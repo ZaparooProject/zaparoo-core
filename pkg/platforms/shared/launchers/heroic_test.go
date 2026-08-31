@@ -28,9 +28,91 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHeroicBuildLaunchCommandFlatpak(t *testing.T) {
+	t.Parallel()
+
+	opts := HeroicOptions{
+		CheckFlatpak: true,
+		lookPath: func(name string) (string, error) {
+			if name == "flatpak" {
+				return "/usr/bin/flatpak", nil
+			}
+			return "", os.ErrNotExist
+		},
+		isFlatpakInstalled: func(id string) bool { return id == FlatpakHeroicID },
+		launchEnv:          func() []string { return []string{"WAYLAND_DISPLAY=wayland-1"} },
+	}
+	launcher := NewHeroicLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "heroic://legendary%3AQuail/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/flatpak", command.Executable)
+	assert.Equal(t, []string{
+		"run", "--die-with-parent", "--command=sh", FlatpakHeroicID,
+		"-c", `exec /app/bin/heroic-run --no-gui "$1"`, "zaparoo-heroic",
+		"heroic://launch?appName=Quail&gui=false&runner=legendary",
+	}, command.Args)
+	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
+	assert.Equal(t, []string{"WAYLAND_DISPLAY=wayland-1"}, command.Env)
+}
+
+func TestHeroicBuildLaunchCommandLegacyPath(t *testing.T) {
+	t.Parallel()
+
+	opts := HeroicOptions{
+		lookPath: func(name string) (string, error) {
+			if name == "heroic" {
+				return "/usr/bin/heroic", nil
+			}
+			return "", os.ErrNotExist
+		},
+		launchEnv: func() []string { return nil },
+	}
+	launcher := NewHeroicLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "heroic://Quail/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/heroic", command.Executable)
+	assert.Equal(t, []string{"--no-gui", "heroic://launch?appName=Quail&gui=false"}, command.Args)
+}
+
+func TestScanHeroicGamesIncludesNile(t *testing.T) {
+	t.Parallel()
+
+	storeCacheDir := t.TempDir()
+	nileLibrary := `{"library":[{"app_name":"amazon-game","title":"Amazon Game","runner":"nile","is_installed":true}]}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(storeCacheDir, "nile_library.json"), []byte(nileLibrary), 0o600,
+	))
+
+	results, err := ScanHeroicGames(storeCacheDir)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Amazon Game", results[0].Name)
+	assert.Equal(t, "heroic://nile:amazon-game/Amazon%20Game", results[0].Path)
+}
+
+func TestScanHeroicGamesIncludesSideloads(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	storeCacheDir := filepath.Join(root, "store_cache")
+	require.NoError(t, os.MkdirAll(storeCacheDir, 0o750))
+	sideloadDir := filepath.Join(root, "sideload_apps")
+	require.NoError(t, os.MkdirAll(sideloadDir, 0o750))
+	library := `{"games":[{"app_name":"zaparoo-openttd","title":"Zaparoo OpenTTD",` +
+		`"runner":"sideload","is_installed":true}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(sideloadDir, "library.json"), []byte(library), 0o600))
+
+	results, err := ScanHeroicGames(storeCacheDir)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Zaparoo OpenTTD", results[0].Name)
+	assert.Equal(t, "heroic://sideload:zaparoo-openttd/Zaparoo%20OpenTTD", results[0].Path)
+}
 
 func TestScanHeroicGames(t *testing.T) {
 	t.Parallel()
@@ -103,6 +185,12 @@ func TestScanHeroicGames(t *testing.T) {
 					"title": "Stardew Valley",
 					"is_installed": true,
 					"runner": "gog"
+				},
+				{
+					"app_name": "gog-redist",
+					"title": "Galaxy Common Redistributables",
+					"is_installed": true,
+					"runner": "gog"
 				}
 			]
 		}`
@@ -114,7 +202,8 @@ func TestScanHeroicGames(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should find 4 installed games (2 Epic + 2 GOG)
-		// Excludes: RocketLeague (not installed), Witcher 3 (not installed), No App Name Game (no app_name)
+		// Excludes: RocketLeague and Witcher 3 (not installed), No App Name Game (no app_name),
+		// and Heroic's installed GOG redistributables package.
 		assert.Len(t, results, 4)
 
 		// Verify results
@@ -386,6 +475,39 @@ func TestScanHeroicLibraryFile(t *testing.T) {
 		results, err := scanHeroicLibraryFile(filePath, "library")
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+	})
+
+	t.Run("filters_games_without_title", func(t *testing.T) {
+		t.Parallel()
+
+		filePath := filepath.Join(t.TempDir(), "library.json")
+		library := `{
+			"library": [
+				{
+					"app_name": "ValidGame",
+					"title": "Valid Game",
+					"is_installed": true,
+					"runner": "legendary"
+				},
+				{
+					"app_name": "MissingTitle",
+					"is_installed": true,
+					"runner": "legendary"
+				},
+				{
+					"app_name": "WhitespaceTitle",
+					"title": "   ",
+					"is_installed": true,
+					"runner": "legendary"
+				}
+			]
+		}`
+		require.NoError(t, os.WriteFile(filePath, []byte(library), 0o600))
+
+		results, err := scanHeroicLibraryFile(filePath, "library")
+		require.NoError(t, err)
+		require.Len(t, results, 1)
 		assert.Equal(t, "Valid Game", results[0].Name)
 	})
 }

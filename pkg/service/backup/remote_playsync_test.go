@@ -1,0 +1,351 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package backup
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/stretchr/testify/assert"
+	testifymock "github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOnlineErrorClassifiers(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, IsRemoteUnlinkedError(errRemoteUnlinked))
+	assert.True(t, IsRemoteUnlinkedError(errors.Join(errors.New("wrapped"), errRemoteUnlinked)))
+	assert.False(t, IsRemoteUnlinkedError(errors.New("network failure")))
+
+	assert.True(t, IsPlaySyncDisabledError(errPlaySyncDisabled))
+	assert.True(t, IsPlaySyncDisabledError(errors.Join(errors.New("wrapped"), errPlaySyncDisabled)))
+	assert.False(t, IsPlaySyncDisabledError(errors.New("upload failure")))
+}
+
+// playSyncTestEntry builds one closed, syncable MediaHistory row.
+func playSyncTestEntry(dbid int64, id, mediaName string, updatedAt time.Time) database.MediaHistoryEntry {
+	endTime := updatedAt
+	identity := &database.MediaIdentity{
+		MediaType:              "Game",
+		CanonicalSystemID:      "SNES",
+		DisplayName:            mediaName,
+		CoreSlug:               "game",
+		ObservationFingerprint: "sha256:fixture",
+		Tags: []database.MediaIdentityTag{
+			{Type: "extension", Value: "sfc", Role: database.MediaIdentityTagRoleContext},
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+		},
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	return database.MediaHistoryEntry{
+		DBID:          dbid,
+		ID:            id,
+		StartTime:     updatedAt.Add(-30 * time.Minute),
+		EndTime:       &endTime,
+		SystemID:      "snes",
+		SystemName:    "Super Nintendo",
+		MediaPath:     filepath.Join("games", mediaName+".sfc"),
+		MediaName:     mediaName,
+		MediaIdentity: identity,
+		LauncherID:    "test",
+		PlayTime:      1800,
+		ClockReliable: true,
+		ClockSource:   "system",
+		// Matches identity.LegacyTags(): enrichment rewrites the legacy tags
+		// column from the identity snapshot, so a row carrying an identity
+		// always has this exact derived form.
+		Tags:      []string{"extension:sfc", "region:us"},
+		UpdatedAt: updatedAt,
+	}
+}
+
+// playSyncTestServer serves the watermark and ingestion endpoints, recording
+// every uploaded batch.
+func playSyncTestServer(t *testing.T, watermark *time.Time) (*httptest.Server, *[][]remotePlaySessionItem) {
+	t.Helper()
+	var batches [][]remotePlaySessionItem
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/play-sessions/watermark":
+			assert.NoError(t, json.NewEncoder(w).Encode(remotePlayWatermarkResponse{Watermark: watermark}))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/play-sessions":
+			var req remotePlaySessionRequest
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&req)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			batches = append(batches, req.Sessions)
+			newest := req.Sessions[len(req.Sessions)-1].CoreUpdatedAt
+			assert.NoError(t, json.NewEncoder(w).Encode(remotePlaySessionResponse{
+				Accepted:  int64(len(req.Sessions)),
+				Watermark: &newest,
+			}))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, &batches
+}
+
+func configurePlaytimeTestAuth(t *testing.T, manager *Manager, baseURL string) {
+	t.Helper()
+	require.NoError(t, manager.cfg.SetPlaytimeBaseURL(baseURL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(baseURL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+}
+
+func TestMediaHistoryToRemote_AddsIdentityWithoutBreakingLegacyShape(t *testing.T) {
+	t.Parallel()
+
+	updatedAt := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	entry := playSyncTestEntry(
+		1, "11111111-1111-4111-8111-111111111111", "Game A", updatedAt,
+	)
+	item := mediaHistoryToRemote(&entry)
+	encoded, err := json.Marshal(item)
+	require.NoError(t, err)
+
+	//nolint:tagliatelle // Current remote API compatibility shape uses snake_case.
+	var legacy struct {
+		SessionUUID string   `json:"session_uuid"`
+		SystemID    string   `json:"system_id"`
+		MediaPath   string   `json:"media_path"`
+		MediaName   string   `json:"media_name"`
+		Tags        []string `json:"tags"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &legacy),
+		"current API receivers must ignore the additive media_identity object")
+	assert.Equal(t, entry.ID, legacy.SessionUUID)
+	assert.Equal(t, entry.SystemID, legacy.SystemID)
+	assert.Equal(t, entry.MediaPath, legacy.MediaPath)
+	assert.Equal(t, entry.MediaName, legacy.MediaName)
+	assert.Equal(t, entry.Tags, legacy.Tags)
+
+	var payload map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	assert.Contains(t, payload, "media_identity")
+
+	entry.MediaIdentity = nil
+	encoded, err = json.Marshal(mediaHistoryToRemote(&entry))
+	require.NoError(t, err)
+	payload = nil
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	assert.NotContains(t, payload, "media_identity", "legacy and unindexed rows omit identity")
+}
+
+func TestSyncPlayHistory_BulkImport(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+
+	server, batches := playSyncTestServer(t, nil)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+	assert.Equal(t, config.DefaultBackupRemoteBaseURL, env.Manager.cfg.BackupRemoteBaseURL())
+	assert.Equal(t, server.URL, env.Manager.cfg.PlaytimeBaseURL())
+
+	first := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
+	second := playSyncTestEntry(2, "22222222-2222-4222-8222-222222222222", "Game B", base.Add(time.Hour))
+
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	// Never synced: the cursor starts at zero and the whole history uploads.
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{first, second}, nil).Once()
+	env.UserDB.On("MarkMediaHistorySynced", []database.MediaHistorySyncRef{
+		{DBID: first.DBID, UpdatedAt: first.UpdatedAt},
+		{DBID: second.DBID, UpdatedAt: second.UpdatedAt},
+	}, testifymock.AnythingOfType("time.Time")).Return(nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, info.Uploaded)
+	assert.Equal(t, 1, info.Batches)
+
+	require.Len(t, *batches, 1)
+	uploaded := (*batches)[0]
+	require.Len(t, uploaded, 2)
+	assert.Equal(t, first.ID, uploaded[0].SessionUUID)
+	assert.Equal(t, "Game A", uploaded[0].MediaName)
+	assert.Equal(t, 1800, uploaded[0].PlayTimeSecs)
+	assert.True(t, first.UpdatedAt.Equal(uploaded[0].CoreUpdatedAt))
+	assert.True(t, uploaded[0].ClockReliable)
+	assert.Equal(t, []string{"extension:sfc", "region:us"}, uploaded[0].Tags,
+		"complete canonical tags travel with the compatibility session fields")
+	require.NotNil(t, uploaded[0].MediaIdentity)
+	assert.Equal(t, first.MediaIdentity, uploaded[0].MediaIdentity)
+	assert.Equal(t, "sha256:fixture", uploaded[0].MediaIdentity.ObservationFingerprint)
+}
+
+func TestSyncPlayHistory_UploadsActiveSession(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	updatedAt := time.Now().UTC().Truncate(time.Second)
+
+	server, batches := playSyncTestServer(t, nil)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+
+	active := playSyncTestEntry(
+		1, "11111111-1111-4111-8111-111111111111", "Now Playing", updatedAt,
+	)
+	active.EndTime = nil
+	active.PlayTime = 0
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{active}, nil).Once()
+	env.UserDB.On("MarkMediaHistorySynced", []database.MediaHistorySyncRef{
+		{DBID: active.DBID, UpdatedAt: active.UpdatedAt},
+	}, testifymock.AnythingOfType("time.Time")).Return(nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, info.Uploaded)
+	require.Len(t, *batches, 1)
+	require.Len(t, (*batches)[0], 1)
+	assert.Nil(t, (*batches)[0][0].EndedAt)
+	assert.Zero(t, (*batches)[0][0].PlayTimeSecs)
+}
+
+func TestSyncPlayHistory_ResumesFromServerWatermark(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	watermark := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Hour)
+
+	server, batches := playSyncTestServer(t, &watermark)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+
+	env.UserDB.On(
+		"ResetMediaHistorySyncAfter",
+		testifymock.MatchedBy(func(got *time.Time) bool {
+			return got != nil && watermark.Equal(*got)
+		}),
+	).Return(nil).Once()
+	// Local acknowledgement state suppresses unchanged rows; selection always
+	// starts at zero so old unreliable-clock rows remain eligible.
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{}, nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, info.Uploaded)
+	assert.Empty(t, *batches, "nothing new: no upload requests")
+}
+
+func TestSyncPlayHistory_PaginatesFullBatches(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+
+	server, batches := playSyncTestServer(t, nil)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+
+	// A full first batch forces a second query cursored after its last row.
+	full := make([]database.MediaHistoryEntry, 0, playSyncBatchSize)
+	refs := make([]database.MediaHistorySyncRef, 0, playSyncBatchSize)
+	for i := range playSyncBatchSize {
+		entry := playSyncTestEntry(
+			int64(i+1), "11111111-1111-4111-8111-111111111111", "Game", base.Add(time.Duration(i)*time.Second),
+		)
+		full = append(full, entry)
+		refs = append(refs, database.MediaHistorySyncRef{DBID: entry.DBID, UpdatedAt: entry.UpdatedAt})
+	}
+	last := full[len(full)-1]
+
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return(full, nil).Once()
+	env.UserDB.On(
+		"GetMediaHistorySyncBatch",
+		testifymock.MatchedBy(func(after time.Time) bool { return last.UpdatedAt.Equal(after) }),
+		last.DBID, playSyncBatchSize,
+	).Return([]database.MediaHistoryEntry{}, nil).Once()
+	env.UserDB.On("MarkMediaHistorySynced", refs, testifymock.AnythingOfType("time.Time")).
+		Return(nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, playSyncBatchSize, info.Uploaded)
+	assert.Equal(t, 1, info.Batches)
+	require.Len(t, *batches, 1)
+}
+
+func TestSyncPlayHistory_StopsWhenConsentRevokedDuringPass(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+	server, batches := playSyncTestServer(t, nil)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+	entry := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
+
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Run(func(_ testifymock.Arguments) { env.Manager.cfg.SetPlaytimeSync(false) }).
+		Return([]database.MediaHistoryEntry{entry}, nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.ErrorIs(t, err, errPlaySyncDisabled)
+	assert.Zero(t, info.Uploaded)
+	assert.Empty(t, *batches, "revoked consent must stop before the next upload")
+	env.UserDB.AssertNotCalled(t, "MarkMediaHistorySynced", testifymock.Anything, testifymock.Anything)
+}
+
+func TestSyncPlayHistory_UnsetConsentIsDisabled(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, "mister")
+
+	assert.False(t, env.Manager.cfg.PlaytimeSyncEnabled())
+	_, err := env.Manager.SyncPlayHistory(context.Background())
+	require.ErrorIs(t, err, errPlaySyncDisabled)
+}
+
+func TestSyncPlayHistory_DisabledByConfig(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(false)
+
+	_, err := env.Manager.SyncPlayHistory(context.Background())
+	require.ErrorIs(t, err, errPlaySyncDisabled)
+}
+
+func TestSyncPlayHistory_Unlinked(t *testing.T) {
+	// No t.Parallel(): other play-sync tests mutate the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	// No credential configured: sync must report unlinked, not upload.
+
+	_, err := env.Manager.SyncPlayHistory(context.Background())
+	require.ErrorIs(t, err, errRemoteUnlinked)
+}

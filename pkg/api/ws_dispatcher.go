@@ -23,62 +23,112 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
 
+type mediaDBLockMode uint8
+
 const (
-	wsHighConcurrency       = 1
-	wsNormalConcurrency     = 4
-	wsLowConcurrency        = 2
-	wsQueueSize             = 256
-	wsResponseQueueSize     = 256
-	wsGlobalImageConcurrent = 2
+	wsHighConcurrency         = 1
+	wsRunConcurrency          = 1
+	wsNormalConcurrency       = 4
+	wsLowConcurrency          = 2
+	wsQueueSize               = 256
+	wsLowQueueSize            = 16
+	wsResponseQueueSize       = 256
+	wsGlobalImageConcurrent   = 2
+	wsInputWorkerDrainTimeout = 2 * time.Second
+)
+
+const (
+	mediaDBLockNone mediaDBLockMode = iota
+	mediaDBLockRead
+	mediaDBLockWrite
 )
 
 var (
-	wsGlobalImageSlots = make(chan struct{}, wsGlobalImageConcurrent)
-	wsMediaDBMu        syncutil.RWMutex
+	errWSRequestQueueFull = errors.New("websocket request queue is full")
+	wsGlobalImageSlots    = make(chan struct{}, wsGlobalImageConcurrent)
+	wsMediaDBMu           syncutil.RWMutex
 )
 
 const wsDispatcherSessionKey = "api.ws.dispatcher"
 
-type wsRequestJob struct {
-	tracker   RequestTracker
-	methodMap *MethodMap
-	cs        *apimiddleware.ClientSession
-	cancel    context.CancelFunc
-	env       *requests.RequestEnv
+type wsRequestQueueFullError struct {
 	method    string
-	msg       []byte
-	image     bool
+	requestID models.RPCID
+	priority  apiRequestPriority
+	depth     int
+	capacity  int
+}
+
+func (e *wsRequestQueueFullError) Error() string {
+	return fmt.Sprintf("%s: method %s", errWSRequestQueueFull, e.method)
+}
+
+func (*wsRequestQueueFullError) Unwrap() error {
+	return errWSRequestQueueFull
+}
+
+func queueDuration(enqueuedAt time.Time) time.Duration {
+	if enqueuedAt.IsZero() {
+		return 0
+	}
+	return time.Since(enqueuedAt)
+}
+
+type wsRequestJob struct {
+	tracker    RequestTracker
+	methodMap  *MethodMap
+	cs         *apimiddleware.ClientSession
+	cancel     context.CancelFunc
+	env        *requests.RequestEnv
+	enqueuedAt time.Time
+	requestID  models.RPCID
+	method     string
+	msg        []byte
+	image      bool
 }
 
 type wsResponseJob struct {
-	tracker RequestTracker
-	cs      *apimiddleware.ClientSession
-	cancel  context.CancelFunc
-	result  requestResult
-	pong    bool
+	enqueuedAt time.Time
+	tracker    RequestTracker
+	cs         *apimiddleware.ClientSession
+	cancel     context.CancelFunc
+	method     string
+	result     requestResult
+	pong       bool
 }
 
 type wsSessionDispatcher struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	session   *melody.Session
-	high      chan *wsRequestJob
-	normal    chan *wsRequestJob
-	low       chan *wsRequestJob
-	responses chan *wsResponseJob
+	ctx          context.Context
+	cancel       context.CancelFunc
+	session      *melody.Session
+	inputSession platforms.InputSession
+	high         chan *wsRequestJob
+	run          chan *wsRequestJob
+	normal       chan *wsRequestJob
+	input        chan *wsRequestJob
+	low          chan *wsRequestJob
+	responses    chan *wsResponseJob
+	inputDone    chan struct{}
+	closeOnce    sync.Once
 }
 
-func getOrCreateWSDispatcher(parent context.Context, session *melody.Session) *wsSessionDispatcher {
+func getOrCreateWSDispatcher(
+	parent context.Context,
+	session *melody.Session,
+	platform platforms.Platform,
+) *wsSessionDispatcher {
 	if existing, ok := session.Get(wsDispatcherSessionKey); ok {
 		if d, ok := existing.(*wsSessionDispatcher); ok {
 			return d
@@ -86,14 +136,22 @@ func getOrCreateWSDispatcher(parent context.Context, session *melody.Session) *w
 	}
 
 	ctx, cancel := context.WithCancel(parent)
+	var inputSession platforms.InputSession
+	if provider, ok := platform.(platforms.InputSessionProvider); ok {
+		inputSession = provider.NewInputSession()
+	}
 	d := &wsSessionDispatcher{
-		ctx:       ctx,
-		cancel:    cancel,
-		session:   session,
-		high:      make(chan *wsRequestJob, wsQueueSize),
-		normal:    make(chan *wsRequestJob, wsQueueSize),
-		low:       make(chan *wsRequestJob, wsQueueSize),
-		responses: make(chan *wsResponseJob, wsResponseQueueSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		session:      session,
+		inputSession: inputSession,
+		high:         make(chan *wsRequestJob, wsQueueSize),
+		run:          make(chan *wsRequestJob, wsQueueSize),
+		normal:       make(chan *wsRequestJob, wsQueueSize),
+		input:        make(chan *wsRequestJob, wsQueueSize),
+		low:          make(chan *wsRequestJob, wsLowQueueSize),
+		responses:    make(chan *wsResponseJob, wsResponseQueueSize),
+		inputDone:    make(chan struct{}),
 	}
 	session.Set(wsDispatcherSessionKey, d)
 	d.start()
@@ -113,11 +171,44 @@ func closeWSDispatcher(session *melody.Session) {
 }
 
 func (d *wsSessionDispatcher) close() {
-	d.cancel()
-	d.drainQueuedJobs(d.high)
-	d.drainQueuedJobs(d.normal)
-	d.drainQueuedJobs(d.low)
-	d.drainQueuedResponses()
+	d.closeOnce.Do(func() {
+		d.cancel()
+		d.releaseInputSession()
+		d.drainQueuedJobs(d.high)
+		d.drainQueuedJobs(d.run)
+		d.drainQueuedJobs(d.normal)
+		d.drainQueuedJobs(d.input)
+		d.drainQueuedJobs(d.low)
+		d.waitForInputWorker()
+		// Retry after the drain wait in case worker cleanup raced the first
+		// release or a device release initially failed.
+		d.releaseInputSession()
+		d.drainQueuedResponses()
+	})
+}
+
+func (d *wsSessionDispatcher) waitForInputWorker() {
+	if d.inputDone == nil {
+		return
+	}
+
+	timer := time.NewTimer(wsInputWorkerDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-d.inputDone:
+	case <-timer.C:
+		log.Warn().Dur("timeout", wsInputWorkerDrainTimeout).
+			Msg("timed out waiting for WebSocket input worker to stop")
+	}
+}
+
+func (d *wsSessionDispatcher) releaseInputSession() {
+	if d.inputSession == nil {
+		return
+	}
+	if err := d.inputSession.ReleaseAll(); err != nil {
+		log.Warn().Err(err).Msg("error releasing WebSocket input session")
+	}
 }
 
 func (*wsSessionDispatcher) drainQueuedJobs(queue <-chan *wsRequestJob) {
@@ -153,36 +244,52 @@ func (d *wsSessionDispatcher) drainQueuedResponses() {
 }
 
 func (d *wsSessionDispatcher) start() {
+	if d.inputDone == nil {
+		d.inputDone = make(chan struct{})
+	}
 	for range wsHighConcurrency {
 		go d.worker(d.high)
+	}
+	for range wsRunConcurrency {
+		go d.worker(d.run)
 	}
 	for range wsNormalConcurrency {
 		go d.worker(d.normal)
 	}
+	go func() {
+		defer close(d.inputDone)
+		d.worker(d.input)
+	}()
 	for range wsLowConcurrency {
 		go d.worker(d.low)
 	}
 	go d.writer()
 }
 
-func (d *wsSessionDispatcher) enqueue(job *wsRequestJob, priority apiRequestPriority) error {
-	var q chan *wsRequestJob
+func (d *wsSessionDispatcher) queue(priority apiRequestPriority) chan *wsRequestJob {
 	switch priority {
 	case apiPriorityHigh:
-		q = d.high
+		return d.high
+	case apiPriorityRun:
+		return d.run
+	case apiPriorityInput:
+		return d.input
 	case apiPriorityLow:
-		q = d.low
+		return d.low
 	default:
-		q = d.normal
+		return d.normal
 	}
+}
 
+func (d *wsSessionDispatcher) enqueue(job *wsRequestJob, priority apiRequestPriority) error {
+	q := d.queue(priority)
 	select {
 	case <-d.ctx.Done():
 		return d.ctx.Err()
 	case q <- job:
 		return nil
 	default:
-		return errors.New("websocket request queue is full")
+		return errWSRequestQueueFull
 	}
 }
 
@@ -190,7 +297,9 @@ func (d *wsSessionDispatcher) enqueuePong(cs *apimiddleware.ClientSession, track
 	select {
 	case <-d.ctx.Done():
 		return d.ctx.Err()
-	case d.responses <- &wsResponseJob{cs: cs, tracker: tracker, pong: true}:
+	case d.responses <- &wsResponseJob{
+		cs: cs, tracker: tracker, enqueuedAt: time.Now(), method: "ping", pong: true,
+	}:
 		return nil
 	default:
 		return errors.New("websocket response queue is full")
@@ -209,12 +318,23 @@ func (d *wsSessionDispatcher) worker(queue <-chan *wsRequestJob) {
 }
 
 func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
+	log.Debug().
+		Str("method", job.method).
+		Str("requestId", requestIDForLog(job.requestID)).
+		Dur("queueWaitDuration", queueDuration(job.enqueuedAt)).
+		Msg("websocket request dequeued")
+
+	//nolint:gosec // Cancellation is transferred to job and invoked when response handling completes.
+	ctx, cancel := requestContextForAPIMethod(d.ctx, job.method)
+	job.env.Context = ctx
+	job.cancel = cancel
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Msg("panic in websocket request worker")
 			d.enqueueResponse(&wsResponseJob{
 				result: requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorInternalError, ShouldReply: true},
-				cs:     job.cs, tracker: job.tracker, cancel: job.cancel,
+				cs:     job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
 			})
 		}
 	}()
@@ -236,16 +356,42 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 	defer unlock()
 
 	result := processRequestObject(job.methodMap, *job.env, job.msg)
-	d.enqueueResponse(&wsResponseJob{result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel})
+	d.enqueueResponse(&wsResponseJob{
+		result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
+	})
+}
+
+func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
+	// Control methods (run/launch, stop, media.control) never touch MediaDB
+	// from the API goroutine, so they must not wait behind a slow tag/meta
+	// write or an in-flight indexing commit holding this lock. run/launch
+	// wait on the service worker instead, which reads MediaDB on its own
+	// connection with bounded timeouts.
+	if isMediaDBFreeInstantMethod(method) {
+		return mediaDBLockNone
+	}
+	if isMediaDBTransactionAPIMethod(method) {
+		return mediaDBLockWrite
+	}
+	// media.image already has its own tiny concurrency gate; do not let slow
+	// image reads/resizes hold the API DB read lane and starve tag/meta writes.
+	if isImageAPIMethod(method) {
+		return mediaDBLockNone
+	}
+	return mediaDBLockRead
 }
 
 func lockMediaDBForAPIMethod(method string) func() {
-	if isMediaDBTransactionAPIMethod(method) {
+	switch mediaDBLockModeForAPIMethod(method) {
+	case mediaDBLockWrite:
 		wsMediaDBMu.Lock()
 		return wsMediaDBMu.Unlock
+	case mediaDBLockRead:
+		wsMediaDBMu.RLock()
+		return wsMediaDBMu.RUnlock
+	default:
+		return func() {}
 	}
-	wsMediaDBMu.RLock()
-	return wsMediaDBMu.RUnlock
 }
 
 func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
@@ -254,10 +400,12 @@ func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
 		cs:      job.cs,
 		tracker: job.tracker,
 		cancel:  job.cancel,
+		method:  job.method,
 	})
 }
 
 func (d *wsSessionDispatcher) enqueueResponse(resp *wsResponseJob) {
+	resp.enqueuedAt = time.Now()
 	select {
 	case <-d.ctx.Done():
 		if resp.cancel != nil {
@@ -282,6 +430,16 @@ func (d *wsSessionDispatcher) writer() {
 }
 
 func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
+	requestID := resp.result.ID
+	if resp.pong {
+		requestID = models.RPCID{}
+	}
+	log.Debug().
+		Str("method", resp.method).
+		Str("requestId", requestIDForLog(requestID)).
+		Dur("responseQueueDuration", queueDuration(resp.enqueuedAt)).
+		Msg("websocket response dequeued")
+
 	defer func() {
 		if resp.cancel != nil {
 			resp.cancel()
@@ -327,22 +485,31 @@ func enqueueWSRequest(
 	cs *apimiddleware.ClientSession,
 	tracker RequestTracker,
 ) error {
-	method := methodFromAPIRequestPayload(msg)
+	method, requestID := requestMetadataFromAPIRequestPayload(msg)
 	priority := classifyAPIMethod(method)
-	ctx, cancel := context.WithTimeout(d.ctx, config.APIRequestTimeout)
-	env.Context = ctx
+	env.Context = d.ctx
 	job := &wsRequestJob{
-		methodMap: methodMap,
-		env:       env,
-		method:    method,
-		msg:       append([]byte(nil), msg...),
-		cs:        cs,
-		tracker:   tracker,
-		cancel:    cancel,
-		image:     isImageAPIMethod(method),
+		methodMap:  methodMap,
+		env:        env,
+		enqueuedAt: time.Now(),
+		requestID:  requestID,
+		method:     method,
+		msg:        append([]byte(nil), msg...),
+		cs:         cs,
+		tracker:    tracker,
+		image:      isImageAPIMethod(method),
 	}
 	if err := d.enqueue(job, priority); err != nil {
-		cancel()
+		if errors.Is(err, errWSRequestQueueFull) {
+			q := d.queue(priority)
+			return &wsRequestQueueFullError{
+				requestID: requestID,
+				method:    method,
+				priority:  priority,
+				depth:     len(q),
+				capacity:  cap(q),
+			}
+		}
 		return fmt.Errorf("enqueue websocket request: %w", err)
 	}
 	return nil

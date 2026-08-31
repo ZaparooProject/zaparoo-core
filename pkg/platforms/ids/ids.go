@@ -35,4 +35,5 @@ const (
 	RetroPie  = "retropie"
 	SteamOS   = "steamos"
 	Windows   = "windows"
+	ZapOS     = "zapos"
 )

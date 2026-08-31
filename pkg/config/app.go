@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -56,4 +57,25 @@ const (
 	CacheDir             = "cache"
 	LogUploadURL         = "https://logs.zaparoo.org/"
 	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
+
+	// VersionFlagName is the flag that prints VersionLine and exits. The
+	// self-update probe passes it to a binary it has just downloaded, so the
+	// name is part of the same frozen contract as the line itself.
+	VersionFlagName = "version"
 )
+
+// VersionLine is the line the version flag prints, and the line the self-update
+// probe looks for in a staged binary's output.
+//
+// It is a compatibility surface between releases, not a cosmetic string. The
+// probe runs in the binary that is already installed and checks what the
+// incoming one prints, so it is always the *older* build that decides whether a
+// newer release is acceptable. Changing this text would make every device
+// already in the field reject the release that changed it, and every release
+// after that, with no way to fix it from the new release's side. Both the
+// producer and the probe read it from here so they cannot drift, and the probe
+// matches this as one line of output rather than the whole stream so that
+// adding another line elsewhere stays harmless.
+func VersionLine(version, platformID string) string {
+	return fmt.Sprintf("Zaparoo v%s (%s)", version, platformID)
+}

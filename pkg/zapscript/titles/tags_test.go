@@ -321,6 +321,81 @@ func TestExtractCanonicalTagsFromParensEdgeCases(t *testing.T) {
 	}
 }
 
+func TestExtractCanonicalTagsFromParensCommaShorthand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		input             string
+		expectedRemaining string
+		expected          []zapscript.TagFilter
+	}{
+		{
+			name:              "two values same type with space",
+			input:             "Game (region:us, region:eu)",
+			expectedRemaining: "Game",
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorAND},
+			},
+		},
+		{
+			name:              "two values same type no space",
+			input:             "Game (region:us,region:eu)",
+			expectedRemaining: "Game",
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorAND},
+			},
+		},
+		{
+			name:              "extra whitespace around comma",
+			input:             "Game (region:us ,  region:eu)",
+			expectedRemaining: "Game",
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorAND},
+			},
+		},
+		{
+			name:              "mixed types in one parens",
+			input:             "Game (region:us, rev:a)",
+			expectedRemaining: "Game",
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "rev", Value: "a", Operator: zapscript.TagOperatorAND},
+			},
+		},
+		{
+			name:              "filename language list left untouched",
+			input:             "Game (En,Fr,De)",
+			expectedRemaining: "Game (En,Fr,De)",
+			expected:          nil,
+		},
+		{
+			name:              "filename disc paren left untouched",
+			input:             "Game (Disc 1)",
+			expectedRemaining: "Game (Disc 1)",
+			expected:          nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tagFilters, remaining := ExtractCanonicalTagsFromParens(tt.input)
+			assert.Equal(t, tt.expectedRemaining, remaining)
+			require.Len(t, tagFilters, len(tt.expected))
+			for i, want := range tt.expected {
+				assert.Equal(t, want.Type, tagFilters[i].Type, "type at %d", i)
+				assert.Equal(t, want.Value, tagFilters[i].Value, "value at %d", i)
+				assert.Equal(t, want.Operator, tagFilters[i].Operator, "operator at %d", i)
+			}
+		})
+	}
+}
+
 func TestExtractCanonicalTagsFromParensOperators(t *testing.T) {
 	t.Parallel()
 

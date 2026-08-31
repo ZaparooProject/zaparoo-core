@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -37,6 +38,8 @@ var (
 	ErrNoMatch       = errors.New("no matching title found")
 	ErrLowConfidence = errors.New("match confidence below minimum threshold")
 )
+
+const slugResolutionCacheWriteTimeout = 100 * time.Millisecond
 
 // ResolveResult contains the output of a title resolution.
 type ResolveResult struct {
@@ -54,6 +57,31 @@ type ResolveParams struct {
 	MediaType      slugs.MediaType
 	AdditionalTags []zapscript.TagFilter
 	Launchers      []platforms.Launcher
+}
+
+// cacheSlugResolution writes the resolution result to the cache in the
+// background. SetCachedSlugResolution can block for seconds waiting on
+// SQLite's WAL writer lock while a long-running indexing transaction holds
+// it, and that wait is not reliably cut short by ctx cancellation - so this
+// must run detached from the caller to keep launch-critical title
+// resolution instant.
+func cacheSlugResolution(
+	ctx context.Context,
+	mediadb database.MediaDBI,
+	systemID string,
+	slug string,
+	tagFilters []zapscript.TagFilter,
+	mediaID int64,
+	strategy string,
+) {
+	go func() {
+		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), slugResolutionCacheWriteTimeout)
+		defer cancel()
+		cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy)
+		if cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
+		}
+	}()
 }
 
 // ResolveTitle runs the full title resolution pipeline against the media database.
@@ -127,11 +155,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 			results, tagFilters, params.Cfg, MatchQualityExact, params.Launchers)
 
 		if confidence >= ConfidenceHigh {
-			if cacheErr := mediadb.SetCachedSlugResolution(
-				ctx, systemID, slug, tagFilters, selectedResult.MediaID, StrategyExactMatch,
-			); cacheErr != nil {
-				log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
-			}
+			cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, selectedResult.MediaID, StrategyExactMatch)
 			return &ResolveResult{
 				Result:     selectedResult,
 				Strategy:   StrategyExactMatch,
@@ -291,12 +315,9 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		return nil, ErrLowConfidence
 	}
 
-	// Cache the successful resolution
-	if cacheErr := mediadb.SetCachedSlugResolution(
-		ctx, systemID, slug, tagFilters, bestCandidate.result.MediaID, bestCandidate.strategy,
-	); cacheErr != nil {
-		log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
-	}
+	// Cache the successful resolution without letting cache bookkeeping block
+	// launch-critical title resolution.
+	cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, bestCandidate.result.MediaID, bestCandidate.strategy)
 
 	return &ResolveResult{
 		Result:     bestCandidate.result,

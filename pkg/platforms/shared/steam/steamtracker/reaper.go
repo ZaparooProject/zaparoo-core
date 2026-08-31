@@ -32,6 +32,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	sharedsteam "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 )
 
 // ReaperProcess represents a running Steam game detected via its reaper process.
@@ -42,7 +44,7 @@ type ReaperProcess struct {
 }
 
 // appIDRegex matches "AppId=XXXXX" in process command line.
-var appIDRegex = regexp.MustCompile(`AppId=(\d+)`)
+var appIDRegex = regexp.MustCompile(`(?i)AppId=(\d+)`)
 
 // ScanReaperProcesses finds all Steam reaper processes and their AppIDs.
 // Steam wraps game launches: ~/.local/share/Steam/ubuntu12_32/reaper SteamLaunch AppId=XXXXX -- [cmd]
@@ -92,7 +94,7 @@ func checkReaperProcess(procPath string, pid int) (appID int, gamePath string, o
 	}
 
 	comm := strings.TrimSpace(string(commData))
-	if comm != "reaper" {
+	if !strings.EqualFold(comm, "reaper") {
 		return 0, "", false
 	}
 
@@ -108,7 +110,7 @@ func checkReaperProcess(procPath string, pid int) (appID int, gamePath string, o
 		return 0, "", false
 	}
 
-	if !strings.Contains(cmdline, "SteamLaunch") {
+	if !strings.Contains(strings.ToLower(cmdline), "steamlaunch") {
 		return 0, "", false
 	}
 
@@ -133,27 +135,44 @@ func parseAppIDFromCmdline(cmdline string) (int, bool) {
 	return appID, true
 }
 
-// parseGamePathFromCmdline extracts the game executable path from a reaper cmdline.
-// Format: reaper SteamLaunch AppId=XXX -- [runtime args] -- ... -- /path/to/game
+// parseGamePathFromCmdline extracts the most likely game executable path from a
+// Steam reaper cmdline. Proton adds multiple runtime separators, so the last
+// separator is not necessarily followed by the game executable.
 func parseGamePathFromCmdline(cmdline string) string {
-	args := strings.Split(cmdline, "\x00")
-
-	lastDashIndex := -1
-	for i, arg := range args {
-		if arg == "--" {
-			lastDashIndex = i
-		}
-	}
-
-	if lastDashIndex == -1 || lastDashIndex >= len(args)-1 {
+	if !strings.Contains(cmdline, "\x00") {
 		return ""
 	}
 
-	gamePath := args[lastDashIndex+1]
-	gamePath = strings.TrimSpace(gamePath)
-	gamePath = strings.TrimRight(gamePath, "\x00")
+	args := strings.Split(cmdline, "\x00")
+	firstSeparator := -1
+	for i, arg := range args {
+		if cleanProcArg(arg) == "--" {
+			firstSeparator = i
+			break
+		}
+	}
+	if firstSeparator == -1 {
+		return ""
+	}
 
-	return gamePath
+	for i := len(args) - 1; i > firstSeparator; i-- {
+		arg := cleanProcArg(args[i])
+		if isPathArgument(arg) {
+			return arg
+		}
+	}
+	return ""
+}
+
+func cleanProcArg(arg string) string {
+	return strings.Trim(strings.TrimSpace(arg), "'\"")
+}
+
+func isPathArgument(arg string) bool {
+	if arg == "" || arg == "--" || strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		return false
+	}
+	return strings.Contains(arg, "/") || strings.Contains(arg, "\\")
 }
 
 // FindGamePID finds a running process that matches the game executable path.
@@ -161,22 +180,63 @@ func FindGamePID(gamePath string) (int, bool) {
 	return FindGamePIDWithProcPath("/proc", gamePath)
 }
 
+// FindGamePIDForAppID finds a process for an AppID using Steam's install and
+// launch metadata before falling back to the reaper-derived path.
+func FindGamePIDForAppID(steamDir string, appID int, gamePath string) (int, bool) {
+	return FindGamePIDForAppIDWithProcPath("/proc", steamDir, appID, gamePath)
+}
+
+// FindGamePIDForAppIDWithProcPath is the testable form of FindGamePIDForAppID.
+func FindGamePIDForAppIDWithProcPath(
+	procPath, steamDir string, appID int, gamePath string,
+) (int, bool) {
+	targets, installDir := resolveGameProcessTargets(steamDir, appID, gamePath)
+	if len(targets) == 0 && installDir == "" {
+		return 0, false
+	}
+	return findGamePIDWithPaths(procPath, targets, installDir)
+}
+
+func resolveGameProcessTargets(
+	steamDir string, appID int, gamePath string,
+) (targets []string, installDir string) {
+	installDir, _ = sharedsteam.FindInstallDirByAppIDInSteamDir(steamDir, appID)
+	executablePath, _ := sharedsteam.GetGameExecutable(steamDir, appID)
+
+	// A runtime/Proton path parsed from the reaper command line is not useful
+	// once manifest metadata gives us the game's install directory.
+	if installDir != "" && !pathWithin(gamePath, installDir) {
+		gamePath = ""
+	}
+
+	targets = make([]string, 0, 2)
+	if gamePath != "" {
+		targets = append(targets, gamePath)
+	}
+	if executablePath != "" && executablePath != gamePath {
+		targets = append(targets, executablePath)
+	}
+	return targets, installDir
+}
+
 // FindGamePIDWithProcPath finds a running process matching the game path using a custom proc path.
-// It first tries to find an exact match for the game executable, then falls back to
-// searching for any process in the game's install directory.
+// It first tries an exact executable/argument match, then falls back to a
+// process whose command line or executable is inside the game's install directory.
 func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
 	if gamePath == "" {
 		return 0, false
 	}
+	return findGamePIDWithPaths(procPath, []string{gamePath}, filepath.Dir(gamePath))
+}
 
+func findGamePIDWithPaths(procPath string, targets []string, installDir string) (int, bool) {
 	entries, err := os.ReadDir(procPath)
 	if err != nil {
 		return 0, false
 	}
 
-	gameDir := filepath.Dir(gamePath)
-	var fallbackPID int
-	foundFallback := false
+	var argumentPID, installArgumentPID, fallbackPID int
+	foundArgument, foundInstallArgument, foundFallback := false, false, false
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -190,7 +250,7 @@ func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
 
 		commPath := filepath.Join(procPath, entry.Name(), "comm")
 		commData, _ := os.ReadFile(commPath) //nolint:gosec // G304
-		if strings.TrimSpace(string(commData)) == "reaper" {
+		if strings.EqualFold(strings.TrimSpace(string(commData)), "reaper") {
 			continue
 		}
 
@@ -200,25 +260,62 @@ func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
 			continue
 		}
 
-		cmdline := string(cmdlineData)
-		firstArg := strings.SplitN(cmdline, "\x00", 2)[0]
+		args := strings.Split(string(cmdlineData), "\x00")
+		firstArg := cleanProcArg(args[0])
 
-		// Exact match - return immediately
-		if firstArg == gamePath {
-			return pid, true
+		for _, target := range targets {
+			cleanTarget := cleanProcArg(target)
+			for _, arg := range args {
+				cleanArg := cleanProcArg(arg)
+				if cleanArg == cleanTarget {
+					return pid, true
+				}
+				if !foundArgument && cleanTarget != "" && strings.Contains(cleanArg, cleanTarget) {
+					argumentPID = pid
+					foundArgument = true
+				}
+			}
 		}
 
-		// Track first process in game directory as fallback
-		if !foundFallback && strings.HasPrefix(firstArg, gameDir) {
-			fallbackPID = pid
-			foundFallback = true
+		if installDir != "" {
+			for _, arg := range args {
+				if pathWithin(cleanProcArg(arg), installDir) {
+					if !foundInstallArgument {
+						installArgumentPID = pid
+						foundInstallArgument = true
+					}
+					break
+				}
+			}
+			if !foundFallback && pathWithin(firstArg, installDir) {
+				fallbackPID = pid
+				foundFallback = true
+			}
 		}
 	}
 
-	// Return fallback if no exact match found
+	if foundArgument {
+		return argumentPID, true
+	}
+	if foundInstallArgument {
+		return installArgumentPID, true
+	}
 	if foundFallback {
 		return fallbackPID, true
 	}
-
 	return 0, false
+}
+
+func pathWithin(path, dir string) bool {
+	path = cleanProcArg(path)
+	dir = cleanProcArg(dir)
+	if path == "" || dir == "" {
+		return false
+	}
+
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	if err != nil || filepath.IsAbs(rel) || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

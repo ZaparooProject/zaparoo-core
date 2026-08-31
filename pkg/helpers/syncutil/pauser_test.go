@@ -45,6 +45,31 @@ func TestPauser_WaitBlocksWhenPaused(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestPauser_WaitForPacingAppliesBoundedSleepWhenPaused(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, 20*time.Millisecond)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	require.NoError(t, p.WaitForPacing(ctx))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.NoError(t, ctx.Err())
+}
+
+func TestPauser_WaitForPacingPausedSleepHonorsCancellation(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, time.Hour)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	require.ErrorIs(t, p.WaitForPacing(ctx), context.DeadlineExceeded)
+}
+
 func TestPauser_WaitUnblocksOnResume(t *testing.T) {
 	p := NewPauser()
 	p.Pause()
@@ -75,6 +100,39 @@ func TestPauser_WaitReturnsCancelledContext(t *testing.T) {
 
 	err := p.Wait(ctx)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestPauser_WaitForPacingReturnsImmediatelyWhenNotPaused(t *testing.T) {
+	p := NewPauser()
+	err := p.WaitForPacing(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause pins a race where
+// an earlier WaitForPacing read the pauser as not paused, then Pause landed
+// before the wait actually observed state: if that read and the wait are two
+// separate lock acquisitions, the wait can still take the blocking branch and
+// never return since Resume is never called here. Racing many fresh pausers
+// gives the scheduler many chances to land Pause inside that window; every
+// call must still return within the bounded duty cycle regardless.
+func TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause(t *testing.T) {
+	const iterations = 50
+	for i := range iterations {
+		p := NewPauser()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- p.WaitForPacing(context.Background())
+		}()
+		go p.Pause()
+
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("WaitForPacing blocked past its bounded duty cycle on iteration %d", i)
+		}
+	}
 }
 
 func TestPauser_PauseIsIdempotent(t *testing.T) {
@@ -110,6 +168,21 @@ func TestPauser_NilReceiverWaitReturnsNil(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestPauser_NilReceiverIsPausedReturnsFalse(t *testing.T) {
+	var p *Pauser
+	assert.False(t, p.IsPaused())
+}
+
+func TestPauser_NilReceiverIsThrottledReturnsFalse(t *testing.T) {
+	var p *Pauser
+	assert.False(t, p.IsThrottled())
+}
+
+func TestPauser_NilReceiverLevelReturnsLight(t *testing.T) {
+	var p *Pauser
+	assert.Equal(t, ThrottleLight, p.Level())
+}
+
 func TestPauser_MultipleWaitersUnblocked(t *testing.T) {
 	p := NewPauser()
 	p.Pause()
@@ -133,6 +206,325 @@ func TestPauser_MultipleWaitersUnblocked(t *testing.T) {
 			t.Fatal("not all waiters unblocked")
 		}
 	}
+}
+
+func TestPauser_BaselineThrottleSleepsWithoutReportingThrottled(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(10*time.Millisecond, 20*time.Millisecond)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-10 * time.Millisecond)
+	p.mu.Unlock()
+
+	start := time.Now()
+	require.NoError(t, p.Wait(context.Background()))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.False(t, p.IsThrottled())
+	assert.False(t, p.IsPaused())
+}
+
+type doneSignalingContext struct {
+	context.Context
+	doneCalled chan struct{}
+}
+
+func (c *doneSignalingContext) Done() <-chan struct{} {
+	select {
+	case c.doneCalled <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
+func TestPauser_HasBaselineThrottle(t *testing.T) {
+	var nilPauser *Pauser
+	assert.False(t, nilPauser.HasBaselineThrottle())
+
+	p := NewPauser()
+	assert.False(t, p.HasBaselineThrottle())
+	p.SetBaselineThrottle(ThrottleBackground)
+	assert.True(t, p.HasBaselineThrottle())
+}
+
+func TestPauser_BaselineSleepObservesPause(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(time.Millisecond, 50*time.Millisecond)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Millisecond)
+	p.mu.Unlock()
+
+	ctx := &doneSignalingContext{
+		Context:    context.Background(),
+		doneCalled: make(chan struct{}, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(ctx)
+	}()
+
+	<-ctx.doneCalled
+	p.Pause()
+	select {
+	case err := <-done:
+		require.Failf(t, "Wait returned while paused", "error: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+
+	p.Resume()
+	require.NoError(t, <-done)
+}
+
+func TestPauser_BaselineSleepHonorsCancellation(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(time.Millisecond, time.Hour)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Millisecond)
+	p.mu.Unlock()
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := &doneSignalingContext{
+		Context:    baseCtx,
+		doneCalled: make(chan struct{}, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(ctx)
+	}()
+
+	<-ctx.doneCalled
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestBaselineSleepForElapsed_CapsLongWorkCompensation(t *testing.T) {
+	assert.Equal(t, maxBaselineThrottleSleep, baselineSleepForElapsed(
+		3*time.Second, backgroundThrottleWork, backgroundThrottleSleep,
+	))
+}
+
+func TestBaselineSleepForElapsed_PreservesShortWorkRatio(t *testing.T) {
+	assert.Equal(t, 80*time.Millisecond, baselineSleepForElapsed(
+		80*time.Millisecond, backgroundThrottleWork, backgroundThrottleSleep,
+	))
+}
+
+func TestPauser_ResumeReturnsToBaselineThrottle(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(10*time.Millisecond, 20*time.Millisecond)
+	p.Throttle(ThrottleHeavy)
+	p.Resume()
+
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-10 * time.Millisecond)
+	p.mu.Unlock()
+	start := time.Now()
+	require.NoError(t, p.Wait(context.Background()))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.False(t, p.IsThrottled())
+}
+
+func TestPauser_ResumeResetsRunningBaselineWindow(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Hour)
+	p.mu.Unlock()
+
+	p.Resume()
+	require.NoError(t, p.Wait(context.Background()))
+}
+
+func TestPauser_ThrottleAllowsWorkWithinQuantum(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.SetThrottleQuanta(time.Hour, time.Hour)
+
+	// Work window has not expired, so Wait must return immediately.
+	err := p.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, p.IsThrottled())
+	assert.False(t, p.IsPaused())
+}
+
+func TestPauser_ThrottleSleepsAfterQuantumExpires(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.SetThrottleQuanta(time.Nanosecond, 50*time.Millisecond)
+
+	// Ensure the work window is expired.
+	time.Sleep(time.Millisecond)
+
+	start := time.Now()
+	err := p.Wait(context.Background())
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "Wait should have slept for the sleep quantum")
+}
+
+func TestPauser_ThrottleResetsWindowAfterSleep(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.SetThrottleQuanta(time.Hour, time.Millisecond)
+
+	// Force the first window to be expired.
+	p.mu.Lock()
+	p.workStart = time.Now().Add(-2 * time.Hour)
+	p.mu.Unlock()
+
+	require.NoError(t, p.Wait(context.Background()))
+
+	// Window was reset to a fresh hour-long quantum: immediate return.
+	start := time.Now()
+	require.NoError(t, p.Wait(context.Background()))
+	assert.Less(t, time.Since(start), 10*time.Millisecond)
+}
+
+func TestPauser_ThrottleCancelledDuringSleep(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.SetThrottleQuanta(time.Nanosecond, time.Hour)
+	time.Sleep(time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := p.Wait(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestPauser_ResumeInterruptsThrottleSleep(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.SetThrottleQuanta(time.Nanosecond, time.Hour)
+	time.Sleep(time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(context.Background())
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	p.Resume()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not unblock after Resume during throttle sleep")
+	}
+	assert.False(t, p.IsThrottled())
+}
+
+func TestPauser_PauseOverridesThrottle(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.Pause()
+
+	assert.True(t, p.IsPaused())
+	assert.False(t, p.IsThrottled())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := p.Wait(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestPauser_ThrottleReleasesPausedWaiters(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Hour, time.Hour)
+	p.Pause()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(context.Background())
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	p.Throttle(ThrottleLight)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("paused waiter was not released into throttled state")
+	}
+	assert.True(t, p.IsThrottled())
+}
+
+func TestPauser_ThrottleIsIdempotent(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	p.Throttle(ThrottleLight) // should not panic or reset state
+
+	assert.True(t, p.IsThrottled())
+	p.Resume()
+	assert.False(t, p.IsThrottled())
+}
+
+func TestPauser_ThrottleLightUsesLightPreset(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+
+	assert.Equal(t, ThrottleLight, p.Level())
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.Equal(t, lightThrottleWork, p.workQuantum)
+	assert.Equal(t, lightThrottleSleep, p.sleepQuantum)
+}
+
+func TestPauser_ThrottleHeavyUsesHeavyPreset(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleHeavy)
+
+	assert.Equal(t, ThrottleHeavy, p.Level())
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.Equal(t, heavyThrottleWork, p.workQuantum)
+	assert.Equal(t, heavyThrottleSleep, p.sleepQuantum)
+}
+
+func TestPauser_BaselineThrottleUsesBackgroundPreset(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.True(t, p.baselineEnabled)
+	assert.Equal(t, backgroundThrottleWork, p.baselineWorkQuantum)
+	assert.Equal(t, backgroundThrottleSleep, p.baselineSleep)
+}
+
+func TestPauser_ThrottleLevelSwitchUpdatesQuanta(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleLight)
+	require.Equal(t, ThrottleLight, p.Level())
+
+	p.Throttle(ThrottleHeavy)
+	assert.Equal(t, ThrottleHeavy, p.Level())
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.Equal(t, heavyThrottleWork, p.workQuantum)
+	assert.Equal(t, heavyThrottleSleep, p.sleepQuantum)
+}
+
+func TestPauser_ThrottleSameLevelIsNoOpOnWorkWindow(t *testing.T) {
+	p := NewPauser()
+	p.Throttle(ThrottleHeavy)
+
+	p.mu.Lock()
+	firstWorkStart := p.workStart
+	p.mu.Unlock()
+
+	time.Sleep(time.Millisecond)
+	p.Throttle(ThrottleHeavy) // same level: idempotent, must not reset the window
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.Equal(t, firstWorkStart, p.workStart)
 }
 
 func TestPauser_PauseResumeRapidCycling(t *testing.T) {

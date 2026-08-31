@@ -131,34 +131,3 @@ func sqlDeleteMediaTag(ctx context.Context, db sqlQueryable, mediaDBID, tagDBID 
 
 	return nil
 }
-
-func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaTagLink, error) {
-	query := `
-		SELECT mt.MediaDBID, mt.TagDBID
-		FROM MediaTags mt
-		JOIN Media m ON mt.MediaDBID = m.DBID
-		JOIN Systems s ON m.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
-		ORDER BY mt.MediaDBID, mt.TagDBID
-	`
-	rows, err := db.QueryContext(ctx, query, systemID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query media tags for system %s: %w", systemID, err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	links := make([]database.MediaTagLink, 0)
-	for rows.Next() {
-		var link database.MediaTagLink
-		if err := rows.Scan(&link.MediaDBID, &link.TagDBID); err != nil {
-			return nil, fmt.Errorf("failed to scan media tags for system %s: %w", systemID, err)
-		}
-		links = append(links, link)
-	}
-
-	return links, rows.Err()
-}

@@ -1,0 +1,95 @@
+{
+  "policy_version": 1,
+  "vectors": [
+    {
+      "name": "game with identity and context tags",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "SNES",
+        "display_name": "Super Mario World",
+        "core_slug": "supermarioworld",
+        "observation_fingerprint": "sha256:05321b55b8f053db8788c97e0478ee608b744200fe864297d4191a5540d90de8",
+        "tags": [
+          {"type": "extension", "value": "sfc", "role": "context"},
+          {"type": "region", "value": "us", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"SNES\",\"core_slug\":\"supermarioworld\",\"tags\":[{\"type\":\"extension\",\"value\":\"sfc\",\"role\":\"context\"},{\"type\":\"region\",\"value\":\"us\",\"role\":\"identity\"}],\"policy_version\":1}"
+    },
+    {
+      "name": "valid empty tag observation",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "NES",
+        "display_name": "Tetris",
+        "core_slug": "tetris",
+        "observation_fingerprint": "sha256:85ce46396434b1369ce019ddd3c2449ebc29896a1bd2a0ef605203fad1b7a2f0",
+        "tags": [],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"NES\",\"core_slug\":\"tetris\",\"tags\":[],\"policy_version\":1}"
+    },
+    {
+      "name": "non-latin Core slug",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "PSX",
+        "display_name": "悪魔城ドラキュラ",
+        "core_slug": "悪魔城ドラキュラ",
+        "observation_fingerprint": "sha256:02e6c02347eb756ea629d226c68e6c65fdc026a51ac2a380cac423b059580eaf",
+        "tags": [
+          {"type": "region", "value": "jp", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"PSX\",\"core_slug\":\"悪魔城ドラキュラ\",\"tags\":[{\"type\":\"region\",\"value\":\"jp\",\"role\":\"identity\"}],\"policy_version\":1}"
+    },
+    {
+      "name": "context tag changes observation",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "SNES",
+        "display_name": "Super Mario World",
+        "core_slug": "supermarioworld",
+        "observation_fingerprint": "sha256:5a068648e458884f72a7526caa71c264dfa68b2a9c5e211180575660721cb897",
+        "tags": [
+          {"type": "extension", "value": "zip", "role": "context"},
+          {"type": "region", "value": "us", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"SNES\",\"core_slug\":\"supermarioworld\",\"tags\":[{\"type\":\"extension\",\"value\":\"zip\",\"role\":\"context\"},{\"type\":\"region\",\"value\":\"us\",\"role\":\"identity\"}],\"policy_version\":1}"
+    },
+    {
+      "name": "U+2028 and U+2029 line separators are always \\u-escaped",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "PSX",
+        "display_name": "Line Separator Game",
+        "core_slug": "lineseparatorgame",
+        "observation_fingerprint": "sha256:9457c0b1449894c1d610b72893a162923e55e6c2db8aea292c9a53597e587bfa",
+        "tags": [
+          {"type": "publisher", "value": "line and break", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"PSX\",\"core_slug\":\"lineseparatorgame\",\"tags\":[{\"type\":\"publisher\",\"value\":\"line\\u2028and\\u2029break\",\"role\":\"identity\"}],\"policy_version\":1}"
+    },
+    {
+      "name": "ampersand tag value is not HTML-escaped",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "Genesis",
+        "display_name": "Dungeons & Dragons: Warriors of the Eternal Sun",
+        "core_slug": "dungeonsanddragonswarriorsoftheeternalsun",
+        "observation_fingerprint": "sha256:d6bf694f32201030a1f973b195b77227f4b31fc510f719e326db775c145e1b59",
+        "tags": [
+          {"type": "publisher", "value": "d&d", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"Genesis\",\"core_slug\":\"dungeonsanddragonswarriorsoftheeternalsun\",\"tags\":[{\"type\":\"publisher\",\"value\":\"d&d\",\"role\":\"identity\"}],\"policy_version\":1}"
+    }
+  ]
+}

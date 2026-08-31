@@ -36,14 +36,28 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	mediaHistoryUpdateInterval = 15 * time.Second
+	activePlaySyncInterval     = 5 * time.Minute
+	mediaIdentityLookupTimeout = 2 * time.Second
+)
+
+var mediaIdentityRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+type mediaIdentityLookupFunc func(
+	context.Context, database.MediaDBI, string, string,
+) (database.MediaIdentity, bool, error)
+
 // mediaHistoryTracker encapsulates the state and logic for tracking media history.
 // It coordinates between the notification listener and the periodic PlayTime updater.
 type mediaHistoryTracker struct {
 	clock                     clockwork.Clock
 	currentMediaStartTime     time.Time
 	currentMediaStartTimeMono time.Time
+	lastPlaySyncRequestAt     time.Time
 	st                        *state.State
 	db                        *database.Database
+	requestPlaySync           func()
 	currentHistoryDBID        int64
 	closingHistoryDBID        int64
 	mu                        syncutil.RWMutex
@@ -54,6 +68,41 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 	for notif := range notificationChan {
 		switch notif.Method {
 		case models.NotificationStarted:
+			// If a previous session is still open (e.g., a stop notification was
+			// dropped), close it now before creating the new entry. This prevents orphaned
+			// rows with no EndTime from accumulating in MediaHistory.
+			t.mu.RLock()
+			prevDBID := t.currentHistoryDBID
+			prevStartTime := t.currentMediaStartTime
+			prevStartTimeMono := t.currentMediaStartTimeMono
+			t.mu.RUnlock()
+
+			if prevDBID != 0 {
+				log.Warn().Int64("dbid", prevDBID).
+					Msg("media history: closing orphaned entry before new session starts")
+				endTime := t.clock.Now()
+				var playTime int
+				if !prevStartTimeMono.IsZero() {
+					playTime = int(time.Since(prevStartTimeMono).Seconds())
+				} else if !prevStartTime.IsZero() {
+					playTime = int(endTime.Sub(prevStartTime).Seconds())
+				}
+				if closeErr := t.db.UserDB.CloseMediaHistory(prevDBID, endTime, playTime); closeErr != nil {
+					log.Error().Err(closeErr).Int64("dbid", prevDBID).
+						Msg("media history: failed to close orphaned entry")
+				} else if t.requestPlaySync != nil {
+					t.requestPlaySync()
+				}
+				t.mu.Lock()
+				if t.currentHistoryDBID == prevDBID {
+					t.currentHistoryDBID = 0
+					t.currentMediaStartTime = time.Time{}
+					t.currentMediaStartTimeMono = time.Time{}
+					t.lastPlaySyncRequestAt = time.Time{}
+				}
+				t.mu.Unlock()
+			}
+
 			// Media started - create new history entry
 			activeMedia := t.st.ActiveMedia()
 			if activeMedia != nil {
@@ -96,6 +145,12 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					CreatedAt:      now,
 					UpdatedAt:      now,
 				}
+				// Attribution is fixed at launch time: the row keeps this
+				// profile even if the active profile switches mid-game.
+				if activeProfile := t.st.ActiveProfile(); activeProfile != nil {
+					profileID := activeProfile.ProfileID
+					entry.ProfileID = &profileID
+				}
 				dbid, addErr := t.db.UserDB.AddMediaHistory(entry)
 				if addErr != nil {
 					log.Error().Err(addErr).Msg("failed to add media history entry")
@@ -106,6 +161,12 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					t.currentMediaStartTimeMono = nowMono
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Msg("created media history entry")
+					t.requestActivePlaySyncIfDue(dbid, now, true)
+
+					// MediaDB lookup may block behind indexing. Capture lookup keys now,
+					// then enrich the durable history row off the notification path.
+					systemID, mediaPath := entry.SystemID, entry.MediaPath
+					go t.snapshotMediaHistoryIdentity(dbid, systemID, mediaPath)
 				}
 			}
 
@@ -148,22 +209,140 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 						t.currentHistoryDBID = 0
 						t.currentMediaStartTime = time.Time{}
 						t.currentMediaStartTimeMono = time.Time{}
+						t.lastPlaySyncRequestAt = time.Time{}
 					}
 					if t.closingHistoryDBID == dbid {
 						t.closingHistoryDBID = 0
 					}
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("closed media history entry")
+					if t.requestPlaySync != nil {
+						t.requestPlaySync()
+					}
 				}
 			}
 		}
 	}
 }
 
-// updatePlayTime periodically updates the PlayTime for the currently active media
-// history entry every minute.
+// lookupMediaIdentityWithRetry distinguishes a definitive unindexed path from
+// transient MediaDB failures. retryDelays bounds attempts to len(delays)+1.
+func lookupMediaIdentityWithRetry(
+	ctx context.Context,
+	mediaDB database.MediaDBI,
+	systemID string,
+	path string,
+	attemptTimeout time.Duration,
+	retryDelays []time.Duration,
+	lookup mediaIdentityLookupFunc,
+) (database.MediaIdentity, bool, error) {
+	if lookup == nil {
+		lookup = database.LookupMediaIdentity
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if err := ctx.Err(); err != nil {
+			return database.MediaIdentity{}, false, err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		identity, found, err := lookup(attemptCtx, mediaDB, systemID, path)
+		cancel()
+		if err == nil {
+			return identity, found, nil
+		}
+		lastErr = err
+		if attempt == len(retryDelays) {
+			break
+		}
+
+		timer := time.NewTimer(retryDelays[attempt])
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return database.MediaIdentity{}, false, ctx.Err()
+		}
+	}
+	return database.MediaIdentity{}, false, lastErr
+}
+
+// lookupMediaIdentity snapshots scanner-derived identity for launched media.
+// A launch outside the index has no snapshot; transient failures retry within
+// a small bound without blocking notifications.
+func (t *mediaHistoryTracker) lookupMediaIdentity(
+	ctx context.Context, systemID, path string,
+) (database.MediaIdentity, bool, error) {
+	return lookupMediaIdentityWithRetry(
+		ctx,
+		t.db.MediaDB,
+		systemID,
+		path,
+		mediaIdentityLookupTimeout,
+		mediaIdentityRetryDelays,
+		database.LookupMediaIdentity,
+	)
+}
+
+// snapshotMediaHistoryIdentity enriches a persisted entry without blocking notifications.
+func (t *mediaHistoryTracker) snapshotMediaHistoryIdentity(dbid int64, systemID, path string) {
+	ctx := context.Background()
+	if t.st != nil {
+		ctx = t.st.GetContext()
+	}
+	identity, found, lookupErr := t.lookupMediaIdentity(ctx, systemID, path)
+	if lookupErr != nil {
+		if ctx.Err() == nil {
+			log.Warn().Err(lookupErr).Int64("dbid", dbid).Msg("failed to resolve media history identity")
+		}
+		return
+	}
+	if !found {
+		return
+	}
+	updated, err := t.db.UserDB.UpdateMediaHistoryIdentity(dbid, &identity)
+	if err != nil {
+		log.Warn().Err(err).Int64("dbid", dbid).Msg("failed to store media history identity")
+		return
+	}
+	if updated && t.requestPlaySync != nil {
+		t.requestPlaySync()
+	}
+}
+
+// requestActivePlaySyncIfDue requests an immediate now-playing upload at
+// session start, then no more than once per activePlaySyncInterval. The DBID
+// check prevents a late updater tick from requesting a session already closing.
+func (t *mediaHistoryTracker) requestActivePlaySyncIfDue(dbid int64, now time.Time, force bool) {
+	if t.requestPlaySync == nil {
+		return
+	}
+
+	t.mu.Lock()
+	if t.currentHistoryDBID != dbid || t.closingHistoryDBID == dbid {
+		t.mu.Unlock()
+		return
+	}
+	if !force && !t.lastPlaySyncRequestAt.IsZero() &&
+		now.Before(t.lastPlaySyncRequestAt.Add(activePlaySyncInterval)) {
+		t.mu.Unlock()
+		return
+	}
+	t.lastPlaySyncRequestAt = now
+	requestPlaySync := t.requestPlaySync
+	t.mu.Unlock()
+
+	requestPlaySync()
+}
+
+// updatePlayTime periodically updates the current entry, limiting crash-loss to 15 seconds.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
-	ticker := t.clock.NewTicker(1 * time.Minute)
+	ticker := t.clock.NewTicker(mediaHistoryUpdateInterval)
 	defer ticker.Stop()
 
 	for {
@@ -197,6 +376,7 @@ func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 					log.Warn().Err(updateErr).Msg("failed to update media history play time")
 				} else {
 					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("updated media history play time")
+					t.requestActivePlaySyncIfDue(dbid, t.clock.Now(), false)
 				}
 			}
 		case <-ctx.Done():

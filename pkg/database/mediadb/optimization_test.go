@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -36,9 +37,9 @@ import (
 
 func expectAnalyzeStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("(?i)analyze;?").
+	mock.ExpectExec("(?i)PRAGMA optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
@@ -65,8 +66,12 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	// PopulateBrowseCache: BEGIN, SELECT (empty), DELETEs, root dir insert,
-	// count prepare, COMMIT.
+	// PopulateBrowseCache pins a connection and disables foreign keys before
+	// opening its transaction — the unqualified DELETE below cascades otherwise
+	// (see acquireBrowseCacheConn, #1279). Then: BEGIN, SELECT (empty), DELETEs,
+	// root dir insert, count prepare, COMMIT, and the pragma is restored.
+	mock.ExpectExec("PRAGMA foreign_keys = OFF").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT m.SystemDBID, m.Path").
 		WillReturnRows(sqlmock.NewRows([]string{"SystemDBID", "Path"}))
@@ -82,22 +87,47 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigBrowseIndexVersion, browseCacheSchemaVersion).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigBrowseIndexComplete, "1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+	mock.ExpectExec("PRAGMA foreign_keys = ON").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+// expectDisambiguationBackfillStepNoop mocks the disambiguation_backfill step
+// finding the stamp already at the current algorithm version and skipping.
+func expectDisambiguationBackfillStepNoop(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "disambiguation_backfill").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigDisambiguationVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}).AddRow(disambiguationAlgoVersion))
 }
 
 func expectWALCheckpointStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "wal_checkpoint").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("(?i)PRAGMA wal_checkpoint").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("(?i)^PRAGMA wal_checkpoint\\(TRUNCATE\\);?$").
+		WillReturnRows(sqlmock.NewRows([]string{"busy", "log", "checkpointed"}).AddRow(0, 0, 0))
 }
 
-// expectPostAnalyzeSteps mocks all steps that run after analyze in the
-// background optimization sequence: page_prefetch, browse_cache, wal_checkpoint.
+// expectOptimizationResumeRead mocks the read of the persisted optimization step
+// that RunBackgroundOptimization performs to decide where to resume. An empty
+// value means "start from the first step".
+func expectOptimizationResumeRead(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigOptimizationStep).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}).AddRow(""))
+}
+
+// expectPostAnalyzeSteps mocks the steps that run after PRAGMA optimize in the
+// background optimization sequence: page_prefetch, wal_checkpoint. browse_cache
+// runs before PRAGMA optimize (see expectBrowseCacheStep), not here.
 func expectPostAnalyzeSteps(mock sqlmock.Sqlmock) {
 	expectPagePrefetchStep(mock)
-	expectBrowseCacheStep(mock)
 	expectWALCheckpointStep(mock)
 }
 
@@ -133,12 +163,12 @@ func TestSetGetOptimizationStatus(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql:               db,
 				ctx:               ctx,
 				clock:             clockwork.NewFakeClock(),
 				analyzeRetryDelay: 1 * time.Millisecond,
 				vacuumRetryDelay:  1 * time.Millisecond,
 			}
+			mediaDB.sql.Store(db)
 
 			// Mock set operation
 			mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -169,12 +199,12 @@ func TestGetOptimizationStatus_NoStatus(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock no rows found
 	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ?").
@@ -198,8 +228,8 @@ func TestSetGetOptimizationStep(t *testing.T) {
 			step: "indexes",
 		},
 		{
-			name: "analyze step",
-			step: "analyze",
+			name: "pragma optimize step",
+			step: "pragma_optimize",
 		},
 		{
 			name: "vacuum step",
@@ -219,12 +249,12 @@ func TestSetGetOptimizationStep(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql:               db,
 				ctx:               ctx,
 				clock:             clockwork.NewFakeClock(),
 				analyzeRetryDelay: 1 * time.Millisecond,
 				vacuumRetryDelay:  1 * time.Millisecond,
 			}
+			mediaDB.sql.Store(db)
 
 			// Mock set operation
 			mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -255,30 +285,73 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
-	// Set optimization as already running
-	mediaDB.isOptimizing.Store(true)
+	// Claim optimization as already running.
+	lease, acquireErr := mediaDB.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, acquireErr)
+	defer lease.Release()
 
-	// This should return immediately without doing anything
+	// A second start returns immediately without changing ownership.
 	mediaDB.RunBackgroundOptimization(nil, nil)
+	assert.Equal(t, database.MediaWriteOperationOptimization, mediaDB.ActiveMediaWriteOperation())
+}
 
-	// Verify it's still marked as running
-	assert.True(t, mediaDB.isOptimizing.Load())
+func TestBrowseCacheRebuildReportsOptimizing(t *testing.T) {
+	mediaDB := &MediaDB{}
+	assert.False(t, mediaDB.IsOptimizing())
+
+	mediaDB.BeginBrowseCacheRebuild()
+	assert.True(t, mediaDB.IsOptimizing())
+
+	mediaDB.EndBrowseCacheRebuild()
+	assert.False(t, mediaDB.IsOptimizing())
+}
+
+func TestRunBackgroundOptimizationWithLease_InvalidOperationReleasesLease(t *testing.T) {
+	mediaDB := &MediaDB{}
+	lease, err := mediaDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, err)
+
+	err = mediaDB.RunBackgroundOptimizationWithLease(nil, nil, lease)
+	require.ErrorIs(t, err, database.ErrMediaWriteLease)
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
+}
+
+func TestRunBackgroundOptimization_PanicReleasesLease(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	mediaDB := &MediaDB{ctx: context.Background(), clock: clockwork.NewFakeClock()}
+	mediaDB.sql.Store(sqlDB)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, IndexingStatusRunning).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, IndexingStatusFailed).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mediaDB.RunBackgroundOptimization(func(bool) {
+		panic("injected callback panic")
+	}, nil)
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
+	assert.False(t, mediaDB.IsOptimizing())
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestRunBackgroundOptimization_NilDatabase(t *testing.T) {
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:   nil,
 		ctx:   ctx,
 		clock: clockwork.NewFakeClock(),
 	}
+	mediaDB.sql.Store(nil)
 
 	// This should return immediately without panicking
 	mediaDB.RunBackgroundOptimization(nil, nil)
@@ -294,19 +367,23 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
-	// Steps run in order: temporary_repair_parent_dirs → analyze → page_prefetch → browse_cache → wal_checkpoint
+	// Steps run in order: temporary_repair_parent_dirs → browse_cache →
+	// pragma_optimize → disambiguation_backfill → page_prefetch → wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -328,32 +405,35 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
-	// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+	// temporary repair and browse_cache run first; pragma_optimize failure aborts
+	// before page_prefetch/wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	analyzeError := errors.New("analyze failed")
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // all retries exhausted
+	analyzeError := errors.New("pragma optimize failed")
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // all retries exhausted
 
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
-		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mediaDB.RunBackgroundOptimization(nil, nil)
@@ -368,33 +448,37 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 	defer func() { _ = db.Close() }()
 
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               context.Background(),
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "page_prefetch").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("^SELECT COUNT\\(\\*\\) FROM Tags$").
 		WillReturnError(context.Canceled)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
+		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	assert.False(t, mediaDB.isOptimizing.Load())
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -405,19 +489,22 @@ func TestConcurrentOptimization(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock successful optimization for the first call
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -475,12 +562,12 @@ func TestOptimizationDatabaseError(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock failure to set initial status
 	statusError := errors.New("database connection lost")
@@ -504,18 +591,21 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectOptimizationResumeRead(mock)
 		expectTemporaryParentDirRepairStepNoop(mock)
+		expectBrowseCacheStep(mock)
 		expectAnalyzeStep(mock)
+		expectDisambiguationBackfillStepNoop(mock)
 		expectPostAnalyzeSteps(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "completed").
@@ -556,27 +646,33 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewRealClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
-		// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+		// temporary repair and browse_cache run first; pragma_optimize failure
+		// aborts before page_prefetch/wal_checkpoint.
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectOptimizationResumeRead(mock)
 		expectTemporaryParentDirRepairStepNoop(mock)
+		expectBrowseCacheStep(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "analyze").
+			WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		analyzeError := errors.New("analyze failed")
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
+		analyzeError := errors.New("pragma optimize failed")
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
 
+		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+			WithArgs(DBConfigOptimizationStep, "").
+			WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "failed").
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -613,18 +709,21 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectOptimizationResumeRead(mock)
 		expectTemporaryParentDirRepairStepNoop(mock)
+		expectBrowseCacheStep(mock)
 		expectAnalyzeStep(mock)
+		expectDisambiguationBackfillStepNoop(mock)
 		expectPostAnalyzeSteps(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "completed").
@@ -648,12 +747,12 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		// Mock failure to set initial status
 		statusError := errors.New("database connection lost")
@@ -694,19 +793,22 @@ func TestRunBackgroundOptimization_PausesAndResumes(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Set up expectations for a full successful run
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").

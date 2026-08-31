@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,6 +114,24 @@ func TestActiveMedia_Equal(t *testing.T) {
 				SystemName: "SNES",
 				Path:       "/roms/mario.nes",
 				Name:       "Super Mario Bros.",
+			},
+			expected: false,
+		},
+		{
+			name: "different slot",
+			a: &ActiveMedia{
+				SystemID:   "Audio",
+				SystemName: "Audio",
+				Path:       "/music/song.mp3",
+				Name:       "Song",
+				Slot:       "primary",
+			},
+			b: &ActiveMedia{
+				SystemID:   "Audio",
+				SystemName: "Audio",
+				Path:       "/music/song.mp3",
+				Name:       "Song",
+				Slot:       "background",
 			},
 			expected: false,
 		},
@@ -218,6 +237,23 @@ func TestActiveMedia_Equal(t *testing.T) {
 	}
 }
 
+func TestActiveMedia_PlaybackStateJSON(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(ActiveMedia{PlaybackState: MediaPlaybackStatePaused})
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, "paused", got["playbackState"])
+
+	raw, err = json.Marshal(ActiveMedia{})
+	require.NoError(t, err)
+	got = nil
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.NotContains(t, got, "playbackState")
+}
+
 // TestPairedClient_JSONShape pins the wire shape of the PairedClient
 // type returned by the `clients` RPC method. This test exists to catch a
 // future regression where someone embeds *database.Client (which contains
@@ -232,6 +268,7 @@ func TestPairedClient_JSONShape(t *testing.T) {
 	pc := PairedClient{
 		ClientID:   "client-123",
 		ClientName: "Test Client",
+		Role:       "member",
 		CreatedAt:  1700000000,
 		LastSeenAt: 1700001000,
 	}
@@ -244,6 +281,7 @@ func TestPairedClient_JSONShape(t *testing.T) {
 	expectedKeys := map[string]bool{
 		"clientId":   true,
 		"clientName": true,
+		"role":       true,
 		"createdAt":  true,
 		"lastSeenAt": true,
 	}
@@ -291,6 +329,43 @@ func TestClientsResponse_JSONShape(t *testing.T) {
 	assert.Len(t, clients, 2)
 }
 
+func TestClientsCurrentResponse_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paired", func(t *testing.T) {
+		t.Parallel()
+
+		role := "member"
+		resp := ClientsCurrentResponse{
+			Role:         &role,
+			Capabilities: []string{"input", "screenshot"},
+			Access:       "member",
+			Paired:       true,
+		}
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"role":"member","capabilities":["input","screenshot"],"access":"member","paired":true}`,
+			string(raw),
+		)
+	})
+
+	t.Run("unpaired", func(t *testing.T) {
+		t.Parallel()
+
+		resp := ClientsCurrentResponse{
+			Capabilities: []string{},
+			Access:       "legacy",
+		}
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"role":null,"capabilities":[],"access":"legacy","paired":false}`,
+			string(raw),
+		)
+	})
+}
+
 // TestClientsDeleteParams_JSONShape pins the wire shape of the
 // `clients.delete` RPC parameters object.
 func TestClientsDeleteParams_JSONShape(t *testing.T) {
@@ -322,5 +397,66 @@ func TestClientsPairedNotification_JSONShape(t *testing.T) {
 		_, present := got[k]
 		assert.False(t, present,
 			"clients.paired notification must never include %q", k)
+	}
+}
+
+func marshalledTagsField(t *testing.T, value any) (any, bool) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	tags, present := fields["tags"]
+	return tags, present
+}
+
+func TestMediaHistoryEntries_TagsJSONTriState(t *testing.T) {
+	t.Parallel()
+
+	populated := []database.TagInfo{{Tag: "favorite", Type: "collection", Label: "Favorite"}}
+	tests := []struct {
+		value       any
+		name        string
+		wantPresent bool
+		wantLen     int
+	}{
+		{name: "history nil tags omitted", value: MediaHistoryResponseEntry{}},
+		{
+			name:        "history empty tags serialised as empty array",
+			value:       MediaHistoryResponseEntry{Tags: []database.TagInfo{}},
+			wantPresent: true,
+		},
+		{
+			name:        "history populated tags",
+			value:       MediaHistoryResponseEntry{Tags: populated},
+			wantPresent: true,
+			wantLen:     1,
+		},
+		{name: "top nil tags omitted", value: MediaHistoryTopEntry{}},
+		{
+			name:        "top empty tags serialised as empty array",
+			value:       MediaHistoryTopEntry{Tags: []database.TagInfo{}},
+			wantPresent: true,
+		},
+		{
+			name:        "top populated tags",
+			value:       MediaHistoryTopEntry{Tags: populated},
+			wantPresent: true,
+			wantLen:     1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tags, present := marshalledTagsField(t, tt.value)
+			require.Equal(t, tt.wantPresent, present)
+			if !tt.wantPresent {
+				return
+			}
+			list, ok := tags.([]any)
+			require.True(t, ok, "tags must serialise as a JSON array, got %T", tags)
+			assert.Len(t, list, tt.wantLen)
+		})
 	}
 }

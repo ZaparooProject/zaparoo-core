@@ -26,7 +26,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +42,7 @@ func TestNewPlatform(t *testing.T) {
 
 	assert.NotNil(t, p)
 	assert.NotNil(t, p.Base)
+	assert.True(t, p.gameMode.Enabled())
 	assert.Equal(t, platformids.ChimeraOS, p.ID())
 }
 
@@ -61,6 +65,12 @@ func TestPlatformSettings(t *testing.T) {
 	assert.NotEmpty(t, settings.ConfigDir)
 	assert.NotEmpty(t, settings.TempDir)
 	assert.NotEmpty(t, settings.LogDir)
+}
+
+func TestPlatformStartPreDoesNotRequireEmulators(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, NewPlatform().StartPre(nil))
 }
 
 func TestPlatformSupportedReaders(t *testing.T) {
@@ -106,8 +116,50 @@ func TestPlatformLaunchers(t *testing.T) {
 	}
 
 	assert.True(t, launcherIDs["Steam"], "Should have Steam launcher")
+	for _, launcher := range launchers {
+		if launcher.ID == "Steam" {
+			assert.Equal(t, platforms.LifecycleExternal, launcher.Lifecycle)
+		}
+	}
 	assert.True(t, launcherIDs["ChimeraGOG"], "Should have ChimeraGOG launcher")
 	assert.True(t, launcherIDs["Generic"], "Should have Generic launcher")
+
+	for i := range launchers {
+		if launchers[i].ID == "Generic" {
+			assert.NotNil(t, launchers[i].Kill, "non-Steam launchers should restore Game Mode focus")
+		}
+	}
+}
+
+func TestPlatformLaunchersIncludeSharedRetroArchOnce(t *testing.T) {
+	t.Parallel()
+
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+	options := linuxemu.NewOptions(t.TempDir(), sharedretroarch.Options{Exec: []string{"flatpak"}})
+	options.IncludeStandalone = false
+	options.IncludeProviderDecks = false
+	options.IsFlatpakInstalled = func(id string) bool { return id == linuxemu.RetroArchFlatpakID }
+	p := NewPlatform()
+	p.emulationOptionsOverride = &options
+
+	count := 0
+	for _, launcher := range p.Launchers(cfg) {
+		if launcher.ID == "RetroArchSNES9x" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+	assert.Contains(t, launcherIDs(p.Launchers(cfg)), "ChimeraGOG")
+}
+
+func launcherIDs(launchers []platforms.Launcher) map[string]struct{} {
+	ids := make(map[string]struct{}, len(launchers))
+	for i := range launchers {
+		ids[launchers[i].ID] = struct{}{}
+	}
+	return ids
 }
 
 func TestPlatformLaunchersContainSteamFirst(t *testing.T) {
@@ -138,4 +190,11 @@ func TestPlatformLaunchersContainSteamFirst(t *testing.T) {
 		}
 		assert.GreaterOrEqual(t, steamPos, 0, "Steam launcher should be present")
 	}
+}
+
+func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.NoError(t, p.ReturnToMenu())
 }

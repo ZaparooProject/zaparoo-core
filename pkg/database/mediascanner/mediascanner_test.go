@@ -23,19 +23,24 @@ import (
 	"archive/zip"
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -43,6 +48,42 @@ import (
 
 // testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
 var testLauncherCacheMutex syncutil.Mutex
+
+func TestCoalesceScanResults(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("roms", "SNES", "Game.sfc")
+	files := []platforms.ScanResult{
+		{Path: path, Name: "Game"},
+		{Path: filepath.Join("roms", "snes", ".", "game.sfc"), NoExt: true},
+		{Path: filepath.Join("other", "snes", "Game.sfc"), Name: "Game"},
+	}
+
+	result := coalesceScanResults("SNES", files)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, path, result[0].Path)
+	assert.Equal(t, "Game", result[0].Name)
+	assert.True(t, result[0].NoExt)
+	assert.Equal(t, files[2], result[1])
+}
+
+func TestCoalesceScanResultsFillsMissingName(t *testing.T) {
+	t.Parallel()
+
+	files := []platforms.ScanResult{
+		{Path: "steam://123"},
+		{Path: "STEAM://123", Name: "Game"},
+		{Path: "steam://124", Name: "Other"},
+	}
+
+	result := coalesceScanResults("PC", files)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, "Game", result[0].Name)
+	assert.Equal(t, "steam://123", result[0].Path)
+	assert.Equal(t, files[2], result[1])
+}
 
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
 // both have their scanners executed. This reproduces the bug where only one scanner
@@ -116,6 +157,35 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	// Both scanners should have been called
 	assert.True(t, scanner1Called, "Scanner 1 should have been called")
 	assert.True(t, scanner2Called, "Scanner 2 should have been called") // This will fail with the current bug
+}
+
+func TestGetSystemPathsIncludesUnavailableLaunchers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemFolder := filepath.Join(root, "nes")
+	require.NoError(t, os.Mkdir(systemFolder, 0o750))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID:           "UnavailableLauncher",
+			SystemID:     systemdefs.SystemNES,
+			Folders:      []string{"nes"},
+			Availability: func(*config.Instance) error { return errors.New("runtime not installed") },
+		},
+	})
+
+	results := getSystemPathsForLauncherCache(
+		context.Background(),
+		[]string{root},
+		[]systemdefs.System{{ID: systemdefs.SystemNES}},
+		cache,
+	)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemNES, results[0].System.ID)
+	assert.Equal(t, systemFolder, results[0].Path)
 }
 
 func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
@@ -197,44 +267,19 @@ func TestScannerDoubleExecutionPrevention(t *testing.T) {
 	assert.False(t, shouldRunAgain, "Scanner should not execute again if already marked as scanned")
 }
 
-// TestSeedCanonicalTags_Success tests that SeedCanonicalTags works correctly under normal conditions
+// TestSeedCanonicalTags_Success tests that canonical tag seeding populates
+// the vocabulary and is idempotent.
 func TestSeedCanonicalTags_Success(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 
-	// Use real database
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
 
-	scanState := &database.ScanState{
-		TagTypesIndex: 0,
-		TagTypeIDs:    make(map[string]int),
-		TagsIndex:     0,
-		TagIDs:        make(map[string]int),
-	}
+	require.NoError(t, SeedCanonicalTags(ctx, mediaDB),
+		"SeedCanonicalTags should not return an error on success")
 
-	// Call SeedCanonicalTags with real database
-	err := SeedCanonicalTags(mediaDB, scanState)
-
-	// Verify no error occurred
-	require.NoError(t, err, "SeedCanonicalTags should not return an error on success")
-
-	// Verify state was updated correctly
-	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
-	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
-	// Tags now use composite keys "type:value"
-	assert.Contains(t, scanState.TagIDs, "unknown:unknown", "TagIDs should contain 'unknown:unknown' composite key")
-
-	// Verify that specific tag types were processed and exist in scan state
-	// This tests the actual business logic without needing to query all tag types
-	unknownTagID, exists := scanState.TagTypeIDs["unknown"]
-	assert.True(t, exists, "unknown tag type should be in scan state")
-	assert.Positive(t, unknownTagID, "unknown tag type should have positive ID")
-
-	extensionTagID, exists := scanState.TagTypeIDs["extension"]
-	assert.True(t, exists, "extension tag type should be in scan state")
-	assert.Positive(t, extensionTagID, "extension tag type should have positive ID")
-
-	// Verify that we can find the tag types in the database (tests actual insertion)
+	// Verify that tag types were inserted.
 	unknownType, err := mediaDB.FindTagType(database.TagType{Type: "unknown"})
 	require.NoError(t, err)
 	assert.Equal(t, "unknown", unknownType.Type)
@@ -242,114 +287,52 @@ func TestSeedCanonicalTags_Success(t *testing.T) {
 	extensionType, err := mediaDB.FindTagType(database.TagType{Type: "extension"})
 	require.NoError(t, err)
 	assert.Equal(t, "extension", extensionType.Type)
+
+	countRows := func(query string) int {
+		var n int
+		require.NoError(t, mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, query).Scan(&n))
+		return n
+	}
+	tagTypes := countRows("SELECT COUNT(*) FROM TagTypes")
+	tagValues := countRows("SELECT COUNT(*) FROM Tags")
+	assert.Positive(t, tagTypes)
+	assert.Positive(t, tagValues)
+
+	// Re-seeding must be a no-op: no duplicate types or values.
+	require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
+	assert.Equal(t, tagTypes, countRows("SELECT COUNT(*) FROM TagTypes"))
+	assert.Equal(t, tagValues, countRows("SELECT COUNT(*) FROM Tags"))
 }
 
-// TestSeedCanonicalTags_DatabaseError tests error handling when database operations fail
+// TestSeedCanonicalTags_DatabaseError tests error handling when seeding fails.
 func TestSeedCanonicalTags_DatabaseError(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name          string
-		failOperation string
-		expectedError string
-	}{
-		{
-			name:          "InsertTagType Unknown fails",
-			failOperation: "InsertTagType_Unknown",
-			expectedError: "error inserting tag type unknown",
-		},
-		{
-			name:          "InsertTag unknown fails",
-			failOperation: "InsertTag_unknown",
-			expectedError: "error inserting tag unknown",
-		},
-		{
-			name:          "InsertTagType Extension fails",
-			failOperation: "InsertTagType_Extension",
-			expectedError: "error inserting tag type extension",
-		},
-	}
+	mockDB := &testhelpers.MockMediaDBI{}
+	mockDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
+	mockDB.On("SeedCanonicalTagDefinitions", mock.Anything).Return(assert.AnError).Once()
+	mockDB.On("RollbackTransaction").Return(nil).Once()
 
-	for _, tc := range testCases {
-		// capture range variable
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			mockDB := &testhelpers.MockMediaDBI{}
-			scanState := &database.ScanState{
-				TagTypesIndex: 0,
-				TagTypeIDs:    make(map[string]int),
-				TagsIndex:     0,
-				TagIDs:        make(map[string]int),
-			}
-
-			mockDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
-			mockDB.On("RollbackTransaction").Return(nil).Maybe()
-
-			// Set up mocks based on which operation should fail
-			switch tc.failOperation {
-			case "InsertTagType_Unknown":
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "unknown"
-				})).Return(database.TagType{}, assert.AnError).Once()
-
-			case "InsertTag_unknown":
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "unknown"
-				})).Return(database.TagType{}, nil).Once()
-				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-					return tag.Tag == "unknown"
-				})).Return(database.Tag{}, assert.AnError).Once()
-
-			case "InsertTagType_Extension":
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "unknown"
-				})).Return(database.TagType{}, nil).Once()
-				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-					return tag.Tag == "unknown"
-				})).Return(database.Tag{}, nil).Once()
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "extension"
-				})).Return(database.TagType{}, assert.AnError).Once()
-			}
-
-			// Call SeedCanonicalTags
-			err := SeedCanonicalTags(mockDB, scanState)
-
-			// Verify error occurred and contains expected message
-			require.Error(t, err, "SeedCanonicalTags should return an error when database operation fails")
-			assert.Contains(t, err.Error(), tc.expectedError, "Error message should contain expected text")
-
-			// Verify mock expectations
-			mockDB.AssertExpectations(t)
-		})
-	}
+	err := SeedCanonicalTags(context.Background(), mockDB)
+	require.Error(t, err, "SeedCanonicalTags should return an error when seeding fails")
+	assert.Contains(t, err.Error(), "failed to seed canonical tags")
+	mockDB.AssertExpectations(t)
 }
 
-// TestSeedCanonicalTags_BatchTransaction tests that SeedCanonicalTags uses a batch transaction
-func TestSeedCanonicalTags_BatchTransaction(t *testing.T) {
+// TestSeedCanonicalTags_OwnTransaction ensures SeedCanonicalTags manages its
+// own transaction and leaves none open afterwards.
+func TestSeedCanonicalTags_OwnTransaction(t *testing.T) {
 	t.Parallel()
-
-	// This test ensures SeedCanonicalTags manages its own transaction for batch operations
-	// to avoid database locking issues
 
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
 
-	scanState := &database.ScanState{
-		TagTypesIndex: 0,
-		TagTypeIDs:    make(map[string]int),
-		TagsIndex:     0,
-		TagIDs:        make(map[string]int),
-	}
+	require.NoError(t, SeedCanonicalTags(context.Background(), mediaDB),
+		"SeedCanonicalTags should complete successfully")
 
-	// Call SeedCanonicalTags - this should manage its own transaction
-	err := SeedCanonicalTags(mediaDB, scanState)
-
-	// Verify success
-	require.NoError(t, err, "SeedCanonicalTags should complete successfully with batch transaction")
-	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
-	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
+	// A new transaction can begin immediately: nothing was left open.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	require.NoError(t, mediaDB.RollbackTransaction())
 }
 
 // TestNewNamesIndex_SuccessfulResume tests resuming indexing from an interrupted state
@@ -405,6 +388,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - no Truncate() for successful resume
@@ -415,6 +399,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -446,23 +431,11 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes", "snes", "genesis"}, nil).Once() // Match current systems
 	// Always called at start (unified setup path)
 	mockMediaDB.On("SetIndexingSystems", []string{"genesis", "nes", "snes"}).Return(nil).Once()
-	// Mock GetMax*ID methods for PopulateScanStateForSelectiveIndexing
-	mockMediaDB.On("GetMaxSystemID").Return(int64(5), nil).Once()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(10), nil).Once()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(15), nil).Once()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(3), nil).Once()
-	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Once()
 	// Mock GetAll* methods to populate maps
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
-	// Mock per-system loading (PopulatePersistentScanStateForSystem calls both)
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
+	// Mock per-system loading (PopulatePersistentScanStateForSystem reads titles + media/tags)
 	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
 		Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Maybe()
 	// Subsequent calls: normal operation (no truncate because resuming successfully)
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
@@ -501,116 +474,60 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
-func TestNewNamesIndex_ReportsSystemBeforeLoadingExistingData(t *testing.T) {
+func TestNewNamesIndex_PreexistingCorruptFastFail(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-	mockPlatform.On("Settings").Return(platforms.Settings{})
-	launchers := []platforms.Launcher{
-		{
-			ID:       "nes-launcher",
-			SystemID: "nes",
-			Scanner: func(
-				context.Context, *config.Instance, string, []platforms.ScanResult,
-			) ([]platforms.ScanResult, error) {
-				return nil, nil
-			},
-		},
-		{
-			ID:       "snes-launcher",
-			SystemID: "snes",
-			Scanner: func(
-				context.Context, *config.Instance, string, []platforms.ScanResult,
-			) ([]platforms.ScanResult, error) {
-				return nil, nil
-			},
-		},
-	}
-	mockPlatform.On("Launchers", mock.Anything).Return(launchers)
-	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil).Twice()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Once()
 
-	testLauncherCacheMutex.Lock()
-	originalCache := helpers.GlobalLauncherCache
-	testCache := &helpers.LauncherCache{}
-	testCache.InitializeFromSlice(launchers)
-	helpers.GlobalLauncherCache = testCache
-	defer func() {
-		helpers.GlobalLauncherCache = originalCache
-		testLauncherCacheMutex.Unlock()
-	}()
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media database is corrupt")
+	assert.Contains(t, err.Error(), "original database left untouched")
+	mockMediaDB.AssertNotCalled(t, "GetAllSystems")
+	mockMediaDB.AssertNotCalled(t, "GetAllTags")
+	mockMediaDB.AssertNotCalled(t, "GetAllTagTypes")
+	mockMediaDB.AssertNotCalled(t, "SetIndexingSystems", mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestNewNamesIndex_CorruptExistingTagsMarksDatabaseCorrupt(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockMediaDB := testhelpers.NewMockMediaDBI()
-
-	events := make([]string, 0)
-	recordLoad := func(systemID string) {
-		events = append(events, "load:"+systemID)
-	}
-
-	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
-	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
-	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
-	mockMediaDB.On("UpdateLastGenerated").Return(nil).Once()
-	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Once()
-	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Once()
-	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Once()
-	mockMediaDB.On("SetOptimizationStatus", "pending").Return(nil).Once()
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
-	mockMediaDB.On("SetIndexingSystems", []string{"nes", "snes"}).Return(nil).Once()
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
-	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
-	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
-	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
-	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
-		Run(func(args mock.Arguments) { recordLoad(args.String(0)) }).
-		Return([]database.TitleWithSystem{}, nil).Twice()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaWithFullPath{}, nil).Twice()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Twice()
-	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string{"NES"}).Return(nil).Once()
+	// The run is marked before it seeds, so that seeding commit invalidates
+	// caches as an indexing commit rather than an ordinary write.
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
+	mockMediaDB.On("SeedCanonicalTagDefinitions", mock.Anything).
+		Return(sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
+	// Twice: a fresh run clears the resume marker before it marks itself
+	// running, and the corruption handler clears it again on the way out.
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Twice()
 
-	updateFunc := func(status IndexStatus) {
-		if status.SystemID != "" {
-			events = append(events, "status:"+status.SystemID)
-		}
-	}
-
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{
-		{ID: "nes"},
-		{ID: "snes"},
-	}, &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, updateFunc, nil)
-	require.NoError(t, err)
-
-	indexOf := func(target string) int {
-		for i, event := range events {
-			if event == target {
-				return i
-			}
-		}
-		return -1
-	}
-
-	require.NotEqual(t, -1, indexOf("status:nes"), "events: %v", events)
-	require.NotEqual(t, -1, indexOf("load:nes"), "events: %v", events)
-	require.NotEqual(t, -1, indexOf("status:snes"), "events: %v", events)
-	require.NotEqual(t, -1, indexOf("load:snes"), "events: %v", events)
-	assert.Less(t, indexOf("status:nes"), indexOf("load:nes"), "events: %v", events)
-	assert.Less(t, indexOf("status:snes"), indexOf("load:snes"), "events: %v", events)
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media database is corrupt")
+	assert.Contains(t, err.Error(), "original database left untouched")
 	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 // TestNewNamesIndex_ResumeSystemNotFound tests handling when last indexed system is no longer available
@@ -646,6 +563,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - no special fallback in this scenario
@@ -656,6 +574,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -695,25 +614,8 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()     // Clear for fresh start
 	// Mock GetAll* methods for PopulateScanStateFromDB
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
 		Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
-	// Mock GetMax*ID methods for PopulateScanStateFromDB
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()             // Finally complete
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear on completion
@@ -760,14 +662,7 @@ func TestNewNamesIndex_FullFreshRunDoesNotDropSecondaryIndexes(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 	mockMediaDB.On("SetIndexingSystems", requestedSystemIDs).Return(nil).Once()
@@ -776,6 +671,7 @@ func TestNewNamesIndex_FullFreshRunDoesNotDropSecondaryIndexes(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Once()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil).Once()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
 	mockMediaDB.On("PersistTagCache").Return(nil).Once()
@@ -814,6 +710,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - fallback to fresh start
@@ -825,6 +722,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -863,20 +761,8 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear on completion
 	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
-	// Mock GetMax*ID methods for scan state population
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
-
 	// Mock GetAll* methods for map population
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -907,11 +793,19 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock indexing state methods with database error
 	// The health check now fails fast if GetIndexingStatus returns an error
 	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once()
+	mockMediaDB.On("RollbackTransaction").Return(sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
+	mockMediaDB.On("IntegrityReport").Return([]string{"Page 3: malformed"}).Once()
+	mockMediaDB.On("MarkCorrupt", mock.MatchedBy(func(reason string) bool {
+		return strings.Contains(reason, "failed to rollback indexing transaction")
+	})).Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -980,6 +874,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - should fall back to fresh start when systems differ
@@ -991,6 +886,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -1022,32 +918,12 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	// Previous systems differ from current
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"genesis", "snes"}, nil).Once()
 
-	// Mock GetMax*ID methods for PopulateScanStateFromDB (may be called multiple times)
-	mockMediaDB.On("GetMaxSystemID").Return(int64(5), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(10), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(15), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(3), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(25), nil).Maybe()
-
 	// After checking state, should clear it and start fresh since systems changed
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe() // May be called multiple times
 	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Maybe()    // Clear status when systems change
 
-	// Mock GetMax*ID methods for fresh start scan state population (may return either 5 or 0)
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
-
 	// Mock GetAll* methods for scan state population (may be called multiple times)
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 
 	mockMediaDB.On("SetIndexingSystems", []string{"nes", "snes"}).Return(nil).Once()
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
@@ -1089,6 +965,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	mockMediaDB.On("TruncateSystems", []string{}).Return(nil).Maybe()
@@ -1100,6 +977,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -1123,17 +1001,6 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 
 	// Mock GetAll* methods for PopulateScanStateFromDB
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
-	// Mock GetMax*ID methods for scan state population
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
 
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
@@ -1171,6 +1038,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations
@@ -1180,6 +1048,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -1211,23 +1080,8 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
 	mockMediaDB.On("Truncate").Return(nil).Maybe()
 
-	// Mock GetMax*ID methods for PopulateScanStateFromDB
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-
 	// Mock GetAll* methods for PopulateScanStateFromDB to populate maps
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
-	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
-
-	// Mock optimized exclusion methods for selective indexing (since this is a single system)
-	mockMediaDB.On("GetTitlesWithSystemsExcluding", []string{"nes"}).Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaWithFullPathExcluding", []string{"nes"}).Return([]database.MediaWithFullPath{}, nil).Maybe()
 
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
@@ -1540,7 +1394,7 @@ func TestGetFiles_CustomLauncherMatchesFiles(t *testing.T) {
 
 	// Call GetFiles with the custom launcher's directory
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir, nil)
 	require.NoError(t, err)
 
 	// Should find all matching files (.iso and .bin) but not .txt
@@ -1606,7 +1460,7 @@ func TestGetFiles_CustomLauncherNestedDirectories(t *testing.T) {
 
 	// Call GetFiles
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 3, "Should find files in root and nested directories")
@@ -1852,6 +1706,86 @@ func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
 	assert.True(t, foundPaths["scanner-game-b.iso"], "Should find scanner game B in DB")
 }
 
+// TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles is the regression
+// test for a failing pipeline (non-SkipFilesystemScan) scanner clobbering the
+// collected file list. The filesystem files must still be staged, and because
+// the scan is incomplete the previously indexed row absent from this run must
+// keep its missing state instead of being flagged.
+func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	customDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.bin"), []byte("test"), 0o600))
+
+	customLauncher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{customDir},
+		Extensions: []string{".iso", ".bin"},
+	}
+	// Pipeline scanner that fails outright (e.g. corrupt gamelist.xml).
+	failingLauncher := platforms.Launcher{
+		ID:       "failing-enricher",
+		SystemID: systemdefs.SystemPS2,
+		Scanner: func(_ context.Context, _ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, errors.New("gamelist parse failed")
+		},
+	}
+
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{customLauncher, failingLauncher})
+
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Plant a previously indexed row that this run won't collect. With the
+	// scan incomplete it must keep IsMissing=0.
+	plantedPath := filepath.Join(customDir, "planted.iso")
+	require.NoError(t, os.WriteFile(plantedPath, []byte("test"), 0o600))
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(plantedPath))
+
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, filesIndexed,
+		"filesystem files must survive a failing pipeline scanner")
+
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	byBase := make(map[string]database.MediaWithFullPath)
+	for _, entry := range mediaEntries {
+		byBase[filepath.Base(entry.Path)] = entry
+	}
+	require.Len(t, byBase, 3)
+	assert.False(t, byBase["game1.iso"].IsMissing)
+	assert.False(t, byBase["game2.bin"].IsMissing)
+	assert.False(t, byBase["planted.iso"].IsMissing,
+		"an incomplete scan must not flag absent media as missing")
+}
+
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
 // are skipped during media scanning along with all their subdirectories.
 func TestZaparooignoreMarker(t *testing.T) {
@@ -2009,7 +1943,7 @@ func TestZaparooignoreMarker(t *testing.T) {
 
 			// Call GetFiles using NES system ID
 			ctx := context.Background()
-			files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+			files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, nil)
 			require.NoError(t, err, "GetFiles should not fail")
 
 			// Convert results to map for easier checking
@@ -2203,7 +2137,7 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	// Should find the 2 .nes files inside the zip, but not readme.txt
@@ -2215,6 +2149,139 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.True(t, foundFiles["game1.nes"])
 	assert.True(t, foundFiles["game2.nes"])
 	assert.False(t, foundFiles["readme.txt"])
+}
+
+func TestShouldSkipExcludedSymlink_FsTimeout(t *testing.T) {
+	t.Parallel()
+
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(context.Background(), "excluded-link", stat)
+	require.NoError(t, err)
+	assert.True(t, shouldSkip)
+}
+
+func TestShouldSkipExcludedSymlink_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(ctx, "excluded-link", stat)
+	assert.False(t, shouldSkip)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+	organizedTarget := filepath.Join(rootDir, "organized-target")
+	organizedTargetDir := filepath.Join(organizedTarget, "_1 A-E")
+	require.NoError(t, os.MkdirAll(arcadeDir, 0o750))
+	require.NoError(t, os.MkdirAll(organizedTargetDir, 0o750))
+	organizedLink := filepath.Join(arcadeDir, "_Organized")
+	require.NoError(t, os.Symlink(organizedTarget, organizedLink))
+
+	canonicalPath := filepath.Join(arcadeDir, "Pooyan.mra")
+	require.NoError(t, os.WriteFile(canonicalPath, []byte("<misterromdescription/>"), 0o600))
+	aliasPath := filepath.Join(organizedLink, "_1 A-E", "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(organizedTargetDir, "Pooyan.mra")))
+	fileAliasPath := filepath.Join(arcadeDir, "ExcludedFile.mra")
+	require.NoError(t, os.Symlink(canonicalPath, fileAliasPath))
+
+	launcher := platforms.Launcher{
+		ID:                    "arcade-launcher",
+		SystemID:              systemdefs.SystemArcade,
+		Folders:               []string{"_Arcade"},
+		Extensions:            []string{".mra"},
+		ScanDirectoryExcludes: []string{"_Organized", "ExcludedFile.mra"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{canonicalPath, fileAliasPath}, files)
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+	assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, aliasPath),
+		"excluded directory media must remain directly launchable")
+}
+
+func TestGetFiles_RespectsLauncherScanExcludes(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	gamesDir := filepath.Join(rootDir, "nes")
+	require.NoError(t, os.MkdirAll(gamesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(gamesDir, "game.rom"), []byte("game"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(gamesDir, "boot.rom"), []byte("boot"), 0o600))
+
+	zipPath := filepath.Join(gamesDir, "boot.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	fw, createErr := w.Create("boot.vhd")
+	require.NoError(t, createErr)
+	_, writeErr := fw.Write([]byte("boot"))
+	require.NoError(t, writeErr)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	launcher := platforms.Launcher{
+		ID:           "nes-launcher",
+		SystemID:     systemdefs.SystemNES,
+		Folders:      []string{"nes"},
+		Extensions:   []string{".rom", ".vhd"},
+		ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, gamesDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(gamesDir, "game.rom")}, files)
 }
 
 func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
@@ -2310,7 +2377,7 @@ func TestGetFiles_SkipsMacOSDirectories(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 1, "should only find the real game file")
@@ -2362,7 +2429,7 @@ func TestGetFiles_SkipsDotDirectories(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 1, "should only find the real game file, not files in hidden dirs")
@@ -2420,10 +2487,145 @@ func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	// Should find only the game inside the real zip, not the ._games.zip
 	assert.Len(t, files, 1, "should find only the game inside the real zip")
 	assert.Contains(t, files[0], "game.nes")
+}
+
+type recordingIndexingPragmaDB struct {
+	calls []string
+}
+
+func (db *recordingIndexingPragmaDB) SetIndexingCacheSize(enable bool) {
+	db.calls = append(db.calls, fmt.Sprintf("cache:%t", enable))
+}
+
+func (db *recordingIndexingPragmaDB) SetWALAutoCheckpoint(pages int) {
+	db.calls = append(db.calls, fmt.Sprintf("wal:%d", pages))
+}
+
+// TestBatchCommitLimit_FullSpeedWhenNotThrottled verifies a nil or running
+// pauser leaves the batch commit size at its full-speed default.
+func TestBatchCommitLimit_FullSpeedWhenNotThrottled(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, maxFilesPerTransaction, batchCommitLimit(nil), "nil pauser")
+
+	pauser := syncutil.NewPauser()
+	assert.Equal(t, maxFilesPerTransaction, batchCommitLimit(pauser), "running pauser")
+}
+
+// TestBatchCommitLimit_ShrinksWhenThrottledOrPaused verifies throttled and
+// paused states use the smaller batch size, so each commit's fsync burst
+// stays short and interruptible instead of one large uninterrupted batch.
+func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
+	t.Parallel()
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
+}
+
+// TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn
+// covers both the disable and the restore-on-early-return, on every platform
+// (not just resource-constrained ones) — see configureIndexingPragmas's
+// comment for why this is now unconditional.
+func TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn(t *testing.T) {
+	t.Parallel()
+
+	db := &recordingIndexingPragmaDB{}
+	earlyErr := errors.New("stop indexing early")
+	err := func() error {
+		cleanup := configureIndexingPragmas(db)
+		defer cleanup()
+		return earlyErr
+	}()
+	require.ErrorIs(t, err, earlyErr)
+	assert.Equal(t, []string{
+		"cache:true",
+		fmt.Sprintf("wal:%d", disabledWALAutoCheckpoint),
+		fmt.Sprintf("wal:%d", defaultWALAutoCheckpoint),
+		"cache:false",
+	}, db.calls)
+}
+
+func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, directoryWalkWorkers(true, nil), "resource-constrained platform")
+	assert.Zero(t, directoryWalkWorkers(false, nil), "unrestricted platform")
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, 1, directoryWalkWorkers(false, throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, 1, directoryWalkWorkers(false, paused), "paused pauser")
+
+	baseline := syncutil.NewPauser()
+	baseline.SetBaselineThrottle(syncutil.ThrottleBackground)
+	assert.Equal(t, 1, directoryWalkWorkers(false, baseline), "baseline-paced pauser")
+}
+
+// TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically
+// checks the pauser during the directory walk itself, not just per-file in
+// the caller's indexing loop. A paused walk over enough entries to cross the
+// wait interval must yield to the pauser and stop instead of racing through
+// the entire directory tree unthrottled.
+func TestGetFiles_PausedPauserInterruptsWalk(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+	// More than one wait interval's worth of entries so the periodic pauser
+	// check inside the walk callback is guaranteed to fire.
+	const fileCount = walkEntryWaitInterval*2 + 10
+	for i := range fileCount {
+		name := fmt.Sprintf("game%d.nes", i)
+		require.NoError(t, os.WriteFile(filepath.Join(rootDir, name), []byte("data"), 0o600))
+	}
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err = GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, pauser)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }

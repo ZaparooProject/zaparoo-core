@@ -154,11 +154,11 @@ var (
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 
-	loadingModal := tview.NewModal().SetText("Uploading log file...")
-	SetBoxTitle(loadingModal, "Log upload")
-	loadingModal.SetBorder(true)
-	pages.AddPage("temp_upload", loadingModal, true, true)
-	app.SetFocus(loadingModal)
+	loadingDialog := NewDialog().
+		SetText("Uploading log file...").
+		SetTitle("Log upload")
+	pages.AddPage("temp_upload", loadingDialog, true, true)
+	app.SetFocus(loadingDialog)
 	app.ForceDraw()
 
 	//nolint:gosec // logPath is from internal platform settings, not user input

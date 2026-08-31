@@ -21,7 +21,6 @@ package tui
 
 import (
 	"testing"
-	"time"
 
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
@@ -115,7 +114,7 @@ func TestBuildTagsWriteMenu_Integration(t *testing.T) {
 		BuildTagsWriteMenu(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Write Token", 100*time.Millisecond), "Write Token title should appear")
+	require.True(t, runner.WaitForText("Write Token", uiSettleTimeout), "Write Token title should appear")
 
 	// Verify UI elements are visible
 	assert.True(t, runner.ContainsText("ZapScript"), "ZapScript label should be visible")
@@ -145,7 +144,7 @@ func TestBuildTagsWriteMenu_EscapeGoesBack_Integration(t *testing.T) {
 		BuildTagsWriteMenu(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Write Token", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Write Token", uiSettleTimeout))
 
 	// Helper to get current page
 	getFrontPage := func() string {
@@ -163,7 +162,7 @@ func TestBuildTagsWriteMenu_EscapeGoesBack_Integration(t *testing.T) {
 	// Verify we went back
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return getFrontPage() == PageMain
-	}, 100*time.Millisecond), "Should navigate back to main page")
+	}, uiSettleTimeout), "Should navigate back to main page")
 }
 
 func TestBuildTagsWriteMenu_ClearButton_Integration(t *testing.T) {
@@ -188,7 +187,7 @@ func TestBuildTagsWriteMenu_ClearButton_Integration(t *testing.T) {
 		BuildTagsWriteMenu(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Write Token", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Write Token", uiSettleTimeout))
 
 	// Navigate to Clear button (Tab then right)
 	runner.Screen().InjectTab()
@@ -203,7 +202,7 @@ func TestBuildTagsWriteMenu_ClearButton_Integration(t *testing.T) {
 	// Wait for session state to be cleared
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return session.GetWriteTagZapScript() == ""
-	}, 100*time.Millisecond), "ZapScript should be cleared")
+	}, uiSettleTimeout), "ZapScript should be cleared")
 }
 
 func TestBuildTagsWriteMenu_Validation_Integration(t *testing.T) {
@@ -228,7 +227,7 @@ func TestBuildTagsWriteMenu_Validation_Integration(t *testing.T) {
 		BuildTagsWriteMenu(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Write Token", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Write Token", uiSettleTimeout))
 
 	// Verify page is showing and the ZapScript label is present
 	assert.True(t, runner.ContainsText("ZapScript"), "Should show ZapScript label")
@@ -256,7 +255,7 @@ func TestBuildTagsWriteMenu_InvalidScript_Integration(t *testing.T) {
 		BuildTagsWriteMenu(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Write Token", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Write Token", uiSettleTimeout))
 
 	// Verify page shows properly
 	assert.True(t, runner.ContainsText("ZapScript"), "Should show ZapScript label")

@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	limit := defaultMediaHistoryLimit
 	var lastID int64
 	var systemIDs []string
+	var distinctMedia bool
 
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryParams
@@ -49,7 +51,9 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		if params.Limit != nil {
 			limit = *params.Limit
 		}
-
+		if params.DistinctMedia != nil {
+			distinctMedia = *params.DistinctMedia
+		}
 		if params.Cursor != nil {
 			cursor, err := decodeCursor(*params.Cursor)
 			if err != nil {
@@ -73,12 +77,20 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		}
 	}
 
-	// Fetch one extra to detect next page
-	entries, err := env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	// Fetch one extra to detect next page.
+	queryStarted := time.Now()
+	var entries []database.MediaHistoryEntry
+	var err error
+	if distinctMedia {
+		entries, err = env.Database.UserDB.GetDistinctMediaHistory(env.Context, systemIDs, lastID, limit+1)
+	} else {
+		entries, err = env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	}
 	if err != nil {
-		log.Error().Err(err).Msg("error getting media history")
+		log.Error().Err(err).Bool("distinctMedia", distinctMedia).Msg("error getting media history")
 		return nil, fmt.Errorf("error getting media history: %w", err)
 	}
+	queryElapsed := time.Since(queryStarted)
 
 	hasNextPage := len(entries) > limit
 	if hasNextPage {
@@ -91,8 +103,39 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			Path:     entries[i].MediaPath,
 		})
 	}
-	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
+	enrichStarted := time.Now()
+	mediaIDs := make(map[mediaPathRef]int64)
+	coverStatuses := make(map[int64]bool)
+	// Unknown must remain true in the response so clients do not suppress a
+	// valid image request merely because optional enrichment timed out.
+	coverStatusesKnown := false
+	var tagsByID map[int64][]database.TagInfo
+	tagsKnown := false
+	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
+	defer cancelEnrichment()
 
+	mediaRows, enrichErr := resolveMediaPathIDs(enrichCtx, env.Database.MediaDB, mediaRefs)
+	if enrichErr != nil {
+		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
+	} else {
+		var resolvedRefs []database.MediaRef
+		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
+		if len(resolvedRefs) == 0 {
+			coverStatusesKnown = true
+		} else {
+			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, resolvedRefs)
+			if coverErr != nil {
+				log.Debug().Err(coverErr).Msg("could not enrich media history cover status")
+			} else {
+				coverStatuses = resolvedCoverStatuses
+				coverStatusesKnown = true
+			}
+		}
+		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
+	}
+	enrichElapsed := time.Since(enrichStarted)
+
+	buildStarted := time.Now()
 	responseEntries := make([]models.MediaHistoryResponseEntry, 0, len(entries))
 	for i := range entries {
 		entry := &entries[i]
@@ -104,10 +147,16 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			formatted := entry.EndTime.Format(time.RFC3339)
 			endedAt = &formatted
 		}
+		mediaID := mediaIDs[ref]
+		hasCover := true
+		if coverStatusesKnown {
+			hasCover = coverStatuses[mediaID]
+		}
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
-			MediaID:    mediaIDs[ref],
+			MediaID:    mediaID,
 			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			HasCover:   hasCover,
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,
@@ -116,8 +165,18 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			StartedAt:  startedAt,
 			EndedAt:    endedAt,
 			PlayTime:   entry.PlayTime,
+			Tags:       mediaEntryTags(tagsKnown, mediaID, tagsByID),
 		})
 	}
+
+	log.Debug().
+		Int("entries", len(responseEntries)).
+		Int("taggedMedia", len(tagsByID)).
+		Bool("distinctMedia", distinctMedia).
+		Dur("queryDuration", queryElapsed).
+		Dur("enrichDuration", enrichElapsed).
+		Dur("buildDuration", time.Since(buildStarted)).
+		Msg("media history handler step timing")
 
 	var pagination *models.PaginationInfo
 	if len(responseEntries) > 0 {

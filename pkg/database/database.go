@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -38,6 +39,13 @@ import (
 type Database struct {
 	UserDB  UserDBI
 	MediaDB MediaDBI
+}
+
+type ScrapingOperation struct {
+	ScraperID string   `json:"scraperId"`
+	RunID     string   `json:"runId,omitempty"`
+	Systems   []string `json:"systems"`
+	Force     bool     `json:"force"`
 }
 
 // Structs for SQL records
@@ -61,28 +69,38 @@ type HistoryEntry struct {
 }
 
 type MediaHistoryEntry struct {
-	StartTime      time.Time  `json:"startTime"`
-	UpdatedAt      time.Time  `json:"updatedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt,omitempty"`
-	EndTime        *time.Time `json:"endTime,omitempty"`
-	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
-	DeviceID       *string    `json:"deviceId,omitempty"`
-	BootUUID       string     `json:"bootUuid,omitempty"`
-	ClockSource    string     `json:"clockSource,omitempty"`
-	SystemID       string     `json:"systemId"`
-	ID             string     `json:"uuid,omitempty"`
-	LauncherID     string     `json:"launcherId"`
-	SystemName     string     `json:"systemName"`
-	MediaPath      string     `json:"mediaPath"`
-	MediaName      string     `json:"mediaName"`
-	DBID           int64      `db:"DBID" json:"id"`
-	WallDuration   int        `json:"wallDuration"`
-	DurationSec    int        `json:"durationSec"`
-	MonotonicStart int64      `json:"monotonicStart,omitempty"`
-	PlayTime       int        `json:"playTime"`
-	TimeSkewFlag   bool       `json:"timeSkewFlag"`
-	ClockReliable  bool       `json:"clockReliable"`
-	IsDeleted      bool       `json:"isDeleted,omitempty"`
+	StartTime      time.Time      `json:"startTime"`
+	UpdatedAt      time.Time      `json:"updatedAt,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt,omitempty"`
+	EndTime        *time.Time     `json:"endTime,omitempty"`
+	SyncedAt       *time.Time     `json:"syncedAt,omitempty"`
+	DeviceID       *string        `json:"deviceId,omitempty"`
+	ProfileID      *string        `json:"profileId,omitempty"`
+	MediaIdentity  *MediaIdentity `json:"mediaIdentity,omitempty"`
+	BootUUID       string         `json:"bootUuid,omitempty"`
+	ClockSource    string         `json:"clockSource,omitempty"`
+	SystemID       string         `json:"systemId"`
+	ID             string         `json:"uuid,omitempty"`
+	LauncherID     string         `json:"launcherId"`
+	SystemName     string         `json:"systemName"`
+	MediaPath      string         `json:"mediaPath"`
+	MediaName      string         `json:"mediaName"`
+	Tags           []string       `json:"tags,omitempty"`
+	DBID           int64          `db:"DBID" json:"id"`
+	WallDuration   int            `json:"wallDuration"`
+	DurationSec    int            `json:"durationSec"`
+	MonotonicStart int64          `json:"monotonicStart,omitempty"`
+	PlayTime       int            `json:"playTime"`
+	TimeSkewFlag   bool           `json:"timeSkewFlag"`
+	ClockReliable  bool           `json:"clockReliable"`
+	IsDeleted      bool           `json:"isDeleted,omitempty"`
+}
+
+// MediaHistorySyncRef identifies the exact local version acknowledged by a
+// play-history upload. UpdatedAt is a monotonic per-row version watermark.
+type MediaHistorySyncRef struct {
+	UpdatedAt time.Time
+	DBID      int64
 }
 
 type MediaHistoryTopEntry struct {
@@ -116,12 +134,52 @@ type InboxMessage struct {
 	ProfileID int64     `json:"profileId"`
 }
 
+// Profile represents a device profile: a named bucket of preferences and
+// limits with no credentials. PINHash is hidden from JSON
+// (API uses models.ProfileResponse instead). Nil limit fields mean
+// "inherit the global config value"; a "0" duration string means
+// "explicitly unlimited".
+type Profile struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	LastUsedAt    *int64  `json:"lastUsedAt,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	SwitchID      string  `json:"switchId"`
+	PINHash       string  `json:"-"`
+	DBID          int64   `json:"-"`
+	CreatedAt     int64   `json:"createdAt"`
+	UpdatedAt     int64   `json:"updatedAt"`
+}
+
+// DeviceStateKeyActiveProfile is the DeviceState key holding the
+// ProfileID of the device's active profile.
+const DeviceStateKeyActiveProfile = "active_profile_id"
+
+// DeviceStateKeyMediaHistoryIdentitySweep is the DeviceState key recording
+// the last completed media history identity backfill sweep, as
+// "<policy version>:<media LastGeneratedAt unix>". A matching value means no
+// history row below the current policy version can newly resolve, so sweeps
+// skip the table walk entirely.
+const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
+
+// DeviceStateKeyPlaytimeExtensions is the DeviceState key holding granted
+// playtime extensions: the current session's duration grant and any
+// unexpired per-profile day waivers, as versioned JSON. It stores resolved
+// profile IDs only, never the switch IDs used to authorize a grant.
+const DeviceStateKeyPlaytimeExtensions = "playtime_extensions"
+
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
 type Client struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
 	AuthToken  string `json:"-"`
+	// Role is the client's permission role ("admin" or "member"), chosen
+	// at pairing approval. See pkg/api/permissions.
+	Role       string `json:"role"`
 	PairingKey []byte `json:"-"`
 	DBID       int64  `json:"-"`
 	CreatedAt  int64  `json:"createdAt"`
@@ -135,18 +193,22 @@ type System struct {
 }
 
 type MediaTitle struct {
-	Slug          string
-	Name          string
-	SecondarySlug sql.NullString
-	DBID          int64
-	SystemDBID    int64
-	SlugLength    int
-	SlugWordCount int
+	Slug string
+	Name string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// whose values differ across its non-missing media (see RecomputeTitleDisambiguation).
+	DisambiguationTypes string
+	SecondarySlug       sql.NullString
+	DBID                int64
+	SystemDBID          int64
+	SlugLength          int
+	SlugWordCount       int
 }
 
 type Media struct {
 	Path           string
 	ParentDir      string
+	SortName       string // write-once copy of MediaTitles.Name; titles never update so no propagation is needed
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -159,6 +221,45 @@ type MediaFullRow struct {
 	System System
 	Media
 	Title MediaTitle
+}
+
+// MediaUserData is the source-of-truth record for user-authored data about a
+// single media path: whether it is a favourite and any per-game launcher
+// override. It lives in UserDB (durable, power-loss safe) and is materialized
+// into media.db's MediaTags/MediaProperties projection both on edit and on
+// reindex. Keyed by (SystemID, Path) because a Media row's DBID is not stable
+// across a full media.db rebuild. A row with IsFavorite false and an empty
+// LauncherOverride carries no user intent and should be deleted rather than kept.
+type MediaUserData struct {
+	SystemID         string
+	Path             string
+	LauncherOverride string
+	// MediaName and Tags snapshot the scanner's identity for this path at
+	// write time (display name + complete canonical type:value tags), so the
+	// row stays matchable to a canonical game after MediaDB is rebuilt or
+	// the file disappears. Empty when no scanner entry existed.
+	MediaName  string
+	Tags       []string
+	DBID       int64
+	CreatedAt  int64
+	UpdatedAt  int64
+	IsFavorite bool
+}
+
+// MediaPathID identifies a Media row and its title by system ID and path, used
+// for batch API response enrichment.
+type MediaPathID struct {
+	SystemID       string
+	Path           string
+	DBID           int64
+	MediaTitleDBID int64
+}
+
+// MediaRef identifies a Media row and its MediaTitle row for batch lookups
+// such as cover status and tags.
+type MediaRef struct {
+	MediaDBID      int64
+	MediaTitleDBID int64
 }
 
 type TagType struct {
@@ -222,10 +323,23 @@ type MediaTagLink struct {
 	TagDBID   int64
 }
 
+// MediaTagRef identifies a tag by its stable type and value.
+type MediaTagRef struct {
+	Type string
+	Tag  string
+}
+
 type SearchResult struct {
 	SystemID string
 	Name     string
 	Path     string
+	Slug     string
+	MediaID  int64
+}
+
+type SystemMediaCount struct {
+	SystemID string
+	Count    int
 }
 
 type TagInfo struct {
@@ -233,6 +347,34 @@ type TagInfo struct {
 	Type  string `json:"type"`
 	Label string `json:"label,omitempty"`
 	Count int64  `json:"count,omitempty"`
+}
+
+type BackupInfo struct {
+	CreatedAt  time.Time `json:"createdAt"`
+	Name       string    `json:"name"`
+	Path       string    `json:"path"`
+	QuickCheck string    `json:"quickCheck"`
+	Reason     string    `json:"reason,omitempty"`
+	Size       int64     `json:"size"`
+	Valid      bool      `json:"valid"`
+	Manual     bool      `json:"manual"`
+}
+
+type RestoreInfo struct {
+	PreRestoreBackup *BackupInfo `json:"preRestoreBackup,omitempty"`
+	RestoredFrom     BackupInfo  `json:"restoredFrom"`
+}
+
+type WALCheckpointMode int
+
+const (
+	WALCheckpointAuto WALCheckpointMode = iota
+	WALCheckpointSkip
+	WALCheckpointForce
+)
+
+type TransactionOptions struct {
+	WALCheckpoint WALCheckpointMode
 }
 
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
@@ -255,22 +397,80 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 // BrowseDirectoryResult represents a subdirectory found during browse navigation.
 type BrowseDirectoryResult struct {
 	Name      string
+	Path      string
 	SystemIDs []string
 	FileCount int
 }
 
+// SingletonContainerAlias is the resolved launch media for a child directory
+// whose contents collapse to a single logical launch target.
+type SingletonContainerAlias struct {
+	ChildDir      string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo
+	Row           MediaFullRow
+	HasCover      bool
+}
+
+// SingletonAliasCandidate identifies a child directory to consider for
+// singleton-container alias resolution. ChildDir must end with a trailing
+// slash. FileCount is the recursive per-system media count for the directory
+// (from the browse cache) — when it exceeds the number of direct media rows,
+// the directory contains nested subdirectories and is not a singleton
+// container.
+type SingletonAliasCandidate struct {
+	ChildDir  string
+	FileCount int
+}
+
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
+// AfterName is the keyset cursor for directory pagination: only directories
+// whose Name sorts strictly after it are returned (directory names are unique
+// within a parent, so Name alone is a stable keyset). Limit caps the number of
+// directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
+	AfterName  string
+	Systems    []systemdefs.System
+	Limit      int
+}
+
+// BrowseDirCountOptions contains parameters for the BrowseDirCount query.
+type BrowseDirCountOptions struct {
+	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
 }
 
 // BrowseCursor holds the keyset pagination state for browse queries.
-// SortValue is the value of the sort column (Name or Path) from the last
-// result, and LastID is the DBID tiebreaker.
+//
+// media.browse pages directories first (ordered by Name), then files, under a
+// single cursor. Phase selects which stream the cursor resumes: "dirs" uses
+// DirName as the keyset, "files" (or empty, for legacy file-only cursors) uses
+// SortValue/SortMode/LastID. TotalFiles and TotalDirs carry the first-page
+// counts so cursor pages do not rerun the count queries.
 type BrowseCursor struct {
-	SortValue string
-	LastID    int64
+	SortValue  string
+	SortMode   string
+	Phase      string
+	DirName    string
+	RootView   string
+	LastID     int64
+	TotalFiles int
+	TotalDirs  int
+}
+
+// BrowseSource is one ordered physical directory contributing to a pathless
+// system-root contents view. Earlier sources have higher overlay priority.
+// IncludeDirs is false for an ancestor route retained only for direct media.
+type BrowseSource struct {
+	PathPrefix  string
+	IncludeDirs bool
+}
+
+type BrowseOverlay struct {
+	Sources []BrowseSource
 }
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
@@ -278,8 +478,10 @@ type BrowseFilesOptions struct {
 	Cursor     *BrowseCursor
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Sort       string
 	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
 	Limit      int
 }
 
@@ -287,7 +489,51 @@ type BrowseFilesOptions struct {
 type BrowseFileCountOptions struct {
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
+}
+
+// BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
+// mirrors the scoping fields of BrowseFilesOptions so the index describes the
+// exact list a media.browse call would return.
+type BrowseIndexOptions struct {
+	PathPrefix string
+	Overlay    *BrowseOverlay
+	Sort       string
+	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
+}
+
+// BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
+// and LastID are the keyset of the row immediately before the bucket's first
+// row, so a media.browse cursor built from them lands a page on the bucket's
+// first item. Offset is the bucket's 0-based position among the scope's files
+// (its row number in the ordered query, so it can't drift from the browse
+// order); it excludes leading directories, which the caller adds. AtStart is
+// true for the bucket that begins the list (no preceding row), in which case
+// the caller should produce an empty cursor.
+type BrowseIndexBucket struct {
+	Key       string
+	SortValue string
+	LastID    int64
+	Count     int
+	Offset    int
+	AtStart   bool
+}
+
+// BrowseIndexResult is the ordered set of first-character buckets for a browse
+// scope. Buckets are ordered to match the active sort. Scheme reports the
+// collation used to derive the buckets ("latin"); it is "none" when the
+// directory's effective sort is not alphabetical, in which case Buckets is
+// empty and no rail applies. SortMode is the resolved browse sort mode the
+// buckets were computed under and must be embedded into the seek cursors so the
+// subsequent media.browse page continues in the same order.
+type BrowseIndexResult struct {
+	Scheme     string
+	SortMode   string
+	Buckets    []BrowseIndexBucket
+	TotalFiles int
 }
 
 // BrowseVirtualScheme represents a virtual URI scheme with indexed content.
@@ -310,10 +556,15 @@ type BrowseRouteCountsOptions struct {
 }
 
 // BrowseRouteCount represents a populated browse route and its media count.
+// CountUnknown is set when the route is known to contain media but the exact
+// FileCount could not be computed within the deadline (degraded fallback);
+// callers should treat such routes as present with an unknown count rather than
+// as empty.
 type BrowseRouteCount struct {
-	Path      string
-	SystemIDs []string
-	FileCount int
+	Path         string
+	SystemIDs    []string
+	FileCount    int
+	CountUnknown bool
 }
 
 // BrowseSystemRootCandidatesOptions parameterises the batched lookup used
@@ -335,43 +586,116 @@ type BrowseSystemRootCandidates struct {
 }
 
 type SearchResultWithCursor struct {
-	SystemID      string
-	Name          string
-	Path          string
-	Tags          []TagInfo
-	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
-	MediaID       int64
+	SystemID string
+	Name     string
+	Path     string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// that distinguish its variants (see RecomputeTitleDisambiguation). Empty for
+	// titles with no variants, which lets the read path skip the tag lookup.
+	DisambiguationTypes string
+	SortValue           string
+	SortMode            string
+	Tags                []TagInfo
+	ZapScriptTags       []TagInfo
+	MediaID             int64
+	MediaTitleID        int64 `json:"-"`
+	HasCover            bool
 }
 
-// ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
-// title commands. Only these types are considered when checking for disambiguation.
-var ZapScriptTagTypes = []string{"year", "players", "rev", "developer", "publisher", "credit", "edition", "release"}
+// TagTypeDisplayPriority orders the eligible disambiguation tag types from most to least
+// important for display. Clients render the emitted disambiguating tags left-to-right and
+// truncate when space runs out, so the most decisive distinctions come first: variant
+// flags (beta/proto/hack) before region, then the specific-variant markers, then extra
+// context. A tag type only appears on an entry when it actually differs across the title's
+// siblings, so a sole differentiator always survives truncation regardless of its rank.
+// Rank is the slice index.
+var TagTypeDisplayPriority = []string{
+	"unfinished", "unlicensed", "patch", "region", "video", "disc", "disctotal", "edition",
+	"rev", "arcadeboard", "cabinet", "protection", "set", "input", "dump", "alt", "compatibility", "builddate",
+	"lang", "distribution", "media", "addon", "release", "year",
+	"players", "developer", "publisher", "copyright", "credit",
+	"track",
+}
+
+// ZapScriptTagTypes is the allowlist of tag types eligible for sibling disambiguation:
+// only these types are considered when deciding whether a title's media differ. It is the
+// same set as TagTypeDisplayPriority (order is irrelevant here, used only for SQL
+// membership), so it aliases the priority list to keep the two in sync. "unknown" is
+// deliberately absent — unclassified tokens never disambiguate.
+var ZapScriptTagTypes = TagTypeDisplayPriority
+
+// TagTypeDisplayRank returns the display-importance rank of a tag type (lower is more
+// important). Unknown types sort last. Used to order emitted disambiguating tags.
+func TagTypeDisplayRank(tagType string) int {
+	for i, t := range TagTypeDisplayPriority {
+		if t == tagType {
+			return i
+		}
+	}
+	return len(TagTypeDisplayPriority)
+}
+
+// isFourDigitYear reports whether s is exactly four ASCII digits, the only form
+// accepted for a year value in a ZapScript title command.
+func isFourDigitYear(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
 // media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
-// Only includes tags that are present in the provided slice.
+// Multiple values of the same type are grouped into one parens as a comma-separated
+// shorthand: (region:eu, region:us). Types are emitted in the order they first appear in
+// the input (callers pass tags pre-sorted by display priority). Only non-empty tags are
+// included; year values must be exactly 4 digits.
 func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 	var sb strings.Builder
 	_, _ = sb.WriteString("@" + systemID + "/" + name)
+
+	typeOrder := make([]string, 0, len(tags))
+	valuesByType := make(map[string][]string, len(tags))
 	for _, tag := range tags {
 		if tag.Tag == "" {
 			continue
 		}
-		if tag.Type == "year" {
-			if len(tag.Tag) == 4 {
-				_, _ = sb.WriteString(" (year:" + tag.Tag + ")")
-			}
+		if tag.Type == "year" && !isFourDigitYear(tag.Tag) {
 			continue
 		}
-		_, _ = sb.WriteString(" (" + tag.Type + ":" + tag.Tag + ")")
+		if _, seen := valuesByType[tag.Type]; !seen {
+			typeOrder = append(typeOrder, tag.Type)
+		}
+		valuesByType[tag.Type] = append(valuesByType[tag.Type], tag.Tag)
+	}
+
+	for _, tagType := range typeOrder {
+		values := valuesByType[tagType]
+		if len(values) == 0 {
+			continue
+		}
+		_, _ = sb.WriteString(" (")
+		for k, v := range values {
+			if k > 0 {
+				_, _ = sb.WriteString(", ")
+			}
+			_, _ = sb.WriteString(tagType + ":" + v)
+		}
+		_, _ = sb.WriteString(")")
 	}
 	return sb.String()
 }
 
 // ZapScript returns the ZapScript title command string for this search result.
 // Uses ZapScriptTags (disambiguating tags only). If ZapScriptTags has not been
-// computed (nil), no tags are emitted — callers that need disambiguation must
-// ensure ZapScriptTags is populated via computeZapScriptTags or equivalent.
+// populated (nil), no tags are emitted — callers that need disambiguation must
+// run the result through attachZapScriptTags, which reads the title's stored
+// DisambiguationTypes (see RecomputeTitleDisambiguation).
 func (r *SearchResultWithCursor) ZapScript() string {
 	return BuildTitleZapScript(r.SystemID, r.Name, r.ZapScriptTags)
 }
@@ -385,14 +709,16 @@ type TitleWithSystem struct {
 	SystemDBID int64
 }
 
-// MediaWithFullPath represents a Media item with its associated title and system information
+// MediaWithFullPath represents a Media item with its associated title and system information.
 type MediaWithFullPath struct {
 	Path           string
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
+	SortName       string
 	DBID           int64
 	MediaTitleDBID int64
+	IsMissing      bool
 }
 
 // ScrapeWrite is the database-level write payload produced by a scraper for a
@@ -434,35 +760,112 @@ type MediaQuery struct {
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 }
 
-// SearchFilters represents parameters for filtered media search
-type SearchFilters struct {
-	Cursor  *int64                `json:"cursor,omitempty"`
-	Letter  *string               `json:"letter,omitempty"`
-	Query   string                `json:"query"`
-	Systems []systemdefs.System   `json:"systems,omitempty"`
-	Tags    []zapscript.TagFilter `json:"tags,omitempty"`
-	Limit   int                   `json:"limit"`
+type SearchCursor struct {
+	SortValue string
+	Sort      string
+	LastID    int64
 }
 
-type ScanState struct {
-	SystemIDs       map[string]int
-	TitleIDs        map[string]int
-	MediaIDs        map[string]int
-	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
-	MediaParentDirs map[int]string
-	MediaTagIDs     map[int]map[int]struct{}
-	TagTypeIDs      map[string]int
-	TagIDs          map[string]int
-	UserOwnedTagIDs map[int]bool
-	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex    int
-	TitlesIndex     int
-	MediaIndex      int
-	TagTypesIndex   int
-	TagsIndex       int
+// SearchFilters represents parameters for filtered media search
+type SearchFilters struct {
+	Cursor     *int64                `json:"cursor,omitempty"`
+	SortCursor *SearchCursor         `json:"-"`
+	Letter     *string               `json:"letter,omitempty"`
+	PathPrefix string                `json:"pathPrefix,omitempty"`
+	Query      string                `json:"query"`
+	Sort       string                `json:"sort,omitempty"`
+	Systems    []systemdefs.System   `json:"systems,omitempty"`
+	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
+	Limit      int                   `json:"limit"`
+}
+
+// ScanStagedTag is one tag derived from a scanned file, staged for set-based
+// reconcile. Value is the natural (unpadded) form; the DB layer applies
+// tags.PadTagValue when writing the staging row.
+type ScanStagedTag struct {
+	Type  string
+	Value string
+}
+
+// ScanStagedProperty is one property derived from a scanned file, staged for
+// set-based reconcile after the corresponding Media row exists.
+type ScanStagedProperty struct {
+	Type string
+	Name string
+	Text string
+}
+
+// ScanStagedMedia is one scanned file's parsed fragments, staged into the
+// ScanStage/ScanStageTags tables for set-based reconcile against the media
+// tables. SecondarySlug is empty when the title has none.
+type ScanStagedMedia struct {
+	Path          string
+	ParentDir     string
+	Slug          string
+	TitleName     string
+	SortName      string
+	SecondarySlug string
+	Tags          []ScanStagedTag
+	Properties    []ScanStagedProperty
+	SlugLength    int
+	SlugWordCount int
+}
+
+// ScanReconcileOpts adjusts how a staged-system reconcile treats the staged
+// file set.
+type ScanReconcileOpts struct {
+	// Yield runs between set-based reconcile steps and chunked missing-media
+	// updates. Background indexers use it for cooperative pacing; nil preserves
+	// unpaced callers such as foreground maintenance and tests.
+	Yield func() error
+	// IncompleteScan means file collection for this system hit errors (an
+	// unreadable path, a failed launcher scanner), so the staged set may be a
+	// subset of what actually exists. Staged files are still upserted and
+	// re-found rows still clear their missing flag, but media absent from the
+	// stage keep their current missing state instead of being flagged missing.
+	IncompleteScan bool
+}
+
+// ScanReconcileStats reports what a staged-system reconcile changed. Counts are
+// per-statement sqlite changes() values, for logging and tests.
+type ScanReconcileStats struct {
+	SystemDBID      int64
+	TitlesInserted  int64
+	TitlesRenamed   int64
+	MediaUpserted   int64
+	MediaMissing    int64
+	TagsInserted    int64
+	TagLinksAdded   int64
+	TagLinksDeleted int64
+	TouchedTitles   int64
+	// SystemKnown is false when the system has no DB row and nothing was staged,
+	// meaning the reconcile was a no-op and no Systems row was created.
+	SystemKnown bool
 }
 
 // JournalMode represents SQLite journal mode
+// RemoteCommand is one durable typed-operation ledger entry. State changes
+// are persisted before side effects so a crash can never cause re-execution.
+//
+//nolint:govet // Field grouping follows persisted lifecycle semantics.
+type RemoteCommand struct {
+	DeadlineAt         time.Time
+	ExecutionExpiresAt *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Origin             json.RawMessage
+	Result             json.RawMessage
+	CommandID          string
+	OperationID        string
+	OperationType      string
+	ParamsDigest       string
+	State              string
+	ResultStatus       string
+	ErrorCode          string
+	ProtocolVersion    int
+	ResultReported     bool
+}
+
 type JournalMode string
 
 // Journal mode constants
@@ -491,18 +894,43 @@ type UserDBI interface {
 	CleanupHistory(retentionDays int) (int64, error)
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
+	UpdateMediaHistoryIdentity(dbid int64, identity *MediaIdentity) (bool, error)
+	// UpdateMediaHistoryIdentityAndPath is UpdateMediaHistoryIdentity plus a
+	// MediaPath correction, for backfilling legacy rows recorded under a
+	// non-path external identifier (e.g. a MiSTer arcade set name).
+	UpdateMediaHistoryIdentityAndPath(dbid int64, path string, identity *MediaIdentity) (bool, error)
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetDistinctMediaHistory(
+		ctx context.Context, systemIDs []string, lastID int64, limit int,
+	) ([]MediaHistoryEntry, error)
+	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
-	CleanupMediaHistory(retentionDays int) (int64, error)
+	CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error)
+	BackfillMediaHistoryUUIDs() (int64, error)
+	GetMediaHistoryIdentityBackfillBatch(
+		afterDBID int64, policyVersion int, limit int,
+	) ([]MediaHistoryEntry, error)
+	ResetMediaHistorySyncAfter(watermark *time.Time) error
+	GetMediaHistorySyncBatch(after time.Time, afterDBID int64, limit int) ([]MediaHistoryEntry, error)
+	MarkMediaHistorySynced(refs []MediaHistorySyncRef, syncedAt time.Time) error
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
+	SumMediaPlayTimeForDay(dayStart time.Time) (int64, error)
+	SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error)
 	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error
 	UpdateMapping(id int64, m *Mapping) error
 	GetAllMappings() ([]Mapping, error)
 	GetEnabledMappings() ([]Mapping, error)
+	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
+	SetMediaUserFavorite(systemID, path string, favorite bool) error
+	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
+	SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error
+	UpsertMediaUserData(data *MediaUserData) error
+	DeleteMediaUserData(systemID, path string) error
+	ListMediaUserData() ([]MediaUserData, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
 	GetSupportedZapLinkHosts() ([]string, error)
@@ -516,15 +944,49 @@ type UserDBI interface {
 	CreateClient(c *Client) error
 	GetClientByToken(authToken string) (*Client, error)
 	ListClients() ([]Client, error)
+	ReplaceAllClients(clients []Client) error
 	DeleteClient(clientID string) error
 	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
 	CountClients() (int, error)
+	CreateProfile(p *Profile) error
+	GetProfile(profileID string) (*Profile, error)
+	GetProfileBySwitchID(switchID string) (*Profile, error)
+	ListProfiles() ([]Profile, error)
+	UpdateProfile(p *Profile) error
+	ActivateProfile(profileID string, lastUsedAt int64) error
+	DeleteProfile(profileID string) error
+	SetDeviceState(key, value string) error
+	GetDeviceState(key string) (string, bool, error)
+	DeleteDeviceState(key string) error
+	ClaimRemoteCommand(command *RemoteCommand) (*RemoteCommand, bool, error)
+	TransitionRemoteCommand(commandID, fromState, toState string, executionExpiresAt *time.Time) (bool, error)
+	StoreRemoteCommandResult(
+		commandID, fromState, status string, result json.RawMessage, errorCode string,
+	) (bool, error)
+	MarkRemoteCommandResultReported(commandID string) error
+	ListUnreportedRemoteCommands(limit int) ([]RemoteCommand, error)
+	ListRecentRemoteCommands(limit int) ([]RemoteCommand, error)
+	PruneRemoteCommands(before time.Time) (int64, error)
+	Backup(reason string, manual bool) (BackupInfo, error)
+	BackupForUpdate(targetVersion string) (BackupInfo, func() error, error)
+	BackupForTransfer(ctx context.Context, reason string) (BackupInfo, func() error, error)
+	EnsureRecentBackup(maxAge time.Duration) (BackupInfo, bool, error)
+	ListBackups() ([]BackupInfo, error)
+	RestoreBackup(name string) (RestoreInfo, error)
+	IntegrityReport() []string
+	MarkCorrupt(reason string)
+	IsMarkedCorrupt() bool
+	ClearCorruptMarker() error
+	NoteCorruption(err error) bool
+	RecoverFromCorruption() (RestoreInfo, error)
 }
 
 type MediaDBI interface {
 	GenericDBI
 	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
+	CommitTransactionWithOptions(options TransactionOptions) error
+	FlushBatchInserters() error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
@@ -534,19 +996,35 @@ type MediaDBI interface {
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
+	IsOptimizing() bool
+	BeginBrowseCacheRebuild()
+	EndBrowseCacheRebuild()
 	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
+	BeginRecovery()
+	EndRecovery()
 	TrackBackgroundOperation()
+	HasBackgroundOperations() bool
+	SetIndexingConnBoost(active bool)
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
+	WALCheckpoint() error
+	QuickCheck() (bool, error)
+	IntegrityReport() []string
+	MarkCorrupt(reason string)
+	IsMarkedCorrupt() bool
+	ClearCorruptMarker() error
+	NoteCorruption(err error) bool
+	Recreate(keepBackup bool) error
 
-	// On-disk persistence for the rebuilt caches. Persist* writes the
-	// current in-memory cache atomically; LoadCached* reads it back at
-	// startup and returns (false, nil) on missing/stale/version-mismatch
-	// so the caller can fall through to a SQL rebuild.
+	// On-disk persistence for rebuilt caches. Persist* writes the current
+	// in-memory cache atomically; LoadCached* reads it back at startup and
+	// returns (false, nil) when a SQL rebuild is still required. A valid
+	// selective slug cache may be installed while returning false so covered
+	// systems remain searchable during the complete rebuild.
 	PersistTagCache() error
 	LoadCachedTagCache() (bool, error)
 	PersistSlugSearchCache() error
@@ -571,17 +1049,36 @@ type MediaDBI interface {
 	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
 	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
 	DropSecondaryIndexes() error
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
+	GetIndexResumeAttempts() (int, error)
+	IncrementIndexResumeAttempts() (int, error)
+	ResetIndexResumeAttempts() error
+	GetIndexResumeCheckpoint() (string, error)
+	SetIndexResumeCheckpoint(checkpoint string) error
+	SetScrapingStatus(status string) error
+	GetScrapingStatus() (string, error)
+	SetScrapingOperation(operation ScrapingOperation) error
+	GetScrapingOperation() (ScrapingOperation, bool, error)
+	ClearScrapingOperation() error
 	SetLastIndexedSystem(systemID string) error
 	GetLastIndexedSystem() (string, error)
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
 
-	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
+	// Scanner staging: files are streamed into staging tables inside the open
+	// batch transaction, then folded into the media tables with set-based SQL
+	// so indexing memory does not scale with database size.
+	StageScannedMedia(media *ScanStagedMedia) error
+	ReconcileStagedSystem(ctx context.Context, systemID string, opts ScanReconcileOpts) (ScanReconcileStats, error)
+	ClearScanStage() error
+	SeedCanonicalTagDefinitions(ctx context.Context) error
+
+	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
@@ -599,10 +1096,15 @@ type MediaDBI interface {
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 	) ([]MediaTitle, error)
 	GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error)
+	// SearchMediaByProperty finds media by a stored property value. systemID is an optional scope.
+	SearchMediaByProperty(ctx context.Context, systemID, property, value string) ([]SearchResult, error)
+	// HasMediaPropertyForPath reports whether indexed media already has a stored property.
+	HasMediaPropertyForPath(ctx context.Context, systemID, path, property string) (bool, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error
 	PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error
+	AnalyzeApproximate() error
 	RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
@@ -610,8 +1112,13 @@ type MediaDBI interface {
 
 	// Browse methods for directory-style navigation of indexed content
 	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
+	BrowseDirCount(ctx context.Context, opts BrowseDirCountOptions) (int, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
+	// GetMediaCoverStatus returns statuses keyed by MediaDBID. True means a media-
+	// or title-level image exists; absent keys mean no cover.
+	GetMediaCoverStatus(ctx context.Context, refs []MediaRef) (map[int64]bool, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
+	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
@@ -619,12 +1126,17 @@ type MediaDBI interface {
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
 	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
+	PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error
+	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
+	SystemMediaCounts(ctx context.Context, tags []zapscript.TagFilter) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
-	RandomGame(systems []systemdefs.System) (SearchResult, error)
-	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
+	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
+	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
+	HasAnyMedia() (bool, error)
+	GetMissingMediaCount() (int, error)
 	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
 	GetTotalScrapedMediaCount(ctx context.Context) (int, error)
 
@@ -640,10 +1152,13 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
-	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
-	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
-	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
+	UpdateMediaTags(
+		ctx context.Context,
+		mediaDBID int64,
+		remove []MediaTagRef,
+		add []MediaTagRef,
+	) error
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
@@ -658,10 +1173,6 @@ type MediaDBI interface {
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
 
-	// Missing media methods for persistent indexing
-	BulkSetMediaMissing(dbids map[int]struct{}) error
-	ResetMissingFlags(systemDBIDs []int) error
-
 	// CleanMediaOrphans removes Media rows where IsMissing=1 together with
 	// their associated MediaTags and MediaProperties.  MediaTitles that are
 	// no longer referenced by any Media row are also removed (including their
@@ -673,34 +1184,14 @@ type MediaDBI interface {
 	// cannot safely run.
 	CleanMediaOrphans(ctx context.Context) (int64, error)
 
-	// GetMax*ID methods for resume functionality
-	GetMaxSystemID() (int64, error)
-	GetMaxTitleID() (int64, error)
-	GetMaxMediaID() (int64, error)
-	GetMaxTagTypeID() (int64, error)
-	GetMaxTagID() (int64, error)
-	GetMaxMediaTagID() (int64, error)
-
-	// GetAll* methods for populating scan state maps
 	GetAllSystems() ([]System, error)
-	GetAllMediaTitles() ([]MediaTitle, error)
-	GetAllMedia() ([]Media, error)
-	GetAllTags() ([]Tag, error)
-	GetAllTagTypes() ([]TagType, error)
+	// GetExistingMediaUserData returns user-authored data (favourites, launcher
+	// overrides) already stored in media.db, for the one-time UserDB backfill.
+	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
 
-	// Optimized JOIN query methods for populating scan state
-	GetTitlesWithSystems() ([]TitleWithSystem, error)
-	GetMediaWithFullPath() ([]MediaWithFullPath, error)
-
-	// Optimized JOIN query methods for selective indexing (excluding specified systems)
-	GetSystemsExcluding(excludeSystemIDs []string) ([]System, error)
-	GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]TitleWithSystem, error)
-	GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]MediaWithFullPath, error)
-
-	// Per-system query methods for lazy loading during resume
+	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
-	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 
 	// Scraper support methods
 
@@ -708,9 +1199,23 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
-	// FindSingleDescendantMedia returns the only non-missing Media row below dirPath
-	// for systemDBID, or nil, nil when dirPath has zero or multiple descendants.
-	FindSingleDescendantMedia(ctx context.Context, systemDBID int64, dirPath string) (*Media, error)
+	// FindMediaIDsByPaths returns the system ID, path, media DBID, and title DBID
+	// of every Media row whose Path is in paths, in one query across all systems.
+	FindMediaIDsByPaths(ctx context.Context, paths []string) ([]MediaPathID, error)
+	// FindSingleContainerLaunchMedia returns the one logical launch target in the
+	// direct contents of containerPath for systemDBID, or nil, nil when the
+	// container is empty, nested-only, or ambiguous.
+	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// ResolveSingletonContainerAliases resolves the given candidate child
+	// directories for systemDBID in a single batch query, returning one
+	// SingletonContainerAlias per candidate that collapses to a single launch
+	// target. Candidates with nested subdirs (recursive FileCount exceeding
+	// their direct media rows) or ambiguous contents are omitted.
+	// ZapScriptTags are populated via in-memory disambiguation (same approach
+	// as the search path) and will be empty for unambiguous titles.
+	ResolveSingletonContainerAliases(
+		ctx context.Context, systemDBID int64, candidates []SingletonAliasCandidate,
+	) ([]SingletonContainerAlias, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is
@@ -732,6 +1237,14 @@ type MediaDBI interface {
 	// by scraperID.
 	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)
 
+	// GetScrapeRunMediaIDs returns media DBIDs in a system completed during a
+	// specific scraper run.
+	GetScrapeRunMediaIDs(ctx context.Context, scraperID, runID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// ClearScrapeRunMarkers removes per-run completion markers after a scraper
+	// operation reaches a terminal state.
+	ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error
+
 	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
 	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type
 	// for the entity before inserting; additive types use INSERT OR IGNORE.
@@ -740,6 +1253,15 @@ type MediaDBI interface {
 	// UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
 	// Exclusive/additive behaviour is identical to UpsertMediaTags.
 	UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []TagInfo) error
+
+	// RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
+	// for the given MediaTitle DBIDs. Called after writes that change a title's
+	// media or tags so reads can rely on the stored, title-global value.
+	RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error
+
+	// RecomputeSystemDisambiguation recomputes the stored disambiguating tag types
+	// for every MediaTitle belonging to the given system DBIDs. Used at index time.
+	RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error
 
 	// UpsertMediaTitleProperties upserts properties into MediaTitleProperties.
 	// Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.
@@ -752,6 +1274,11 @@ type MediaDBI interface {
 	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
 	// writes the sentinel tag last.
 	ApplyScrapeResult(ctx context.Context, mediaDBID, mediaTitleDBID int64, write *ScrapeWrite) error
+
+	// ConsumeScrapeImageChanges returns and clears systems with materially changed
+	// image properties. all is true when tracking could not resolve a safe targeted
+	// set and callers must conservatively invalidate the full cache.
+	ConsumeScrapeImageChanges() (systems []string, all bool)
 
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 	// that have no Media row with the given sentinel tag value.
@@ -809,6 +1336,15 @@ type MediaDBI interface {
 	// (MediaTitleTags) for a single MediaTitle row.
 	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
 	GetMediaTitleTagsByMediaTitleDBIDs(ctx context.Context, mediaTitleDBIDs []int64) (map[int64][]TagInfo, error)
+
+	// GetMediaTagsByMediaRefs returns the merged file-level (MediaTags) and
+	// title-level (MediaTitleTags) tags for each referenced media row, keyed
+	// by MediaDBID. This is the same tag view media.search attaches to
+	// results, unlike GetMediaTagsByMediaDBIDs which is file-level only.
+	// Tags are deduplicated by (type, tag) and sorted by type then tag.
+	// Untagged media have no map entry. Refs with MediaDBID <= 0 are ignored.
+	// The lookup is batched internally under the SQLite parameter limit.
+	GetMediaTagsByMediaRefs(ctx context.Context, refs []MediaRef) (map[int64][]TagInfo, error)
 
 	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
 	// SHA-256 hash of framed content type and bytes already exists, then returns its DBID.

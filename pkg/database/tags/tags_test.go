@@ -58,6 +58,7 @@ func TestTagTypeConstants(t *testing.T) {
 		{"Set", TagTypeSet, "set"},
 		{"Alt", TagTypeAlt, "alt"},
 		{"Unlicensed", TagTypeUnlicensed, "unlicensed"},
+		{"Patch", TagTypePatch, "patch"},
 		{"MameParent", TagTypeMameParent, "mameparent"},
 		{"Region", TagTypeRegion, "region"},
 		{"Year", TagTypeYear, "year"},
@@ -84,7 +85,7 @@ func TestTagTypeNaming(t *testing.T) {
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
-		TagTypeAlt, TagTypeUnlicensed, TagTypeMameParent, TagTypeRegion, TagTypeYear,
+		TagTypeAlt, TagTypeUnlicensed, TagTypePatch, TagTypeMameParent, TagTypeRegion, TagTypeYear,
 		TagTypeVideo, TagTypeCopyright, TagTypeDump, TagTypeMedia, TagTypeExtension,
 		TagTypeUnknown, TagTypeUser,
 	}
@@ -115,6 +116,15 @@ func TestTagTypeNaming(t *testing.T) {
 	}
 }
 
+func TestScraperTagHelpers(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, TagType("scraper.gamelist.xml"), ScraperType("gamelist.xml"))
+	assert.Equal(t, "scraper.gamelist.xml:scraped", ScraperTypeTag("gamelist.xml"))
+	assert.Equal(t, TagType("scraper-run.gamelist.xml"), ScraperRunType("gamelist.xml"))
+	assert.Equal(t, "scraper-run.gamelist.xml:run-123", ScraperRunTypeTag("gamelist.xml", "run-123"))
+}
+
 func TestIsUserOwnedType(t *testing.T) {
 	t.Parallel()
 
@@ -130,7 +140,7 @@ func TestCanonicalTagDefinitionsCoverage(t *testing.T) {
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
-		TagTypeAlt, TagTypeUnlicensed, TagTypeMameParent, TagTypeRegion, TagTypeYear,
+		TagTypeAlt, TagTypeUnlicensed, TagTypePatch, TagTypeMameParent, TagTypeRegion, TagTypeYear,
 		TagTypeVideo, TagTypeCopyright, TagTypeDump, TagTypeMedia,
 		// Note: Extension and Unknown are special and may not have predefined tags
 	}
@@ -140,8 +150,8 @@ func TestCanonicalTagDefinitionsCoverage(t *testing.T) {
 			tags, exists := CanonicalTagDefinitions[tagType]
 			assert.True(t, exists, "TagType %s must exist in CanonicalTagDefinitions", tagType)
 
-			// MameParent can be empty, but all others should have at least one tag
-			if tagType != TagTypeMameParent {
+			// MameParent and Patch use dynamic values, but all others should have predefined tags.
+			if tagType != TagTypeMameParent && tagType != TagTypePatch {
 				assert.NotEmpty(t, tags, "TagType %s should have at least one tag defined", tagType)
 			}
 		})
@@ -603,7 +613,7 @@ func TestNoTagTypeCollisions(t *testing.T) {
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
-		TagTypeAlt, TagTypeUnlicensed, TagTypeMameParent, TagTypeRegion, TagTypeYear,
+		TagTypeAlt, TagTypeUnlicensed, TagTypePatch, TagTypeMameParent, TagTypeRegion, TagTypeYear,
 		TagTypeVideo, TagTypeCopyright, TagTypeDump, TagTypeMedia, TagTypeExtension,
 		TagTypeUnknown,
 	}

@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -33,34 +34,74 @@ import (
 
 // AddMediaHistory adds a new media history entry and returns the DBID.
 func (db *UserDB) AddMediaHistory(entry *database.MediaHistoryEntry) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlAddMediaHistory(db.ctx, db.sql, entry)
+	return sqlAddMediaHistory(db.ctx, db.sql.Load(), entry)
 }
 
 // UpdateMediaHistoryTime updates only the PlayTime for currently playing media.
 func (db *UserDB) UpdateMediaHistoryTime(dbid int64, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateMediaHistoryTime(db.ctx, db.sql, dbid, playTime)
+	return sqlUpdateMediaHistoryTime(db.ctx, db.sql.Load(), dbid, playTime)
+}
+
+// UpdateMediaHistoryIdentity stores a complete scanner identity snapshot and
+// reports whether this policy version changed the history row.
+func (db *UserDB) UpdateMediaHistoryIdentity(dbid int64, identity *database.MediaIdentity) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	return sqlUpdateMediaHistoryIdentity(db.ctx, db.sql.Load(), dbid, identity)
+}
+
+// UpdateMediaHistoryIdentityAndPath is UpdateMediaHistoryIdentity plus a
+// MediaPath correction, for backfilling legacy rows recorded under a
+// non-path external identifier (e.g. a MiSTer arcade set name).
+func (db *UserDB) UpdateMediaHistoryIdentityAndPath(
+	dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	return sqlUpdateMediaHistoryIdentityAndPath(db.ctx, db.sql.Load(), dbid, path, identity)
 }
 
 // CloseMediaHistory finalizes a media history entry with end time and final play time.
 func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseMediaHistory(db.ctx, db.sql, dbid, endTime, playTime)
+	return sqlCloseMediaHistory(db.ctx, db.sql.Load(), dbid, endTime, playTime)
 }
 
 // GetMediaHistory retrieves media history entries with pagination and optional system filtering.
 func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, nil, lastID, limit)
+}
+
+// GetDistinctMediaHistory returns the newest lean history row for each
+// (system, media path) identity, ordered for stable cursor pagination.
+func (db *UserDB) GetDistinctMediaHistory(
+	ctx context.Context, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetDistinctMediaHistory(ctx, db.sql.Load(), systemIDs, lastID, limit)
+}
+
+// GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
+func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
+	if db.sql.Load() == nil {
+		return database.MediaHistoryEntry{}, false, ErrNullSQL
+	}
+	return sqlGetLatestMediaHistory(db.ctx, db.sql.Load())
 }
 
 // GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
@@ -68,36 +109,60 @@ func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) (
 func (db *UserDB) GetMediaHistoryTop(
 	systemIDs []string, since *time.Time, limit int,
 ) ([]database.MediaHistoryTopEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistoryTop(db.ctx, db.sql, systemIDs, since, limit)
+	return sqlGetMediaHistoryTop(db.ctx, db.sql.Load(), systemIDs, since, limit)
 }
 
 // CloseHangingMediaHistory closes any media history entries left open from unclean shutdowns.
 // It sets EndTime = StartTime + PlayTime for entries where EndTime is NULL.
 func (db *UserDB) CloseHangingMediaHistory() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseHangingMediaHistory(db.ctx, db.sql)
+	return sqlCloseHangingMediaHistory(db.ctx, db.sql.Load())
 }
 
 // CleanupMediaHistory removes media history older than the retention period.
-func (db *UserDB) CleanupMediaHistory(retentionDays int) (int64, error) {
-	if db.sql == nil {
+// When requireSynced is true, only server-acknowledged versions are removed.
+func (db *UserDB) CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error) {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlCleanupMediaHistory(db.ctx, db.sql, retentionDays)
+	return sqlCleanupMediaHistory(db.ctx, db.sql.Load(), retentionDays, requireSynced)
 }
 
 // HealTimestamps corrects timestamps for records created with unreliable clocks (MiSTer boot without NTP).
 // When NTP syncs, this reconstructs correct timestamps using: TrueStartTime = TrueBootTime + MonotonicStart
 func (db *UserDB) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlHealTimestamps(db.ctx, db.sql, bootUUID, trueBootTime)
+	return sqlHealTimestamps(db.ctx, db.sql.Load(), bootUUID, trueBootTime)
+}
+
+// SumMediaPlayTimeForDay returns the total seconds of completed play-time that
+// overlaps with the day starting at dayStart. Sessions that span midnight are
+// pro-rated: only the portion after dayStart is counted. The currently-active
+// session (EndTime IS NULL) is excluded; callers add it separately.
+func (db *UserDB) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, nil)
+}
+
+// SumMediaPlayTimeForDayByProfile is SumMediaPlayTimeForDay scoped to
+// history attributed to a single profile. History with no profile (the
+// shared profile) is counted by SumMediaPlayTimeForDay, which sums all
+// rows: shared limits are device-level, so deactivating a profile must not
+// grant a fresh daily allowance.
+func (db *UserDB) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, &profileID)
 }
 
 /*
@@ -109,8 +174,9 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
+			MediaIdentity, MediaIdentityPolicyVersion
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -124,6 +190,14 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 	var deviceID any
 	if entry.DeviceID != nil {
 		deviceID = *entry.DeviceID
+	}
+	var profileID any
+	if entry.ProfileID != nil {
+		profileID = *entry.ProfileID
+	}
+	identityPolicyVersion := 0
+	if entry.MediaIdentity != nil {
+		identityPolicyVersion = entry.MediaIdentity.PolicyVersion
 	}
 
 	result, err := stmt.ExecContext(ctx,
@@ -145,6 +219,10 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		entry.CreatedAt.Unix(),
 		entry.UpdatedAt.Unix(),
 		deviceID,
+		profileID,
+		database.EncodeTagStrings(entry.Tags),
+		database.EncodeMediaIdentity(entry.MediaIdentity),
+		identityPolicyVersion,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -161,7 +239,7 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, playTime int) error {
 	stmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
-		SET PlayTime = ?, DurationSec = ?, UpdatedAt = ?
+		SET PlayTime = ?, DurationSec = ?, UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
 		WHERE DBID = ?;
 	`)
 	if err != nil {
@@ -181,11 +259,90 @@ func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, play
 	return nil
 }
 
+func sqlUpdateMediaHistoryIdentity(
+	ctx context.Context, db *sql.DB, dbid int64, identity *database.MediaIdentity,
+) (bool, error) {
+	if identity == nil {
+		return false, errors.New("media history identity is required")
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE MediaHistory
+		SET MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
+		WHERE DBID = ?
+		  AND (
+		    MediaIdentityPolicyVersion < ? OR
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '')
+		  );
+	`,
+		identity.DisplayName,
+		database.EncodeTagStrings(identity.LegacyTags()),
+		database.EncodeMediaIdentity(identity),
+		identity.PolicyVersion,
+		time.Now().Unix(),
+		dbid,
+		identity.PolicyVersion,
+		identity.PolicyVersion,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute media history identity update: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to count media history identity update: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// sqlUpdateMediaHistoryIdentityAndPath is sqlUpdateMediaHistoryIdentity plus
+// a MediaPath correction. DBID, ID (session UUID), StartTime/EndTime,
+// PlayTime, and ProfileID are untouched.
+func sqlUpdateMediaHistoryIdentityAndPath(
+	ctx context.Context, db *sql.DB, dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	if identity == nil {
+		return false, errors.New("media history identity is required")
+	}
+	if path == "" {
+		return false, errors.New("media history path is required")
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE MediaHistory
+		SET MediaPath = ?, MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
+		WHERE DBID = ?
+		  AND (
+		    MediaIdentityPolicyVersion < ? OR
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '') OR
+		    MediaPath <> ?
+		  );
+	`,
+		path,
+		identity.DisplayName,
+		database.EncodeTagStrings(identity.LegacyTags()),
+		database.EncodeMediaIdentity(identity),
+		identity.PolicyVersion,
+		time.Now().Unix(),
+		dbid,
+		identity.PolicyVersion,
+		identity.PolicyVersion,
+		path,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute media history identity and path update: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to count media history identity and path update: %w", err)
+	}
+	return rows > 0, nil
+}
+
 func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime time.Time, playTime int) error {
 	stmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
-		SET EndTime = ?, PlayTime = ?, DurationSec = ?, UpdatedAt = ?,
-		    WallDuration = (? - StartTime)
+		SET EndTime = ?, PlayTime = ?, DurationSec = ?, UpdatedAt = MAX(?, UpdatedAt + 1),
+		    WallDuration = (? - StartTime), SyncedAt = NULL
 		WHERE DBID = ?;
 	`)
 	if err != nil {
@@ -197,7 +354,11 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 		}
 	}()
 
-	_, err = stmt.ExecContext(ctx, endTime.Unix(), playTime, playTime, time.Now().Unix(), endTime.Unix(), dbid)
+	// Use endTime as the wall-clock candidate. SQL advances UpdatedAt by at
+	// least one second so concurrent sync acknowledgements can compare exact
+	// local versions even when two changes happen in the same second.
+	endUnix := endTime.Unix()
+	_, err = stmt.ExecContext(ctx, endUnix, playTime, playTime, endUnix, endUnix, dbid)
 	if err != nil {
 		return fmt.Errorf("failed to execute media history close: %w", err)
 	}
@@ -206,7 +367,7 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 }
 
 func sqlGetMediaHistory(
-	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
+	ctx context.Context, db *sql.DB, systemIDs []string, profileID *string, lastID int64, limit int,
 ) ([]database.MediaHistoryEntry, error) {
 	if limit <= 0 {
 		limit = 25
@@ -223,7 +384,7 @@ func sqlGetMediaHistory(
 	}
 
 	conditions := []string{"DBID < ?"}
-	args := make([]any, 0, len(systemIDs)+2)
+	args := make([]any, 0, len(systemIDs)+3)
 	args = append(args, lastID)
 
 	if len(systemIDs) == 1 {
@@ -238,8 +399,14 @@ func sqlGetMediaHistory(
 		conditions = append(conditions, "SystemID IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
+	if profileID != nil {
+		conditions = append(conditions, "ProfileID = ?")
+		args = append(args, *profileID)
+	}
+
 	where := strings.Join(conditions, " AND ")
 	args = append(args, limit)
+	queryStarted := time.Now()
 
 	//nolint:gosec // where clause uses only hardcoded column names, not user input
 	query := fmt.Sprintf(`
@@ -247,7 +414,8 @@ func sqlGetMediaHistory(
 			DBID, ID, StartTime, EndTime, SystemID, SystemName,
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
+			MediaIdentity
 		FROM MediaHistory
 		WHERE %s
 		ORDER BY DBID DESC
@@ -280,7 +448,8 @@ func sqlGetMediaHistory(
 		var endTimeUnix sql.NullInt64
 		var createdAtUnix, updatedAtUnix int64
 		var id, clockSource sql.NullString
-		var deviceID sql.NullString
+		var deviceID, rowProfileID sql.NullString
+		var rawTags, rawIdentity string
 
 		err = rows.Scan(
 			&entry.DBID,
@@ -303,6 +472,9 @@ func sqlGetMediaHistory(
 			&createdAtUnix,
 			&updatedAtUnix,
 			&deviceID,
+			&rowProfileID,
+			&rawTags,
+			&rawIdentity,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history row: %w", err)
@@ -318,6 +490,12 @@ func sqlGetMediaHistory(
 			deviceStr := deviceID.String
 			entry.DeviceID = &deviceStr
 		}
+		if rowProfileID.Valid {
+			profileStr := rowProfileID.String
+			entry.ProfileID = &profileStr
+		}
+		entry.Tags = database.DecodeTagStrings(rawTags)
+		entry.MediaIdentity = database.DecodeMediaIdentity(rawIdentity)
 
 		entry.StartTime = time.Unix(startTimeUnix, 0)
 		if endTimeUnix.Valid {
@@ -334,7 +512,152 @@ func sqlGetMediaHistory(
 		return list, fmt.Errorf("error iterating media history rows: %w", err)
 	}
 
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("media history query timing")
+
 	return list, nil
+}
+
+func sqlGetDistinctMediaHistory(
+	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if lastID == 0 {
+		lastID = math.MaxInt64
+	}
+
+	args := make([]any, 0, len(systemIDs)+2)
+	latestWhere := ""
+	switch len(systemIDs) {
+	case 1:
+		latestWhere = "WHERE SystemID = ?"
+		args = append(args, systemIDs[0])
+	default:
+		if len(systemIDs) > 1 {
+			placeholders := make([]string, len(systemIDs))
+			for i, systemID := range systemIDs {
+				placeholders[i] = "?"
+				args = append(args, systemID)
+			}
+			latestWhere = "WHERE SystemID IN (" + strings.Join(placeholders, ", ") + ")"
+		}
+	}
+	args = append(args, lastID, limit)
+
+	// Group before applying the cursor. Filtering raw history rows first would
+	// let an older session for a media identity reappear on a later page.
+	//nolint:gosec // latestWhere contains only fixed SQL and placeholders.
+	query := fmt.Sprintf(`
+		WITH LatestMedia AS (
+			SELECT MAX(DBID) AS DBID
+			FROM MediaHistory
+			%s
+			GROUP BY SystemID, MediaPath
+		)
+		SELECT
+			history.DBID, history.StartTime, history.EndTime,
+			history.SystemID, history.SystemName, history.MediaPath,
+			history.MediaName, history.LauncherID, history.PlayTime
+		FROM MediaHistory AS history
+		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
+		WHERE history.DBID < ?
+		ORDER BY history.DBID DESC
+		LIMIT ?;
+	`, latestWhere)
+
+	list := make([]database.MediaHistoryEntry, 0, limit)
+	queryStarted := time.Now()
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return list, fmt.Errorf("failed to query distinct media history: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close distinct media history rows")
+		}
+	}()
+
+	for rows.Next() {
+		var entry database.MediaHistoryEntry
+		var startTimeUnix int64
+		var endTimeUnix sql.NullInt64
+		if scanErr := rows.Scan(
+			&entry.DBID,
+			&startTimeUnix,
+			&endTimeUnix,
+			&entry.SystemID,
+			&entry.SystemName,
+			&entry.MediaPath,
+			&entry.MediaName,
+			&entry.LauncherID,
+			&entry.PlayTime,
+		); scanErr != nil {
+			return list, fmt.Errorf("failed to scan distinct media history row: %w", scanErr)
+		}
+		entry.StartTime = time.Unix(startTimeUnix, 0)
+		if endTimeUnix.Valid {
+			endTime := time.Unix(endTimeUnix.Int64, 0)
+			entry.EndTime = &endTime
+		}
+		list = append(list, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating distinct media history rows: %w", err)
+	}
+
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("distinct media history query timing")
+	return list, nil
+}
+
+func sqlGetLatestMediaHistory(ctx context.Context, db *sql.DB) (database.MediaHistoryEntry, bool, error) {
+	stmt, err := db.PrepareContext(ctx, `
+		SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID
+		FROM MediaHistory
+		ORDER BY DBID DESC
+		LIMIT 1;
+	`)
+	if err != nil {
+		return database.MediaHistoryEntry{}, false,
+			fmt.Errorf("failed to prepare latest media history query statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var entry database.MediaHistoryEntry
+	var startTimeUnix int64
+	err = stmt.QueryRowContext(ctx).Scan(
+		&entry.DBID,
+		&startTimeUnix,
+		&entry.SystemID,
+		&entry.SystemName,
+		&entry.MediaPath,
+		&entry.MediaName,
+		&entry.LauncherID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return database.MediaHistoryEntry{}, false, nil
+		}
+		return database.MediaHistoryEntry{}, false, fmt.Errorf("failed to scan latest media history row: %w", err)
+	}
+
+	entry.StartTime = time.Unix(startTimeUnix, 0)
+	return entry, true, nil
 }
 
 func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
@@ -344,7 +667,8 @@ func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
 		SET EndTime = StartTime + PlayTime,
 		    DurationSec = PlayTime,
 		    WallDuration = PlayTime,
-		    UpdatedAt = unixepoch()
+		    UpdatedAt = MAX(unixepoch(), UpdatedAt + 1),
+		    SyncedAt = NULL
 		WHERE EndTime IS NULL;
 	`)
 	if err != nil {
@@ -369,10 +693,16 @@ func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) (int64, error) {
+func sqlCleanupMediaHistory(
+	ctx context.Context, db *sql.DB, retentionDays int, requireSynced bool,
+) (int64, error) {
 	cutoffTime := time.Now().AddDate(0, 0, -retentionDays).Unix()
 
-	stmt, err := db.PrepareContext(ctx, `DELETE FROM MediaHistory WHERE StartTime < ?;`)
+	query := `DELETE FROM MediaHistory WHERE StartTime < ?;`
+	if requireSynced {
+		query = `DELETE FROM MediaHistory WHERE StartTime < ? AND SyncedAt IS NOT NULL;`
+	}
+	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history cleanup statement: %w", err)
 	}
@@ -395,10 +725,54 @@ func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) 
 	return rowsAffected, nil
 }
 
+func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Time, profileID *string) (int64, error) {
+	dayStartUnix := dayStart.Unix()
+
+	// Sum completed sessions that overlap [dayStart, ∞).
+	// Sessions spanning midnight are pro-rated: only the portion after dayStart counts.
+	// The active session (EndTime IS NULL) is excluded; callers add it separately.
+	query := `
+		SELECT COALESCE(SUM(
+		    CASE
+		        WHEN StartTime < ? THEN EndTime - ?
+		        ELSE PlayTime
+		    END
+		), 0)
+		FROM MediaHistory
+		WHERE EndTime IS NOT NULL
+		  AND EndTime > ?`
+	args := []any{dayStartUnix, dayStartUnix, dayStartUnix}
+	if profileID != nil {
+		query += `
+		  AND ProfileID = ?`
+		args = append(args, *profileID)
+	}
+	query += ";"
+
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare daily play time sum statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var total int64
+	if scanErr := stmt.QueryRowContext(ctx, args...).Scan(&total); scanErr != nil {
+		return 0, fmt.Errorf("failed to scan daily play time sum: %w", scanErr)
+	}
+
+	return total, nil
+}
+
 func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBootTime time.Time) (int64, error) {
 	trueBootUnix := trueBootTime.Unix()
 
-	// Heal MediaHistory timestamps
+	// Heal MediaHistory timestamps.
+	// Rows with MonotonicStart = 0 are skipped: they cannot be accurately healed
+	// (uptime was unavailable when the row was written), so we leave them as-is.
 	mediaStmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
 		SET StartTime = ? + MonotonicStart,
@@ -408,8 +782,9 @@ func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBoo
 		    END,
 		    ClockReliable = 1,
 		    ClockSource = 'healed',
-		    UpdatedAt = unixepoch()
-		WHERE BootUUID = ? AND ClockReliable = 0;
+		    UpdatedAt = MAX(unixepoch(), UpdatedAt + 1),
+		    SyncedAt = NULL
+		WHERE BootUUID = ? AND ClockReliable = 0 AND MonotonicStart > 0;
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history heal statement: %w", err)
@@ -522,6 +897,7 @@ func sqlGetMediaHistoryTop(
 	args = append(args, limit)
 
 	list := make([]database.MediaHistoryTopEntry, 0, limit)
+	queryStarted := time.Now()
 
 	q, err := db.PrepareContext(ctx, query)
 	if err != nil {
@@ -567,6 +943,12 @@ func sqlGetMediaHistoryTop(
 	if err = rows.Err(); err != nil {
 		return list, fmt.Errorf("error iterating media history top rows: %w", err)
 	}
+
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("media history top query timing")
 
 	return list, nil
 }

@@ -1,0 +1,439 @@
+//go:build linux
+
+package mister
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
+)
+
+type arcadeSystemSpec struct {
+	systemID  string
+	platforms []string
+}
+
+var misterArcadeSystemSpecs = []arcadeSystemSpec{
+	{systemID: systemdefs.SystemCave68000, platforms: []string{"CAVE 68000"}},
+	{systemID: systemdefs.SystemCPS1, platforms: []string{"Capcom CPS-1", "Capcom CPS-1.5"}},
+	{systemID: systemdefs.SystemCPS2, platforms: []string{"Capcom CPS-2"}},
+	{systemID: systemdefs.SystemCPS3, platforms: []string{"Capcom CPS-3"}},
+	{systemID: systemdefs.SystemIremM72, platforms: []string{"Irem M72"}},
+	{systemID: systemdefs.SystemIremM92, platforms: []string{"Irem M92"}},
+	{systemID: systemdefs.SystemJalecoMegaSystem1, platforms: []string{"Jaleco Mega System 1"}},
+	{systemID: systemdefs.SystemNamcoSystem1, platforms: []string{"Namco System-1"}},
+	{systemID: systemdefs.SystemPGM, platforms: []string{"IGS PGM"}},
+	{systemID: systemdefs.SystemSegaSTV, platforms: []string{"Sega ST-V"}},
+	{systemID: systemdefs.SystemSegaSystem16, platforms: []string{"Sega System 16"}},
+	{systemID: systemdefs.SystemSegaSystem18, platforms: []string{"Sega System 18"}},
+	{systemID: systemdefs.SystemTaitoF2, platforms: []string{"Taito F2 System"}},
+}
+
+// arcadeClassProgressInterval is how many MRA files are classified between
+// progress log lines, so a long pass over slow storage is visibly alive.
+const arcadeClassProgressInterval = 500
+
+type arcadeSystemCache struct {
+	platform        *Platform
+	scanArcadeFiles func(context.Context, *config.Instance) ([]platforms.ScanResult, error)
+	readArcadeDB    func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error)
+	readMRA         func(string) (mgls.MRA, error)
+	results         map[string][]platforms.ScanResult
+	persistPath     string
+	captured        []platforms.ScanResult
+	mu              syncutil.Mutex
+	hasCaptured     bool
+	loaded          bool
+}
+
+func newArcadeSystemCache(platform *Platform) *arcadeSystemCache {
+	cache := &arcadeSystemCache{platform: platform}
+	cache.scanArcadeFiles = cache.scanFiles
+	cache.readArcadeDB = arcadedb.ReadArcadeDb
+	cache.readMRA = mgls.ReadMRA
+	cache.persistPath = filepath.Join(helpers.DataDir(platform), config.CacheDir, arcadeClassCacheFileName)
+	return cache
+}
+
+// captureScanner snapshots the Arcade system's walked file list so a later
+// sub-system classification can reuse it without re-walking. It deliberately
+// reads no MRA contents: classification only serves the granular arcade
+// systems (CPS1 etc.), so an Arcade-only index must not pay for parsing
+// thousands of MRA files it will never use.
+func (c *arcadeSystemCache) captureScanner(
+	_ context.Context,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.captured = append([]platforms.ScanResult(nil), results...)
+	c.hasCaptured = true
+	// A fresh walk may have added, removed, or replaced MRA files; drop any
+	// classification derived from the previous list so the next sub-system
+	// demand re-derives it (cheap for unchanged files via the persisted cache).
+	c.loaded = false
+	c.results = nil
+	return results, nil
+}
+
+func (c *arcadeSystemCache) scanner(systemID string) func(
+	context.Context, *config.Instance, string, []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	return func(
+		ctx context.Context,
+		cfg *config.Instance,
+		_ string,
+		_ []platforms.ScanResult,
+	) ([]platforms.ScanResult, error) {
+		if err := c.classify(ctx, cfg); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return append([]platforms.ScanResult(nil), c.results[systemID]...), nil
+	}
+}
+
+// classify maps every captured MRA file to a granular arcade system by
+// setname. File contents are only read for files the persisted cache has not
+// seen at their current size and mtime; unchanged files (including ones that
+// previously failed to parse) resolve without touching storage.
+func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.loaded {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	files := c.captured
+	if !c.hasCaptured {
+		var err error
+		files, err = c.scanArcadeFiles(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+
+	entries, err := c.readArcadeDB(c.platform)
+	if err != nil {
+		log.Warn().Err(err).Msg("unable to classify MiSTer arcade systems")
+		c.loaded = true
+		return nil
+	}
+
+	setSystems := arcadeSetSystems(entries)
+	cached := loadArcadeClassCache(c.persistPath)
+	fresh := make(map[string]arcadeClassCacheEntry, len(files))
+
+	started := time.Now()
+	var mraCount, cacheHits, parsed, parseFailures int
+	classified := make(map[string][]platforms.ScanResult, len(misterArcadeSystemSpecs))
+	for i := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !strings.EqualFold(filepath.Ext(files[i].Path), ".mra") {
+			continue
+		}
+		mraCount++
+		if mraCount%arcadeClassProgressInterval == 0 {
+			log.Debug().
+				Int("classified", mraCount).
+				Int("total", len(files)).
+				Dur("elapsed", time.Since(started)).
+				Msg("arcade MRA classification progress")
+		}
+
+		setName, ok := c.cachedSetName(cached, files[i].Path)
+		if ok {
+			cacheHits++
+			fresh[files[i].Path] = cached[files[i].Path]
+		} else {
+			parsed++
+			var parseOK bool
+			setName, parseOK = c.parseSetName(files[i].Path)
+			if !parseOK {
+				parseFailures++
+			}
+			if entry, statOK := statCacheEntry(files[i].Path, setName); statOK {
+				fresh[files[i].Path] = entry
+			}
+		}
+		if systemID := setSystems[strings.ToLower(setName)]; systemID != "" {
+			classified[systemID] = append(classified[systemID], files[i])
+		}
+	}
+
+	if mraCount > 0 && (parsed > 0 || len(fresh) != len(cached)) {
+		if saveErr := saveArcadeClassCache(c.persistPath, fresh); saveErr != nil {
+			log.Warn().Err(saveErr).Msg("failed to persist arcade classification cache")
+		}
+	}
+
+	log.Info().
+		Int("mraFiles", mraCount).
+		Int("cacheHits", cacheHits).
+		Int("parsed", parsed).
+		Int("parseFailures", parseFailures).
+		Dur("elapsed", time.Since(started)).
+		Msg("arcade MRA classification complete")
+
+	c.results = classified
+	c.loaded = true
+	return nil
+}
+
+// cachedSetName returns the setname recorded for path when its current size
+// and mtime match the cache entry.
+func (*arcadeSystemCache) cachedSetName(
+	cached map[string]arcadeClassCacheEntry, path string,
+) (setName string, ok bool) {
+	entry, found := cached[path]
+	if !found {
+		return "", false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	if info.Size() != entry.Size || info.ModTime().UnixNano() != entry.MtimeNs {
+		return "", false
+	}
+	return entry.SetName, true
+}
+
+// parseSetName reads and parses one MRA file. A failed read or parse returns
+// ok=false with an empty setname — the file is unclassifiable, which is also
+// worth caching so it isn't re-read every classification.
+func (c *arcadeSystemCache) parseSetName(path string) (setName string, ok bool) {
+	mra, err := c.readMRA(path)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("unable to classify arcade MRA")
+		return "", false
+	}
+	return mra.SetName, true
+}
+
+// statCacheEntry builds a cache entry pinning setName to the file's current
+// size and mtime.
+func statCacheEntry(path, setName string) (arcadeClassCacheEntry, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return arcadeClassCacheEntry{}, false
+	}
+	return arcadeClassCacheEntry{
+		SetName: setName,
+		Size:    info.Size(),
+		MtimeNs: info.ModTime().UnixNano(),
+	}, true
+}
+
+func arcadeSetSystems(entries []arcadedb.ArcadeDbEntry) map[string]string {
+	platformSystems := make(map[string]string)
+	for _, spec := range misterArcadeSystemSpecs {
+		for _, platformName := range spec.platforms {
+			platformSystems[platformName] = spec.systemID
+		}
+	}
+	setSystems := make(map[string]string, len(entries))
+	for i := range entries {
+		if systemID := platformSystems[entries[i].Platform]; systemID != "" {
+			setSystems[strings.ToLower(entries[i].Setname)] = systemID
+		}
+	}
+	return setSystems
+}
+
+func (c *arcadeSystemCache) scanFiles(
+	ctx context.Context,
+	cfg *config.Instance,
+) ([]platforms.ScanResult, error) {
+	var results []platforms.ScanResult
+	matcher := helpers.NewLauncherMatcher(cfg, c.platform)
+	// afero.Walk reports symlinks without following them, so an Organizer
+	// alias arrives here as a file entry and must be filtered by its target.
+	var readLink func(string) (string, error)
+	if linkReader, ok := c.platform.filesystem().(afero.LinkReader); ok {
+		readLink = linkReader.ReadlinkIfPossible
+	}
+	for _, root := range c.platform.RootDirs(cfg) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		arcadePath, err := mediascanner.FindPath(ctx, filepath.Join(root, "_Arcade"))
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		walkErr := afero.Walk(
+			c.platform.filesystem(),
+			arcadePath,
+			func(path string, info os.FileInfo, walkEntryErr error) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if walkEntryErr != nil {
+					return walkEntryErr
+				}
+				if info.IsDir() {
+					if matcher.ShouldSkipScanDirectory(systemdefs.SystemArcade, path) {
+						log.Info().Str("path", path).Msg("skipping launcher-excluded MiSTer arcade directory")
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if info.Mode()&os.ModeSymlink != 0 && readLink != nil {
+					skip, skipErr := matcher.ShouldSkipScanSymlink(
+						systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+					)
+					if skipErr != nil {
+						log.Debug().Err(skipErr).Str("path", path).Msg("unable to read MiSTer arcade symlink")
+					} else if skip {
+						return nil
+					}
+				}
+				ext := filepath.Ext(path)
+				if strings.EqualFold(ext, ".mra") || strings.EqualFold(ext, ".mgl") {
+					results = append(results, platforms.ScanResult{Path: path})
+				}
+				return nil
+			},
+		)
+		// Walk can finish without observing cancellation when the last entry
+		// is already in flight, so partial results must not look complete.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if walkErr != nil {
+			log.Warn().Err(walkErr).Str("path", arcadePath).Msg("unable to scan MiSTer arcade files for classification")
+		}
+	}
+	return results, nil
+}
+
+func addNeoGeoMVSLauncher(
+	platform *Platform,
+	neoGeo *platforms.Launcher,
+) (updatedNeoGeo, neoGeoMVS platforms.Launcher) {
+	updatedNeoGeo = *neoGeo
+	baseScanner := updatedNeoGeo.Scanner
+	var mu syncutil.Mutex
+	var cached []platforms.ScanResult
+	var loaded bool
+
+	scanAndCache := func(
+		ctx context.Context,
+		cfg *config.Instance,
+		systemID string,
+		results []platforms.ScanResult,
+	) ([]platforms.ScanResult, error) {
+		scanned, err := baseScanner(ctx, cfg, systemID, results)
+		if err != nil {
+			return scanned, err
+		}
+		mu.Lock()
+		cached = append([]platforms.ScanResult(nil), scanned...)
+		loaded = true
+		mu.Unlock()
+		return scanned, nil
+	}
+	updatedNeoGeo.Scanner = scanAndCache
+
+	neoGeoMVS = platforms.Launcher{
+		ID:         systemdefs.SystemNeoGeoMVS,
+		SystemID:   systemdefs.SystemNeoGeoMVS,
+		Folders:    []string{"NEOGEO"},
+		Extensions: []string{".neo", ".zip"},
+		Test: func(_ *config.Instance, path string) bool {
+			return filepath.Ext(path) == ""
+		},
+		SkipFilesystemScan: true,
+		Launch:             launchNeoGeoMVS(platform),
+		Scanner: func(
+			ctx context.Context,
+			cfg *config.Instance,
+			_ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			mu.Lock()
+			wasLoaded := loaded
+			results := append([]platforms.ScanResult(nil), cached...)
+			mu.Unlock()
+			if wasLoaded {
+				return results, nil
+			}
+			return scanAndCache(ctx, cfg, systemdefs.SystemNeoGeo, nil)
+		},
+	}
+	return updatedNeoGeo, neoGeoMVS
+}
+
+func launchNeoGeoMVS(platform *Platform) func(
+	*config.Instance, string, *platforms.LaunchOptions,
+) (*os.Process, error) {
+	baseLaunch := launch(platform, systemdefs.SystemNeoGeo)
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		launchOpts := neoGeoMVSLaunchOptions(opts)
+		return baseLaunch(cfg, path, &launchOpts)
+	}
+}
+
+func neoGeoMVSLaunchOptions(opts *platforms.LaunchOptions) platforms.LaunchOptions {
+	launchOpts := platforms.LaunchOptions{}
+	if opts != nil {
+		launchOpts = *opts
+	}
+	if launchOpts.SetName == "" {
+		launchOpts.SetName = systemdefs.SystemNeoGeoMVS
+	}
+	if launchOpts.SetNameSameDir == "" {
+		launchOpts.SetNameSameDir = "true"
+	}
+	return launchOpts
+}
+
+func addArcadeSystemLaunchers(platform *Platform, launchers []platforms.Launcher) []platforms.Launcher {
+	cache := newArcadeSystemCache(platform)
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemArcade {
+			launchers[i].Scanner = cache.captureScanner
+			break
+		}
+	}
+
+	for _, spec := range misterArcadeSystemSpecs {
+		launchers = append(launchers, platforms.Launcher{
+			ID:                 spec.systemID,
+			SystemID:           spec.systemID,
+			Folders:            []string{"_Arcade"},
+			Extensions:         []string{".mra"},
+			SkipFilesystemScan: true,
+			Scanner:            cache.scanner(spec.systemID),
+			Launch:             launchArcade(platform, systemdefs.SystemArcade),
+		})
+	}
+	return launchers
+}

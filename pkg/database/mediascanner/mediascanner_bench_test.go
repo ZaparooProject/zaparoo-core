@@ -20,15 +20,37 @@
 package mediascanner
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-	"github.com/stretchr/testify/mock"
 )
+
+// zaparooBenchLargeEnv gates reconcile benchmark cases large enough to blow
+// the 45-minute count=6 budget of task bench-baseline/bench-compare — neither
+// passes -short, so testing.Short() wouldn't gate these. Added for #1279 to
+// reproduce the scale (tens of thousands of files/tag links in one system)
+// where the reconcile pipeline showed super-linear cost on device:
+//
+//	ZAPAROO_BENCH_LARGE=1 go test -bench=Reconcile -benchtime=1x -count=1 ./pkg/database/mediascanner/
+const zaparooBenchLargeEnv = "ZAPAROO_BENCH_LARGE"
+
+// largeReconcileBenchSize is the size threshold above which a bench case
+// needs zaparooBenchLargeEnv set.
+const largeReconcileBenchSize = 50_000
+
+func skipUnlessLargeReconcileBench(b *testing.B) {
+	b.Helper()
+	if os.Getenv(zaparooBenchLargeEnv) != "1" {
+		b.Skipf("set %s=1 to run this large-scale reconcile benchmark", zaparooBenchLargeEnv)
+	}
+}
 
 func BenchmarkGetPathFragments(b *testing.B) {
 	cases := []struct {
@@ -125,267 +147,271 @@ func BenchmarkGetPathFragments_Batch(b *testing.B) {
 	}
 }
 
-func BenchmarkFlushScanStateMaps(b *testing.B) {
-	sizes := []struct {
-		name string
-		n    int
-	}{
-		{"10k", 10_000},
-		{"50k", 50_000},
-	}
-
-	for _, sz := range sizes {
-		b.Run(sz.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				b.StopTimer()
-				ss := &database.ScanState{
-					SystemIDs:  make(map[string]int, 100),
-					TitleIDs:   make(map[string]int, sz.n),
-					MediaIDs:   make(map[string]int, sz.n),
-					TagTypeIDs: make(map[string]int, 50),
-					TagIDs:     make(map[string]int, 500),
-				}
-				for i := range sz.n {
-					ss.TitleIDs[fmt.Sprintf("title-%d", i)] = i
-					ss.MediaIDs[fmt.Sprintf("media-%d", i)] = i
-				}
-				b.StartTimer()
-				FlushScanStateMaps(ss)
-				runtime.KeepAlive(ss)
-			}
-		})
-	}
-}
-
-// buildSyntheticFilenamesMultiSystem distributes n filenames across multiple
-// systems with a Zipf-like distribution to mimic real-world collections.
-func buildSyntheticFilenamesMultiSystem(n int, systems []string) map[string][]string {
-	if len(systems) == 0 {
-		return nil
-	}
-
-	prefixes := []string{
-		"Super", "Mega", "Ultra", "Final", "Grand", "Dark", "Crystal",
-		"Shadow", "Iron", "Bright", "Neo", "Hyper", "Royal", "Star",
-	}
-	middles := []string{
-		"Mario", "Fighter", "Quest", "Fantasy", "Dragon", "Knight",
-		"Warrior", "Battle", "Storm", "Legend", "World", "Racer",
-	}
-	suffixes := []string{
-		"Bros", "Adventure", "Saga", "Chronicles", "Wars", "Legacy",
-		"Origins", "Legends", "Rising", "Revolution", "Arena", "Force",
-	}
-	regions := []string{
-		"(USA)", "(Europe)", "(Japan)", "(USA, Europe)", "(World)",
-	}
-	extensions := []string{".nes", ".sfc", ".md", ".gba", ".z64", ".iso"}
-
-	// Distribute with decreasing weight: first system gets most files
-	//nolint:gosec // Deterministic seed for reproducible benchmarks
-	rng := rand.New(rand.NewSource(42))
-	weights := make([]float64, len(systems))
-	total := 0.0
-	for i := range systems {
-		w := 1.0 / float64(i+1) // Inverse-rank weighted: 1, 0.5, 0.33, 0.25, ...
-		weights[i] = w
-		total += w
-	}
-
-	result := make(map[string][]string, len(systems))
-	remaining := n
-	for i, sys := range systems {
-		count := int(float64(n) * weights[i] / total)
-		if i == len(systems)-1 {
-			count = remaining // Last system gets remainder
-		}
-		if count > remaining {
-			count = remaining
-		}
-		remaining -= count
-
-		fns := make([]string, count)
-		for j := range count {
-			fns[j] = fmt.Sprintf("/roms/%s/%s %s %s %d %s%s",
-				sys,
-				prefixes[rng.Intn(len(prefixes))],
-				middles[rng.Intn(len(middles))],
-				suffixes[rng.Intn(len(suffixes))],
-				rng.Intn(99)+1,
-				regions[rng.Intn(len(regions))],
-				extensions[rng.Intn(len(extensions))],
-			)
-		}
-		result[sys] = fns
-	}
-	return result
-}
-
-// newScanState creates a fresh ScanState for benchmarking.
-func newScanState() *database.ScanState {
-	return &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: make(map[string]int),
-		TagIDs:     make(map[string]int),
-	}
-}
-
-// setupMockMediaDB creates a MockMediaDBI with all Insert/Find methods stubbed
-// for benchmarking AddMediaPath without real SQLite.
-func setupMockMediaDB() *helpers.MockMediaDBI {
-	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("InsertSystem", mock.Anything).Return(database.System{}, nil)
-	mockDB.On("InsertMediaTitle", mock.Anything).Return(database.MediaTitle{}, nil)
-	mockDB.On("InsertMedia", mock.Anything).Return(database.Media{}, nil)
-	mockDB.On("InsertTag", mock.Anything).Return(database.Tag{}, nil)
-	mockDB.On("InsertTagType", mock.Anything).Return(database.TagType{}, nil)
-	mockDB.On("InsertMediaTag", mock.Anything).Return(database.MediaTag{}, nil)
-	mockDB.On("FindTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil)
-	mockDB.On("BeginTransaction", mock.Anything).Return(nil)
-	mockDB.On("CommitTransaction").Return(nil)
-	return mockDB
-}
-
-// seedMockScanState populates a ScanState with tag types and tags
-// matching what SeedCanonicalTags would produce, but without hitting a real DB.
-func seedMockScanState(ss *database.ScanState) {
-	// Seed the tag types that AddMediaPath looks up
-	ss.TagTypesIndex = 2
-	ss.TagTypeIDs["extension"] = 1
-	ss.TagTypeIDs["unknown"] = 2
-	ss.TagsIndex = 1
-	ss.TagIDs["unknown:unknown"] = 1
-}
-
-func BenchmarkAddMediaPath_MockDB(b *testing.B) {
+// BenchmarkMediaScanner_StageAndReconcile_FreshDB measures a full first index
+// of n files through the staging pipeline: stage every file, one set-based
+// reconcile, commit.
+func BenchmarkMediaScanner_StageAndReconcile_FreshDB(b *testing.B) {
 	sizes := []struct {
 		name string
 		n    int
 	}{
 		{name: "1k", n: 1_000},
 		{name: "10k", n: 10_000},
+		{name: "50k", n: largeReconcileBenchSize},
 	}
 
 	for _, sz := range sizes {
 		b.Run(sz.name, func(b *testing.B) {
-			b.ReportAllocs()
-			mockDB := setupMockMediaDB()
-			filenames := buildSyntheticFilenames(sz.n)
-			b.ResetTimer()
-			for b.Loop() {
-				ss := newScanState()
-				seedMockScanState(ss)
-				for i, fn := range filenames {
-					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, "", false, false, nil, "")
-					if i == 0 && err != nil {
-						b.Fatal(err)
-					}
-				}
+			if sz.n == largeReconcileBenchSize {
+				skipUnlessLargeReconcileBench(b)
 			}
-		})
-	}
-}
-
-func BenchmarkAddMediaPath_RealDB(b *testing.B) {
-	sizes := []struct {
-		name string
-		n    int
-	}{
-		{name: "1k", n: 1_000},
-		{name: "10k", n: 10_000},
-	}
-
-	for _, sz := range sizes {
-		b.Run(sz.name, func(b *testing.B) {
 			b.ReportAllocs()
 			filenames := buildSyntheticFilenames(sz.n)
+			ctx := context.Background()
 
 			// Each iteration needs a fresh DB. Setup cost is included in
 			// timing but is constant (~20-50ms) and doesn't affect comparisons.
 			for b.Loop() {
 				db, cleanup := helpers.NewInMemoryMediaDB(b)
-				ss := newScanState()
-				_ = SeedCanonicalTags(db, ss)
-				_ = db.BeginTransaction(true)
-
-				// Measured: insert all files with production commit pattern.
-				// Mid-system file-limit commits do not flush dedup maps;
-				// flushes only happen between systems (single-system bench).
-				for i, fn := range filenames {
-					_, _, err := AddMediaPath(db, ss, "nes", fn, "", false, false, nil, "")
-					if i == 0 && err != nil {
+				if err := SeedCanonicalTags(ctx, db); err != nil {
+					b.Fatal(err)
+				}
+				if err := db.BeginTransaction(true); err != nil {
+					b.Fatal(err)
+				}
+				for _, fn := range filenames {
+					err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn})
+					if err != nil {
 						b.Fatal(err)
 					}
-					if sz.n > 10_000 && (i+1)%10_000 == 0 {
-						_ = db.CommitTransaction()
-						_ = db.BeginTransaction(true)
-					}
 				}
-
-				_ = db.CommitTransaction()
+				if _, err := db.ReconcileStagedSystem(ctx, "nes", database.ScanReconcileOpts{}); err != nil {
+					b.Fatal(err)
+				}
+				if err := db.CommitTransaction(); err != nil {
+					b.Fatal(err)
+				}
 				cleanup()
 			}
 		})
 	}
 }
 
-func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
-	systems := []string{"nes", "snes", "gba", "n64", "psx", "genesis", "megadrive", "gamegear", "mastersystem", "gb"}
-
-	type endToEndCase struct {
-		name    string
-		systems []string
-		n       int
-	}
-	sizes := []endToEndCase{
-		{name: "10k_1sys", systems: systems[:1], n: 10_000},
+// BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB re-indexes the same 1k
+// files against databases of growing size. This is the memory-scaling
+// regression guard for the staging rearchitecture: allocations must stay flat
+// as the existing row count grows (the old pipeline preloaded every existing
+// row into Go maps, so its footprint scaled with the database instead of the
+// scan). The n-1k rows outside the scan flip to missing on the first
+// reconcile, before the timer starts; timed iterations are steady-state.
+func BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB(b *testing.B) {
+	const scanSize = 1_000
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "10k", n: 10_000},
+		{name: "100k", n: 100_000},
 	}
 
 	for _, sz := range sizes {
 		b.Run(sz.name, func(b *testing.B) {
 			b.ReportAllocs()
-			filesBySystem := buildSyntheticFilenamesMultiSystem(sz.n, sz.systems)
+			filenames := buildSyntheticFilenames(sz.n)
+			scanFiles := filenames[:scanSize]
+			ctx := context.Background()
+
+			db, cleanup := helpers.NewInMemoryMediaDB(b)
+			defer cleanup()
+			if err := SeedCanonicalTags(ctx, db); err != nil {
+				b.Fatal(err)
+			}
+			rescan := func(files []string) {
+				if err := db.BeginTransaction(true); err != nil {
+					b.Fatal(err)
+				}
+				if err := db.ClearScanStage(); err != nil {
+					b.Fatal(err)
+				}
+				for _, fn := range files {
+					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if _, err := db.ReconcileStagedSystem(ctx, "nes", database.ScanReconcileOpts{}); err != nil {
+					b.Fatal(err)
+				}
+				if err := db.CommitTransaction(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			rescan(filenames) // seed full DB
+			rescan(scanFiles) // one-time missing-state flip outside the timer
+
+			b.ResetTimer()
+			for b.Loop() {
+				rescan(scanFiles)
+			}
+		})
+	}
+}
+
+// BenchmarkMediaScanner_Reconcile_ExistingRows measures an unchanged full
+// re-index against a database that already holds the same rows. Cost is
+// expected to scale linearly with scan size (per-file parse + staging), never
+// super-linearly with the database.
+func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "10k", n: 10_000},
+		{name: "50k", n: largeReconcileBenchSize},
+		{name: "100k", n: 100_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			if sz.n == largeReconcileBenchSize {
+				skipUnlessLargeReconcileBench(b)
+			}
+			b.ReportAllocs()
+			filenames := buildSyntheticFilenames(sz.n)
+			ctx := context.Background()
+
+			db, cleanup := helpers.NewInMemoryMediaDB(b)
+			defer cleanup()
+			if err := SeedCanonicalTags(ctx, db); err != nil {
+				b.Fatal(err)
+			}
+			seedOnce := func() {
+				if err := db.BeginTransaction(true); err != nil {
+					b.Fatal(err)
+				}
+				for _, fn := range filenames {
+					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if _, err := db.ReconcileStagedSystem(ctx, "nes", database.ScanReconcileOpts{}); err != nil {
+					b.Fatal(err)
+				}
+				if err := db.CommitTransaction(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			seedOnce()
+
+			b.ResetTimer()
+			for b.Loop() {
+				seedOnce()
+			}
+		})
+	}
+}
+
+// growingRunSystemCount, growingRunFilesPerSystem, and growingRunMegaFiles
+// shape BenchmarkMediaScanner_GrowingRun_AnalyzeCadence: a full library's
+// worth of distinct systems reconciled in sequence against one continuously
+// growing database, the shape a real device index run takes and none of the
+// other benchmarks in this file reproduce (they compare a fixed scan against
+// a small number of discrete existing-DB sizes, not a monotonic multi-system
+// growth curve). 120 systems of 500 files each, with every 20th system a
+// 20,000-file mega-system, approximates a real MiSTer library (#1279 round 3
+// device data: 131 systems, most under 1k files, a handful of mega-systems in
+// the tens of thousands) without the runtime of a full-scale run. The mega
+// systems specifically stress the risk this benchmark exists to check: a real
+// re-analysis (not a skipped no-op) firing against an already-large, still
+// growing Media table.
+const (
+	growingRunSystemCount    = 120
+	growingRunFilesPerSystem = 500
+	growingRunMegaEvery      = 20
+	growingRunMegaFiles      = 20_000
+)
+
+func growingRunFilesForSystem(sys int) int {
+	if sys%growingRunMegaEvery == 0 {
+		return growingRunMegaFiles
+	}
+	return growingRunFilesPerSystem
+}
+
+// BenchmarkMediaScanner_GrowingRun_AnalyzeCadence measures the aggregate cost
+// of calling AnalyzeApproximate (PRAGMA optimize) after every system-boundary
+// commit in a long run, instead of only once after the first system (#1279
+// round 4). PRAGMA optimize only re-analyzes a table whose size has changed
+// >10x (or that lacks stats) since its last analysis, so the expectation is
+// that most of these calls become cheap no-ops once table sizes stabilize
+// relative to their own last analysis — this benchmark measures whether that
+// expectation holds, rather than assuming it does.
+//
+//	ZAPAROO_BENCH_LARGE=1 go test -bench=GrowingRun -benchtime=1x -count=1 ./pkg/database/mediascanner/
+func BenchmarkMediaScanner_GrowingRun_AnalyzeCadence(b *testing.B) {
+	skipUnlessLargeReconcileBench(b)
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		analyzeEvery bool
+		analyzeOnce  bool
+	}{
+		{name: "PerSystem", analyzeEvery: true},
+		{name: "Once", analyzeOnce: true},
+		{name: "Never"},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+
 			for b.Loop() {
 				db, cleanup := helpers.NewInMemoryMediaDB(b)
-				ss := newScanState()
-				_ = SeedCanonicalTags(db, ss)
+				if err := SeedCanonicalTags(ctx, db); err != nil {
+					b.Fatal(err)
+				}
 
-				filesInBatch := 0
-				batchStarted := false
+				var analyzeTotal time.Duration
+				analyzeCalls := 0
+				analyzed := false
+				for sys := range growingRunSystemCount {
+					systemID := fmt.Sprintf("synth%d", sys)
+					filenames := buildSyntheticFilenames(growingRunFilesForSystem(sys))
+					for i := range filenames {
+						filenames[i] = fmt.Sprintf("/roms/%s/f%d.rom", systemID, i)
+					}
 
-				for _, sys := range sz.systems {
-					fns := filesBySystem[sys]
-					for _, fn := range fns {
-						if !batchStarted {
-							_ = db.BeginTransaction(true)
-							batchStarted = true
-						}
-
-						_, _, err := AddMediaPath(db, ss, sys, fn, "", false, false, nil, "")
-						if filesInBatch == 0 && err != nil {
+					if err := db.BeginTransaction(true); err != nil {
+						b.Fatal(err)
+					}
+					for _, fn := range filenames {
+						if err := StageMediaPath(&StageMediaPathParams{
+							DB: db, SystemID: systemID, Path: fn,
+						}); err != nil {
 							b.Fatal(err)
 						}
-						filesInBatch++
-
-						// Mid-system file-limit commits do not flush dedup
-						// maps — only between-system flushes do.
-						if filesInBatch >= 10_000 {
-							_ = db.CommitTransaction()
-							filesInBatch = 0
-							batchStarted = false
-						}
 					}
-					// Between-system flush mirrors production behaviour.
-					FlushScanStateMaps(ss)
+					if _, err := db.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{}); err != nil {
+						b.Fatal(err)
+					}
+					if err := db.CommitTransaction(); err != nil {
+						b.Fatal(err)
+					}
+
+					runAnalyze := tc.analyzeEvery || (tc.analyzeOnce && !analyzed)
+					if runAnalyze {
+						start := time.Now()
+						if err := db.AnalyzeApproximate(); err != nil {
+							b.Fatal(err)
+						}
+						analyzeTotal += time.Since(start)
+						analyzeCalls++
+						analyzed = true
+					}
 				}
 
-				if batchStarted {
-					_ = db.CommitTransaction()
-				}
-
+				b.ReportMetric(float64(analyzeTotal.Milliseconds()), "analyze-ms/op")
+				b.ReportMetric(float64(analyzeCalls), "analyze-calls/op")
 				cleanup()
 			}
 		})

@@ -41,8 +41,15 @@ import (
 func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCodeFor(err))
 	}
+}
+
+func linuxDefaults() config.Values {
+	defaults := config.BaseDefaults
+	enabled := true
+	defaults.Service.Encryption = &enabled
+	return defaults
 }
 
 func run() error {
@@ -109,7 +116,7 @@ func run() error {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	cfg := cli.Setup(pl, config.BaseDefaults, logWriters)
+	cfg := cli.Setup(pl, linuxDefaults(), logWriters)
 
 	if *start {
 		if err := cli.StartAndOpenBrowser(cfg); err != nil {

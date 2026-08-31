@@ -33,7 +33,9 @@ func NewStopNotificationBroker() *StopNotificationBroker {
 	}
 }
 
-func (b *StopNotificationBroker) Subscribe(_ int) (notifications <-chan models.Notification, subscriptionID int) {
+func (b *StopNotificationBroker) Subscribe(
+	_ int, _ ...string,
+) (notifications <-chan models.Notification, subscriptionID int) {
 	return b.Notifications, 1
 }
 

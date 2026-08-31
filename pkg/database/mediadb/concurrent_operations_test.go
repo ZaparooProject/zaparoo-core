@@ -28,33 +28,70 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func TestCleanMediaOrphansPreservesConflictErrors(t *testing.T) {
+	tests := []struct {
+		legacyErr error
+		operation database.MediaWriteOperation
+	}{
+		{operation: database.MediaWriteOperationIndexing, legacyErr: ErrIndexingInProgress},
+		{operation: database.MediaWriteOperationOptimization, legacyErr: ErrOptimizationInProgress},
+		{operation: database.MediaWriteOperationScraping},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.operation), func(t *testing.T) {
+			mediaDB := &MediaDB{}
+			lease, err := mediaDB.AcquireMediaWrite(tt.operation)
+			require.NoError(t, err)
+			defer lease.Release()
+
+			deleted, err := mediaDB.CleanMediaOrphans(context.Background())
+			assert.Zero(t, deleted)
+			require.ErrorIs(t, err, database.ErrMediaWriteConflict)
+			if tt.legacyErr != nil {
+				require.ErrorIs(t, err, tt.legacyErr)
+			}
+		})
+	}
+}
+
 func TestConcurrentOptimizationPrevention(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
-	fakeClock := clockwork.NewFakeClock()
+	fakeClock := clockwork.NewRealClock()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             fakeClock,
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock successful optimization for the first call only
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -99,12 +136,12 @@ func TestOptimizationAndIndexingStatusConflict(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	tests := []struct {
 		optimizationStatusErr error
@@ -179,15 +216,21 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	const numGoroutines = 10
 
@@ -230,12 +273,12 @@ func TestConcurrentOptimizationStepUpdates(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Test sequential step updates to avoid mock order issues
 	steps := []string{"indexes", "analyze", "vacuum"}
@@ -256,15 +299,21 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Test that the atomic flag properly prevents concurrent optimization
 	const numGoroutines = 100
@@ -276,8 +325,11 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -321,32 +373,35 @@ func TestOptimizationInterruption(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
-	// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+	// temporary repair and browse_cache run first; pragma_optimize failure aborts
+	// before page_prefetch/wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	analyzeError := errors.New("database locked")
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // Final failure
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // Final failure
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
+		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
@@ -361,15 +416,21 @@ func TestConcurrentIndexingAndOptimizationStatusChecks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	const numReaders = 50
 	var wg sync.WaitGroup
@@ -411,22 +472,37 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock optimization workflow
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	// Steps run in order: resume read → temporary_repair_parent_dirs → browse_cache
+	// → pragma_optimize → disambiguation_backfill → page_prefetch → wal_checkpoint.
+	// All must be mocked so the
+	// concurrent status reads race against the real workflow rather than steps that
+	// silently error on unmatched expectations.
+	expectOptimizationResumeRead(mock)
+	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectPostAnalyzeSteps(mock)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

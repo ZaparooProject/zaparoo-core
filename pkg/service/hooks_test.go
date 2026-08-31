@@ -20,6 +20,8 @@
 package service
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -165,4 +167,58 @@ func TestRunHook_NilContextParams(t *testing.T) {
 
 	err := runHook(svc, "test_hook", "**echo:nil opts test", nil, nil)
 	assert.NoError(t, err, "nil scanned/launching should work")
+}
+
+// TestRunHook_ZapScriptDisabledReturnsSentinel documents that runHook
+// propagates state.ErrRunZapScriptDisabled like any other ZapScript command
+// path; it is each hook call site's responsibility to treat that specific
+// sentinel as a benign no-op rather than a real hook failure via
+// hookErrorBlocks, not by having runHook swallow it. A hook must not
+// silently swallow the error here, since that would hide the distinction
+// from every caller permanently.
+func TestRunHook_ZapScriptDisabledReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
+	svc := setupHookTest(t)
+	svc.State.SetRunZapScript(false)
+
+	err := runHook(svc, "on_scan", "**echo:should not run", nil, nil)
+	require.ErrorIs(t, err, state.ErrRunZapScriptDisabled)
+}
+
+// TestHookErrorBlocks pins the classification every hook call site (on_scan,
+// on_remove, before_media_start) relies on to stay consistent: a disabled
+// "run ZapScript" setting must never block, any other error always must.
+func TestHookErrorBlocks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err     error
+		name    string
+		expects bool
+	}{
+		{name: "nil error does not block", err: nil, expects: false},
+		{
+			name:    "disabled sentinel does not block",
+			err:     state.ErrRunZapScriptDisabled,
+			expects: false,
+		},
+		{
+			name:    "disabled sentinel wrapped does not block",
+			err:     fmt.Errorf("before_media_start hook blocked launch: %w", state.ErrRunZapScriptDisabled),
+			expects: false,
+		},
+		{
+			name:    "other error blocks",
+			err:     errors.New("script parse failure"),
+			expects: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expects, hookErrorBlocks(tt.err))
+		})
+	}
 }

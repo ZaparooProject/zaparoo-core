@@ -27,6 +27,7 @@ import (
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -101,7 +102,8 @@ func (c *Client) Launch(
 	// On Windows, we use "cmd /c start <url>" to open Steam URLs
 	// HideWindow prevents a console window from flashing on screen
 	cmdOpts := command.StartOptions{HideWindow: true}
-	if err := c.cmd.StartWithOptions(context.Background(), cmdOpts, "cmd", "/c", "start", steamURL); err != nil {
+	err = c.cmd.StartWithOptions(context.Background(), cmdOpts, helpers.ComSpec(), "/c", "start", steamURL)
+	if err != nil {
 		return nil, fmt.Errorf("failed to start Steam: %w", err)
 	}
 	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget

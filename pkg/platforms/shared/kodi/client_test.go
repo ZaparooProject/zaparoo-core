@@ -543,6 +543,10 @@ func TestClient_GetTVShows_MakesCorrectAPICall(t *testing.T) {
 					map[string]any{
 						"tvshowid": 1,
 						"label":    "Breaking Bad",
+						"uniqueid": map[string]any{
+							"tvdb": "81189",
+							"imdb": "tt0903747",
+						},
 					},
 					map[string]any{
 						"tvshowid": 2,
@@ -568,6 +572,10 @@ func TestClient_GetTVShows_MakesCorrectAPICall(t *testing.T) {
 	// Verify first TV show
 	assert.Equal(t, 1, tvShows[0].ID)
 	assert.Equal(t, "Breaking Bad", tvShows[0].Label)
+	assert.Equal(t, map[string]string{
+		"tvdb": "81189",
+		"imdb": "tt0903747",
+	}, tvShows[0].UniqueIDs)
 
 	// Verify second TV show
 	assert.Equal(t, 2, tvShows[1].ID)
@@ -577,6 +585,11 @@ func TestClient_GetTVShows_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
 	assert.Equal(t, "VideoLibrary.GetTVShows", receivedPayload["method"])
 	assert.NotNil(t, receivedPayload["id"])
+	params, ok := receivedPayload["params"].(map[string]any)
+	require.True(t, ok)
+	properties, ok := params["properties"].([]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []any{"title", "uniqueid"}, properties)
 }
 
 func TestClient_GetEpisodes_MakesCorrectAPICall(t *testing.T) {
@@ -1205,8 +1218,7 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the implementation of LaunchTVShow to make playlist-based API requests
-	// It should: 1) Clear video playlist, 2) Get episodes for the show, 3) Add episodes to playlist, 4) Start playback
+	// Resolve the current Kodi ID before building and opening the show playlist.
 
 	var receivedPayloads []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1224,6 +1236,22 @@ func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 		// Mock different responses based on method
 		var response map[string]any
 		switch method {
+		case "VideoLibrary.GetTVShows":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": map[string]any{
+					"tvshows": []map[string]any{
+						{
+							"tvshowid": 456,
+							"label":    "Breaking Bad",
+							"uniqueid": map[string]any{
+								"tvdb": "81189",
+							},
+						},
+					},
+				},
+			}
 		case "Playlist.Clear":
 			response = map[string]any{
 				"jsonrpc": "2.0",
@@ -1280,28 +1308,31 @@ func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Test launching a TV show
-	showPath := "kodi-show://456/Breaking Bad"
+	showPath := "kodi-show://106/Breaking Bad?tvdb=81189"
 	err := client.LaunchTVShow(showPath)
 	require.NoError(t, err)
 
 	// Verify the correct sequence of API calls was made
-	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetEpisodes, Add, Open")
+	require.Len(t, receivedPayloads, 5, "Should resolve the show, then clear, populate, and open its playlist")
 
-	// 1. Clear video playlist (playlistid=1)
-	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
+	// 1. Resolve the current Kodi TV show ID.
+	assert.Equal(t, "VideoLibrary.GetTVShows", receivedPayloads[0]["method"])
+
+	// 2. Clear video playlist (playlistid=1)
+	assert.Equal(t, "Playlist.Clear", receivedPayloads[1]["method"])
+	clearParams, ok := receivedPayloads[1]["params"].(map[string]any)
 	require.True(t, ok, "params should be a map[string]any")
 	assert.Equal(t, 1, int(clearParams["playlistid"].(float64)))
 
-	// 2. Get episodes for the show
-	assert.Equal(t, "VideoLibrary.GetEpisodes", receivedPayloads[1]["method"])
-	episodesParams, ok := receivedPayloads[1]["params"].(map[string]any)
+	// 3. Get episodes for the show
+	assert.Equal(t, "VideoLibrary.GetEpisodes", receivedPayloads[2]["method"])
+	episodesParams, ok := receivedPayloads[2]["params"].(map[string]any)
 	require.True(t, ok, "params should be a map[string]any")
 	assert.Equal(t, 456, int(episodesParams["tvshowid"].(float64)))
 
-	// 3. Add episodes to playlist
-	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
-	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
+	// 4. Add episodes to playlist
+	assert.Equal(t, "Playlist.Add", receivedPayloads[3]["method"])
+	addParams, ok := receivedPayloads[3]["params"].(map[string]any)
 	require.True(t, ok, "params should be a map[string]any")
 	assert.Equal(t, 1, int(addParams["playlistid"].(float64)))
 
@@ -1314,9 +1345,9 @@ func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 	require.True(t, ok, "first item should be a map[string]any")
 	assert.Equal(t, 123, int(firstItem["episodeid"].(float64)))
 
-	// 4. Start playbook with playlist
-	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
-	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
+	// 5. Start playback with playlist
+	assert.Equal(t, "Player.Open", receivedPayloads[4]["method"])
+	openParams, ok := receivedPayloads[4]["params"].(map[string]any)
 	require.True(t, ok, "params should be a map[string]any")
 	item, ok := openParams["item"].(map[string]any)
 	require.True(t, ok, "item should be a map[string]any")

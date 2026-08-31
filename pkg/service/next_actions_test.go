@@ -125,14 +125,16 @@ block_commands = ["write"]
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
-	require.Equal(t, nextActionInvalid, result)
+	require.Equal(t, nextActionBlocked, result)
 	assert.Nil(t, svc.State.GetPendingWrite())
 }
 
 func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	t.Parallel()
 
-	svc, _, _ := setupNextActionTestEnv(t)
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
 	parser := gozapscript.NewParser("**launch?launcher=3do-dualram")
 	script, err := parser.ParseScript()
 	require.NoError(t, err)
@@ -145,6 +147,42 @@ func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	require.NotNil(t, pending)
 	assert.Equal(t, "3do-dualram", pending.LauncherID)
 	assert.Equal(t, "source", pending.Source.UID)
+}
+
+func TestHandleNextActionPreflight_ArmsLaunchOverrideCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "Winamp_Main", SystemID: ""}})
+	parser := gozapscript.NewParser("**launch?launcher=winamp_main")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**launch?launcher=winamp_main", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionArmed, result)
+	pending := svc.State.GetPendingLaunchOverride()
+	require.NotNil(t, pending)
+	assert.Equal(t, "winamp_main", pending.LauncherID)
+}
+
+func TestHandleNextActionPreflight_RejectsUnknownLaunchOverride(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
+	parser := gozapscript.NewParser("**launch?launcher=Winamp_Main")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**launch?launcher=Winamp_Main", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionInvalid, result)
+	assert.Nil(t, svc.State.GetPendingLaunchOverride())
 }
 
 func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
@@ -160,12 +198,43 @@ func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
 			return l != nil && l.ID == "3do-dualram"
 		}),
 		svc.DB,
-		(*platforms.LaunchOptions)(nil)).Return(nil).Once()
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
 
 	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
 		LauncherID: "3do-dualram",
 		Source:     tokens.Token{UID: "source"},
 		CreatedAt:  time.Now(),
+	})
+
+	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
+	token := tokens.Token{Text: "**launch:" + path, ScanTime: time.Now(), Source: tokens.SourceReader}
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+
+	require.NoError(t, err)
+	assert.Nil(t, svc.State.GetPendingLaunchOverride())
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestRunTokenZapScript_DiscardsExpiredPendingLaunchOverride(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	path := filepath.Join(t.TempDir(), "game.chd")
+	mockPlatform.On("LaunchMedia", cfg, path,
+		(*platforms.Launcher)(nil),
+		svc.DB,
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
+
+	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
+		LauncherID: "3do-dualram",
+		Source:     tokens.Token{UID: "source"},
+		CreatedAt:  time.Now().Add(-launchOverrideTTL - time.Minute),
 	})
 
 	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
@@ -186,7 +255,9 @@ func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 	mockPlatform.On("LaunchMedia", cfg, path,
 		(*platforms.Launcher)(nil),
 		svc.DB,
-		(*platforms.LaunchOptions)(nil)).Return(nil).Once()
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
 	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
 		LauncherID: "3do-dualram",
 		Source:     tokens.Token{UID: "source"},
@@ -235,7 +306,7 @@ scan_feedback = true
 	readerID := "mock-reader-0123456789abcdef"
 	source := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now(), ReaderID: readerID}
 	target := &tokens.Token{UID: "target", Text: "old", ScanTime: time.Now(), ReaderID: readerID}
-	written := &tokens.Token{UID: "target", Text: "payload", ScanTime: time.Now(), ReaderID: readerID}
+	written := &tokens.Token{UID: "target", Text: "payload", ScanTime: time.Now()}
 	svc.State.SetPendingWrite(&state.PendingWrite{Payload: "payload", Source: source, CreatedAt: time.Now()})
 	reader.On("WriteTarget", mock.Anything, "payload", readers.WriteOptions{
 		TargetUID:  "target",
@@ -248,7 +319,8 @@ scan_feedback = true
 
 	require.True(t, consumed)
 	assert.Nil(t, svc.State.GetPendingWrite())
-	assert.Equal(t, written, svc.State.GetWroteToken())
+	assert.Equal(t, readerID, written.ReaderID)
+	assert.Equal(t, written, svc.State.GetWroteToken(readerID))
 	reader.AssertCalled(t, "WriteTarget", mock.Anything, "payload", readers.WriteOptions{
 		TargetUID:  "target",
 		ExcludeUID: "source",

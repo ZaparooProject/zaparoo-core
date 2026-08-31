@@ -23,11 +23,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -266,6 +269,43 @@ func TestDoLaunch_RunningInstanceLauncher(t *testing.T) {
 	}
 }
 
+func TestDoLaunch_AppliesRenderDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[[launchers.default]]
+launcher = "test-launcher"
+render_scale = 33`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	mockPlatform.On("SetTrackedProcess", mock.AnythingOfType("*os.Process")).Return().Once()
+	var captured *platforms.LaunchOptions
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleTracked,
+		Launch: func(_ *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			captured = opts
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+
+	err := platforms.DoLaunch(&platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         cfg,
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "game.rom"),
+	}, filepath.Base)
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.RenderScale)
+	assert.Equal(t, 33, *captured.RenderScale)
+	assert.Empty(t, captured.RenderResolution)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_LifecycleModes(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +410,72 @@ func TestDoLaunch_LifecycleModes(t *testing.T) {
 	}
 }
 
+func TestDoLaunch_ExternalLifecycleDefersActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:        "Steam",
+		SystemID:  "PC",
+		Lifecycle: platforms.LifecycleExternal,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           "steam://212680/FTL",
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "FTL" }))
+	assert.True(t, launchCalled)
+	assert.Nil(t, activeMedia, "external tracker must publish ActiveMedia after Steam starts the game")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "SNES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+
+	var published *models.ActiveMedia
+	externalCalled := false
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) { externalCalled = true },
+		Launcher:       launcher,
+		Path:           "game.sfc",
+		Options: &platforms.LaunchOptions{
+			ActiveMediaPublisher: func(media *models.ActiveMedia) { published = media },
+		},
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "Game" }))
+	require.NotNil(t, published)
+	assert.Equal(t, "SNES", published.SystemID)
+	assert.False(t, externalCalled)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 
@@ -440,6 +546,84 @@ func TestDoLaunch_LaunchError(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_BlockingLaunchError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:        "blocking-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleBlocking,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			return nil, assert.AnError
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "path.rom"),
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.True(t, launchCalled, "blocking launch must run before DoLaunch returns")
+	assert.Nil(t, activeMedia)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_BlockingProcessCannotLeaveStaleActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	mockPlatform.On("SetTrackedProcess", mock.AnythingOfType("*os.Process")).Return().Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "blocking-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleBlocking,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			cmd := exec.CommandContext(context.Background(), "true")
+			require.NoError(t, cmd.Start())
+			require.NoError(t, cmd.Wait())
+			return cmd.Process, nil
+		},
+	}
+	mediaUpdates := make(chan *models.ActiveMedia, 2)
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { mediaUpdates <- media },
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "path.rom"),
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "path" }))
+	select {
+	case active := <-mediaUpdates:
+		require.NotNil(t, active)
+	case <-time.After(time.Second):
+		t.Fatal("ActiveMedia was not published")
+	}
+	select {
+	case cleared := <-mediaUpdates:
+		assert.Nil(t, cleared)
+	case <-time.After(time.Second):
+		t.Fatal("completed process did not clear ActiveMedia")
+	}
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 
@@ -478,11 +662,56 @@ func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
-func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
+func TestDoLaunch_ActiveMediaLookupUsesProvidedContext(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact",
+		mock.MatchedBy(func(ctx context.Context) bool {
+			return ctx.Err() != nil
+		}),
+		mock.Anything,
+		"/test/path.rom",
+	).Return([]database.SearchResult{}, context.Canceled).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return &os.Process{}, nil
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	params := &platforms.LaunchParams{
+		Context:        ctx,
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		DB:             &database.Database{MediaDB: mockMediaDB},
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.NoError(t, err)
+	require.NotNil(t, activeMedia)
+	assert.Equal(t, "path", activeMedia.Name)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
 
 	launcher := &platforms.Launcher{
 		ID:       "no-launch-func",
@@ -504,6 +733,7 @@ func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no-launch-func")
 	assert.Contains(t, err.Error(), "no launch function configured")
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForPreemption)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -605,6 +835,89 @@ func TestDoLaunch_NativeLaunchPath(t *testing.T) {
 			mockPlatform.AssertExpectations(t)
 		})
 	}
+}
+
+func TestDoLaunch_InvalidSlotReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	launcher := &platforms.Launcher{
+		ID:        platforms.NativeAudioLauncherID,
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
+		Options:        &platforms.LaunchOptions{Slot: "invalid-slot-value"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normalize slot")
+}
+
+func TestDoLaunch_BackgroundSlotWrongLauncherReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
+
+	launcher := &platforms.Launcher{
+		ID:        "some-other-launcher",
+		SystemID:  "NES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "game.nes"),
+		Options:        &platforms.LaunchOptions{Slot: "background"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), platforms.NativeAudioLauncherID)
+}
+
+func TestDoLaunch_BackgroundSlotReturnsEarlyWithoutSettingActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	launched := false
+	launcher := &platforms.Launcher{
+		ID:        platforms.NativeAudioLauncherID,
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launched = true
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(m *models.ActiveMedia) { activeMedia = m },
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
+		Options:        &platforms.LaunchOptions{Slot: "background"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.NoError(t, err)
+	assert.True(t, launched, "launcher must be called")
+	assert.Nil(t, activeMedia, "background slot must not set active media")
 }
 
 func TestKeyboardControls_EmptyActions(t *testing.T) {

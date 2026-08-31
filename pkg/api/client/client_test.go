@@ -20,6 +20,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,10 +32,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/gorilla/websocket"
+	"github.com/jonboulle/clockwork"
 	"github.com/olahol/melody"
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,17 +64,10 @@ func parseServerPort(t *testing.T, server *httptest.Server) int {
 	return port
 }
 
-// unusedPort returns a port that is guaranteed to not have anything listening.
-// It binds to port 0 (OS assigns a free port), gets the assigned port, then
-// closes the listener. There's a small race window but it's reliable for tests.
+// unusedPort returns port 0, which cannot have a listening TCP service.
 func unusedPort(t *testing.T) int {
 	t.Helper()
-	var lc net.ListenConfig
-	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, listener.Close())
-	return port
+	return 0
 }
 
 func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.Duration) bool {
@@ -81,6 +79,91 @@ func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.D
 		time.Sleep(time.Millisecond)
 	}
 	return false
+}
+
+// waitNotificationTimeout is the budget these tests hand to WaitNotification.
+//
+// It has to comfortably exceed a loopback dial rather than just the wait:
+// WaitNotification reuses the caller's timeout as its dial deadline
+// (dialTimeout = timeout), so a budget close to the dial cost surfaces a dial
+// i/o timeout instead of the timeout error under test. Under
+// `go test -race ./pkg/...` a loopback dial was observed past 100 ms, which is
+// what made the 100 ms variants of these tests flaky.
+const waitNotificationTimeout = 2 * time.Second
+
+type waitNotificationResult struct {
+	err    error
+	params string
+}
+
+// waitNotificationInBackground starts WaitNotification and hands back its
+// result, so the test body can wait for the client's session to register before
+// broadcasting. Melody delivers only to sessions that are already connected, so
+// a broadcast sent before the client arrives is dropped and the caller waits out
+// its whole timeout for a notification that no longer exists.
+func waitNotificationInBackground(
+	ctx context.Context, cfg *config.Instance, id string,
+) <-chan waitNotificationResult {
+	ch := make(chan waitNotificationResult, 1)
+	go func() {
+		params, err := WaitNotification(ctx, waitNotificationTimeout, cfg, id)
+		ch <- waitNotificationResult{params: params, err: err}
+	}()
+	return ch
+}
+
+// broadcastAfterSessionReady blocks until the client's websocket session is
+// registered, then broadcasts each payload in order.
+func broadcastAfterSessionReady(
+	t *testing.T, server *helpers.WebSocketTestServer, payloads ...map[string]any,
+) {
+	t.Helper()
+	require.True(t, waitForWebSocketSession(server, waitNotificationTimeout),
+		"websocket session never registered; a broadcast now would be dropped")
+	for _, payload := range payloads {
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		require.NoError(t, server.Melody.Broadcast(data))
+	}
+}
+
+// awaitNotification returns the background WaitNotification result, failing the
+// test rather than hanging if it never arrives.
+func awaitNotification(t *testing.T, resultCh <-chan waitNotificationResult) waitNotificationResult {
+	t.Helper()
+	select {
+	case result := <-resultCh:
+		return result
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotification did not complete")
+		return waitNotificationResult{}
+	}
+}
+
+type recordingTimer struct {
+	clockwork.Timer
+	stopped bool
+}
+
+func (t *recordingTimer) Stop() bool {
+	t.stopped = true
+	return t.Timer.Stop()
+}
+
+type recordingClock struct {
+	clockwork.Clock
+	timer *recordingTimer
+}
+
+func (c *recordingClock) NewTimer(d time.Duration) clockwork.Timer {
+	c.timer = &recordingTimer{Timer: c.Clock.NewTimer(d)}
+	return c.timer
+}
+
+type waitNotificationsResult struct {
+	err    error
+	method string
+	params string
 }
 
 func TestLocalClient_ValidRequest(t *testing.T) {
@@ -243,6 +326,43 @@ func TestLocalClient_Timeout(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrRequestTimeout) || errors.Is(err, ErrRequestCancelled))
 }
 
+func TestRequestWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	timeout, bounded := requestWaitTimeout(context.Background(), models.MethodVersion)
+	assert.True(t, bounded)
+	assert.Equal(t, config.APIRequestTimeout, timeout)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer shortCancel()
+	timeout, bounded = requestWaitTimeout(shortCtx, models.MethodVersion)
+	assert.True(t, bounded)
+	assert.LessOrEqual(t, timeout, 100*time.Millisecond)
+
+	longCtx, longCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout+time.Minute)
+	defer longCancel()
+	timeout, bounded = requestWaitTimeout(longCtx, models.MethodVersion)
+	assert.True(t, bounded)
+	assert.Greater(t, timeout, config.APIRequestTimeout)
+
+	// Backup methods have no whole-operation deadline: without a caller
+	// deadline the wait is unbounded, but an explicit deadline still wins.
+	for _, method := range []string{
+		models.MethodSettingsBackup,
+		models.MethodSettingsBackupRestore,
+		models.MethodSettingsBackupRemoteRun,
+		models.MethodSettingsBackupRemoteRestore,
+	} {
+		_, bounded = requestWaitTimeout(context.Background(), method)
+		assert.False(t, bounded, method)
+		timeout, bounded = requestWaitTimeout(shortCtx, method)
+		assert.True(t, bounded, method)
+		assert.LessOrEqual(t, timeout, 100*time.Millisecond, method)
+	}
+	_, bounded = requestWaitTimeout(context.Background(), models.MethodSettingsBackupList)
+	assert.True(t, bounded)
+}
+
 func TestLocalClient_IgnoresMismatchedIDs(t *testing.T) {
 	t.Parallel()
 
@@ -341,23 +461,18 @@ func TestWaitNotification_ReceivesNotification(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	// Send notification after connection is established
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.added",
-			"params":  map[string]any{"token": "test123"},
-		}
-		data, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(data)
-	}()
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.added",
+		"params":  map[string]any{"token": "test123"},
+	})
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.Equal(t, "test123", params["token"])
 }
@@ -371,33 +486,26 @@ func TestWaitNotification_IgnoresWrongMethod(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		// Send wrong notification first
-		wrongNotification := map[string]any{
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server,
+		// Wrong notification first; it must be skipped.
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.removed",
 			"params":  map[string]any{"wrong": true},
-		}
-		wrongData, _ := json.Marshal(wrongNotification)
-		_ = server.Melody.Broadcast(wrongData)
-
-		// Then send correct notification
-		correctNotification := map[string]any{
+		},
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"correct": true},
-		}
-		correctData, _ := json.Marshal(correctNotification)
-		_ = server.Melody.Broadcast(correctData)
-	}()
+		},
+	)
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.True(t, params["correct"].(bool))
 }
@@ -411,34 +519,27 @@ func TestWaitNotification_IgnoresRequestObjects(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		// Send a request object (has ID) - should be ignored
-		request := map[string]any{
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server,
+		// A request object (it has an ID) must be ignored.
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"from_request": true},
 			"id":      "some-id",
-		}
-		requestData, _ := json.Marshal(request)
-		_ = server.Melody.Broadcast(requestData)
-
-		// Send a true notification (no ID)
-		notification := map[string]any{
+		},
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"from_notification": true},
-		}
-		notificationData, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(notificationData)
-	}()
+		},
+	)
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.True(t, params["from_notification"].(bool))
 }
@@ -452,8 +553,9 @@ func TestWaitNotification_Timeout(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	// Don't send any notification, let it timeout
-	_, err := WaitNotification(context.Background(), 100*time.Millisecond, cfg, "tokens.added")
+	// Don't send any notification, let it timeout. The budget must stay well
+	// above the dial cost — see waitNotificationTimeout.
+	_, err := WaitNotification(context.Background(), waitNotificationTimeout, cfg, "tokens.added")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrRequestTimeout)
 }
@@ -470,14 +572,17 @@ func TestWaitNotification_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	// Cancel only once the client is connected. Cancelling during the dial
+	// fails it instead, which reports a wrapped context error rather than
+	// ErrRequestCancelled.
+	resultCh := waitNotificationInBackground(ctx, cfg, "tokens.added")
+	require.True(t, waitForWebSocketSession(server, waitNotificationTimeout),
+		"websocket session never registered")
+	cancel()
 
-	_, err := WaitNotification(ctx, time.Second, cfg, "tokens.added")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRequestCancelled)
+	result := awaitNotification(t, resultCh)
+	require.Error(t, result.err)
+	assert.ErrorIs(t, result.err, ErrRequestCancelled)
 }
 
 func TestWaitNotifications_ReceivesAnyOfMultiple(t *testing.T) {
@@ -608,14 +713,234 @@ func TestWaitNotifications_Timeout(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	_, _, err := WaitNotifications(
-		context.Background(),
-		100*time.Millisecond,
-		cfg,
-		"tokens.added",
-	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRequestTimeout)
+	// Drive the timeout off a fake clock rather than a short real budget. The
+	// dial deadline is the same value the wait uses, so a budget small enough to
+	// keep the test quick was being consumed by the loopback dial instead,
+	// surfacing a dial i/o timeout rather than ErrRequestTimeout.
+	fakeClock := clockwork.NewFakeClock()
+	resultCh := make(chan waitNotificationsResult, 1)
+	go func() {
+		method, params, err := waitNotificationsWithClock(
+			context.Background(), waitNotificationTimeout, cfg, fakeClock, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+	}()
+
+	blockCtx, blockCancel := context.WithTimeout(context.Background(), waitNotificationTimeout)
+	defer blockCancel()
+	require.NoError(t, fakeClock.BlockUntilContext(blockCtx, 1), "timeout timer was never armed")
+	fakeClock.Advance(waitNotificationTimeout)
+
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, ErrRequestTimeout)
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotifications did not complete after the timeout fired")
+	}
+}
+
+func TestWaitNotifications_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan waitNotificationsResult, 1)
+
+	go func() {
+		method, params, err := WaitNotifications(ctx, -1, cfg, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+	}()
+
+	require.True(t, waitForWebSocketSession(server, time.Second))
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, ErrRequestCancelled)
+		assert.Empty(t, result.method)
+		assert.Empty(t, result.params)
+	case <-time.After(time.Second):
+		t.Fatal("WaitNotifications did not complete after cancellation")
+	}
+}
+
+func TestWaitNotifications_IntentionalCloseIsJoinedAndTraceLogged(t *testing.T) {
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	var logs bytes.Buffer
+	originalLogger := zlog.Logger
+	zlog.Logger = zerolog.New(&logs).Level(zerolog.TraceLevel)
+	t.Cleanup(func() { zlog.Logger = originalLogger })
+
+	// Fake clock for the same reason as TestWaitNotifications_Timeout: a real
+	// budget short enough to keep this quick can be eaten by the dial, which
+	// fails before any of the close/log behaviour under test happens.
+	fakeClock := clockwork.NewFakeClock()
+	resultCh := make(chan waitNotificationsResult, 1)
+	go func() {
+		method, params, waitErr := waitNotificationsWithClock(
+			context.Background(), waitNotificationTimeout, cfg, fakeClock, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: waitErr}
+	}()
+
+	blockCtx, blockCancel := context.WithTimeout(context.Background(), waitNotificationTimeout)
+	defer blockCancel()
+	require.NoError(t, fakeClock.BlockUntilContext(blockCtx, 1), "timeout timer was never armed")
+	fakeClock.Advance(waitNotificationTimeout)
+
+	var err error
+	select {
+	case result := <-resultCh:
+		err = result.err
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotifications did not complete after the timeout fired")
+	}
+	require.ErrorIs(t, err, ErrRequestTimeout)
+
+	lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
+	require.Len(t, lines, 1, "reader must finish logging before WaitNotifications returns")
+	var event map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &event))
+	assert.Equal(t, "trace", event[zerolog.LevelFieldName])
+	assert.Equal(t, "websocket closed", event[zerolog.MessageFieldName])
+}
+
+func TestWaitNotifications_StopsTimer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		expectedErr error
+		trigger     func(
+			t *testing.T,
+			fakeClock *clockwork.FakeClock,
+			server *helpers.WebSocketTestServer,
+			cancel context.CancelFunc,
+		)
+		name string
+	}{
+		{
+			name: "timeout",
+			trigger: func(
+				_ *testing.T,
+				fakeClock *clockwork.FakeClock,
+				_ *helpers.WebSocketTestServer,
+				_ context.CancelFunc,
+			) {
+				fakeClock.Advance(time.Second)
+			},
+			expectedErr: ErrRequestTimeout,
+		},
+		{
+			name: "cancellation",
+			trigger: func(
+				_ *testing.T,
+				_ *clockwork.FakeClock,
+				_ *helpers.WebSocketTestServer,
+				cancel context.CancelFunc,
+			) {
+				cancel()
+			},
+			expectedErr: ErrRequestCancelled,
+		},
+		{
+			name: "notification success",
+			trigger: func(
+				t *testing.T,
+				_ *clockwork.FakeClock,
+				server *helpers.WebSocketTestServer,
+				_ context.CancelFunc,
+			) {
+				notification := []byte(`{"jsonrpc":"2.0","method":"tokens.added","params":{"token":"123"}}`)
+				require.NoError(t, server.Melody.Broadcast(notification))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := helpers.NewWebSocketTestServer(t, nil)
+			defer server.Close()
+			port := parseServerPort(t, server.Server)
+			cfg := testConfigWithPort(t, port)
+			fakeClock := clockwork.NewFakeClock()
+			clock := &recordingClock{Clock: fakeClock}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultCh := make(chan waitNotificationsResult, 1)
+
+			go func() {
+				method, params, err := waitNotificationsWithClock(ctx, time.Second, cfg, clock, "tokens.added")
+				resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+			}()
+
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+			defer waitCancel()
+			require.NoError(t, fakeClock.BlockUntilContext(waitCtx, 1))
+			require.True(t, waitForWebSocketSession(server, time.Second))
+			tt.trigger(t, fakeClock, server, cancel)
+
+			select {
+			case result := <-resultCh:
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, result.err, tt.expectedErr)
+				} else {
+					require.NoError(t, result.err)
+					assert.Equal(t, "tokens.added", result.method)
+					assert.JSONEq(t, `{"token":"123"}`, result.params)
+				}
+				require.NotNil(t, clock.timer)
+				assert.True(t, clock.timer.stopped)
+			case <-time.After(time.Second):
+				t.Fatal("WaitNotifications did not complete")
+			}
+		})
+	}
+}
+
+func TestWaitNotifications_ConcurrentCallerAndPeerClose(t *testing.T) {
+	t.Parallel()
+
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+
+	go func() {
+		_, _, err := WaitNotifications(ctx, -1, cfg, "tokens.added")
+		resultCh <- err
+	}()
+
+	require.True(t, waitForWebSocketSession(server, time.Second))
+	start := make(chan struct{})
+	peerClosed := make(chan struct{})
+	go func() {
+		<-start
+		_ = server.Melody.CloseWithMsg(melody.FormatCloseMessage(websocket.CloseAbnormalClosure, "peer closed"))
+		close(peerClosed)
+	}()
+	close(start)
+	cancel()
+
+	select {
+	case err := <-resultCh:
+		assert.True(t,
+			errors.Is(err, ErrRequestCancelled) || errors.Is(err, ErrRequestTimeout),
+			"unexpected concurrent-close result: %v", err,
+		)
+	case <-time.After(time.Second):
+		t.Fatal("concurrent close deadlocked WaitNotifications")
+	}
+	<-peerClosed
 }
 
 func TestLocalAPIClient_Call(t *testing.T) {
@@ -692,21 +1017,22 @@ func TestLocalAPIClient_WaitNotification(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
+	client := NewLocalAPIClient(cfg)
+	resultCh := make(chan waitNotificationResult, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.added",
-			"params":  map[string]any{"token": "abc"},
-		}
-		data, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(data)
+		params, err := client.WaitNotification(context.Background(), waitNotificationTimeout, "tokens.added")
+		resultCh <- waitNotificationResult{params: params, err: err}
 	}()
 
-	client := NewLocalAPIClient(cfg)
-	result, err := client.WaitNotification(context.Background(), time.Second, "tokens.added")
-	require.NoError(t, err)
-	assert.Contains(t, result, "abc")
+	broadcastAfterSessionReady(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.added",
+		"params":  map[string]any{"token": "abc"},
+	})
+
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
+	assert.Contains(t, result.params, "abc")
 }
 
 func TestNewLocalAPIClient(t *testing.T) {
@@ -864,4 +1190,124 @@ func TestWaitForAPI_Timeout(t *testing.T) {
 
 	assert.False(t, result)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+}
+
+func TestWaitNotificationsReadLogLevel(t *testing.T) {
+	t.Parallel()
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		err           error
+		ctx           context.Context
+		name          string
+		expected      zerolog.Level
+		callerClosing bool
+	}{
+		{
+			name:          "intentional local close",
+			ctx:           context.Background(),
+			callerClosing: true,
+			err:           net.ErrClosed,
+			expected:      zerolog.TraceLevel,
+		},
+		{
+			name:     "ended request context",
+			ctx:      cancelledCtx,
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure},
+			expected: zerolog.TraceLevel,
+		},
+		{
+			name:     "normal peer close",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseNormalClosure},
+			expected: zerolog.DebugLevel,
+		},
+		{
+			name:     "peer going away",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseGoingAway},
+			expected: zerolog.DebugLevel,
+		},
+		{
+			name:     "abnormal peer close",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure},
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "peer close without status",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseNoStatusReceived},
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "unmarked network close",
+			ctx:      context.Background(),
+			err:      net.ErrClosed,
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "protocol failure",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
+			expected: zerolog.ErrorLevel,
+		},
+		{
+			name:     "unexpected read failure",
+			ctx:      context.Background(),
+			err:      errors.New("read failed"),
+			expected: zerolog.ErrorLevel,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, waitNotificationsReadLogLevel(tt.ctx, tt.callerClosing, tt.err))
+		})
+	}
+}
+
+// TestIsExpectedWebsocketClose verifies that expected disconnects (including the
+// 1006 abnormal closure that was flooding Sentry) are classified for below-Error
+// logging, while genuine read faults are not.
+func TestIsExpectedWebsocketClose(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err      error
+		name     string
+		expected bool
+	}{
+		{name: "net closed", err: net.ErrClosed, expected: true},
+		{
+			name:     "abnormal closure 1006",
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "unexpected EOF"},
+			expected: true,
+		},
+		{
+			name:     "normal closure",
+			err:      &websocket.CloseError{Code: websocket.CloseNormalClosure},
+			expected: true,
+		},
+		{
+			name:     "going away",
+			err:      &websocket.CloseError{Code: websocket.CloseGoingAway},
+			expected: true,
+		},
+		{
+			name:     "protocol error stays visible",
+			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
+			expected: false,
+		},
+		{name: "generic error", err: errors.New("boom"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isExpectedWebsocketClose(tt.err))
+		})
+	}
 }

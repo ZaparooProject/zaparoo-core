@@ -11,7 +11,7 @@ on:
         type: string
         default: ""
       test_build:
-        description: "Test build only (no release created, uses test-signing)"
+        description: "Test build only: build every target, publish and sign nothing"
         required: false
         type: boolean
         default: false
@@ -27,7 +27,7 @@ on:
         type: boolean
         default: false
       test_build:
-        description: "Test build only (no release created)"
+        description: "Test build only: build every target, publish and sign nothing"
         required: false
         type: boolean
         default: false
@@ -61,7 +61,7 @@ jobs:
           is_nightly: ${{ inputs.is_nightly || 'false' }}
         run: |
           # Detect pre-release builds (nightly, alpha, beta, rc, etc.)
-          # Any tag with a hyphen after the version (e.g. v2.10.0-beta2) is pre-release
+          # Any tag with a hyphen after the version (e.g. v2.10.0-beta.2) is pre-release
           VERSION="${tag#v}"
           if [[ "$is_nightly" == "true" ]] || [[ "$tag" == *"nightly"* ]]; then
             PRERELEASE="--prerelease"
@@ -119,8 +119,10 @@ jobs:
             arch: arm
           - platform: replayos
             arch: arm64
+          - platform: zapos
+            arch: arm64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Get latest Zaparoo App release tag
         id: zaparooapprel
         run: |
@@ -146,7 +148,7 @@ jobs:
           echo "Version: $VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -158,11 +160,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker CLI
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
         with:
           use: true
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -183,26 +185,26 @@ jobs:
           GOFLAGS: "-buildvcs=false"
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Upload unsigned Windows exe
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-exe-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Zaparoo.exe
           retention-days: 30
       - name: Copy installer to consistent name
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         run: |
           cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
              "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned Windows installer
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
       - name: Upload Windows distribution files
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-dist-${{matrix.arch}}
@@ -257,19 +259,28 @@ jobs:
     timeout-minutes: 30
     name: Sign all Windows binaries
     needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # Skipped for a test build: signing needs the release policy and its
+    # credentials, and a build that publishes nothing has no artifact worth
+    # spending a signature on.
+    if: ${{ !cancelled() && needs.build.result == 'success' && !inputs.test_build }}
     permissions:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Every repository package makezip imports has to be listed here, or
+          # the repackage step below cannot build it. TestSigningCheckoutCovers
+          # Imports keeps this in step with what the tool actually imports.
           sparse-checkout: |
             scripts/
+            pkg/platforms/batocera/payload/
+            pkg/platforms/updatepayload/
             go.mod
+            go.sum
           sparse-checkout-cone-mode: false
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -340,7 +351,7 @@ jobs:
           path: _signing_bundle/
           retention-days: 30
       - name: Sign all Windows binaries
-        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
         with:
           api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
           organization-id: "${{ secrets.SIGNPATH_ORGANIZATION_ID }}"
@@ -361,7 +372,7 @@ jobs:
             cp "_signed/${arch}/Zaparoo.exe" "_dist/${arch}/Zaparoo.exe"
 
             # Create distribution ZIP
-            go run scripts/tasks/utils/makezip/main.go \
+            go run ./scripts/tasks/utils/makezip \
               windows "_dist/${arch}" Zaparoo.exe \
               "zaparoo-windows_${arch}-${VERSION}.zip"
 
@@ -384,7 +395,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             scripts/
@@ -438,6 +449,54 @@ jobs:
           PKG_VERSION="${VERSION//-/_}"
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-any.pkg.tar.zst" --clobber
 
+  mister-module-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Check mister module tag
+    # The standalone mister/ module is versioned by its own directory-prefixed
+    # tags, which a vX.Y.Z release does not create. Without this the module
+    # quietly never gets one and third parties can only pin a pseudo-version.
+    if: ${{ !cancelled() && !inputs.test_build }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Report whether mister/ needs a new tag
+        env:
+          tag: ${{ env.BUILD_TAG }}
+          is_nightly: ${{ inputs.is_nightly || 'false' }}
+        run: |
+          # Only stable releases are worth a library tag; a nightly or beta
+          # would just churn the version third parties pin.
+          case "${tag#v}" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          if [ "$is_nightly" = "true" ] || [ "$prerelease" = "true" ]; then
+            echo "$tag is a pre-release; skipping the mister/ tag check."
+            exit 0
+          fi
+          last=$(git tag -l 'mister/v*' | sort -V | tail -n 1)
+          if [ -z "$last" ]; then
+            echo "::warning::The mister/ module has never been tagged. Cut one with 'task mister:tag-module -- v0.1.0' so third parties can pin a version."
+            echo "The mister/ module has never been tagged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git diff --quiet "$last" "$tag" -- mister; then
+            echo "mister/ is unchanged since $last." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::mister/ has changed since $last. Cut a new tag with 'task mister:tag-module -- vX.Y.Z'."
+            {
+              echo "mister/ has changed since $last:"
+              echo '```'
+              git diff --stat "$last" "$tag" -- mister
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   attest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -449,7 +508,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download release assets
         env:
@@ -470,12 +529,12 @@ jobs:
           output-file: _release/sbom.spdx.json
 
       - name: Attest build provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: '_release/zaparoo-*'
 
       - name: Attest SBOM
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: '_release/zaparoo-*'
           sbom-path: _release/sbom.spdx.json

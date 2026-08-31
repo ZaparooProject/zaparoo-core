@@ -164,9 +164,9 @@ func FilterByTags(
 ) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if HasAllTags(&result, tagFilters) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if HasAllTags(&results[i], tagFilters) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -175,38 +175,52 @@ func FilterByTags(
 
 // HasAllTags checks if a result matches the specified tag filters
 // Respects operator logic: AND (must have), NOT (must not have), OR (at least one)
+// tagValueSets builds a lookup of a result's tags as type -> set of values. Multi-valued
+// types (e.g. region:us,eu or lang:en,fr,de) keep every value rather than collapsing to a
+// single last-write-wins value, so tag filters match against the full set.
+func tagValueSets(result *database.SearchResultWithCursor) map[string]map[string]struct{} {
+	sets := make(map[string]map[string]struct{}, len(result.Tags))
+	for _, tag := range result.Tags {
+		values, ok := sets[tag.Type]
+		if !ok {
+			values = make(map[string]struct{})
+			sets[tag.Type] = values
+		}
+		values[tag.Tag] = struct{}{}
+	}
+	return sets
+}
+
 func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.TagFilter) bool {
 	if len(tagFilters) == 0 {
 		return true
 	}
 
-	// Create a map of result's tags for fast lookup
-	resultTags := make(map[string]string) // type -> value
-	for _, tag := range result.Tags {
-		resultTags[tag.Type] = tag.Tag
-	}
+	resultTags := tagValueSets(result)
 
 	// Group filters by operator using shared logic
 	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
 
-	// Check AND filters: must have ALL
+	// Check AND filters: the result's value set for the type must contain the value.
 	for _, requiredTag := range andFilters {
-		value, exists := resultTags[requiredTag.Type]
+		values, exists := resultTags[requiredTag.Type]
 		if !exists {
 			// Tag type not present on result — can't evaluate.
 			// Missing metadata is not a conflict, so skip rather
 			// than rejecting results that simply lack this tag type.
 			continue
 		}
-		if value != requiredTag.Value {
+		if _, ok := values[requiredTag.Value]; !ok {
 			return false
 		}
 	}
 
 	// Check NOT filters: must NOT have ANY
 	for _, excludedTag := range notFilters {
-		if value, exists := resultTags[excludedTag.Type]; exists && value == excludedTag.Value {
-			return false // Has a tag that should be excluded
+		if values, exists := resultTags[excludedTag.Type]; exists {
+			if _, ok := values[excludedTag.Value]; ok {
+				return false // Has a tag that should be excluded
+			}
 		}
 	}
 
@@ -214,9 +228,11 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 	if len(orFilters) > 0 {
 		hasAtLeastOne := false
 		for _, orTag := range orFilters {
-			if value, exists := resultTags[orTag.Type]; exists && value == orTag.Value {
-				hasAtLeastOne = true
-				break
+			if values, exists := resultTags[orTag.Type]; exists {
+				if _, ok := values[orTag.Value]; ok {
+					hasAtLeastOne = true
+					break
+				}
 			}
 		}
 		if !hasAtLeastOne {
@@ -231,9 +247,9 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 func FilterOutVariants(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if !IsVariant(&result) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if !IsVariant(&results[i]) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -291,9 +307,9 @@ func hasVariantTagFilter(tagFilters []zapscript.TagFilter) bool {
 func FilterOutRereleases(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if !IsRerelease(&result) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if !IsRerelease(&results[i]) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -319,15 +335,15 @@ func FilterByPreferredRegions(
 	var untagged []database.SearchResultWithCursor
 	var others []database.SearchResultWithCursor
 
-	for _, result := range results {
-		regionMatch := getRegionMatch(&result, preferredRegions)
+	for i := range results {
+		regionMatch := getRegionMatch(&results[i], preferredRegions)
 		switch regionMatch {
 		case tagMatchPreferred:
-			preferred = append(preferred, result)
+			preferred = append(preferred, results[i])
 		case tagMatchUntagged:
-			untagged = append(untagged, result)
+			untagged = append(untagged, results[i])
 		case tagMatchOther:
-			others = append(others, result)
+			others = append(others, results[i])
 		}
 	}
 
@@ -375,15 +391,15 @@ func FilterByPreferredLanguages(
 	var untagged []database.SearchResultWithCursor
 	var others []database.SearchResultWithCursor
 
-	for _, result := range results {
-		langMatch := getLanguageMatch(&result, preferredLangs)
+	for i := range results {
+		langMatch := getLanguageMatch(&results[i], preferredLangs)
 		switch langMatch {
 		case tagMatchPreferred:
-			preferred = append(preferred, result)
+			preferred = append(preferred, results[i])
 		case tagMatchUntagged:
-			untagged = append(untagged, result)
+			untagged = append(untagged, results[i])
 		case tagMatchOther:
-			others = append(others, result)
+			others = append(others, results[i])
 		}
 	}
 
@@ -574,11 +590,8 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 		return 1.0
 	}
 
-	// Create a map of result's tags for fast lookup
-	resultTags := make(map[string]string) // type -> value
-	for _, tag := range result.Tags {
-		resultTags[tag.Type] = tag.Tag
-	}
+	// Build a lookup of the result's tags as type -> set of values.
+	resultTags := tagValueSets(result)
 
 	// If result has no tags at all, give moderate confidence (0.65)
 	// This handles database entries with incomplete tag information
@@ -596,13 +609,13 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	// on the result. Missing metadata is not a conflict.
 	applicableAndFilters := 0
 	for _, requiredTag := range andFilters {
-		value, exists := resultTags[requiredTag.Type]
+		values, exists := resultTags[requiredTag.Type]
 		if !exists {
 			// Tag type not present — can't evaluate, skip.
 			continue
 		}
 		applicableAndFilters++
-		if value == requiredTag.Value {
+		if _, ok := values[requiredTag.Value]; ok {
 			matched++
 		} else {
 			conflicts++
@@ -611,7 +624,8 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 
 	// Check NOT filters
 	for _, excludedTag := range notFilters {
-		if value, exists := resultTags[excludedTag.Type]; exists && value == excludedTag.Value {
+		values, exists := resultTags[excludedTag.Type]
+		if _, has := values[excludedTag.Value]; exists && has {
 			// Has a tag that should be excluded - major penalty
 			conflicts += 2
 		} else {
@@ -624,10 +638,12 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	if len(orFilters) > 0 {
 		hasAtLeastOne := false
 		for _, orTag := range orFilters {
-			if value, exists := resultTags[orTag.Type]; exists && value == orTag.Value {
-				hasAtLeastOne = true
-				matched++
-				break
+			if values, exists := resultTags[orTag.Type]; exists {
+				if _, ok := values[orTag.Value]; ok {
+					hasAtLeastOne = true
+					matched++
+					break
+				}
 			}
 		}
 		if !hasAtLeastOne {
@@ -685,7 +701,8 @@ func FilterByFileTypePriority(
 	}
 
 	scored := make([]scoredResult, 0, len(results))
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		ext := strings.ToLower(filepath.Ext(result.Path))
 		bestScore := 999999 // Default: no launcher match
 
@@ -701,22 +718,22 @@ func FilterByFileTypePriority(
 			}
 		}
 
-		scored = append(scored, scoredResult{result: result, score: bestScore})
+		scored = append(scored, scoredResult{result: *result, score: bestScore})
 	}
 
 	// Find minimum score
 	minScore := 999999
-	for _, s := range scored {
-		if s.score < minScore {
-			minScore = s.score
+	for i := range scored {
+		if scored[i].score < minScore {
+			minScore = scored[i].score
 		}
 	}
 
 	// Return all results with minimum score
 	var best []database.SearchResultWithCursor
-	for _, s := range scored {
-		if s.score == minScore {
-			best = append(best, s.result)
+	for i := range scored {
+		if scored[i].score == minScore {
+			best = append(best, scored[i].result)
 		}
 	}
 

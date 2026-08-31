@@ -20,10 +20,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
@@ -33,6 +36,17 @@ import (
 // Returns error if the script fails (for blocking hooks) or nil on success.
 // The scanned/launching params provide optional context for the expression env.
 func runHook(
+	svc *ServiceContext,
+	hookName string,
+	script string,
+	scanned *gozapscript.ExprEnvScanned,
+	launching *gozapscript.ExprEnvLaunching,
+) error {
+	return runHookWithContext(svc.State.GetContext(), svc, hookName, script, scanned, launching)
+}
+
+func runHookWithContext(
+	ctx context.Context,
 	svc *ServiceContext,
 	hookName string,
 	script string,
@@ -53,5 +67,13 @@ func runHook(
 	}
 
 	hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, scanned, launching)
-	return runTokenZapScript(svc, t, plsc, &hookEnv, true)
+	return runTokenZapScriptWithContext(ctx, svc, t, plsc, &hookEnv, true)
+}
+
+// hookErrorBlocks reports whether a hook's error should block its caller,
+// such as skipping a scan, keeping media running on removal, or failing a
+// launch. A disabled "run ZapScript" setting is the prior silent no-op, not
+// a hook failure, so callers must not treat it as one.
+func hookErrorBlocks(err error) bool {
+	return err != nil && !errors.Is(err, state.ErrRunZapScriptDisabled)
 }

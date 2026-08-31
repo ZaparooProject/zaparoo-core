@@ -22,22 +22,29 @@
 package shared
 
 import (
-	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
 // LinuxInput manages virtual keyboard and gamepad devices for Linux platforms.
 // Embed this struct in platform implementations that need input device support.
 type LinuxInput struct {
-	NewKeyboard func(time.Duration) (linuxinput.Keyboard, error)
-	NewGamepad  func(time.Duration) (linuxinput.Gamepad, error)
-	kbd         linuxinput.Keyboard
-	gpd         linuxinput.Gamepad
+	NewKeyboard   func(time.Duration) (linuxinput.Keyboard, error)
+	NewGamepad    func(time.Duration) (linuxinput.Gamepad, error)
+	inputSessions map[*linuxInputSession]*heldInputState
+	keyboardRefs  map[int]int
+	gamepadRefs   map[int]int
+	kbd           linuxinput.Keyboard
+	gpd           linuxinput.Gamepad
+	sequenceMu    syncutil.Mutex
+	inputMu       syncutil.Mutex
 }
 
 // InitDevices initializes keyboard and optionally gamepad based on config.
@@ -72,49 +79,70 @@ func (l *LinuxInput) InitDevices(cfg *config.Instance, gamepadEnabledByDefault b
 	return nil
 }
 
-// CloseDevices closes keyboard and gamepad devices.
+// CloseDevices releases all held input before closing keyboard and gamepad devices.
 func (l *LinuxInput) CloseDevices() {
-	if l.kbd.Device != nil {
-		if err := l.kbd.Close(); err != nil {
-			log.Warn().Err(err).Msg("error closing keyboard")
-		}
-	}
-	if l.gpd.Device != nil {
-		if err := l.gpd.Close(); err != nil {
-			log.Warn().Err(err).Msg("error closing gamepad")
-		}
-	}
+	l.closeInputDevices()
 }
 
 // KeyboardPress sends a keyboard key press.
 func (l *LinuxInput) KeyboardPress(arg string) error {
+	return l.pressKeyboardToken(arg)
+}
+
+// DefaultInterKeyDelay is the default pause between consecutive key presses in a
+// sequence. Matches the inter-key delay used by the per-key fallback loop.
+const DefaultInterKeyDelay = 100 * time.Millisecond
+
+// resolveHoldKeyCode converts a key name (as it appears inside a sigil or hold
+// token, without braces) to a uinput keycode. Shifted single chars (e.g. "M",
+// "*") resolve to their base code. Multi-char names get braces added before
+// looking them up (e.g. "shift" → "{shift}").
+func resolveHoldKeyCode(name string) (int, error) {
+	if baseCode, ok := keyboardmap.IsShiftedKey(name); ok {
+		return baseCode, nil
+	}
+	// Choose the form ParseKeyCombo expects.
+	arg := name
+	if len([]rune(name)) > 1 {
+		arg = "{" + name + "}"
+	}
 	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
 	if err != nil {
-		return fmt.Errorf("failed to parse key combo: %w", err)
+		return 0, fmt.Errorf("unknown key %q: %w", name, err)
 	}
 	if isCombo {
-		if err := l.kbd.Combo(codes...); err != nil {
-			return fmt.Errorf("failed to press keyboard combo: %w", err)
-		}
-		return nil
+		return 0, fmt.Errorf("hold/press/release does not support combos: %q", name)
 	}
-	if err := l.kbd.Press(codes[0]); err != nil {
-		return fmt.Errorf("failed to press keyboard key: %w", err)
+	return codes[0], nil
+}
+
+// parseMacroDuration is the local copy of the duration parser used by the core
+// zapscript package. It accepts plain integers (milliseconds) and Go durations
+// ("1s", "500ms", "1m30s").
+func parseMacroDuration(s string) (time.Duration, error) {
+	if ms, err := strconv.Atoi(s); err == nil {
+		return time.Duration(ms) * time.Millisecond, nil
 	}
-	return nil
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	return d, nil
+}
+
+// KeyboardPressSequence sends a request-scoped key sequence. Explicit press
+// tokens are always released before this method returns.
+func (l *LinuxInput) KeyboardPressSequence(args []string, interKeyDelay time.Duration) error {
+	return l.pressKeyboardSequence(args, interKeyDelay)
 }
 
 // GamepadPress sends a gamepad button press.
 func (l *LinuxInput) GamepadPress(name string) error {
-	if l.gpd.Device == nil {
-		return errors.New("virtual gamepad is disabled")
-	}
-	code, ok := linuxinput.ToGamepadCode(name)
-	if !ok {
-		return fmt.Errorf("unknown button: %s", name)
-	}
-	if err := l.gpd.Press(code); err != nil {
-		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
-	}
-	return nil
+	return l.pressGamepadToken(name)
+}
+
+// GamepadPressSequence sends a request-scoped gamepad sequence. Explicit press
+// tokens are always released before this method returns.
+func (l *LinuxInput) GamepadPressSequence(args []string, interKeyDelay time.Duration) error {
+	return l.pressGamepadSequence(args, interKeyDelay)
 }

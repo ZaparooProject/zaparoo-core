@@ -20,12 +20,11 @@
 package methods
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -36,6 +35,7 @@ import (
 )
 
 func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
+	started := time.Now()
 	log.Info().Msg("received media tags update request")
 
 	var params models.MediaTagsUpdateParams
@@ -64,6 +64,7 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		return nil, models.ClientErrf("invalid remove tags: %w", err)
 	}
 
+	resolveStarted := time.Now()
 	resolved, err := resolveMediaRefs(&env, []mediaRefParam{mediaRef})
 	if err != nil {
 		return nil, err
@@ -76,10 +77,25 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	}
 
 	row := resolved[0].Row
-	if updateErr := updateMediaUserTags(env.Database.MediaDB, row.DBID, remove, add); updateErr != nil {
-		return nil, updateErr
+	resolveDuration := time.Since(resolveStarted)
+
+	// Write the durable truth (UserDB) before the MediaDB projection. Since
+	// user:favorite is the only mutable tag, any add wins over a simultaneous
+	// remove. A failed projection remains repairable by the next reindex.
+	favorite := len(add) > 0
+	if udErr := setMediaUserFavorite(&env, row.System.SystemID, row.Path, favorite); udErr != nil {
+		return nil, udErr
 	}
 
+	updateStarted := time.Now()
+	if updateErr := env.Database.MediaDB.UpdateMediaTags(
+		env.Context, row.DBID, remove, add,
+	); updateErr != nil {
+		return nil, fmt.Errorf("failed to update media tag projection: %w", updateErr)
+	}
+	updateDuration := time.Since(updateStarted)
+
+	fetchStarted := time.Now()
 	fileTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media tags: %w", err)
@@ -88,11 +104,20 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media title tags: %w", err)
 	}
+	fetchDuration := time.Since(fetchStarted)
+
+	log.Debug().
+		Int64("mediaDBID", row.DBID).
+		Dur("resolveDuration", resolveDuration).
+		Dur("updateDuration", updateDuration).
+		Dur("fetchDuration", fetchDuration).
+		Dur("totalDuration", time.Since(started)).
+		Msg("media tags update timing")
 
 	return models.TagsResponse{Tags: append(fileTags, titleTags...)}, nil
 }
 
-func parseMutableUserTags(rawTags []string) ([]zapscript.TagFilter, error) {
+func parseMutableUserTags(rawTags []string) ([]database.MediaTagRef, error) {
 	if len(rawTags) == 0 {
 		return nil, nil
 	}
@@ -110,98 +135,13 @@ func parseMutableUserTags(rawTags []string) ([]zapscript.TagFilter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse tag filters: %w", err)
 	}
+	refs := make([]database.MediaTagRef, 0, len(parsed))
 	for _, tag := range parsed {
 		if tag.Type != string(tags.TagTypeUser) || tag.Value != string(tags.TagUserFavorite) {
 			return nil, fmt.Errorf("only %s:%s can be mutated", tags.TagTypeUser, tags.TagUserFavorite)
 		}
+		refs = append(refs, database.MediaTagRef{Type: tag.Type, Tag: tag.Value})
 	}
 
-	return parsed, nil
-}
-
-func updateMediaUserTags(
-	mediaDB database.MediaDBI,
-	mediaDBID int64,
-	remove []zapscript.TagFilter,
-	add []zapscript.TagFilter,
-) error {
-	if err := mediaDB.BeginTransaction(false); err != nil {
-		return fmt.Errorf("failed to begin media tag update transaction: %w", err)
-	}
-
-	for _, tag := range remove {
-		if err := removeMediaUserTag(mediaDB, mediaDBID, tag); err != nil {
-			rollbackMediaTagUpdate(mediaDB)
-			return err
-		}
-	}
-	for _, tag := range add {
-		if err := addMediaUserTag(mediaDB, mediaDBID, tag); err != nil {
-			rollbackMediaTagUpdate(mediaDB)
-			return err
-		}
-	}
-
-	if err := mediaDB.CommitTransaction(); err != nil {
-		rollbackMediaTagUpdate(mediaDB)
-		return fmt.Errorf("failed to commit media tag update transaction: %w", err)
-	}
-
-	return nil
-}
-
-func rollbackMediaTagUpdate(mediaDB database.MediaDBI) {
-	if rbErr := mediaDB.RollbackTransaction(); rbErr != nil {
-		log.Error().Err(rbErr).Msg("failed to rollback media tag update transaction")
-	}
-}
-
-func addMediaUserTag(mediaDB database.MediaDBI, mediaDBID int64, tag zapscript.TagFilter) error {
-	tagType, err := mediaDB.FindOrInsertTagType(database.TagType{
-		Type:        tag.Type,
-		IsExclusive: tags.IsExclusiveType(tags.TagType(tag.Type)),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to find or insert tag type: %w", err)
-	}
-
-	tagRow, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: tag.Value})
-	if err != nil {
-		return fmt.Errorf("failed to find or insert tag: %w", err)
-	}
-
-	mediaTag := database.MediaTag{
-		MediaDBID: mediaDBID,
-		TagDBID:   tagRow.DBID,
-	}
-	if _, err = mediaDB.FindOrInsertMediaTag(mediaTag); err != nil {
-		return fmt.Errorf("failed to find or insert media tag: %w", err)
-	}
-
-	return nil
-}
-
-func removeMediaUserTag(mediaDB database.MediaDBI, mediaDBID int64, tag zapscript.TagFilter) error {
-	tagType, err := mediaDB.FindTagType(database.TagType{Type: tag.Type})
-	if err != nil {
-		return ignoreMissingTag(err)
-	}
-
-	tagRow, err := mediaDB.FindTag(database.Tag{TypeDBID: tagType.DBID, Tag: tag.Value})
-	if err != nil {
-		return ignoreMissingTag(err)
-	}
-
-	if err = mediaDB.DeleteMediaTag(mediaDBID, tagRow.DBID); err != nil {
-		return fmt.Errorf("failed to delete media tag: %w", err)
-	}
-
-	return nil
-}
-
-func ignoreMissingTag(err error) error {
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	return err
+	return refs, nil
 }

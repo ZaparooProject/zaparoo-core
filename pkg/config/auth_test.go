@@ -161,9 +161,12 @@ func TestLoadAuthFromData_EmptyData(t *testing.T) {
 func TestLoadAuthFromData_InvalidTOML(t *testing.T) {
 	t.Parallel()
 
-	// Invalid TOML should not panic, just return empty
-	result := LoadAuthFromData([]byte("this is not valid toml [[["))
+	data := []byte("this is not valid toml [[[")
+	// Low-level compatibility parser remains non-panicking; file-management
+	// callers validate first so malformed credentials are never discarded.
+	result := LoadAuthFromData(data)
 	assert.Empty(t, result)
+	require.Error(t, validateAuthFileData(data))
 }
 
 func TestNormalizeScheme(t *testing.T) {
@@ -719,6 +722,46 @@ func readAPIKeysFromInstance(t *testing.T, cfg *Instance) []string {
 	return LoadAPIKeysFromData(data)
 }
 
+func TestReloadAuth_MalformedFileKeepsExistingValues(t *testing.T) {
+	originalAuth := authCfg.Load()
+	originalAPIKeys := apiKeys.Load()
+	t.Cleanup(func() {
+		if originalAuth != nil {
+			authCfg.Store(originalAuth)
+		} else {
+			authCfg.Store(map[string]CredentialEntry{})
+		}
+		if originalAPIKeys != nil {
+			apiKeys.Store(originalAPIKeys)
+		} else {
+			apiKeys.Store([]string{})
+		}
+	})
+
+	cfg := newTestConfigInstance(t)
+	existingCredentials := map[string]CredentialEntry{
+		"https://api.example.com": {Bearer: "existing-token"},
+	}
+	existingAPIKeys := []string{"existing-key"}
+	validData, err := marshalAuthFile(existingCredentials, existingAPIKeys)
+	require.NoError(t, err)
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, validData, 0o600))
+
+	cfg.mu.Lock()
+	cfg.reloadAuth()
+	cfg.mu.Unlock()
+	require.Equal(t, existingCredentials, GetAuthCfg())
+	require.Equal(t, existingAPIKeys, GetAPIKeys())
+
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, []byte("not valid toml [[["), 0o600))
+	cfg.mu.Lock()
+	cfg.reloadAuth()
+	cfg.mu.Unlock()
+
+	assert.Equal(t, existingCredentials, GetAuthCfg())
+	assert.Equal(t, existingAPIKeys, GetAPIKeys())
+}
+
 func TestSaveAuthEntry_CreateNewFile(t *testing.T) {
 	t.Parallel()
 
@@ -732,6 +775,21 @@ func TestSaveAuthEntry_CreateNewFile(t *testing.T) {
 	creds := readAuthFromInstance(t, cfg)
 	require.Len(t, creds, 1)
 	assert.Equal(t, "test-token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestSaveAuthEntry_RejectsMalformedExistingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	malformed := []byte("not valid toml [[[")
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, malformed, 0o600))
+
+	err := cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "new-token"})
+	require.Error(t, err)
+
+	preserved, readErr := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, malformed, preserved)
 }
 
 func TestSaveAuthEntry_UpdateExisting(t *testing.T) {
@@ -799,4 +857,95 @@ bearer = "existing-token"
 	creds := readAuthFromInstance(t, cfg)
 	assert.Equal(t, "existing-token", creds["https://existing.com"].Bearer)
 	assert.Equal(t, "new-token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_RemovesOnlyTargetedDomains(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "token1"}))
+	require.NoError(t, cfg.SaveAuthEntry("https://zpr.au", CredentialEntry{Bearer: "token2"}))
+	require.NoError(t, cfg.SaveAuthEntry("https://other.example.com", CredentialEntry{Bearer: "token3"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com", "https://zpr.au"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "token3", creds["https://other.example.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_RejectsMalformedExistingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	malformed := []byte("not valid toml [[[")
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, malformed, 0o600))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.Error(t, err)
+
+	preserved, readErr := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, malformed, preserved)
+}
+
+func TestDeleteAuthEntries_MatchesCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://API.Zaparoo.com", CredentialEntry{Bearer: "token1"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	assert.Empty(t, creds)
+}
+
+func TestDeleteAuthEntries_PreservesAPIKeys(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	existingData := []byte(`api_keys = ["key1", "key2"]
+
+[creds."https://api.zaparoo.com"]
+bearer = "token"
+`)
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, existingData, 0o600))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	keys := readAPIKeysFromInstance(t, cfg)
+	assert.Equal(t, []string{"key1", "key2"}, keys)
+	creds := readAuthFromInstance(t, cfg)
+	assert.Empty(t, creds)
+}
+
+func TestDeleteAuthEntries_MissingDomainIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "token"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://unrelated.example.com"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_NoAuthFileIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
 }

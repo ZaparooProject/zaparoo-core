@@ -20,29 +20,42 @@
 package userdb
 
 import (
+	"errors"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
+// ErrLastClientAdmin is returned when deleting the final admin client.
+var ErrLastClientAdmin = errors.New("cannot delete the last admin client")
+
 func (db *UserDB) CreateClient(c *database.Client) error {
-	return sqlCreateClient(db.ctx, db.sql, c)
+	return sqlCreateClient(db.ctx, db.sql.Load(), c)
 }
 
 func (db *UserDB) GetClientByToken(authToken string) (*database.Client, error) {
-	return sqlGetClientByToken(db.ctx, db.sql, authToken)
+	return sqlGetClientByToken(db.ctx, db.sql.Load(), authToken)
 }
 
 func (db *UserDB) ListClients() ([]database.Client, error) {
-	return sqlListClients(db.ctx, db.sql)
+	return sqlListClients(db.ctx, db.sql.Load())
+}
+
+// ReplaceAllClients atomically replaces every paired client row. Device
+// backup restore uses this to carry the destination's paired clients across
+// a restored user database, since portable snapshots are created without
+// client rows.
+func (db *UserDB) ReplaceAllClients(clients []database.Client) error {
+	return sqlReplaceAllClients(db.ctx, db.sql.Load(), clients)
 }
 
 func (db *UserDB) DeleteClient(clientID string) error {
-	return sqlDeleteClient(db.ctx, db.sql, clientID)
+	return sqlDeleteClient(db.ctx, db.sql.Load(), clientID)
 }
 
 func (db *UserDB) UpdateClientLastSeen(authToken string, lastSeenAt int64) error {
-	return sqlUpdateClientLastSeen(db.ctx, db.sql, authToken, lastSeenAt)
+	return sqlUpdateClientLastSeen(db.ctx, db.sql.Load(), authToken, lastSeenAt)
 }
 
 func (db *UserDB) CountClients() (int, error) {
-	return sqlCountClients(db.ctx, db.sql)
+	return sqlCountClients(db.ctx, db.sql.Load())
 }

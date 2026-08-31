@@ -42,17 +42,17 @@ func TestWALCheckpointing(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := tempDir + "/test.db"
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -148,18 +148,20 @@ func TestWALCheckpointing(t *testing.T) {
 	require.Equal(t, 4, count) // 1 initial + 3 additional
 }
 
-// TestConnectionParameters verifies the memory-safe connection parameters
+// TestConnectionParameters verifies the durable, memory-safe connection parameters.
 func TestConnectionParameters(t *testing.T) {
 	connParams := getSqliteConnParams()
 
-	// Verify key memory-safe parameters are present
-	// These settings are optimized for all platforms including low-RAM devices (e.g. MiSTer 256MB)
+	// Verify key durable and memory-safe parameters are present.
+	// WAL + synchronous=NORMAL is durable against crashes and normal power
+	// loss; MediaDB rows are rebuildable, so the small last-transaction-loss
+	// window on hardware power loss is an acceptable trade for avoiding
+	// synchronous=FULL's per-commit fsync stalls.
 	require.Contains(t, connParams, "_journal_mode=WAL")
 	require.Contains(t, connParams, "_synchronous=NORMAL")
 	require.Contains(t, connParams, "_cache_size=-8192") // 8MB cache (safe on 256MB systems)
 	require.Contains(t, connParams, "_temp_store=FILE")  // temp tables on disk for safe VACUUM
 	require.Contains(t, connParams, "_mmap_size=0")      // disabled to avoid memory pressure
-	require.Contains(t, connParams, "_page_size=8192")
 	require.Contains(t, connParams, "_foreign_keys=ON")
 	require.Contains(t, connParams, "_busy_timeout=5000")
 
@@ -179,17 +181,17 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 	ctx := context.Background()
 
 	// Create in-memory database with the same connection parameters as production
-	sqlDB, err := sql.Open("sqlite3", ":memory:"+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), ":memory:"+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -258,17 +260,17 @@ func TestWALSizeManagement(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := tempDir + "/test.db"
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()

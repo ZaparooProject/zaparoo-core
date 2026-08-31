@@ -23,33 +23,54 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/remote"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	backupShutdownWarningAfter  = 30 * time.Second
+	backupShutdownHardDeadline  = 2 * time.Minute
+	startupMediaIdleQuietWindow = 5 * time.Second
+	startupMediaIdleMaximumWait = 300 * time.Second
+	// updateConfirmDelay is how long an updated version has to stay up before its
+	// update is committed. Long enough to catch a build that starts and then dies
+	// on its first real work, short enough that recovery files do not fill storage.
+	updateConfirmDelay = 30 * time.Second
 )
 
 // StartResult holds the return values from Start.
@@ -59,11 +80,291 @@ type StartResult struct {
 	RestartRequested func() bool
 }
 
+func resumeAndScheduleStartupMediaWork(
+	ctx context.Context,
+	scheduler *idle.Scheduler,
+	db *database.Database,
+	resumeIndexing func() bool,
+	runDeferred func(context.Context, bool),
+) {
+	// Interrupted indexing is recovery work. Resume it synchronously; API
+	// activity must not postpone visible database progress.
+	resumeStarted := resumeIndexing()
+	scheduler.Schedule(
+		ctx,
+		"startup-media-work",
+		startupMediaIdleQuietWindow,
+		startupMediaIdleMaximumWait,
+		func(taskCtx context.Context) {
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping deferred startup media work: media database is nil")
+				return
+			}
+			runDeferred(taskCtx, resumeStarted)
+		},
+	)
+}
+
+func waitForBackupShutdown(
+	coordinator *backupsvc.Coordinator,
+	warningAfter time.Duration,
+	hardDeadline time.Duration,
+) error {
+	hardCtx, cancelHard := context.WithTimeout(context.Background(), hardDeadline)
+	defer cancelHard()
+	warningCtx, cancelWarning := context.WithTimeout(hardCtx, warningAfter)
+	err := coordinator.Shutdown(warningCtx)
+	cancelWarning()
+	if err == nil {
+		return nil
+	}
+	log.Warn().Err(err).Msg("backup operation still stopping; delaying service teardown")
+	if waitErr := coordinator.Shutdown(hardCtx); waitErr != nil {
+		return fmt.Errorf("waiting for backup operation before teardown: %w", waitErr)
+	}
+	return nil
+}
+
+// recoverInterruptedMediaDBRecreate repairs the 2.16 failure state where a
+// recreated database lost its reindex intent before indexing persisted a status.
+// A non-empty persisted slug cache plus a blank, never-generated, empty database
+// is durable evidence that an indexed database existed before it was replaced.
+func recoverInterruptedMediaDBRecreate(mediaDB database.MediaDBI, slugCacheLoaded bool) bool {
+	if mediaDB == nil || !slugCacheLoaded {
+		return false
+	}
+
+	status, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check indexing status for interrupted database recreation")
+		return false
+	}
+	if status != "" {
+		return false
+	}
+
+	lastGenerated, err := mediaDB.GetLastGenerated()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check generation time for interrupted database recreation")
+		return false
+	}
+	if !lastGenerated.IsZero() {
+		return false
+	}
+
+	hasMedia, err := mediaDB.HasAnyMedia()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check media rows for interrupted database recreation")
+		return false
+	}
+	if hasMedia {
+		return false
+	}
+
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+
+	if err := mediaDB.SetIndexingStatus(mediadb.IndexingStatusPending); err != nil {
+		log.Error().Err(err).Msg("failed to restore reindex intent for empty recreated media database")
+		return false
+	}
+
+	log.Warn().Msg("detected empty media database with stale search cache; resuming interrupted rebuild")
+	if err := mediaDB.RebuildSlugSearchCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to clear stale slug search cache after interrupted rebuild")
+	} else if err := mediaDB.PersistSlugSearchCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to remove stale persisted slug search cache after interrupted rebuild")
+	}
+	return true
+}
+
+func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bool) {
+	if mediaDB == nil || slugCacheLoaded {
+		return
+	}
+	indexingStatus, statusErr := mediaDB.GetIndexingStatus()
+	if statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to get indexing status before slug cache rebuild")
+		return
+	}
+	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
+		log.Debug().Str("status", indexingStatus).Msg("skipping slug search cache rebuild during indexing")
+		return
+	}
+
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+	if cacheErr := mediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+		return
+	}
+	if persistErr := mediaDB.PersistSlugSearchCache(); persistErr != nil {
+		log.Warn().Err(persistErr).
+			Msg("failed to persist slug search cache after startup rebuild")
+	}
+}
+
+type drainCallbackRegistrar interface {
+	SetDrainCallback(slot string, fn func(natural bool))
+}
+
+func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
+	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
+		if !natural {
+			return
+		}
+		// Another launcher may have taken over active media while the track was
+		// still playing (e.g. a game started outside Zaparoo); only clear it if
+		// native audio still owns it.
+		media := svc.State.ActiveMedia()
+		if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
+			return
+		}
+		svc.State.SetActiveMedia(nil)
+	})
+	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
+		if !natural {
+			return
+		}
+		advanceBackgroundPlaylist(svc)
+	})
+}
+
+// advanceBackgroundPlaylist is called when a background track ends naturally.
+// It advances to the next track according to the playlist's repeat mode, or clears
+// the background state when the playlist has finished and repeat is off.
+func advanceBackgroundPlaylist(svc *ServiceContext) {
+	pls := svc.State.GetBackgroundPlaylist()
+	if pls == nil {
+		// Single-track background (not a playlist) — just clear media state.
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	var next *playlists.Playlist
+	switch {
+	case pls.LoopOne:
+		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
+		next = &playlists.Playlist{
+			ID:            pls.ID,
+			Name:          pls.Name,
+			Slot:          pls.Slot,
+			Items:         pls.Items,
+			Index:         pls.Index,
+			Playing:       true,
+			Loop:          pls.Loop,
+			LoopOne:       pls.LoopOne,
+			ForceRelaunch: true,
+		}
+	case pls.Index+1 < len(pls.Items):
+		// More tracks remain — advance normally.
+		next = playlists.Next(*pls)
+		next.Playing = true
+	case pls.Loop:
+		// Last track finished and repeat=all — wrap back to the start.
+		next = playlists.Next(*pls) // Next already wraps to 0
+		next.Playing = true
+		if len(pls.Items) <= 1 {
+			// Single-item loop: same index after wrap, need ForceRelaunch.
+			next.ForceRelaunch = true
+		}
+	default:
+		// repeat=off, end of playlist — clear state and stop.
+		svc.State.SetBackgroundPlaylist(nil)
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	select {
+	case svc.PlaylistQueue <- next:
+	case <-svc.State.GetContext().Done():
+	}
+}
+
+// resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
+// media stops. Runs synchronously from the media-stop hook so that launch-path code
+// running after a SetActiveMedia(nil) observes the resumed state.
+func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
+	if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
+		return
+	}
+	if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
+		log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
+		return
+	}
+	svc.State.SetBackgroundAutoPaused(false)
+}
+
+// Start brings the service up and resolves any update still waiting on this
+// boot to prove itself.
+//
+// The wrapper around startService exists for the failure path. Most of the platforms
+// this runs on have no supervisor, so a version that cannot start is not
+// restarted by anything: the device is simply gone until someone reflashes it.
+// Routing every way startService can fail through one deferred hook puts the previous
+// version back and reports ErrRolledBack, and the caller re-execs into it
+// rather than exiting.
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
-) (*StartResult, error) {
+) (res *StartResult, err error) {
+	return startWith(
+		pl,
+		cfg,
+		updater.RunStartupWatchdog,
+		startService,
+	)
+}
+
+func startWith(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	runWatchdog func(context.Context, string, string) error,
+	initialize func(platforms.Platform, *config.Instance) (*StartResult, error),
+) (res *StartResult, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
+
+	dataDir := helpers.DataDir(pl)
+
+	// Deliberately before config, databases and network are touched: the
+	// failure this exists to catch is a binary that cannot reach any of them.
+	// It has its own context because st.GetContext does not exist yet.
+	if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
+		if errors.Is(watchdogErr, updater.ErrRolledBack) ||
+			errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
+			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+		}
+		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
+	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+		// Only does anything when this boot is the first one after an update.
+		if rollbackErr := updater.RollBackFailedStart(
+			context.Background(), dataDir, config.AppVersion,
+		); rollbackErr != nil {
+			err = fmt.Errorf("%w: %w", rollbackErr, err)
+		}
+	}()
+
+	return initialize(pl, cfg)
+}
+
+func startService(
+	pl platforms.Platform,
+	cfg *config.Instance,
+) (*StartResult, error) {
+	// A config file created outside Core can lack a device ID. The service
+	// daemon owns device identity (TUI/CLI processes only read it), so
+	// mint and persist one before anything reads it. Save generates a
+	// UUID whenever the ID is empty.
+	if cfg.DeviceID() == "" {
+		if err := cfg.Save(); err != nil {
+			log.Error().Err(err).Msg("failed to persist generated device id")
+		}
+	}
 
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)
 	bootUUID := uuid.New().String()
@@ -71,41 +372,68 @@ func Start(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
+	platformSettings := pl.Settings()
+	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
 	// Create and start notification broker to broadcast to all consumers.
-	// media.indexing is coalesceable: bursts during index/resume collapse to
-	// latest-wins so slow WebSocket consumers don't drop discrete events.
-	notifBroker := broker.NewBroker(st.GetContext(), ns, models.NotificationMediaIndexing)
+	// Coalesceable methods collapse bursts to latest state for slow consumers.
+	// UI state publishes directly to broker so source-queue pressure cannot drop it.
+	notifBroker := broker.NewBroker(
+		st.GetContext(), ns,
+		models.NotificationMediaIndexing,
+		models.NotificationUIChanged,
+	)
 	notifBroker.Start()
+
+	var uiRenderer uievents.Renderer
+	if renderer, ok := pl.(uievents.Renderer); ok {
+		uiRenderer = renderer
+	}
+	uiEvents := uievents.New(clockwork.NewRealClock(), uiRenderer, func(payload models.UIStateResponse) {
+		notifications.UIChanged(notifBroker.Publish, payload)
+	})
+	st.SetUIEvents(uiEvents)
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
+	lgcq := make(chan struct{}, 1)        // launch guard cancellation queue
 	backgroundWG := &sync.WaitGroup{}
 
+	setupStarted := time.Now()
 	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
 		return nil, err
 	}
+	log.Debug().Dur("duration", time.Since(setupStarted)).Msg("setup environment completed")
 
 	log.Info().Msg("running platform pre start")
+	preStartStarted := time.Now()
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
+	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
 	log.Info().Msg("opening databases")
-	db, err := makeDatabase(st.GetContext(), pl)
+	databaseStarted := time.Now()
+	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
+	}
+	log.Debug().Dur("duration", time.Since(databaseStarted)).Msg("databases opened")
+	backupManager := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+	if recoveryErr := backupManager.RecoverRestore(st.GetContext()); recoveryErr != nil {
+		closeDatabase(db)
+		return nil, fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr)
 	}
 	closeHangingMediaHistoryOnStartup(db)
 
@@ -113,12 +441,50 @@ func Start(
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
+	if mediaDBReset != nil {
+		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost)
+	}
+
+	// Initialize profiles and restore the persisted active profile before
+	// the limits manager starts, so limit checks see the right profile.
+	log.Info().Msg("initializing profiles service")
+	profilesSvc := profiles.NewService(db, st)
+	if restoreErr := profilesSvc.RestoreOnBoot(); restoreErr != nil {
+		log.Error().Err(restoreErr).Msg("error restoring active profile")
+	}
+
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
+	limitsResolver := profiles.NewLimitsResolver(cfg, st)
+	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.Start(notifBroker, st.Notifications)
-	if cfg.PlaytimeLimitsEnabled() {
+	// Restore session state from history so session limits survive restarts within
+	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
+	// and after the active profile is restored, so the session is judged
+	// against the right profile's limits.
+	limitsManager.RestoreSessionFromHistory(time.Now())
+	// Restore granted extensions after the session, so a session-scoped
+	// grant is only reinstated when the session it belongs to came back.
+	limitsManager.RestoreExtensions(time.Now())
+	if limitsResolver.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
+	}
+
+	// Data swapping: on platforms with the capability, profile switches
+	// also swap profile-scoped data (saves, save states). The boot
+	// reconcile runs after profile and session restore so a game already
+	// running across a service restart defers the swap until it stops.
+	var dataSwapper platforms.ProfileDataSwapper
+	if swapper, ok := pl.(platforms.ProfileDataSwapper); ok {
+		dataSwapper = swapper
+	}
+	dataSwap := profiles.NewDataSwapCoordinator(cfg, st, dataSwapper)
+	dataSwap.Start(notifBroker, st.Notifications)
+	profilesSvc.SetDataSwap(dataSwap)
+	dataSwap.Reconcile()
+	if watcher, ok := pl.(platforms.ProfileDataWatcher); ok && dataSwapper != nil {
+		watcher.WatchProfileData(st.GetContext(), dataSwap.Reconcile)
 	}
 
 	svc := &ServiceContext{
@@ -126,40 +492,71 @@ func Start(
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		Profiles:            profilesSvc,
+		LimitsManager:       limitsManager,
+		PlaybackManager:     playbackManager,
+		UI:                  uiEvents,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
+		LaunchGuardCancel:   lgcq,
 		BackgroundWG:        backgroundWG,
 	}
+	wireNativeAudioDrainCallbacks(playbackManager, svc)
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
 		startMediaReadyProbe(svc, media, gen)
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
 			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
-				log.Error().Err(hookErr).Msg("error running on_media_start script")
+				logHookError(hookErr, "on_media_start")
 			}
 		}
 	})
 
+	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnMediaStopHook(func() {
+		resumeBackgroundAfterMediaStop(svc)
+		select {
+		case svc.LaunchGuardCancel <- struct{}{}:
+		default:
+		}
+	})
+
 	log.Info().Msg("loading mapping files")
+	mappingsStarted := time.Now()
 	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 	}
+	log.Debug().Dur("duration", time.Since(mappingsStarted)).Msg("mapping files loaded")
 
 	log.Info().Msg("loading custom launchers")
+	launchersStarted := time.Now()
 	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}
+	log.Debug().Dur("duration", time.Since(launchersStarted)).Msg("custom launchers loaded")
 
 	log.Info().Msg("initializing launcher cache")
-	helpers.GlobalLauncherCache.Initialize(pl, cfg)
+	launcherCacheStarted := time.Now()
+	helpers.GlobalLauncherCache.Initialize(
+		pl, cfg,
+		platforms.NativeAudioLauncher(playbackManager, st.SetBackgroundMedia),
+	)
+	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
-	// Create pausers to pause heavy background media work while a game is running.
+	// Resource-constrained platforms pace indexing and scraping so UI, API,
+	// reader, and audio work gets regular CPU time. Active media can impose the
+	// stronger light/heavy throttle or full pause through these same pausers.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
+	if platformSettings.ResourceConstrained {
+		indexPauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+		scrapePauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+	}
+	backupPauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)
 
@@ -172,12 +569,13 @@ func Start(
 	apiDone := make(chan error, 1)
 	go func() {
 		apiDone <- api.StartWithReady(
-			pl, cfg, st, itq, cfq, db, limitsManager,
-			notifBroker, discoveryService.InstanceName(), player, indexPauser, scrapePauser,
-			idleSched, apiReady,
+			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
+			notifBroker, player, playbackManager, indexPauser, scrapePauser,
+			backupPauser, idleSched, apiReady,
 		)
 	}()
 
+	apiReadyStarted := time.Now()
 	if apiErr := <-apiReady; apiErr != nil {
 		discoveryService.Stop()
 		if stopErr := pl.Stop(); stopErr != nil {
@@ -187,43 +585,112 @@ func Start(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
+		uiEvents.Shutdown()
 		notifBroker.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
 	}
+	log.Debug().Dur("duration", time.Since(apiReadyStarted)).Msg("API service reported ready")
 
 	log.Info().Msg("starting mDNS discovery service")
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
-	// Load persisted slug + tag caches before launching background work so
-	// the launcher's first media.browse hits a warm cache. Both fall
-	// through to (false, nil) on a missing/stale/version-mismatched file;
-	// the rebuild path below covers that case.
-	var tagCacheLoaded, slugCacheLoaded bool
-	if db.MediaDB != nil {
-		loaded, loadErr := db.MediaDB.LoadCachedTagCache()
-		if loadErr != nil {
-			log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
-		}
-		tagCacheLoaded = loaded
-		loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
-		if loadErr != nil {
-			log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
-		}
-		slugCacheLoaded = loaded
-	}
+	// Recover before resuming persisted media work. A running status may be stale after
+	// a crash, while the sidecar marker remains authoritative and must win.
+	checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+	checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
 
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		if db == nil {
-			log.Warn().Msg("skipping startup maintenance: database is nil")
-			return
-		}
-		runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-	}()
+	// Active gameplay pauses indexing through indexPauser independently of the
+	// API-idle scheduler used for lower-priority startup maintenance.
+	resumeAndScheduleStartupMediaWork(
+		st.GetContext(),
+		idleSched,
+		db,
+		func() bool {
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping startup index resume: database is nil")
+				return false
+			}
+			return checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+		},
+		func(_ context.Context, resumeStarted bool) {
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping startup media work: media database is nil")
+				return
+			}
+
+			// Recover a corrupt media database before any other startup work reads it,
+			// so cache loads and resume checks operate on the fresh DB.
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+
+			var tagCacheLoaded, slugCacheLoaded bool
+			if db.MediaDB != nil {
+				tagCacheStarted := time.Now()
+				loaded, loadErr := db.MediaDB.LoadCachedTagCache()
+				if loadErr != nil {
+					log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
+				}
+				log.Debug().
+					Bool("loaded", loaded).
+					Dur("duration", time.Since(tagCacheStarted)).
+					Msg("cached tag cache load completed")
+				tagCacheLoaded = loaded
+
+				slugCacheStarted := time.Now()
+				loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
+				if loadErr != nil {
+					log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
+				}
+				log.Debug().
+					Bool("loaded", loaded).
+					Dur("duration", time.Since(slugCacheStarted)).
+					Msg("cached slug search cache load completed")
+				slugCacheLoaded = loaded
+			}
+
+			if recoverInterruptedMediaDBRecreate(db.MediaDB, slugCacheLoaded) {
+				slugCacheLoaded = false
+				if inboxSvc := st.Inbox(); inboxSvc != nil {
+					if inboxErr := inboxSvc.Add("Media database rebuild resumed",
+						inbox.WithBody("A previous media database rebuild was interrupted. Full media indexing "+
+							"will resume automatically; keep the device powered until it completes."),
+						inbox.WithSeverity(inbox.SeverityWarning),
+						inbox.WithCategory(inbox.CategoryMediaDBInterruptedRebuild),
+					); inboxErr != nil {
+						log.Warn().Err(inboxErr).Msg("failed to add inbox message about resumed media database rebuild")
+					}
+				}
+				// This legacy recovery path depends on loading the persisted slug cache,
+				// so it cannot be detected by the immediate startup check above.
+				resumeStarted = checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+			}
+
+			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
+			if resumeStarted {
+				deferMediaWriteRetry(mediaWriteRetryOptimization)
+			} else if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+				// A failed optimization revealed a corrupt database; rebuild it now
+				// rather than waiting for the next startup.
+				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			}
+
+			// Rebuild the slug search cache (synchronous) before kicking off the
+			// browse-cache self-heal. Both are heavy DB readers; running them
+			// concurrently on a large library saturates the 2-connection pool and
+			// starves foreground browse (observed as 30 s browse timeouts on wake).
+			// Serializing them keeps a connection free for browsing throughout.
+			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
+
+			// Recover a stale/absent browse cache so large libraries stay browsable
+			// without waiting for a full reindex to finish. Runs after the resume
+			// checks so it can see whether indexing was actually (re)started, and
+			// after the slug rebuild so the two don't contend for the connection pool.
+			checkAndHealBrowseCache(st.GetContext(), db, st.Notifications, indexPauser)
+		},
+	)
 
 	// Defer non-critical "run eventually" work to the idle scheduler so it
 	// doesn't compete with the launcher's first request for the single
@@ -237,21 +704,11 @@ func Start(
 		},
 	)
 	idleSched.Schedule(
-		st.GetContext(), "updater-check",
-		5*time.Second, 300*time.Second,
-		func(ctx context.Context) {
-			updater.CheckAndNotify(
-				ctx, cfg, pl.ID(), st.Inbox(),
-				helpers.WaitForInternetContext, updater.Check,
-				pl.ManagedByPackageManager(),
-			)
-		},
-	)
-	idleSched.Schedule(
 		st.GetContext(), "history-retention-cleanup",
 		5*time.Second, 300*time.Second,
 		func(ctx context.Context) {
-			cleanupHistoryRetention(ctx, cfg, db)
+			remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
+			cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
 		},
 	)
 	idleSched.Schedule(
@@ -261,42 +718,28 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
-	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
-
-	log.Info().Msg("checking for interrupted media indexing")
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-	}()
-
-	log.Info().Msg("checking for interrupted media optimization")
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		checkAndResumeOptimization(db, st.Notifications, indexPauser)
-	}()
-
-	// Build the slug search cache after the API is listening so it doesn't
-	// block startup. If LoadCachedSlugSearchCache already populated it from
-	// disk we skip the SQL rebuild — that's the whole point of persisting.
-	if db.MediaDB != nil && !slugCacheLoaded {
-		db.MediaDB.TrackBackgroundOperation()
-		go func() {
-			defer db.MediaDB.BackgroundOperationDone()
-			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
-				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
-				return
-			}
-			// Best-effort persist so the next cold boot can skip the
-			// rebuild. A write failure leaves the running cache intact.
-			if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
-				log.Warn().Err(persistErr).
-					Msg("failed to persist slug search cache after startup rebuild")
-			}
-		}()
+	playSyncRequests := make(chan struct{}, 1)
+	requestPlaySync := func() {
+		select {
+		case playSyncRequests <- struct{}{}:
+		default:
+		}
 	}
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		watchMediaHistoryBackfill(st.GetContext(), notifBroker, db, indexPauser, requestPlaySync)
+	}()
+	startRemoteBackupScheduler(
+		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
+	)
+	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
+	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
+	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
+	go watchForCorruptMediaDBRecovery(
+		st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser, scrapePauser,
+	)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
@@ -305,11 +748,12 @@ func Start(
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
-		st:    st,
-		db:    db,
-		clock: clockwork.NewRealClock(),
+		st:              st,
+		db:              db,
+		clock:           clockwork.NewRealClock(),
+		requestPlaySync: requestPlaySync,
 	}
-	historyNotifications, _ := notifBroker.Subscribe(100)
+	historyNotifications, _ := notifBroker.Subscribe(100, models.NotificationStarted, models.NotificationStopped)
 	historyListenDone := make(chan struct{})
 	go func() {
 		defer close(historyListenDone)
@@ -357,8 +801,24 @@ func Start(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
+		if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
+			log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+		}
+		if backupErr := waitForBackupShutdown(
+			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
+		); backupErr != nil {
+			log.Error().Err(backupErr).Msg("backup operation did not stop cleanly")
+		}
+		uiEvents.Shutdown()
 		indexPauser.Resume()
 		scrapePauser.Resume()
+
+		if stopErr := playbackManager.Stop(mediaslot.Primary); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping primary playback during cleanup")
+		}
+		if stopErr := playbackManager.Stop(mediaslot.Background); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping background playback during cleanup")
+		}
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()
@@ -373,6 +833,7 @@ func Start(
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone
 		<-historyUpdateDone
@@ -404,6 +865,41 @@ func Start(
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
+	// A separate MethodMap instance from the one api.StartWithReady builds
+	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
+	// references the pairing methods api.Start registers on its own map
+	// after construction, so the two registries can't diverge in a way that
+	// matters here. Deliberately after StartPost: StartPost sets platform
+	// fields (e.g. p.ctx, p.setActiveMedia on MiSTer) that a dispatched
+	// launch or non-hidden mister.script operation reaches into, so the
+	// remote poller must not be able to dispatch anything before they exist.
+	remote.Start(st.GetContext(), &remote.Deps{
+		Platform: svc.Platform, Config: svc.Config, State: svc.State, DB: svc.DB,
+		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
+		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
+		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
+		Methods: api.NewMethodMap(),
+		RunZapScript: func(
+			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
+			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
+		) error {
+			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
+		},
+	}, backgroundWG)
+
+	// A rollback finishes before there is a database to post to and then
+	// re-execs, so this is the first point at which the user can be told about
+	// one. It is deliberately after StartPost: a boot that still fails after
+	// here rolls back and restores the database, which would take the message
+	// with it.
+	updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
+
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		confirmPendingUpdate(st, helpers.DataDir(pl))
+	}()
+
 	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
 		backgroundWG.Add(1)
 		go func() {
@@ -421,4 +917,25 @@ func Start(
 		Done:             doneCh,
 		RestartRequested: st.RestartRequested,
 	}, nil
+}
+
+// confirmPendingUpdate commits an update once the version it installed has run
+// for a while without falling over. Shutting down before then proves nothing, so
+// the marker stays and the next boot starts the wait again.
+func confirmPendingUpdate(st *state.State, dataDir string) {
+	select {
+	case <-time.After(updateConfirmDelay):
+	case <-st.GetContext().Done():
+		return
+	}
+
+	version, err := updater.Confirm(st.GetContext(), dataDir, config.AppVersion)
+	if err != nil {
+		log.Error().Err(err).Msg("could not confirm the installed update")
+		return
+	}
+	if version == "" {
+		return
+	}
+	updater.ReportLastUpdate(dataDir, st.Inbox())
 }

@@ -24,65 +24,333 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/charlievieth/fastwalk"
-	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction = 10000
+	maxFilesPerTransaction = 5000
+	// throttledMaxFilesPerTransaction is used instead of maxFilesPerTransaction
+	// while background indexing is explicitly throttled or paused.
+	throttledMaxFilesPerTransaction = 500
+	disabledWALAutoCheckpoint       = 0
+	defaultWALAutoCheckpoint        = 1000
+	mediaDatabaseCorruptMessage     = "media database is corrupt; manual repair or rebuild required; " +
+		"original database left untouched"
+	// walkEntryWaitInterval is how often (in scanned filesystem entries) the
+	// parallel directory walk checks the pauser. Short enough that a throttled
+	// walk still yields promptly even on a directory with few matched files.
+	walkEntryWaitInterval = 200
+	// rootValidationConcurrency bounds the goroutines probing root folders in
+	// parallel. Probes are independent metadata reads; running a few at once
+	// hides the per-root latency of cold or slow storage without stampeding it.
+	rootValidationConcurrency = 4
+	slowZIPListingThreshold   = 5 * time.Second
 )
 
-// listNumberingRegex matches file list numbering patterns like "1. ", "01 - ", "42. "
-var listNumberingRegex = regexp.MustCompile(`^\d{1,3}[.\s\-]+`)
+// logIndexingEnvironment records the storage and version context for an
+// indexing run once, up front: the effective pragmas (logged separately,
+// after configureIndexingPragmas applies them) tell us what SQLite is doing;
+// this tells us what it's doing it on. Best-effort — a lookup failure logs a
+// warning and indexing proceeds regardless.
+func logIndexingEnvironment(db database.MediaDBI, platform platforms.Platform) {
+	dbPath := db.GetDBPath()
+	event := log.Info().
+		Str("version", config.AppVersion).
+		Str("platform", platform.ID()).
+		Str("dbPath", dbPath)
 
-// detectNumberingPattern returns true if a significant portion of files match list numbering pattern.
-// This heuristic detects directory-wide list numbering (e.g., "1. Game.zip", "2. Game.zip")
-// to distinguish from legitimate title numbers (e.g., "1942.zip", "007.zip").
-//
-// Parameters:
-//   - files: slice of scan results to analyze
-//   - threshold: minimum ratio of matching files (0.0-1.0) to trigger stripping
-//   - minFiles: minimum number of files required to apply heuristic
-//
-// Returns true if >threshold% of files match AND file count >= minFiles.
-func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
-	if len(files) < minFiles {
-		return false // Don't apply heuristic to small file sets
+	if storage, ok := helpers.StorageInfoForPath(dbPath); ok {
+		event = event.
+			Str("fsType", storage.FSType).
+			Str("mountPoint", storage.Mountpoint).
+			Str("mountSource", storage.Source).
+			Str("mountOptions", storage.Options)
 	}
 
-	matchCount := 0
+	if freeBytes, freeErr := helpers.FreeDiskSpace(dbPath); freeErr != nil {
+		log.Warn().Err(freeErr).Msg("failed to determine free disk space before indexing")
+	} else {
+		event = event.Uint64("freeDiskBytes", freeBytes)
+	}
+
+	event.Msg("media indexing environment")
+}
+
+// logEffectiveIndexingPragmas reads back the pragmas actually applied to the
+// pool after configureIndexingPragmas ran, rather than trusting the request —
+// SetWALAutoCheckpoint (mediadb.go) skips a connection it cannot acquire
+// within its timeout, so a value set there can silently fail to reach every
+// physical connection. Best-effort, like logIndexingEnvironment above.
+func logEffectiveIndexingPragmas(ctx context.Context, db database.MediaDBI) {
+	database.LogEffectivePragmasForDB(
+		ctx, db.UnsafeGetSQLDb(), "media-indexing", database.SynchronousNormal, database.UnsetPageSize,
+	)
+}
+
+// checkWALJournalMode reports a clear error when the media database is not in
+// WAL journal mode, instead of the silent mid-index hang a rollback journal
+// would otherwise cause (see the caller's comment for why). Verification
+// itself is best-effort: an inability to check — no open handle, connection
+// acquire failure, or pragma read failure — logs a warning and lets indexing
+// proceed, the same tolerance every other diagnostic in this file applies.
+// Only a definite non-WAL journal mode returns an error.
+func checkWALJournalMode(ctx context.Context, db database.MediaDBI) error {
+	sqlDB := db.UnsafeGetSQLDb()
+	if sqlDB == nil {
+		log.Warn().Msg("no database handle available to verify WAL journal mode before indexing; continuing")
+		return nil
+	}
+
+	journalConn, connErr := sqlDB.Conn(ctx)
+	if connErr != nil {
+		log.Warn().Err(connErr).Msg("failed to verify WAL journal mode before indexing; continuing")
+		return nil
+	}
+	pragmas, pragmaErr := database.ReadEffectivePragmas(ctx, journalConn)
+	if closeErr := journalConn.Close(); closeErr != nil {
+		log.Warn().Err(closeErr).Msg("failed to release WAL journal mode verification connection")
+	}
+	switch {
+	case pragmaErr != nil:
+		log.Warn().Err(pragmaErr).Msg("failed to verify WAL journal mode before indexing; continuing")
+		return nil
+	case pragmas.JournalMode != "wal":
+		return fmt.Errorf(
+			"media database is not in WAL journal mode (got %q); indexing requires WAL for its "+
+				"batched per-system transactions and would hang under a rollback journal instead of failing",
+			pragmas.JournalMode)
+	default:
+		return nil
+	}
+}
+
+// batchCommitLimit returns the file-count threshold for committing an
+// indexing batch. Explicitly throttled or paused work uses smaller commits so
+// each fsync burst yields sooner to foreground activity. Baseline pacing does
+// not change transaction size.
+func batchCommitLimit(pauser *syncutil.Pauser) int {
+	if pauser.IsThrottled() || pauser.IsPaused() {
+		return throttledMaxFilesPerTransaction
+	}
+	return maxFilesPerTransaction
+}
+
+type indexingPragmaDB interface {
+	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
+}
+
+// configureIndexingPragmas disables SQLite's automatic WAL checkpointing for the
+// duration of indexing, on every platform (not just resource-constrained ones):
+// device measurement on #1279 showed automatic checkpointing running inside
+// tx.Commit at the previous constrained 128-page threshold produced worse commit
+// stalls than the original report it was meant to fix (up to 29.5s, vs 16.6s
+// before), while checkpointLargeWAL's own explicit, logged checkpoint never once
+// fired because its threshold was unreachable. checkpointLargeWAL (now at a
+// reachable threshold — mediaWALCheckpointThreshold, mediadb.go) replaces it as
+// the sole, deliberate, measured checkpoint mechanism during indexing.
+func configureIndexingPragmas(db indexingPragmaDB) func() {
+	db.SetIndexingCacheSize(true)
+	db.SetWALAutoCheckpoint(disabledWALAutoCheckpoint)
+	return func() {
+		db.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
+		db.SetIndexingCacheSize(false)
+	}
+}
+
+// maxReconcileRowsPerTransaction is kept for tests that exercise historical
+// reconcile-volume commits. Production now commits at every system boundary;
+// only the file-limit path can still commit mid-system.
+var maxReconcileRowsPerTransaction int64 = 50000
+
+func scanResultIdentity(path string) string {
+	if schemeEnd := strings.Index(path, "://"); schemeEnd > 0 {
+		return strings.ToLower(path[:schemeEnd]) + path[schemeEnd:]
+	}
+	return helpers.NormalizePathForComparison(path)
+}
+
+func coalesceScanResults(systemID string, files []platforms.ScanResult) []platforms.ScanResult {
+	if len(files) < 2 {
+		return files
+	}
+
+	result := files[:0]
+	positions := make(map[string]int, len(files))
 	for _, file := range files {
-		filename := filepath.Base(file.Path)
-		if listNumberingRegex.MatchString(filename) {
-			matchCount++
+		key := scanResultIdentity(file.Path)
+		position, found := positions[key]
+		if !found {
+			positions[key] = len(result)
+			result = append(result, file)
+			continue
+		}
+
+		existing := &result[position]
+		if existing.Name == "" {
+			existing.Name = file.Name
+		} else if file.Name != "" && file.Name != existing.Name {
+			log.Debug().
+				Str("system", systemID).
+				Str("path", existing.Path).
+				Str("keptName", existing.Name).
+				Str("ignoredName", file.Name).
+				Msg("coalesced scan result with conflicting name")
+		}
+		existing.NoExt = existing.NoExt || file.NoExt
+	}
+	return result
+}
+
+func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	return browseprefix.DetectPolicyForPaths(paths, threshold, minFiles)
+}
+
+// detectNumberingPattern returns true when a directory looks like a ranked list.
+// Kept for focused scanner tests; production code uses detectBrowsePrefixPolicy.
+func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
+	return detectBrowsePrefixPolicy(files, threshold, minFiles).Kind == browseprefix.KindRank
+}
+
+func isSQLiteDatabaseCorrupt(err error) bool {
+	return database.IsCorruptionError(err)
+}
+
+// noteIndexingCorruption flags the media database corrupt during indexing so the
+// recovery flow rebuilds it: it logs an integrity fingerprint, writes the durable
+// corrupt marker, persists the corrupt status, and clears the last-indexed-system
+// pointer. It must run after any active transaction has been rolled back so the
+// terminal status is not rolled back with the failed indexing transaction.
+func noteIndexingCorruption(db database.MediaDBI, reason string) {
+	log.Error().Strs("integrity", db.IntegrityReport()).
+		Msg("media database integrity check after corruption detected during indexing")
+	db.MarkCorrupt(reason)
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+	}
+	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+	}
+}
+
+func finalizeIndexingError(db database.MediaDBI, err error) {
+	switch {
+	case err == nil:
+		return
+	case err.Error() == mediaDatabaseCorruptMessage:
+		// Preserve corruption status discovered before this run.
+		return
+	case isSQLiteDatabaseCorrupt(err):
+		// Corruption wins over cancellation when joined cleanup errors contain both.
+		noteIndexingCorruption(db, fmt.Sprintf("media indexing failed: %v", err))
+	case errors.Is(err, context.Canceled):
+		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
+			logMaintenanceError(setErr, "failed to set indexing status to cancelled after cancellation")
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		return
+	default:
+		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			logMaintenanceError(setErr, "failed to set indexing status to failed after error")
 		}
 	}
+}
 
-	return float64(matchCount)/float64(len(files)) > threshold
+// bestEffortMaintenanceError preserves self-healing behavior for ordinary cache
+// and status failures while ensuring corruption and cancellation abort the run.
+// Callers must return the wrapped error so finalizeIndexingError can persist the
+// terminal status after transaction cleanup.
+func bestEffortMaintenanceError(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+	if isSQLiteDatabaseCorrupt(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", msg, err)
+	}
+	logMaintenanceError(err, msg)
+	return nil
+}
+
+// logMaintenanceError logs an indexing maintenance failure (status writes, cache
+// population). When the failure is just the service context being cancelled
+// mid-index — an expected shutdown condition — it logs at Debug; any other
+// failure logs at Error so genuine problems stay visible in Sentry.
+func logMaintenanceError(err error, msg string) {
+	if errors.Is(err, context.Canceled) {
+		log.Debug().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
 }
 
 type PathResult struct {
 	Path   string
 	System systemdefs.System
+}
+
+type indexingPlanStore interface {
+	SetIndexingPlanSystems(systemIDs []string) error
+	GetIndexingPlanSystems() ([]string, error)
+}
+
+func systemIDsFromDefs(systems []systemdefs.System) []string {
+	systemIDs := make([]string, 0, len(systems))
+	for _, system := range systems {
+		systemIDs = append(systemIDs, system.ID)
+	}
+	return systemIDs
+}
+
+func systemDefsFromIDs(systemIDs []string) (systems []systemdefs.System, missing []string) {
+	systems = make([]systemdefs.System, 0, len(systemIDs))
+	missing = make([]string, 0)
+	for _, systemID := range systemIDs {
+		system, err := systemdefs.GetSystem(systemID)
+		if err != nil || system == nil {
+			missing = append(missing, systemID)
+			continue
+		}
+		systems = append(systems, *system)
+	}
+	return systems, missing
+}
+
+func incompleteIndexedSystems(systems []systemdefs.System, completedSystems map[string]bool) []string {
+	missing := make([]string, 0)
+	for _, system := range systems {
+		if !completedSystems[system.ID] {
+			missing = append(missing, system.ID)
+		}
+	}
+	return missing
 }
 
 // FindPath case-insensitively finds a file/folder at a path and returns the actual filesystem case.
@@ -97,6 +365,17 @@ type PathResult struct {
 //   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
 //   - All platforms: Works with symlinks, UNC paths, network drives
 func FindPath(ctx context.Context, path string) (string, error) {
+	return findPathWithReadDir(ctx, path, readDirWithContext)
+}
+
+// findPathWithReadDir is FindPath's implementation with the directory-listing
+// function injected, so a discovery pass can share memoized listings across
+// many probes (see pathResolver) while one-off callers read directly.
+func findPathWithReadDir(
+	ctx context.Context,
+	path string,
+	readDir func(ctx context.Context, path string) ([]os.DirEntry, error),
+) (string, error) {
 	// Check if path exists first
 	if _, err := statWithContext(ctx, path); err != nil {
 		return "", fmt.Errorf("path does not exist: %s", path)
@@ -148,7 +427,7 @@ func FindPath(ctx context.Context, path string) (string, error) {
 			continue
 		}
 
-		entries, err := readDirWithContext(ctx, currentPath)
+		entries, err := readDir(ctx, currentPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to read directory %s: %w", currentPath, err)
 		}
@@ -225,12 +504,31 @@ func getSystemPathsForLauncherCache(
 		Int("systems", len(systems)).
 		Msg("starting path discovery")
 
+	// One resolver for the whole pass: root validation and every system-folder
+	// probe below share directory listings, so large parents (e.g. the SD
+	// root) are read once instead of once per probe.
+	resolver := newPathResolver()
+
 	// Validate root folders ONCE before iterating systems
 	// This prevents logging the same error 200+ times (once per system)
+	resolvedRoots := make([]string, len(rootFolders))
+	rootErrs := make([]error, len(rootFolders))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, rootValidationConcurrency)
+	for i, folder := range rootFolders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			resolvedRoots[i], rootErrs[i] = resolver.findPath(ctx, folder)
+		}()
+	}
+	wg.Wait()
+
 	validRootFolders := make([]string, 0, len(rootFolders))
-	for _, folder := range rootFolders {
-		gf, err := FindPath(ctx, folder)
-		if err != nil {
+	for i, folder := range rootFolders {
+		if err := rootErrs[i]; err != nil {
 			switch {
 			case errors.Is(err, ErrFsTimeout):
 				log.Warn().Str("path", folder).Dur("timeout", defaultFsTimeout).
@@ -243,7 +541,7 @@ func getSystemPathsForLauncherCache(
 			}
 			continue
 		}
-		validRootFolders = append(validRootFolders, gf)
+		validRootFolders = append(validRootFolders, resolvedRoots[i])
 	}
 
 	log.Info().
@@ -259,6 +557,9 @@ func getSystemPathsForLauncherCache(
 		default:
 		}
 
+		// Availability describes whether media can launch right now. Indexing
+		// still needs every platform launcher so users can discover media before
+		// installing or configuring its runtime dependency.
 		launchers := launcherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
@@ -292,7 +593,7 @@ func getSystemPathsForLauncherCache(
 				}
 
 				systemFolder := filepath.Join(gf, folder)
-				path, err := FindPath(ctx, systemFolder)
+				path, err := resolver.findPath(ctx, systemFolder)
 				if err != nil {
 					if ctx.Err() != nil {
 						return matches
@@ -312,7 +613,7 @@ func getSystemPathsForLauncherCache(
 				continue
 			}
 
-			path, err := FindPath(ctx, folder)
+			path, err := resolver.findPath(ctx, folder)
 			if err != nil {
 				if ctx.Err() != nil {
 					return matches
@@ -378,6 +679,58 @@ func filterRunnableSystems(
 	return filtered
 }
 
+func directoryWalkWorkers(resourceConstrained bool, pauser *syncutil.Pauser) int {
+	if resourceConstrained || pauser.HasBaselineThrottle() || pauser.IsThrottled() || pauser.IsPaused() {
+		return 1
+	}
+	return 0
+}
+
+// shouldSkipExcludedSymlink reports whether an excluded symlink must be kept
+// out of the walk. A timeout means its target type is unknown, but allowing
+// fastwalk to follow it would immediately repeat the blocking stat without a
+// timeout. Context cancellation takes precedence so callers can stop the walk.
+func shouldSkipExcludedSymlink(
+	ctx context.Context,
+	path string,
+	stat func(context.Context, string) (os.FileInfo, error),
+) (bool, error) {
+	targetInfo, err := stat(ctx, path)
+	if err == nil {
+		return targetInfo.IsDir(), nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// shouldSkipSymlinkAlias reports whether a symlink must be kept out of the
+// walk because it aliases media already scanned under its target path. A
+// timeout while reading the link leaves its target unknown, but letting
+// fastwalk continue would immediately repeat the blocking call without a
+// timeout, so the link is skipped. Any other read error keeps the link in the
+// walk so ordinary handling applies. Context cancellation takes precedence.
+func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bool, error) {
+	skip, err := check()
+	// Checked before the success return too: a link read that lands after
+	// cancellation still answers, and returning it would let the walk carry on
+	// as though nothing had been interrupted.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err == nil {
+		return skip, nil
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -387,6 +740,7 @@ func GetFiles(
 	platform platforms.Platform,
 	systemID string,
 	path string,
+	pauser *syncutil.Pauser,
 ) ([]string, error) {
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
@@ -394,13 +748,17 @@ func GetFiles(
 	}
 
 	var entriesScanned atomic.Int64
+	var symlinksEncountered atomic.Int64
+	var directoriesExcluded atomic.Int64
+	var symlinkAliasesSkipped atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
 	var results []string
 
 	conf := &fastwalk.Config{
-		Follow: true,
+		Follow:     true,
+		NumWorkers: directoryWalkWorkers(platform.Settings().ResourceConstrained, pauser),
 	}
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
@@ -408,6 +766,16 @@ func GetFiles(
 	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
 	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// fastwalk reports a directory read failure by re-invoking this
+			// callback with the error an entry callback returned (see
+			// walker.walk in fastwalk.go), which is also how our own
+			// pauser.Wait/ctx cancellation below reaches here. A real
+			// filesystem error is logged and skipped so the walk continues;
+			// our own cancellation must propagate, not be swallowed as if
+			// it were a bad directory.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			log.Warn().Err(err).Str("path", p).Msg("walk error")
 			return nil
 		}
@@ -419,6 +787,48 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
+		if d.Type()&os.ModeSymlink != 0 {
+			symlinksEncountered.Add(1)
+		}
+		isSymlink := d.Type()&os.ModeSymlink != 0
+		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
+			shouldSkip := d.IsDir()
+			if isSymlink {
+				var skipErr error
+				shouldSkip, skipErr = shouldSkipExcludedSymlink(ctx, p, statWithContext)
+				if skipErr != nil {
+					return skipErr
+				}
+			}
+			if shouldSkip {
+				directoriesExcluded.Add(1)
+				log.Info().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping launcher-excluded scan directory")
+				return filepath.SkipDir
+			}
+		}
+
+		if isSymlink {
+			skip, skipErr := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
+				return matcher.ShouldSkipScanSymlink(system.ID, p, func() (string, error) {
+					return readlinkWithContext(ctx, p)
+				})
+			})
+			if skipErr != nil {
+				return skipErr
+			}
+			if skip {
+				symlinkAliasesSkipped.Add(1)
+				log.Debug().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping symlink alias of scanned media")
+				return filepath.SkipDir
+			}
+		}
+
 		if n%5000 == 0 {
 			log.Debug().
 				Str("system", systemID).
@@ -426,6 +836,12 @@ func GetFiles(
 				Int64("entriesScanned", n).
 				Dur("elapsed", time.Since(walkStartTime)).
 				Msg("directory walk progress")
+		}
+
+		if n%walkEntryWaitInterval == 0 {
+			if waitErr := pauser.Wait(ctx); waitErr != nil {
+				return fmt.Errorf("directory walk cancelled while throttled: %w", waitErr)
+			}
 		}
 
 		if d.IsDir() {
@@ -457,21 +873,35 @@ func GetFiles(
 
 		if helpers.IsZip(p) && platform.Settings().ZipsAsDirs {
 			log.Trace().Str("path", p).Msg("opening zip file for indexing")
-			zipFiles, zipErr := helpers.ListZip(p)
+			zipStarted := time.Now()
+			zipFiles, zipErr := helpers.ListZipWithYield(
+				ctx, p, func() error { return pauser.Wait(ctx) },
+			)
+			zipElapsed := time.Since(zipStarted)
 			if zipErr != nil {
-				log.Warn().Err(zipErr).Msgf("error listing zip: %s", p)
+				if errors.Is(zipErr, context.Canceled) || errors.Is(zipErr, context.DeadlineExceeded) {
+					return fmt.Errorf("ZIP listing stopped: %w", zipErr)
+				}
+				log.Warn().Err(zipErr).Str("path", p).Dur("elapsed", zipElapsed).Msg("error listing zip")
 				return nil
+			}
+			if zipElapsed > slowZIPListingThreshold {
+				log.Warn().
+					Str("path", p).
+					Int("entries", len(zipFiles)).
+					Dur("elapsed", zipElapsed).
+					Msg("zip listing took longer than expected")
 			}
 
 			mu.Lock()
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
-				if matcher.MatchSystemFile(system.ID, abs) {
+				if matcher.MatchSystemFileForScan(system.ID, abs) {
 					results = append(results, abs)
 				}
 			}
 			mu.Unlock()
-		} else if matcher.MatchSystemFile(system.ID, p) {
+		} else if matcher.MatchSystemFileForScan(system.ID, p) {
 			mu.Lock()
 			results = append(results, p)
 			mu.Unlock()
@@ -482,6 +912,12 @@ func GetFiles(
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk directory %s: %w", path, err)
 	}
+	// The callback checks the context per entry, so cancellation during the
+	// last one leaves the walk finishing normally. Reporting a partial file
+	// list as a complete scan is worse than losing a cancelled run's work.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("directory walk cancelled: %w", ctxErr)
+	}
 
 	scanned := entriesScanned.Load()
 	walkElapsed := time.Since(walkStartTime)
@@ -490,6 +926,9 @@ func GetFiles(
 		Str("system", systemID).
 		Str("path", path).
 		Int64("entriesScanned", scanned).
+		Int64("symlinksEncountered", symlinksEncountered.Load()).
+		Int64("directoriesExcluded", directoriesExcluded.Load()).
+		Int64("symlinkAliasesSkipped", symlinkAliasesSkipped.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
@@ -529,22 +968,76 @@ func GetFiles(
 // handleCancellation performs cleanup when media indexing is cancelled
 func handleCancellation(ctx context.Context, db database.MediaDBI, message string) (int, error) {
 	log.Info().Msg(message)
+	terminalErr := ctx.Err()
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+		logMaintenanceError(setErr, "failed to set indexing status to cancelled")
+		terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to set indexing status to cancelled: %w", setErr))
 	}
-	return 0, ctx.Err()
+	return 0, terminalErr
+}
+
+// refreshMidScanCaches makes just-committed systems fully usable while the
+// rest of the scan continues: the slug search cache serves fast search, the
+// system tags cache serves tag filters, and the browse cache serves directory
+// listings. Best-effort — a failure only means those systems stay on the SQL
+// fallback paths until the end-of-run rebuild.
+// populateTagsCache is false on runs big enough that every commit invalidates
+// all systems, which drops SystemTagsCache wholesale — see
+// mediadb.MidScanSystemTagsCacheSurvivesCommit. Populating it there is pure
+// cost: the rows are deleted by the next system's commit.
+func refreshMidScanCaches(
+	ctx context.Context, db database.MediaDBI, systemIDs []string, populateTagsCache bool,
+) error {
+	started := time.Now()
+	if err := bestEffortMaintenanceError(
+		db.RefreshSlugSearchCacheForSystems(ctx, systemIDs),
+		"mid-scan slug search cache refresh failed",
+	); err != nil {
+		return err
+	}
+	if populateTagsCache {
+		sysDefs := make([]systemdefs.System, 0, len(systemIDs))
+		for _, id := range systemIDs {
+			if sys, err := systemdefs.GetSystem(id); err == nil && sys != nil {
+				sysDefs = append(sysDefs, *sys)
+			}
+		}
+		if len(sysDefs) > 0 {
+			if err := bestEffortMaintenanceError(
+				db.PopulateSystemTagsCacheForSystems(ctx, sysDefs),
+				"mid-scan system tags cache refresh failed",
+			); err != nil {
+				return err
+			}
+		}
+	}
+	if err := bestEffortMaintenanceError(
+		db.PopulateBrowseCacheForSystems(ctx, systemIDs),
+		"mid-scan browse cache refresh failed",
+	); err != nil {
+		return err
+	}
+	log.Debug().
+		Strs("systems", systemIDs).
+		Bool("tagsCache", populateTagsCache).
+		Dur("elapsed", time.Since(started)).
+		Msg("mid-scan cache refresh complete")
+	return nil
 }
 
 // handleCancellationWithRollback performs cleanup when media indexing is cancelled after transaction begins
 func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, message string) (int, error) {
 	log.Info().Msg(message)
+	terminalErr := ctx.Err()
 	if rbErr := db.RollbackTransaction(); rbErr != nil {
 		log.Error().Err(rbErr).Msg("failed to rollback transaction after cancellation")
+		terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback after cancellation: %w", rbErr))
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+		logMaintenanceError(setErr, "failed to set indexing status to cancelled")
+		terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to set indexing status to cancelled: %w", setErr))
 	}
-	return 0, ctx.Err()
+	return 0, terminalErr
 }
 
 const (
@@ -571,6 +1064,17 @@ type IndexStatus struct {
 // during key steps.
 //
 // Returns the total number of files indexed.
+func newIndexLauncherCache(
+	cfg *config.Instance,
+	platform platforms.Platform,
+) (*helpers.LauncherCache, []platforms.Launcher) {
+	allLaunchers := platform.Launchers(cfg)
+	allLaunchers = append(allLaunchers, launchables.Launchers(cfg, platform)...)
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(allLaunchers)
+	return launcherCache, allLaunchers
+}
+
 func NewNamesIndex(
 	ctx context.Context,
 	platform platforms.Platform,
@@ -579,9 +1083,19 @@ func NewNamesIndex(
 	fdb *database.Database,
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
-) (int, error) {
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+	logIndexingEnvironment(db, platform)
+	metrics := perfmetrics.NewRecorderForDB(db)
+	runMetricsStart := metrics.Capture(ctx, true)
+	phaseMetricsStart := runMetricsStart
+	logPhaseMetrics := func(phase string) {
+		phaseMetricsEnd := metrics.Capture(ctx, true)
+		perfmetrics.AddDelta(log.Info().Str("phase", phase), &phaseMetricsStart, &phaseMetricsEnd).
+			Msg("media indexing phase metrics")
+		phaseMetricsStart = phaseMetricsEnd
+	}
 
 	// Activate the NormalizeTag cache for the duration of this indexing run.
 	// The bracket vocabulary is small (~200–400 unique strings), so the cache
@@ -589,27 +1103,39 @@ func NewNamesIndex(
 	tags.SetNormalizeTagCache(make(map[string]string))
 	defer tags.SetNormalizeTagCache(nil)
 
-	// Temporarily increase SQLite cache to 32MB for bulk indexing
-	db.SetIndexingCacheSize(true)
-	defer db.SetIndexingCacheSize(false)
+	// Same lifecycle for company-name normalization, which runs the slug word
+	// pipeline per developer/publisher paren tag and repeats heavily.
+	tags.SetCompanyNameCache(make(map[string]tags.TagValue))
+	defer tags.SetCompanyNameCache(nil)
+
+	// Temporarily increase SQLite cache to 32MB for bulk indexing and disable
+	// automatic WAL checkpointing, with both settings restored on every return path.
+	cleanupPragmas := configureIndexingPragmas(db)
+	defer cleanupPragmas()
+	logEffectiveIndexingPragmas(ctx, db)
 
 	log.Info().
 		Int("systemCount", len(systems)).
 		Msg("starting media indexing")
 
-	var indexedFiles int
-	var err error
-
 	// Track requested systems for resume validation before platform/path filtering.
-	requestedSystemIDs := make([]string, 0, len(systems))
-	for _, sys := range systems {
-		requestedSystemIDs = append(requestedSystemIDs, sys.ID)
-	}
-	allSystemIDs := make([]string, 0, len(systemdefs.AllSystems()))
-	for _, sys := range systemdefs.AllSystems() {
-		allSystemIDs = append(allSystemIDs, sys.ID)
-	}
+	requestedSystemIDs := systemIDsFromDefs(systems)
+	allSystemIDs := systemIDsFromDefs(systemdefs.AllSystems())
 	fullRun := helpers.EqualStringSlices(requestedSystemIDs, allSystemIDs)
+	// Decided once: the invalidation scope depends on the run's system count,
+	// which does not change while the run is in flight.
+	midScanTagsCache := mediadb.MidScanSystemTagsCacheSurvivesCommit(len(requestedSystemIDs))
+
+	// Register terminal classification before readiness reads so corruption from
+	// either status query is persisted after transaction cleanup.
+	defer func() {
+		terminalErr := err
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback indexing transaction: %w", rbErr))
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after indexing")
+		}
+		finalizeIndexingError(db, terminalErr)
+	}()
 
 	// 1. Check for database locks or issues before starting
 	log.Info().Msg("checking database readiness for indexing")
@@ -617,6 +1143,19 @@ func NewNamesIndex(
 	_, checkErr := db.GetIndexingStatus()
 	if checkErr != nil {
 		return 0, fmt.Errorf("database not ready for indexing (possible lock or corruption): %w", checkErr)
+	}
+
+	// Indexing batches one write transaction per system while the next
+	// system's state load reads on a separate pool connection
+	// (PopulatePersistentScanStateForSystem). Under WAL that read sees the
+	// last committed snapshot while the writer transaction is still open;
+	// under a rollback journal the writer holds an exclusive lock for the
+	// whole transaction, so the separate-connection read blocks until
+	// commit — which never comes, because the read is on the critical path
+	// to reaching the next commit. Fail loudly here instead of hanging
+	// silently mid-index.
+	if walErr := checkWALJournalMode(ctx, db); walErr != nil {
+		return 0, walErr
 	}
 
 	// 2. Determine resume state
@@ -628,6 +1167,7 @@ func NewNamesIndex(
 
 	lastIndexedSystemID := ""
 	shouldResume := false
+	var storedPlanSystemIDs []string
 
 	switch indexingStatus {
 	case "":
@@ -646,31 +1186,53 @@ func NewNamesIndex(
 
 			switch {
 			case getStoredErr != nil:
-				log.Warn().Err(getStoredErr).Msg("failed to get stored indexing configuration, assuming fresh start")
+				if maintenanceErr := bestEffortMaintenanceError(
+					getStoredErr, "failed to get stored indexing configuration; assuming fresh start",
+				); maintenanceErr != nil {
+					return 0, maintenanceErr
+				}
 			case !helpers.EqualStringSlices(storedSystems, requestedSystemIDs):
 				log.Warn().Msg("system list changed from previous indexing, reverting to fresh index")
 			default:
 				log.Info().Msgf("previous indexing interrupted. attempting to resume from system: %s",
 					lastIndexedSystemID)
 				shouldResume = true
+				if planStore, ok := db.(indexingPlanStore); ok {
+					var getPlanErr error
+					storedPlanSystemIDs, getPlanErr = planStore.GetIndexingPlanSystems()
+					if getPlanErr != nil {
+						if maintenanceErr := bestEffortMaintenanceError(
+							getPlanErr, "failed to get stored indexing plan; recomputing runnable systems",
+						); maintenanceErr != nil {
+							return 0, maintenanceErr
+						}
+						storedPlanSystemIDs = nil
+					} else if len(storedPlanSystemIDs) == 0 {
+						log.Warn().Msg("stored indexing plan missing; recomputing runnable systems")
+					}
+				}
 			}
 		}
 	case mediadb.IndexingStatusFailed:
 		log.Info().Msg("previous indexing run failed, starting fresh index")
 		// Explicitly clear status for a fresh start after a failure
-		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to clear last indexed system after failed run")
+		if setErr := bestEffortMaintenanceError(
+			db.SetLastIndexedSystem(""), "failed to clear last indexed system after failed run",
+		); setErr != nil {
+			return 0, setErr
 		}
-		if setErr := db.SetIndexingStatus(""); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to clear indexing status after failed run")
+		if setErr := bestEffortMaintenanceError(
+			db.SetIndexingStatus(""), "failed to clear indexing status after failed run",
+		); setErr != nil {
+			return 0, setErr
 		}
+	case mediadb.IndexingStatusCorrupt:
+		return 0, errors.New(mediaDatabaseCorruptMessage)
 	}
 
 	// Build launcher metadata once so runnable-system filtering and scanner
 	// execution both use the same launcher set even when the global cache is stale.
-	allLaunchers := platform.Launchers(cfg)
-	launcherCache := &helpers.LauncherCache{}
-	launcherCache.InitializeFromSlice(allLaunchers)
+	launcherCache, allLaunchers := newIndexLauncherCache(cfg, platform)
 
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
@@ -678,6 +1240,7 @@ func NewNamesIndex(
 	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
+	logPhaseMetrics("path_discovery")
 	update(IndexStatus{Phase: PhaseInitializing})
 
 	systemsWithScanners := make(map[string]bool, len(allLaunchers))
@@ -692,6 +1255,9 @@ func NewNamesIndex(
 			anyScanners = append(anyScanners, &allLaunchers[i])
 		}
 	}
+	for _, item := range launchables.Media(cfg, platform) {
+		systemsWithScanners[item.SystemID] = true
+	}
 
 	existingSystems, getExistingSystemsErr := db.GetAllSystems()
 	if getExistingSystemsErr != nil {
@@ -703,10 +1269,21 @@ func NewNamesIndex(
 	}
 
 	systems = filterRunnableSystems(systems, systemPaths, systemsWithScanners, existingSystemIDs, len(anyScanners) > 0)
-	currentSystemIDs := make([]string, 0, len(systems))
-	for _, sys := range systems {
-		currentSystemIDs = append(currentSystemIDs, sys.ID)
+	if shouldResume && len(storedPlanSystemIDs) > 0 {
+		planSystems, missingPlanSystems := systemDefsFromIDs(storedPlanSystemIDs)
+		if len(missingPlanSystems) > 0 {
+			log.Warn().Strs("systems", missingPlanSystems).
+				Msg("stored indexing plan references unknown systems; reverting to fresh index")
+			shouldResume = false
+		} else {
+			// Resume the exact runnable plan that was persisted when indexing started.
+			// Recomputing it after a reboot can silently shrink the plan if media paths
+			// or cached system rows are temporarily unavailable, which could otherwise
+			// let a partial index reach the completion block and clear resume metadata.
+			systems = planSystems
+		}
 	}
+	currentSystemIDs := systemIDsFromDefs(systems)
 
 	// Check for cancellation or pause
 	select {
@@ -733,76 +1310,72 @@ func NewNamesIndex(
 				lastIndexedSystemID)
 			shouldResume = false // Cannot resume reliably, force full re-index
 			// Clear state for a fresh start
-			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear last indexed system after unresumable state")
+			if setErr := bestEffortMaintenanceError(
+				db.SetLastIndexedSystem(""), "failed to clear last indexed system after unresumable state",
+			); setErr != nil {
+				return 0, setErr
 			}
-			if setErr := db.SetIndexingStatus(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear indexing status after unresumable state")
+			if setErr := bestEffortMaintenanceError(
+				db.SetIndexingStatus(""), "failed to clear indexing status after unresumable state",
+			); setErr != nil {
+				return 0, setErr
 			}
 		}
 	}
 
-	// Initialize scan state
-	scanState := database.ScanState{
-		SystemsIndex:    0,
-		SystemIDs:       make(map[string]int),
-		TitlesIndex:     0,
-		TitleIDs:        make(map[string]int),
-		MediaIndex:      0,
-		MediaIDs:        make(map[string]int),
-		MediaTitleIDs:   make(map[int]int),
-		MediaParentDirs: make(map[int]string),
-		MediaTagIDs:     make(map[int]map[int]struct{}),
-		TagTypesIndex:   0,
-		TagTypeIDs:      make(map[string]int),
-		TagsIndex:       0,
-		TagIDs:          make(map[string]int),
-		MissingMedia:    make(map[int]struct{}),
-	}
-
-	// 3. Set up scan state — persistent mode is always active
+	// 3. Record the requested system set and exact runnable plan for resume validation.
 	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {
 		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 	}
+	if planStore, ok := db.(indexingPlanStore); ok {
+		if setErr := planStore.SetIndexingPlanSystems(currentSystemIDs); setErr != nil {
+			return 0, fmt.Errorf("failed to set indexing plan systems: %w", setErr)
+		}
+	}
 	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
-	// Populate scan state from existing DB (max IDs, system map, tag maps)
-	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
-		}
-		return 0, fmt.Errorf("failed to populate scan state: %w", err)
-	}
-
-	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to running")
-	}
+	// Clear the resume marker before the status says a run is under way, so a
+	// crash in between cannot make the next boot resume from the previous run's
+	// last system.
 	if !shouldResume {
-		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to clear last indexed system")
+		if setErr := bestEffortMaintenanceError(
+			db.SetLastIndexedSystem(""), "failed to clear last indexed system",
+		); setErr != nil {
+			return 0, setErr
 		}
 	}
 
-	// Ensure transaction cleanup and status update on completion or error
-	defer func() {
-		// Always attempt to rollback any dangling transaction, whether success or failure
-		// On success, this should be a no-op (tx == nil), but ensures cleanup if
-		// the last transaction was never committed due to batchStarted being false
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			if err != nil {
-				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
-			} else {
-				log.Debug().Err(rbErr).Msg("no transaction to rollback (expected)")
-			}
-		}
+	// Mark the run before it commits anything. MediaDB picks its cache
+	// invalidation scope on every commit by reading this status: a commit made
+	// while it still reads "completed" is an ordinary write, so it drops the
+	// whole in-memory slug search cache and the tag list, while a commit made
+	// during a run keeps both and lets the scanner invalidate per system as it
+	// goes.
+	//
+	// SeedCanonicalTags commits, so with the status written after it the first
+	// commit of every run threw both caches away. On the #1279 device that left
+	// media.search on the grouped SQL LIKE path and made media.tags re-aggregate
+	// 731,332 rows per call, and both hit the 30s API timeout.
+	if setErr := bestEffortMaintenanceError(
+		db.SetIndexingStatus(mediadb.IndexingStatusRunning),
+		"failed to set indexing status to running",
+	); setErr != nil {
+		return 0, setErr
+	}
 
-		if err != nil {
-			// Mark indexing as failed on error
-			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set indexing status to failed after error")
-			}
+	// Ensure the canonical tag vocabulary exists before any system reconciles
+	// against it. Set-based: no existing rows are read into memory.
+	if err = SeedCanonicalTags(ctx, db); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return handleCancellation(ctx, db, "Media indexing cancelled during canonical tag seeding")
 		}
-	}()
+		if isSQLiteDatabaseCorrupt(err) {
+			return 0, fmt.Errorf("%s during canonical tag seeding: %w", mediaDatabaseCorruptMessage, err)
+		}
+		return 0, fmt.Errorf("failed to seed canonical tags: %w", err)
+	}
+
+	logPhaseMetrics("seed_canonical_tags")
 
 	// Build sorted system list as the single loop driver. This covers all three
 	// previous sources: sysPathIDs (systems with paths), launcher-specific
@@ -818,9 +1391,6 @@ func NewNamesIndex(
 		Total: len(sortedSystems) + 1, // +1 for final "Writing database" step
 		Step:  0,
 	}
-
-	// Track UNIQUE constraint failures across all systems
-	var uniqueConstraintFailures int
 
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)
@@ -839,26 +1409,96 @@ func NewNamesIndex(
 		}
 	}
 
-	// Batch tracking variables for adaptive transaction management
+	// Batch tracking variables for adaptive transaction management. One
+	// A transaction is committed at each system boundary. Earlier builds batched
+	// multiple small systems into one transaction, but crash logs repeatedly ended
+	// at the next system's status update while that cross-system transaction was
+	// still open. Keep the mid-system file-limit commit for memory safety, then
+	// finalize each system before moving on.
 	filesInBatch := 0
+	rowsInBatch := int64(0)
 	batchStarted := false
+	pendingSystems := make([]string, 0)
 
+	// Sub-phase wall-time accumulators across the systems loop, logged once after
+	// it so the monolithic "systems" phase can be attributed to its parts:
+	// file collection (filesystem scan + scanners), staging row inserts,
+	// per-system reconcile (set-based merge + missing flags + disambiguation),
+	// and transaction commits (the fsync + checkpoint cost).
+	var (
+		collectDur   time.Duration
+		insertDur    time.Duration
+		reconcileDur time.Duration
+		commitDur    time.Duration
+		// Everything below was previously untimed. Round 7 measured
+		// elapsed - (collect+insert+reconcile+commit) at 11.87 min (18.3% of the
+		// run) with no log line accounting for any of it, so the largest single
+		// item in a reindex could not be worked on. See #1279.
+		//
+		// throttleDur is deliberately separate from the work phases: on a
+		// resource-constrained platform the scanner sleeps between work windows
+		// by design, and that time must never be mistaken for work being slow.
+		throttleDur     time.Duration
+		analyzeDur      time.Duration
+		cacheRefreshDur time.Duration
+	)
+
+	// timedWait accounts for time spent blocked in the pauser — throttle sleeps
+	// on constrained platforms, or an unbounded pause while a game is running.
+	timedWait := func(wait func() error) error {
+		start := time.Now()
+		err := wait()
+		throttleDur += time.Since(start)
+		return err
+	}
+
+	// TODO: skip unchanged systems via a per-system fingerprint — store
+	// hash(sorted walked paths) + parser version + media row count after each
+	// system completes; on match at the next run, skip the state load, parse,
+	// and reconcile phases entirely. Needs its own design pass for
+	// invalidation rules (parser/config changes) and a forced-reindex path.
+	//
 	// Unified loop: each system is processed exactly once regardless of source.
 	// Filesystem scan, per-system launcher scanners, and any-scanners are all
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
 	// are called for every system, fixing the stale-state gaps that existed in
 	// the previous loop 2 and loop 3.
 	for _, sys := range sortedSystems {
+		// Starts the iteration, not the collect phase: the pauser wait, status
+		// update, slug cache drop and scan-stage clear below all cost real time
+		// and used to fall outside the measured window entirely, so a system
+		// could report an elapsed far smaller than the wall time it consumed.
+		systemStartTime := time.Now()
+
 		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled")
 		default:
 		}
-		if waitErr := pauser.Wait(ctx); waitErr != nil {
+		if waitErr := timedWait(func() error { return pauser.Wait(ctx) }); waitErr != nil {
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled while paused")
 		}
+		// Setup is measured from after the wait above, not from systemStartTime:
+		// that wait is already counted in throttle, and measuring setup from the
+		// top of the loop would count it in both, inflating the named phases and
+		// shrinking unattributed by the same amount. elapsed still spans the whole
+		// iteration — throttle owns the wait, setup owns what follows it.
+		systemSetupStart := time.Now()
 
+		systemMetricsStart := metrics.Capture(ctx, false)
+		// Snapshot the run-level sub-phase accumulators so this system's own
+		// share can be reported when it finishes. Without per-system figures a
+		// system that runs long can only be attributed to "the systems phase";
+		// the whole-run breakdown logged after the loop cannot say whether the
+		// time went to walking, staging, reconciling or committing. See #1279.
+		systemCollectStart := collectDur
+		systemInsertStart := insertDur
+		systemReconcileStart := reconcileDur
+		systemCommitStart := commitDur
+		systemThrottleStart := throttleDur
+		systemAnalyzeStart := analyzeDur
+		systemCacheRefreshStart := cacheRefreshDur
 		systemID := sys.ID
 		status.SystemID = systemID
 		status.Step++
@@ -875,18 +1515,41 @@ func NewNamesIndex(
 			continue
 		}
 
-		scanState.MissingMedia = make(map[int]struct{})
+		// The slug search cache deliberately keeps this system's previous
+		// entries while it is rescanned; refreshMidScanCaches replaces them
+		// once the system commits. Nothing is served wrongly in the meantime:
+		// the cache only nominates candidate title IDs, and the rows come from
+		// a live query, so entries whose rows have gone simply return nothing.
+		// Only files added since the last run are missing, and only until this
+		// system finishes.
+		//
+		// Evicting up front instead cost far more than it protected. A search
+		// naming an evicted system cannot be answered from memory, so a
+		// library-wide search — which names every system — fell back to the
+		// grouped SQL LIKE path for whichever systems were in flight. Measured
+		// on the #1279 device mid-index, the same query took 242 ms across 28
+		// covered systems and 27,205 ms across all of them; the difference was
+		// entirely the fallback for the four in flight.
 
-		// Load existing data for this system — always persistent.
-		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-			if errors.Is(loadErr, context.Canceled) {
-				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+		// Drop any staged rows a crashed run left behind (a mid-system commit
+		// makes staged rows durable); this system re-stages from scratch.
+		if clearErr := db.ClearScanStage(); clearErr != nil {
+			if isSQLiteDatabaseCorrupt(clearErr) {
+				return 0, fmt.Errorf("%s while clearing scan stage for %s: %w",
+					mediaDatabaseCorruptMessage, systemID, clearErr)
 			}
-			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
+			return 0, fmt.Errorf("failed to clear scan staging tables for %s: %w", systemID, clearErr)
 		}
 
 		files := make([]platforms.ScanResult, 0)
-		systemStartTime := time.Now()
+		collectStart := time.Now()
+		// Per-system setup: the pauser wait, status update, slug cache drop and
+		// scan-stage clear that ran before collection could start.
+		systemSetupDur := collectStart.Sub(systemSetupStart)
+		// Set when any file source for this system errors. The staged set is
+		// then a subset of the library, so the reconcile must not treat
+		// absence from it as evidence media is missing.
+		scanIncomplete := false
 
 		log.Info().
 			Str("system", systemID).
@@ -897,12 +1560,13 @@ func NewNamesIndex(
 
 		// 1. Filesystem scan (no-op if this system has no configured paths)
 		for _, systemPath := range systemPaths[systemID] {
-			pathFiles, pathErr := GetFiles(ctx, cfg, platform, systemID, systemPath)
+			pathFiles, pathErr := GetFiles(ctx, cfg, platform, systemID, systemPath, pauser)
 			if pathErr != nil {
 				if errors.Is(pathErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
+				scanIncomplete = true
 				continue
 			}
 			for _, f := range pathFiles {
@@ -940,12 +1604,25 @@ func NewNamesIndex(
 					files = append(files, independent...)
 				}
 			} else {
-				// Pipeline: scanner filters/enriches existing files
-				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				// Pipeline: scanner filters/enriches existing files. Replace the
+				// collected list only on success — a failing scanner must not
+				// clobber it, or every file already collected would go missing.
+				var piped []platforms.ScanResult
+				piped, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				if scanErr == nil {
+					files = piped
+				}
 			}
 			if scanErr != nil {
+				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
+				}
+				if errors.Is(scanErr, syscall.ECONNREFUSED) {
+					// The scanner's backing service (e.g. Kodi) isn't running.
+					// Expected on devices without it; keep out of Sentry.
+					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
+					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
@@ -959,6 +1636,7 @@ func NewNamesIndex(
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", anyScanners[i].ID, systemID)
 			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
+				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
 				}
@@ -968,6 +1646,19 @@ func NewNamesIndex(
 			}
 			files = append(files, results...)
 		}
+
+		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
+		// rows with zaparoo:// paths, so search, browse, paging, and missing-state
+		// handling stay in one place.
+		for _, item := range launchables.MediaForSystem(cfg, platform, systemID) {
+			files = append(files, platforms.ScanResult{
+				Path:  item.ZapScript(),
+				Name:  item.Name,
+				NoExt: true,
+			})
+		}
+
+		files = coalesceScanResults(systemID, files)
 
 		if len(files) == 0 {
 			log.Debug().Msgf("no files found for system: %s", systemID)
@@ -990,17 +1681,21 @@ func NewNamesIndex(
 				Msg("grouped scanned files by directory")
 		}
 
-		stripPolicyByDir := make(map[string]bool)
+		prefixPolicyByDir := make(map[string]browseprefix.Policy)
 		for dir, dirFiles := range filesByDir {
 			// Use 50% threshold and require at least 5 files to apply heuristic
-			stripPolicyByDir[dir] = detectNumberingPattern(dirFiles, 0.5, 5)
+			prefixPolicyByDir[dir] = detectBrowsePrefixPolicy(
+				dirFiles, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles,
+			)
 		}
 		if len(files) >= 1000 {
 			log.Debug().
 				Str("system", systemID).
-				Int("directories", len(stripPolicyByDir)).
-				Msg("calculated directory strip policies")
+				Int("directories", len(prefixPolicyByDir)).
+				Msg("calculated directory prefix policies")
 		}
+
+		collectDur += time.Since(collectStart)
 
 		for fileIdx, file := range files {
 			// Check for cancellation or pause between file processing
@@ -1009,7 +1704,7 @@ func NewNamesIndex(
 				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file processing")
 			default:
 			}
-			if waitErr := pauser.Wait(ctx); waitErr != nil {
+			if waitErr := timedWait(func() error { return pauser.Wait(ctx) }); waitErr != nil {
 				return handleCancellationWithRollback(ctx, db,
 					"Media indexing cancelled while paused during file processing")
 			}
@@ -1031,20 +1726,26 @@ func NewNamesIndex(
 
 			// Look up stripping policy for this file's directory
 			dir := filepath.Dir(file.Path)
-			shouldStrip := stripPolicyByDir[dir]
+			prefixPolicy := prefixPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(
-				db, &scanState, systemID, file.Path, file.Name, file.NoExt, shouldStrip, cfg, mediaType,
-			)
+			insertStart := time.Now()
+			addErr := StageMediaPath(&StageMediaPathParams{
+				Config:       cfg,
+				DB:           db,
+				Path:         file.Path,
+				SystemID:     systemID,
+				MediaType:    mediaType,
+				ProvidedName: file.Name,
+				PrefixPolicy: prefixPolicy,
+				NoExt:        file.NoExt,
+			})
+			insertDur += time.Since(insertStart)
 			if addErr != nil {
-				var sqliteErr sqlite3.Error
-				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-					!errors.Is(addErr, mediadb.ErrDependencyFlush) {
-					uniqueConstraintFailures++
-					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
-					continue
+				if isSQLiteDatabaseCorrupt(addErr) {
+					return 0, fmt.Errorf("%s while staging media for %s: %w",
+						mediaDatabaseCorruptMessage, systemID, addErr)
 				}
-				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
+				return 0, fmt.Errorf("unrecoverable error staging media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
 			if len(files) >= 1000 && (fileIdx+1)%1000 == 0 {
@@ -1055,17 +1756,23 @@ func NewNamesIndex(
 					Msg("processed media paths")
 			}
 
-			// Commit if we hit file limit (memory safety - even mid-system)
-			if filesInBatch >= maxFilesPerTransaction {
+			// Commit if we hit file limit (memory safety - even mid-system). The
+			// current system is only partially processed here, so it is NOT marked
+			// complete; on resume the cursor points at it and it is re-indexed from
+			// scratch (idempotent). Systems fully processed earlier in this batch are
+			// now durable and marked complete.
+			if filesInBatch >= batchCommitLimit(pauser) {
 				log.Debug().
 					Str("system", systemID).
 					Int("files", filesInBatch).
-					Msg("committing media indexing batch")
+					Int("batchedSystems", len(pendingSystems)).
+					Msg("committing media indexing batch (file limit)")
 				commitStart := time.Now()
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
 				}
 				commitElapsed := time.Since(commitStart)
+				commitDur += commitElapsed
 				log.Debug().
 					Str("system", systemID).
 					Int("files", filesInBatch).
@@ -1077,80 +1784,236 @@ func NewNamesIndex(
 						Dur("commitTime", commitElapsed).
 						Msg("database commit took longer than expected")
 				}
-				// Update progress after successful commit
-				if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-					log.Error().Err(setErr).Msgf(
-						"failed to set last indexed system to %s after file limit commit", systemID)
+				// Resume cursor points at the in-progress system so it is redone;
+				// systems sorted before it (including the batched, fully-processed
+				// ones) are treated as complete on resume.
+				if setErr := bestEffortMaintenanceError(
+					db.SetLastIndexedSystem(systemID),
+					fmt.Sprintf("failed to set last indexed system to %s after file limit commit", systemID),
+				); setErr != nil {
+					return 0, setErr
 				}
-				// NOTE: Do not flush TitleIDs/MediaIDs here — we are still
-				// mid-system. Clearing them would break dedup for remaining
-				// files in this system (multi-disc titles, persistent-mode
-				// existing-media tracking). Flush only happens between systems.
+				for _, s := range pendingSystems {
+					completedSystems[s] = true
+				}
+				pendingSystems = pendingSystems[:0]
+				// Staged rows for this system are now durable; the reconcile at
+				// system end still sees them (staging is a real table, not
+				// transaction-local state), so a mid-system commit is safe.
 				filesInBatch = 0
+				rowsInBatch = 0
 				batchStarted = false
+
+				// Give a throttled/paused foreground consumer a window right
+				// after the commit's fsync burst, before starting the next batch.
+				if waitErr := timedWait(func() error { return pauser.Wait(ctx) }); waitErr != nil {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled after file-limit commit")
+				}
 			}
 		}
 
+		// Reconcile this system's staged rows into the media tables inside the
+		// currently open transaction, which is shared across batched systems.
+		// The set-based merge computes new/changed/missing rows, tag links, and
+		// the touched-title disambiguation recompute entirely in SQL; the commit
+		// itself is deferred to a batch boundary below so the fsync + checkpoint
+		// cost is amortised.
+		reconcileStart := time.Now()
+		// A mid-system file-limit commit may have closed the transaction on the
+		// final file; reopen one so the reconcile writes have a home.
+		if !batchStarted {
+			if beginErr := db.BeginTransaction(true); beginErr != nil {
+				return 0, fmt.Errorf("failed to begin transaction to reconcile system %s: %w", systemID, beginErr)
+			}
+			batchStarted = true
+		}
+		if scanIncomplete {
+			log.Warn().
+				Str("system", systemID).
+				Msg("file collection hit errors; keeping existing missing-media state for this system")
+		}
+		// WaitForPacing, not Wait: reconcile holds the open write transaction
+		// (see ReconcileStagedSystem), so honoring a full pause here would
+		// hold it for as long as the pause lasts (a whole gameplay session
+		// under the pause-during-media policy) instead of pacing between
+		// statements.
+		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
+			ctx, systemID, database.ScanReconcileOpts{
+				Yield:          func() error { return pauser.WaitForPacing(ctx) },
+				IncompleteScan: scanIncomplete,
+			},
+		)
+		if reconcileErr != nil {
+			if errors.Is(reconcileErr, context.Canceled) {
+				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during system reconcile")
+			}
+			if isSQLiteDatabaseCorrupt(reconcileErr) {
+				return 0, fmt.Errorf("%s while reconciling staged system %s: %w",
+					mediaDatabaseCorruptMessage, systemID, reconcileErr)
+			}
+			return 0, fmt.Errorf("failed to reconcile staged system %s: %w", systemID, reconcileErr)
+		}
+		if reconcileStats.SystemKnown {
+			log.Debug().
+				Str("system", systemID).
+				Int64("titlesInserted", reconcileStats.TitlesInserted).
+				Int64("titlesRenamed", reconcileStats.TitlesRenamed).
+				Int64("mediaUpserted", reconcileStats.MediaUpserted).
+				Int64("mediaMissing", reconcileStats.MediaMissing).
+				Int64("tagsInserted", reconcileStats.TagsInserted).
+				Int64("tagLinksAdded", reconcileStats.TagLinksAdded).
+				Int64("tagLinksDeleted", reconcileStats.TagLinksDeleted).
+				Int64("touchedTitles", reconcileStats.TouchedTitles).
+				Msg("reconciled staged system")
+			pendingSystems = append(pendingSystems, systemID)
+			// Track reconcile write volume so a run of low-file/high-reconcile
+			// systems still commits regularly, bounding WAL growth.
+			rowsInBatch += reconcileStats.MediaMissing + reconcileStats.MediaUpserted +
+				reconcileStats.TitlesInserted + reconcileStats.TouchedTitles
+		} else {
+			// System has no DB row and produced no files — nothing to commit.
+			completedSystems[systemID] = true
+		}
+		reconcileDur += time.Since(reconcileStart)
+
+		// Apply only bounded pacing before commit. A full pause is honored
+		// immediately after commit so it cannot pin the writer transaction.
+		if waitErr := timedWait(func() error { return pauser.WaitForPacing(ctx) }); waitErr != nil {
+			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled after system reconcile")
+		}
+
+		// Commit at every system boundary so no transaction spans the next
+		// system's staging clear or filesystem scan. This keeps the resume cursor
+		// current and avoids carrying uncommitted WAL across many small systems.
 		if batchStarted {
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
-				Msg("committing media indexing system transaction")
+				Int64("reconcileRows", rowsInBatch).
+				Int("batchedSystems", len(pendingSystems)).
+				Msg("committing media indexing batch")
 			commitStart := time.Now()
 			if commitErr := db.CommitTransaction(); commitErr != nil {
-				return 0, fmt.Errorf("failed to commit system transaction: %w", commitErr)
+				return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 			}
 			commitElapsed := time.Since(commitStart)
+			commitDur += commitElapsed
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
+				Int("batchedSystems", len(pendingSystems)).
 				Dur("commitTime", commitElapsed).
-				Msg("committed system transaction")
+				Msg("committed batch")
 			if commitElapsed > 5*time.Second {
 				log.Warn().
 					Int("files", filesInBatch).
 					Dur("commitTime", commitElapsed).
 					Msg("database commit took longer than expected")
 			}
+			// The cursor points at the last fully-finalized system; systems before
+			// it are complete and it is redone on resume (idempotent).
+			var justCommitted []string
+			if len(pendingSystems) > 0 {
+				lastDone := pendingSystems[len(pendingSystems)-1]
+				if setErr := bestEffortMaintenanceError(
+					db.SetLastIndexedSystem(lastDone),
+					fmt.Sprintf("failed to set last indexed system to %s after batch commit", lastDone),
+				); setErr != nil {
+					return 0, setErr
+				}
+				for _, s := range pendingSystems {
+					completedSystems[s] = true
+				}
+				justCommitted = append(justCommitted, pendingSystems...)
+				pendingSystems = pendingSystems[:0]
+			}
 			filesInBatch = 0
+			rowsInBatch = 0
 			batchStarted = false
-		}
 
-		systemDBID, found := scanState.SystemIDs[systemID]
-		if !found {
-			completedSystems[systemID] = true
-			FlushScanStateMaps(&scanState)
-			continue
-		}
+			// Give a throttled/paused foreground consumer a window right
+			// after the commit's fsync burst, before analyze/cache refresh.
+			if waitErr := timedWait(func() error { return pauser.Wait(ctx) }); waitErr != nil {
+				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled after system boundary commit")
+			}
 
-		if beginErr := db.BeginTransaction(false); beginErr != nil {
-			return 0, fmt.Errorf("failed to begin missing-state transaction: %w", beginErr)
-		}
-		if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
-			return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
-		}
-		if len(scanState.MissingMedia) > 0 {
-			if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
-				return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
+			if len(justCommitted) > 0 {
+				// Refresh query planner statistics after every system boundary
+				// commit, not just the first: a fresh database has an empty
+				// sqlite_stat1 until the end-of-run ANALYZE, and stats captured
+				// once early (when Media holds only the first system's rows)
+				// stay frozen for the rest of a long run otherwise — the
+				// planner keeps believing a SystemDBID filter is unselective
+				// long after Media has grown far past that. PRAGMA optimize
+				// only re-analyzes a table whose size has changed >10x (or
+				// that lacks stats) since its last analysis, so this becomes
+				// a cheap no-op on most calls once table sizes stabilize
+				// relative to their last analysis. See #1279.
+				//
+				// Timed because it is not free when a table does qualify: this
+				// call sat in the untimed window and PRAGMA optimize used a mask
+				// that omitted SQLite's analysis limit, so a qualifying table got
+				// a full unbounded ANALYZE. The mask is fixed (see
+				// AnalyzeApproximate), and this timer is what proves it stays
+				// cheap on the device rather than assuming it.
+				analyzeStart := time.Now()
+				analyzeErr := bestEffortMaintenanceError(
+					db.AnalyzeApproximate(), "approximate ANALYZE after system commit failed",
+				)
+				analyzeDur += time.Since(analyzeStart)
+				if analyzeErr != nil {
+					return 0, analyzeErr
+				}
+				cacheRefreshStart := time.Now()
+				cacheErr := refreshMidScanCaches(ctx, db, justCommitted, midScanTagsCache)
+				cacheRefreshDur += time.Since(cacheRefreshStart)
+				if cacheErr != nil {
+					return 0, cacheErr
+				}
+
+				// Cache refresh (slug search, tags, browse) is read-heavy SQL
+				// work; give the foreground another window before the next
+				// system starts.
+				if waitErr := timedWait(func() error { return pauser.Wait(ctx) }); waitErr != nil {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled after cache refresh")
+				}
 			}
 		}
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit missing-state transaction: %w", commitErr)
-		}
-
-		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s after system completion", systemID)
-		}
-
-		// Mark system as processed only after its missing-state finalization commits.
-		completedSystems[systemID] = true
 
 		systemElapsed := time.Since(systemStartTime)
-		log.Info().
-			Str("system", systemID).
-			Int("files", len(files)).
-			Dur("elapsed", systemElapsed).
-			Msg("completed system indexing")
+		systemCollect := collectDur - systemCollectStart
+		systemInsert := insertDur - systemInsertStart
+		systemReconcile := reconcileDur - systemReconcileStart
+		systemCommit := commitDur - systemCommitStart
+		systemThrottle := throttleDur - systemThrottleStart
+		systemAnalyze := analyzeDur - systemAnalyzeStart
+		systemCacheRefresh := cacheRefreshDur - systemCacheRefreshStart
+		// Whatever the named phases do not account for. Logged directly so the
+		// residue is visible without arithmetic across eight fields, and so a
+		// future regression in an untimed path shows up as a number rather than
+		// as a system that is mysteriously slow. Round 7 measured this at 18.3%
+		// of the run with nothing reporting it at all.
+		systemUnattributed := systemElapsed - systemSetupDur - systemCollect - systemInsert -
+			systemReconcile - systemCommit - systemThrottle - systemAnalyze - systemCacheRefresh
+
+		systemMetricsEnd := metrics.Capture(ctx, false)
+		perfmetrics.AddDelta(
+			log.Info().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Dur("elapsed", systemElapsed).
+				Dur("setup", systemSetupDur).
+				Dur("collect", systemCollect).
+				Dur("insert", systemInsert).
+				Dur("reconcile", systemReconcile).
+				Dur("commit", systemCommit).
+				Dur("throttle", systemThrottle).
+				Dur("analyze", systemAnalyze).
+				Dur("cacheRefresh", systemCacheRefresh).
+				Dur("unattributed", systemUnattributed),
+			&systemMetricsStart,
+			&systemMetricsEnd,
+		).Msg("completed system indexing")
 
 		if systemElapsed > 30*time.Second {
 			log.Warn().
@@ -1159,30 +2022,27 @@ func NewNamesIndex(
 				Dur("elapsed", systemElapsed).
 				Msg("system indexing took longer than expected - check for slow storage or large directories")
 		}
+	}
 
-		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
-		// Populate* re-loads them for the next system.
-		FlushScanStateMaps(&scanState)
+	log.Info().
+		Dur("collect", collectDur).
+		Dur("insert", insertDur).
+		Dur("reconcile", reconcileDur).
+		Dur("commit", commitDur).
+		Dur("throttle", throttleDur).
+		Dur("analyze", analyzeDur).
+		Dur("cacheRefresh", cacheRefreshDur).
+		Msg("media indexing systems sub-phase breakdown")
+	logPhaseMetrics("systems")
+
+	if missingSystems := incompleteIndexedSystems(sortedSystems, completedSystems); len(missingSystems) > 0 {
+		return 0, fmt.Errorf("media indexing stopped before completing all planned systems: %v", missingSystems)
 	}
 
 	status.Step++
 	status.SystemID = ""
 	update(status)
 
-	// Nil out all ScanState maps to release backing memory. Go maps retain
-	// their allocated bucket array even after all keys are deleted, so the
-	// only way to reclaim that memory is to drop all references and let GC
-	// collect the backing arrays. With 250k titles this can be 20-40MB.
-	scanState.SystemIDs = nil
-	scanState.TitleIDs = nil
-	scanState.MediaIDs = nil
-	scanState.MediaTitleIDs = nil
-	scanState.MediaParentDirs = nil
-	scanState.MediaTagIDs = nil
-	scanState.TagTypeIDs = nil
-	scanState.TagIDs = nil
-
-	scanState.MissingMedia = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)
 
@@ -1190,17 +2050,35 @@ func NewNamesIndex(
 	// This ensures the database is fully searchable when indexing finishes.
 	t0 := time.Now()
 	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
-		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
+		return 0, fmt.Errorf("failed to create secondary indexes: %w", idxErr)
 	}
 	log.Info().Dur("elapsed", time.Since(t0)).Msg("CreateSecondaryIndexes complete")
+	logPhaseMetrics("create_secondary_indexes")
 
 	// Mark database as complete and ready for use. UpdateLastGenerated clears
 	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
 	// population must happen after this call.
-	err = db.UpdateLastGenerated()
-	if err != nil {
-		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
+	updateErr := db.UpdateLastGenerated()
+	if updateErr != nil {
+		return 0, fmt.Errorf("failed to update last generated timestamp: %w", updateErr)
 	}
+	logPhaseMetrics("update_last_generated")
+
+	// Re-materialize user-owned data (favourites, launcher overrides) from UserDB
+	// onto the freshly built media.db, before the caches below are populated so
+	// they reflect it. Best-effort: a failure here only means the projection is
+	// stale until the next reindex; the truth in UserDB is unaffected.
+	t0 = time.Now()
+	if applied, reapplyErr := reapplyMediaUserData(ctx, db, fdb.UserDB); reapplyErr != nil {
+		if maintenanceErr := bestEffortMaintenanceError(
+			reapplyErr, "failed to re-apply media user data",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
+		}
+	} else {
+		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
+	}
+	logPhaseMetrics("reapply_media_user_data")
 
 	status.Phase = PhaseBuildingCaches
 	update(status)
@@ -1215,6 +2093,11 @@ func NewNamesIndex(
 	sort.Strings(indexedSystems)
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
+	// UpdateLastGenerated (above) invalidated the SystemTagsCache rows for every
+	// indexed system, so all of them must be repopulated here. Restricting this to
+	// only the systems that changed would leave the preserved systems with no cache
+	// rows, and GetSystemTagsCached — which checks the in-memory cache first and
+	// never self-heals on a hit — would then return empty tags for them.
 	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
 	for _, systemID := range indexedSystems {
 		system, getSystemErr := systemdefs.GetSystem(systemID)
@@ -1227,60 +2110,94 @@ func NewNamesIndex(
 
 	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
 
-	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
-	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
-	// indexed systems, and rebuild the in-memory tag cache from the mixed
-	// preserved+refreshed SystemTagsCache table so first-entry requests for the
-	// touched systems stay warm too.
+	// Refresh planner statistics before the synchronous cache builds: their
+	// aggregate queries otherwise plan against stats from before the bulk
+	// (re)index, since the full ANALYZE only runs later in background
+	// optimization.
+	t0 = time.Now()
+	if analyzeErr := bestEffortMaintenanceError(
+		db.AnalyzeApproximate(), "failed to refresh planner statistics before cache builds",
+	); analyzeErr != nil {
+		return 0, analyzeErr
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("PragmaOptimize complete")
+	logPhaseMetrics("pragma_optimize")
+
+	// Populate caches after UpdateLastGenerated. For selective scans we rebuild the
+	// persisted per-system SQL cache for the indexed systems, refresh in-memory slug
+	// coverage for them, and rebuild the in-memory tag cache from the SystemTagsCache
+	// table so first-entry requests for those systems stay warm too.
 	t0 = time.Now()
 	if selectiveRun {
-		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to populate system tags cache for indexed systems")
+		if cacheErr := bestEffortMaintenanceError(
+			db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs),
+			"failed to populate system tags cache for indexed systems",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
 			Int("systems", len(indexedSystemDefs)).
 			Msg("PopulateSystemTagsCacheForSystems complete")
+		logPhaseMetrics("populate_system_tags_cache")
 
 		t0 = time.Now()
-		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache after selective indexing")
+		if cacheErr := bestEffortMaintenanceError(
+			db.RebuildTagCache(), "failed to rebuild tag cache after selective indexing",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+		logPhaseMetrics("rebuild_tag_cache")
 
 		t0 = time.Now()
-		if cacheErr := db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to refresh slug search cache for indexed systems")
+		if cacheErr := bestEffortMaintenanceError(
+			db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems),
+			"failed to refresh slug search cache for indexed systems",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
 			Int("systems", len(indexedSystems)).
 			Msg("RefreshSlugSearchCacheForSystems complete")
+		logPhaseMetrics("refresh_slug_search_cache")
 	} else {
-		if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+		if cacheErr := bestEffortMaintenanceError(
+			db.PopulateSystemTagsCache(ctx), "failed to populate system tags cache",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+		logPhaseMetrics("populate_system_tags_cache")
 
 		t0 = time.Now()
-		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+		if cacheErr := bestEffortMaintenanceError(
+			db.RebuildSlugSearchCache(), "failed to rebuild slug search cache",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+		logPhaseMetrics("rebuild_slug_search_cache")
 
 		t0 = time.Now()
-		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+		if cacheErr := bestEffortMaintenanceError(
+			db.RebuildTagCache(), "failed to rebuild tag cache",
+		); cacheErr != nil {
+			return 0, cacheErr
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+		logPhaseMetrics("rebuild_tag_cache")
 	}
 
 	// Bump the index generation counter so persisted cache files written
 	// below carry the new value. Boot-time loads compare this against the
 	// DB to detect stale cache files from a previous run.
 	_, bumpErr := db.BumpIndexGeneration()
-	if bumpErr != nil {
-		log.Error().Err(bumpErr).Msg("failed to bump index generation")
+	if maintenanceErr := bestEffortMaintenanceError(
+		bumpErr, "failed to bump index generation",
+	); maintenanceErr != nil {
+		return 0, maintenanceErr
 	}
 
 	// Persist the rebuilt in-memory caches to disk so a subsequent cold
@@ -1291,61 +2208,70 @@ func NewNamesIndex(
 	if bumpErr != nil {
 		log.Warn().Msg("skipping cache persist because index generation bump failed")
 	} else {
-		if persistErr := db.PersistTagCache(); persistErr != nil {
-			log.Error().Err(persistErr).Msg("failed to persist tag cache to disk")
+		if persistErr := bestEffortMaintenanceError(
+			db.PersistTagCache(), "failed to persist tag cache to disk",
+		); persistErr != nil {
+			return 0, persistErr
 		}
-		if persistErr := db.PersistSlugSearchCache(); persistErr != nil {
-			log.Error().Err(persistErr).Msg("failed to persist slug search cache to disk")
+		if persistErr := bestEffortMaintenanceError(
+			db.PersistSlugSearchCache(), "failed to persist slug search cache to disk",
+		); persistErr != nil {
+			return 0, persistErr
 		}
 	}
+	logPhaseMetrics("persist_caches")
 
-	// Mark indexing as completed and clear indexing metadata
+	// Clear resume metadata and prepare background optimization before publishing
+	// Completed. Completed is the final database write, so no later maintenance
+	// failure can turn a corrupt run into a transient success.
+	if setErr := bestEffortMaintenanceError(
+		db.SetLastIndexedSystem(""), "failed to clear last indexed system on completion",
+	); setErr != nil {
+		return 0, setErr
+	}
+	if setErr := bestEffortMaintenanceError(
+		db.SetIndexingSystems(nil), "failed to clear indexing systems on completion",
+	); setErr != nil {
+		return 0, setErr
+	}
+	if planStore, ok := db.(indexingPlanStore); ok {
+		if setErr := bestEffortMaintenanceError(
+			planStore.SetIndexingPlanSystems(nil), "failed to clear indexing plan systems on completion",
+		); setErr != nil {
+			return 0, setErr
+		}
+	}
+	if cacheErr := bestEffortMaintenanceError(
+		db.InvalidateCountCache(), "failed to invalidate media count cache after indexing",
+	); cacheErr != nil {
+		return 0, cacheErr
+	}
+
+	// Background optimization handles cache population and WAL housekeeping.
+	if optimizationErr := db.SetOptimizationStatus(mediadb.IndexingStatusPending); optimizationErr != nil {
+		return 0, fmt.Errorf("failed to set optimization status to pending: %w", optimizationErr)
+	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to completed")
-	}
-	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to clear last indexed system on completion")
-	}
-	if setErr := db.SetIndexingSystems(nil); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to clear indexing systems on completion")
-	}
-
-	// Invalidate media count cache after successful indexing
-	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to invalidate media count cache after indexing")
-	}
-
-	// Mark optimization as pending — background optimization will handle
-	// index rebuilds, cache population, and WAL checkpoint without blocking
-	// game launches or search queries.
-	err = db.SetOptimizationStatus("pending")
-	if err != nil {
-		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
-		log.Error().Err(err).Msg("failed to set optimization status to pending")
-	}
-
-	if uniqueConstraintFailures > 0 {
-		log.Warn().Int("count", uniqueConstraintFailures).
-			Msg("UNIQUE constraint failures during indexing (possible duplicate paths)")
+		return 0, fmt.Errorf("failed to set indexing status to completed: %w", setErr)
 	}
 
 	indexedFiles = status.Files
 	indexElapsed := time.Since(indexStartTime)
-
-	if err != nil {
-		log.Error().
-			Err(err).
-			Int("files", indexedFiles).
-			Int("systemsCompleted", len(indexedSystems)).
-			Dur("elapsed", indexElapsed).
-			Msg("media indexing completed with error")
-	} else {
+	indexMetricsEnd := metrics.Capture(ctx, true)
+	perfmetrics.AddDelta(
 		log.Info().
 			Int("files", indexedFiles).
 			Int("systemsCompleted", len(indexedSystems)).
-			Dur("elapsed", indexElapsed).
-			Msg("media indexing completed successfully")
-	}
+			Dur("elapsed", indexElapsed),
+		&runMetricsStart,
+		&indexMetricsEnd,
+	).Msg("media indexing resource summary")
 
-	return indexedFiles, err
+	log.Info().
+		Int("files", indexedFiles).
+		Int("systemsCompleted", len(indexedSystems)).
+		Dur("elapsed", indexElapsed).
+		Msg("media indexing completed successfully")
+
+	return indexedFiles, nil
 }

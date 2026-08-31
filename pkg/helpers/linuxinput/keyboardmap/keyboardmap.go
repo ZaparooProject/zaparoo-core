@@ -179,6 +179,18 @@ var KeyboardMap = map[string]int{
 	"M":      -50,
 }
 
+// IsShiftedKey reports whether name maps to a shift-modified key (negative code).
+// If so, it returns the positive base keycode that must be pressed while LeftShift
+// is held. Returns 0, false for unshifted keys, braced specials that are not
+// shift-modified, and unknown names.
+func IsShiftedKey(name string) (baseCode int, ok bool) {
+	code, found := KeyboardMap[name]
+	if !found || code >= 0 {
+		return 0, false
+	}
+	return -code, true
+}
+
 var LegacyKeyboardMap map[int]string
 
 func SetupLegacyKeyboardMap() {

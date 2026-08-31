@@ -51,7 +51,7 @@ tasks:
           APP_VERSION:
             sh: echo -n "${APP_VERSION:-$(git rev-parse --short HEAD)-dev}"
       - >-
-        go run scripts/tasks/utils/makezip/main.go
+        go run ./scripts/tasks/utils/makezip
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
         "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.{{.ARCHIVE_EXT}}"
 

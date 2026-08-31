@@ -20,24 +20,101 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const (
+	//nolint:gosec // Test fixture claim URL.
+	secretURL = "https://api.example.com/claim?token=zpc1_claim-secret"
+	//nolint:gosec // Test fixture credentials.
+	malformedClaimURL = "https://user:claim-url-secret@%zz"
+)
+
+func TestSettingsAuthStatus_RequiresURL(t *testing.T) {
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	_, err = HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "url is required")
+}
+
+func TestSettingsAuthStatus_LinkedOfficialURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"https://api.zaparoo.com": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.True(t, resp.Linked)
+}
+
+func TestSettingsAuthStatus_RejectsUnsupportedURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"https://other.example.com": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "https://other.example.com"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.False(t, resp.Linked)
+}
+
+func TestSettingsAuthStatus_AllowsConfiguredBackupURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"http://127.0.0.1:8787": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "http://127.0.0.1:8787"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.True(t, resp.Linked)
+}
 
 func TestSettingsAuthClaim_MissingParams(t *testing.T) {
 	t.Parallel()
@@ -77,6 +154,49 @@ func TestSettingsAuthClaim_RequiresHTTPS(t *testing.T) {
 	_, err = HandleSettingsAuthClaim(env, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTPS")
+	assert.NotContains(t, err.Error(), params.ClaimURL)
+}
+
+func TestRemoteRequestError_StripsSensitiveURL(t *testing.T) {
+	// Not parallel: swaps package-level logger.
+	err := remoteRequestError("failed to contact claim server", &url.Error{
+		Op:  http.MethodPost,
+		URL: secretURL,
+		Err: errors.New("connection refused"),
+	})
+
+	assert.Contains(t, err.Error(), "connection refused")
+	assert.NotContains(t, err.Error(), secretURL)
+	assert.NotContains(t, err.Error(), "zpc1_claim-secret")
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+	log.Warn().Err(err).Msg("claim request failed")
+	assert.Contains(t, buf.String(), "failed to contact claim server")
+	assert.NotContains(t, buf.String(), secretURL)
+	assert.NotContains(t, buf.String(), "zpc1_claim-secret")
+}
+
+func TestPerformClaim_MalformedURLRedacted(t *testing.T) {
+	t.Parallel()
+
+	_, err := performClaim(t.Context(), nil, nil, nil, malformedClaimURL, "token", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid claim URL")
+	assert.NotContains(t, err.Error(), malformedClaimURL)
+	assert.NotContains(t, err.Error(), "claim-url-secret")
+}
+
+func TestRedeemClaimToken_RequestErrorRedactsURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := redeemClaimToken(t.Context(), malformedClaimURL, "token", "test", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create claim request")
+	assert.NotContains(t, err.Error(), malformedClaimURL)
+	assert.NotContains(t, err.Error(), "claim-url-secret")
 }
 
 func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
@@ -88,7 +208,7 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 		assert.Equal(t, runtime.GOARCH, r.Header.Get(zapscript.HeaderZaparooArch))
 		assert.Equal(t, "test-platform", r.Header.Get(zapscript.HeaderZaparooPlatform))
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("invalid token"))
+		_, _ = w.Write([]byte("invalid token: bad-token"))
 	}))
 	defer claimServer.Close()
 
@@ -125,6 +245,8 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
+	assert.NotContains(t, err.Error(), "bad-token")
+	assert.NotContains(t, err.Error(), "invalid token: bad-token")
 }
 
 func TestSettingsAuthClaim_RootMissingAuth(t *testing.T) {
@@ -202,6 +324,13 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 
 	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
 	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
+	})
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+	st.BackupCoordinator().SetRemoteUnlinked(true)
 
 	// Mock well-known fetcher: root has auth and trusts spoke.example.com,
 	// related domain confirms trust back to root
@@ -236,6 +365,7 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
+		State:    st,
 		Params:   paramsJSON,
 	}
 
@@ -249,6 +379,141 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 	assert.Contains(t, resp.Domains, claimServer.URL)
 	assert.Contains(t, resp.Domains, "https://spoke.example.com")
 	assert.Len(t, resp.Domains, 2)
+	assert.False(t, st.BackupCoordinator().RemoteUnlinked())
+}
+
+// TestSettingsAuthClaim_ResetsAllOnlineConsent pins that a fresh claim,
+// even re-claiming for the same account, resets every Online feature's
+// consent (remote control, cloud backup, play history sync), since it is a
+// new "who is on the other end" event and must be re-approved explicitly
+// rather than silently carrying over.
+func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
+	// Not parallel: swaps package-level claimClient
+
+	claimServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"bearer": "secret-api-key"}`))
+	}))
+	defer claimServer.Close()
+
+	origClient := claimClient
+	claimClient = claimServer.Client()
+	t.Cleanup(func() { claimClient = origClient })
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
+	})
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+
+	cfg.SetRemoteControl(true)
+	cfg.SetBackupRemoteEnabled(true)
+	cfg.SetPlaytimeSync(true)
+	require.True(t, cfg.RemoteControlEnabled())
+	require.True(t, cfg.BackupRemoteEnabled())
+	require.True(t, cfg.PlaytimeSyncEnabled())
+
+	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
+		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
+	}
+
+	params := models.SettingsAuthClaimParams{
+		ClaimURL: claimServer.URL + "/claim",
+		Token:    "claim-token-123",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    st,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
+	require.NoError(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled())
+	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.PlaytimeSyncEnabled())
+}
+
+// TestSettingsAuthClaim_SurfacesConsentResetSaveFailure pins that a failed
+// config.toml write during ResetOnlineConsent in performClaim is reported to
+// the caller rather than swallowed, mirroring the unlink path. Requires a
+// real filesystem so the config file's permission bits can force the write
+// to fail deterministically. The consent reset now runs and persists BEFORE
+// the credential is saved to auth.toml, so a failed save must leave no
+// credential behind either: auth.toml and config.toml are separate files
+// with no shared transaction, and saving the credential anyway would let a
+// restart bring the new credential up paired with the previous owner's
+// still-enabled consent.
+func TestSettingsAuthClaim_SurfacesConsentResetSaveFailure(t *testing.T) {
+	// Not parallel: swaps package-level claimClient
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	claimServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"bearer": "secret-api-key"}`))
+	}))
+	defer claimServer.Close()
+
+	origClient := claimClient
+	claimClient = claimServer.Client()
+	t.Cleanup(func() { claimClient = origClient })
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
+	})
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+
+	cfgPath := filepath.Join(configDir, config.CfgFile)
+	require.NoError(t, os.Chmod(cfgPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+
+	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
+		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
+	}
+
+	params := models.SettingsAuthClaimParams{
+		ClaimURL: claimServer.URL + "/claim",
+		Token:    "claim-token-123",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    st,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
+	require.Error(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled(), "in-memory consent must be reset even when the save fails")
+	entry := config.LookupAuth(config.GetAuthCfg(), claimServer.URL)
+	assert.Nil(t, entry, "the credential must not be persisted when the consent-reset save fails")
 }
 
 func TestSettingsAuthClaim_NoRelatedTrust(t *testing.T) {
@@ -298,6 +563,12 @@ func TestSettingsAuthClaim_NoRelatedTrust(t *testing.T) {
 
 	// Only root domain stored
 	assert.Equal(t, []string{claimServer.URL}, resp.Domains)
+
+	// The stored entry carries its provenance so unlink can find it.
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	entry := config.LookupAuth(config.GetAuthCfg(), config.BackupAuthLookupURL(claimServer.URL))
+	require.NotNil(t, entry)
+	assert.Equal(t, claimServer.URL, entry.LinkedVia)
 }
 
 func TestRedeemClaimToken_Success(t *testing.T) {
@@ -326,7 +597,9 @@ func TestRedeemClaimToken_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bearer, err := redeemClaimToken(context.Background(), server.URL+"/claim", "test-token-123", "test-platform")
+	bearer, err := redeemClaimToken(
+		context.Background(), server.URL+"/claim", "test-token-123", "test-platform", "hint-uuid",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, "real-api-key", bearer)
 }
@@ -340,7 +613,7 @@ func TestRedeemClaimToken_EmptyBearer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform")
+	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing bearer token")
 }
@@ -354,7 +627,7 @@ func TestRedeemClaimToken_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform")
+	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
@@ -418,4 +691,232 @@ func TestConfirmRelatedTrust_ServerDown(t *testing.T) {
 
 	result := confirmRelatedTrust("http://127.0.0.1:1", "https://root.example.com", nil, zapscript.FetchWellKnown)
 	assert.False(t, result)
+}
+
+func newAuthUnlinkTestEnv(t *testing.T) requests.RequestEnv {
+	t.Helper()
+	dataDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
+	require.NoError(t, err)
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	originalRevoke := revokeRemoteDevice
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error { return nil }
+	t.Cleanup(func() { revokeRemoteDevice = originalRevoke })
+	return requests.RequestEnv{
+		Context:  context.Background(),
+		Config:   cfg,
+		Platform: mockPlatform,
+		IsLocal:  true,
+	}
+}
+
+func TestSettingsAuthUnlink_RemovesTaggedFamily(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+
+	// The claim flow tags the root and each trusted-domain copy with the
+	// root that created them — including domains on no static list
+	// (zaparoo.run). Bearers deliberately differ to prove the provenance
+	// tag decides, not credential contents.
+	root := "https://api.zaparoo.com"
+	require.NoError(t, env.Config.SaveAuthEntry(root,
+		config.CredentialEntry{Bearer: "b1", LinkedVia: root}))
+	require.NoError(t, env.Config.SaveAuthEntry("https://edge.zaparoo.com",
+		config.CredentialEntry{Bearer: "b2", LinkedVia: root}))
+	require.NoError(t, env.Config.SaveAuthEntry("https://zaparoo.run",
+		config.CredentialEntry{Bearer: "b3", LinkedVia: root}))
+	// Tagged with a different root: belongs to another link, must survive.
+	require.NoError(t, env.Config.SaveAuthEntry("https://service.example.com",
+		config.CredentialEntry{Bearer: "b4", LinkedVia: "https://other-root.example.com"}))
+	// Hand-written entry: must survive.
+	require.NoError(t, env.Config.SaveAuthEntry("https://other.example.com",
+		config.CredentialEntry{Bearer: "b5"}))
+
+	result, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthUnlinkResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{
+		"https://api.zaparoo.com", "https://edge.zaparoo.com", "https://zaparoo.run",
+	}, resp.Domains)
+
+	creds := config.GetAuthCfg()
+	require.Len(t, creds, 2)
+	assert.Equal(t, "b4", creds["https://service.example.com"].Bearer)
+	assert.Equal(t, "b5", creds["https://other.example.com"].Bearer)
+}
+
+func TestSettingsAuthUnlink_CustomServerScopedToItsOwnFamily(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+
+	// Unlinking the configured custom server removes only its entry;
+	// credentials for other domains are untouched.
+	require.NoError(t, env.Config.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	require.NoError(t, env.Config.SaveAuthEntry("http://127.0.0.1:8787",
+		config.CredentialEntry{Bearer: "t1", LinkedVia: "http://127.0.0.1:8787"}))
+	require.NoError(t, env.Config.SaveAuthEntry("https://api.zaparoo.com",
+		config.CredentialEntry{Bearer: "t2", LinkedVia: "https://api.zaparoo.com"}))
+
+	result, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthUnlinkResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"http://127.0.0.1:8787"}, resp.Domains)
+
+	creds := config.GetAuthCfg()
+	require.Len(t, creds, 1)
+	assert.Equal(t, "t2", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestSettingsAuthUnlink_NotLinkedIsNoOp(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+
+	require.NoError(t, env.Config.SaveAuthEntry("https://other.example.com", config.CredentialEntry{Bearer: "t3"}))
+
+	result, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthUnlinkResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Domains)
+
+	creds := config.GetAuthCfg()
+	require.Len(t, creds, 1)
+	assert.Equal(t, "t3", creds["https://other.example.com"].Bearer)
+}
+
+func TestSettingsAuthUnlink_RemovesConfiguredBackupServerCredential(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+
+	require.NoError(t, env.Config.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	require.NoError(t, env.Config.SaveAuthEntry("http://127.0.0.1:8787", config.CredentialEntry{Bearer: "t1"}))
+
+	result, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthUnlinkResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"http://127.0.0.1:8787"}, resp.Domains)
+	assert.Empty(t, config.GetAuthCfg())
+}
+
+func TestSettingsAuthUnlink_RevokeFailureKeepsLocalCredential(t *testing.T) {
+	// Not parallel: SaveAuthEntry and revokeRemoteDevice are process globals.
+	env := newAuthUnlinkTestEnv(t)
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error {
+		return errors.New("server unavailable")
+	}
+
+	require.NoError(t, env.Config.SaveAuthEntry(
+		"https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"},
+	))
+
+	_, err := HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to revoke remote device link")
+	entry := config.LookupAuth(config.GetAuthCfg(), "https://api.zaparoo.com")
+	require.NotNil(t, entry)
+	assert.Equal(t, "t1", entry.Bearer)
+}
+
+func TestSettingsAuthUnlink_MarksRemoteUnlinked(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+
+	require.NoError(t, env.Config.SaveAuthEntry("https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"}))
+
+	_, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+
+	statusPath := filepath.Join(env.Platform.Settings().DataDir, "backups", "status.json")
+	data, err := os.ReadFile(statusPath) //nolint:gosec // test-owned temp path
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"unlinked": true`)
+}
+
+// TestSettingsAuthUnlink_ResetsAllOnlineConsent pins that unlinking clears
+// every Online feature's consent (remote control, cloud backup, play
+// history sync), not just remote control. The credential all three depend
+// on is gone, so none of their consent should silently survive to whatever
+// links next.
+func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+	require.NoError(t, env.Config.SaveAuthEntry("https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"}))
+	env.Config.SetRemoteControl(true)
+	env.Config.SetBackupRemoteEnabled(true)
+	env.Config.SetPlaytimeSync(true)
+	require.True(t, env.Config.RemoteControlEnabled())
+	require.True(t, env.Config.BackupRemoteEnabled())
+	require.True(t, env.Config.PlaytimeSyncEnabled())
+
+	_, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+
+	assert.False(t, env.Config.RemoteControlEnabled())
+	assert.False(t, env.Config.BackupRemoteEnabled())
+	assert.False(t, env.Config.PlaytimeSyncEnabled())
+}
+
+// TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure pins that a failed
+// config.toml write after ResetOnlineConsent is reported to the caller
+// rather than swallowed: the in-memory consent flags are already reset
+// regardless (safe for the rest of this process's life), but if the write
+// never succeeds and the device restarts, a silently-logged failure would
+// mean the old consent state loads back from disk. Requires a real
+// filesystem so the config file's permission bits can be used to force the
+// write to fail deterministically.
+func TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	originalRevoke := revokeRemoteDevice
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error { return nil }
+	t.Cleanup(func() { revokeRemoteDevice = originalRevoke })
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"}))
+	cfg.SetRemoteControl(true)
+	require.True(t, cfg.RemoteControlEnabled())
+
+	cfgPath := filepath.Join(configDir, config.CfgFile)
+	require.NoError(t, os.Chmod(cfgPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+
+	env := requests.RequestEnv{
+		Context: context.Background(), Config: cfg, Platform: mockPlatform, IsLocal: true,
+	}
+	_, err = HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled(), "in-memory consent must be reset even when the save fails")
+}
+
+func TestSettingsAuthUnlink_RejectsRemoteClients(t *testing.T) {
+	t.Parallel()
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		IsLocal: false,
+	}
+	_, err := HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local or admin")
+
+	env.ClientRole = "member"
+	_, err = HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local or admin")
 }

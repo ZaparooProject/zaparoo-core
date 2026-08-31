@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -25,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -37,7 +39,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -144,8 +145,9 @@ func (p *Platform) StartPost(
 		if err != nil {
 			if attempt == maxRetries {
 				log.Warn().Err(err).Msg("ES API unavailable after retries, continuing without active media detection")
-				p.setActiveMedia(nil)
-				return nil
+				// Don't return: the background tracker (started below) keeps
+				// polling and detects games once the ES API becomes available.
+				break
 			}
 
 			delay := time.Duration(1<<attempt) * baseDelay
@@ -164,15 +166,13 @@ func (p *Platform) StartPost(
 			systemID, err := fromBatoceraSystem(gameResp.SystemName)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to convert system %s, setting no active media", gameResp.SystemName)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			systemMeta, err := assets.GetSystemMetadata(systemID)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to get system metadata for %s, setting no active media", systemID)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			game = models.NewActiveMedia(
@@ -258,6 +258,15 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return result
 }
 
+// RefreshLauncherDependencies invalidates external EmulationStation config so
+// the following launcher rebuild reparses current system paths and extensions.
+func (p *Platform) RefreshLauncherDependencies() error {
+	p.esConfigMu.Lock()
+	defer p.esConfigMu.Unlock()
+	p.esConfigCache = nil
+	return nil
+}
+
 // getESConfig returns cached ES system config, parsing it on first access.
 func (p *Platform) getESConfig() *ESSystemConfig {
 	p.esConfigMu.RLock()
@@ -286,13 +295,18 @@ func (p *Platform) getESConfig() *ESSystemConfig {
 	return esCfg
 }
 
+func (*Platform) UpdatePayload() []updatepayload.File {
+	return UpdatePayload()
+}
+
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    DataDir,
-		ConfigDir:  ConfigDir,
-		TempDir:    filepath.Join(os.TempDir(), config.AppName),
-		LogDir:     LogDir,
-		ZipsAsDirs: false,
+		DataDir:               DataDir,
+		ConfigDir:             ConfigDir,
+		TempDir:               filepath.Join(os.TempDir(), config.AppName),
+		LogDir:                LogDir,
+		ZipsAsDirs:            false,
+		DisableZapScriptInTUI: true,
 	}
 }
 
@@ -393,7 +407,7 @@ func (p *Platform) ReturnToMenu() error {
 }
 
 func (p *Platform) LaunchSystem(_ *config.Instance, systemID string) error {
-	if strings.EqualFold(systemID, "menu") {
+	if strings.EqualFold(systemID, platforms.SystemMenu) {
 		return p.ReturnToMenu()
 	}
 
@@ -809,31 +823,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(customLaunchers, launchers...)
 }
 
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	if err := esapi.APINotify(args.Text); err != nil {
-		return nil, 0, fmt.Errorf("failed to show notice: %w", err)
-	}
-	return nil, 0, nil
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
+func (*Platform) PresentUI(
+	_ context.Context,
+	event *models.UIEvent,
 ) (func() error, error) {
-	if err := esapi.APINotify(args.Text); err != nil {
-		return nil, fmt.Errorf("failed to show loader: %w", err)
+	if event.Kind != models.UIEventKindNotice && event.Kind != models.UIEventKindLoader {
+		return nil, platforms.ErrNotSupported
+	}
+	text := event.Message
+	if text == "" {
+		text = event.Title
+	}
+	if err := esapi.APINotify(text); err != nil {
+		return nil, fmt.Errorf("failed to present UI event: %w", err)
 	}
 	return func() error { return nil }, nil
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
@@ -848,6 +852,7 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }

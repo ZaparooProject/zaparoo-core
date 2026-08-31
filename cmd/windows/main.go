@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/rs/zerolog/log"
 	syswindows "golang.org/x/sys/windows"
@@ -83,16 +84,63 @@ func isElevated() (bool, error) {
 	return token.IsElevated(), nil
 }
 
-func isRunning() bool {
-	_, err := syswindows.CreateMutex(
+type singleInstance struct {
+	closeHandle func(syswindows.Handle) error
+	handle      syswindows.Handle
+}
+
+func (s *singleInstance) release() error {
+	if s == nil || s.handle == 0 {
+		return nil
+	}
+	if err := s.closeHandle(s.handle); err != nil {
+		return err
+	}
+	s.handle = 0
+	return nil
+}
+
+type singleInstanceOps struct {
+	createMutex func(*syswindows.SecurityAttributes, bool, *uint16) (syswindows.Handle, error)
+	closeHandle func(syswindows.Handle) error
+}
+
+func acquireSingleInstance() (*singleInstance, bool) {
+	return acquireSingleInstanceWith(singleInstanceOps{
+		createMutex: syswindows.CreateMutex,
+		closeHandle: syswindows.CloseHandle,
+	})
+}
+
+func acquireSingleInstanceWith(ops singleInstanceOps) (*singleInstance, bool) {
+	handle, err := ops.createMutex(
 		nil, false,
 		syswindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
 	)
-	if err != nil {
-		log.Fatal().Err(err).Msg("error creating mutex")
+	// When another instance already holds the named mutex, CreateMutex reports
+	// ERROR_ALREADY_EXISTS. That is the "already running" signal we want — not a
+	// failure. Treating it as fatal crashed the second launch instead of exiting
+	// cleanly.
+	if errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
+		if closeErr := ops.closeHandle(handle); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("could not close duplicate single-instance mutex handle")
+		}
+		return nil, true
 	}
-	lastError := syswindows.GetLastError()
-	return errors.Is(lastError, syswindows.ERROR_ALREADY_EXISTS)
+	if err != nil {
+		// A genuine mutex-creation failure shouldn't prevent startup; log it and
+		// assume no other instance is running.
+		log.Error().Err(err).Msg("error creating single-instance mutex")
+		return nil, false
+	}
+	return &singleInstance{handle: handle, closeHandle: ops.closeHandle}, false
+}
+
+func restartAfterReleasing(instance *singleInstance, restartFn func() error) error {
+	if err := instance.release(); err != nil {
+		return fmt.Errorf("releasing single-instance mutex before restart: %w", err)
+	}
+	return restartFn()
 }
 
 func main() {
@@ -150,23 +198,42 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	if isRunning() {
+	instance, running := acquireSingleInstance()
+	if running {
 		log.Error().Msg("core is already running")
 		return errors.New("zaparoo is already running")
 	}
+	defer func() {
+		if releaseErr := instance.release(); releaseErr != nil {
+			log.Error().Err(releaseErr).Msg("could not release single-instance mutex")
+		}
+	}()
 
 	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
+		// The previous version is back on disk, but this process is still the
+		// image that failed and nothing here would start the restored one.
+		if errors.Is(err, updater.ErrRolledBack) {
+			if releaseErr := instance.release(); releaseErr != nil {
+				return fmt.Errorf("releasing single-instance mutex before rollback restart: %w",
+					errors.Join(err, releaseErr))
+			}
+			return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
+		}
+
 		log.Error().Msgf("error starting service: %s", err)
 		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	exit := make(chan bool, 1)
-	defer close(exit)
+
+	// The tray owns the main thread until it quits, so the service has to be
+	// watched alongside it rather than after it.
+	restarting := restart.WaitForShutdown(
+		sigs, exit, svcResult.Done, svcResult.RestartRequested, systray.Quit)
 
 	systray.Run(cfg, pl, icon,
 		func(msg string) {
@@ -177,22 +244,16 @@ func run() error {
 		},
 	)
 
-	select {
-	case <-sigs:
-		err = svcResult.Stop()
-		if err != nil {
-			log.Error().Msgf("error stopping service: %s", err)
-		}
-	case <-exit:
-		err = svcResult.Stop()
-		if err != nil {
-			log.Error().Msgf("error stopping service: %s", err)
-		}
-	case <-svcResult.Done:
-		log.Info().Msg("service shut down internally")
-		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
+	if <-restarting {
+		// The service stopped itself on the way to being replaced. Stopping it
+		// again would only delay the binary that replaced it.
+		if err := restartAfterReleasing(instance, restart.Exec); err != nil {
 			return fmt.Errorf("failed to re-exec for restart: %w", err)
 		}
+		return nil
+	}
+	if err := svcResult.Stop(); err != nil {
+		log.Error().Msgf("error stopping service: %s", err)
 	}
 
 	return nil

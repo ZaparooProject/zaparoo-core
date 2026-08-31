@@ -25,11 +25,13 @@ import (
 	"context"
 	"os/exec"
 	"syscall"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
 func openPath(path string) error {
 	//nolint:gosec // Safe: opens file/URL with system default handler
-	cmd := exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
+	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", "start", "", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Start() //nolint:wrapcheck // internal helper
 }

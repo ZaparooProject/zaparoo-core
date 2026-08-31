@@ -64,3 +64,21 @@ func TestClientErrf_DetectedByErrorsAs(t *testing.T) {
 	var clientErr *models.ClientError
 	assert.ErrorAs(t, err, &clientErr)
 }
+
+func TestQuietClientErr_DetectedAsQuietAndClientError(t *testing.T) {
+	err := models.QuietClientErr(errSentinel)
+
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+	assert.Equal(t, errSentinel, quietErr.Err)
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Equal(t, errSentinel, clientErr.Err)
+}
+
+func TestQuietClientErrf_FormatsMessage(t *testing.T) {
+	err := models.QuietClientErrf("bad input: %s", "foo")
+	require.Error(t, err)
+	assert.Equal(t, "bad input: foo", err.Error())
+}

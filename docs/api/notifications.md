@@ -81,6 +81,76 @@ A token was removed from a connected reader.
 
 Returns `null`.
 
+## UI
+
+### ui.changed
+
+Authoritative global UI state changed. Sent when event opens, updates, is replaced, or resolves. Clients should replace local event snapshot with `events` from newest revision rather than applying incremental patches.
+
+Host platform and all connected clients may render same event in parallel. First valid response wins. A terminal update removes event from `events` and describes it in `resolved`, instructing every renderer to close.
+
+`ui.changed` is latest-wins coalescible. Clients that reconnect or suspect missed notifications should query [`ui`](./methods.md#ui).
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| revision | number | Yes      | Monotonic revision of process-wide UI state shared across clients. Ignore older values. |
+| events   | object[] | Yes    | Complete active event snapshot. Initial implementation contains zero or one event. |
+| resolved | object[] | Yes    | Terminal resolutions associated with this transition. |
+
+Event and resolution fields are defined under [`ui`](./methods.md#ui-event-object) and [`ui.respond`](./methods.md#ui-resolution-object).
+
+#### Picker opened
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "ui.changed",
+  "params": {
+    "revision": 12,
+    "events": [
+      {
+        "id": "68bb6f25-dbd4-46a0-a3ac-e4fb54928ac2",
+        "kind": "picker",
+        "title": "Favorites",
+        "choices": [
+          {"id": "e88560a7-76bb-4ab4-a914-da4be745778d", "label": "Game One"},
+          {"id": "ce99379a-b803-4489-9da4-e752e96471e9", "label": "Game Two"}
+        ],
+        "selectedChoiceId": "e88560a7-76bb-4ab4-a914-da4be745778d",
+        "dismissible": true,
+        "createdAt": "2026-07-16T12:00:00Z",
+        "expiresAt": "2026-07-16T12:00:30Z"
+      }
+    ],
+    "resolved": []
+  }
+}
+```
+
+#### Picker resolved
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "ui.changed",
+  "params": {
+    "revision": 13,
+    "events": [],
+    "resolved": [
+      {
+        "id": "68bb6f25-dbd4-46a0-a3ac-e4fb54928ac2",
+        "outcome": "selected",
+        "choiceId": "ce99379a-b803-4489-9da4-e752e96471e9"
+      }
+    ]
+  }
+}
+```
+
+Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for compatibility while also opening a global `confirm` UI event for API clients. Core does not present this specific confirmation through host platform renderer, preserving existing sound and card re-tap behavior during active media.
+
 ## Media
 
 ### media.started
@@ -374,6 +444,41 @@ The warning applies to whichever limit will be reached first (session or daily).
 }
 ```
 
+### playtime.extended
+
+Sent when extra playtime was granted to the session currently being limited, either through the [`playtime.extend`](./methods.md#playtimeextend) method or by scanning a physical extension card. Warning thresholds are re-armed by a grant, so they fire again against the newly granted time.
+
+Profiles are identified by ID only. The switch ID authorizing a card grant is a bearer credential and is never published.
+
+A repeated request that granted no additional time emits no notification.
+
+#### Parameters
+
+| Key              | Type   | Required | Description                                                                    |
+| :--------------- | :----- | :------- | :------------------------------------------------------------------------------- |
+| mode             | string | Yes      | `"duration"` when time was added, `"today"` when the session limit was waived.  |
+| duration         | string | No       | Time this grant added (Go duration format). Omitted for `"today"`.              |
+| expires          | string | No       | RFC 3339 timestamp when a `"today"` waiver lapses. Omitted for `"duration"`.     |
+| sessionExtension | string | No       | The session's accumulated extension after this grant.                          |
+| profileId        | string | No       | Recipient profile. Omitted for the shared profile.                             |
+| grantedBy        | string | No       | Profile that authorized the grant. Omitted when authorized by an admin client rather than a profile credential. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "playtime.extended",
+  "params": {
+    "mode": "duration",
+    "duration": "15m0s",
+    "sessionExtension": "15m0s",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "grantedBy": "0194e2a1-9f8e-7c65-b432-1a0f9e8d7c6b"
+  }
+}
+```
+
 ## Inbox
 
 ### inbox.added
@@ -405,6 +510,194 @@ Sent when a new inbox message is added to the server.
     "severity": 0,
     "category": "update",
     "createdAt": "2024-09-24T17:49:42.938167429+08:00"
+  }
+}
+```
+
+## Profiles
+
+### profiles.active
+
+Sent when the device's active profile changes, including deactivation.
+
+#### Parameters
+
+| Key     | Type   | Required | Description                                                        |
+| :------ | :----- | :------- | :------------------------------------------------------------------ |
+| profile | object \| null | Yes | The new active profile, or null when the device deactivated.       |
+
+The profile object contains `profileId`, `name`, `hasPin` and any playtime limit overrides (`limitsEnabled`, `dailyLimit`, `sessionLimit`).
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "profiles.active",
+  "params": {
+    "profile": {
+      "profileId": "1ad28b9a-7aef-11ef-9817-020304050607",
+      "name": "Kid A",
+      "hasPin": true,
+      "limitsEnabled": true,
+      "dailyLimit": "2h"
+    }
+  }
+}
+```
+
+### profiles.data
+
+Sent when a profile data swap (save files, save states) changes state on
+platforms that support data swapping. The profile switch itself always
+succeeds independently of data swapping; this notification reports the
+data side.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                          |
+| :-------- | :----- | :------- | :-------------------------------------------------------------------- |
+| profileId | string | Yes      | Profile whose data the swap targets. Empty for the shared profile.   |
+| status    | string | Yes      | One of `applied`, `deferred` (media is running; applies when it stops), `failed`, or `unavailable` (the storage setup does not permit swapping, e.g. a read-only network share). |
+| reason    | string | No       | Human-readable explanation for `failed`/`unavailable`.               |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "profiles.data",
+  "params": {
+    "profileId": "1ad28b9a-7aef-11ef-9817-020304050607",
+    "status": "deferred"
+  }
+}
+```
+
+## Auth
+
+### auth.link.status
+
+Sent on every state transition of a device link flow started with `settings.auth.link`. Notification payloads always omit the user code and verification URLs; clients that need them read the `settings.auth.link` result or poll `settings.auth.link.status`.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                     |
+| :-------- | :----- | :------- | :-------------------------------------------------------------- |
+| status    | string | Yes      | One of `pending`, `approved`, `failed`, or `cancelled`.         |
+| expiresAt | string | No       | RFC 3339 time when the link request expires.                    |
+| error     | string | No       | Human-readable reason when `status` is `failed`.                |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "auth.link.status",
+  "params": {
+    "status": "approved"
+  }
+}
+```
+
+## Backup
+
+### backup.state
+
+Sent while a backup operation (local create, cloud upload, or restore) is running, whenever its pause/throttle state changes because a game started or stopped, and once with `finished` true when the operation ends. Backup work follows the same policy as media indexing: most games throttle it, storage-sensitive CD-based cores pause it entirely, and it resumes when the game stops. A notification with `paused`, `throttled`, and `finished` all false means the operation returned to full speed.
+
+The `finished` notification is terminal for that operation, whatever its outcome — use it to clear any paused/slowed indicator, and read `settings.backup.status` for the result.
+
+#### Parameters
+
+| Key       | Type    | Required | Description                                                                              |
+| :-------- | :------ | :------- | :--------------------------------------------------------------------------------------- |
+| operation | string  | No       | The active operation kind, matching `activeOperation` from `settings.backup.status`.     |
+| paused    | boolean | Yes      | True if the operation is fully paused until the running game stops.                      |
+| throttled | boolean | Yes      | True if the operation is running slowed to stay out of the running game's way.           |
+| finished  | boolean | No       | True when the operation has ended; no further `backup.state` events follow for it.       |
+
+#### Examples
+
+##### Upload paused by a running game
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "backup.state",
+  "params": {
+    "operation": "remote-upload",
+    "paused": true,
+    "throttled": false
+  }
+}
+```
+
+##### Operation finished
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "backup.state",
+  "params": {
+    "operation": "remote-upload",
+    "paused": false,
+    "throttled": false,
+    "finished": true
+  }
+}
+```
+
+## Updates
+
+### update.state
+
+Sent while an update is being applied, so a client can show progress instead of a spinner that outlasts a large download.
+
+The stages that happen after the restart — `confirming`, `succeeded` and `rolledBack` — are not sent here, because no client is connected while they run. Read them from `update.check`'s `lastResult` once the service is back.
+
+Download progress is reported at most a few times a second, and the final byte always produces an event.
+
+#### Parameters
+
+| Key             | Type   | Required | Description                                                                              |
+| :-------------- | :----- | :------- | :---------------------------------------------------------------------------------------- |
+| stage           | string | Yes      | `checking`, `downloading`, `verifying`, `probing`, `installing`, `restarting`, or `failed`. |
+| version         | string | No       | The version being installed.                                                             |
+| trigger         | string | No       | Who asked for it: `manual` or `auto`.                                                    |
+| error           | string | No       | What went wrong. Only present on `failed`.                                               |
+| bytesDownloaded | number | No       | Bytes downloaded so far. Only present during `downloading`.                              |
+| bytesTotal      | number | No       | Total bytes to download, when the server reported a length.                              |
+
+#### Examples
+
+##### Downloading
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "update.state",
+  "params": {
+    "stage": "downloading",
+    "version": "2.10.0",
+    "trigger": "manual",
+    "bytesDownloaded": 4194304,
+    "bytesTotal": 12582912
+  }
+}
+```
+
+##### Failed
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "update.state",
+  "params": {
+    "stage": "failed",
+    "version": "2.10.0",
+    "trigger": "auto",
+    "error": "verifying the download: checksum mismatch"
   }
 }
 ```

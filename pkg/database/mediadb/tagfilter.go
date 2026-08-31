@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -72,15 +73,139 @@ func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
 	return expanded
 }
 
+func candidateTagExistsSQL(condition, mediaRef string) string {
+	return fmt.Sprintf(`(EXISTS (
+		SELECT 1 FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTags.MediaDBID = %s.DBID
+		AND %s
+	) OR EXISTS (
+		SELECT 1 FROM MediaTitleTags
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTitleTags.MediaTitleDBID = %s.MediaTitleDBID
+		AND %s
+	))`, mediaRef, condition, mediaRef, condition)
+}
+
+// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
+// media candidates. Probing tag indexes for each candidate avoids materializing
+// every media ID carrying a common tag across the full database.
+func isRequiredFavoriteFilter(filter zapscript.TagFilter) bool {
+	if filter.Operator == zapscript.TagOperatorNOT || filter.Operator == zapscript.TagOperatorOR {
+		return false
+	}
+	tagType, tagValue := resolveFilter(filter.Type, filter.Value)
+	return tagType == string(tags.TagTypeUser) && tagValue == string(tags.TagUserFavorite)
+}
+
+func hasRequiredFavoriteFilter(filters []zapscript.TagFilter) bool {
+	return slices.ContainsFunc(filters, isRequiredFavoriteFilter)
+}
+
+func buildBrowseTagFilterSQL(
+	filters []zapscript.TagFilter,
+	mediaRef string,
+) (clauses []string, args []any) {
+	if !hasRequiredFavoriteFilter(filters) {
+		return buildCandidateTagFilterSQLForRef(filters, mediaRef)
+	}
+
+	var favoriteFilter zapscript.TagFilter
+	remaining := make([]zapscript.TagFilter, 0, len(filters)-1)
+	for _, filter := range filters {
+		if favoriteFilter.Type == "" && isRequiredFavoriteFilter(filter) {
+			favoriteFilter = filter
+			continue
+		}
+		remaining = append(remaining, filter)
+	}
+
+	favoriteClauses, favoriteArgs := buildTagFilterSQLForRef([]zapscript.TagFilter{favoriteFilter}, mediaRef)
+	remainingClauses, remainingArgs := buildCandidateTagFilterSQLForRef(remaining, mediaRef)
+	clauses = make([]string, 0, len(favoriteClauses)+len(remainingClauses))
+	clauses = append(clauses, favoriteClauses...)
+	clauses = append(clauses, remainingClauses...)
+	args = make([]any, 0, len(favoriteArgs)+len(remainingArgs))
+	args = append(args, favoriteArgs...)
+	args = append(args, remainingArgs...)
+	return clauses, args
+}
+
+func buildCandidateTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
+	return buildCandidateTagFilterSQLForRef(filters, "Media")
+}
+
+func buildCandidateTagFilterSQLForRef(
+	filters []zapscript.TagFilter,
+	mediaRef string,
+) (clauses []string, args []any) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+
+	filters = expandCreditFilters(filters)
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	clauses = make([]string, 0, len(filters))
+	args = make([]any, 0, len(filters)*4)
+
+	for _, f := range andFilters {
+		if f.Type == string(tags.TagTypeCredit) {
+			_, val := resolveFilter(f.Type, f.Value)
+			condition := "Tags.Tag = ? AND TagTypes.Type IN (?, ?, ?)"
+			clauses = append(clauses, candidateTagExistsSQL(condition, mediaRef))
+			devType := string(tags.TagTypeDeveloper)
+			pubType := string(tags.TagTypePublisher)
+			credType := string(tags.TagTypeCredit)
+			args = append(args, val, devType, pubType, credType, val, devType, pubType, credType)
+			continue
+		}
+
+		typ, val := resolveFilter(f.Type, f.Value)
+		clauses = append(clauses, candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?", mediaRef))
+		args = append(args, typ, val, typ, val)
+	}
+
+	for _, f := range notFilters {
+		typ, val := resolveFilter(f.Type, f.Value)
+		clauses = append(clauses, "NOT "+candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?", mediaRef))
+		args = append(args, typ, val, typ, val)
+	}
+
+	if len(orFilters) > 0 {
+		orConditions := make([]string, 0, len(orFilters))
+		orTypes := make([]string, 0, len(orFilters))
+		orValues := make([]string, 0, len(orFilters))
+		for _, f := range orFilters {
+			typ, val := resolveFilter(f.Type, f.Value)
+			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
+			orTypes = append(orTypes, typ)
+			orValues = append(orValues, val)
+			args = append(args, typ, val)
+		}
+		for i := range orTypes {
+			args = append(args, orTypes[i], orValues[i])
+		}
+		clauses = append(clauses, candidateTagExistsSQL("("+strings.Join(orConditions, " OR ")+")", mediaRef))
+	}
+
+	return clauses, args
+}
+
 // BuildTagFilterSQL constructs SQL WHERE clauses and arguments for tag filtering
 // using a hybrid strategy optimized for SQLite performance:
 //   - AND filters: INTERSECT pattern
-//   - NOT filters: NOT EXISTS pattern
+//   - NOT filters: forward NOT IN anti-set
 //   - OR filters: EXISTS with OR conditions
 //
 // Returns a slice of WHERE clause strings and corresponding arguments.
 // Clauses should be joined with " AND " and appended to the main query's WHERE conditions.
 func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
+	return buildTagFilterSQLForRef(filters, "Media")
+}
+
+func buildTagFilterSQLForRef(filters []zapscript.TagFilter, mediaRef string) (clauses []string, args []any) {
 	if len(filters) == 0 {
 		return nil, nil
 	}
@@ -131,7 +256,7 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 			args = append(args, typ, val, typ, val)
 		}
 
-		intersectClause := fmt.Sprintf("Media.DBID IN (%s)", strings.Join(intersectSelects, " INTERSECT "))
+		intersectClause := fmt.Sprintf("%s.DBID IN (%s)", mediaRef, strings.Join(intersectSelects, " INTERSECT "))
 		clauses = append(clauses, intersectClause)
 	}
 
@@ -154,66 +279,65 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 	)`
 	for _, f := range andCreditFilters {
 		_, val := resolveFilter(f.Type, f.Value)
-		clauses = append(clauses, fmt.Sprintf("Media.DBID IN (%s)", andCreditSelect))
+		clauses = append(clauses, fmt.Sprintf("%s.DBID IN (%s)", mediaRef, andCreditSelect))
 		devType := string(tags.TagTypeDeveloper)
 		pubType := string(tags.TagTypePublisher)
 		credType := string(tags.TagTypeCredit)
 		args = append(args, val, devType, pubType, credType, val, devType, pubType, credType)
 	}
 
-	// Build NOT EXISTS clauses for NOT filters
-	// Each NOT filter excludes media that has the specified tag at either level
+	// Build forward anti-set clauses for NOT filters. Resolving matching media IDs
+	// once lets SQLite use the reverse tag indexes instead of repeating correlated
+	// tag joins for every candidate media row.
 	for _, f := range notFilters {
 		typ, val := resolveFilter(f.Type, f.Value)
-		clause := `NOT EXISTS (
-			SELECT 1 FROM MediaTags
+		clause := mediaRef + `.DBID NOT IN (
+			SELECT MediaDBID FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTags.MediaDBID = Media.DBID
-			AND TagTypes.Type = ? AND Tags.Tag = ?
-		) AND NOT EXISTS (
-			SELECT 1 FROM MediaTitleTags
-			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			UNION ALL
+			SELECT m.DBID AS MediaDBID FROM Media m
+			JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags ON mtt.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
-			AND TagTypes.Type = ? AND Tags.Tag = ?
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
 		)`
 		clauses = append(clauses, clause)
 		args = append(args, typ, val, typ, val)
 	}
 
-	// Build a single EXISTS clause with OR for all OR filters
-	// Media must have at least ONE of the OR tags from either level
+	// Resolve all OR matches through reverse tag indexes once. Correlating OR
+	// probes against the outer Media scan makes even sparse unions O(all media)
+	// on MiSTer and can exceed the API timeout.
 	if len(orFilters) > 0 {
-		var orConditions []string
-		var orTyps, orVals []string
+		orConditions := make([]string, 0, len(orFilters))
+		orTypes := make([]string, 0, len(orFilters))
+		orValues := make([]string, 0, len(orFilters))
 		for _, f := range orFilters {
 			typ, val := resolveFilter(f.Type, f.Value)
-			orTyps = append(orTyps, typ)
-			orVals = append(orVals, val)
+			orTypes = append(orTypes, typ)
+			orValues = append(orValues, val)
 			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
 			args = append(args, typ, val)
 		}
 		orJoined := strings.Join(orConditions, " OR ")
-
-		// Duplicate args for the second EXISTS (MediaTitleTags)
-		for i := range orTyps {
-			args = append(args, orTyps[i], orVals[i])
+		for i := range orTypes {
+			args = append(args, orTypes[i], orValues[i])
 		}
 
-		orClause := fmt.Sprintf(`(EXISTS (
-			SELECT 1 FROM MediaTags
+		orClause := fmt.Sprintf(`%s.DBID IN (
+			SELECT MediaDBID FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTags.MediaDBID = Media.DBID
-			AND (%s)
-		) OR EXISTS (
-			SELECT 1 FROM MediaTitleTags
-			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			WHERE %s
+			UNION
+			SELECT m.DBID AS MediaDBID FROM Media m
+			JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags ON mtt.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
-			AND (%s)
-		))`, orJoined, orJoined)
+			WHERE %s
+		)`, mediaRef, orJoined, orJoined)
 		clauses = append(clauses, orClause)
 	}
 

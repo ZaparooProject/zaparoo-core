@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -45,7 +46,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -77,16 +77,16 @@ type Platform struct {
 	cmd            command.Executor
 	ctx            context.Context
 	clock          clockwork.Clock
-	activeMedia    func() *models.ActiveMedia
+	cancel         context.CancelFunc
 	setActiveMedia func(*models.ActiveMedia)
 	stopTracker    func() error
-	cancel         context.CancelFunc
+	activeMedia    func() *models.ActiveMedia
+	activeStorage  string
+	pendingROMPath string
+	lastKnownCore  string
+	procPath       string
+	storagePaths   []string
 	shared.LinuxInput
-	activeStorage    string
-	pendingROMPath   string
-	lastKnownCore    string
-	procPath         string
-	storagePaths     []string
 	trackerMu        syncutil.RWMutex
 	keyboardRealMode bool
 }
@@ -281,7 +281,7 @@ func (p *Platform) LaunchMedia(
 }
 
 func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
-	return platforms.CmdResult{}, nil
+	return platforms.CmdResult{}, platforms.ErrNotSupported
 }
 
 func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
@@ -316,27 +316,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	return nil, 0, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
-}
-
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
@@ -346,8 +325,9 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }
 
 // launchGame spawns a background goroutine that deletes the autostart file

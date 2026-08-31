@@ -24,6 +24,7 @@ package mister
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -37,7 +38,7 @@ import (
 // This includes:
 //   - Checking if FPGA core is active and returning to menu if needed
 //   - Opening the console (switching to launcher VT)
-//   - Cleaning both F9 console (tty1) and launcher console (tty7)
+//   - Cleaning both F9 console (tty1) and launcher console (tty3)
 //
 // The provided context can be used to cancel console operations if the launcher is superseded.
 //
@@ -54,11 +55,12 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 		}
 	}
 
-	// Get console manager
-	cm := pl.ConsoleManager()
+	return setupConsoleManager(ctx, pl.ConsoleManager())
+}
 
+func setupConsoleManager(ctx context.Context, cm platforms.ConsoleManager) (platforms.ConsoleManager, error) {
 	// Switch to console mode (F9 + chvt to launcher VT)
-	if err := cm.Open(ctx, launcherConsoleVT); err != nil {
+	if err := cm.Open(ctx, armLauncherVT); err != nil {
 		return nil, fmt.Errorf("failed to open console: %w", err)
 	}
 
@@ -68,9 +70,13 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 		log.Debug().Err(err).Msg("failed to clean f9 console")
 	}
 
-	// Clean launcher console (tty7) - where content actually displays
-	if err := cm.Clean(launcherConsoleVT); err != nil {
-		return nil, fmt.Errorf("failed to clean launcher console: %w", err)
+	// Clean launcher console (tty3) - where content actually displays
+	if err := cm.Clean(armLauncherVT); err != nil {
+		cleanErr := fmt.Errorf("failed to clean launcher console: %w", err)
+		if closeErr := cm.Close(); closeErr != nil {
+			return nil, errors.Join(cleanErr, fmt.Errorf("close console after clean failure: %w", closeErr))
+		}
+		return nil, cleanErr
 	}
 
 	return cm, nil
@@ -78,10 +84,7 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 
 // createConsoleRestoreFunc builds a standard console cleanup function for console-based launchers.
 // The returned function handles:
-//   - Launching the MiSTer menu core
-//   - Restoring cursor state on both F9 and launcher consoles
-//   - Pressing F12 to exit console mode
-//   - Clearing the console active flag
+//   - Closing the console through a Main lease or stock F12 fallback
 //   - Grace period for transitions to complete
 //
 // This cleanup function should be called when:
@@ -92,32 +95,14 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 // new launcher will handle console setup.
 //
 // This function is reusable for any console-based launcher.
-func createConsoleRestoreFunc(pl *Platform, cm platforms.ConsoleManager) func() {
+func createConsoleRestoreFunc(cm platforms.ConsoleManager) func() {
 	return func() {
-		// Exit console mode FIRST before loading menu
-		// If we call LaunchMenu() while in console mode, MiSTer Main switches to tty2
-		if err := pl.KeyboardPress("{f12}"); err != nil {
-			log.Error().Err(err).Msg("error pressing F12 to exit console")
+		// Exit console mode before loading menu. Close uses the explicit Main
+		// console lease when available and retains the stock F12 fallback.
+		if err := cm.Close(); err != nil {
+			log.Error().Err(err).Msg("error closing console")
 		}
 		time.Sleep(100 * time.Millisecond)
-
-		// Restore cursor state on F9 console (tty1) and launcher console (tty7)
-		if err := cm.Restore(f9ConsoleVT); err != nil {
-			log.Warn().Err(err).Msg("error restoring tty1 cursor")
-		}
-		if err := cm.Restore(launcherConsoleVT); err != nil {
-			log.Warn().Err(err).Msgf("error restoring tty%s cursor", launcherConsoleVT)
-		}
-
-		// NOW load menu core after exiting console mode
-		if err := pl.ReturnToMenu(); err != nil {
-			log.Error().Err(err).Msg("error launching menu")
-		}
-
-		// Clear console active flag
-		pl.consoleManager.mu.Lock()
-		pl.consoleManager.active = false
-		pl.consoleManager.mu.Unlock()
 
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -194,8 +179,9 @@ func runTrackedProcess(
 		return nil, fmt.Errorf("failed to start %s: %w", logPrefix, err)
 	}
 
-	// Track process and completion channel together BEFORE cleanup goroutine starts
-	pl.setTrackedProcessWithCleanup(cmd.Process, done)
+	// Track process and completion channel together BEFORE cleanup goroutine starts.
+	processGroup := cmd.SysProcAttr != nil && (cmd.SysProcAttr.Setsid || cmd.SysProcAttr.Setpgid)
+	pl.setTrackedProcessWithCleanup(cmd.Process, done, processGroup)
 
 	// Cleanup in goroutine (non-blocking)
 	go func() {
@@ -203,6 +189,7 @@ func runTrackedProcess(
 		defer close(done)
 
 		waitErr := cmd.Wait()
+		killRemainingProcessGroup(cmd.Process, processGroup)
 		log.Debug().Msgf("%s: process exited, waitErr=%v", logPrefix, waitErr)
 
 		// Handle different exit scenarios
@@ -220,7 +207,7 @@ func runTrackedProcess(
 		restoreFunc()
 
 		// Clear tracked process after cleanup completes
-		pl.clearTrackedProcess()
+		pl.clearTrackedProcess(cmd.Process)
 	}()
 
 	return cmd.Process, nil

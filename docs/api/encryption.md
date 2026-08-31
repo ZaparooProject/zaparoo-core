@@ -7,7 +7,7 @@ Zaparoo encrypts WebSocket traffic using PAKE-based pairing and AES-256-GCM with
 - **Pairing**: One-time PAKE2 (P-256) handshake. User enters a 6-digit PIN from the Zaparoo device into the client app. Both sides derive a shared 32-byte pairing key. The PIN is never transmitted.
 - **Encryption**: AES-256-GCM with counter-derived nonces on every WebSocket frame.
 - **Per-session keys**: Each WebSocket connection generates a random 16-byte session salt. Both sides derive ephemeral keys via HKDF-SHA256 (pairing key as IKM, session salt as HKDF salt).
-- **Scope**: WebSocket only. HTTP POST, SSE, and REST GET are localhost-restricted by default.
+- **Scope**: WebSocket only. HTTP POST, SSE, and REST GET are localhost-restricted by default. Remotely enabled SSE requires authenticated API-key admin on legacy-disabled platforms. HTTP POST also exposes explicitly unauthenticated authentication bootstrap methods.
 
 ## Configuration
 
@@ -15,8 +15,13 @@ Set `encryption` in `[service]` of `config.toml`:
 
 | Value | Behavior |
 |---|---|
-| `false` (default) | No encryption. All WebSocket connections accepted as plaintext. |
+| unset | Use platform default. Linux and SteamOS default to `true`; other existing platforms retain their platform default. |
+| `false` | Encryption is optional. The explicit override persists across saves. Remote plaintext full-API access still requires either an authenticated API key or a platform with grandfathered legacy access. |
 | `true` | Remote WebSocket connections must send an encrypted first frame from a paired client. Localhost plaintext connections still work without pairing. |
+
+Upgrading Linux or SteamOS enables encryption when existing configuration omits this key. Use local Core UI/configuration to pair clients or explicitly disable encryption. Static API keys remain an admin escape hatch for clients that cannot implement encrypted WebSockets, but plaintext WebSocket use requires explicitly setting `encryption = false`.
+
+Remote WebSocket sessions receive no notifications until their encrypted first frame authenticates. Sessions that do not authenticate within 10 seconds are closed.
 
 ## Pairing flow
 
@@ -65,7 +70,7 @@ Where `role` is `"client"` or `"server"`, and `MsgA`/`MsgB` are the **raw bytes 
 
 ### PAKE message format
 
-The `pake` field in `/pair/start` request and response carries a base64-encoded JSON object. The PAKE protocol is based on [schollz/pake](https://github.com/schollz/pake) v3 using the P-256 curve. Coordinates are string-encoded for cross-language compatibility.
+The `pake` field in `/api/pair/start` request and response carries a base64-encoded JSON object. The PAKE protocol is based on [schollz/pake](https://github.com/schollz/pake) v3 using the P-256 curve. Coordinates are string-encoded for cross-language compatibility.
 
 | Field | Type | Description |
 |---|---|---|
@@ -102,7 +107,7 @@ Example client message (role 0, message A, Y not yet computed):
 - **PIN**: 6 decimal digits, `crypto/rand`. ~20 bits of entropy.
 - **Expiry**: 5 minutes from PIN generation.
 - **Attempts**: 3 failed HMAC verifications per PIN before invalidation.
-- **Sessions**: `/pair/start` session expires after 2 minutes.
+- **Sessions**: `/api/pair/start` session expires after 2 minutes.
 - **Client name**: max 128 bytes.
 - **Max paired clients**: 50 per device.
 - **Rate limit**: 1 req/sec per IP on `/api/pair/*`.
@@ -224,12 +229,12 @@ HTTP errors on pairing endpoints:
 
 | Status | Endpoint | Meaning |
 |---|---|---|
-| 400 | `/pair/*` | Malformed request body or PAKE message |
-| 401 | `/pair/finish` | HMAC mismatch (wrong PIN) |
-| 403 | `/pair/start` | Max paired clients reached, or attempts exhausted |
-| 404 | `/pair/finish` | Unknown session ID |
-| 410 | `/pair/*` | Pairing PIN expired |
-| 429 | `/pair/*` | Rate limit exceeded |
+| 400 | `/api/pair/*` | Malformed request body or PAKE message |
+| 401 | `/api/pair/finish` | HMAC mismatch (wrong PIN) |
+| 403 | `/api/pair/start` | Max paired clients reached, or attempts exhausted |
+| 404 | `/api/pair/finish` | Unknown session ID |
+| 410 | `/api/pair/*` | Pairing PIN expired |
+| 429 | `/api/pair/*` | Rate limit exceeded |
 
 WebSocket errors (plaintext JSON-RPC error, then connection closed):
 
@@ -245,12 +250,20 @@ If the client doesn't know whether encryption is on:
 1. Try connecting plaintext.
 2. If the server returns `-32002`, you need to pair first.
 3. Prompt the user to start pairing from the Zaparoo device.
-4. Run the PAKE handshake (`/pair/start` → `/pair/finish`). Derive `pairingKey` locally via HKDF (see [Pairing flow](#pairing-flow)). Store `authToken` and `pairingKey`.
+4. Run the PAKE handshake (`/api/pair/start` → `/api/pair/finish`). Derive `pairingKey` locally via HKDF (see [Pairing flow](#pairing-flow)). Store `authToken` and `pairingKey`.
 5. On future connections: fresh session salt, derive session keys (see [Session cryptography](#session-cryptography)), send the encrypted first frame.
 
 ## Non-WebSocket transports
 
-HTTP POST, SSE, and REST GET (`/api`, `/api/events`, `/r/*`, `/run/*`) are localhost-only by default. Add IPs or CIDR ranges to `allowed_ips` in config for remote access. No encryption on these transports, they're for simple integrations on trusted networks. API key auth still applies.
+HTTP POST and SSE (`/api`, `/api/events`) are localhost-only by default. Add IPs or CIDR ranges to `allowed_ips` for remote access. On legacy-disabled platforms, SSE requires a valid static API key. HTTP POST applies per-method authority; other methods remain denied unless explicitly allowed by legacy policy. These transports are not encrypted and should be used only on trusted networks.
+
+Core's intentionally unauthenticated surface remains available on every platform:
+
+- Client pairing (`/api/pair/start`, `/api/pair/finish`) is remotely reachable and strictly rate limited.
+- Online authentication bootstrap (`settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status`) is available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited.
+- `/health` is unrestricted and returns only `OK` for liveness checks.
+
+REST `/run/*` (plus `/r/*` and deprecated `/l/*`) is a separate restricted anonymous surface. Remote use requires explicit `allow_run`, and requested ZapScript must match configured patterns. Static API-key middleware still applies when keys are configured.
 
 ## Pseudocode example
 

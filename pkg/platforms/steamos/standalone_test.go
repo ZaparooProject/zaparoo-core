@@ -1,0 +1,278 @@
+//go:build linux
+
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package steamos
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNativeStandaloneLaunchers(t *testing.T) {
+	t.Parallel()
+
+	launchers := nativeStandaloneLaunchers()
+	require.Len(t, launchers, 18)
+
+	byID := make(map[string]platforms.Launcher, len(launchers))
+	for i := range launchers {
+		launcher := launchers[i]
+		byID[launcher.ID] = launcher
+		assert.Contains(t, launcher.Groups, platformshared.LauncherGroupNative)
+		assert.Equal(t, platforms.LifecycleTracked, launcher.Lifecycle)
+		assert.NotNil(t, launcher.Availability)
+		assert.NotNil(t, launcher.BuildLaunchCommand)
+		assert.NotNil(t, launcher.Launch)
+	}
+
+	assert.Equal(t, systemdefs.SystemXbox360, byID["XeniaCanary"].SystemID)
+	assert.Equal(t, systemdefs.SystemSwitch, byID["Ryubing"].SystemID)
+	assert.Equal(t, systemdefs.SystemPS4, byID["ShadPS4"].SystemID)
+	assert.Equal(t, systemdefs.SystemPS2, byID["PCSX2"].SystemID)
+	assert.Equal(t, systemdefs.SystemWiiU, byID["Cemu"].SystemID)
+	assert.Equal(t, systemdefs.System3DS, byID["Azahar"].SystemID)
+	assert.Equal(t, systemdefs.SystemVita, byID["Vita3K"].SystemID)
+	assert.Equal(t, systemdefs.SystemPS3, byID["RPCS3"].SystemID)
+	assert.Equal(t, systemdefs.SystemPSX, byID["DuckStation"].SystemID)
+	assert.Equal(t, systemdefs.SystemPSP, byID["PPSSPP"].SystemID)
+	assert.Equal(t, systemdefs.SystemGameCube, byID["DolphinGameCube"].SystemID)
+	assert.Equal(t, systemdefs.SystemWii, byID["DolphinWii"].SystemID)
+	assert.Equal(t, systemdefs.SystemNDS, byID["MelonDS"].SystemID)
+	assert.Equal(t, systemdefs.SystemScummVM, byID["ScummVMStandalone"].SystemID)
+	assert.Equal(t, systemdefs.SystemModel3, byID["Supermodel"].SystemID)
+	assert.Equal(t, systemdefs.SystemXbox, byID["Xemu"].SystemID)
+
+	for _, id := range []string{
+		"XeniaCanary", "Ryubing", "ShadPS4",
+		"PCSX2", "Cemu", "Azahar", "Vita3K", "RPCS3",
+		"DolphinGameCube", "DolphinWii", "Supermodel", "Xemu",
+	} {
+		assert.False(t, byID[id].SkipFilesystemScan, id)
+		assert.NotEmpty(t, byID[id].Folders, id)
+		assert.NotEmpty(t, byID[id].Extensions, id)
+	}
+	for _, id := range []string{
+		"DuckStation", "PPSSPP", "MelonDS", "ScummVMStandalone", "PrimeHackGameCube", "PrimeHackWii",
+	} {
+		assert.True(t, byID[id].SkipFilesystemScan, id)
+	}
+}
+
+func TestStandaloneLaunchCommandBuilders(t *testing.T) {
+	t.Run("flatpak", func(t *testing.T) {
+		mediaPath := filepath.Join(string(filepath.Separator), "games", "ps2", "game.iso")
+		def := standaloneDef{
+			id: "PCSX2", flatpakID: "net.pcsx2.PCSX2", args: batchArgs("-fullscreen", "-batch"),
+		}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, "flatpak", command.Executable)
+		assert.Equal(t, []string{
+			"run", "--filesystem=" + filepath.Dir(mediaPath) + ":ro", "--die-with-parent",
+			def.flatpakID, "-fullscreen", "-batch", mediaPath,
+		}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native", func(t *testing.T) {
+		dir := t.TempDir()
+		executableName := "zaparoo-test-emulator"
+		executable := filepath.Join(dir, executableName)
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		mediaPath := filepath.Join(dir, "game.rom")
+		def := standaloneDef{id: "TestNative", executable: executableName, args: batchArgs("--fullscreen")}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
+		assert.Equal(t, []string{"--fullscreen", mediaPath}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native executable missing", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		executableName := "zaparoo-missing-emulator"
+		def := standaloneDef{id: "MissingNative", executable: executableName, args: batchArgs()}
+
+		_, err := buildStandaloneLaunchCommand(&def, "game.rom")
+
+		require.ErrorContains(t, err, "executable not found")
+	})
+}
+
+func TestNativeStandaloneLauncherAvailabilityAndBuildErrors(t *testing.T) {
+	buildErr := errors.New("arguments unavailable")
+	t.Run("argument builder error", func(t *testing.T) {
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "BrokenArgs", flatpakID: "test.Flatpak",
+			args: func(string) ([]string, error) { return nil, buildErr },
+		})
+
+		_, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+
+		require.ErrorIs(t, err, buildErr)
+	})
+
+	t.Run("missing native executable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "MissingNative", executable: "missing-native", args: batchArgs(),
+		})
+
+		err := launcher.Availability(nil)
+
+		require.ErrorContains(t, err, "emulator not installed")
+	})
+
+	t.Run("available native executable", func(t *testing.T) {
+		dir := t.TempDir()
+		executable := filepath.Join(dir, "test-native")
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "TestNative", executable: filepath.Base(executable), args: batchArgs("--fullscreen"),
+		})
+
+		require.NoError(t, launcher.Availability(nil))
+		command, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
+	})
+}
+
+func TestFlatpakRunArgsExposeMediaDirectoryReadOnly(t *testing.T) {
+	t.Parallel()
+
+	mediaPath := filepath.Join(string(filepath.Separator), "run", "media", "deck", "ROMs", "ps2", "game.iso")
+	assert.Equal(t, []string{
+		"run",
+		"--filesystem=" + filepath.Dir(mediaPath) + ":ro",
+		"--die-with-parent",
+		"net.pcsx2.PCSX2",
+		"-batch",
+		mediaPath,
+	}, flatpakRunArgs("net.pcsx2.PCSX2", mediaPath, []string{"-batch", mediaPath}))
+}
+
+func TestStandaloneArguments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		id   string
+		path string
+		want []string
+	}{
+		{id: "XeniaCanary", path: "game.xex", want: []string{"game.xex"}},
+		{id: "Ryubing", path: "game.nro", want: []string{"--fullscreen", "game.nro"}},
+		{id: "PCSX2", path: "game.iso", want: []string{"-fullscreen", "-batch", "game.iso"}},
+		{id: "Cemu", path: "game.wua", want: []string{"-g", "game.wua", "-f"}},
+		{id: "Azahar", path: "game.3dsx", want: []string{"-f", "game.3dsx"}},
+		{id: "DuckStation", path: "game.cue", want: []string{"-batch", "-fullscreen", "game.cue"}},
+		{id: "PPSSPP", path: "game.iso", want: []string{"--fullscreen", "game.iso"}},
+		{id: "DolphinGameCube", path: "game.dol", want: []string{"-b", "-e", "game.dol"}},
+		{id: "MelonDS", path: "game.nds", want: []string{"--fullscreen", "game.nds"}},
+		{id: "Supermodel", path: "game.zip", want: []string{"-fullscreen", "game.zip"}},
+		{id: "Xemu", path: "game.iso", want: []string{"-full-screen", "-dvd_path", "game.iso"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			t.Parallel()
+			var def standaloneDef
+			for i := range nativeStandaloneDefs {
+				if nativeStandaloneDefs[i].id == tt.id {
+					def = nativeStandaloneDefs[i]
+					break
+				}
+			}
+			require.NotNil(t, def.args)
+			got, err := def.args(tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestInstalledTitleArgs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	vitaPath := filepath.Join(dir, "homebrew.psvita")
+	require.NoError(t, os.WriteFile(vitaPath, []byte("VITATEST01\n"), 0o600))
+	args, err := vita3KArgs(vitaPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-Fr", "VITATEST01"}, args)
+
+	ps4Target := filepath.Join(dir, "eboot.bin")
+	ps4Path := filepath.Join(dir, "homebrew.ps4")
+	require.NoError(t, os.WriteFile(ps4Path, []byte(ps4Target+"\n"), 0o600))
+	args, err = shadPS4Args(ps4Path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-g", ps4Target, "--fullscreen", "true"}, args)
+
+	ps3Target := filepath.Join(dir, "EBOOT.BIN")
+	ps3Path := filepath.Join(dir, "homebrew.ps3")
+	require.NoError(t, os.WriteFile(ps3Path, []byte(ps3Target+"\n"), 0o600))
+	args, err = rpcs3Args(ps3Path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--no-gui", ps3Target}, args)
+}
+
+func TestReadLauncherTargetRejectsInvalidContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "empty"},
+		{name: "multiline", content: "TITLE0001\nTITLE0002"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(dir, tt.name+".psvita")
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+
+			_, err := readLauncherTarget(path, ".psvita")
+			require.ErrorContains(t, err, "invalid launcher target")
+		})
+	}
+
+	_, err := readLauncherTarget(filepath.Join(dir, "missing.psvita"), ".psvita")
+	require.ErrorContains(t, err, "read launcher target")
+	_, err = readLauncherTarget(filepath.Join(dir, "wrong.txt"), ".psvita")
+	require.ErrorContains(t, err, "launcher target requires a .psvita file")
+}
+
+func TestScummVMArgs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sky.scummvm")
+	require.NoError(t, os.WriteFile(path, []byte("sky\n"), 0o600))
+
+	args, err := scummVMArgs(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--fullscreen", "--path=" + dir, "sky"}, args)
+
+	_, err = scummVMArgs(filepath.Join(dir, "game.dat"))
+	require.Error(t, err)
+}

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/rs/zerolog/log"
 )
@@ -37,7 +38,8 @@ func HandleMediaCleanOrphans(env requests.RequestEnv) (any, error) { //nolint:go
 
 	deleted, err := env.Database.MediaDB.CleanMediaOrphans(env.Context)
 	if err != nil {
-		if errors.Is(err, mediadb.ErrIndexingInProgress) ||
+		if errors.Is(err, database.ErrMediaWriteConflict) ||
+			errors.Is(err, mediadb.ErrIndexingInProgress) ||
 			errors.Is(err, mediadb.ErrOptimizationInProgress) ||
 			errors.Is(err, mediadb.ErrTransactionActive) {
 			return nil, models.ClientErrf("%w", err)

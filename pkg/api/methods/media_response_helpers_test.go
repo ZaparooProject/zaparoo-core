@@ -21,15 +21,42 @@ package methods
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
+
+// stubPlaybackManager is a minimal PlaybackManager that returns fixed state per slot.
+type stubPlaybackManager struct {
+	states map[string]audio.PlaybackState
+}
+
+func newStubPlaybackManager(slot string, state audio.PlaybackState) *stubPlaybackManager {
+	return &stubPlaybackManager{states: map[string]audio.PlaybackState{slot: state}}
+}
+
+func (*stubPlaybackManager) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*stubPlaybackManager) Stop(_ string) error                             { return nil }
+func (*stubPlaybackManager) Pause(_ string) error                            { return nil }
+func (*stubPlaybackManager) Resume(_ string) error                           { return nil }
+func (*stubPlaybackManager) TogglePause(_ string) error                      { return nil }
+func (*stubPlaybackManager) Seek(_ string, _ time.Duration) error            { return nil }
+func (s *stubPlaybackManager) State(slot string) audio.PlaybackState {
+	return s.states[slot]
+}
 
 func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 	t.Parallel()
@@ -45,11 +72,10 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 		{SystemID: "NES", Path: ""},
 	}
 
-	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 7, SystemID: "NES"}, nil)
-	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(7), []string{pathOne, pathTwo}).Return(
-		map[string]database.Media{
-			pathOne: {DBID: 10, Path: pathOne},
-			pathTwo: {DBID: 11, Path: pathTwo},
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathOne, pathTwo}).Return(
+		[]database.MediaPathID{
+			{SystemID: "NES", Path: pathOne, DBID: 10},
+			{SystemID: "NES", Path: pathTwo, DBID: 11},
 		}, nil,
 	)
 
@@ -62,15 +88,261 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestMediaIDsByPath_SkipsUnresolvableSystems(t *testing.T) {
+// ----- toPlaylistState tests -----
+
+func TestToPlaylistState_RepeatNone(t *testing.T) {
+	t.Parallel()
+	p := &playlists.Playlist{
+		ID:   "pl-1",
+		Name: "Rock Classics",
+		Slot: mediaslot.Background,
+		Items: []playlists.PlaylistItem{
+			{Name: "Track A", ZapScript: "**launch:a.mp3"},
+			{Name: "Track B", ZapScript: "**launch:b.mp3"},
+		},
+		Index: 1,
+	}
+	got := toPlaylistState(p)
+	assert.Equal(t, "pl-1", got.ID)
+	assert.Equal(t, "Rock Classics", got.Name)
+	assert.Equal(t, mediaslot.Background, got.Slot)
+	assert.Equal(t, 1, got.Index)
+	assert.Equal(t, 2, got.Total)
+	assert.Equal(t, "none", got.Repeat)
+	assert.False(t, got.Playing)
+	assert.Len(t, got.Items, 2)
+	assert.Equal(t, "Track A", got.Items[0].Name)
+}
+
+func TestToPlaylistState_RepeatAll(t *testing.T) {
+	t.Parallel()
+	p := &playlists.Playlist{Slot: mediaslot.Primary, Loop: true}
+	assert.Equal(t, "all", toPlaylistState(p).Repeat)
+}
+
+func TestToPlaylistState_RepeatOne(t *testing.T) {
+	t.Parallel()
+	// LoopOne takes priority over Loop if both are set (defensive)
+	p := &playlists.Playlist{Slot: mediaslot.Primary, Loop: true, LoopOne: true}
+	assert.Equal(t, "one", toPlaylistState(p).Repeat)
+}
+
+func TestToPlaylistState_Playing(t *testing.T) {
+	t.Parallel()
+	p := &playlists.Playlist{Slot: mediaslot.Primary, Playing: true}
+	assert.True(t, toPlaylistState(p).Playing)
+}
+
+func TestToPlaylistState_EmptyItems(t *testing.T) {
+	t.Parallel()
+	p := &playlists.Playlist{Slot: mediaslot.Primary}
+	state := toPlaylistState(p)
+	assert.Empty(t, state.Items)
+	assert.Equal(t, 0, state.Total)
+}
+
+// ----- enrichPlaybackState tests -----
+
+func TestEnrichPlaybackState_NilManagerLeavesFieldsNil(t *testing.T) {
+	t.Parallel()
+	env := &requests.RequestEnv{PlaybackManager: nil}
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
+	enrichPlaybackState(env, entry, mediaslot.Primary)
+	assert.Nil(t, entry.PositionMs)
+	assert.Nil(t, entry.DurationMs)
+	assert.Empty(t, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_NonNativeLauncherLeavesFieldsNil(t *testing.T) {
+	t.Parallel()
+	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
+		Position: 30 * time.Second,
+		Duration: 3 * time.Minute,
+		Playing:  true,
+	})
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+	entry := &models.ActiveMedia{LauncherID: "mister"}
+	enrichPlaybackState(env, entry, mediaslot.Primary)
+	assert.Nil(t, entry.PositionMs)
+	assert.Nil(t, entry.DurationMs)
+	assert.Empty(t, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_NativeAudioFillsPlayingState(t *testing.T) {
+	t.Parallel()
+	pos := 45 * time.Second
+	dur := 3 * time.Minute
+	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
+		Position: pos,
+		Duration: dur,
+		Playing:  true,
+	})
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
+	enrichPlaybackState(env, entry, mediaslot.Primary)
+	require.NotNil(t, entry.PositionMs)
+	require.NotNil(t, entry.DurationMs)
+	assert.Equal(t, pos.Milliseconds(), *entry.PositionMs)
+	assert.Equal(t, dur.Milliseconds(), *entry.DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePlaying, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_BackgroundSlotUsesPausedState(t *testing.T) {
+	t.Parallel()
+	bgPos := 10 * time.Second
+	bgDur := 2 * time.Minute
+	mgr := &stubPlaybackManager{states: map[string]audio.PlaybackState{
+		mediaslot.Primary: {
+			Position: 999 * time.Second,
+			Duration: 999 * time.Second,
+			Playing:  true,
+		},
+		mediaslot.Background: {
+			Position: bgPos,
+			Duration: bgDur,
+			Paused:   true,
+		},
+	}}
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
+	enrichPlaybackState(env, entry, mediaslot.Background)
+	require.NotNil(t, entry.PositionMs)
+	require.NotNil(t, entry.DurationMs)
+	assert.Equal(t, bgPos.Milliseconds(), *entry.PositionMs)
+	assert.Equal(t, bgDur.Milliseconds(), *entry.DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePaused, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_StoppedState(t *testing.T) {
+	t.Parallel()
+
+	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{})
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
+
+	enrichPlaybackState(env, entry, mediaslot.Primary)
+
+	assert.Equal(t, models.MediaPlaybackStateStopped, entry.PlaybackState)
+}
+
+func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	path := filepath.Join("games", "missing.rom")
-	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
+	path := filepath.Join("games", "shared.rom")
+
+	// The same path can exist under multiple systems; only the requested
+	// (system, path) pair should be resolved.
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{path}).Return(
+		[]database.MediaPathID{
+			{SystemID: "NES", Path: path, DBID: 10},
+			{SystemID: "FDS", Path: path, DBID: 22},
+		}, nil,
+	)
 
 	ids := mediaIDsByPath(context.Background(), mockDB, []mediaPathRef{{SystemID: "NES", Path: path}})
 
-	assert.Empty(t, ids)
+	assert.Equal(t, map[mediaPathRef]int64{
+		{SystemID: "NES", Path: path}: 10,
+	}, ids)
 	mockDB.AssertExpectations(t)
+}
+
+func TestResolvedMediaRefs_DedupesByMediaIDInEntryOrder(t *testing.T) {
+	t.Parallel()
+
+	first := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "a.nes")}
+	second := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "b.nes")}
+	missing := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "missing.nes")}
+	rows := map[mediaPathRef]database.MediaPathID{
+		first:  {SystemID: "NES", Path: first.Path, DBID: 7, MediaTitleDBID: 70},
+		second: {SystemID: "NES", Path: second.Path, DBID: 5, MediaTitleDBID: 50},
+	}
+
+	mediaIDs, refs := resolvedMediaRefs([]mediaPathRef{first, second, first, missing}, rows)
+
+	assert.Equal(t, map[mediaPathRef]int64{first: 7, second: 5}, mediaIDs)
+	assert.Equal(t, []database.MediaRef{
+		{MediaDBID: 7, MediaTitleDBID: 70},
+		{MediaDBID: 5, MediaTitleDBID: 50},
+	}, refs)
+}
+
+func TestMediaTagsByRefs_EmptyRefsSkipsLookup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{}, nil).Maybe()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, nil)
+
+	assert.True(t, known)
+	assert.Equal(t, map[int64][]database.TagInfo{}, tags)
+	mockMediaDB.AssertNotCalled(t, "GetMediaTagsByMediaRefs", mock.Anything, mock.Anything)
+}
+
+func TestMediaTagsByRefs_NilDatabaseIsKnownEmpty(t *testing.T) {
+	t.Parallel()
+
+	tags, known := mediaTagsByRefs(context.Background(), nil, []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}})
+
+	assert.True(t, known)
+	assert.Equal(t, map[int64][]database.TagInfo{}, tags)
+}
+
+func TestMediaTagsByRefs_ErrorReturnsUnknown(t *testing.T) {
+	t.Parallel()
+
+	refs := []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, refs).
+		Return(nil, errors.New("tag lookup failed")).Once()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, refs)
+
+	assert.False(t, known)
+	assert.Nil(t, tags)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestMediaTagsByRefs_ReturnsLookupResult(t *testing.T) {
+	t.Parallel()
+
+	refs := []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}}
+	expected := map[int64][]database.TagInfo{1: {{Tag: "favorite", Type: "collection"}}}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, refs).Return(expected, nil).Once()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, refs)
+
+	assert.True(t, known)
+	assert.Equal(t, expected, tags)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestMediaEntryTags_TriState(t *testing.T) {
+	t.Parallel()
+
+	tagged := []database.TagInfo{{Tag: "favorite", Type: "collection"}}
+	tags := map[int64][]database.TagInfo{1: tagged, 3: nil}
+	tests := []struct {
+		name     string
+		expected []database.TagInfo
+		mediaID  int64
+		known    bool
+	}{
+		{name: "unknown tags omit", known: false, mediaID: 1, expected: nil},
+		{name: "unresolved media omits", known: true, mediaID: 0, expected: nil},
+		{name: "tagged media returns tags", known: true, mediaID: 1, expected: tagged},
+		{name: "untagged media returns empty array", known: true, mediaID: 2, expected: []database.TagInfo{}},
+		{name: "nil map entry returns empty array", known: true, mediaID: 3, expected: []database.TagInfo{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, mediaEntryTags(tt.known, tt.mediaID, tags))
+		})
+	}
 }

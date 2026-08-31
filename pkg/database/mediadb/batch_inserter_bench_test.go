@@ -50,7 +50,7 @@ func newBenchSQLite(b *testing.B) (sqlDB *sql.DB, cleanup func()) {
 		b.Fatal(err)
 	}
 	// Close the MediaDB wrapper but keep the raw *sql.DB open for direct use
-	db.sql = nil // Prevent Close() from closing the underlying connection
+	db.sql.Store(nil) // Prevent Close() from closing the underlying connection
 
 	return sqlDB, func() { _ = sqlDB.Close() }
 }

@@ -138,6 +138,169 @@ func TestCmdSystem_InvalidArgCount(t *testing.T) {
 	assert.Equal(t, ErrArgCount, err)
 }
 
+// launcherSelectorMockPlatform adds platforms.SystemLauncherSelector to
+// MockPlatform, mirroring the runtimeMockPlatform pattern used for
+// LauncherRuntimeProvider in pkg/api/methods/launchers_test.go.
+type launcherSelectorMockPlatform struct {
+	*mocks.MockPlatform
+	err         error
+	gotSystem   string
+	gotLauncher string
+}
+
+func (p *launcherSelectorMockPlatform) LaunchSystemLauncher(
+	_ *config.Instance, systemID string, launcher *platforms.Launcher,
+) error {
+	p.gotSystem = systemID
+	p.gotLauncher = launcher.ID
+	return p.err
+}
+
+// TestCmdSystem_LauncherArg verifies an explicit launcher adv arg routes
+// through SystemLauncherSelector instead of the default LaunchSystem path.
+func TestCmdSystem_LauncherArg(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "SuperNT", SystemID: "SNES"}
+
+	base := mocks.NewMockPlatform()
+	base.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	selector := &launcherSelectorMockPlatform{MockPlatform: base}
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.system",
+			Args: []string{"SNES"},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "SuperNT",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdSystem(selector, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	assert.Equal(t, "SNES", selector.gotSystem)
+	assert.Equal(t, "SuperNT", selector.gotLauncher)
+	selector.AssertNotCalled(t, "LaunchSystem", mock.Anything, mock.Anything)
+}
+
+// TestCmdSystem_LauncherArgNotFound verifies an unknown launcher ID errors
+// before any platform launch call is attempted.
+func TestCmdSystem_LauncherArgNotFound(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	base := mocks.NewMockPlatform()
+	base.On("Launchers", cfg).Return([]platforms.Launcher{})
+	selector := &launcherSelectorMockPlatform{MockPlatform: base}
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.system",
+			Args: []string{"SNES"},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "missing",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	_, err := cmdSystem(selector, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "launcher not found")
+}
+
+// TestCmdSystem_LauncherArgWrongSystem verifies a launcher belonging to a
+// different system is rejected rather than silently launched.
+func TestCmdSystem_LauncherArgWrongSystem(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "SuperNT", SystemID: "SNES"}
+	base := mocks.NewMockPlatform()
+	base.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	selector := &launcherSelectorMockPlatform{MockPlatform: base}
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.system",
+			Args: []string{"Genesis"},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "SuperNT",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	_, err := cmdSystem(selector, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not belong to system")
+}
+
+// TestCmdSystem_LauncherArgUnsupportedPlatform verifies a platform that
+// doesn't implement SystemLauncherSelector errors instead of silently
+// ignoring the requested launcher.
+func TestCmdSystem_LauncherArgUnsupportedPlatform(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "SuperNT", SystemID: "SNES"}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	mockPlatform.On("ID").Return("windows")
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.system",
+			Args: []string{"SNES"},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "SuperNT",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	_, err := cmdSystem(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "launcher selection not supported")
+}
+
+// TestCmdSystem_LauncherArgPropagatesFailure verifies a launch failure from
+// the selector is wrapped and MediaChanged still reflects the attempt.
+func TestCmdSystem_LauncherArgPropagatesFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "SuperNT", SystemID: "SNES"}
+	base := mocks.NewMockPlatform()
+	base.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	selector := &launcherSelectorMockPlatform{MockPlatform: base, err: assert.AnError}
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.system",
+			Args: []string{"SNES"},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "SuperNT",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdSystem(selector, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch system")
+	assert.True(t, result.MediaChanged)
+}
+
 // TestCmdSystem_MenuCaseInsensitive verifies menu works with different cases
 func TestCmdSystem_MenuCaseInsensitive(t *testing.T) {
 	t.Parallel()

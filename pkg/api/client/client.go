@@ -33,6 +33,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/jonboulle/clockwork"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,6 +45,20 @@ var (
 )
 
 const APIPath = "/api/v0.1"
+
+// isExpectedWebsocketClose reports whether a websocket read error is an expected
+// disconnect (the connection closed, the peer went away, or an abnormal closure
+// such as the service restarting) rather than a genuine protocol/read fault.
+// Expected disconnects are logged below Error level to keep them out of Sentry.
+func isExpectedWebsocketClose(err error) bool {
+	return errors.Is(err, net.ErrClosed) ||
+		websocket.IsCloseError(err,
+			websocket.CloseNormalClosure,
+			websocket.CloseGoingAway,
+			websocket.CloseNoStatusReceived,
+			websocket.CloseAbnormalClosure,
+		)
+}
 
 // DisableZapScript disables the service running any processed ZapScript from
 // tokens, and returns a function to re-enable it.
@@ -134,7 +150,7 @@ func LocalClient(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+				if ctx.Err() != nil || isExpectedWebsocketClose(readErr) {
 					log.Debug().Err(readErr).Msg("connection closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
@@ -167,18 +183,16 @@ func LocalClient(
 		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
-	timeout := config.APIRequestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
+	var timerC <-chan time.Time
+	if timeout, bounded := requestWaitTimeout(ctx, method); bounded {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		timerC = timer.C
 	}
-	timer := time.NewTimer(timeout)
 	select {
 	case <-done:
 
-	case <-timer.C:
+	case <-timerC:
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
 		return "", ErrRequestCancelled
@@ -199,6 +213,25 @@ func LocalClient(
 	}
 
 	return string(b), nil
+}
+
+// requestWaitTimeout returns how long to wait for a response and whether the
+// wait is bounded at all. A caller deadline always wins. Without one,
+// unbounded-runtime backup methods wait on cancellation alone — the server
+// runs them with no deadline either — and every other method falls back to
+// the default request timeout.
+func requestWaitTimeout(ctx context.Context, method string) (timeout time.Duration, bounded bool) {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			return remaining, true
+		}
+		return 0, true
+	}
+	if models.MethodHasUnboundedRuntime(method) {
+		return 0, false
+	}
+	return config.APIRequestTimeout, true
 }
 
 func WaitNotification(
@@ -248,7 +281,7 @@ func WaitNotification(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+				if ctx.Err() != nil || isExpectedWebsocketClose(readErr) {
 					log.Debug().Err(readErr).Msg("connection closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
@@ -351,12 +384,47 @@ func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) 
 	return false
 }
 
+func waitNotificationsReadLogLevel(ctx context.Context, callerClosing bool, err error) zerolog.Level {
+	if callerClosing || ctx.Err() != nil {
+		return zerolog.TraceLevel
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return zerolog.DebugLevel
+	}
+	if errors.Is(err, net.ErrClosed) || websocket.IsCloseError(err,
+		websocket.CloseNoStatusReceived,
+		websocket.CloseAbnormalClosure,
+	) {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
+}
+
+func logWaitNotificationsReadError(ctx context.Context, callerClosing bool, err error) {
+	level := waitNotificationsReadLogLevel(ctx, callerClosing, err)
+	message := "websocket closed"
+	if level == zerolog.ErrorLevel {
+		message = "error reading message"
+	}
+	log.WithLevel(level).Err(err).Msg(message)
+}
+
 // WaitNotifications waits for any of the specified notification types on a single
 // WebSocket connection. Returns the notification method that matched and its params.
 func WaitNotifications(
 	ctx context.Context,
 	timeout time.Duration,
 	cfg *config.Instance,
+	ids ...string,
+) (method, params string, err error) {
+	return waitNotificationsWithClock(ctx, timeout, cfg, clockwork.NewRealClock(), ids...)
+}
+
+func waitNotificationsWithClock(
+	ctx context.Context,
+	timeout time.Duration,
+	cfg *config.Instance,
+	clock clockwork.Clock,
 	ids ...string,
 ) (method, params string, err error) {
 	u := url.URL{
@@ -385,12 +453,18 @@ func WaitNotifications(
 	if err != nil {
 		return "", "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
-	defer func(c *websocket.Conn) {
+	connectionClosed := false
+	closeConnection := func() {
+		if connectionClosed {
+			return
+		}
+		connectionClosed = true
 		closeErr := c.Close()
-		if closeErr != nil {
+		if closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
 			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
-	}(c)
+	}
+	defer closeConnection()
 
 	idSet := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -398,6 +472,7 @@ func WaitNotifications(
 	}
 
 	done := make(chan struct{})
+	callerClosing := make(chan struct{})
 	var resp *models.RequestObject
 
 	go func() {
@@ -405,15 +480,11 @@ func WaitNotifications(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if errors.Is(readErr, net.ErrClosed) ||
-					websocket.IsCloseError(readErr,
-						websocket.CloseNormalClosure,
-						websocket.CloseGoingAway,
-						websocket.CloseNoStatusReceived,
-					) {
-					log.Warn().Err(readErr).Msg("websocket closed")
-				} else {
-					log.Error().Err(readErr).Msg("error reading message")
+				select {
+				case <-callerClosing:
+					logWaitNotificationsReadError(ctx, true, readErr)
+				default:
+					logWaitNotificationsReadError(ctx, false, readErr)
 				}
 				return
 			}
@@ -442,28 +513,40 @@ func WaitNotifications(
 		}
 	}()
 
+	var timer clockwork.Timer
 	var timerChan <-chan time.Time
 	if timeout == 0 {
 		effectiveTimeout := config.APIRequestTimeout
 		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
+			remaining := clock.Until(deadline)
 			if remaining < effectiveTimeout {
 				effectiveTimeout = remaining
 			}
 		}
-		timer := time.NewTimer(effectiveTimeout)
-		timerChan = timer.C
+		timer = clock.NewTimer(effectiveTimeout)
+		timerChan = timer.Chan()
 	} else if timeout > 0 {
-		timer := time.NewTimer(timeout)
-		timerChan = timer.C
+		timer = clock.NewTimer(timeout)
+		timerChan = timer.Chan()
+	}
+	if timer != nil {
+		defer timer.Stop()
+	}
+
+	shutdownReader := func() {
+		close(callerClosing)
+		closeConnection()
+		<-done
 	}
 
 	select {
 	case <-done:
 
 	case <-timerChan:
+		shutdownReader()
 		return "", "", ErrRequestTimeout
 	case <-ctx.Done():
+		shutdownReader()
 		return "", "", ErrRequestCancelled
 	}
 

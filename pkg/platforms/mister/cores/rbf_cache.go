@@ -30,25 +30,27 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // RBFCache provides lookups of RBF paths by system ID, short name, or launcher ID.
 //
 // On-disk persistence: when SetPersistPath has been called, the first
 // Refresh of the process tries to load `<path>` instead of scanning the
-// SD. If the loaded file's directory-mtime snapshot still matches the
-// live filesystem, no scan runs at all. If mtimes have drifted, the
-// loaded data is still installed for serving and NeedsRescan() returns
-// true so the caller can schedule a background rescan via the idle
-// scheduler. Subsequent Refresh calls noop when mtimes still match
-// (cheap stat-only check) and rescan when they don't.
+// SD. If its shallow RBF manifest matches the live filesystem, no scan runs.
+// If the manifest differs, the loaded data is installed for serving and
+// NeedsRescan returns true so the caller can schedule a background rescan.
+// Subsequent Refresh calls use directory mtimes as a cheap runtime check.
 type RBFCache struct {
+	fs            afero.Fs
+	persistPath   string
+	sdRoot        string
 	bySystemID    map[string]RBFInfo
 	byShortName   map[string][]RBFInfo
-	byLauncherID  map[string]string
+	byLauncherID  map[string][]string
 	lastDirMtimes map[string]int64
-	persistPath   string
 	lastRootRBFs  []string
 	mu            syncutil.RWMutex
 	initialized   bool
@@ -93,10 +95,9 @@ func (c *RBFCache) SetPersistPath(path string) {
 }
 
 // NeedsRescan reports whether the most recent first-call Refresh loaded a
-// persisted cache whose directory-mtime snapshot didn't match the live
-// filesystem. The caller (typically a platform's StartPost) is expected
-// to schedule a background Refresh when this is true. The flag is reset
-// once a fresh scan completes.
+// persisted cache whose RBF manifest did not match the live filesystem.
+// The caller (typically a platform's StartPost) is expected to schedule a
+// background Refresh when this is true. The flag resets after a fresh scan.
 func (c *RBFCache) NeedsRescan() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -106,13 +107,12 @@ func (c *RBFCache) NeedsRescan() bool {
 // Refresh ensures the cache reflects the current filesystem. Behaviour:
 //
 //   - First call after process start, with a configured persist path: try
-//     to load the persisted cache. If loaded and the directory-mtime
-//     snapshot matches the live filesystem, install the data and return
-//     without scanning. If loaded but mtimes drifted, install the data,
-//     set NeedsRescan, and return without scanning. If the file is
-//     missing, corrupt, or version-mismatched, fall through to a scan.
-//   - Subsequent calls: stat the snapshot directories; if all mtimes
-//     still match, noop. Otherwise, scan and persist.
+//     to load the persisted cache. If loaded and its shallow RBF manifest
+//     matches the filesystem, install the data and return without scanning.
+//     If the manifest differs, install the data, set NeedsRescan, and return.
+//     Missing, corrupt, or version-mismatched files fall through to a scan.
+//   - Subsequent calls: stat snapshot directories and compare root RBF names;
+//     if all still match, noop. Otherwise, scan and persist.
 //
 // The cheap-stat fast path means callers like Platform.Launchers (which
 // is invoked from many hot paths) pay only a handful of stats per call
@@ -126,16 +126,30 @@ func (c *RBFCache) Refresh() {
 		if c.tryLoadFromDiskLocked() {
 			return
 		}
-	} else if dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
+	} else if !c.needsRescan &&
+		dirMtimesMatchWithFS(c.filesystem(), c.root(), c.lastDirMtimes) &&
+		rootRBFsMatchWithFS(c.filesystem(), c.root(), c.lastRootRBFs) {
 		return
 	}
 
-	c.scanLocked()
+	if err := c.scanLocked(); err != nil {
+		log.Warn().Err(err).Msg("RBF cache: scan failed, keeping previous cache")
+	}
+}
+
+// ForceRefresh bypasses filesystem fast paths and immediately rebuilds the
+// cache from the live RBF files. A failed scan leaves existing entries intact.
+func (c *RBFCache) ForceRefresh() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.initialized = true
+	return c.scanLocked()
 }
 
 // tryLoadFromDiskLocked attempts to populate the cache from the persisted
-// file. Returns true if a usable file was loaded (the cache is now
-// populated even if mtimes drifted; needsRescan tracks that case).
+// file. Returns true if a usable file was loaded. The cache is populated
+// even if its manifest drifted; needsRescan tracks that case.
 func (c *RBFCache) tryLoadFromDiskLocked() bool {
 	if c.persistPath == "" {
 		return false
@@ -149,12 +163,14 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		return false
 	}
 
+	beforeManifest, beforeErr := c.snapshotRBFManifest()
 	c.BuildFromRBFs(stored.Files)
-	c.lastDirMtimes = stored.DirMtimes
-	c.lastRootRBFs = stored.RootRBFs
-	mtimesOK := dirMtimesMatch(stored.DirMtimes)
-	rootOK := rootRBFsMatch(stored.RootRBFs)
-	if mtimesOK && rootOK {
+	afterManifest, afterErr := c.snapshotRBFManifest()
+	c.lastDirMtimes, _ = c.snapshotDirMtimes()
+	c.lastRootRBFs, _ = c.snapshotRootRBFs()
+	manifestStable := beforeErr == nil && afterErr == nil &&
+		rbfManifestsMatch(beforeManifest, afterManifest)
+	if manifestStable && rbfManifestsMatch(stored.Manifest, beforeManifest) {
 		log.Info().
 			Int("rbf_files", len(stored.Files)).
 			Int("systems_mapped", len(c.bySystemID)).
@@ -162,15 +178,16 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 			Msg("RBF cache loaded from disk")
 		c.needsRescan = false
 	} else {
-		drifted := diffDirMtimes(stored.DirMtimes)
-		rootDiff := diffRootRBFs(stored.RootRBFs)
-		log.Info().
+		event := log.Info().
 			Str("path", c.persistPath).
-			Int("drifted_count", len(drifted)).
-			Interface("drifted", drifted).
-			Strs("added_root_rbfs", rootDiff.Added).
-			Strs("removed_root_rbfs", rootDiff.Removed).
-			Msg("RBF cache loaded but state drifted; rescan needed")
+			Int("cached_rbf_files", len(stored.Manifest)).
+			Int("current_rbf_files", len(afterManifest))
+		if beforeErr != nil {
+			event = event.Err(beforeErr)
+		} else if afterErr != nil {
+			event = event.Err(afterErr)
+		}
+		event.Msg("RBF cache loaded but manifest check failed or drifted; rescan needed")
 		c.needsRescan = true
 	}
 	return true
@@ -178,66 +195,157 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 
 // scanLocked runs the synchronous SD scan, rebuilds the in-memory maps,
 // and (when persistence is configured) writes the result to disk. Caller
-// must hold c.mu.
-func (c *RBFCache) scanLocked() {
-	rbfFiles, err := shallowScanRBF()
-	if err != nil {
-		log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
-		c.BuildFromRBFs(nil)
-		c.needsRescan = false
-		return
-	}
-	c.BuildFromRBFs(rbfFiles)
-	c.needsRescan = false
-	log.Info().
-		Int("rbf_files", len(rbfFiles)).
-		Int("systems_mapped", len(c.bySystemID)).
-		Msg("RBF cache initialized")
+// must hold c.mu. Failed or unstable scans leave existing entries intact.
+func (c *RBFCache) scanLocked() error {
+	const maxScanAttempts = 2
+	var lastErr error
+	for range maxScanAttempts {
+		beforeManifest, beforeErr := c.snapshotRBFManifest()
+		if beforeErr != nil {
+			lastErr = fmt.Errorf("snapshot RBF manifest before scan: %w", beforeErr)
+			continue
+		}
 
-	if c.persistPath == "" {
+		rbfFiles, err := shallowScanRBFWithFS(c.filesystem(), c.root())
+		if err != nil {
+			c.needsRescan = true
+			return fmt.Errorf("scan RBF files: %w", err)
+		}
+		afterManifest, afterErr := c.snapshotRBFManifest()
+		if afterErr != nil {
+			lastErr = fmt.Errorf("snapshot RBF manifest after scan: %w", afterErr)
+			continue
+		}
+		if !rbfManifestsMatch(beforeManifest, afterManifest) {
+			lastErr = errors.New("RBF manifest changed during scan")
+			continue
+		}
+
+		c.BuildFromRBFs(rbfFiles)
+		c.needsRescan = false
+		log.Info().
+			Int("rbf_files", len(rbfFiles)).
+			Int("systems_mapped", len(c.bySystemID)).
+			Msg("RBF cache initialized")
+
+		if c.persistPath == "" {
+			return nil
+		}
+		snapshot, snapErr := c.snapshotDirMtimes()
+		if snapErr != nil {
+			c.needsRescan = true
+			return fmt.Errorf("snapshot RBF directory mtimes: %w", snapErr)
+		}
+		rootRBFs, rootErr := c.snapshotRootRBFs()
+		if rootErr != nil {
+			c.needsRescan = true
+			return fmt.Errorf("snapshot root RBFs: %w", rootErr)
+		}
+		c.lastDirMtimes = snapshot
+		c.lastRootRBFs = rootRBFs
+		if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, afterManifest); writeErr != nil {
+			log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
+			return nil
+		}
+		log.Debug().
+			Int("rbf_files", len(rbfFiles)).
+			Str("path", c.persistPath).
+			Msg("RBF cache persisted to disk")
+		return nil
+	}
+
+	c.needsRescan = true
+	if lastErr == nil {
+		lastErr = errors.New("RBF scan did not produce a stable manifest")
+	}
+	return lastErr
+}
+
+func (c *RBFCache) filesystem() afero.Fs {
+	if c.fs != nil {
+		return c.fs
+	}
+	return afero.NewOsFs()
+}
+
+// SetFilesystem configures filesystem access before first Refresh.
+// Calls after cache initialization are ignored.
+func (c *RBFCache) SetFilesystem(fs afero.Fs) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.initialized {
 		return
 	}
-	snapshot, snapErr := snapshotDirMtimes()
-	if snapErr != nil {
-		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
-		return
+	c.fs = fs
+}
+
+func (c *RBFCache) root() string {
+	if c.sdRoot != "" {
+		return c.sdRoot
 	}
-	rootRBFs, rootErr := snapshotRootRBFs()
-	if rootErr != nil {
-		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
-		return
+	return misterconfig.SDRootDir
+}
+
+func (c *RBFCache) snapshotRBFManifest() ([]string, error) {
+	return snapshotRBFManifestWithFS(c.filesystem(), c.root())
+}
+
+func (c *RBFCache) snapshotDirMtimes() (map[string]int64, error) {
+	return snapshotDirMtimesWithFS(c.filesystem(), c.root())
+}
+
+func (c *RBFCache) snapshotRootRBFs() ([]string, error) {
+	return snapshotRootRBFsWithFS(c.filesystem(), c.root())
+}
+
+func unstableCoreBaseName(shortName string) (string, bool) {
+	const marker = "_unstable_"
+	markerIndex := strings.LastIndex(strings.ToLower(shortName), marker)
+	if markerIndex <= 0 {
+		return "", false
 	}
-	c.lastDirMtimes = snapshot
-	c.lastRootRBFs = rootRBFs
-	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot, rootRBFs); writeErr != nil {
-		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
-		return
+
+	parts := strings.Split(shortName[markerIndex+len(marker):], "_")
+	if len(parts) != 2 || !isNDigits(parts[0], 8) || !isHexish(parts[1]) {
+		return "", false
 	}
-	log.Debug().
-		Int("rbf_files", len(rbfFiles)).
-		Str("path", c.persistPath).
-		Msg("RBF cache persisted to disk")
+	return shortName[:markerIndex], true
 }
 
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
-// scanned RBF list, preferring each system's canonical directory when multiple
-// RBFs share a short name. No filesystem access; safe to call in tests.
+// scanned RBF list. Exact core names take precedence over standardized
+// unstable-nightly fallbacks. No filesystem access; safe to call in tests.
 func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 	c.bySystemID = make(map[string]RBFInfo)
 	c.byShortName = make(map[string][]RBFInfo)
+	unstableByBase := make(map[string][]RBFInfo)
 
 	for _, rbf := range rbfFiles {
 		key := strings.ToLower(rbf.ShortName)
 		c.byShortName[key] = append(c.byShortName[key], rbf)
+		if baseName, ok := unstableCoreBaseName(rbf.ShortName); ok {
+			baseKey := strings.ToLower(baseName)
+			unstableByBase[baseKey] = append(unstableByBase[baseKey], rbf)
+		}
+	}
+	for key := range unstableByBase {
+		sort.SliceStable(unstableByBase[key], func(i, j int) bool {
+			return unstableByBase[key][i].ShortName > unstableByBase[key][j].ShortName
+		})
 	}
 
-	for _, system := range Systems {
+	for systemID := range Systems {
+		system := Systems[systemID]
 		if system.RBF == "" {
 			continue
 		}
 		canonicalDir, shortName := splitRBFPath(system.RBF)
-		candidates := c.byShortName[strings.ToLower(shortName)]
-		if rbf, ok := selectByCanonicalDir(candidates, canonicalDir); ok {
+		key := strings.ToLower(shortName)
+		if rbf, ok := selectByCanonicalDir(c.byShortName[key], canonicalDir); ok {
+			c.bySystemID[system.ID] = rbf
+			continue
+		}
+		if rbf, ok := selectByCanonicalDir(unstableByBase[key], canonicalDir); ok {
 			c.bySystemID[system.ID] = rbf
 		}
 	}
@@ -386,31 +494,114 @@ func isHexish(s string) bool {
 	return true
 }
 
-// RegisterAltCore registers an alt core's expected RBF path.
-// Called during launcher creation.
-func (c *RBFCache) RegisterAltCore(launcherID, rbfPath string) {
+// RegisterAltCore registers an alt core's expected RBF path(s).
+// Called during launcher creation. When multiple paths are given, they are
+// tried in order at resolution time and the first that matches a scanned RBF
+// wins, allowing a launcher to support more than one core location/naming
+// convention (e.g. Sinden cores in "Light Gun/" or legacy "_Sinden/").
+func (c *RBFCache) RegisterAltCore(launcherID string, rbfPaths ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byLauncherID == nil {
-		c.byLauncherID = make(map[string]string)
+		c.byLauncherID = make(map[string][]string)
 	}
-	c.byLauncherID[launcherID] = rbfPath
+	c.byLauncherID[launcherID] = rbfPaths
 }
 
 // GetByLauncherID returns the resolved RBF path for an alt core launcher.
-// When the registered path includes a directory, the match is strict: a
-// directory mismatch returns (RBFInfo{}, false) rather than silently falling
-// back to a different directory's core.
+// Registered paths are tried in order; the first that resolves wins. When a
+// registered path includes a directory, the match is strict: a directory
+// mismatch is skipped rather than silently falling back to a different
+// directory's core.
 func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	rbfPath, ok := c.byLauncherID[launcherID]
+	rbfPaths, ok := c.byLauncherID[launcherID]
 	if !ok {
 		return RBFInfo{}, false
 	}
 
-	return c.getByMglPathLocked(rbfPath)
+	for _, rbfPath := range rbfPaths {
+		if rbfInfo, found := c.getByMglPathLocked(rbfPath); found {
+			return rbfInfo, true
+		}
+	}
+	return RBFInfo{}, false
+}
+
+// AltCorePaths returns the RBF paths registered for an alt core launcher, in
+// the order they are tried at resolution time. Returns nil when launcherID is
+// not a registered alt core.
+func (c *RBFCache) AltCorePaths(launcherID string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	paths, ok := c.byLauncherID[launcherID]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), paths...)
+}
+
+// ResolveLauncher reports the RBF a launcher would use if launched now. It
+// mirrors Resolve's precedence exactly, including its fallback: config
+// load_path override, then registered alt-core paths, then the system's
+// default core — an alt core whose own RBF isn't installed silently falls
+// back to the system's base core at launch time, and this must report the
+// same thing Resolve would, not a more conservative answer. cfg may be nil,
+// which skips the load_path check. Unlike Resolve it never errors — a total
+// miss simply reports false, since callers use this to describe launcher
+// state rather than to launch.
+func (c *RBFCache) ResolveLauncher(cfg *config.Instance, launcherID, systemID string) (RBFInfo, bool) {
+	key := launcherID
+	if key == "" {
+		key = systemID
+	}
+
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			return c.GetByMglPath(lp)
+		}
+	}
+
+	if launcherID != "" {
+		if rbfInfo, ok := c.GetByLauncherID(launcherID); ok {
+			return rbfInfo, true
+		}
+	}
+
+	return c.GetBySystemID(systemID)
+}
+
+// ResolveLauncherStrict reports the RBF a launcher would use, without
+// ResolveLauncher's fall back to the system's stock core. A launcher that
+// registered its own alt core paths resolves to one of those or to nothing:
+// "would silently run the stock core instead" is not the same as installed,
+// and callers deciding whether a launcher is usable must not conflate them.
+// cfg may be nil, which skips the load_path check.
+func (c *RBFCache) ResolveLauncherStrict(cfg *config.Instance, launcherID, systemID string) (RBFInfo, bool) {
+	key := launcherID
+	if key == "" {
+		key = systemID
+	}
+
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			return c.GetByMglPath(lp)
+		}
+	}
+
+	if launcherID != "" {
+		if rbfInfo, ok := c.GetByLauncherID(launcherID); ok {
+			return rbfInfo, true
+		}
+		if len(c.AltCorePaths(launcherID)) > 0 {
+			return RBFInfo{}, false
+		}
+	}
+
+	return c.GetBySystemID(systemID)
 }
 
 func (c *RBFCache) relatedCandidates(rbfPath string) []string {

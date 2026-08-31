@@ -18,7 +18,29 @@ permissions:
   packages: read
   security-events: write
 
+env:
+  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
+  GOLANGCI_LINT_VERSION: v2.12.2
+
 jobs:
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
   ci:
     name: CI
     timeout-minutes: 15
@@ -39,10 +61,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -70,7 +92,7 @@ jobs:
       - name: Restore Go cache (Unix)
         id: restore-go-cache-unix
         if: matrix.os != 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -80,7 +102,7 @@ jobs:
       - name: Restore Go cache (Windows)
         id: restore-go-cache-windows
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -98,15 +120,15 @@ jobs:
 
       - name: Cache APT packages (Ubuntu)
         if: matrix.os == 'ubuntu'
-        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
         with:
           packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
           version: 1.1
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
       - name: Install govulncheck
@@ -120,11 +142,31 @@ jobs:
 
       - name: Run govulncheck (CI gate)
         if: matrix.os == 'ubuntu'
-        run: govulncheck ./...
+        run: |
+          set +e
+          report="$(mktemp)"
+          govulncheck -format json ./... | tee "$report"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          unexpected="$(jq -s '[.[] | select(type == "object" and has("finding")) | .finding.osv | select(. != "GO-2026-5932")] | unique' "$report")"
+          known="$(jq -s '[.[] | select(type == "object" and has("finding")) | .finding.osv | select(. == "GO-2026-5932")] | length > 0' "$report")"
+          rm "$report"
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$known" = "true" ] && [ "$unexpected" = "[]" ]; then
+            echo "Accepted GO-2026-5932: go-selfupdate requires unmaintained OpenPGP; no upstream fix exists."
+            exit 0
+          fi
+
+          echo "Unexpected govulncheck findings: $unexpected" >&2
+          exit "$status"
 
       - name: Upload govulncheck SARIF
         if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
@@ -154,27 +196,60 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu' && !startsWith(github.ref, 'refs/tags/')
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.txt
+          files: ./coverage.txt
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: true
 
       - name: Save Go cache (Unix)
         if: matrix.os != 'windows' && steps.restore-go-cache-unix.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
       - name: Save Go cache (Windows)
         if: matrix.os == 'windows' && steps.restore-go-cache-windows.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
+
+  mister-backup-mount-smoke:
+    name: MiSTer Backup Mount Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev \
+            libnfc-dev \
+            libpcsclite-dev
+
+      - name: Verify runner prerequisites
+        run: |
+          command -v unshare
+          sudo -n true
+
+      - name: Run MiSTer backup mount smoke test
+        run: scripts/test-mister-backup-mounts.sh
 
   cross-lint:
     name: Cross Lint
@@ -189,7 +264,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set image reference
         run: |
@@ -218,7 +293,7 @@ jobs:
           fi
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -243,8 +318,9 @@ jobs:
             -e CXX="${TARGET_CXX}" \
             -e CGO_CFLAGS="${TARGET_CGO_CFLAGS}" \
             -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
+            -e GOLANGCI_LINT_VERSION \
             ${{ env.ZIGCC_IMAGE }} \
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
 
   native-pr-tests:
     name: Native PR Tests
@@ -262,10 +338,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
@@ -292,7 +368,7 @@ jobs:
 
       - name: Restore Go cache (macOS)
         if: matrix.os == 'macos'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -301,7 +377,7 @@ jobs:
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -325,12 +401,14 @@ jobs:
         run: |
           go test -v -race \
             ./pkg/api \
+            ./pkg/database/mediascanner \
             ./pkg/helpers \
             ./pkg/helpers/command \
             ./pkg/readers/externaldrive \
             ./pkg/platforms/shared/steam \
             ./pkg/platforms/shared/steam/steamtracker \
             ./pkg/service \
+            ./pkg/service/backup \
             ./pkg/service/restart \
             ./pkg/ui/systray
 
@@ -339,12 +417,14 @@ jobs:
         run: |
           go test -v -race \
             ./pkg/api \
+            ./pkg/database/mediascanner \
             ./pkg/helpers \
             ./pkg/helpers/command \
             ./pkg/readers/externaldrive \
             ./pkg/platforms/shared/steam \
             ./pkg/platforms/shared/steam/steamtracker \
             ./pkg/service \
+            ./pkg/service/backup \
             ./pkg/service/daemon \
             ./pkg/service/restart \
             ./pkg/ui/systray
@@ -360,11 +440,15 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [ci, cross-lint, native-pr-tests]
+    needs: [actionlint, ci, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
         run: |
+          if [ "${{ needs.actionlint.result }}" != "success" ]; then
+            echo "CI failed: actionlint=${{ needs.actionlint.result }}"
+            exit 1
+          fi
           if [ "${{ needs.ci.result }}" != "success" ]; then
             echo "CI failed: ci=${{ needs.ci.result }}"
             exit 1

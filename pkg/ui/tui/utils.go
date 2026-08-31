@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -38,6 +39,8 @@ const TUIRequestTimeout = 5 * time.Second
 // This is longer than TUIRequestTimeout to give users time to physically tap a tag.
 const TagReadTimeout = 30 * time.Second
 
+var disableZapScript = client.DisableZapScript
+
 // tuiContext creates a context with the TUI request timeout.
 // Use this for API calls from the TUI to avoid long hangs.
 func tuiContext() (context.Context, context.CancelFunc) {
@@ -50,6 +53,12 @@ func tuiContext() (context.Context, context.CancelFunc) {
 func tagReadContext() (context.Context, context.CancelFunc) {
 	//nolint:gosec // G118: caller is responsible for cancel
 	return context.WithTimeout(context.Background(), TagReadTimeout)
+}
+
+// backupContext creates a cancellable context without imposing a whole-operation deadline.
+func backupContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: caller is responsible for cancel
+	return context.WithCancel(context.Background())
 }
 
 // DefaultMaxWidth is the default maximum width for the TUI in non-CRT mode.
@@ -91,7 +100,8 @@ func ResponsiveMaxWidget(maxWidth, maxHeight int, p tview.Primitive) tview.Primi
 
 // Draw implements tview.Primitive.
 func (r *responsiveWrapper) Draw(screen tcell.Screen) {
-	r.DrawForSubclass(screen, r)
+	// The wrapper only positions its child. Drawing its Box would fill the
+	// entire terminal with the theme background outside the centered dialog.
 	x, y, width, height := r.GetInnerRect()
 
 	actualWidth := r.maxWidth
@@ -146,52 +156,55 @@ const (
 	waitingModalPage         = "waiting_modal"
 	oskModalPage             = "osk_modal"
 	errorReportingPromptPage = "error_reporting_prompt"
+	encryptionPromptPage     = "encryption_prompt"
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
-// onDismiss is called when the modal is closed and should restore focus.
-func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string, onDismiss func()) {
-	modal := tview.NewModal().
+// onDismiss is called when the modal is closed and should restore focus. The
+// returned dialog supports callers that need to update displayed information.
+func ShowInfoModal(
+	pages *tview.Pages, app *tview.Application, title, message string, onDismiss func(),
+) *Dialog {
+	dialog := NewDialog().
 		SetText(message).
+		SetTitle(title).
 		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(_ int, _ string) {
+		SetDoneFunc(func(_ int) {
 			pages.HidePage(infoModalPage)
 			pages.RemovePage(infoModalPage)
 			if onDismiss != nil {
 				onDismiss()
 			}
 		})
-	modal.SetTitle(" " + title + " ").
-		SetBorder(true).
-		SetTitleAlign(tview.AlignCenter)
-	pages.AddPage(infoModalPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(infoModalPage, dialog, true, true)
+	app.SetFocus(dialog)
+	return dialog
 }
 
 // ShowErrorModal displays an error message modal to the user.
 // onDismiss is called when the modal is closed and should restore focus.
 func ShowErrorModal(pages *tview.Pages, app *tview.Application, message string, onDismiss func()) {
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText(message).
 		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(_ int, _ string) {
+		SetDoneFunc(func(_ int) {
 			pages.HidePage(errorModalPage)
 			pages.RemovePage(errorModalPage)
 			if onDismiss != nil {
 				onDismiss()
 			}
 		})
-	pages.AddPage(errorModalPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(errorModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 }
 
 // ShowConfirmModal displays a confirmation dialog with Yes/No buttons.
 // onYes is called when the user clicks "Yes", onNo is called for "No" or Escape.
 func ShowConfirmModal(pages *tview.Pages, app *tview.Application, message string, onYes, onNo func()) {
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText(message).
 		AddButtons([]string{"Yes", "No"}).
-		SetDoneFunc(func(buttonIndex int, _ string) {
+		SetDoneFunc(func(buttonIndex int) {
 			pages.HidePage(confirmModalPage)
 			pages.RemovePage(confirmModalPage)
 			if buttonIndex == 0 {
@@ -204,8 +217,8 @@ func ShowConfirmModal(pages *tview.Pages, app *tview.Application, message string
 				}
 			}
 		})
-	pages.AddPage(confirmModalPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(confirmModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 }
 
 // ShowErrorReportingPrompt displays the first-run error reporting opt-in modal.
@@ -217,15 +230,16 @@ func ShowErrorReportingPrompt(
 	app *tview.Application,
 	onEnable, onNotNow, onDontAsk func(),
 ) {
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText(
 			"Help improve Zaparoo?\n\n" +
 				"Anonymous error reports help fix bugs faster.\n" +
 				"Only sent when errors occur. No personal data collected.\n" +
 				"You can change this in Settings at any time.",
 		).
+		SetTitle("Error Reporting").
 		AddButtons([]string{"Enable", "Not Now", "Don't Ask Again"}).
-		SetDoneFunc(func(buttonIndex int, _ string) {
+		SetDoneFunc(func(buttonIndex int) {
 			pages.HidePage(errorReportingPromptPage)
 			pages.RemovePage(errorReportingPromptPage)
 			switch buttonIndex {
@@ -243,28 +257,67 @@ func ShowErrorReportingPrompt(
 				}
 			}
 		})
-	modal.SetTitle(" Error Reporting ").
-		SetBorder(true).
-		SetTitleAlign(tview.AlignCenter)
-	pages.AddPage(errorReportingPromptPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(errorReportingPromptPage, dialog, true, true)
+	app.SetFocus(dialog)
+}
+
+// ShowEncryptionPrompt displays the first-run secure-device opt-in modal.
+// onSecure is called when the user clicks "Secure Now".
+// onNotNow is called when the user clicks "Not Now" or presses Escape.
+// onDontAsk is called when the user clicks "Don't Ask Again".
+func ShowEncryptionPrompt(
+	pages *tview.Pages,
+	app *tview.Application,
+	onSecure, onNotNow, onDontAsk func(),
+) {
+	dialog := NewDialog().
+		SetText(
+			"Right now, anyone on your network can send\n" +
+				"Zaparoo commands to this device. Securing it\n" +
+				"means only phones and apps you approve can\n" +
+				"connect to Zaparoo, each with its own level\n" +
+				"of access.\n\n" +
+				"You can change this in Settings at any time.",
+		).
+		SetTitle("Secure Zaparoo?").
+		AddButtons([]string{"Secure Now", "Not Now", "Don't Ask Again"}).
+		SetDoneFunc(func(buttonIndex int) {
+			pages.HidePage(encryptionPromptPage)
+			pages.RemovePage(encryptionPromptPage)
+			switch buttonIndex {
+			case 0:
+				if onSecure != nil {
+					onSecure()
+				}
+			case 2:
+				if onDontAsk != nil {
+					onDontAsk()
+				}
+			default:
+				if onNotNow != nil {
+					onNotNow()
+				}
+			}
+		})
+	pages.AddPage(encryptionPromptPage, dialog, true, true)
+	app.SetFocus(dialog)
 }
 
 // ShowWaitingModal displays a modal while waiting for user action (like placing a tag).
 // Returns a cleanup function that removes the modal.
 func ShowWaitingModal(pages *tview.Pages, app *tview.Application, message string, onCancel func()) func() {
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText(message).
 		AddButtons([]string{"Cancel"}).
-		SetDoneFunc(func(_ int, _ string) {
+		SetDoneFunc(func(_ int) {
 			pages.HidePage(waitingModalPage)
 			pages.RemovePage(waitingModalPage)
 			if onCancel != nil {
 				onCancel()
 			}
 		})
-	pages.AddPage(waitingModalPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(waitingModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 
 	return func() {
 		pages.HidePage(waitingModalPage)
@@ -370,10 +423,10 @@ func WriteTagWithModal(
 
 	ctx, ctxCancel := tagReadContext()
 
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText("Place token on reader...").
 		AddButtons([]string{"Cancel"}).
-		SetDoneFunc(func(_ int, _ string) {
+		SetDoneFunc(func(_ int) {
 			ctxCancel()
 			// Cancel the write operation on the server (fire and forget)
 			go func() {
@@ -387,8 +440,8 @@ func WriteTagWithModal(
 			}
 		})
 
-	pages.AddPage(writeModalPage, modal, true, true)
-	app.SetFocus(modal)
+	pages.AddPage(writeModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 
 	go func() {
 		err := svc.WriteTag(ctx, text)
@@ -410,17 +463,17 @@ func WriteTagWithModal(
 
 		app.QueueUpdateDraw(func() {
 			pages.RemovePage(writeModalPage)
-			successModal := tview.NewModal().
+			successDialog := NewDialog().
 				SetText("Token written successfully!").
 				AddButtons([]string{"OK"}).
-				SetDoneFunc(func(_ int, _ string) {
+				SetDoneFunc(func(_ int) {
 					pages.RemovePage(successModalPage)
 					if onComplete != nil {
 						onComplete(true)
 					}
 				})
-			pages.AddPage(successModalPage, successModal, true, true)
-			app.SetFocus(successModal)
+			pages.AddPage(successModalPage, successDialog, true, true)
+			app.SetFocus(successDialog)
 		})
 	}()
 }
@@ -430,20 +483,33 @@ type PrimitiveWithSetBorder interface {
 	SetBorder(arg bool) *tview.Box
 }
 
-// BuildAndRetry attempts to build and display a TUI dialog, retrying with
-// alternate settings on error.
-// It's used to work around issues on MiSTer, which has an unusual setup for
-// showing TUI applications.
-// When cfg is non-nil, ZapScript execution is disabled while the TUI is open.
+func shouldDisableZapScriptInMainTUI(cfg *config.Instance, pl platforms.Platform) bool {
+	return cfg != nil && pl != nil && pl.Settings().DisableZapScriptInTUI
+}
+
+// BuildAndRetry attempts to build and display the main TUI, retrying with
+// alternate settings on error. ZapScript is disabled only on platforms whose
+// main TUI occupies the primary display and cannot run alongside launched media.
 func BuildAndRetry(
 	cfg *config.Instance,
+	pl platforms.Platform,
 	builder func() (*tview.Application, error),
 ) error {
-	if cfg != nil {
-		enableZapScript := client.DisableZapScript(cfg)
+	if shouldDisableZapScriptInMainTUI(cfg, pl) {
+		enableZapScript := disableZapScript(cfg)
 		defer enableZapScript()
 	}
 
+	return buildAndRunWithRetry(builder)
+}
+
+// BuildWidgetAndRetry displays a utility TUI widget without disabling
+// ZapScript, allowing widget controls to trigger their intended actions.
+func BuildWidgetAndRetry(builder func() (*tview.Application, error)) error {
+	return buildAndRunWithRetry(builder)
+}
+
+func buildAndRunWithRetry(builder func() (*tview.Application, error)) error {
 	app, err := builder()
 	if err != nil {
 		return err

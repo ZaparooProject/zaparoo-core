@@ -886,6 +886,9 @@ func TestGetZapScriptTagsBySystemAndPath_WithYear_Integration(t *testing.T) {
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
+	// Disambiguating types are precomputed per title at index time; replicate that here.
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{insertedSystem.DBID}))
+
 	// Test GetZapScriptTagsBySystemAndPath - should return year since siblings differ
 	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/mario.nes")
 	require.NoError(t, err)
@@ -950,6 +953,9 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
+
+	// Disambiguating types are precomputed per title at index time; replicate that here.
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{insertedSystem.DBID}))
 
 	resultTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(
 		ctx,

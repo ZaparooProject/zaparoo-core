@@ -75,15 +75,9 @@ func TestGetStatus_StateReset(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		// Expect DB call to calculate daily usage
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-			{
-				DBID:      1,
-				StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-				EndTime:   timePtr(time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)),
-				PlayTime:  3600, // 1 hour
-			},
-		}, nil)
+		// Expect DB call to calculate daily usage (1 hour completed today)
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(3600), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -163,14 +157,8 @@ func TestGetStatus_StateReset(t *testing.T) {
 
 		mockDB := testhelpers.NewMockUserDBI()
 		// Return 3 hours of usage (over the 2 hour limit)
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-			{
-				DBID:      1,
-				StartTime: time.Date(2025, 1, 15, 8, 0, 0, 0, time.UTC),
-				EndTime:   timePtr(time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)),
-				PlayTime:  10800, // 3 hours
-			},
-		}, nil)
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(10800), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -209,14 +197,9 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-			{
-				DBID:      1,
-				StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-				EndTime:   timePtr(time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)),
-				PlayTime:  1800, // 30 minutes
-			},
-		}, nil)
+		// 30 minutes completed in history
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(1800), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -241,7 +224,6 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		tm.state = StateCooldown
 		tm.sessionCumulativeTime = 30 * time.Minute
 		tm.lastStopTime = time.Date(2025, 1, 15, 10, 55, 0, 0, time.UTC)
-		tm.sessionResetTimeout = 20 * time.Minute
 		tm.mu.Unlock()
 
 		status := tm.GetStatus()
@@ -295,7 +277,6 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		tm.state = StateCooldown
 		tm.sessionCumulativeTime = 30 * time.Minute
 		tm.lastStopTime = time.Date(1970, 1, 1, 10, 55, 0, 0, time.UTC)
-		tm.sessionResetTimeout = 20 * time.Minute
 		tm.mu.Unlock()
 
 		status := tm.GetStatus()
@@ -344,7 +325,6 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		tm.state = StateCooldown
 		tm.sessionCumulativeTime = 30 * time.Minute
 		tm.lastStopTime = time.Date(2025, 1, 15, 10, 55, 0, 0, time.UTC)
-		tm.sessionResetTimeout = 20 * time.Minute
 		tm.mu.Unlock()
 
 		status := tm.GetStatus()
@@ -365,15 +345,9 @@ func TestGetStatus_StateActive(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-			// Previous session today
-			{
-				DBID:      1,
-				StartTime: time.Date(2025, 1, 15, 9, 0, 0, 0, time.UTC),
-				EndTime:   timePtr(time.Date(2025, 1, 15, 9, 30, 0, 0, time.UTC)),
-				PlayTime:  1800, // 30 minutes
-			},
-		}, nil)
+		// 30 min completed today before current session
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(1800), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -482,9 +456,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		// DB still gets called in buildRuleContext when clock is reliable,
-		// but the result is not used when daily limit is 0
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
+		// No DB call expected - DailyLimit() == 0, so buildRuleContext skips the query.
 
 		db := &database.Database{
 			UserDB: mockDB,

@@ -21,6 +21,8 @@ package tokens
 
 import (
 	"time"
+
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 )
 
 const (
@@ -41,15 +43,26 @@ const (
 	SourceHook     = "Hook"     // Hook-generated token
 	SourceGMC      = "GMC"      // Groovy Media Center proxy
 	SourceControl  = "Control"  // Config-defined control script
+	SourceRemote   = "Remote"   // Allowlisted Zaparoo Online remote operation
 )
 
+//nolint:govet // Field order groups token identity and structural command source.
 type Token struct {
 	ScanTime time.Time
+	// Commands bypass text parsing and mappings for trusted structural callers.
+	// Remote operations use this only after deny-by-default verb validation.
+	Commands []gozapscript.Command
 	Type     string
 	UID      string
 	Text     string
 	Data     string
 	Source   string
 	ReaderID string // Deterministic ID of the source reader
+	// PathRoot is an optional filesystem root used to resolve relative paths
+	// originating from source-backed tokens such as external drives.
+	PathRoot string
 	Unsafe   bool
+	// Completion, when non-nil, receives the terminal result of processing
+	// this token exactly once. Only callers that wait on execution set it.
+	Completion *Completion
 }

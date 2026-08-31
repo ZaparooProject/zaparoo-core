@@ -2,7 +2,11 @@
 
 The scraper subsystem enriches existing MediaDB records with metadata from external sources. The filesystem scanner owns record creation; scrapers update records that already exist.
 
-The only current scraper implementation is `gamelist.xml`, which imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
+Current scraper implementations:
+
+- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
+- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
+- `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 
 ## Code Layout
 
@@ -10,6 +14,9 @@ The only current scraper implementation is `gamelist.xml`, which imports Emulati
 |---|---|
 | `pkg/database/scraper/` | Shared scrape types (`ScrapeOptions`, `ScrapeUpdate`), sentinel helper, and small channel startup helper |
 | `pkg/database/scraper/gamelistxml/` | EmulationStation `gamelist.xml` scraper loop, matcher, mapper, and companion-entry handling |
+| `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
+| `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
+| `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
 | `pkg/api/methods/media_scrape.go` | JSON-RPC scrape start/status/cancel/resume handlers and scraper listing |
@@ -52,6 +59,8 @@ For each system, the normal loop:
 14. Emits progress updates and a final done update.
 
 The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
+
+Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed when the operation reaches a terminal state.
 
 Per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
 
@@ -129,9 +138,70 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
 
-Only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read by the current scraper.
+By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
+
+An additional metadata bundle can be configured independently of ROM storage:
+
+```toml
+[scraper.gamelist_xml]
+custom_path = "/path/to/gamelists"
+```
+
+For each indexed system, the scraper also checks `<custom_path>/<system ID>/gamelist.xml`. Game paths in this file resolve against the system's first ROM root; asset paths resolve against the custom system directory. Custom bundle image references are optional: only files present during scraping are stored, and missing references fall back to `media/` artwork under the custom directory and then the system's ROM roots. Run the scraper again after installing more bundle artwork. Regular ROM-root gamelists are processed first and take precedence over matching custom entries.
+
+Custom gamelists enrich existing indexed records; they do not create systems, titles, or media rows. For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
+
+## MiSTer Installed Docs Databases
+
+The MiSTer-only `mister-docs` scraper indexes assets already installed by MiSTer Downloader or Update All. Downloader remains responsible for downloading, verifying, updating, and placing third-party content. Core performs no online database enumeration and does not edit Downloader configuration.
+
+Example artwork sources:
+
+```ini
+[chipster6502/artworkdb-snes]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-nintendo-consoles/db/snes_box2d.json.zip
+
+[chipster6502/artworkdb-genesis]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-sega/db/genesis_box2d.json.zip
+
+[chipster6502/artworkdb-arcade]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-arcade/db/arcade_box2d.json.zip
+```
+
+Game manuals can be selected through Update All's **Game Manuals (EN)** settings or installed through compatible Downloader database sections. These collections are large; Core intentionally does not mirror or bulk-download them.
+
+### Discovery
+
+Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots. It recognizes content by installed format rather than repository name:
+
+- Artwork: `docs/<system>/Artwork/index.tsv` plus image files in the same directory.
+- Optional title metadata: `gameinfo.tsv` beside the artwork index.
+- Optional description: `synopsis_en.tsv` beside the artwork index.
+- Manuals: direct PDF files in a child directory whose name contains `manual`, for example `docs/SNES/Manuals/` or `docs/NES/Famicom Disk System Manuals/`.
+
+This format-based discovery means future compatible databases need no Core update. Run `mister-docs` again after Downloader installs or updates content. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art/manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
+
+Metadata files are treated as untrusted input. Core bounds their size and record count, rejects symlink/path escapes and non-regular assets, skips ambiguous matches, and continues past malformed optional sources where possible.
+
+### Matching And Fields
+
+`index.tsv` maps ROM or MRA basenames to canonical artwork keys. Core prefers an exact media basename match. When no exact media match exists, a unique title-slug match may receive title-level artwork; ambiguous matches are skipped. CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O.
+
+| Source | Destination |
+|---|---|
+| Artwork image | `property:image-boxart` at media scope for exact matches, title scope for unique slug fallback |
+| `gameinfo.tsv` year | title tag `year` |
+| `gameinfo.tsv` genre | title tag `genre` |
+| `gameinfo.tsv` developer | title tag `developer` |
+| `gameinfo.tsv` players | title tag `players` using highest numeric value |
+| `synopsis_en.tsv` synopsis | title property `property:description` |
+| Manual PDF | title property `property:manual` |
+
+Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
+
+If multiple docs roots provide the same property, MiSTer root order decides which source wins. As with other scrapers, running a different scraper later may replace exclusive tags or same-type properties.
 
 ## ZaparooCompanion Entries
 
@@ -217,9 +287,9 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
-`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. On platforms that treat zips as directories, a `system`/`path` request for a folder or zip-as-directory container resolves to its only non-missing indexed media descendant when exactly one exists.
+`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. On platforms that treat zips as directories, a `system`/`path` request for a folder or zip-as-directory container resolves only when its direct contents collapse to one logical launch target.
 
-`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On zip-as-directory platforms, singleton container aliases are checked as media-level fallbacks, so artwork attached to a sole child or its container can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
+`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On zip-as-directory platforms, logical container aliases are checked as media-level fallbacks, so artwork attached to a direct single-game target or its container can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
 
 ## Useful Focused Tests
 

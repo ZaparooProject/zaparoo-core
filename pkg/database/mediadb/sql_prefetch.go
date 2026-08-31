@@ -38,13 +38,13 @@ var prefetchTables = []string{
 }
 
 func (db *MediaDB) prefetchSearchPages(ctx context.Context) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	for _, table := range prefetchTables {
 		var count int64
 		//nolint:gosec // table names are hardcoded literals, not user input
-		if err := db.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+		if err := db.sql.Load().QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

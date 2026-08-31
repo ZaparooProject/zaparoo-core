@@ -217,51 +217,6 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 	return row, nil
 }
 
-func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, Tag, TypeDBID, DisplayName FROM Tags ORDER BY DBID")
-	if err != nil {
-		return nil, fmt.Errorf("failed to query tags: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	dbTags := make([]database.Tag, 0)
-	for rows.Next() {
-		var tag database.Tag
-		if err := rows.Scan(&tag.DBID, &tag.Tag, &tag.TypeDBID, &tag.DisplayName); err != nil {
-			return nil, fmt.Errorf("failed to scan tag: %w", err)
-		}
-		tag.Tag = tags.UnpadTagValue(tag.Tag)
-		dbTags = append(dbTags, tag)
-	}
-	return dbTags, rows.Err()
-}
-
-func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, Type, IsExclusive FROM TagTypes ORDER BY DBID")
-	if err != nil {
-		return nil, fmt.Errorf("failed to query tag types: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	tagTypes := make([]database.TagType, 0)
-	for rows.Next() {
-		var tagType database.TagType
-		if err := rows.Scan(&tagType.DBID, &tagType.Type, &tagType.IsExclusive); err != nil {
-			return nil, fmt.Errorf("failed to scan tag type: %w", err)
-		}
-		tagTypes = append(tagTypes, tagType)
-	}
-	return tagTypes, rows.Err()
-}
-
 // sqlGetAllUsedTags queries for all tags that are currently in use with their
 // aggregate usage counts across both MediaTags and MediaTitleTags.
 func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, error) {

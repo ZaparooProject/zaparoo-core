@@ -164,6 +164,7 @@ func TestRunControlScript_CancelsMidExecution(t *testing.T) {
 	mockPlatform.On("ID").Return("test")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	mockPlatform.On("KeyboardPress", "{f2}").
 		Run(func(_ mock.Arguments) { cancel() }).
 		Return(nil)
@@ -195,6 +196,39 @@ func TestIsControlCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, IsControlCommand(tt.cmdName))
+		})
+	}
+}
+
+// TestIsControlAllowed_BlocksMediaDBReadingCommands guards the media.control
+// bypass in pkg/api/request_priority.go's isMediaDBFreeInstantMethod: that
+// bypass skips wsMediaDBMu for media.control on the assumption that
+// isControlAllowed rejects every command capable of reading MediaDB (only
+// IsMediaLaunchingCommand's set does, via launch.go/titles.go/control_cmd.go).
+// If a future MediaDB-reading command is ever added without being folded into
+// IsMediaLaunchingCommand (or otherwise blocked here), it would run through
+// media.control's uncontended path and could overlap an exclusive indexing or
+// tag-update transaction. This test must keep failing for every such command.
+func TestIsControlAllowed_BlocksMediaDBReadingCommands(t *testing.T) {
+	t.Parallel()
+
+	mediaDBReadingCommands := []string{
+		gozapscript.ZapScriptCmdLaunch,
+		gozapscript.ZapScriptCmdLaunchSystem,
+		gozapscript.ZapScriptCmdLaunchRandom,
+		gozapscript.ZapScriptCmdLaunchSearch,
+		gozapscript.ZapScriptCmdLaunchTitle,
+		gozapscript.ZapScriptCmdLaunchLast,
+		gozapscript.ZapScriptCmdMisterMGL,
+		gozapscript.ZapScriptCmdRandom, // deprecated alias for launch.random
+		gozapscript.ZapScriptCmdSystem, // deprecated alias for launch.system
+	}
+
+	for _, cmdName := range mediaDBReadingCommands {
+		t.Run(cmdName, func(t *testing.T) {
+			t.Parallel()
+			assert.False(t, isControlAllowed(cmdName),
+				"%s reads MediaDB and must be rejected in control context", cmdName)
 		})
 	}
 }

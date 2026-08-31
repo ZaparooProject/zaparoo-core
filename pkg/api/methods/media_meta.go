@@ -22,21 +22,39 @@ package methods
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/rs/zerolog/log"
 )
 
 // HandleMediaMeta returns the full metadata graph for a single Media record:
 // the Media itself, its parent MediaTitle, System, level-separated Tags, and
 // level-separated Properties. Binary payloads are not included; use media.image
 // to fetch image bytes.
-func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//
+//nolint:gocritic // RequestEnv is copied once at the API handler boundary.
+func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
+	started := time.Now()
+	batch := false
+	itemCount := 0
+	defer func() {
+		log.Debug().
+			Dur("duration", time.Since(started)).
+			Bool("batch", batch).
+			Int("itemCount", itemCount).
+			Bool("ok", resultErr == nil).
+			Msg("media.meta handler timing")
+	}()
+
 	params, err := parseMediaRequest(env.Params, maxMediaMetaBatchItems)
 	if err != nil {
 		return nil, err
 	}
+	batch = params.Batch
+	itemCount = len(params.Items)
 	if !params.Batch && params.Items[0].MediaID == nil {
 		return handleMediaMetaSinglePath(&env, params.Items[0])
 	}
@@ -236,13 +254,26 @@ func buildMediaMetaResponse(
 	if row.Title.SecondarySlug.Valid {
 		secondarySlug = &row.Title.SecondarySlug.String
 	}
+	// Guard nil slices so they marshal to [] not null. The grouped tag scanner
+	// omits DBIDs with zero tags from its map, so callers may receive nil from
+	// a map lookup when no tags exist.
+	if mediaTags == nil {
+		mediaTags = []database.TagInfo{}
+	}
+	if titleTags == nil {
+		titleTags = []database.TagInfo{}
+	}
+
+	properties := mapMediaProperties(mediaProps)
+	launcherOverride := mediaLauncherOverride(properties)
 
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:                row.Path,
 		ParentDir:           row.ParentDir,
 		IsMissing:           row.IsMissing,
 		Tags:                mediaTags,
-		Properties:          mapMediaProperties(mediaProps),
+		Properties:          properties,
+		LauncherOverride:    launcherOverride,
 		AvailableImageTypes: availableImageTypes(mediaProps),
 		Title: models.MediaMetaTitleResponse{
 			Slug:                row.Title.Slug,
@@ -261,6 +292,14 @@ func buildMediaMetaResponse(
 	}}
 }
 
+func mediaLauncherOverride(props map[string]models.MediaMetaPropertyItem) *string {
+	item, ok := props[launcherOverridePropertyTypeTag()]
+	if !ok || item.Text == "" {
+		return nil
+	}
+	return &item.Text
+}
+
 func availableImageTypes(props []database.MediaProperty) []string {
 	typesByTag := make(map[string]string, len(imageTypeTags))
 	for imageType, typeTag := range imageTypeTags {
@@ -274,7 +313,7 @@ func availableImageTypes(props []database.MediaProperty) []string {
 		}
 	}
 	if len(seen) == 0 {
-		return nil
+		return []string{}
 	}
 
 	result := make([]string, 0, len(seen))

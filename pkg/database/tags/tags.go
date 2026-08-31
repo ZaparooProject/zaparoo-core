@@ -66,14 +66,32 @@ func PropertyTypeTag(value TagValue) string {
 	return string(TagTypeProperty) + ":" + string(value)
 }
 
+// Dynamic scraper tag-type prefixes. IsScannerOwnedType matches on these, so
+// they are named rather than reconstructed from empty-ID type calls.
+const (
+	ScraperTypePrefix    = "scraper."
+	ScraperRunTypePrefix = "scraper-run."
+)
+
 // ScraperType returns the dynamic tag type used by a scraper's sentinel tag.
 func ScraperType(scraperID string) TagType {
-	return TagType("scraper." + scraperID)
+	return TagType(ScraperTypePrefix + scraperID)
 }
 
 // ScraperTypeTag returns the full sentinel TypeTag string for a scraper.
 func ScraperTypeTag(scraperID string) string {
 	return CanonicalTag{Type: ScraperType(scraperID), Value: TagScraperScraped}.String()
+}
+
+// ScraperRunType returns the dynamic tag type used to mark media completed
+// during one persisted scraper run.
+func ScraperRunType(scraperID string) TagType {
+	return TagType(ScraperRunTypePrefix + scraperID)
+}
+
+// ScraperRunTypeTag returns the full run marker TypeTag string for a scraper run.
+func ScraperRunTypeTag(scraperID, runID string) string {
+	return CanonicalTag{Type: ScraperRunType(scraperID), Value: TagValue(runID)}.String()
 }
 
 // Tag type constants - these define the top-level categories for our hierarchical tag system
@@ -86,6 +104,8 @@ const (
 	TagTypeEmbedded      TagType = "embedded"      // Embedded chips and internal hardware
 	TagTypeSave          TagType = "save"          // Save mechanism
 	TagTypeArcadeBoard   TagType = "arcadeboard"   // Arcade board types
+	TagTypeCabinet       TagType = "cabinet"       // Arcade cabinet orientation
+	TagTypeProtection    TagType = "protection"    // Arcade copy-protection state
 	TagTypeCompatibility TagType = "compatibility" // System compatibility tags
 	TagTypeSupplement    TagType = "supplement"    // Supplementary content (dlc, update, expansion, theme, avatar)
 	TagTypeDistribution  TagType = "distribution"  // Digital distribution platform (virtual-console, wiiware, xblig)
@@ -103,9 +123,11 @@ const (
 	TagTypeSet           TagType = "set"           // Set number
 	TagTypeAlt           TagType = "alt"           // Alternate version
 	TagTypeUnlicensed    TagType = "unlicensed"    // Unlicensed/bootleg/hacks
+	TagTypePatch         TagType = "patch"         // Applied ROM patches and modifications
 	TagTypeMameParent    TagType = "mameparent"    // MAME parent ROM relationship
 	TagTypeRegion        TagType = "region"        // Release region
 	TagTypeYear          TagType = "year"          // Release year
+	TagTypeBuildDate     TagType = "builddate"     // Romset/build date (YYYY-MM-DD); MiSTer arcade YYMMDD
 	TagTypeSeason        TagType = "season"        // TV show season number
 	TagTypeEpisode       TagType = "episode"       // TV show episode number
 	TagTypeTrack         TagType = "track"         // Music track number
@@ -135,6 +157,14 @@ const (
 const (
 	TagUserFavorite TagValue = "favorite"
 )
+
+// UtilityTags are non-metadata tags the browse grid renders directly
+// (currently the favorite star) and are therefore always attached to browse
+// results. All other (metadata) tags are excluded from browse and fetched on
+// demand via media.meta. Add an entry here when the grid renders a new tag.
+var UtilityTags = []CanonicalTag{
+	{Type: TagTypeUser, Value: TagUserFavorite},
+}
 
 // Tag Format:
 //   - Flat tags: Just the value (e.g., "trackball", "quiz")
@@ -419,6 +449,17 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSavePassword, // Password-based progression (no save memory)
 	},
 
+	TagTypeCabinet: {
+		// Arcade cabinet orientation
+		TagCabinetUpright, TagCabinetCocktail, TagCabinetCabaret, TagCabinetSitdown,
+	},
+
+	TagTypeProtection: {
+		// Arcade copy-protection state (chip family only)
+		TagProtectionNone, TagProtectionFD1094, TagProtectionFD1089, TagProtection8751,
+		TagProtectionMC8123, TagProtectionEncrypted, TagProtectionDecrypted,
+	},
+
 	TagTypeArcadeBoard: {
 		// Arcade system boards - specific hardware platforms for arcade games
 		// CAPCOM
@@ -470,6 +511,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Nintendo
 		TagArcadeBoardNintendoVS, TagArcadeBoardNintendoNSS,
 	},
+
 	TagTypeCompatibility: {
 		// SEGA systems
 		TagCompatibilitySG1000, TagCompatibilitySG1000SC3000, TagCompatibilitySG1000Othello,
@@ -523,7 +565,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Apple II
 		TagCompatibilityApple2Plus, TagCompatibilityApple2E,
 		// Memory requirements
-		TagCompatibilityMemory16K, TagCompatibilityMemory128K, TagCompatibilityMemory48K128K,
+		TagCompatibilityMemory3K, TagCompatibilityMemory4K, TagCompatibilityMemory8K,
+		TagCompatibilityMemory16K, TagCompatibilityMemory19K, TagCompatibilityMemory64K,
+		TagCompatibilityMemory128K, TagCompatibilityMemory48K128K,
+		TagCompatibilityLoadA000, TagCompatibilityBasic, TagCompatibilityPascal,
+		TagCompatibilityCPM, TagCompatibilityRDOS, TagCompatibilityOSB, TagCompatibilitySedoric,
 		// Other
 		TagCompatibilityIBMPCDoctorPCJr, TagCompatibilityOsbourneOsbourne1,
 		TagCompatibilityMiscOrch80, TagCompatibilityMiscPiano90,
@@ -541,7 +587,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagDistributionGameCube, TagDistributionSwitchOnline, TagDistributionDiskWriter, TagDistributionSteam,
 		TagDistributionSegaChannel, TagDistributionGenesisMini, TagDistributionSegaAges, TagDistributionSegaSmashPack,
 		TagDistributionWii, TagDistributionClubNintendo, TagDistributionGBAEReader,
-		TagDistributionCompilation,
+		TagDistributionCompilation, TagDistributionTypeIn,
 	},
 	TagTypeDisc: {
 		// Disc number for multi-disc games (which disc this file is)
@@ -665,6 +711,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagUnfinishedPreview,     // Preview version (our addition)
 		TagUnfinishedPrerelease,  // Pre-release version (our addition)
 		TagUnfinishedFinal,       // Final release (TOSEC/demo-scene: completed version)
+		TagUnfinishedWIP,         // Work-in-progress build
 		// Demo variants
 		TagUnfinishedDemoPlayable, TagUnfinishedDemoRolling, TagUnfinishedDemoSlideshow,
 	},
@@ -726,6 +773,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagUnlicensedSachen, // Sachen unlicensed (NES)
 	},
 
+	TagTypePatch: {
+		// Dynamic values identify applied patches and optional versions, such as
+		// patch:fastrom:1-1 or patch:uncensored:2-1.
+	},
+
 	TagTypeMameParent: {
 		// MAME parent ROM relationship (empty - values are dynamic ROM names)
 	},
@@ -740,6 +792,10 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 	TagTypeCredit: {
 		// Dynamic values - company credits where developer/publisher role is unspecified
+	},
+
+	TagTypeBuildDate: {
+		// Dynamic values - romset/build dates normalized to YYYY-MM-DD by the parser.
 	},
 
 	TagTypeRelease: {
@@ -826,7 +882,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagDumpVerified,   // Verified good dump
 		// Dump variants
 		TagDumpPending, TagDumpChecksumBad, TagDumpChecksumUnknown, TagDumpBIOS,
-		TagDumpHackedFFE, TagDumpHackedIntroRemov,
+		TagDumpHackedFFE, TagDumpHackedIntroRemov, TagDumpNoBoot,
 	},
 
 	TagTypeMedia: {
@@ -843,6 +899,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagMediaTape,  // Cassette tape
 		// Additional media types
 		TagMediaCart, TagMediaN64DD, TagMediaFDS, TagMediaEReader, TagMediaMultiboot,
+		TagMediaKFile, TagMediaLNX,
+	},
+
+	TagTypeTrack: {
+		// Music track numbers — values are open-ended (track:1, track:2, …) and created
+		// dynamically at index time, so no fixed values are enumerated here.
 	},
 
 	TagTypeExtension: {
@@ -920,6 +982,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyVideo,
 		TagPropertyManual,
 		TagPropertyXMLGameID,
+		TagPropertyGameID,
+		TagPropertyLauncherOverride,
 	},
 
 	// Rating, genre, and game-family are scraped from external sources; seeded here

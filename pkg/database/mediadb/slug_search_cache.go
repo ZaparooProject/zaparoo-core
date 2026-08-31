@@ -60,14 +60,32 @@ func formatBytes(b int) string {
 	}
 }
 
+// trigramDelta holds trigram postings (global entry indexes, ascending) for
+// one block of entries appended after the CSR trigram index was built. Layers
+// are immutable once published; a mid-scan refresh adds a new layer instead
+// of rebuilding the CSR.
+type trigramDelta map[uint32][]uint32
+
 // SlugSearchCache holds all slug data in memory for fast substring matching.
 // Entries are sorted by systemDBID for contiguous system-filtered scans.
 // A trigram inverted index accelerates unfiltered substring searches.
+//
+// Mid-scan indexing maintenance mutates the cache logically without touching
+// the entry arrays: dropping a system tombstones its contiguous block
+// (droppedRanges/liveEntries) and a refresh appends the system's new entries
+// as a block at the end with a trigramDelta layer for postings. Tombstoned
+// entries and delta layers accumulate only until the end-of-run full rebuild
+// publishes a compact cache. All fields are immutable after publication via
+// the atomic pointer; writers build a new struct (sharing arrays) and swap.
 type SlugSearchCache struct {
-	systemDBIDToID  map[int64]string
-	systemIDToDBID  map[string]int64
-	systemRanges    map[int64][2]int
-	coveredSystems  map[string]struct{}
+	systemDBIDToID map[int64]string
+	systemIDToDBID map[string]int64
+	systemRanges   map[int64][2]int
+	coveredSystems map[string]struct{}
+	// droppedSystems are systems withoutSystems removed, as opposed to ones
+	// that never had rows. Their data still exists in SQL, so a search naming
+	// one must fall back rather than read this cache and report nothing.
+	droppedSystems  map[string]struct{}
 	secSlugOffsets  []uint32
 	slugOffsets     []uint32
 	secSlugData     []byte
@@ -77,8 +95,106 @@ type SlugSearchCache struct {
 	trigramOffsets  []uint32
 	trigramPostings []uint32
 	trigramCapped   []bool
+	trigramDeltas   []trigramDelta
+	droppedRanges   [][2]int
+	liveEntries     [][2]int
 	entryCount      int
 	complete        bool
+	// derivedFromComplete marks a cache that descends from one covering the
+	// whole library. It is the difference between "this system has no rows"
+	// and "this system has not been built yet", which coveredSystems alone
+	// cannot express — see CanServeSystems. Not persisted: a cache written to
+	// disk is either complete or rebuilt on load.
+	derivedFromComplete bool
+}
+
+// hasMidScanState reports whether the cache carries tombstones or trigram
+// delta layers — transient mid-index state that the persisted-cache format
+// cannot represent.
+func (c *SlugSearchCache) hasMidScanState() bool {
+	return len(c.droppedRanges) > 0 || len(c.trigramDeltas) > 0
+}
+
+// insertDroppedRange inserts r into sorted ranges, merging overlaps and
+// adjacent ranges so the slice stays minimal and sorted by start.
+func insertDroppedRange(ranges [][2]int, r [2]int) [][2]int {
+	if r[1] <= r[0] {
+		return ranges
+	}
+	pos, _ := slices.BinarySearchFunc(ranges, r, func(a, b [2]int) int {
+		return cmp.Compare(a[0], b[0])
+	})
+	ranges = slices.Insert(ranges, pos, r)
+	merged := ranges[:0]
+	for _, cur := range ranges {
+		if n := len(merged); n > 0 && cur[0] <= merged[n-1][1] {
+			merged[n-1][1] = max(merged[n-1][1], cur[1])
+			continue
+		}
+		merged = append(merged, cur)
+	}
+	return merged
+}
+
+// computeLiveEntries returns the complement of droppedRanges over
+// [0, entryCount), or nil when nothing is dropped (meaning "all live").
+func computeLiveEntries(droppedRanges [][2]int, entryCount int) [][2]int {
+	if len(droppedRanges) == 0 {
+		return nil
+	}
+	live := make([][2]int, 0, len(droppedRanges)+1)
+	prev := 0
+	for _, r := range droppedRanges {
+		if r[0] > prev {
+			live = append(live, [2]int{prev, r[0]})
+		}
+		prev = max(prev, r[1])
+	}
+	if prev < entryCount {
+		live = append(live, [2]int{prev, entryCount})
+	}
+	return live
+}
+
+// entryDropped reports whether entry i belongs to a tombstoned system block.
+func (c *SlugSearchCache) entryDropped(i int) bool {
+	if len(c.droppedRanges) == 0 {
+		return false
+	}
+	pos, exact := slices.BinarySearchFunc(c.droppedRanges, [2]int{i, 0}, func(a, b [2]int) int {
+		return cmp.Compare(a[0], b[0])
+	})
+	if exact {
+		return true
+	}
+	return pos > 0 && i < c.droppedRanges[pos-1][1]
+}
+
+// forEachLiveEntry calls fn for every entry index that is not tombstoned.
+func (c *SlugSearchCache) forEachLiveEntry(fn func(i int)) {
+	if c.liveEntries == nil {
+		for i := range c.entryCount {
+			fn(i)
+		}
+		return
+	}
+	for _, r := range c.liveEntries {
+		for i := r[0]; i < r[1]; i++ {
+			fn(i)
+		}
+	}
+}
+
+// liveEntryCount returns the number of entries not tombstoned.
+func (c *SlugSearchCache) liveEntryCount() int {
+	if c.liveEntries == nil {
+		return c.entryCount
+	}
+	count := 0
+	for _, r := range c.liveEntries {
+		count += r[1] - r[0]
+	}
+	return count
 }
 
 // Size returns the approximate memory footprint of the cache in bytes.
@@ -199,7 +315,7 @@ func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs [
 	}
 
 	if len(coverage) == 0 {
-		finalizeCache(cache)
+		finalizeFragment(cache)
 		return cache, nil
 	}
 
@@ -292,6 +408,33 @@ func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs [
 // finalizeCache sorts entries by system, builds system ranges, and builds the
 // trigram index. Called after raw data population by both production and test paths.
 func finalizeCache(cache *SlugSearchCache) {
+	finalizeCacheEntries(cache, true)
+}
+
+// finalizeFragment finalizes a selective refresh fragment without building its
+// trigram index.
+//
+// mergeSlugSearchCaches folds the fragment's trigrams into a new delta layer
+// derived from the merged cache's own slug data and the base's frequency cap; it
+// never reads the fragment's CSR arrays. Building them would allocate five
+// trigramCount-sized arrays (~850KB) and make three passes over the slug data on
+// every per-system refresh, all discarded. The one path that returns a fragment
+// directly — an empty base — builds the index there via ensureTrigramIndex.
+func finalizeFragment(cache *SlugSearchCache) {
+	finalizeCacheEntries(cache, false)
+}
+
+// ensureTrigramIndex builds the CSR index for a cache finalized without one.
+// Caches with no entries are left alone, matching finalizeCacheEntries, which
+// also skips the index for them.
+func ensureTrigramIndex(cache *SlugSearchCache) {
+	if cache.entryCount == 0 || cache.trigramOffsets != nil {
+		return
+	}
+	buildTrigramIndex(cache)
+}
+
+func finalizeCacheEntries(cache *SlugSearchCache, withTrigramIndex bool) {
 	if cache.coveredSystems == nil && !cache.complete {
 		cache.coveredSystems = make(map[string]struct{})
 	}
@@ -322,7 +465,9 @@ func finalizeCache(cache *SlugSearchCache) {
 
 	sortCacheBySystem(cache)
 	cache.systemRanges = buildSystemRanges(cache.systemDBIDs, cache.entryCount)
-	buildTrigramIndex(cache)
+	if withTrigramIndex {
+		buildTrigramIndex(cache)
+	}
 
 	cache.slugData = slices.Clip(cache.slugData)
 	cache.slugOffsets = slices.Clip(cache.slugOffsets)
@@ -357,6 +502,42 @@ func sortedCoveredSystems(covered map[string]struct{}) []string {
 	return ids
 }
 
+// PartitionServableSystems splits requested systems into those this cache can
+// answer and those a caller must still reach SQL for.
+//
+// Only meaningful on a cache that once covered the whole library: there an
+// unknown system genuinely has no rows, while a dropped one is mid-reindex and
+// its rows are still in SQL. A search spanning both can then serve the bulk
+// from memory and scope its SQL to the handful actually in flight, instead of
+// falling back wholesale — which on the #1279 device meant every library-wide
+// search ran eight grouped LIKE queries across 293 systems and timed out.
+//
+// Returns ok=false when the split does not apply and the caller should keep
+// its existing all-or-nothing behaviour.
+func (c *SlugSearchCache) PartitionServableSystems(systemIDs []string) (cached, viaSQL []string, ok bool) {
+	if c == nil || c.complete || !c.derivedFromComplete || len(systemIDs) == 0 {
+		return nil, nil, false
+	}
+	for _, systemID := range systemIDs {
+		if _, dropped := c.droppedSystems[systemID]; dropped {
+			viaSQL = append(viaSQL, systemID)
+			continue
+		}
+		if _, covered := c.coveredSystems[systemID]; covered {
+			cached = append(cached, systemID)
+			continue
+		}
+		if _, known := c.systemIDToDBID[systemID]; !known {
+			// No rows anywhere; contributes nothing to either side.
+			continue
+		}
+		// Known to the cache but neither covered nor dropped: unexpected, so
+		// fall back rather than guess.
+		return nil, nil, false
+	}
+	return cached, viaSQL, true
+}
+
 func (c *SlugSearchCache) CanServeSystems(systemIDs []string) bool {
 	if c == nil {
 		return false
@@ -368,13 +549,42 @@ func (c *SlugSearchCache) CanServeSystems(systemIDs []string) bool {
 		return false
 	}
 	for _, systemID := range systemIDs {
-		if _, ok := c.coveredSystems[systemID]; !ok {
+		if _, ok := c.coveredSystems[systemID]; ok {
+			continue
+		}
+		// A system the cache has never held entries for contributes no
+		// results, so it cannot make the answer wrong — but only once the
+		// cache is known to account for the whole library. Without this a
+		// library-wide search is unservable for the entire duration of an
+		// index: a client asks for every system Zaparoo knows about (293 on
+		// the #1279 device) while the database holds rows for far fewer (106),
+		// so the systems that simply have no media veto the cache and every
+		// search falls back to the grouped SQL LIKE path.
+		//
+		// The system currently being re-indexed is also absent here, and is
+		// likewise treated as contributing nothing until its refresh lands.
+		// Its rows are mid-rewrite, so a moment of no results for that one
+		// system is the intended degradation.
+		if _, dropped := c.droppedSystems[systemID]; dropped {
+			// Removed for re-indexing. Its rows are still in SQL, so the
+			// caller must fall back or it would silently report no results.
 			return false
 		}
+		if c.derivedFromComplete {
+			if _, known := c.systemIDToDBID[systemID]; !known {
+				continue
+			}
+		}
+		return false
 	}
 	return true
 }
 
+// withoutSystems returns a cache with the given systems logically removed.
+// The entry and trigram arrays are shared with c, untouched: removed systems
+// are tombstoned via droppedRanges and excised from the metadata maps, so the
+// cost is O(#systems), not O(#entries). Dropped entries stay in the arrays as
+// dead weight until the next full rebuild compacts them.
 func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 	if c == nil {
 		return nil
@@ -386,15 +596,42 @@ func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 	}
 
 	trimmed := &SlugSearchCache{
-		slugData:       make([]byte, 0, len(c.slugData)),
-		slugOffsets:    make([]uint32, 0, len(c.slugOffsets)),
-		secSlugData:    make([]byte, 0, len(c.secSlugData)),
-		secSlugOffsets: make([]uint32, 0, len(c.secSlugOffsets)),
-		titleDBIDs:     make([]int64, 0, len(c.titleDBIDs)),
-		systemDBIDs:    make([]int64, 0, len(c.systemDBIDs)),
-		systemDBIDToID: make(map[int64]string),
-		systemIDToDBID: make(map[string]int64),
-		coveredSystems: make(map[string]struct{}),
+		slugData:        c.slugData,
+		slugOffsets:     c.slugOffsets,
+		secSlugData:     c.secSlugData,
+		secSlugOffsets:  c.secSlugOffsets,
+		titleDBIDs:      c.titleDBIDs,
+		systemDBIDs:     c.systemDBIDs,
+		trigramOffsets:  c.trigramOffsets,
+		trigramPostings: c.trigramPostings,
+		trigramCapped:   c.trigramCapped,
+		trigramDeltas:   c.trigramDeltas,
+		entryCount:      c.entryCount,
+		droppedRanges:   slices.Clone(c.droppedRanges),
+		systemDBIDToID:  make(map[int64]string, len(c.systemDBIDToID)),
+		systemIDToDBID:  make(map[string]int64, len(c.systemIDToDBID)),
+		systemRanges:    make(map[int64][2]int, len(c.systemRanges)),
+		coveredSystems:  make(map[string]struct{}),
+		// Removing systems loses full coverage, but not the knowledge that
+		// every other system in the library is accounted for.
+		derivedFromComplete: c.complete || c.derivedFromComplete,
+		droppedSystems:      make(map[string]struct{}, len(c.droppedSystems)+len(remove)),
+	}
+	for systemID := range c.droppedSystems {
+		trimmed.droppedSystems[systemID] = struct{}{}
+	}
+	for systemID := range remove {
+		// Only systems the cache actually holds entries for become "dropped".
+		// A system it has never seen has nothing stale to fall back for, and
+		// marking it anyway is not harmless: droppedSystems makes
+		// CanServeSystems refuse, so one InsertSystem outside a transaction —
+		// which invalidates with the new system's ID, and a new system has no
+		// media yet — would put every library-wide search back on the grouped
+		// SQL LIKE path until the next full rebuild.
+		if _, known := c.systemIDToDBID[systemID]; !known {
+			continue
+		}
+		trimmed.droppedSystems[systemID] = struct{}{}
 	}
 
 	if c.complete {
@@ -413,49 +650,80 @@ func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 
 	for dbid, systemID := range c.systemDBIDToID {
 		if _, drop := remove[systemID]; drop {
+			if r, ok := c.systemRanges[dbid]; ok {
+				trimmed.droppedRanges = insertDroppedRange(trimmed.droppedRanges, r)
+			}
 			continue
 		}
 		trimmed.systemDBIDToID[dbid] = systemID
 		trimmed.systemIDToDBID[systemID] = dbid
-	}
-
-	for i := range c.entryCount {
-		systemID := c.systemDBIDToID[c.systemDBIDs[i]]
-		if _, drop := remove[systemID]; drop {
-			continue
+		if r, ok := c.systemRanges[dbid]; ok {
+			trimmed.systemRanges[dbid] = r
 		}
-		appendSlugCacheEntry(trimmed, c, i)
 	}
 
-	trimmed.entryCount = len(trimmed.titleDBIDs)
-	finalizeCache(trimmed)
+	trimmed.liveEntries = computeLiveEntries(trimmed.droppedRanges, trimmed.entryCount)
 	return trimmed
 }
 
+// mergeSlugSearchCaches folds a selective refresh fragment into base by
+// appending the fragment's entries as a contiguous block at the end of the
+// (shared) arrays — no re-sort, no CSR rebuild. The fragment's trigrams go
+// into a new delta layer consulted alongside the CSR at query time. Any base
+// entries for the fragment's systems are tombstoned first (normally already
+// done by the pre-index drop), so stale entries never resurface.
+//
+// Safe with concurrent readers of previously published caches: appends only
+// write past the published lengths, maps are copied before mutation, and the
+// single index-goroutine writer always appends to the latest cache.
 func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache {
 	if replacement == nil {
 		return base
 	}
 	if replacement.complete || base == nil {
+		// The fragment becomes the published cache, so it needs its own CSR
+		// index; every other path folds it into a delta layer instead.
+		ensureTrigramIndex(replacement)
 		return replacement
 	}
 
+	// Tombstone any lingering entries for the systems being replaced.
+	leftover := make([]string, 0, len(replacement.coveredSystems))
+	for systemID := range replacement.coveredSystems {
+		if _, exists := base.systemIDToDBID[systemID]; exists {
+			leftover = append(leftover, systemID)
+		}
+	}
+	if len(leftover) > 0 {
+		base = base.withoutSystems(leftover)
+	}
+
 	merged := &SlugSearchCache{
-		slugData:       make([]byte, 0, len(base.slugData)+len(replacement.slugData)),
-		slugOffsets:    make([]uint32, 0, len(base.slugOffsets)+len(replacement.slugOffsets)),
-		secSlugData:    make([]byte, 0, len(base.secSlugData)+len(replacement.secSlugData)),
-		secSlugOffsets: make([]uint32, 0, len(base.secSlugOffsets)+len(replacement.secSlugOffsets)),
-		titleDBIDs:     make([]int64, 0, len(base.titleDBIDs)+len(replacement.titleDBIDs)),
-		systemDBIDs:    make([]int64, 0, len(base.systemDBIDs)+len(replacement.systemDBIDs)),
-		systemDBIDToID: make(map[int64]string),
-		systemIDToDBID: make(map[string]int64),
-		complete:       base.complete,
+		slugData:            base.slugData,
+		slugOffsets:         base.slugOffsets,
+		secSlugData:         base.secSlugData,
+		secSlugOffsets:      base.secSlugOffsets,
+		titleDBIDs:          base.titleDBIDs,
+		systemDBIDs:         base.systemDBIDs,
+		trigramOffsets:      base.trigramOffsets,
+		trigramPostings:     base.trigramPostings,
+		trigramCapped:       base.trigramCapped,
+		entryCount:          base.entryCount,
+		droppedRanges:       base.droppedRanges,
+		liveEntries:         nil, // recomputed below with the new entryCount
+		complete:            base.complete,
+		derivedFromComplete: base.derivedFromComplete,
+		droppedSystems:      mergeDroppedSystems(base.droppedSystems, replacement.coveredSystems),
+		systemDBIDToID:      make(map[int64]string, len(base.systemDBIDToID)+len(replacement.systemDBIDToID)),
+		systemIDToDBID:      make(map[string]int64, len(base.systemIDToDBID)+len(replacement.systemIDToDBID)),
+		systemRanges:        make(map[int64][2]int, len(base.systemRanges)+len(replacement.systemRanges)),
 	}
 
 	if merged.complete {
 		merged.coveredSystems = nil
 	} else {
-		merged.coveredSystems = make(map[string]struct{})
+		merged.coveredSystems = make(map[string]struct{},
+			len(base.coveredSystems)+len(replacement.coveredSystems))
 		for systemID := range base.coveredSystems {
 			merged.coveredSystems[systemID] = struct{}{}
 		}
@@ -464,11 +732,7 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 		}
 	}
 
-	replace := replacement.coveredSystems
 	for dbid, systemID := range base.systemDBIDToID {
-		if _, drop := replace[systemID]; drop {
-			continue
-		}
 		merged.systemDBIDToID[dbid] = systemID
 		merged.systemIDToDBID[systemID] = dbid
 	}
@@ -476,38 +740,146 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 		merged.systemDBIDToID[dbid] = systemID
 		merged.systemIDToDBID[systemID] = dbid
 	}
+	for dbid, r := range base.systemRanges {
+		merged.systemRanges[dbid] = r
+	}
 
-	for i := range base.entryCount {
-		systemID := base.systemDBIDToID[base.systemDBIDs[i]]
-		if _, drop := replace[systemID]; drop {
-			continue
-		}
-		appendSlugCacheEntry(merged, base, i)
+	// The shared offsets arrays end with a sentinel holding the data length —
+	// which is exactly the first appended entry's start offset. Reuse that
+	// slot instead of rewriting it: it lies within the published base cache's
+	// length, so writing it (even with an identical value) races with
+	// concurrent readers. Each iteration appends the entry's END offset,
+	// which doubles as the next entry's start and, finally, as the new
+	// sentinel. All other appends only touch indexes past the published
+	// lengths.
+	blockStart := merged.entryCount
+	if len(merged.slugOffsets) != merged.entryCount+1 || len(merged.secSlugOffsets) != merged.entryCount+1 {
+		// Defensive: private rebuild if a construction path ever breaks the
+		// sentinel invariant, so the appends below stay race-free.
+		merged.slugOffsets = append(slices.Clone(merged.slugOffsets[:merged.entryCount]),
+			//nolint:gosec // Safe: slug data won't exceed 4GB
+			uint32(len(merged.slugData)))
+		merged.secSlugOffsets = append(slices.Clone(merged.secSlugOffsets[:merged.entryCount]),
+			//nolint:gosec // Safe: slug data won't exceed 4GB
+			uint32(len(merged.secSlugData)))
 	}
 	for i := range replacement.entryCount {
-		appendSlugCacheEntry(merged, replacement, i)
+		merged.slugData = append(merged.slugData, replacement.slugForEntry(i)...)
+		merged.slugData = append(merged.slugData, 0)
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		merged.slugOffsets = append(merged.slugOffsets, uint32(len(merged.slugData)))
+
+		if sec := replacement.secSlugForEntry(i); len(sec) > 0 {
+			merged.secSlugData = append(merged.secSlugData, sec...)
+			merged.secSlugData = append(merged.secSlugData, 0)
+		}
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		merged.secSlugOffsets = append(merged.secSlugOffsets, uint32(len(merged.secSlugData)))
+
+		merged.titleDBIDs = append(merged.titleDBIDs, replacement.titleDBIDs[i])
+		merged.systemDBIDs = append(merged.systemDBIDs, replacement.systemDBIDs[i])
+	}
+	merged.entryCount = len(merged.titleDBIDs)
+
+	// The fragment is finalized, so its entries form contiguous per-system
+	// blocks; translate its ranges to their appended positions.
+	for dbid, r := range replacement.systemRanges {
+		merged.systemRanges[dbid] = [2]int{blockStart + r[0], blockStart + r[1]}
 	}
 
-	merged.entryCount = len(merged.titleDBIDs)
-	finalizeCache(merged)
+	merged.liveEntries = computeLiveEntries(merged.droppedRanges, merged.entryCount)
+
+	if blockStart == 0 {
+		// The base contributed no entries, so it has no CSR index to preserve
+		// and there is nothing for a delta layer to sit on top of. Build the
+		// index outright: the unfiltered Search path keys off trigramPostings,
+		// so leaving this cache reachable only through a delta would put every
+		// query on linearSearch until enough refreshes accumulated to trigger
+		// compaction.
+		merged.trigramDeltas = nil
+		ensureTrigramIndex(merged)
+		return merged
+	}
+
+	merged.trigramDeltas = appendTrigramDelta(base.trigramDeltas, merged, blockStart)
+	if len(merged.trigramDeltas) > maxTrigramDeltaLayers {
+		compactTrigramDeltas(merged)
+	}
 	return merged
 }
 
-func appendSlugCacheEntry(dst, src *SlugSearchCache, i int) {
-	//nolint:gosec // Safe: slug data won't exceed 4GB
-	dst.slugOffsets = append(dst.slugOffsets, uint32(len(dst.slugData)))
-	dst.slugData = append(dst.slugData, src.slugForEntry(i)...)
-	dst.slugData = append(dst.slugData, 0)
-
-	//nolint:gosec // Safe: slug data won't exceed 4GB
-	dst.secSlugOffsets = append(dst.secSlugOffsets, uint32(len(dst.secSlugData)))
-	if sec := src.secSlugForEntry(i); len(sec) > 0 {
-		dst.secSlugData = append(dst.secSlugData, sec...)
-		dst.secSlugData = append(dst.secSlugData, 0)
+// appendTrigramDelta builds a delta layer covering entries [blockStart,
+// merged.entryCount) and returns existing layers plus the new one. The layer
+// slice is copied (not mutated) so previously published caches are untouched.
+func appendTrigramDelta(existing []trigramDelta, merged *SlugSearchCache, blockStart int) []trigramDelta {
+	if merged.entryCount <= blockStart {
+		return existing
+	}
+	delta := make(trigramDelta)
+	lastSeen := make(map[uint32]int32, 64)
+	addTrigrams := func(data []byte, entry int) {
+		//nolint:gosec // Safe: entryCount < 2^31
+		idx := int32(entry)
+		for i := 0; i <= len(data)-3; i++ {
+			id, ok := encodeTrigramID(data[i], data[i+1], data[i+2])
+			if !ok || (len(merged.trigramCapped) > 0 && merged.trigramCapped[id]) {
+				continue
+			}
+			if seen, dup := lastSeen[id]; dup && seen == idx {
+				continue
+			}
+			lastSeen[id] = idx
+			//nolint:gosec // Safe: entryCount < 2^32
+			delta[id] = append(delta[id], uint32(entry))
+		}
+	}
+	for i := blockStart; i < merged.entryCount; i++ {
+		addTrigrams(merged.slugForEntry(i), i)
+		if sec := merged.secSlugForEntry(i); len(sec) > 0 {
+			addTrigrams(sec, i)
+		}
 	}
 
-	dst.titleDBIDs = append(dst.titleDBIDs, src.titleDBIDs[i])
-	dst.systemDBIDs = append(dst.systemDBIDs, src.systemDBIDs[i])
+	layers := make([]trigramDelta, 0, len(existing)+1)
+	layers = append(layers, existing...)
+	layers = append(layers, delta)
+	return layers
+}
+
+// maxTrigramDeltaLayers bounds how many delta layers a cache carries before the
+// CSR index is rebuilt to absorb them.
+//
+// Layers only exist mid-index: every per-system refresh appends one, and the
+// end-of-run full rebuild starts from none. Both postingListSize and
+// combinedPostingList walk every layer per trigram, so an unbounded count makes
+// search slower the longer an index runs — which works directly against the
+// reason progressive indexing keeps search available at all.
+//
+// The bound is a straight trade, measured at 130 systems / 208k entries.
+// Unbounded, the layers cost ~32us of fixed overhead per search (~75% of a
+// selective query's total time) and ~8MB of heap, because holding 688k postings
+// as 130 maps costs roughly 3x holding them as one array. One compaction is a
+// full CSR rebuild: ~37ms on x86, slower on MiSTer. 32 keeps both costs at about
+// a quarter of the unbounded worst case for ~4 rebuilds across a 131-system run.
+const maxTrigramDeltaLayers = 32
+
+// compactTrigramDeltas folds every delta layer back into a freshly built CSR
+// index, so subsequent lookups touch one array instead of walking N maps.
+//
+// Race-safe with already-published caches: buildTrigramIndex assigns new slices
+// rather than mutating in place, so a cache still held by a reader keeps the
+// arrays it was published with. Rebuilding also recomputes trigramCapped
+// against the current entry count, which delta layers cannot do — they inherit
+// whatever cap the CSR was built with.
+func compactTrigramDeltas(cache *SlugSearchCache) {
+	if cache.entryCount == 0 {
+		return
+	}
+	cache.trigramOffsets = nil
+	cache.trigramPostings = nil
+	cache.trigramCapped = nil
+	buildTrigramIndex(cache)
+	cache.trigramDeltas = nil
 }
 
 // sortCacheBySystem reorders all parallel arrays so entries are grouped by
@@ -750,11 +1122,40 @@ func fillEntryTrigrams(
 	}
 }
 
-// postingList returns the sorted entry indices for the given trigram ID.
+// postingList returns the sorted entry indices for the given trigram ID from
+// the CSR index only (entries present at the last full build).
 func (c *SlugSearchCache) postingList(trigramID uint32) []uint32 {
 	start := c.trigramOffsets[trigramID]
 	end := c.trigramOffsets[trigramID+1]
 	return c.trigramPostings[start:end]
+}
+
+// postingListSize returns the total posting count for a trigram across the
+// CSR index and all delta layers, without materializing the combined list.
+func (c *SlugSearchCache) postingListSize(trigramID uint32) uint32 {
+	size := c.trigramOffsets[trigramID+1] - c.trigramOffsets[trigramID]
+	for _, layer := range c.trigramDeltas {
+		//nolint:gosec // Safe: posting counts < 2^32
+		size += uint32(len(layer[trigramID]))
+	}
+	return size
+}
+
+// combinedPostingList returns the sorted entry indices for a trigram across
+// the CSR index and all delta layers. CSR postings precede every layer's, and
+// layers cover ascending appended blocks, so concatenation stays sorted. The
+// result is freshly allocated and safe for the caller to mutate.
+func (c *SlugSearchCache) combinedPostingList(trigramID uint32) []uint32 {
+	csr := c.postingList(trigramID)
+	if len(c.trigramDeltas) == 0 {
+		return slices.Clone(csr)
+	}
+	combined := make([]uint32, 0, c.postingListSize(trigramID))
+	combined = append(combined, csr...)
+	for _, layer := range c.trigramDeltas {
+		combined = append(combined, layer[trigramID]...)
+	}
+	return combined
 }
 
 // extractQueryTrigrams returns the unique trigram IDs in data.
@@ -901,6 +1302,9 @@ func (c *SlugSearchCache) trigramSearch(variantGroups [][][]byte) []int64 {
 
 	result := make([]int64, 0, len(candidates))
 	for _, idx := range candidates {
+		if c.entryDropped(int(idx)) {
+			continue
+		}
 		if c.matchesVariantGroups(int(idx), variantGroups) {
 			result = append(result, c.titleDBIDs[idx])
 		}
@@ -955,18 +1359,16 @@ func (c *SlugSearchCache) trigramCandidatesForVariant(variant []byte) []uint32 {
 
 	// Sort by posting list size (rarest first) for efficient intersection.
 	slices.SortFunc(filtered, func(a, b uint32) int {
-		sizeA := c.trigramOffsets[a+1] - c.trigramOffsets[a]
-		sizeB := c.trigramOffsets[b+1] - c.trigramOffsets[b]
-		return cmp.Compare(sizeA, sizeB)
+		return cmp.Compare(c.postingListSize(a), c.postingListSize(b))
 	})
 
 	limit := min(len(filtered), trigramMaxIntersect)
-	result := slices.Clone(c.postingList(filtered[0]))
+	result := c.combinedPostingList(filtered[0])
 	if len(result) == 0 {
 		return result // empty non-nil = no candidates (distinct from nil = can't filter)
 	}
 	for _, t := range filtered[1:limit] {
-		result = sortedIntersection(result, c.postingList(t))
+		result = sortedIntersection(result, c.combinedPostingList(t))
 		if len(result) == 0 {
 			return result
 		}
@@ -974,14 +1376,14 @@ func (c *SlugSearchCache) trigramCandidatesForVariant(variant []byte) []uint32 {
 	return result
 }
 
-// linearSearch does a full scan of all entries, matching variant groups.
+// linearSearch does a full scan of all live entries, matching variant groups.
 func (c *SlugSearchCache) linearSearch(variantGroups [][][]byte) []int64 {
 	candidates := make([]int64, 0, min(c.entryCount, 1024))
-	for i := range c.entryCount {
+	c.forEachLiveEntry(func(i int) {
 		if c.matchesVariantGroups(i, variantGroups) {
 			candidates = append(candidates, c.titleDBIDs[i])
 		}
-	}
+	})
 	return candidates
 }
 
@@ -1022,8 +1424,15 @@ func (c *SlugSearchCache) collectEntries(systemDBIDs []int64) []int64 {
 		}
 		return result
 	}
-	result := make([]int64, c.entryCount)
-	copy(result, c.titleDBIDs)
+	if c.liveEntries == nil {
+		result := make([]int64, c.entryCount)
+		copy(result, c.titleDBIDs)
+		return result
+	}
+	result := make([]int64, 0, c.liveEntryCount())
+	for _, r := range c.liveEntries {
+		result = append(result, c.titleDBIDs[r[0]:r[1]]...)
+	}
 	return result
 }
 
@@ -1125,6 +1534,26 @@ func (c *SlugSearchCache) RandomEntry(systemDBIDs []int64) (int64, bool) {
 		return 0, false
 	}
 
+	// No filter with tombstones: weighted pick across live ranges.
+	if c.liveEntries != nil {
+		count := c.liveEntryCount()
+		if count == 0 {
+			return 0, false
+		}
+		target, err := helpers.RandomInt(count)
+		if err != nil {
+			return 0, false
+		}
+		for _, r := range c.liveEntries {
+			size := r[1] - r[0]
+			if target < size {
+				return c.titleDBIDs[r[0]+target], true
+			}
+			target -= size
+		}
+		return 0, false
+	}
+
 	// No filter: direct index.
 	target, err := helpers.RandomInt(c.entryCount)
 	if err != nil {
@@ -1150,9 +1579,7 @@ func (c *SlugSearchCache) iterateEntries(systemDBIDs []int64, fn func(i int)) {
 		}
 		return
 	}
-	for i := range c.entryCount {
-		fn(i)
-	}
+	c.forEachLiveEntry(fn)
 }
 
 // ---------- Entry accessors ----------
@@ -1207,7 +1634,7 @@ func (c *SlugSearchCache) TrigramIndexSize() int {
 
 // RebuildSlugSearchCache builds or rebuilds the in-memory slug search cache.
 func (db *MediaDB) RebuildSlugSearchCache() error {
-	cache, err := buildSlugSearchCache(db.ctx, db.sql)
+	cache, err := buildSlugSearchCache(db.ctx, db.sql.Load())
 	if err != nil {
 		return fmt.Errorf("failed to build slug search cache: %w", err)
 	}
@@ -1221,8 +1648,30 @@ func (db *MediaDB) RebuildSlugSearchCache() error {
 	return nil
 }
 
+// SlugSearchCacheCoverageForTesting reports whether an in-memory slug search
+// cache is currently loaded and, if so, how many systems it holds entries for
+// and whether it still accounts for the whole library. Tests outside this
+// package use it to assert the cache survives an indexing run; nothing in
+// production reads it.
+func (db *MediaDB) SlugSearchCacheCoverageForTesting() (loaded bool, systems int, libraryWide bool) {
+	cache := db.slugSearchCache.Load()
+	if cache == nil {
+		return false, 0, false
+	}
+	return true, len(cache.systemRanges), cache.complete || cache.derivedFromComplete
+}
+
+// CanServeSystemsFromSlugCacheForTesting reports whether a search naming the
+// given systems could be answered from the in-memory slug search cache. Tests
+// outside this package use it to assert coverage during an indexing run;
+// nothing in production reads it.
+func (db *MediaDB) CanServeSystemsFromSlugCacheForTesting(systemIDs []string) bool {
+	cache := db.slugSearchCache.Load()
+	return cache != nil && cache.CanServeSystems(systemIDs)
+}
+
 func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
-	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql, systemIDs)
+	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql.Load(), systemIDs)
 	if err != nil {
 		return fmt.Errorf("failed to build selective slug search cache: %w", err)
 	}
@@ -1237,4 +1686,23 @@ func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemI
 		Bool("complete", refreshed.complete).
 		Msg("slug search cache refreshed for systems")
 	return nil
+}
+
+// mergeDroppedSystems clears systems from the dropped set as their refreshed
+// entries are folded back in.
+func mergeDroppedSystems(dropped, refreshed map[string]struct{}) map[string]struct{} {
+	if len(dropped) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(dropped))
+	for systemID := range dropped {
+		if _, back := refreshed[systemID]; back {
+			continue
+		}
+		out[systemID] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

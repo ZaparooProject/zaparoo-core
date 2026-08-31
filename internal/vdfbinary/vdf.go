@@ -85,13 +85,14 @@ func parseMap(buf *bufio.Reader) (vdfValue, error) {
 func parseNumber(buf *bufio.Reader) (vdfValue, error) {
 	bf := make([]byte, 4)
 
-	l, err := buf.Read(bf)
-	if err != nil {
+	// io.ReadFull, not buf.Read: bufio.Reader.Read returns only the bytes
+	// currently buffered, so a 4-byte number straddling a buffer-refill
+	// boundary would otherwise produce a short read and fail parsing.
+	if _, err := io.ReadFull(buf, bf); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return vdfValue{}, ErrCorruptedVDF
+		}
 		return vdfValue{}, fmt.Errorf("read number error: %w", err)
-	}
-
-	if l != len(bf) {
-		return vdfValue{}, errors.New("number did not have the required amount of bytes")
 	}
 
 	number := binary.LittleEndian.Uint32(bf)

@@ -1,0 +1,311 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package mediadb
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+)
+
+type mediaSearchTypeGroup struct {
+	systems       []systemdefs.System
+	variantGroups [][]string
+	includeName   bool
+}
+
+func buildMediaSearchTypeGroups(
+	systems []systemdefs.System,
+	queryWords []string,
+) []mediaSearchTypeGroup {
+	groups := make([]mediaSearchTypeGroup, 0, 8)
+	groupIndexes := make(map[slugs.MediaType]int, 8)
+
+	for i := range systems {
+		mediaType := systems[i].GetMediaType()
+		groupIndex, ok := groupIndexes[mediaType]
+		if !ok {
+			groupIndex = len(groups)
+			groupIndexes[mediaType] = groupIndex
+			groups = append(groups, mediaSearchTypeGroup{})
+		}
+		groups[groupIndex].systems = append(groups[groupIndex].systems, systems[i])
+	}
+
+	for i := range groups {
+		mediaType := groups[i].systems[0].GetMediaType()
+		groups[i].variantGroups = make([][]string, len(queryWords))
+		for wordIndex, word := range queryWords {
+			variant := slugs.Slugify(mediaType, word)
+			if variant == "" {
+				groups[i].includeName = true
+				continue
+			}
+			groups[i].variantGroups[wordIndex] = []string{variant}
+		}
+	}
+
+	return groups
+}
+
+func mediaSearchSystemsForPathPrefix(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+) ([]systemdefs.System, error) {
+	pathClause, args := browsePathPrefixCondition(
+		"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+	rows, err := db.QueryContext(ctx, `
+		SELECT DISTINCT Systems.SystemID
+		FROM Media
+		INNER JOIN Systems ON Systems.DBID = Media.SystemDBID
+		WHERE Media.IsMissing = 0 AND `+pathClause+`
+		ORDER BY Systems.SystemID`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query media search path systems: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	systems := make([]systemdefs.System, 0, 4)
+	for rows.Next() {
+		var systemID string
+		if scanErr := rows.Scan(&systemID); scanErr != nil {
+			return nil, fmt.Errorf("scan media search path system: %w", scanErr)
+		}
+		system, lookupErr := systemdefs.GetSystem(systemID)
+		if lookupErr == nil {
+			systems = append(systems, *system)
+			continue
+		}
+		// Unregistered indexed systems use System's default game-title normalization.
+		systems = append(systems, systemdefs.System{ID: systemID})
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("media search path systems rows: %w", rowsErr)
+	}
+	return systems, nil
+}
+
+func mediaSearchTypeGroupsCacheable(groups []mediaSearchTypeGroup) bool {
+	if len(groups) == 0 {
+		return false
+	}
+	for i := range groups {
+		if groups[i].includeName || len(groups[i].variantGroups) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func searchMediaTypeGroupsInCache(
+	cache *SlugSearchCache,
+	groups []mediaSearchTypeGroup,
+) []int64 {
+	seen := make(map[int64]struct{})
+	candidates := make([]int64, 0, 1024)
+
+	for i := range groups {
+		systemIDs := make([]string, len(groups[i].systems))
+		for j := range groups[i].systems {
+			systemIDs[j] = groups[i].systems[j].ID
+		}
+		systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
+		if len(systemDBIDs) == 0 {
+			continue
+		}
+
+		byteGroups := make([][][]byte, len(groups[i].variantGroups))
+		for wordIndex, variants := range groups[i].variantGroups {
+			byteGroups[wordIndex] = make([][]byte, len(variants))
+			for variantIndex, variant := range variants {
+				byteGroups[wordIndex][variantIndex] = []byte(variant)
+			}
+		}
+
+		for _, candidate := range cache.Search(systemDBIDs, byteGroups) {
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
+	}
+
+	return candidates
+}
+
+func sqliteNoCaseCompare(a, b string) int {
+	limit := min(len(a), len(b))
+	for i := range limit {
+		left := a[i]
+		right := b[i]
+		if left >= 'A' && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if right >= 'A' && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if order := cmp.Compare(left, right); order != 0 {
+			return order
+		}
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+func compareSearchResults(a, b *database.SearchResultWithCursor, sortOrder string) int {
+	var order int
+	switch sortOrder {
+	case "name-asc", "name-desc":
+		order = sqliteNoCaseCompare(a.SortValue, b.SortValue)
+	case "filename-asc", "filename-desc":
+		order = cmp.Compare(a.SortValue, b.SortValue)
+	default:
+		return cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if order == 0 {
+		order = cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if sortOrder == "name-desc" || sortOrder == "filename-desc" {
+		return -order
+	}
+	return order
+}
+
+func titleDBIDQueryParamCount(candidateCount int, filters *database.SearchFilters) int {
+	_, tagArgs := buildCandidateTagFilterSQL(filters.Tags)
+	_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+	var pathArgs []any
+	if filters.PathPrefix != "" {
+		_, pathArgs = browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(filters.PathPrefix))
+	}
+
+	count := candidateCount + len(pathArgs) + len(tagArgs) + len(letterArgs) + 1 // LIMIT
+	if filters.SortCursor != nil {
+		count += 2
+	} else if filters.Cursor != nil {
+		count++
+	}
+	return count
+}
+
+func (db *MediaDB) searchMediaTypeGroupsWithSQL(
+	ctx context.Context,
+	groups []mediaSearchTypeGroup,
+	rawWords []string,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	results := make([]database.SearchResultWithCursor, 0, filters.Limit)
+	for i := range groups {
+		groupResults, err := sqlSearchMediaWithFiltersSorted(
+			ctx,
+			db.sql.Load(),
+			groups[i].systems,
+			groups[i].variantGroups,
+			rawWords,
+			filters.PathPrefix,
+			filters.Tags,
+			filters.Letter,
+			filters.Cursor,
+			filters.SortCursor,
+			filters.Sort,
+			filters.Limit,
+			groups[i].includeName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, groupResults...)
+	}
+
+	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
+		return compareSearchResults(&a, &b, filters.Sort)
+	})
+	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
+		return a.MediaID == b.MediaID
+	})
+	if len(results) > filters.Limit {
+		results = results[:filters.Limit]
+	}
+	return results, nil
+}
+
+// searchSplitAcrossCacheAndSQL answers a search that spans systems the slug
+// cache covers and systems currently being re-indexed.
+//
+// The cached side is re-entered through the normal search path with a narrowed
+// system list, so it takes the in-memory route it would have taken anyway. The
+// SQL side runs only for the in-flight systems, which is the difference between
+// a grouped LIKE across the whole library and one across a system or two.
+// Results are merged with the same ordering, dedup and limit the grouped SQL
+// path applies, so the caller cannot tell which rows came from where.
+func (db *MediaDB) searchSplitAcrossCacheAndSQL(
+	ctx context.Context,
+	cachedSystems, sqlSystems []string,
+	rawWords []string,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	cachedFilters := *filters
+	cachedFilters.Systems = systemsByIDs(cachedSystems)
+	results, err := db.SearchMediaWithFilters(ctx, &cachedFilters)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(sqlSystems) > 0 {
+		sqlFilters := *filters
+		sqlFilters.Systems = systemsByIDs(sqlSystems)
+		groups := buildMediaSearchTypeGroups(sqlFilters.Systems, rawWords)
+		inFlight, sqlErr := db.searchMediaTypeGroupsWithSQL(ctx, groups, rawWords, &sqlFilters)
+		if sqlErr != nil {
+			return nil, sqlErr
+		}
+		results = append(results, inFlight...)
+	}
+
+	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
+		return compareSearchResults(&a, &b, filters.Sort)
+	})
+	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
+		return a.MediaID == b.MediaID
+	})
+	if len(results) > filters.Limit {
+		results = results[:filters.Limit]
+	}
+	return results, nil
+}
+
+// systemsByIDs resolves system IDs to definitions, dropping any the build does
+// not know about.
+func systemsByIDs(ids []string) []systemdefs.System {
+	out := make([]systemdefs.System, 0, len(ids))
+	for _, id := range ids {
+		if sys, err := systemdefs.GetSystem(id); err == nil {
+			out = append(out, *sys)
+		}
+	}
+	return out
+}

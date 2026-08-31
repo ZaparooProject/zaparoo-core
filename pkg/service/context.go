@@ -22,12 +22,16 @@ package service
 import (
 	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
 // ServiceContext holds the shared dependencies threaded through all
@@ -37,8 +41,13 @@ type ServiceContext struct {
 	Config              *config.Instance
 	State               *state.State
 	DB                  *database.Database
+	Profiles            *profiles.Service
+	LimitsManager       *playtime.LimitsManager
+	PlaybackManager     audio.PlaybackManager
+	UI                  *uievents.Service
 	LaunchSoftwareQueue chan *tokens.Token
 	PlaylistQueue       chan *playlists.Playlist
 	ConfirmQueue        chan chan error
+	LaunchGuardCancel   chan struct{}
 	BackgroundWG        *sync.WaitGroup
 }

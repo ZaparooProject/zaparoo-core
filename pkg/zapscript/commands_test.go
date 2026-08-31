@@ -20,14 +20,27 @@
 package zapscript
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsMediaLaunchingCommand(t *testing.T) {
@@ -611,6 +624,161 @@ func TestGetExprEnv_NoActiveMedia(t *testing.T) {
 	assert.Empty(t, env.ActiveMedia.Path)
 }
 
+func TestPathLookupRootsPrependsAndDeduplicatesRoot(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := t.TempDir()
+	normalRoot := t.TempDir()
+	caseParent := t.TempDir()
+	upperRoot := filepath.Join(caseParent, "USB")
+	lowerRoot := filepath.Join(caseParent, "usb")
+	platformRoots := []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}
+
+	roots := pathLookupRoots(platformRoots, filepath.Join("relative", "root"), pathRoot)
+
+	assert.Equal(t, []string{
+		filepath.Clean(pathRoot),
+		filepath.Clean(normalRoot),
+		upperRoot,
+		lowerRoot,
+	}, roots)
+	assert.Equal(t, []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}, platformRoots)
+}
+
+func TestRunCommandResolvesPathRootBeforePlatformRoots(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		scriptText      string
+		createDriveFile bool
+		wantDriveFile   bool
+	}{
+		{
+			name:            "plain path prefers external root",
+			scriptText:      "Game.mgl",
+			createDriveFile: true,
+			wantDriveFile:   true,
+		},
+		{
+			name:          "explicit launch falls back to platform root",
+			scriptText:    "**launch:Game.mgl",
+			wantDriveFile: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pathRoot := t.TempDir()
+			normalRoot := t.TempDir()
+			drivePath := filepath.Join(pathRoot, "Game.mgl")
+			normalPath := filepath.Join(normalRoot, "Game.mgl")
+			require.NoError(t, os.WriteFile(normalPath, []byte("normal"), 0o600))
+			if tt.createDriveFile {
+				require.NoError(t, os.WriteFile(drivePath, []byte("drive"), 0o600))
+			}
+
+			wantPath := normalPath
+			if tt.wantDriveFile {
+				wantPath = drivePath
+			}
+
+			cfg := &config.Instance{}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("RootDirs", cfg).Return([]string{normalRoot}).Once()
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Twice()
+			mockPlatform.On(
+				"LaunchMedia",
+				cfg,
+				wantPath,
+				(*platforms.Launcher)(nil),
+				(*database.Database)(nil),
+				(*platforms.LaunchOptions)(nil),
+			).Return(nil).Once()
+
+			script, err := zapscript.NewParser(tt.scriptText).ParseScript()
+			require.NoError(t, err)
+			require.Len(t, script.Cmds, 1)
+
+			result, err := RunCommand(
+				t.Context(),
+				mockPlatform,
+				cfg,
+				playlists.PlaylistController{},
+				tokens.Token{PathRoot: pathRoot},
+				script.Cmds[0],
+				1,
+				0,
+				nil,
+				RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+				&zapscript.ArgExprEnv{},
+			)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRunCommandInjectsUIService(t *testing.T) {
+	t.Parallel()
+
+	ui := uievents.New(nil, nil, nil)
+	mockPlatform := mocks.NewMockPlatform()
+	var receivedUI *uievents.Service
+	mockPlatform.On("ForwardCmd", mock.MatchedBy(func(env *platforms.CmdEnv) bool {
+		receivedUI = env.UI
+		return true
+	})).Return(platforms.CmdResult{}, nil).Once()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{},
+		zapscript.Command{Name: zapscript.ZapScriptCmdMisterINI},
+		1,
+		0,
+		&database.Database{},
+		RunCommandOptions{UI: ui},
+		&zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.Same(t, ui, receivedUI)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestRunCommandInjectsTokenPathRoot(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ForwardCmd", mock.MatchedBy(func(env *platforms.CmdEnv) bool {
+		return env.PathRoot == pathRoot
+	})).Return(platforms.CmdResult{}, nil).Once()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{PathRoot: pathRoot},
+		zapscript.Command{Name: zapscript.ZapScriptCmdMisterINI},
+		1,
+		0,
+		nil,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestIsValidCommand(t *testing.T) {
 	t.Parallel()
 
@@ -651,4 +819,149 @@ func TestIsValidCommand(t *testing.T) {
 			assert.Equal(t, tt.want, got, "IsValidCommand(%q) = %v, want %v", tt.cmdName, got, tt.want)
 		})
 	}
+}
+
+// TestRunCommandSkippedWhenLogRedactsSensitiveCommand verifies that a command skipped
+// by an unmet "when" condition logs only its name, not its full command text. Before
+// this, the skip log ran before the isSensitiveCommand check and always logged the
+// full command, including args like an http.get URL's query string.
+func TestRunCommandSkippedWhenLogRedactsSensitiveCommand(t *testing.T) {
+	//nolint:gosec // Test fixture URL, not a real credential.
+	const secretURL = "http://example.com/path?api_key=SECRETVALUE"
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	result, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{},
+		zapscript.Command{
+			Name:    zapscript.ZapScriptCmdHTTPGet,
+			Args:    []string{secretURL},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"when": "false"}),
+		},
+		1,
+		0,
+		nil,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, result.NewCommands)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "does not meet when criteria: http.get")
+	assert.NotContains(t, logOutput, secretURL)
+	assert.NotContains(t, logOutput, "api_key")
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestRunCommandSkipsZapLinkForRemoteSource pins that a remote-sourced
+// command never reaches ZapLink resolution: the command's own value is
+// already trusted structural input built server-side, so there is nothing
+// for a link to legitimately resolve, and letting one substitute in
+// server-fetched ZapScript would bypass the remote operation allowlist. The
+// mock has no GetZapLinkHost expectation registered, so a call to it fails
+// the test rather than silently passing.
+func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceRemote},
+		zapscript.Command{
+			Name: "zzz-test-nonexistent-command",
+			Args: []string{"https://zaplink.example.com/resolves-through-cache"},
+		},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+	mockUserDB.AssertNotCalled(t, "GetZapLinkHost", mock.Anything)
+}
+
+// TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
+// which insists on being alone on the token sees the expanded script, not the
+// single command printed on the card. A ZapLink resolving to
+// "playtime.extend || launch" would otherwise slip a grant in ahead of the
+// launch and past the pre-launch limit check.
+func TestRunCommandCountsZapLinkExpansionInTotalCommands(t *testing.T) {
+	t.Parallel()
+
+	const linkURL = "https://zaplink.example.com/extend-then-launch"
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	mockUserDB.On("GetZapLinkCache", linkURL).
+		Return("**playtime.extend:1h?profile=switch-abc||**launch:/games/game.rom", nil)
+	mockUserDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	db := &database.Database{UserDB: mockUserDB}
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{Name: "launch", Args: []string{linkURL}},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrExtendNotAlone)
+}
+
+// TestRunCommandAppliesZapLinkForNonRemoteSource pins that every other
+// token source still goes through ZapLink resolution as before. The
+// remote-source skip in RunCommand must not become a blanket skip.
+func TestRunCommandAppliesZapLinkForNonRemoteSource(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(false, true, nil)
+	db := &database.Database{UserDB: mockUserDB}
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{
+			Name: "zzz-test-nonexistent-command",
+			Args: []string{"https://zaplink.example.com/resolves-through-cache"},
+		},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+	mockUserDB.AssertCalled(t, "GetZapLinkHost", "https://zaplink.example.com")
 }

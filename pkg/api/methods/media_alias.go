@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
 func singletonMediaAliasesEnabled(env *requests.RequestEnv) bool {
@@ -40,7 +41,7 @@ func resolveSingletonMediaPath(
 		return nil, nil //nolint:nilnil // disabled aliasing has no singleton fallback
 	}
 
-	media, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, system.DBID, mediaPath)
+	media, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, system.DBID, mediaPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve singleton media path: %w", err)
 	}
@@ -65,18 +66,20 @@ func equivalentMediaIDs(env *requests.RequestEnv, row *database.MediaFullRow) ([
 		ids = append(ids, media.DBID)
 	}
 
-	child, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, row.System.DBID, row.Path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find child alias media: %w", err)
+	if helpers.IsZip(row.Path) {
+		child, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, row.System.DBID, row.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find child alias media: %w", err)
+		}
+		add(child)
 	}
-	add(child)
 
 	parentPath := strings.TrimSuffix(row.ParentDir, "/")
-	if parentPath == "" || parentPath == row.Path {
+	if parentPath == "" || parentPath == row.Path || !helpers.IsZip(parentPath) {
 		return ids, nil
 	}
 
-	onlyChild, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, row.System.DBID, parentPath)
+	onlyChild, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, row.System.DBID, parentPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify parent alias media: %w", err)
 	}

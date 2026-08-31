@@ -21,7 +21,9 @@ package helpers
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	stdpath "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -29,11 +31,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrNoLauncher indicates that no configured launcher can handle a media path.
+var ErrNoLauncher = errors.New("no launcher found")
 
 // NormalizePathForComparison normalizes a path for cross-platform case-insensitive comparison.
 // Converts to forward slashes and lowercases for consistent matching across all platforms.
@@ -94,6 +100,9 @@ func PathIsLauncher(
 	for _, scheme := range l.Schemes {
 		// scheme is already lowercase in launcher definitions
 		if strings.HasPrefix(lp, scheme+":") {
+			if l.Test != nil {
+				return l.Test(cfg, path)
+			}
 			return true
 		}
 	}
@@ -223,10 +232,13 @@ func pathHasPrefixNormalized(normPath, normRoot string) bool {
 // launcherPrecomp holds per-launcher precomputed values to eliminate repeated
 // string allocations inside the hot pathIsLauncher loop.
 type launcherPrecomp struct {
-	normMediaPath string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
-	rootPairs     []string // normRoot + "/" + normFolder for every root × relative-folder combination
-	absFolders    []string // normalized absolute folder paths (already normalized from folderCache)
-	extensions    []string // pre-lowercased extensions
+	normMediaPath         string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
+	rootPairs             []string // normRoot + "/" + normFolder for every root × relative-folder combination
+	absFolders            []string // normalized absolute folder paths (already normalized from folderCache)
+	extensions            []string // pre-lowercased extensions
+	scanExcludes          []string // pre-normalized scan-only file exclude patterns
+	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
+	skipInternalSymlinks  bool     // skip symlinks whose target is inside this launcher's roots
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -244,14 +256,31 @@ type LauncherMatcher struct {
 // NewLauncherMatcher creates a matcher with pre-normalized root dirs and folder paths.
 // Call once before a file walk and reuse for all files to avoid redundant normalization.
 func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMatcher {
-	rawRoots := pl.RootDirs(cfg)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	needsRoots := false
+	needsDataDir := false
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID != "" {
+			needsDataDir = true
+		}
+		for _, f := range allLaunchers[i].Folders {
+			if !filepath.IsAbs(f) {
+				needsRoots = true
+				break
+			}
+		}
+	}
+
+	var rawRoots []string
+	if needsRoots && pl != nil {
+		rawRoots = pl.RootDirs(cfg)
+	}
 	normRoots := make([]string, len(rawRoots))
 	for i, r := range rawRoots {
 		normRoots[i] = NormalizePathForComparison(r)
 	}
 
 	folderCache := make(map[string]string)
-	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
 	for i := range allLaunchers {
 		for _, f := range allLaunchers[i].Folders {
 			if _, ok := folderCache[f]; !ok {
@@ -260,15 +289,21 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		}
 	}
 
-	normDataDir := NormalizePathForComparison(DataDir(pl))
-	normMediaPrefix := NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	normDataDir := ""
+	if needsDataDir && pl != nil {
+		normDataDir = NormalizePathForComparison(DataDir(pl))
+	}
+	normMediaPrefix := ""
+	if normDataDir != "" {
+		normMediaPrefix = NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	}
 
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
 		lp := &launcherPrecomp{}
 
-		if l.SystemID != "" {
+		if l.SystemID != "" && normMediaPrefix != "" {
 			lp.normMediaPath = NormalizePathForComparison(filepath.Join(normMediaPrefix, strings.ToLower(l.SystemID)))
 		}
 
@@ -290,6 +325,16 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		for _, e := range l.Extensions {
 			lp.extensions = append(lp.extensions, strings.ToLower(e))
 		}
+		for _, exclude := range l.ScanExcludes {
+			lp.scanExcludes = append(lp.scanExcludes, NormalizePathForComparison(exclude))
+		}
+		for _, exclude := range l.ScanDirectoryExcludes {
+			lp.scanDirectoryExcludes = append(
+				lp.scanDirectoryExcludes,
+				NormalizePathForComparison(exclude),
+			)
+		}
+		lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks
 
 		precomp[l.ID] = lp
 	}
@@ -326,6 +371,220 @@ func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
 	return false
 }
 
+// MatchSystemFileForScan returns true if path matches a launcher for the given
+// system and is not blocked by that launcher's scan-only exclude patterns.
+func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
+	lowerPath := strings.ToLower(path)
+	normPath := NormalizePathForComparison(path)
+
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	matchedExcluded := false
+	for i := range launchers {
+		launcher := &launchers[i]
+		if !m.pathIsLauncher(launcher, path, lowerPath, normPath) {
+			continue
+		}
+		if m.pathIsExcludedFromScan(launcher, normPath) {
+			matchedExcluded = true
+			continue
+		}
+		return true
+	}
+
+	if matchedExcluded {
+		log.Trace().
+			Str("system", systemID).
+			Str("path", path).
+			Msg("file matched launcher but was excluded from media scan")
+		return false
+	}
+
+	log.Trace().
+		Str("system", systemID).
+		Str("path", path).
+		Int("launchersChecked", len(launchers)).
+		Msg("no launcher matched file")
+
+	return false
+}
+
+// ShouldSkipScanDirectory reports whether every launcher scanning path for the
+// given system excludes that directory. Requiring agreement preserves files
+// needed by another launcher that shares the same scan root.
+func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
+	normPath := NormalizePathForComparison(path)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	matched := false
+
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.precomp[launcher.ID]
+		if lc == nil {
+			continue
+		}
+
+		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+			for _, root := range roots {
+				if !pathHasPrefixNormalized(normPath, root) {
+					continue
+				}
+				relPath := strings.TrimPrefix(normPath, root)
+				relPath = strings.TrimPrefix(relPath, "/")
+				if relPath == "" {
+					return false
+				}
+
+				matched = true
+				if !scanDirectoryExcludeMatches(relPath, lc.scanDirectoryExcludes) {
+					return false
+				}
+			}
+		}
+	}
+
+	return matched
+}
+
+// ShouldSkipScanSymlink reports whether a symlink found under a launcher scan
+// root should be skipped because its target resolves inside that launcher's
+// folders. Such an alias only duplicates media indexed under the target's own
+// path. Every filesystem-scanning launcher whose root contains the link must
+// opt in through ScanSkipInternalSymlinks, so a launcher sharing the root
+// keeps the aliases it needs. readTarget is only called once that agreement
+// holds, so systems without the flag pay no filesystem cost.
+func (m *LauncherMatcher) ShouldSkipScanSymlink(
+	systemID, linkPath string,
+	readTarget func() (string, error),
+) (bool, error) {
+	normLink := NormalizePathForComparison(linkPath)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	var candidateRoots []string
+
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.precomp[launcher.ID]
+		if lc == nil {
+			continue
+		}
+
+		contains := false
+		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+			for _, root := range roots {
+				if !pathHasPrefixNormalized(normLink, root) {
+					continue
+				}
+				if normLink == root {
+					return false, nil
+				}
+				contains = true
+			}
+		}
+		if !contains {
+			continue
+		}
+		if !lc.skipInternalSymlinks {
+			return false, nil
+		}
+		candidateRoots = append(candidateRoots, lc.rootPairs...)
+		candidateRoots = append(candidateRoots, lc.absFolders...)
+	}
+	if len(candidateRoots) == 0 {
+		return false, nil
+	}
+
+	target, err := readTarget()
+	if err != nil {
+		return false, err
+	}
+	normTarget := NormalizePathForComparison(resolveSymlinkTargetLexically(linkPath, target))
+	for _, root := range candidateRoots {
+		if pathHasPrefixNormalized(normTarget, root) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// resolveSymlinkTargetLexically turns a raw symlink target into an absolute
+// path without touching the filesystem: relative targets are joined to the
+// link's directory. The result is only compared against scan roots, so
+// symlinked ancestors in the path do not need resolving.
+func resolveSymlinkTargetLexically(linkPath, target string) string {
+	if filepath.IsAbs(target) {
+		return filepath.Clean(target)
+	}
+	return filepath.Join(filepath.Dir(linkPath), target)
+}
+
+func scanDirectoryExcludeMatches(relPath string, patterns []string) bool {
+	base := stdpath.Base(relPath)
+	for _, pattern := range patterns {
+		if pattern == "" || pattern == "." {
+			continue
+		}
+		if scanExcludePatternMatches(relPath, base, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *LauncherMatcher) pathIsExcludedFromScan(l *platforms.Launcher, normPath string) bool {
+	var excludes []string
+	if lc := m.precomp[l.ID]; lc != nil {
+		excludes = lc.scanExcludes
+	} else {
+		for _, exclude := range l.ScanExcludes {
+			excludes = append(excludes, NormalizePathForComparison(exclude))
+		}
+	}
+
+	if len(excludes) == 0 {
+		return false
+	}
+
+	base := stdpath.Base(normPath)
+	trimmedPath := strings.TrimPrefix(normPath, "/")
+	for _, pattern := range excludes {
+		if pattern == "" || pattern == "." {
+			continue
+		}
+		if scanExcludePatternMatches(trimmedPath, base, pattern) {
+			log.Trace().
+				Str("launcher", l.ID).
+				Str("path", normPath).
+				Str("pattern", pattern).
+				Msg("file excluded from media scan")
+			return true
+		}
+	}
+	return false
+}
+
+func scanExcludePatternMatches(trimmedPath, base, pattern string) bool {
+	pattern = strings.TrimPrefix(pattern, "/")
+	if !strings.Contains(pattern, "/") {
+		matched, err := stdpath.Match(pattern, base)
+		return err == nil && matched
+	}
+
+	parts := strings.Split(trimmedPath, "/")
+	for i := range parts {
+		suffix := strings.Join(parts[i:], "/")
+		matched, err := stdpath.Match(pattern, suffix)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *LauncherMatcher) pathIsLauncher(
 	l *platforms.Launcher,
 	path, lp, normPath string,
@@ -341,6 +600,9 @@ func (m *LauncherMatcher) pathIsLauncher(
 
 	for _, scheme := range l.Schemes {
 		if strings.HasPrefix(lp, scheme+":") {
+			if l.Test != nil {
+				return l.Test(m.cfg, path)
+			}
 			return true
 		}
 	}
@@ -352,7 +614,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 		if pathHasPrefixNormalized(normPath, lc.normMediaPath) {
 			inDataDir = true
 		}
-	} else if l.SystemID != "" {
+	} else if l.SystemID != "" && m.normDataDir != "" {
 		normZaparooMedia := NormalizePathForComparison(
 			filepath.Join(m.normDataDir, config.MediaDir, strings.ToLower(l.SystemID)),
 		)
@@ -471,6 +733,55 @@ func PathToLaunchers(
 		}
 	}
 	return launchers
+}
+
+// PathToLaunchers returns all launchers matching path using precomputed matcher state.
+func (m *LauncherMatcher) PathToLaunchers(path string) []platforms.Launcher {
+	var launchers []platforms.Launcher
+	lowerPath := strings.ToLower(path)
+	normPath := NormalizePathForComparison(path)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	for i := range allLaunchers {
+		if m.pathIsLauncher(&allLaunchers[i], path, lowerPath, normPath) {
+			launchers = append(launchers, allLaunchers[i])
+		}
+	}
+	return launchers
+}
+
+// FindLauncher returns the most specific launcher for path using precomputed matcher state.
+func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) {
+	launchers := m.PathToLaunchers(path)
+	if len(launchers) == 0 {
+		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
+			Msg("no launcher matched path")
+		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
+	}
+
+	best := 0
+	bestScore := launcherSpecificity(&launchers[0])
+	for i := 1; i < len(launchers); i++ {
+		score := launcherSpecificity(&launchers[i])
+		if score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+
+	launcher := launchers[best]
+
+	log.Debug().
+		Str("path", path).
+		Str("launcher", launcher.ID).
+		Int("specificity", bestScore).
+		Int("candidates", len(launchers)).
+		Msg("selected launcher by specificity")
+
+	if launcher.AllowListOnly && !m.cfg.IsLauncherFileAllowed(path) {
+		return platforms.Launcher{}, errors.New("file not allowed: " + path)
+	}
+
+	return launcher, nil
 }
 
 func ExeDir() string {
@@ -649,6 +960,86 @@ func launcherSpecificity(l *platforms.Launcher) int {
 	return score
 }
 
+func folderTrailSystem(path string) (string, bool) {
+	segments := strings.Split(filepath.ToSlash(filepath.Clean(filepath.Dir(path))), "/")
+	for i := len(segments) - 1; i >= 0; i-- {
+		segment := strings.TrimSpace(segments[i])
+		if segment == "" || segment == "." {
+			continue
+		}
+		system, err := systemdefs.LookupSystem(segment)
+		if err == nil {
+			return system.ID, true
+		}
+	}
+	return "", false
+}
+
+func launcherHasExtension(launcher *platforms.Launcher, ext string) bool {
+	for _, supported := range launcher.Extensions {
+		if strings.EqualFold(ext, supported) {
+			return true
+		}
+	}
+	return false
+}
+
+func guessLauncherFromCandidates(
+	path string, launchers []platforms.Launcher,
+) (platforms.Launcher, bool) {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return platforms.Launcher{}, false
+	}
+
+	candidates := make([]platforms.Launcher, 0, len(launchers))
+	for i := range launchers {
+		if launchers[i].SystemID != "" && launcherHasExtension(&launchers[i], ext) {
+			candidates = append(candidates, launchers[i])
+		}
+	}
+	if len(candidates) == 0 {
+		return platforms.Launcher{}, false
+	}
+
+	if folderSystem, ok := folderTrailSystem(path); ok {
+		match := -1
+		for i := range candidates {
+			if !strings.EqualFold(candidates[i].SystemID, folderSystem) {
+				continue
+			}
+			if match != -1 {
+				return platforms.Launcher{}, false
+			}
+			match = i
+		}
+		if match != -1 {
+			return candidates[match], true
+		}
+		return platforms.Launcher{}, false
+	}
+
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
+	}
+	return candidates[0], true
+}
+
+// GuessLauncherForPath conservatively infers a launcher when normal folder
+// matching fails. A recognized folder alias must identify exactly one matching
+// launcher; without one, the extension must match exactly one launcher.
+func GuessLauncherForPath(path string) (platforms.Launcher, bool) {
+	launcher, ok := guessLauncherFromCandidates(path, GlobalLauncherCache.GetAllLaunchers())
+	if ok {
+		log.Info().
+			Str("path", path).
+			Str("launcher", launcher.ID).
+			Str("system", launcher.SystemID).
+			Msg("guessed launcher from folder trail and file extension")
+	}
+	return launcher, ok
+}
+
 // FindLauncher takes a path and tries to find the best possible match for a
 // launcher, taking into account specificity and allowlist restrictions.
 func FindLauncher(
@@ -657,30 +1048,34 @@ func FindLauncher(
 	path string,
 ) (platforms.Launcher, error) {
 	launchers := PathToLaunchers(cfg, pl, path)
+	var launcher platforms.Launcher
 	if len(launchers) == 0 {
-		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
-			Msg("no launcher matched path")
-		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
-	}
-
-	best := 0
-	bestScore := launcherSpecificity(&launchers[0])
-	for i := 1; i < len(launchers); i++ {
-		score := launcherSpecificity(&launchers[i])
-		if score > bestScore {
-			best = i
-			bestScore = score
+		var guessed bool
+		launcher, guessed = GuessLauncherForPath(path)
+		if !guessed {
+			log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
+				Msg("no launcher matched path")
+			return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 		}
+	} else {
+		best := 0
+		bestScore := launcherSpecificity(&launchers[0])
+		for i := 1; i < len(launchers); i++ {
+			score := launcherSpecificity(&launchers[i])
+			if score > bestScore {
+				best = i
+				bestScore = score
+			}
+		}
+
+		launcher = launchers[best]
+		log.Debug().
+			Str("path", path).
+			Str("launcher", launcher.ID).
+			Int("specificity", bestScore).
+			Int("candidates", len(launchers)).
+			Msg("selected launcher by specificity")
 	}
-
-	launcher := launchers[best]
-
-	log.Debug().
-		Str("path", path).
-		Str("launcher", launcher.ID).
-		Int("specificity", bestScore).
-		Int("candidates", len(launchers)).
-		Msg("selected launcher by specificity")
 
 	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
 		return platforms.Launcher{}, errors.New("file not allowed: " + path)

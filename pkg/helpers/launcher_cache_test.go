@@ -21,12 +21,62 @@ package helpers
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetLaunchableSystems_ReturnsCopy(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
+	systems := []launchables.VirtualSystem{
+		{ID: id, Name: "Chess", Category: "Other"},
+	}
+	cache := &LauncherCache{}
+	cache.setLaunchableSystems(systems)
+	systems[0].Name = "Mutated Source"
+
+	got := cache.GetLaunchableSystems()
+	require.Len(t, got, 1)
+	assert.Equal(t, id, got[0].ID)
+	assert.Equal(t, "Chess", got[0].Name)
+	assert.Equal(t, "Other", got[0].Category)
+
+	got[0].Name = "Mutated Result"
+	gotAgain := cache.GetLaunchableSystems()
+	require.Len(t, gotAgain, 1)
+	assert.Equal(t, "Chess", gotAgain[0].Name)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.Len(t, cache.GetLaunchableSystems(), 1)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestGetLaunchableSystems_EmptyCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	got := cache.GetLaunchableSystems()
+	assert.Empty(t, got)
+
+	got = append(got, launchables.VirtualSystem{Name: "Mutated Result"})
+	assert.Len(t, got, 1)
+	assert.Empty(t, cache.GetLaunchableSystems())
+}
 
 func TestGetLauncherByID_Found(t *testing.T) {
 	t.Parallel()
@@ -41,6 +91,33 @@ func TestGetLauncherByID_Found(t *testing.T) {
 	require.NotNil(t, launcher)
 	assert.Equal(t, "launcher-b", launcher.ID)
 	assert.Equal(t, "SNES", launcher.SystemID)
+}
+
+func TestGetLauncherByID_CaseInsensitivePreservesID(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Native-Audio", SystemID: "Audio"},
+	})
+
+	launcher := cache.GetLauncherByID("native-audio")
+	require.NotNil(t, launcher)
+	assert.Equal(t, "Native-Audio", launcher.ID)
+	assert.Equal(t, "Audio", launcher.SystemID)
+}
+
+func TestGetLauncherByID_CaseFoldCollisionIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Steam", SystemID: "PC"},
+		{ID: "steam", SystemID: "PC"},
+	})
+
+	assert.Nil(t, cache.GetLauncherByID("Steam"))
+	assert.Nil(t, cache.GetLauncherByID("STEAM"))
 }
 
 func TestGetLauncherByID_NotFound(t *testing.T) {
@@ -215,4 +292,47 @@ func TestToRelativePath_SkipFilesystemScan(t *testing.T) {
 	// Launcher with SkipFilesystemScan should not be used for matching.
 	got := cache.ToRelativePath([]string{"/roms"}, "snes", "/roms/SNES/game.sfc")
 	assert.Equal(t, "/roms/SNES/game.sfc", got)
+}
+
+func TestInitialize_DeduplicatesExtraLaunchers(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "platform-launcher", SystemID: "NES"},
+	})
+
+	extra := platforms.Launcher{ID: "extra-launcher", SystemID: "SNES"}
+	duplicate := platforms.Launcher{ID: "PLATFORM-LAUNCHER", SystemID: "NES"} // same ID with different casing
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, extra, duplicate)
+	mp.AssertExpectations(t)
+
+	all := cache.GetAllLaunchers()
+	require.Len(t, all, 2, "duplicate extra launcher must not be added twice")
+
+	ids := make([]string, 0, len(all))
+	for _, l := range all {
+		ids = append(ids, l.ID)
+	}
+	assert.Contains(t, ids, "platform-launcher")
+	assert.Contains(t, ids, "extra-launcher")
+}
+
+func TestInitialize_ExtraLauncherIsRetrievable(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	extra := platforms.Launcher{ID: "native-audio", SystemID: "Audio"}
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, extra)
+	mp.AssertExpectations(t)
+
+	found := cache.GetLauncherByID("native-audio")
+	require.NotNil(t, found)
+	assert.Equal(t, "Audio", found.SystemID)
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -37,7 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -111,18 +111,19 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
-	_ context.Context,
+	ctx context.Context,
 	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
-	_ *idle.Scheduler,
+	scheduler *idle.Scheduler,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := tracker.StartTracker(
+		ctx,
 		cfg,
 		p,
 		activeMedia,
@@ -145,14 +146,15 @@ func (p *Platform) StartPost(
 		}
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
-		if err != nil {
-			log.Error().Msgf("failed to download arcade database: %s", err)
-		}
-
-		if arcadeDbUpdated {
+		switch {
+		case err != nil:
+			// Non-fatal: an embedded arcade database is used as a fallback. Download
+			// failures are usually network/rate-limit issues, not code faults.
+			log.Warn().Msgf("failed to download arcade database: %s", err)
+		case arcadeDbUpdated:
 			log.Info().Msg("arcade database updated")
 			tr.ReloadNameMap()
-		} else {
+		default:
 			log.Info().Msg("arcade database is up to date")
 		}
 
@@ -163,6 +165,21 @@ func (p *Platform) StartPost(
 			log.Info().Msgf("arcade database has %d entries", len(m))
 		}
 	}()
+
+	// One-time cleanup: resolve legacy MediaHistory rows recorded under a
+	// bare arcade set name (from before the tracker could canonicalize
+	// externally detected arcade launches) to their real .mra path and
+	// identity. Track the task through the idle scheduler so shutdown waits
+	// for cancellation before closing the databases.
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-history-backfill",
+			5*time.Second, 300*time.Second,
+			func(ctx context.Context) { tracker.RunArcadeHistoryBackfill(ctx, db, tr) },
+		)
+	} else {
+		log.Debug().Msg("no idle scheduler; skipping arcade history backfill")
+	}
 
 	return nil
 }
@@ -212,6 +229,14 @@ func (*Platform) Settings() platforms.Settings {
 		LogDir:     misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
+}
+
+func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
+	return mister.BackupDefinitions(p.Settings())
+}
+
+func (p *Platform) BackupRestoreRoot() string {
+	return mister.BackupRestoreRoot(p.Settings())
 }
 
 func LaunchMenu() error {
@@ -290,7 +315,7 @@ func (p *Platform) ActiveGamePath() string {
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	// Handle menu specially - launch menu core directly
-	if strings.EqualFold(id, "menu") {
+	if strings.EqualFold(id, platforms.SystemMenu) {
 		if err := LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
@@ -369,29 +394,9 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
-}
-
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	return nil, 0, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

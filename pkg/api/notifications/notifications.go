@@ -39,23 +39,26 @@ var criticalNotifications = map[string]bool{
 	models.NotificationStopped:             true,
 }
 
-func sendNotification(ns chan<- models.Notification, method string, payload any) {
-	var notification models.Notification
+func newNotification(method string, payload any) (models.Notification, bool) {
+	if payload == nil {
+		return models.Notification{Method: method}, true
+	}
 
-	if payload != nil {
-		params, err := json.Marshal(payload)
-		if err != nil {
-			log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
-			return
-		}
-		notification = models.Notification{
-			Method: method,
-			Params: params,
-		}
-	} else {
-		notification = models.Notification{
-			Method: method,
-		}
+	params, err := json.Marshal(payload)
+	if err != nil {
+		log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
+		return models.Notification{}, false
+	}
+	return models.Notification{
+		Method: method,
+		Params: params,
+	}, true
+}
+
+func sendNotification(ns chan<- models.Notification, method string, payload any) {
+	notification, ok := newNotification(method, payload)
+	if !ok {
+		return
 	}
 
 	// Use non-blocking send to prevent back-pressure from freezing callers.
@@ -85,6 +88,7 @@ func MediaStopped(ns chan<- models.Notification, payload *models.MediaStoppedPar
 	sendNotification(ns, models.NotificationStopped, payload)
 }
 
+//nolint:gocritic // notification payload is copied before async send
 func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedParams) {
 	sendNotification(ns, models.NotificationStarted, payload)
 }
@@ -124,10 +128,53 @@ func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.Playtime
 	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
 }
 
+func PlaytimeExtended(ns chan<- models.Notification, payload *models.PlaytimeExtendedParams) {
+	sendNotification(ns, models.NotificationPlaytimeExtended, payload)
+}
+
 func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
 }
 
+//nolint:gocritic // notification payload is copied before synchronous broker fan-out
+func UIChanged(publish func(models.Notification), payload models.UIStateResponse) {
+	notification, ok := newNotification(models.NotificationUIChanged, payload)
+	if !ok {
+		return
+	}
+	publish(notification)
+}
+
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
 	sendNotification(ns, models.NotificationClientsPaired, payload)
+}
+
+// ProfilesActiveChanged broadcasts a change of the device's active profile.
+// The payload profile is null when the device deactivated to no profile.
+func ProfilesActiveChanged(ns chan<- models.Notification, payload models.ProfilesActiveNotification) {
+	sendNotification(ns, models.NotificationProfilesActive, payload)
+}
+
+// ProfilesDataChanged broadcasts the state of profile data swapping after
+// a profile change (applied, deferred until media stops, failed, or
+// unavailable on this platform/storage setup).
+func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesDataNotification) {
+	sendNotification(ns, models.NotificationProfilesData, payload)
+}
+
+func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatusResponse) {
+	sendNotification(ns, models.NotificationAuthLinkStatus, payload)
+}
+
+// BackupState reports a running backup operation's pause/throttle state
+// changing in response to a game starting or stopping.
+func BackupState(ns chan<- models.Notification, payload models.BackupStateNotification) {
+	sendNotification(ns, models.NotificationBackupState, payload)
+}
+
+// UpdateState reports how far an update being applied has got.
+//
+//nolint:gocritic // notification payload is copied before async send
+func UpdateState(ns chan<- models.Notification, payload models.UpdateStateNotification) {
+	sendNotification(ns, models.NotificationUpdateState, payload)
 }

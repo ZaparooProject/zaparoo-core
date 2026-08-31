@@ -33,11 +33,31 @@ import (
 // These are compiled once at initialization for optimal performance.
 var (
 	// Special pattern extraction (complex patterns that still use regex)
-	reTrans          = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
-	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
-	reEditionWord    = regexp.MustCompile(
-		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
-	)
+	reTransBracketed    = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
+	reSquareBracket     = regexp.MustCompile(`\[([^\[\]]+)]`)
+	rePatchVersion      = regexp.MustCompile(`(?:^|-)v(\d+(?:-\d+)*)$`)
+	reFontPatch         = regexp.MustCompile(`^([a-z]{2})-font$`)
+	reHTGDBHackMarker   = regexp.MustCompile(`(?i)\((?:hack|patch)\)`)
+	reHTGDBPatchVersion = regexp.MustCompile(`(?i)(?:^|[\s_+\-])v(\d+(?:\.\d+)*)`)
+	reHTGDBPatchLabel   = regexp.MustCompile(`(?i)\b(?:` +
+		`(?:ted[\s_-]+)?woolsey[\s_-]+uncensored[\s_-]+edition|` +
+		`stereo\s*\+\s*bug[\s_-]*fix(?:es)?|gba[\s_-]+script[\s_-]+port|` +
+		`splash[\s_-]+screen[\s_-]+removed|quality[\s_-]+of[\s_-]+life|` +
+		`music[\s_-]+restore|sram[\s_-]+expansion|faster[\s_-]+rom|` +
+		`fast[\s_-]*rom|slow[\s_-]*rom|all[\s_-]+bugs[\s_-]+fix|` +
+		`bug[\s_-]*fix(?:es)?|uncensor(?:ed)?|relocalized|restoration|` +
+		`performance|retouch|overhaul|tweak|wide[\s_-]*screen|` +
+		`msu[\s_-]*1|sa[\s_-]*1|colori[sz](?:ation|ed)|redux|qol` +
+		`)\b`)
+
+	// "side-N-of-M" — a disk side plus the total disk/side count.
+	reSideOf = regexp.MustCompile(`^side-(\d+)-of-(\d+)$`)
+
+	// Raw TOSEC/GoodTools dump-flag bracket grammar: a 1-2 letter flag, an optional numeric
+	// index ("f1", "a2"), and/or a whitespace-separated cracker/group name ("cr XOR",
+	// "h ASS", "t +2 XOR"). A hyphen after the flag is deliberately NOT accepted, so
+	// hyphenated words like "b-side"/"a-team" are never misread as flag+credit.
+	reDumpFlag = regexp.MustCompile(`^([a-z]{1,2})(\d+)?(?:\s+(\S.*))?$`)
 
 	// Scene release artifact patterns (for modern media: movies, TV shows)
 	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
@@ -67,6 +87,57 @@ var editionSuffixFallbacks = map[string]TagValue{
 	"remake":  TagEditionRemake,
 	"remix":   TagEditionRemix,
 	"cut":     TagEditionCut,
+}
+
+// patchLabelAliases contains patch labels observed in ROM-hack collections.
+// Unknown bracket labels remain available to the general filename parser.
+var patchLabelAliases = map[string]TagValue{
+	"all-bugs-fix":                   "bugfix",
+	"bug-fix":                        "bugfix",
+	"bug-fixes":                      "bugfix",
+	"bugfix":                         "bugfix",
+	"bugfixes":                       "bugfix",
+	"color":                          "color",
+	"colorisation":                   "color",
+	"colorised":                      "color",
+	"colorization":                   "color",
+	"colorized":                      "color",
+	"fast-rom":                       "fastrom",
+	"faster-rom":                     "fastrom",
+	"fastrom":                        "fastrom",
+	"fix":                            "fix",
+	"fixes":                          "fix",
+	"gba-script-port":                "script-port",
+	"hack":                           "hack",
+	"msu-1":                          "msu1",
+	"msu1":                           "msu1",
+	"music":                          "music",
+	"music-restore":                  "music",
+	"no-sram":                        "no-sram",
+	"overhaul":                       "overhaul",
+	"performance":                    "performance",
+	"quality-of-life":                "qol",
+	"qol":                            "qol",
+	"redux":                          "redux",
+	"relocalized":                    "relocalized",
+	"restoration":                    "restoration",
+	"retouch":                        "retouch",
+	"sa-1":                           "sa1",
+	"sa1":                            "sa1",
+	"script-port":                    "script-port",
+	"slow-rom":                       "slowrom",
+	"slowrom":                        "slowrom",
+	"splash-screen-removed":          "splash-screen-removed",
+	"sram":                           "sram",
+	"sram-expansion":                 "sram",
+	"stereo-bug-fixes":               "bugfix",
+	"tweak":                          "tweak",
+	"uncensor":                       "uncensored",
+	"uncensored":                     "uncensored",
+	"wide-screen":                    "widescreen",
+	"widescreen":                     "widescreen",
+	"woolsey-uncensored-edition":     "uncensored",
+	"ted-woolsey-uncensored-edition": "uncensored",
 }
 
 // editionQualifiers maps recognized qualifier strings (after stripping the suffix and "the-")
@@ -106,7 +177,12 @@ func resolveEditionTag(qualifier, suffix string, src TagSource) CanonicalTag {
 // group has two or more tokens (e.g. "disc-3", not bare "disc" which allTagMappings handles).
 var structuralPrefixes = map[string]bool{
 	"disc":    true,
+	"disk":    true,
+	"file":    true,
 	"part":    true,
+	"tape":    true,
+	"cd":      true,
+	"side":    true,
 	"book":    true,
 	"program": true,
 	"chapter": true,
@@ -115,6 +191,28 @@ var structuralPrefixes = map[string]bool{
 	"track":   true,
 	"vol":     true,
 	"volume":  true,
+}
+
+var structuralMediaPrefixes = map[string]TagValue{
+	"disc": TagMediaDisc,
+	"disk": TagMediaDisk,
+	"file": TagMediaFile,
+	"part": TagMediaPart,
+	"tape": TagMediaTape,
+	"cd":   TagMediaDisc,
+}
+
+var structuralRomanNumbers = map[string]string{
+	"i":    "1",
+	"ii":   "2",
+	"iii":  "3",
+	"iv":   "4",
+	"v":    "5",
+	"vi":   "6",
+	"vii":  "7",
+	"viii": "8",
+	"ix":   "9",
+	"x":    "10",
 }
 
 // catalogNumberRE matches catalog/part-number shapes like "kd02", "ap009", "pbpx-95205", "v512".
@@ -213,9 +311,58 @@ func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 		return []CanonicalTag{{Type: TagTypeRelease, Value: TagReleaseClassics, Source: TagSourceBracketed}}, true
 	}
 
-	// Version phrases — drop, no tag ("version" or its Romance-language equivalents)
-	for _, t := range tokens {
+	// ROM hack with a title prefix: "smw-hack", "sa-1-smw-hack" → unlicensed:hack.
+	// (Bare "hack" already maps; the title prefix is what breaks the dash-split.)
+	if last == "hack" && len(tokens) >= 2 {
+		return []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedHack, Source: TagSourceBracketed}}, true
+	}
+
+	// Cracked dump with a cracker credit: "4am-crack", "...-crack" → dump:cracked.
+	if last == "crack" && len(tokens) >= 2 {
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceBracketed}}, true
+	}
+
+	// Literal translation marker: "english-translation" → unlicensed:translation, plus the
+	// language tag when the prefix names a language.
+	if last == "translation" {
+		result := []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceBracketed}}
+		if len(tokens) >= 2 {
+			prefix := strings.Join(tokens[:len(tokens)-1], "-")
+			for _, lt := range mapFilenameTagToCanonical(prefix) {
+				if lt.Type == TagTypeLang {
+					lt.Source = TagSourceBracketed
+					result = append(result, lt)
+				}
+			}
+		}
+		return result, true
+	}
+
+	// Set number: "set-1", "set-2" → set:N (distinct from media-structure "disc-N").
+	if first == "set" && len(tokens) >= 2 {
+		if number, ok := normalizeStructuralNumber(tokens[1]); ok {
+			return []CanonicalTag{{Type: TagTypeSet, Value: TagValue(number), Source: TagSourceBracketed}}, true
+		}
+	}
+
+	// "Side 1 of 2" → media side + disc total.
+	if sideTags, ok := parseSideOfToken(normalized); ok {
+		return sideTags, true
+	}
+
+	// Version phrases. "(System 16C version)" carries a meaningful board id before the
+	// "version" word — map the leading tokens if they resolve. Bare "(version)" or phrases
+	// whose leader doesn't map (e.g. "(final version)") drop with no tag.
+	for i, t := range tokens {
 		if t == "version" || t == "versione" || t == "versao" {
+			if i > 0 {
+				if mapped := mapFilenameTagToCanonical(strings.Join(tokens[:i], "-")); len(mapped) > 0 {
+					for j := range mapped {
+						mapped[j].Source = TagSourceBracketed
+					}
+					return mapped, true
+				}
+			}
 			return nil, true
 		}
 	}
@@ -253,6 +400,111 @@ func hasTagType(ts []CanonicalTag, tt TagType) bool {
 		}
 	}
 	return false
+}
+
+func normalizeStructuralNumber(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	if roman, ok := structuralRomanNumbers[s]; ok {
+		return roman, true
+	}
+	for i := range len(s) {
+		if !isDigit(s[i]) {
+			return "", false
+		}
+	}
+	normalized := strings.TrimLeft(s, "0")
+	if normalized == "" {
+		normalized = "0"
+	}
+	return normalized, true
+}
+
+func structuralSideValue(s string) (TagValue, bool) {
+	switch s {
+	case "a", "1":
+		return TagMediaSideA, true
+	case "b", "2":
+		return TagMediaSideB, true
+	case "c", "3":
+		return TagMediaSideC, true
+	case "d", "4":
+		return TagMediaSideD, true
+	default:
+		return "", false
+	}
+}
+
+func compactStructuralMediaTag(normalized string, source TagSource) ([]CanonicalTag, bool) {
+	for prefix, mediaValue := range structuralMediaPrefixes {
+		if !strings.HasPrefix(normalized, prefix) || len(normalized) == len(prefix) {
+			continue
+		}
+		number, ok := normalizeStructuralNumber(normalized[len(prefix):])
+		if !ok {
+			continue
+		}
+		return []CanonicalTag{
+			{Type: TagTypeMedia, Value: mediaValue, Source: source},
+			{Type: TagTypeDisc, Value: TagValue(number), Source: source},
+		}, true
+	}
+	return nil, false
+}
+
+func parseStructuralSetTag(normalized string, source TagSource) ([]CanonicalTag, bool) {
+	if normalized == "" {
+		return nil, false
+	}
+
+	if strings.HasPrefix(normalized, "side-") {
+		if sideValue, ok := structuralSideValue(strings.TrimPrefix(normalized, "side-")); ok {
+			return []CanonicalTag{{Type: TagTypeMedia, Value: sideValue, Source: source}}, true
+		}
+	}
+
+	tokens := strings.Split(normalized, "-")
+	if len(tokens) < 2 {
+		return compactStructuralMediaTag(normalized, source)
+	}
+
+	mediaValue, ok := structuralMediaPrefixes[tokens[0]]
+	if !ok {
+		return nil, false
+	}
+	number, ok := normalizeStructuralNumber(tokens[1])
+	if !ok {
+		return nil, false
+	}
+
+	results := []CanonicalTag{
+		{Type: TagTypeMedia, Value: mediaValue, Source: source},
+		{Type: TagTypeDisc, Value: TagValue(number), Source: source},
+	}
+
+	next := 2
+	if len(tokens) >= next+2 && tokens[next] == "of" {
+		total, totalOK := normalizeStructuralNumber(tokens[next+1])
+		if !totalOK {
+			return nil, false
+		}
+		results = append(results, CanonicalTag{Type: TagTypeDiscTotal, Value: TagValue(total), Source: source})
+		next += 2
+	}
+	if len(tokens) >= next+2 && tokens[next] == "side" {
+		sideValue, sideOK := structuralSideValue(tokens[next+1])
+		if !sideOK {
+			return nil, false
+		}
+		results = append(results, CanonicalTag{Type: TagTypeMedia, Value: sideValue, Source: source})
+		next += 2
+	}
+	if next != len(tokens) {
+		return nil, false
+	}
+
+	return results, true
 }
 
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
@@ -482,6 +734,215 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	return extractSpecialPatternsForMedia(filename, "")
 }
 
+// splitPatchVersion removes a trailing patch version such as "-v1-1".
+func splitPatchVersion(normalized string) (label, version string) {
+	match := rePatchVersion.FindStringSubmatchIndex(normalized)
+	if match == nil {
+		return normalized, ""
+	}
+	return strings.TrimRight(normalized[:match[0]], "-"), normalized[match[2]:match[3]]
+}
+
+func canonicalPatchLabel(label string) (TagValue, bool) {
+	value, ok := patchLabelAliases[label]
+	return value, ok
+}
+
+func versionedPatchValue(value TagValue, version string) TagValue {
+	if version == "" {
+		return value
+	}
+	return TagValue(string(value) + ":" + version)
+}
+
+// parsePatchBracket maps explicit patch naming conventions such as
+// "[FastROM hack by Author v1.1]", "[Performance by Author (v1.0)]",
+// "[FastROM]", and "[US font]" to stable, additive values. Unknown bracket
+// labels are not treated as patches. Credits are intentionally omitted because
+// patch identity and version select media without author-specific tag noise.
+func parsePatchBracket(content string) ([]CanonicalTag, bool) {
+	normalized := cachedNormalizeTag(content)
+
+	if match := reFontPatch.FindStringSubmatch(normalized); match != nil {
+		return []CanonicalTag{{
+			Type:   TagTypePatch,
+			Value:  TagValue("font:" + match[1]),
+			Source: TagSourceBracketed,
+		}}, true
+	}
+
+	label, version := splitPatchVersion(normalized)
+	patchValue, matched := canonicalPatchLabel(label)
+
+	if !matched {
+		if descriptor, _, found := strings.Cut(label, "-by-"); found {
+			patchValue, matched = canonicalPatchLabel(descriptor)
+		}
+	}
+
+	if !matched {
+		for _, marker := range []string{"-hack", "-patch"} {
+			markerIndex := strings.Index(label, marker)
+			if markerIndex <= 0 {
+				continue
+			}
+
+			suffix := label[markerIndex+len(marker):]
+			if suffix != "" && !strings.HasPrefix(suffix, "-by-") {
+				continue
+			}
+
+			patchName := strings.Trim(label[:markerIndex], "-")
+			if patchName == "" {
+				continue
+			}
+			if canonical, ok := canonicalPatchLabel(patchName); ok {
+				patchValue = canonical
+			} else {
+				patchValue = TagValue(patchName)
+			}
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		return nil, false
+	}
+
+	return []CanonicalTag{
+		{Type: TagTypeUnlicensed, Value: TagUnlicensedHack, Source: TagSourceBracketed},
+		{
+			Type:   TagTypePatch,
+			Value:  versionedPatchValue(patchValue, version),
+			Source: TagSourceBracketed,
+		},
+	}, true
+}
+
+func hasHTGDBPatchMarker(filename string) bool {
+	for offset := 0; offset < len(filename); {
+		markerStart := strings.IndexByte(filename[offset:], '(')
+		if markerStart < 0 {
+			return false
+		}
+		markerStart += offset
+		remaining := filename[markerStart:]
+		if len(remaining) >= len("(hack)") && strings.EqualFold(remaining[:len("(hack)")], "(hack)") {
+			return true
+		}
+		if len(remaining) >= len("(patch)") && strings.EqualFold(remaining[:len("(patch)")], "(patch)") {
+			return true
+		}
+		offset = markerStart + 1
+	}
+	return false
+}
+
+func splitPatchFilenameExtension(filename string) (stem, extension string) {
+	lastSlash := strings.LastIndexAny(filename, `/\\`)
+	lastDot := strings.LastIndex(filename, ".")
+	if lastDot <= lastSlash {
+		return filename, ""
+	}
+
+	extensionBody := filename[lastDot+1:]
+	if len(extensionBody) < 2 || len(extensionBody) > 4 || strings.ContainsAny(extensionBody, " \t") {
+		return filename, ""
+	}
+	return filename[:lastDot], filename[lastDot:]
+}
+
+// parseHTGDBPatchSuffix handles HTGDB/SmokeMonster names such as
+// "Axelay (U) FastROM (Hack) v1.0 Vitor Vilela". Only researched patch
+// labels are recognized; arbitrary names containing "(Hack)" retain their
+// existing title and revision behavior.
+func parseHTGDBPatchSuffix(filename string) ([]CanonicalTag, string, bool) {
+	if !hasHTGDBPatchMarker(filename) {
+		return nil, filename, false
+	}
+
+	stem, extension := splitPatchFilenameExtension(filename)
+	markers := reHTGDBHackMarker.FindAllStringIndex(stem, -1)
+	if len(markers) == 0 {
+		return nil, filename, false
+	}
+
+	marker := markers[len(markers)-1]
+	prefix := stem[:marker[0]]
+	labelMatches := reHTGDBPatchLabel.FindAllStringIndex(prefix, -1)
+	if len(labelMatches) == 0 {
+		return nil, filename, false
+	}
+
+	stripStart := labelMatches[0][0]
+	version := ""
+	if match := reHTGDBPatchVersion.FindStringSubmatch(stem[stripStart:]); match != nil {
+		version = strings.ReplaceAll(match[1], ".", "-")
+	}
+
+	tags := []CanonicalTag{{
+		Type:   TagTypeUnlicensed,
+		Value:  TagUnlicensedHack,
+		Source: TagSourceBracketed,
+	}}
+	seen := make(map[TagValue]struct{}, len(labelMatches))
+	for _, match := range labelMatches {
+		normalized := cachedNormalizeTag(prefix[match[0]:match[1]])
+		patchValue, ok := canonicalPatchLabel(normalized)
+		if !ok {
+			continue
+		}
+		patchValue = versionedPatchValue(patchValue, version)
+		if _, exists := seen[patchValue]; exists {
+			continue
+		}
+		seen[patchValue] = struct{}{}
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypePatch,
+			Value:  patchValue,
+			Source: TagSourceBracketed,
+		})
+	}
+	if len(tags) == 1 {
+		return nil, filename, false
+	}
+
+	remaining := strings.TrimRight(prefix[:stripStart], " \t-_+") + extension
+	return tags, remaining, true
+}
+
+// extractPatchBrackets removes recognized patch-only square brackets before generic
+// version extraction. This keeps patch versions attached to their patch identity instead
+// of misclassifying the first bracketed version as the base ROM revision.
+func extractPatchBrackets(filename string) (patchTags []CanonicalTag, remaining string) {
+	// reSquareBracket cannot match without an opening bracket, and
+	// ReplaceAllStringFunc builds a fresh string even when nothing matches, so
+	// bracket-free names (the common case) would otherwise pay a regex run plus
+	// a string, slice and map allocation to get their own input back.
+	if strings.IndexByte(filename, '[') < 0 {
+		return nil, filename
+	}
+	patchTags = make([]CanonicalTag, 0)
+	seen := make(map[string]struct{})
+	remaining = reSquareBracket.ReplaceAllStringFunc(filename, func(group string) string {
+		parsed, ok := parsePatchBracket(group[1 : len(group)-1])
+		if !ok {
+			return group
+		}
+		for _, tag := range parsed {
+			key := tag.String()
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			patchTags = append(patchTags, tag)
+		}
+		return " "
+	})
+	return patchTags, remaining
+}
+
 // extractSpecialPatternsForMedia is the media-type-aware variant of extractSpecialPatterns.
 // Patterns irrelevant to the given mediaType are skipped to reduce regex overhead.
 // Pass an empty mediaType to run all patterns (equivalent to extractSpecialPatterns).
@@ -497,22 +958,40 @@ func extractSpecialPatternsForMedia(
 
 	remaining = filename
 
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
+		patchTags, withoutPatchBrackets := extractPatchBrackets(remaining)
+		tags = append(tags, patchTags...)
+		remaining = withoutPatchBrackets
+
+		suffixTags, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(remaining)
+		if matched {
+			tags = append(tags, suffixTags...)
+			remaining = withoutPatchSuffix
+		}
+	}
+
 	// Pattern 1: "Disc/Disk X of Y [Side A/B/C/D]" - most common multi-disc format
 	if m := findDiscPattern(remaining); m.ok {
+		mediaValue := TagMediaDisc
+		if strings.HasPrefix(strings.ToLower(remaining[m.start:m.start+5]), "(disk") {
+			mediaValue = TagMediaDisk
+		}
+		discNumber, _ := normalizeStructuralNumber(remaining[m.cap1s:m.cap1e])
+		discTotal, _ := normalizeStructuralNumber(remaining[m.cap2s:m.cap2e])
 		tags = append(tags,
 			CanonicalTag{
 				Type:   TagTypeMedia,
-				Value:  TagValue("disc"),
+				Value:  mediaValue,
 				Source: TagSourceBracketed,
 			},
 			CanonicalTag{
 				Type:   TagTypeDisc,
-				Value:  TagValue(remaining[m.cap1s:m.cap1e]),
+				Value:  TagValue(discNumber),
 				Source: TagSourceBracketed,
 			},
 			CanonicalTag{
 				Type:   TagTypeDiscTotal,
-				Value:  TagValue(remaining[m.cap2s:m.cap2e]),
+				Value:  TagValue(discTotal),
 				Source: TagSourceBracketed,
 			},
 		)
@@ -702,18 +1181,12 @@ func extractSpecialPatternsForMedia(
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
 	// Skipped for non-Game types when mediaType is specified (ROM-specific naming convention).
 	if mediaType == "" || mediaType == slugs.MediaTypeGame {
-		if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
-			// indices[0:2] = full match
-			// indices[2:4] = prefix (^ or space)
-			// indices[4:6] = "T"
-			// indices[6:8] = +/- (required)
-			// indices[8:10] = language code
-			// indices[10:12] = version number or empty (if present)
-			plusMinus := remaining[indices[6]:indices[7]]
-			langCode := strings.ToLower(remaining[indices[8]:indices[9]])
+		if m := findBracketlessTranslation(remaining); m.ok {
+			plusMinus := string(m.plusMinus)
+			langCode := strings.ToLower(remaining[m.langS:m.langE])
 			versionNum := ""
-			if len(indices) > 11 && indices[10] != -1 {
-				versionNum = remaining[indices[10]:indices[11]]
+			if m.verS != -1 {
+				versionNum = remaining[m.verS:m.verE]
 			}
 
 			// Use shared tag building logic (inferred from plain text, not bracketed)
@@ -721,7 +1194,7 @@ func extractSpecialPatternsForMedia(
 			tags = append(tags, transTags...)
 
 			// Replace the matched pattern with a space to preserve word boundaries
-			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
+			remaining = remaining[:m.start] + " " + remaining[m.end:]
 		}
 	}
 
@@ -749,8 +1222,8 @@ func extractSpecialPatternsForMedia(
 
 	// Pattern 8: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
 	// Detects standalone edition words that will be stripped by slugification
-	if indices := reEditionWord.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		editionWord := strings.ToLower(remaining[indices[2]:indices[3]])
+	if word, found := findEditionWord(remaining); found {
+		editionWord := word
 
 		// Determine if this is a "version" word or "edition" word
 		// Version words: version, versione, versao, バージョン, ヴァージョン
@@ -908,6 +1381,7 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	}
 
 	var results []CanonicalTag
+	var unmatched []string
 
 	for _, part := range parts {
 		// Clean up the part (remove leading/trailing whitespace and dashes)
@@ -920,11 +1394,61 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 		normalized := cachedNormalizeTag(part)
 		mapped := mapFilenameTagToCanonical(normalized)
 
+		matched := false
 		for _, ct := range mapped {
 			if ct.Type != TagTypeUnknown {
 				ct.Source = TagSourceBracketed
 				results = append(results, ct)
+				matched = true
 			}
+		}
+		// A comma-part may itself be a "Region YYMMDD" pack, e.g. the "Japan 951020"
+		// half of "(CPS Changer, Japan 951020)".
+		if !matched {
+			if rdTags, ok := parseRegionDateToken(normalized); ok {
+				results = append(results, rdTags...)
+				matched = true
+			}
+		}
+		if !matched {
+			if vTags, ok := parseVersionToken(normalized); ok {
+				results = append(results, vTags...)
+				matched = true
+			}
+		}
+		if !matched {
+			unmatched = append(unmatched, normalized)
+		}
+	}
+
+	// MiSTer Arcade also writes the region and date as separate comma-parts, e.g.
+	// "(EU, 961004)". A standalone 6-digit number is normally rejected as a date, but
+	// the presence of a region sibling makes it unambiguous, so accept it here.
+	consumed := make([]bool, len(unmatched))
+	if hasTagType(results, TagTypeRegion) {
+		for i, u := range unmatched {
+			if v, ok := parseBuildDate(u); ok {
+				results = append(results, CanonicalTag{
+					Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed,
+				})
+				consumed[i] = true
+				break
+			}
+		}
+	}
+
+	// Any remaining unmatched comma-part is run through classifyUnmappedParen so a
+	// correctly-typed qualifier (set/edition/hack/crack/classics) is not silently dropped
+	// just because it sits after a comma — "(World, Set 1)" now yields set:1. The
+	// company-name→credit fallback is deliberately NOT applied here: a comma-part like
+	// "CPS Changer" is hardware, not a credit, and gets its correct type via an explicit
+	// mapping instead of being mislabeled.
+	for i, u := range unmatched {
+		if consumed[i] {
+			continue
+		}
+		if res, classified := classifyUnmappedParen(u, u); classified {
+			results = append(results, res...)
 		}
 	}
 
@@ -932,6 +1456,69 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 		return results
 	}
 	return nil
+}
+
+// parseVersionToken recognizes MAME/arcade software-version parens like "(ver. 100)" or
+// "(Ver. 1.01)" (normalized to "ver-100" / "ver-1-01") and maps them to a revision tag.
+// The value must start with a digit so it never matches word-shaped tokens. Returns the
+// rev tag(s) and true on a match.
+func parseVersionToken(normalized string) ([]CanonicalTag, bool) {
+	for _, prefix := range []string{"version-", "ver-"} {
+		rest, ok := strings.CutPrefix(normalized, prefix)
+		if !ok || rest == "" || !isASCIIDigit(rest[0]) {
+			continue
+		}
+		valid := true
+		for i := range len(rest) {
+			if !isASCIIDigit(rest[i]) && rest[i] != '-' {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return []CanonicalTag{{Type: TagTypeRev, Value: TagValue(rest), Source: TagSourceBracketed}}, true
+		}
+	}
+	return nil, false
+}
+
+// isASCIIDigit reports whether b is an ASCII digit.
+func isASCIIDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+// parseRegionDateToken handles the MiSTer Arcade naming convention where a single
+// parenthetical packs a region word and a build date, space-separated (normalization
+// turns the space into a dash): "World 931005" → "world-931005" →
+// region:world + builddate:1993-10-05. It also accepts a standalone build date
+// (YYYY-MM-DD or YYYYMMDD). A bare 6-digit number is deliberately NOT treated as a
+// date unless preceded by a region word, to avoid false positives on plain numbers.
+// Returns the canonical tags and true on a match.
+func parseRegionDateToken(normalized string) ([]CanonicalTag, bool) {
+	// Standalone date: YYYY-MM-DD (dashed) or YYYYMMDD (8 digits). Bare 6-digit is
+	// excluded here — it only counts as a date with a region prefix (below).
+	if strings.Contains(normalized, "-") || len(normalized) == 8 {
+		if v, ok := parseBuildDate(normalized); ok {
+			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}, true
+		}
+	}
+
+	// Region word + trailing date. Split on the last dash so multi-word regions
+	// ("hong-kong", "united-kingdom") stay intact.
+	i := strings.LastIndex(normalized, "-")
+	if i <= 0 || i >= len(normalized)-1 {
+		return nil, false
+	}
+	prefix, last := normalized[:i], normalized[i+1:]
+	v, ok := parseBuildDate(last)
+	if !ok {
+		return nil, false
+	}
+	regionTags := mapFilenameTagToCanonical(prefix)
+	if !hasTagType(regionTags, TagTypeRegion) {
+		return nil, false
+	}
+	result := withSource(regionTags, TagSourceBracketed)
+	result = append(result, CanonicalTag{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed})
+	return result, true
 }
 
 // disambiguateTag uses context to determine the correct canonical tag(s) for an ambiguous raw tag.
@@ -948,6 +1535,10 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 
 	// For parentheses tags, normalize and process
 	normalized := cachedNormalizeTag(ctx.CurrentTag)
+
+	if structuralTags, ok := parseStructuralSetTag(normalized, TagSourceBracketed); ok {
+		return structuralTags
+	}
 
 	// First check if it's a multi-language tag (En,Fr,De)
 	if multiLang := parseMultiLanguageTag(normalized); multiLang != nil {
@@ -991,8 +1582,144 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 		return mixedTags
 	}
 
+	// MiSTer Arcade "Region YYMMDD" packs a region word and a build date in one
+	// parens (no comma): "World 931005" → region:world + builddate:1993-10-05.
+	if rdTags, ok := parseRegionDateToken(normalized); ok {
+		return rdTags
+	}
+
+	// Arcade software version "(ver. 100)" → rev:100. Checked before the generic
+	// paren fallback so it is not mis-classified as a credit/company name.
+	if vTags, ok := parseVersionToken(normalized); ok {
+		return vTags
+	}
+
+	// Arcade protection chip "(FD1094 317-0154)" → protection:fd1094.
+	if pTags, ok := parseProtectionChip(normalized); ok {
+		return pTags
+	}
+
 	// For parentheses tags, use position and context
 	return mapParenthesisTag(normalized, ctx)
+}
+
+// parseProtectionChip recognizes an arcade protection-chip token — a chip family followed by
+// a serial ("fd1094-317-0060", "fd1089b-317-0018", "8751-317-0078") — and returns
+// protection:<family>, dropping the open-ended serial. Must run after explicit keyword
+// mappings. Returns the tag and true on a match.
+func parseProtectionChip(normalized string) ([]CanonicalTag, bool) {
+	var value TagValue
+	switch {
+	case strings.HasPrefix(normalized, "fd1094"):
+		value = TagProtectionFD1094
+	case strings.HasPrefix(normalized, "fd1089"):
+		value = TagProtectionFD1089
+	case strings.HasPrefix(normalized, "8751"):
+		value = TagProtection8751
+	case strings.HasPrefix(normalized, "mc-8123"), strings.HasPrefix(normalized, "mc8123"):
+		value = TagProtectionMC8123
+	default:
+		return nil, false
+	}
+	return []CanonicalTag{{Type: TagTypeProtection, Value: value, Source: TagSourceBracketed}}, true
+}
+
+// parseSideOfToken maps "side-N-of-M" (e.g. "Side 1 of 2") to a media side value plus the
+// disc/side total. Returns the tags and true on a match.
+func parseSideOfToken(normalized string) ([]CanonicalTag, bool) {
+	m := reSideOf.FindStringSubmatch(normalized)
+	if m == nil {
+		return nil, false
+	}
+	sides := map[string]TagValue{"1": TagMediaSideA, "2": TagMediaSideB, "3": TagMediaSideC, "4": TagMediaSideD}
+	side, ok := sides[m[1]]
+	if !ok {
+		return nil, false
+	}
+	result := []CanonicalTag{{Type: TagTypeMedia, Value: side, Source: TagSourceBracketed}}
+	totals := map[string]TagValue{
+		"2": TagDiscTotal2, "3": TagDiscTotal3, "4": TagDiscTotal4, "5": TagDiscTotal5, "6": TagDiscTotal6,
+	}
+	if total, ok := totals[m[2]]; ok {
+		result = append(result, CanonicalTag{Type: TagTypeDiscTotal, Value: total, Source: TagSourceBracketed})
+	}
+	return result, true
+}
+
+// dumpFlagValues maps a TOSEC/GoodTools bracket dump-flag letter to its canonical value.
+var dumpFlagValues = map[string]TagValue{
+	"a": TagDumpAlternate, "b": TagDumpBad, "cr": TagDumpCracked, "f": TagDumpFixed,
+	"h": TagDumpHacked, "m": TagDumpModified, "o": TagDumpOverdump, "p": TagDumpPirated,
+	"t": TagDumpTrained, "tr": TagDumpTranslated, "u": TagDumpUnderdump, "v": TagDumpVirus,
+}
+
+// parseDumpFlagBracket handles the TOSEC/GoodTools dump-flag bracket grammar: a flag letter
+// optionally followed by an index ("[f1]", "[a2]") and/or a whitespace-separated cracker/
+// group name ("[cr XOR]", "[h ASS]", "[t +2 XOR]"). The flag sets the dump status; a trailing
+// group name becomes a credit. It parses the RAW bracket tag (not the normalized form) so the
+// cracker convention's space separator is distinguishable from a plain hyphen — hyphenated
+// words like "b-side"/"a-team" must not be misread as flag+credit. Must run AFTER explicit
+// keyword mappings so tokens like "a000" (a load address) are not misread as flag "a".
+func parseDumpFlagBracket(rawTag string) ([]CanonicalTag, bool) {
+	m := reDumpFlag.FindStringSubmatch(strings.ToLower(strings.TrimSpace(rawTag)))
+	if m == nil {
+		return nil, false
+	}
+	value, ok := dumpFlagValues[m[1]]
+	if !ok {
+		return nil, false
+	}
+	result := []CanonicalTag{{Type: TagTypeDump, Value: value, Source: TagSourceBracketed}}
+	if m[3] != "" && looksLikeCompanyName(m[3]) {
+		result = append(result, CanonicalTag{
+			Type: TagTypeCredit, Value: NormalizeCompanyName(m[3]), Source: TagSourceBracketed,
+		})
+	}
+	return result, true
+}
+
+// parseTrackNumber recognizes a music track number token ("01", "12", "track-3") and returns
+// its leading-zero-stripped value.
+func parseTrackNumber(normalized string) (string, bool) {
+	s := normalized
+	if rest, ok := strings.CutPrefix(s, "track-"); ok {
+		s = rest
+	}
+	if s == "" || len(s) > 3 || !allDigits(s) {
+		return "", false
+	}
+	stripped := strings.TrimLeft(s, "0")
+	if stripped == "" {
+		stripped = "0"
+	}
+	return stripped, true
+}
+
+// mapMusicBracket maps the bracket conventions of SPC/NSF music libraries, where brackets
+// carry track numbers, alternate-sound sets, and composer/annotation text rather than dump
+// status. Returns nil if the token is not a recognized music bracket.
+func mapMusicBracket(normalized string) []CanonicalTag {
+	if n, ok := parseTrackNumber(normalized); ok {
+		return []CanonicalTag{{Type: TagTypeTrack, Value: TagValue(n), Source: TagSourceBracketed}}
+	}
+	// Alternate sound set "as1".."asN" → alt:N.
+	if rest, ok := strings.CutPrefix(normalized, "as"); ok && rest != "" && allDigits(rest) {
+		n := strings.TrimLeft(rest, "0")
+		if n == "" {
+			n = "0"
+		}
+		return []CanonicalTag{{Type: TagTypeAlt, Value: TagValue(n), Source: TagSourceBracketed}}
+	}
+	if normalized == "sfx" {
+		return []CanonicalTag{{Type: TagTypeAlt, Value: TagAlt, Source: TagSourceBracketed}}
+	}
+	// Composer / annotation free-text is a credit.
+	if looksLikeCompanyName(normalized) {
+		return []CanonicalTag{{
+			Type: TagTypeCredit, Value: NormalizeCompanyName(normalized), Source: TagSourceBracketed,
+		}}
+	}
+	return nil
 }
 
 // mapBracketTag maps tags from square brackets [].
@@ -1019,6 +1746,27 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 	// Normalize the tag for regular processing
 	normalized := cachedNormalizeTag(tag)
 
+	// A bracketed build date ("[2017-10-31]", "[1988-01]") is a date in any context. Only
+	// the dash-delimited forms are accepted here: bare 6-/8-digit tokens (e.g. "[010203]")
+	// are far more likely to be catalog numbers or ids than dates, so they stay dump info.
+	if strings.Contains(normalized, "-") {
+		if v, ok := parseBuildDate(normalized); ok {
+			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}
+		}
+	}
+
+	// Music libraries use brackets for track numbers, alternate-sound sets, and composer
+	// text rather than dump status.
+	if mediaType == slugs.MediaTypeMusic {
+		if musicTags := mapMusicBracket(normalized); musicTags != nil {
+			return musicTags
+		}
+	}
+
+	if structuralTags, ok := parseStructuralSetTag(normalized, TagSourceBracketed); ok {
+		return structuralTags
+	}
+
 	// Check for multi-language patterns (en-fr-de, En,Fr,De, En+Fr)
 	if langTags := parseMultiLanguageTag(normalized); langTags != nil {
 		return langTags
@@ -1039,23 +1787,64 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceBracketed}}
 	case "t":
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpTrained, Source: TagSourceBracketed}}
+	case "bl":
+		// MAME/arcade "[bl]" marks a bootleg romset.
+		return []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedBootleg, Source: TagSourceBracketed}}
 	default:
-		// Try default mapping, filtering for known tag types
-		// Allow dump, unlicensed, language, and region tags through
+		// Try the keyword mapping and accept any concrete hardware/spec/status type it
+		// yields — memory ([128K]) → compatibility, [PAL] → video, board ids → arcadeboard,
+		// as well as the dump/unlicensed/lang/region markers. Only the company/person types
+		// (credit/publisher/developer) are excluded: those belong to parens, never brackets.
 		mapped := mapFilenameTagToCanonical(normalized)
 		var knownTags []CanonicalTag
 		for _, ct := range mapped {
-			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed ||
-				ct.Type == TagTypeLang || ct.Type == TagTypeRegion {
-				ct.Source = TagSourceBracketed
-				knownTags = append(knownTags, ct)
+			// Skip the company/person types — those belong to parens, never brackets.
+			if ct.Type == TagTypeUnknown || ct.Type == TagTypeCredit ||
+				ct.Type == TagTypePublisher || ct.Type == TagTypeDeveloper {
+				continue
 			}
+			ct.Source = TagSourceBracketed
+			knownTags = append(knownTags, ct)
 		}
 		if len(knownTags) > 0 {
 			return knownTags
 		}
+		// Arcade protection chip "[FD1094 317-0060]" → protection:fd1094 (before the dump-flag
+		// parser so it is not misread, and after explicit mappings).
+		if pTags, ok := parseProtectionChip(normalized); ok {
+			return pTags
+		}
+		// TOSEC dump flags with an index or cracker/group suffix: "[f1]", "[a2]", "[cr XOR]",
+		// "[h ASS]". Parses the raw tag (space vs hyphen) so hyphenated words are not misread.
+		if dumpTags, ok := parseDumpFlagBracket(tag); ok {
+			return dumpTags
+		}
+		// Structural qualifiers (set/edition/hack/crack/classics) can appear in brackets too.
+		if res, classified := classifyUnmappedParen(normalized, tag); classified && len(res) > 0 {
+			return res
+		}
+		// Unrecognized bracket token: traditional bracket semantics treat it as dump info.
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagValue(normalized), Source: TagSourceBracketed}}
 	}
+}
+
+// classifyLooseParenToken classifies a paren/comma token that matched no keyword mapping,
+// using the shared No-Intro/TOSEC heuristics: structural/edition/hack/crack/set/translation
+// classification (classifyUnmappedParen), then the TOSEC year-position publisher rule, then a
+// company-name credit, else unknown. norm is the normalized token, raw the original text.
+// index and yearExtracted come from the paren's position context; comma-parts pass index 1
+// and false, since a comma-part is never at the TOSEC year position.
+func classifyLooseParenToken(norm, raw string, index int, yearExtracted bool) []CanonicalTag {
+	if result, classified := classifyUnmappedParen(norm, raw); classified {
+		return result
+	}
+	if index == 0 && yearExtracted {
+		return []CanonicalTag{{Type: TagTypePublisher, Value: NormalizeCompanyName(raw), Source: TagSourceBracketed}}
+	}
+	if looksLikeCompanyName(norm) {
+		return []CanonicalTag{{Type: TagTypeCredit, Value: NormalizeCompanyName(raw), Source: TagSourceBracketed}}
+	}
+	return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(norm), Source: TagSourceBracketed}}
 }
 
 // mapParenthesisTag maps tags from parentheses ().
@@ -1188,31 +1977,7 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 	// Try default mapping
 	mapped := mapFilenameTagToCanonical(tag)
 	if len(mapped) == 0 {
-		// Classify the unmatched group first: may produce edition:, release:, credit:,
-		// or nothing (nil means "drop silently").
-		result, classified := classifyUnmappedParen(tag, ctx.CurrentTag)
-		if classified {
-			return result
-		}
-		// TOSEC positional rule: Title (year)(publisher)[flags]
-		// extractSpecialPatterns removes the year paren before extractTags runs, so the
-		// TOSEC publisher lands at paren position 0. YearExtractedFromFile is set only by
-		// extractSpecialPatterns, so this check cannot fire from year tags from other sources.
-		if ctx.CurrentIndex == 0 && ctx.YearExtractedFromFile {
-			return []CanonicalTag{{
-				Type:   TagTypePublisher,
-				Value:  NormalizeCompanyName(ctx.CurrentTag),
-				Source: TagSourceBracketed,
-			}}
-		}
-		if looksLikeCompanyName(tag) {
-			return []CanonicalTag{{
-				Type:   TagTypeCredit,
-				Value:  NormalizeCompanyName(ctx.CurrentTag),
-				Source: TagSourceBracketed,
-			}}
-		}
-		return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(tag), Source: TagSourceBracketed}}
+		return classifyLooseParenToken(tag, ctx.CurrentTag, ctx.CurrentIndex, ctx.YearExtractedFromFile)
 	}
 
 	// If multiple mappings, check if they're complementary (like region+language)
@@ -1438,6 +2203,51 @@ func stripSceneArtifacts(input string) string {
 	return result
 }
 
+func stripMetadataBracketsForDisplay(s string) string {
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		open := s[i]
+		var closeBracket byte
+		switch open {
+		case '(':
+			closeBracket = ')'
+		case '[':
+			closeBracket = ']'
+		case '{':
+			closeBracket = '}'
+		case '<':
+			closeBracket = '>'
+		default:
+			_ = result.WriteByte(open)
+			continue
+		}
+
+		start := i
+		depth := 1
+		for i++; i < len(s); i++ {
+			switch s[i] {
+			case open:
+				depth++
+			case closeBracket:
+				depth--
+				if depth == 0 {
+					content := s[start+1 : i]
+					if _, ok := parseStructuralSetTag(cachedNormalizeTag(content), TagSourceBracketed); ok {
+						_, _ = result.WriteString(s[start : i+1])
+					}
+				}
+			}
+			if depth == 0 {
+				break
+			}
+		}
+	}
+
+	return strings.TrimSpace(result.String())
+}
+
 // ParseTitleFromFilename extracts a clean, human-readable display title from a filename.
 // It removes metadata brackets and normalizes common filename artifacts for better presentation.
 //
@@ -1466,9 +2276,41 @@ func stripSceneArtifacts(input string) string {
 // code duplication. However, it only applies transformations appropriate for display
 // titles (no Roman numeral conversion, edition stripping, etc.).
 func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	return ParseTitleFromFilenameForMedia(filename, stripLeadingNumbers, slugs.MediaTypeGame)
+}
+
+// ParseTitleFromFilenameForMedia extracts a canonical title using media-specific cleanup.
+func ParseTitleFromFilenameForMedia(
+	filename string, stripLeadingNumbers bool, mediaType slugs.MediaType,
+) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, false, mediaType)
+}
+
+// ParseDisplayTitleFromFilename extracts a per-file display title while preserving
+// structural set markers such as "(Disc 1)", "(Disk 2 of 4)", and "(File 3)".
+// The canonical title parser still strips those markers before slug generation.
+func ParseDisplayTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	return ParseDisplayTitleFromFilenameForMedia(filename, stripLeadingNumbers, slugs.MediaTypeGame)
+}
+
+// ParseDisplayTitleFromFilenameForMedia extracts a media-specific per-file display title.
+func ParseDisplayTitleFromFilenameForMedia(
+	filename string, stripLeadingNumbers bool, mediaType slugs.MediaType,
+) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, true, mediaType)
+}
+
+func parseFilenameTitle(
+	filename string, stripLeadingNumbers, preserveStructuralTags bool, mediaType slugs.MediaType,
+) string {
 	// Import the slugs package for shared normalization functions
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
+		if _, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(title); matched {
+			title = withoutPatchSuffix
+		}
+	}
 
 	// Step 1: Remove file extension first (simplifies later processing)
 	// Find the last dot that's likely an extension (after the last slash if any)
@@ -1483,7 +2325,13 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 	// Step 2: Strip release group BEFORE separator normalization
 	// Release groups are typically "-GROUP" at the end, and the hyphen will be converted to a space
 	// So we need to remove it early before that conversion happens
-	title = reReleaseGroup.ReplaceAllString(title, "")
+	// reReleaseGroup is anchored at end-of-string and needs a '-', so a title
+	// with no hyphen at all cannot match. ReplaceAllString allocates a new
+	// string even on no match, and this runs twice per file, so skip the engine
+	// for the common hyphen-free case.
+	if strings.IndexByte(title, '-') >= 0 {
+		title = reReleaseGroup.ReplaceAllString(title, "")
+	}
 
 	// Step 3: Normalize filename separators (before scene artifact stripping)
 	// Heuristic: If filename has no spaces AND has 2+ separators (dots, underscores, or dashes),
@@ -1530,9 +2378,13 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 		title = strings.TrimSpace(title)
 	}
 
-	// Step 7: Remove all bracket content using shared function from slugs package
-	// This handles nested brackets and all bracket types uniformly
-	title = slugs.StripMetadataBrackets(title)
+	// Step 7: Remove bracket metadata. Per-file display titles retain
+	// structural set markers, while canonical titles strip every bracket group.
+	if preserveStructuralTags {
+		title = stripMetadataBracketsForDisplay(title)
+	} else {
+		title = slugs.StripMetadataBrackets(title)
+	}
 	title = strings.TrimSpace(title)
 
 	// Step 8: Normalize multiple spaces to single space

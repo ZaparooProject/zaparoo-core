@@ -21,17 +21,21 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
@@ -60,19 +64,28 @@ func indexRPCID(ids []models.RPCID, target models.RPCID) int {
 
 func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cleanup func()) {
 	t.Helper()
+	return startPriorityWSServerWithPlatform(t, methodMap, nil)
+}
+
+func startPriorityWSServerWithPlatform(
+	t *testing.T,
+	methodMap *MethodMap,
+	platform platforms.Platform,
+) (wsURL string, cleanup func()) {
+	t.Helper()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	st, _ := state.NewState(nil, "test-boot")
+	st, _ := state.NewState(platform, "test-boot")
 
 	m := newWebSocketSession()
 	m.HandleDisconnect(func(s *melody.Session) {
 		closeWSDispatcher(s)
 	})
 	m.HandleMessage(handleWSMessage(
-		methodMap, nil, cfg, st, nil, nil,
+		methodMap, platform, cfg, st, nil, nil,
+		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil,
-		nil, nil, nil,
 	))
 
 	mux := http.NewServeMux()
@@ -93,8 +106,11 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	imageStarted := make(chan struct{}, wsLowConcurrency)
-	highStarted := make(chan struct{})
+	imageRequests := wsLowConcurrency + 1
+	queuedImageID := imageRequests
+	mutationID := imageRequests + 1
+	totalResponses := imageRequests + 1
+	imageStarted := make(chan struct{}, imageRequests)
 	releaseImages := make(chan struct{})
 
 	var methodMap MethodMap
@@ -107,8 +123,83 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 			return nil, env.Context.Err()
 		}
 	}))
+	require.NoError(t, methodMap.AddMethod(models.MethodMediaTagsUpdate, func(requests.RequestEnv) (any, error) {
+		return map[string]string{"kind": "favorite"}, nil
+	}))
+
+	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	for id := 1; id <= imageRequests; id++ {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
+	}
+	for range wsLowConcurrency {
+		select {
+		case <-imageStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media.image did not start")
+		}
+	}
+	select {
+	case <-imageStarted:
+		t.Fatal("queued media.image ran before a low-priority worker was free")
+	default:
+	}
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":%d}`,
+			mutationID,
+		))))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(int64(mutationID)), resp.ID,
+		"mutation should bypass active and queued image work")
+
+	close(releaseImages)
+	seen := make([]models.RPCID, 0, totalResponses)
+	seen = append(seen, resp.ID)
+	for range totalResponses - 1 {
+		_, msg, err = conn.ReadMessage()
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(msg, &resp))
+		seen = append(seen, resp.ID)
+	}
+
+	favoriteIndex := indexRPCID(seen, models.NewNumberID(int64(mutationID)))
+	queuedImageIndex := indexRPCID(seen, models.NewNumberID(int64(queuedImageID)))
+	require.NotEqual(t, -1, favoriteIndex)
+	require.NotEqual(t, -1, queuedImageIndex)
+	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
+}
+
+func TestWebSocketLowPriorityQueueRejectsWithoutClosingSession(t *testing.T) {
+	imageStarted := make(chan struct{}, wsLowConcurrency)
+	releaseImages := make(chan struct{})
+	defer close(releaseImages)
+
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
+		select {
+		case imageStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseImages:
+			return map[string]string{"kind": "image"}, nil
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
+	}))
 	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(requests.RequestEnv) (any, error) {
-		close(highStarted)
 		return map[string]string{"kind": "run"}, nil
 	}))
 
@@ -126,48 +217,133 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		select {
 		case <-imageStarted:
 		case <-time.After(2 * time.Second):
-			t.Fatal("initial image request did not start")
+			t.Fatal("media.image did not start")
 		}
 	}
 
-	imageID := models.NewNumberID(int64(wsLowConcurrency + 1))
-	highID := models.NewNumberID(int64(wsLowConcurrency + 2))
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%s}`, imageID.String()))))
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"run","id":%s}`, highID.String()))))
-	select {
-	case <-highStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("high-priority request did not start")
+	for id := wsLowConcurrency + 1; id <= wsLowConcurrency+wsLowQueueSize; id++ {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
 	}
-	close(releaseImages)
+	busyID := wsLowConcurrency + wsLowQueueSize + 1
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, busyID))))
+	// Saturated JSON-RPC notifications are dropped without an error response.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"media.image"}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"run","id":1000}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("ping")))
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
-	seen := make([]models.RPCID, 0, 4)
-	for indexRPCID(seen, highID) == -1 || indexRPCID(seen, imageID) == -1 {
+	var gotBusy, gotRun, gotPong bool
+	for !gotBusy || !gotRun || !gotPong {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err)
+		if string(msg) == "pong" {
+			gotPong = true
+			continue
+		}
+
 		var resp models.ResponseObject
 		require.NoError(t, json.Unmarshal(msg, &resp))
-		seen = append(seen, resp.ID)
+		switch {
+		case resp.ID.Equal(models.NewNumberID(int64(busyID))):
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, JSONRPCErrorServerBusy.Code, resp.Error.Code)
+			assert.Equal(t, JSONRPCErrorServerBusy.Message, resp.Error.Message)
+			gotBusy = true
+		case resp.ID.Equal(models.NewNumberID(1000)):
+			require.Nil(t, resp.Error)
+			gotRun = true
+		default:
+			t.Fatalf("unexpected response while image workers blocked: %s", msg)
+		}
 	}
 
-	highIndex := indexRPCID(seen, highID)
-	imageIndex := indexRPCID(seen, imageID)
-	require.NotEqual(t, -1, highIndex)
-	require.NotEqual(t, -1, imageIndex)
-	assert.Less(t, highIndex, imageIndex, "high-priority request should bypass queued image work")
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, msg, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("unexpected response for rejected notification: %s", msg)
+	}
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr, "expected read timeout, got %v", err)
+	assert.True(t, netErr.Timeout(), "expected read timeout, got %v", err)
+
+	select {
+	case <-imageStarted:
+		t.Fatal("rejected media.image reached a worker")
+	default:
+	}
+}
+
+func TestWebSocketBusyResponseUsesEncryptedSession(t *testing.T) {
+	cs, clientSecrets := establishTestEncryptionSession(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	m := newWebSocketSession()
+	m.HandleConnect(func(session *melody.Session) {
+		dispatcher := getOrCreateWSDispatcher(ctx, session, nil)
+		dispatcher.enqueueResponse(&wsResponseJob{
+			result: requestResult{
+				ID:          models.NewStringID("busy-request"),
+				Error:       &JSONRPCErrorServerBusy,
+				ShouldReply: true,
+			},
+			cs:     cs,
+			method: models.MethodMediaImage,
+		})
+	})
+	m.HandleDisconnect(func(session *melody.Session) {
+		closeWSDispatcher(session)
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	}))
+	defer func() {
+		_ = m.Close()
+		srv.Close()
+	}()
+
+	conn := dialWS(t, "ws"+srv.URL[len("http"):])
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	var frame struct {
+		Ciphertext string `json:"e"`
+	}
+	require.NoError(t, json.Unmarshal(msg, &frame))
+	ciphertext, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
+	require.NoError(t, err)
+	plaintext, err := crypto.Decrypt(
+		clientSecrets.s2cGCM,
+		clientSecrets.s2cNonce,
+		0,
+		ciphertext,
+		clientSecrets.aad,
+	)
+	require.NoError(t, err)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(plaintext, &resp))
+	assert.Equal(t, models.NewStringID("busy-request"), resp.ID)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, JSONRPCErrorServerBusy.Code, resp.Error.Code)
+	assert.Equal(t, JSONRPCErrorServerBusy.Message, resp.Error.Message)
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
-	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
+	require.NoError(t, methodMap.AddMethod(models.MethodConfirm, func(env requests.RequestEnv) (any, error) {
 		select {
 		case <-time.After(150 * time.Millisecond):
 			close(firstDone)
-			return map[string]string{"kind": "run"}, nil
+			return map[string]string{"kind": "confirm"}, nil
 		case <-env.Context.Done():
 			return nil, env.Context.Err()
 		}
@@ -177,8 +353,52 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 		case <-firstDone:
 			return map[string]string{"kind": "stop"}, nil
 		default:
-			return map[string]string{"kind": "stop-before-run"}, nil
+			return map[string]string{"kind": "stop-before-confirm"}, nil
 		}
+	}))
+
+	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"confirm","id":1}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"stop","id":2}`)))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
+
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(2), resp.ID)
+}
+
+// A run that is still waiting on ZapScript execution must not hold up the
+// instant control methods that share a session with it.
+func TestWebSocketRunLaneDoesNotBlockHighLane(t *testing.T) {
+	t.Parallel()
+
+	releaseRun := make(chan struct{})
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
+		select {
+		case <-releaseRun:
+			return map[string]string{"kind": "run"}, nil
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
+	}))
+	require.NoError(t, methodMap.AddMethod(models.MethodStop, func(requests.RequestEnv) (any, error) {
+		return map[string]string{"kind": "stop"}, nil
 	}))
 
 	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
@@ -198,12 +418,13 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(msg, &resp))
-	assert.Equal(t, models.NewNumberID(1), resp.ID)
+	assert.Equal(t, models.NewNumberID(2), resp.ID, "stop must answer while run is still waiting")
 
+	close(releaseRun)
 	_, msg, err = conn.ReadMessage()
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(msg, &resp))
-	assert.Equal(t, models.NewNumberID(2), resp.ID)
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
 }
 
 func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.T) {
@@ -255,6 +476,99 @@ func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.
 	require.NoError(t, err)
 }
 
+func TestWebSocketInstantMethodsBypassMediaTransactionLock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{"run", models.MethodRun},
+		{"launch", models.MethodLaunch},
+		{"stop", models.MethodStop},
+		{"media control", models.MethodMediaControl},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			txStarted := make(chan struct{})
+			releaseTx := make(chan struct{})
+			instantStarted := make(chan struct{}, 1)
+			var methodMap MethodMap
+			tagsUpdateHandler := func(env requests.RequestEnv) (any, error) {
+				close(txStarted)
+				select {
+				case <-releaseTx:
+					return map[string]string{"kind": "favorite"}, nil
+				case <-env.Context.Done():
+					return nil, env.Context.Err()
+				}
+			}
+			require.NoError(t, methodMap.AddMethod(models.MethodMediaTagsUpdate, tagsUpdateHandler))
+			require.NoError(t, methodMap.AddMethod(tt.method, func(requests.RequestEnv) (any, error) {
+				instantStarted <- struct{}{}
+				return map[string]string{"kind": "instant"}, nil
+			}))
+
+			wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+			defer cleanup()
+
+			conn := dialWS(t, wsURL)
+			defer func() { _ = conn.Close() }()
+
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+				[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","id":1}`)))
+			select {
+			case <-txStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("media.tags.update did not start")
+			}
+
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+				[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"id":2}`, tt.method))))
+
+			select {
+			case <-instantStarted:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("%s did not start while media.tags.update was in flight; "+
+					"instant method incorrectly blocked on wsMediaDBMu", tt.method)
+			}
+
+			close(releaseTx)
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+			_, _, err := conn.ReadMessage()
+			require.NoError(t, err)
+			_, _, err = conn.ReadMessage()
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestMediaDBLockModeForAPIMethod(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		wantMode mediaDBLockMode
+	}{
+		{"run takes no lock", models.MethodRun, mediaDBLockNone},
+		{"launch takes no lock", models.MethodLaunch, mediaDBLockNone},
+		{"stop takes no lock", models.MethodStop, mediaDBLockNone},
+		{"media control takes no lock", models.MethodMediaControl, mediaDBLockNone},
+		{"tags update takes exclusive lock", models.MethodMediaTagsUpdate, mediaDBLockWrite},
+		{"meta update takes exclusive lock", models.MethodMediaMetaUpdate, mediaDBLockWrite},
+		{"image takes no lock", models.MethodMediaImage, mediaDBLockNone},
+		{"other method takes read lock", models.MethodMediaMeta, mediaDBLockRead},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantMode, mediaDBLockModeForAPIMethod(tt.method), "method %q", tt.method)
+		})
+	}
+}
+
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.notify", func(requests.RequestEnv) (any, error) {
@@ -275,27 +589,150 @@ func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
 	require.Error(t, err, "JSON-RPC notifications must not receive responses")
 }
 
+func TestWebSocketRunJobStartsMethodTimeoutAtExecution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		method  string
+		timeout time.Duration
+	}{
+		{name: "normal request", method: "test.timeout", timeout: config.APIRequestTimeout},
+		{name: "backup request", method: models.MethodSettingsBackup, timeout: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parentCtx, parentCancel := context.WithCancel(context.Background())
+			defer parentCancel()
+			d := &wsSessionDispatcher{
+				ctx:       parentCtx,
+				responses: make(chan *wsResponseJob, 1),
+			}
+
+			deadlineCh := make(chan time.Time, 1)
+			var methodMap MethodMap
+			require.NoError(t, methodMap.AddMethod(tt.method, func(env requests.RequestEnv) (any, error) {
+				deadline, ok := env.Context.Deadline()
+				if !ok {
+					deadline = time.Time{}
+				}
+				deadlineCh <- deadline
+				return map[string]string{"ok": "true"}, nil
+			}, true))
+
+			enqueuedCtx, enqueuedCancel := context.WithTimeout(parentCtx, time.Millisecond)
+			defer enqueuedCancel()
+			job := &wsRequestJob{
+				methodMap: &methodMap,
+				env:       &requests.RequestEnv{Context: enqueuedCtx, IsLocal: true},
+				method:    tt.method,
+				msg: []byte(fmt.Sprintf(
+					`{"jsonrpc":"2.0","method":%q,"id":1}`,
+					tt.method,
+				)),
+			}
+			// Waited for rather than slept past: a deadline is recorded by a timer
+			// goroutine, so under load the wall clock passes the deadline well
+			// before anything runs to set the error.
+			select {
+			case <-enqueuedCtx.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("pre-existing enqueue-time context should be expired")
+			}
+
+			beforeRun := time.Now()
+			d.runJob(job)
+			require.NotNil(t, job.cancel, "runJob should install cancel func")
+			defer job.cancel()
+
+			select {
+			case deadline := <-deadlineCh:
+				if tt.timeout == 0 {
+					assert.True(t, deadline.IsZero(), "backup request must not have a whole-operation deadline")
+				} else {
+					assert.True(t, deadline.After(beforeRun), "deadline should not reuse expired enqueue-time context")
+					assert.WithinDuration(t, beforeRun.Add(tt.timeout), deadline, time.Second)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handler did not run")
+			}
+
+			select {
+			case resp := <-d.responses:
+				require.NotNil(t, resp.cancel)
+				assert.True(t, resp.result.ShouldReply)
+			case <-time.After(time.Second):
+				t.Fatal("response was not queued")
+			}
+		})
+	}
+}
+
 func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	d := &wsSessionDispatcher{
 		ctx:       ctx,
 		cancel:    cancel,
 		high:      make(chan *wsRequestJob, wsQueueSize),
+		run:       make(chan *wsRequestJob, wsQueueSize),
 		normal:    make(chan *wsRequestJob, wsQueueSize),
-		low:       make(chan *wsRequestJob, wsQueueSize),
+		low:       make(chan *wsRequestJob, wsLowQueueSize),
 		responses: make(chan *wsResponseJob, wsResponseQueueSize),
 	}
 
 	tracker := &countingRequestTracker{}
 	tracker.RequestStarted()
 	jobCtx, jobCancel := context.WithCancel(ctx)
+	defer jobCancel()
 	require.NoError(t, d.enqueue(&wsRequestJob{
 		env:     &requests.RequestEnv{Context: jobCtx},
 		tracker: tracker,
 		cancel:  jobCancel,
 	}, apiPriorityHigh))
 
+	tracker.RequestStarted()
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	require.NoError(t, d.enqueue(&wsRequestJob{
+		env:     &requests.RequestEnv{Context: runCtx},
+		tracker: tracker,
+		cancel:  runCancel,
+	}, apiPriorityRun))
+
 	d.close()
 	assert.Equal(t, 0, tracker.inFlight())
-	assert.Error(t, jobCtx.Err())
+	require.Error(t, jobCtx.Err())
+	require.Error(t, runCtx.Err())
+}
+
+func TestCloseWSDispatcherBoundsInputWorkerDrain(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:       ctx,
+		cancel:    cancel,
+		inputDone: make(chan struct{}),
+	}
+
+	started := time.Now()
+	d.close()
+	assert.Less(t, time.Since(started), wsInputWorkerDrainTimeout+time.Second)
+}
+
+func TestWSDispatcherStartInitializesInputDone(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	d.start()
+	require.NotNil(t, d.inputDone)
+	d.close()
 }

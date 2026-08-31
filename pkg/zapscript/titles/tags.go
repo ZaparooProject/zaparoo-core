@@ -39,6 +39,10 @@ var reCanonicalTag = regexp.MustCompile(`\(([+~-]?)([a-zA-Z][a-zA-Z0-9_-]*):([^)
 // Matches format: (operator?type:value) where operator is -, +, or ~ (optional, defaults to AND)
 // Examples: (-unfinished:beta), (+region:us), (year:1994), (~lang:en)
 //
+// Multiple tags may be comma-separated inside a single parens group as a shorthand,
+// space-optional: (region:us, region:ja), (region:us,rev:a). The gate on a type:value
+// colon means filename parens like (USA), (Disc 1) or (En,Fr,De) are left in the title.
+//
 // This is used to support operator-based tag filtering in media titles, separate from
 // filename metadata tags which don't support operators.
 //
@@ -51,24 +55,24 @@ func ExtractCanonicalTagsFromParens(input string) (tagFilters []zapscript.TagFil
 	matches := reCanonicalTag.FindAllStringSubmatch(input, -1)
 
 	for _, match := range matches {
-		fullMatch := match[0] // "(+region:us)"
-		operator := match[1]  // "+"
-		tagType := match[2]   // "region"
-		tagValue := match[3]  // "us"
+		fullMatch := match[0]   // "(region:us, region:ja)"
+		operator := match[1]    // leading operator, if any
+		tagType := match[2]     // first tag type
+		innerValues := match[3] // value plus any further comma-separated tags
 
-		// Construct tag string with operator for parsing
-		tagStr := operator + tagType + ":" + tagValue
-
-		// Parse using existing filter parser (handles normalization and validation)
-		parsedFilters, err := filters.ParseTagFilters([]string{tagStr})
+		// Reconstruct the full inner content and split into individual type:value
+		// entries. filters.ParseTagFilters trims each, applies per-entry operators,
+		// normalizes, validates, and deduplicates — no custom tag parsing here.
+		inner := operator + tagType + ":" + innerValues
+		parsedFilters, err := filters.ParseTagFilters(strings.Split(inner, ","))
 		if err != nil {
-			log.Warn().Err(err).Str("tag", tagStr).Msg("failed to parse canonical tag from parentheses")
+			log.Warn().Err(err).Str("tags", inner).Msg("failed to parse canonical tags from parentheses")
 			continue
 		}
 
 		if len(parsedFilters) > 0 {
-			extractedTags = append(extractedTags, parsedFilters[0])
-			// Remove this tag from the string
+			extractedTags = append(extractedTags, parsedFilters...)
+			// Remove this whole parens group from the string
 			remaining = strings.Replace(remaining, fullMatch, "", 1)
 		}
 	}

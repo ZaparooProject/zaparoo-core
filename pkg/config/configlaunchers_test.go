@@ -153,6 +153,54 @@ allow_execute = ["^test.*", "^echo$"]`))
 	assert.False(t, cfg.IsExecuteAllowed("rm -rf"))
 }
 
+func TestLauncherRenderDefaultsValidation(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		`[[launchers.default]]
+launcher = "GenericVideo"
+render_scale = 33`,
+		`[[launchers.default]]
+launcher = "ScummVM"
+render_resolution = "640x480"`,
+	}
+	for _, input := range valid {
+		cfg := &Instance{}
+		require.NoError(t, cfg.LoadTOML(input))
+	}
+
+	invalid := []string{
+		`[[launchers.default]]
+launcher = "GenericVideo"
+render_scale = 0`,
+		`[[launchers.default]]
+launcher = "ScummVM"
+render_resolution = "640-480"`,
+		`[[launchers.default]]
+launcher = "ScummVM"
+render_scale = 50
+render_resolution = "640x480"`,
+	}
+	for _, input := range invalid {
+		cfg := &Instance{}
+		require.Error(t, cfg.LoadTOML(input))
+	}
+}
+
+func TestLookupLauncherDefaults_RenderSettingsOverrideEachOther(t *testing.T) {
+	t.Parallel()
+
+	renderScale := 50
+	cfg := &Instance{vals: Values{Launchers: Launchers{Default: []LaunchersDefault{
+		{Launcher: "MiSTer", RenderScale: &renderScale},
+		{Launcher: "GenericVideo", RenderResolution: "640x360"},
+	}}}}
+
+	result := cfg.LookupLauncherDefaults("GenericVideo", []string{"MiSTer"})
+	assert.Nil(t, result.RenderScale)
+	assert.Equal(t, "640x360", result.RenderResolution)
+}
+
 func TestLookupLauncherDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -717,6 +765,30 @@ func TestLoadCustomLaunchers_MissingDirectory(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to stat launchers directory")
 }
 
+func TestLoadCustomLaunchers_SkipsUnreadablePaths(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	fs := afero.NewOsFs()
+	launchersDir := t.TempDir()
+	blocked := filepath.Join(launchersDir, "blocked")
+	require.NoError(t, fs.MkdirAll(blocked, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "good.toml"), []byte(`
+[[launchers.custom]]
+id = "GoodLauncher"
+execute = "echo good"
+`), 0o600))
+	require.NoError(t, os.Chmod(blocked, 0o000))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 1)
+	assert.Equal(t, "GoodLauncher", customs[0].ID)
+}
+
 func TestLoadCustomLaunchers_SkipsInvalidTOML(t *testing.T) {
 	t.Parallel()
 
@@ -742,6 +814,21 @@ execute = "echo good"
 	customs := cfg.CustomLaunchers()
 	require.Len(t, customs, 1)
 	assert.Equal(t, "GoodLauncher", customs[0].ID)
+}
+
+func TestLauncherPreferenceReturnsOwnedCopy(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native", "RetroDECK"]
+`))
+
+	preference := cfg.LauncherPreference()
+	assert.Equal(t, []string{"Native", "RetroDECK"}, preference)
+	preference[0] = "changed"
+	assert.Equal(t, []string{"Native", "RetroDECK"}, cfg.LauncherPreference())
 }
 
 func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {

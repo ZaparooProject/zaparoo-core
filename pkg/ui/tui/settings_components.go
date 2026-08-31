@@ -20,12 +20,46 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
+
+const settingsTextEditModalPage = "settings_text_edit_modal"
+
+// SettingsTextEditOptions configures a text-value row and its edit modal.
+type SettingsTextEditOptions struct {
+	App            *tview.Application
+	AcceptanceFunc func(string, rune) bool
+	DisplayValue   func(string) string
+	Validate       func(string) error
+	Title          string
+	HelpText       string
+	Placeholder    string
+	EmptyDisplay   string
+	FieldWidth     int
+	MaskCharacter  rune
+}
+
+// settingsItem stores data for a single list item.
+type settingsItem struct {
+	toggleValue    *bool
+	toggleOnChange func(bool)
+	textValue      *string
+	textDisplay    func(string) string
+	valueDisplay   func() string
+	cycleIndex     *int
+	cycleOnChange  func(string, int)
+	itemType       string
+	label          string
+	description    string
+	cycleOptions   []string
+}
 
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
 	field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
@@ -115,6 +149,19 @@ func formatToggle(value bool, label string, selected bool) string {
 }
 
 // formatCycle renders a cycle value. When selected, label and value are highlighted.
+func formatTextValue(label, value string, selected bool) string {
+	t := CurrentTheme()
+	escapedValue := tview.Escape(value)
+	if selected {
+		return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:%s]",
+			t.AccentColorName, t.BgColorName,
+			t.HighlightFgName, t.HighlightBgName, label, escapedValue, t.BgColorName)
+	}
+	return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:-]",
+		t.AccentColorName, t.BgColorName,
+		t.TextColorName, t.BgColorName, label, escapedValue)
+}
+
 func formatCycle(label, currentValue string, selected bool) string {
 	t := CurrentTheme()
 	if selected {
@@ -140,6 +187,12 @@ func formatAction(label string, selected bool) string {
 		t.TextColorName, t.BgColorName, label)
 }
 
+// formatHeader renders a non-selectable section header line.
+func formatHeader(label string) string {
+	t := CurrentTheme()
+	return fmt.Sprintf("[%s:%s]── %s ──[-:-]", t.SecondaryColor, t.BgColorName, label)
+}
+
 // formatNavAction renders a navigation action with arrow indicator.
 func formatNavAction(label string, selected bool) string {
 	t := CurrentTheme()
@@ -158,22 +211,13 @@ func formatDesc(desc string) string {
 	return "  " + desc
 }
 
-// settingsItem stores data for a single list item.
-type settingsItem struct {
-	toggleValue  *bool
-	cycleIndex   *int
-	itemType     string
-	label        string
-	description  string
-	cycleOptions []string
-}
-
 // SettingsList wraps a tview.List with consistent navigation and manual highlight management.
 type SettingsList struct {
 	*tview.List
 	pages           *tview.Pages
 	rebuildPrevious func()
 	helpCallback    func(string)
+	onNavigateOut   func()
 	previousPage    string
 	items           []settingsItem
 	dynamicHelpMode bool
@@ -198,6 +242,13 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 	}
 
 	list.SetChangedFunc(func(index int, _, _ string, _ rune) {
+		// Programmatic selection (SetCurrentItem, mouse) can land on a
+		// header or spacer. Nested SetCurrentItem calls are overwritten by
+		// tview once the handler returns, so don't bounce here: the next
+		// Up/Down settles on a selectable item via moveSelection.
+		if !sl.isSelectable(index) {
+			return
+		}
 		sl.refreshAllItems(index)
 	})
 
@@ -212,13 +263,112 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 	})
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
+		switch event.Key() {
+		case tcell.KeyEscape:
 			sl.goBack()
 			return nil
+		case tcell.KeyUp:
+			sl.moveSelection(-1)
+			return nil
+		case tcell.KeyDown:
+			sl.moveSelection(1)
+			return nil
+		case tcell.KeyHome:
+			if target := sl.scanSelectable(0, 1); target != -1 {
+				sl.SetCurrentItem(target)
+			}
+			return nil
+		case tcell.KeyEnd:
+			if target := sl.scanSelectable(len(sl.items)-1, -1); target != -1 {
+				sl.SetCurrentItem(target)
+			}
+			return nil
+		case tcell.KeyLeft, tcell.KeyRight:
+			index := sl.GetCurrentItem()
+			if index < 0 || index >= len(sl.items) {
+				return event
+			}
+			item := &sl.items[index]
+			switch item.itemType {
+			case "toggle":
+				value := event.Key() == tcell.KeyRight
+				if *item.toggleValue != value {
+					*item.toggleValue = value
+					if item.toggleOnChange != nil {
+						item.toggleOnChange(value)
+					}
+				}
+			case "cycle":
+				delta := 1
+				if event.Key() == tcell.KeyLeft {
+					delta = -1
+				}
+				count := len(item.cycleOptions)
+				*item.cycleIndex = (*item.cycleIndex + delta + count) % count
+				if item.cycleOnChange != nil {
+					item.cycleOnChange(item.cycleOptions[*item.cycleIndex], *item.cycleIndex)
+				}
+			default:
+				return event
+			}
+			sl.refreshAllItems(index)
+			return nil
+		default:
+			return event
 		}
-		return event
 	})
 
+	return sl
+}
+
+// isSelectable reports whether the item at index can hold the selection.
+// Headers and spacers are display-only and are skipped by navigation.
+func (sl *SettingsList) isSelectable(index int) bool {
+	if index < 0 || index >= len(sl.items) {
+		return false
+	}
+	itemType := sl.items[index].itemType
+	return itemType != "header" && itemType != "spacer"
+}
+
+// scanSelectable returns the first selectable index walking from `from` in
+// direction `dir` (+1/-1), or -1 when none exists in that direction.
+func (sl *SettingsList) scanSelectable(from, dir int) int {
+	for i := from; i >= 0 && i < len(sl.items); i += dir {
+		if sl.isSelectable(i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// moveSelection moves the selection one selectable item in direction dir,
+// skipping headers and spacers. At the list edge it hands focus to the
+// navigate-out callback (usually the page's button bar), or wraps around.
+func (sl *SettingsList) moveSelection(dir int) {
+	next := sl.scanSelectable(sl.GetCurrentItem()+dir, dir)
+	if next == -1 {
+		if sl.onNavigateOut != nil {
+			sl.onNavigateOut()
+			return
+		}
+		if dir > 0 {
+			next = sl.scanSelectable(0, 1)
+		} else {
+			next = sl.scanSelectable(len(sl.items)-1, -1)
+		}
+	}
+	if next != -1 {
+		sl.SetCurrentItem(next)
+	}
+}
+
+// SetOnNavigateOut sets a callback fired when Up/Down navigation runs past
+// the first or last selectable item. Pages with a button bar should wire
+// this to FocusButtonBar so edge navigation stays consistent on lists that
+// begin or end with a section header.
+func (sl *SettingsList) SetOnNavigateOut(fn func()) *SettingsList {
+	sl.onNavigateOut = fn
 	return sl
 }
 
@@ -245,11 +395,19 @@ func (sl *SettingsList) SetDynamicHelpMode(enabled bool) *SettingsList {
 	return sl
 }
 
-// TriggerInitialHelp calls the help callback with the first item's description.
+// TriggerInitialHelp settles the initial selection on a selectable item and
+// calls the help callback with its description.
 // Call this after adding all items to set the initial help text.
 func (sl *SettingsList) TriggerInitialHelp() *SettingsList {
-	if sl.helpCallback != nil && len(sl.items) > 0 {
-		sl.helpCallback(sl.items[0].description)
+	if current := sl.GetCurrentItem(); !sl.isSelectable(current) {
+		if target := sl.scanSelectable(current+1, 1); target != -1 {
+			sl.SetCurrentItem(target)
+		}
+	}
+	if sl.helpCallback != nil {
+		if idx := sl.GetCurrentItem(); idx >= 0 && idx < len(sl.items) {
+			sl.helpCallback(sl.items[idx].description)
+		}
 	}
 	return sl
 }
@@ -281,7 +439,8 @@ func (sl *SettingsList) goBack() {
 
 // refreshAllItems updates all items to reflect current selection state.
 func (sl *SettingsList) refreshAllItems(selectedIndex int) {
-	for i, item := range sl.items {
+	for i := range sl.items {
+		item := &sl.items[i]
 		// Only show highlight when the list has focus
 		selected := sl.hasFocus && i == selectedIndex
 		desc := formatDesc(item.description)
@@ -292,10 +451,18 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 			mainText = formatToggle(*item.toggleValue, item.label, selected)
 		case "cycle":
 			mainText = formatCycle(item.label, item.cycleOptions[*item.cycleIndex], selected)
+		case "text":
+			mainText = formatTextValue(item.label, item.textDisplay(*item.textValue), selected)
+		case "value":
+			mainText = formatTextValue(item.label, item.valueDisplay(), selected)
 		case "action":
 			mainText = formatAction(item.label, selected)
 		case "nav":
 			mainText = formatNavAction(item.label, selected)
+		case "header":
+			mainText = formatHeader(item.label)
+		case "spacer":
+			mainText = ""
 		}
 
 		sl.SetItemText(i, mainText, desc)
@@ -318,10 +485,11 @@ func (sl *SettingsList) AddToggle(
 	selected := index == 0 // First item is selected by default
 
 	sl.items = append(sl.items, settingsItem{
-		itemType:    "toggle",
-		label:       label,
-		description: description,
-		toggleValue: value,
+		itemType:       "toggle",
+		label:          label,
+		description:    description,
+		toggleValue:    value,
+		toggleOnChange: onChange,
 	})
 
 	sl.AddItem(formatToggle(*value, label, selected), formatDesc(description), 0, func() {
@@ -345,20 +513,170 @@ func (sl *SettingsList) AddCycle(
 	selected := index == 0
 
 	sl.items = append(sl.items, settingsItem{
-		itemType:     "cycle",
-		label:        label,
-		description:  description,
-		cycleOptions: options,
-		cycleIndex:   currentIndex,
+		itemType:      "cycle",
+		label:         label,
+		description:   description,
+		cycleOptions:  options,
+		cycleIndex:    currentIndex,
+		cycleOnChange: onChange,
 	})
 
 	sl.AddItem(formatCycle(label, options[*currentIndex], selected), formatDesc(description), 0, func() {
 		*currentIndex = (*currentIndex + 1) % len(options)
-		onChange(options[*currentIndex], *currentIndex)
+		if onChange != nil {
+			onChange(options[*currentIndex], *currentIndex)
+		}
 		sl.refreshAllItems(sl.GetCurrentItem())
 	})
 
 	return sl
+}
+
+// AddValueAction adds a read-only value row that opens a contextual action.
+// The display callback is evaluated on every refresh so staged state is shown.
+func (sl *SettingsList) AddValueAction(
+	label string,
+	description string,
+	display func() string,
+	action func(),
+) *SettingsList {
+	index := sl.GetItemCount()
+	selected := index == 0
+	sl.items = append(sl.items, settingsItem{
+		itemType:     "value",
+		label:        label,
+		description:  description,
+		valueDisplay: display,
+	})
+	sl.AddItem(formatTextValue(label, display(), selected), formatDesc(description), 0, action)
+	return sl
+}
+
+// AddTextEdit adds a text-value row that opens a focused edit modal.
+func (sl *SettingsList) AddTextEdit(
+	label string,
+	description string,
+	value *string,
+	options *SettingsTextEditOptions,
+	onChange func(string),
+) *SettingsList {
+	if options == nil || options.App == nil {
+		panic("SettingsTextEditOptions.App is required")
+	}
+	if options.Title == "" {
+		options.Title = "Edit " + label
+	}
+	if options.FieldWidth <= 0 {
+		options.FieldWidth = 30
+	}
+	display := options.DisplayValue
+	if display == nil {
+		display = func(text string) string {
+			if text == "" && options.EmptyDisplay != "" {
+				return options.EmptyDisplay
+			}
+			return text
+		}
+	}
+
+	index := sl.GetItemCount()
+	selected := index == 0
+	item := settingsItem{
+		itemType:    "text",
+		label:       label,
+		description: description,
+		textValue:   value,
+		textDisplay: display,
+	}
+	sl.items = append(sl.items, item)
+	sl.AddItem(formatTextValue(label, display(*value), selected), formatDesc(description), 0, func() {
+		sl.showTextEditModal(label, value, options, onChange)
+	})
+	return sl
+}
+
+func (sl *SettingsList) showTextEditModal(
+	label string,
+	value *string,
+	options *SettingsTextEditOptions,
+	onChange func(string),
+) {
+	input := tview.NewInputField().
+		SetText(*value).
+		SetFieldWidth(options.FieldWidth).
+		SetPlaceholder(options.Placeholder)
+	if options.MaskCharacter != 0 {
+		input.SetMaskCharacter(options.MaskCharacter)
+	}
+	if options.AcceptanceFunc != nil {
+		input.SetAcceptanceFunc(options.AcceptanceFunc)
+	}
+	SetInputLabel(input, label)
+	setupInputFieldFocus(input)
+
+	cleanup := func() {
+		sl.pages.HidePage(settingsTextEditModalPage)
+		sl.pages.RemovePage(settingsTextEditModalPage)
+	}
+	commit := func() {
+		text := input.GetText()
+		if options.Validate != nil {
+			if err := options.Validate(text); err != nil {
+				ShowErrorModal(sl.pages, options.App, err.Error(), func() {
+					options.App.SetFocus(input)
+				})
+				return
+			}
+		}
+		*value = text
+		if onChange != nil {
+			onChange(text)
+		}
+		cleanup()
+		sl.refreshAllItems(sl.GetCurrentItem())
+		options.App.SetFocus(sl.List)
+	}
+	cancel := func() {
+		cleanup()
+		options.App.SetFocus(sl.List)
+	}
+
+	input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			if config.GetTUIConfig().OnScreenKeyboard {
+				ShowOSKModal(sl.pages, options.App, input.GetText(), func(text string) {
+					input.SetText(text)
+					commit()
+				}, func() {
+					options.App.SetFocus(input)
+				})
+				return nil
+			}
+			commit()
+			return nil
+		case tcell.KeyEscape:
+			cancel()
+			return nil
+		default:
+			return event
+		}
+	})
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(input, 1, 0, true)
+	modalWidth := max(options.FieldWidth+8, 32)
+	modalHeight := 4
+	if options.HelpText != "" {
+		content.AddItem(tview.NewTextView().SetWordWrap(true).SetText(options.HelpText), 2, 0, false)
+		modalWidth = max(modalWidth, 56)
+		modalHeight += 2
+	}
+	content.AddItem(tview.NewTextView().SetText("Enter to save · Esc to cancel"), 1, 0, false)
+	content.SetBorder(true)
+	SetBoxTitle(content.Box, options.Title)
+	sl.pages.AddPage(settingsTextEditModalPage, CenterWidget(modalWidth, modalHeight, content), true, true)
+	options.App.SetFocus(input)
 }
 
 // AddAction adds a simple action item (like a submenu link or button).
@@ -397,6 +715,18 @@ func (sl *SettingsList) AddNavAction(
 	})
 
 	sl.AddItem(formatNavAction(label, selected), formatDesc(description), 0, action)
+	return sl
+}
+
+// AddHeader adds a non-selectable section header. A blank spacer line is
+// inserted first unless the header opens the list. Navigation skips both.
+func (sl *SettingsList) AddHeader(label string) *SettingsList {
+	if sl.GetItemCount() > 0 {
+		sl.items = append(sl.items, settingsItem{itemType: "spacer"})
+		sl.AddItem("", "", 0, nil)
+	}
+	sl.items = append(sl.items, settingsItem{itemType: "header", label: label})
+	sl.AddItem(formatHeader(label), "", 0, nil)
 	return sl
 }
 
@@ -453,6 +783,109 @@ func (sl *SettingsList) SetupCycleKeys(
 	})
 
 	return sl
+}
+
+// settingsLoadDelay is how long a page fetch may run before the loading
+// frame appears. Fast fetches render directly so the loader never flashes;
+// only genuinely slow fetches (e.g. cloud calls) show it.
+const settingsLoadDelay = 250 * time.Millisecond
+
+// loadSettingsPage fetches page data in the background, then renders the
+// page on the UI thread. The current page stays visible (with input held)
+// during a short grace period; a loading frame appears only when the fetch
+// outlives it. Escape while loading cancels the fetch and navigates back.
+func loadSettingsPage[T any](
+	pages *tview.Pages,
+	app *tview.Application,
+	pageName string,
+	titles []string,
+	loadingText string,
+	errorText string,
+	newCtx func() (context.Context, context.CancelFunc),
+	goBack func(),
+	fetch func(ctx context.Context) (T, error),
+	render func(T),
+) {
+	ctx, cancel := newCtx()
+	// State below is set and read only on the UI thread (the caller's event
+	// handler, the loader's Escape handler, and QueueUpdateDraw callbacks).
+	cancelled := false
+	settled := false
+
+	// Hold input while the previous page is still on screen, so a stray
+	// keypress cannot re-trigger it mid-load. Released as soon as the
+	// loader (which handles its own input) or the real page appears.
+	previousCapture := app.GetInputCapture()
+	inputHeld := true
+	releaseInput := func() {
+		if inputHeld {
+			inputHeld = false
+			app.SetInputCapture(previousCapture)
+		}
+	}
+	app.SetInputCapture(func(_ *tcell.EventKey) *tcell.EventKey { return nil })
+
+	showLoader := func() {
+		frame := NewPageFrame(app).SetTitle(titles...)
+		frame.SetOnEscape(func() {
+			cancelled = true
+			cancel()
+			goBack()
+		})
+		loading := tview.NewTextView().
+			SetTextAlign(tview.AlignCenter).
+			SetText(loadingText)
+		content := tview.NewFlex().SetDirection(tview.FlexRow)
+		content.AddItem(nil, 0, 1, false)
+		content.AddItem(loading, 1, 0, false)
+		content.AddItem(nil, 0, 1, false)
+		frame.SetContent(content)
+		pages.AddAndSwitchToPage(pageName, frame, true)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		data, err := fetch(ctx)
+		cancel()
+		close(done)
+		app.QueueUpdateDraw(func() {
+			settled = true
+			releaseInput()
+			if cancelled {
+				return
+			}
+			if err != nil {
+				log.Warn().Err(err).Str("page", pageName).Msg("error loading settings page data")
+				ShowErrorModal(pages, app, errorText, goBack)
+				return
+			}
+			render(data)
+		})
+	}()
+
+	go func() {
+		timer := time.NewTimer(settingsLoadDelay)
+		defer timer.Stop()
+		select {
+		case <-done:
+			// Fetch finished within the grace period: never show the loader.
+		case <-timer.C:
+			app.QueueUpdateDraw(func() {
+				select {
+				case <-done:
+					// Fetch just finished; its render is queued right
+					// behind this update, so don't flash the loader.
+					return
+				default:
+				}
+				if settled {
+					return
+				}
+				releaseInput()
+				showLoader()
+			})
+		}
+	}()
 }
 
 // ButtonBar creates a horizontal bar of buttons with arrow key navigation.

@@ -1,0 +1,246 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package config
+
+import (
+	"fmt"
+	"net/netip"
+	"net/url"
+	"strings"
+)
+
+const (
+	// DefaultOnlineBaseURL is the official Zaparoo Online API host. Every
+	// per-feature base URL (backup, playtime, remote control) defaults to
+	// this same value; it exists as one shared constant so a check for
+	// "is this feature pointed at a custom server" has one place to live.
+	DefaultOnlineBaseURL        = "https://api.zaparoo.com"
+	DefaultBackupRemoteBaseURL  = DefaultOnlineBaseURL
+	DefaultBackupRemoteSchedule = "daily"
+)
+
+// OfficialAuthHosts are the hosts of the official hosted API
+// services. settings.auth.status only answers link probes for these hosts
+// (over HTTPS) and the configured backup server; other URLs report
+// linked=false without revealing whether a credential exists. The claim
+// flow's trusted-domain extension may store credentials under further
+// domains — those are found at unlink time by linked_via provenance tags,
+// never by this list.
+var OfficialAuthHosts = []string{
+	"api.zaparoo.com",
+	"edge.zaparoo.com",
+	"zpr.au",
+}
+
+// Backup scopes select what a backup job collects.
+const (
+	// BackupScopePlatform includes platform files (settings, inputs,
+	// saves, savestates) alongside Zaparoo's own data.
+	BackupScopePlatform = "platform"
+	// BackupScopeZaparoo restricts backups to Zaparoo's own data:
+	// user.db, Core config, frontend/TUI config, launchers, mappings.
+	BackupScopeZaparoo = "zaparoo"
+)
+
+type Backup struct {
+	LocalDir string       `toml:"local_dir,omitempty"`
+	Scope    string       `toml:"scope,omitempty"`
+	Remote   BackupRemote `toml:"remote,omitempty"`
+}
+
+type BackupRemote struct {
+	BaseURL  string `toml:"base_url,omitempty"`
+	Schedule string `toml:"schedule,omitempty"`
+	Enabled  bool   `toml:"enabled,omitempty"`
+}
+
+func (c *Instance) BackupLocalDir() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Backup.LocalDir
+}
+
+func (c *Instance) SetBackupLocalDir(localDir string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Backup.LocalDir = localDir
+}
+
+// BackupScope returns the configured backup scope. Only an explicit
+// "zaparoo" value narrows the scope; anything else (including unset)
+// means the full platform scope.
+func (c *Instance) BackupScope() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if strings.EqualFold(c.vals.Backup.Scope, BackupScopeZaparoo) {
+		return BackupScopeZaparoo
+	}
+	return BackupScopePlatform
+}
+
+func (c *Instance) SetBackupScope(scope string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Backup.Scope = scope
+}
+
+func (c *Instance) BackupRemoteEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Backup.Remote.Enabled
+}
+
+func (c *Instance) SetBackupRemoteEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Backup.Remote.Enabled = enabled
+}
+
+func (c *Instance) BackupRemoteSchedule() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Backup.Remote.Schedule == "" {
+		return DefaultBackupRemoteSchedule
+	}
+	return c.vals.Backup.Remote.Schedule
+}
+
+func (c *Instance) SetBackupRemoteSchedule(schedule string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Backup.Remote.Schedule = schedule
+}
+
+func (c *Instance) BackupRemoteBaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Backup.Remote.BaseURL == "" {
+		return DefaultBackupRemoteBaseURL
+	}
+	return c.vals.Backup.Remote.BaseURL
+}
+
+func (c *Instance) SetBackupRemoteBaseURL(rawURL string) error {
+	if err := ValidateBackupRemoteBaseURL(rawURL); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Backup.Remote.BaseURL = normalizeRemoteBaseURL(rawURL)
+	return nil
+}
+
+func ValidateBackupRemoteBaseURL(rawURL string) error {
+	return validateRemoteBaseURL(rawURL, "backup remote")
+}
+
+func validateRemoteBaseURL(rawURL, setting string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid %s base URL: %w", setting, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s base URL must use http or https", setting)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf(
+			"%s base URL must include only scheme, host, optional port, and optional path", setting,
+		)
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+
+	if IsAllowedHTTPRemoteHost(parsed.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("http %s base URL must use localhost or a private IP literal", setting)
+}
+
+func normalizeRemoteBaseURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	return parsed.String()
+}
+
+// IsAllowedHTTPRemoteHost reports whether host may use plain HTTP for a
+// remote service. Hostnames other than localhost are rejected to avoid DNS
+// changes bypassing the local-network boundary.
+func IsAllowedHTTPRemoteHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && isAllowedHTTPRemoteAddr(addr)
+}
+
+func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {
+	if addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return true
+	}
+	if addr.Is4() {
+		privateBlocks := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"}
+		for _, block := range privateBlocks {
+			prefix := netip.MustParsePrefix(block)
+			if prefix.Contains(addr) {
+				return true
+			}
+		}
+		return false
+	}
+	if addr.Is6() {
+		for _, block := range []string{"fc00::/7", "fe80::/10"} {
+			prefix := netip.MustParsePrefix(block)
+			if prefix.Contains(addr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsDefaultOnlineBaseURL reports whether raw is empty or matches the
+// official Zaparoo Online host: the shared "is this a custom server"
+// check used by every configurable Online endpoint (backup, playtime,
+// remote control).
+func IsDefaultOnlineBaseURL(raw string) bool {
+	return raw == "" || strings.EqualFold(strings.TrimRight(raw, "/"), DefaultOnlineBaseURL)
+}
+
+func BackupAuthLookupURL(rawURL string) string {
+	return RemoteAuthLookupURL(rawURL)
+}
+
+func RemoteAuthLookupURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	host := parsed.Host
+	if host == "" {
+		return rawURL
+	}
+	return parsed.Scheme + "://" + host
+}

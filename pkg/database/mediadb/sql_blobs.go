@@ -49,14 +49,14 @@ func mediaBlobHash(contentType string, data []byte) string {
 // then returns the DBID of the canonical row. Identical content always resolves
 // to the same DBID.
 func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 	// TODO: If blob hashing shows up in scraper benchmarks, evaluate faster
 	// hashes with collision handling instead of relying on UNIQUE(Hash) alone.
 	hash := mediaBlobHash(contentType, data)
 
-	_, err := db.sql.ExecContext(ctx, `
+	_, err := db.sql.Load().ExecContext(ctx, `
 		INSERT OR IGNORE INTO MediaBlobs (Hash, ContentType, Data)
 		VALUES (?, ?, ?)
 	`, hash, contentType, data)
@@ -65,7 +65,7 @@ func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data
 	}
 
 	var dbid int64
-	err = db.sql.QueryRowContext(ctx,
+	err = db.sql.Load().QueryRowContext(ctx,
 		`SELECT DBID FROM MediaBlobs WHERE Hash = ?`, hash,
 	).Scan(&dbid)
 	if err != nil {
@@ -77,11 +77,11 @@ func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data
 // GetMediaBlob returns the MediaBlob row for the given DBID,
 // or nil, nil when not found.
 func (db *MediaDB) GetMediaBlob(ctx context.Context, blobDBID int64) (*database.MediaBlob, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 	var b database.MediaBlob
-	err := db.sql.QueryRowContext(ctx,
+	err := db.sql.Load().QueryRowContext(ctx,
 		`SELECT DBID, Hash, ContentType, Data FROM MediaBlobs WHERE DBID = ?`,
 		blobDBID,
 	).Scan(&b.DBID, &b.Hash, &b.ContentType, &b.Data)
@@ -98,11 +98,11 @@ func (db *MediaDB) GetMediaBlob(ctx context.Context, blobDBID int64) (*database.
 func (db *MediaDB) GetMediaBlobDataCapped(
 	ctx context.Context, blobDBID int64, maxBytes int64,
 ) (data []byte, contentType string, err error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, "", ErrNullSQL
 	}
 	var blobSize int64
-	err = db.sql.QueryRowContext(ctx, `
+	err = db.sql.Load().QueryRowContext(ctx, `
 		SELECT CASE WHEN length(Data) <= ? THEN Data ELSE NULL END, ContentType, length(Data)
 		FROM MediaBlobs
 		WHERE DBID = ?
@@ -122,10 +122,10 @@ func (db *MediaDB) GetMediaBlobDataCapped(
 // PruneOrphanedBlobs deletes MediaBlobs rows not referenced by either
 // MediaTitleProperties or MediaProperties. Returns the count of rows deleted.
 func (db *MediaDB) PruneOrphanedBlobs(ctx context.Context) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	res, err := db.sql.ExecContext(ctx, `
+	res, err := db.sql.Load().ExecContext(ctx, `
 		DELETE FROM MediaBlobs
 		WHERE DBID NOT IN (
 			SELECT BlobDBID FROM MediaTitleProperties WHERE BlobDBID IS NOT NULL

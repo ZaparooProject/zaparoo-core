@@ -54,16 +54,50 @@ const configHeader = `# Zaparoo Core configuration file.
 # preserved on next save, but comments will be lost.
 `
 
+// PreserveRestoreOverrides forces destination-owned service values into
+// restored config data: the device identity and the encryption requirement.
+// Everything else in the restored config wins.
+func PreserveRestoreOverrides(data []byte, deviceID string, encryption bool) ([]byte, error) {
+	values := make(map[string]any)
+	if err := toml.Unmarshal(data, &values); err != nil {
+		return nil, fmt.Errorf("failed to parse restored config: %w", err)
+	}
+	service, ok := values["service"].(map[string]any)
+	if !ok {
+		service = make(map[string]any)
+		values["service"] = service
+	}
+	// An empty destination ID is left unset so Save generates a fresh
+	// UUID, exactly as it would for any config without one.
+	if deviceID == "" {
+		delete(service, "device_id")
+	} else {
+		service["device_id"] = deviceID
+	}
+	// The encryption requirement belongs to the destination's paired
+	// clients (which restore preserves), so the backup's value must not
+	// silently reopen or lock down the device. False remains explicit because
+	// some platforms default to true.
+	service["encryption"] = encryption
+	encoded, err := toml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply restore overrides to config: %w", err)
+	}
+	return append([]byte(configHeader), encoded...), nil
+}
+
 type Values struct {
 	Groovy         Groovy    `toml:"groovy,omitempty"`
 	Input          Input     `toml:"input,omitempty"`
-	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
-	UpdateChannel  *string   `toml:"update_channel,omitempty"`
+	Updates        Updates   `toml:"updates,omitempty"`
 	Audio          Audio     `toml:"audio"`
+	Backup         Backup    `toml:"backup,omitempty"`
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Profiles       Profiles  `toml:"profiles,omitempty"`
 	Media          Media     `toml:"media,omitempty"`
+	Scraper        Scraper   `toml:"scraper,omitempty"`
 	ZapScript      ZapScript `toml:"zapscript,omitempty"`
 	Mappings       Mappings  `toml:"mappings,omitempty"`
 	Systems        Systems   `toml:"systems,omitempty"`
@@ -71,6 +105,14 @@ type Values struct {
 	ConfigSchema   int       `toml:"config_schema"`
 	DebugLogging   bool      `toml:"debug_logging"`
 	ErrorReporting bool      `toml:"error_reporting"`
+}
+
+// Updates controls how the device handles new releases. Every field is a
+// pointer so an unset key keeps its default rather than reading as false.
+type Updates struct {
+	Channel *string `toml:"channel,omitempty"`
+	Check   *bool   `toml:"check,omitempty"`
+	Install *bool   `toml:"install,omitempty"`
 }
 
 type Audio struct {
@@ -113,6 +155,11 @@ var BaseDefaults = Values{
 	Audio: Audio{
 		ScanFeedback: true,
 	},
+	Backup: Backup{
+		Remote: BackupRemote{
+			Schedule: DefaultBackupRemoteSchedule,
+		},
+	},
 	Readers: Readers{
 		AutoDetect: true,
 		Scan: ReadersScan{
@@ -122,13 +169,16 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	fs       afero.Fs
-	appPath  string
-	cfgPath  string
-	authPath string
-	vals     Values
-	defaults Values
-	mu       syncutil.RWMutex
+	fs                      afero.Fs
+	appPath                 string
+	cfgPath                 string
+	authPath                string
+	customLaunchersExternal []LaunchersCustom
+	mappingsExternal        []MappingsEntry
+	vals                    Values
+	defaults                Values
+	updateMu                syncutil.Mutex
+	mu                      syncutil.RWMutex
 }
 
 // getFs returns the instance's filesystem, defaulting to the OS filesystem
@@ -139,6 +189,12 @@ func (c *Instance) getFs() afero.Fs {
 		return c.fs
 	}
 	return afero.NewOsFs()
+}
+
+// AcquireUpdateLock serializes one config load-modify-save transaction.
+func (c *Instance) AcquireUpdateLock() func() {
+	c.updateMu.Lock()
+	return c.updateMu.Unlock
 }
 
 var (
@@ -189,11 +245,12 @@ func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance,
 
 	cfg := Instance{
 		fs:       fs,
+		updateMu: syncutil.Mutex{},
 		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,
-		vals:     defaults,
-		defaults: defaults,
+		vals:     cloneEncryptionValue(defaults),
+		defaults: cloneEncryptionValue(defaults),
 	}
 
 	if _, err := fs.Stat(cfgPath); os.IsNotExist(err) {
@@ -244,15 +301,13 @@ func (c *Instance) Load() error {
 	// Save old vals so we can restore on error (Load is called at runtime for
 	// config reloads — a bad file must not destroy the running config).
 	oldVals := c.vals
-	c.vals = c.defaults
+	c.vals = cloneEncryptionValue(c.defaults)
 
-	// Save mappings and custom launchers — they're normally loaded from
-	// separate files via LoadMappings/LoadCustomLaunchers, not config.toml.
-	// Save() strips them before marshal, so after a round-trip they'd be
-	// empty. Restore the old values only when the TOML didn't provide new
-	// ones (a user might hand-edit config.toml to include them).
+	// Save mappings — they're normally loaded from separate files via
+	// LoadMappings, not config.toml. Save() strips them before marshal, so
+	// after a round-trip they'd be empty. Restore old values only when TOML
+	// did not provide new ones.
 	savedMappings := oldVals.Mappings
-	savedCustomLaunchers := oldVals.Launchers.Custom
 
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
@@ -261,9 +316,6 @@ func (c *Instance) Load() error {
 
 	if len(c.vals.Mappings.Entry) == 0 {
 		c.vals.Mappings = savedMappings
-	}
-	if len(c.vals.Launchers.Custom) == 0 {
-		c.vals.Launchers.Custom = savedCustomLaunchers
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -303,6 +355,53 @@ func (c *Instance) applyTOML(data string) error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Older releases persisted runtime fallbacks as though they were user
+	// overrides. Treat only those exact legacy values as unset so future saves omit them.
+	if c.vals.Backup.Remote.BaseURL == DefaultBackupRemoteBaseURL {
+		c.vals.Backup.Remote.BaseURL = ""
+	}
+	if c.vals.Playtime.BaseURL == DefaultPlaytimeBaseURL {
+		c.vals.Playtime.BaseURL = ""
+	}
+	if c.vals.Service.RemoteControl.BaseURL == DefaultRemoteControlBaseURL {
+		c.vals.Service.RemoteControl.BaseURL = ""
+	}
+
+	// A base URL only ever reaches config.toml by hand-editing it, since none
+	// of the Set*BaseURL validators have a production caller, so validate
+	// here instead. A bad value falls back to the default rather than
+	// failing the whole config load.
+	if c.vals.Backup.Remote.BaseURL != "" {
+		if err := ValidateBackupRemoteBaseURL(c.vals.Backup.Remote.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Backup.Remote.BaseURL).
+				Msg("invalid backup remote base URL in config, falling back to default")
+			c.vals.Backup.Remote.BaseURL = ""
+		}
+	}
+	if c.vals.Playtime.BaseURL != "" {
+		if err := ValidatePlaytimeBaseURL(c.vals.Playtime.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Playtime.BaseURL).
+				Msg("invalid playtime base URL in config, falling back to default")
+			c.vals.Playtime.BaseURL = ""
+		}
+	}
+	if c.vals.Service.RemoteControl.BaseURL != "" {
+		if err := ValidateRemoteControlBaseURL(c.vals.Service.RemoteControl.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Service.RemoteControl.BaseURL).
+				Msg("invalid remote control base URL in config, falling back to default")
+			c.vals.Service.RemoteControl.BaseURL = ""
+		}
+	}
+
+	c.vals.Launchers.Custom = validateCustomLaunchers(
+		c.vals.Launchers.Custom,
+		nil,
+		"config.toml",
+	)
+	if err := validateLauncherDefaults(c.vals.Launchers.Default); err != nil {
+		return fmt.Errorf("invalid launcher defaults: %w", err)
+	}
+
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))
 	for i, allowFile := range c.vals.Launchers.AllowFile {
@@ -317,7 +416,7 @@ func (c *Instance) applyTOML(data string) error {
 
 		re, err := regexp.Compile(anchorPattern(allowFile))
 		if err != nil {
-			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
+			log.Warn().Err(err).Msgf("invalid allow file regex: %s", allowFile)
 			continue
 		}
 		c.vals.Launchers.allowFileRe[i] = re
@@ -328,7 +427,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowExecute := range c.vals.ZapScript.AllowExecute {
 		re, err := regexp.Compile(anchorPattern(allowExecute))
 		if err != nil {
-			log.Warn().Msgf("invalid allow execute regex: %s", allowExecute)
+			log.Warn().Err(err).Msgf("invalid allow execute regex: %s", allowExecute)
 			continue
 		}
 		c.vals.ZapScript.allowExecuteRe[i] = re
@@ -339,7 +438,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowHTTP := range c.vals.ZapScript.AllowHTTP {
 		re, err := regexp.Compile(anchorPattern(allowHTTP))
 		if err != nil {
-			log.Warn().Msgf("invalid allow HTTP regex: %s", allowHTTP)
+			log.Warn().Err(err).Msgf("invalid allow HTTP regex: %s", allowHTTP)
 			continue
 		}
 		c.vals.ZapScript.allowHTTPRe[i] = re
@@ -350,7 +449,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowRun := range c.vals.Service.AllowRun {
 		re, err := regexp.Compile(anchorPattern(allowRun))
 		if err != nil {
-			log.Warn().Msgf("invalid allow run regex: %s", allowRun)
+			log.Warn().Err(err).Msgf("invalid allow run regex: %s", allowRun)
 			continue
 		}
 		c.vals.Service.allowRunRe[i] = re
@@ -408,6 +507,9 @@ func (c *Instance) Save() error {
 func (c *Instance) reloadAuth() {
 	fs := c.getFs()
 	if _, err := fs.Stat(c.authPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Error().Err(err).Msg("failed to stat auth file")
+		}
 		return
 	}
 
@@ -415,6 +517,10 @@ func (c *Instance) reloadAuth() {
 	authData, err := afero.ReadFile(fs, c.authPath)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to read auth file")
+		return
+	}
+	if validateErr := validateAuthFileData(authData); validateErr != nil {
+		log.Error().Err(validateErr).Msg("auth file is invalid; keeping existing credentials")
 		return
 	}
 
@@ -436,12 +542,23 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 
 	fs := c.getFs()
 
-	// Read existing auth file once, parse both credentials and API keys
+	// Read existing auth file once, parse both credentials and API keys.
+	// Never overwrite unreadable or malformed credentials as though the file
+	// were empty.
 	existing := make(map[string]CredentialEntry)
 	var existingKeys []string
-	if data, err := afero.ReadFile(fs, c.authPath); err == nil {
+	data, readErr := afero.ReadFile(fs, c.authPath)
+	switch {
+	case readErr == nil:
+		if validateErr := validateAuthFileData(data); validateErr != nil {
+			return validateErr
+		}
 		existing = LoadAuthFromData(data)
 		existingKeys = LoadAPIKeysFromData(data)
+	case errors.Is(readErr, os.ErrNotExist):
+		// First credential creates the file.
+	default:
+		return fmt.Errorf("failed to read auth file: %w", readErr)
 	}
 
 	// Upsert the entry
@@ -454,6 +571,56 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 	}
 
 	if err := afero.WriteFile(fs, c.authPath, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write auth file: %w", err)
+	}
+
+	c.reloadAuth()
+	return nil
+}
+
+// DeleteAuthEntries removes the credential entries for the given domains from
+// auth.toml, matching stored keys case-insensitively. API keys and entries
+// for other domains are preserved. Missing domains are a no-op; the in-memory
+// auth config is reloaded when anything was removed.
+func (c *Instance) DeleteAuthEntries(domains []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fs := c.getFs()
+
+	data, err := afero.ReadFile(fs, c.authPath)
+	if errors.Is(err, os.ErrNotExist) {
+		// No auth file means there is nothing to delete.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read auth file: %w", err)
+	}
+	if validateErr := validateAuthFileData(data); validateErr != nil {
+		return validateErr
+	}
+	existing := LoadAuthFromData(data)
+	existingKeys := LoadAPIKeysFromData(data)
+
+	removed := false
+	for stored := range existing {
+		for _, domain := range domains {
+			if strings.EqualFold(stored, domain) {
+				delete(existing, stored)
+				removed = true
+				break
+			}
+		}
+	}
+	if !removed {
+		return nil
+	}
+
+	out, err := marshalAuthFile(existing, existingKeys)
+	if err != nil {
+		return err
+	}
+	if err := afero.WriteFile(fs, c.authPath, out, 0o600); err != nil {
 		return fmt.Errorf("failed to write auth file: %w", err)
 	}
 
@@ -845,24 +1012,42 @@ func (c *Instance) SetErrorReporting(enabled bool) {
 	c.vals.ErrorReporting = enabled
 }
 
-// AutoUpdate returns whether automatic update checking is enabled.
-// The defaultEnabled parameter allows platforms to specify their own default
-// (e.g. package-managed installs default to false).
-// An explicit user setting always takes precedence.
-func (c *Instance) AutoUpdate(defaultEnabled bool) bool {
+// UpdateCheck returns whether the device looks for new releases.
+//
+// It is on unless it has been turned off, on every platform. A check reads a
+// signed metadata file and sends nothing that identifies the device, so there
+// is no reason for a package-managed install to skip it: knowing a newer
+// release exists is useful even when the package manager is the thing that
+// installs it.
+func (c *Instance) UpdateCheck() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.AutoUpdate == nil {
-		return defaultEnabled
-	}
-	return *c.vals.AutoUpdate
+	return c.vals.Updates.Check == nil || *c.vals.Updates.Check
 }
 
-// SetAutoUpdate sets whether automatic update checking is enabled.
-func (c *Instance) SetAutoUpdate(enabled bool) {
+// SetUpdateCheck sets whether the device looks for new releases.
+func (c *Instance) SetUpdateCheck(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.AutoUpdate = &enabled
+	c.vals.Updates.Check = &enabled
+}
+
+// UpdateInstall returns whether the device may download and install updates on
+// its own. It is off unless it has been turned on, and it is off whenever
+// checking is off: a device that is not allowed to look for updates cannot be
+// installing them.
+func (c *Instance) UpdateInstall() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	checking := c.vals.Updates.Check == nil || *c.vals.Updates.Check
+	return checking && c.vals.Updates.Install != nil && *c.vals.Updates.Install
+}
+
+// SetUpdateInstall sets whether the device may install updates on its own.
+func (c *Instance) SetUpdateInstall(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Updates.Install = &enabled
 }
 
 // UpdateChannel returns the configured update channel.
@@ -870,15 +1055,15 @@ func (c *Instance) SetAutoUpdate(enabled bool) {
 func (c *Instance) UpdateChannel() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.UpdateChannel == nil {
+	if c.vals.Updates.Channel == nil {
 		return UpdateChannelStable
 	}
-	return *c.vals.UpdateChannel
+	return *c.vals.Updates.Channel
 }
 
 // SetUpdateChannel sets the update channel. Valid values are "stable" and "beta".
 func (c *Instance) SetUpdateChannel(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.UpdateChannel = &channel
+	c.vals.Updates.Channel = &channel
 }

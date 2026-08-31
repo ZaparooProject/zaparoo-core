@@ -92,7 +92,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "AmigaCD32",
 	},
 	"amigacdtv": {
-		SystemID:   systemdefs.SystemAmiga,
+		SystemID:   systemdefs.SystemCommodoreCDTV,
 		Extensions: []string{".bin", ".cue", ".iso", ".chd", ".m3u"},
 		LauncherID: "AmigaCDTV",
 	},
@@ -114,7 +114,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "Apple2",
 	},
 	"apple2gs": {
-		SystemID: systemdefs.SystemAppleII,
+		SystemID: systemdefs.SystemAppleIIGS,
 		Extensions: []string{
 			".nib", ".do", ".po", ".dsk", ".mfi", ".dfi", ".rti", ".edd", ".woz", ".wav", ".zip", ".7z",
 		},
@@ -301,7 +301,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "CorsixTH",
 	},
 	"cplus4": {
-		SystemID:   systemdefs.SystemC16,
+		SystemID:   systemdefs.SystemCommodorePlus4,
 		Extensions: []string{".d64", ".prg", ".tap", ".m3u", ".zip", ".7z"},
 		LauncherID: "CPlus4",
 	},
@@ -537,7 +537,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "GW",
 	},
 	"gx4000": {
-		SystemID:   systemdefs.SystemAmstrad,
+		SystemID:   systemdefs.SystemAmstradGX4000,
 		Extensions: []string{".dsk", ".m3u", ".cpr", ".zip", ".7z"},
 		LauncherID: "GX4000",
 	},
@@ -883,7 +883,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "PET",
 	},
 	"pico": {
-		SystemID:   systemdefs.SystemGenesis,
+		SystemID:   systemdefs.SystemSegaPico,
 		Extensions: []string{".bin", ".md", ".zip", ".7z"},
 		LauncherID: "Pico",
 	},
@@ -1013,7 +1013,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "ScummVM",
 	},
 	"scv": {
-		SystemID:   systemdefs.SystemSG1000,
+		SystemID:   systemdefs.SystemSuperCassetteVision,
 		Extensions: []string{".bin", ".zip", ".0"},
 		LauncherID: "SCV",
 	},
@@ -1190,7 +1190,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "UQM",
 	},
 	"uzebox": {
-		SystemID:   systemdefs.SystemPC,
+		SystemID:   systemdefs.SystemUzebox,
 		Extensions: []string{".uze"},
 		LauncherID: "Uzebox",
 	},
@@ -1235,7 +1235,7 @@ var SystemMap = map[string]SystemInfo{
 		LauncherID: "VIS",
 	},
 	"vpinball": {
-		SystemID:   systemdefs.SystemArcade,
+		SystemID:   systemdefs.SystemPinball,
 		Extensions: []string{".vpx", ".vpt"},
 		LauncherID: "VPinball",
 	},

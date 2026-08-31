@@ -20,11 +20,53 @@
 package api
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestRequestTimeoutForAPIMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		want   time.Duration
+	}{
+		{"backup create", models.MethodSettingsBackup, 0},
+		{"backup restore", models.MethodSettingsBackupRestore, 0},
+		{"remote backup", models.MethodSettingsBackupRemoteRun, 0},
+		{"remote restore", models.MethodSettingsBackupRemoteRestore, 0},
+		{"update apply", models.MethodUpdateApply, 0},
+		{"case insensitive", "SETTINGS.BACKUP", 0},
+		{"backup list", models.MethodSettingsBackupList, config.APIRequestTimeout},
+		{"unknown", "custom.method", config.APIRequestTimeout},
+		{"empty", "", config.APIRequestTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, requestTimeoutForAPIMethod(tt.method))
+		})
+	}
+}
+
+func TestRequestContextForBackupHasNoDeadlineAndPreservesCancellation(t *testing.T) {
+	t.Parallel()
+	parent, parentCancel := context.WithCancel(context.Background())
+	ctx, cancel := requestContextForAPIMethod(parent, models.MethodSettingsBackup)
+	defer cancel()
+	_, hasDeadline := ctx.Deadline()
+	assert.False(t, hasDeadline)
+	parentCancel()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
 
 func TestClassifyAPIMethod(t *testing.T) {
 	t.Parallel()
@@ -34,10 +76,20 @@ func TestClassifyAPIMethod(t *testing.T) {
 		method string
 		want   apiRequestPriority
 	}{
-		{"high media tags update", models.MethodMediaTagsUpdate, apiPriorityHigh},
-		{"high run case insensitive", "RUN", apiPriorityHigh},
+		{"normal media tags update", models.MethodMediaTagsUpdate, apiPriorityNormal},
+		{"normal media meta update", models.MethodMediaMetaUpdate, apiPriorityNormal},
+		{"high media history latest", models.MethodMediaHistoryLatest, apiPriorityHigh},
+		{"run case insensitive", "RUN", apiPriorityRun},
+		{"run launch alias", models.MethodLaunch, apiPriorityRun},
+		{"run script", models.MethodRunScript, apiPriorityRun},
+		{"high stop", models.MethodStop, apiPriorityHigh},
+		{"high media control", models.MethodMediaControl, apiPriorityHigh},
+		{"input keyboard", models.MethodInputKeyboard, apiPriorityInput},
+		{"input gamepad", models.MethodInputGamepad, apiPriorityInput},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
+		{"low update apply", models.MethodUpdateApply, apiPriorityLow},
+		{"update check stays normal", models.MethodUpdateCheck, apiPriorityNormal},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
 		{"low generate prefix", "media.generate.extra", apiPriorityLow},
 		{"unknown normal", "custom.method", apiPriorityNormal},
@@ -83,6 +135,24 @@ func TestMethodFromAPIRequestPayload(t *testing.T) {
 	}
 }
 
+func TestRequestMetadataFromAPIRequestPayload(t *testing.T) {
+	t.Parallel()
+
+	method, requestID := requestMetadataFromAPIRequestPayload(
+		[]byte(`{"jsonrpc":"2.0","method":"Media.Search","id":"request-42"}`),
+	)
+	assert.Equal(t, models.MethodMediaSearch, method)
+	assert.Equal(t, `"request-42"`, requestID.String())
+}
+
+func TestRequestIDForLogTruncatesLongIDs(t *testing.T) {
+	t.Parallel()
+
+	logged := requestIDForLog(models.NewStringID(strings.Repeat("x", maxLoggedRequestIDLen)))
+	assert.Len(t, logged, maxLoggedRequestIDLen)
+	assert.True(t, strings.HasSuffix(logged, "..."))
+}
+
 func TestIsImageAPIMethod(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +185,7 @@ func TestIsMediaDBTransactionAPIMethod(t *testing.T) {
 	}{
 		{"tags update exact", models.MethodMediaTagsUpdate, true},
 		{"tags update case insensitive", "MEDIA.TAGS.UPDATE", true},
+		{"meta update exact", models.MethodMediaMetaUpdate, true},
 		{"image false", models.MethodMediaImage, false},
 		{"empty", "", false},
 	}
@@ -123,6 +194,34 @@ func TestIsMediaDBTransactionAPIMethod(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, isMediaDBTransactionAPIMethod(tt.method))
+		})
+	}
+}
+
+func TestIsMediaDBFreeInstantMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		want   bool
+	}{
+		{"run exact", models.MethodRun, true},
+		{"run case insensitive", "RUN", true},
+		{"launch exact", models.MethodLaunch, true},
+		{"stop exact", models.MethodStop, true},
+		{"media control exact", models.MethodMediaControl, true},
+		{"media control case insensitive", "MEDIA.CONTROL", true},
+		{"run script false", models.MethodRunScript, false},
+		{"tags update false", models.MethodMediaTagsUpdate, false},
+		{"image false", models.MethodMediaImage, false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isMediaDBFreeInstantMethod(tt.method))
 		})
 	}
 }

@@ -1,0 +1,910 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package updater
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type installTestBackupper struct {
+	err       error
+	resumeErr error
+	version   string
+	snapshot  database.BackupInfo
+	called    bool
+	resumed   bool
+}
+
+func (b *installTestBackupper) BackupForUpdate(
+	targetVersion string,
+) (database.BackupInfo, func() error, error) {
+	b.called = true
+	b.version = targetVersion
+	if b.err != nil {
+		return database.BackupInfo{}, nil, b.err
+	}
+	return b.snapshot, func() error {
+		b.resumed = true
+		return b.resumeErr
+	}, nil
+}
+
+// installStagedFixture is a staged release sitting next to a live binary, laid
+// out the way stage.go leaves it just before an install starts.
+type installStagedFixture struct {
+	backupper    *installTestBackupper
+	dataDir      string
+	targetPath   string
+	stagedPath   string
+	stagingDir   string
+	snapshotPath string
+}
+
+func newInstallStagedFixture(t *testing.T) *installStagedFixture {
+	t.Helper()
+	require.NoError(t, errFakeBinary, "the fake release binary did not build")
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("zaparoo"))
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(targetPath, []byte("old binary"), 0o755))
+
+	stagingDir := filepath.Join(stagingRootFor(dataDir), testStageVersion)
+	require.NoError(t, os.MkdirAll(stagingDir, stateDirPerm))
+	stagedPath := filepath.Join(stagingDir, testBinaryName("zaparoo"))
+	fakeBinary, err := os.ReadFile(fakeBinaryPath) //nolint:gosec // package test fixture
+	require.NoError(t, err)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(stagedPath, fakeBinary, 0o755))
+
+	snapshotPath := filepath.Join(dataDir, "backups", "backup-20260818-043000-000000001-update.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotPath), 0o750))
+	require.NoError(t, os.WriteFile(snapshotPath, []byte("snapshot"), 0o600))
+
+	return &installStagedFixture{
+		backupper:    &installTestBackupper{snapshot: database.BackupInfo{Path: snapshotPath}},
+		dataDir:      dataDir,
+		targetPath:   targetPath,
+		stagedPath:   stagedPath,
+		stagingDir:   stagingDir,
+		snapshotPath: snapshotPath,
+	}
+}
+
+// blockStateDir makes the updater state directory unwritable so the marker
+// cannot be armed, without disturbing anything the install reads first.
+func (f *installStagedFixture) blockStateDir(t *testing.T) {
+	t.Helper()
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, os.MkdirAll(dir, stateDirPerm))
+	makeDirUnwritable(t, dir)
+}
+
+// assertInstallUndone checks that a failed install left the machine exactly as
+// it found it: the old binary in place and no update artifacts behind.
+func (f *installStagedFixture) assertInstallUndone(t *testing.T) {
+	t.Helper()
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installBackupSuffix))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, f.snapshotPath)
+	assert.NoDirExists(t, f.stagingDir)
+}
+
+func (f *installStagedFixture) options() *installOptions {
+	return &installOptions{
+		Staged: &StagedUpdate{
+			Dir:        f.stagingDir,
+			BinaryPath: f.stagedPath,
+			Version:    testStageVersion,
+		},
+		UserDB:          f.backupper,
+		TargetPath:      f.targetPath,
+		DataDir:         f.dataDir,
+		PreviousVersion: testCurrentVersion,
+		PlatformID:      testStagePlatform,
+		Trigger:         triggerManual,
+	}
+}
+
+func TestInstallStaged_ArmsWatchdogBeforeRestart(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	opts.ManifestGeneration = 412
+
+	require.NoError(t, installStaged(t.Context(), opts))
+
+	assert.Equal(t, testStageVersion, f.backupper.version)
+	assert.False(t, f.backupper.resumed, "successful install keeps UserDB quiesced until restart")
+	assert.Equal(t, "old binary", readFileString(t, installSidecarPath(f.targetPath, installBackupSuffix)))
+	assert.FileExists(t, f.targetPath)
+	assert.FileExists(t, f.snapshotPath)
+	assert.DirExists(t, f.stagingDir)
+
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	assert.Equal(t, markerInstalled, m.State)
+	assert.Equal(t, f.targetPath, m.TargetPath)
+	assert.Equal(t, installSidecarPath(f.targetPath, installBackupSuffix), m.BackupPath)
+	assert.Equal(t, f.snapshotPath, m.UserDBSnapshotPath)
+	assert.Equal(t, testCurrentVersion, m.PreviousVersion)
+	assert.Equal(t, testStageVersion, m.TargetVersion)
+	assert.Equal(t, int64(412), m.ManifestGeneration)
+}
+
+func TestInstallStaged_RestoresPayloadWhenIncomingVersionNeverRan(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	installRoot := filepath.Dir(f.targetPath)
+
+	existingStaged := filepath.Join(f.stagingDir, "scripts", "services", "zaparoo_service")
+	newStaged := filepath.Join(f.stagingDir, "scripts", "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingStaged), 0o750))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(existingStaged, []byte("new service"), 0o755))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(newStaged, []byte("new helper"), 0o755))
+	existingTarget := filepath.Join(installRoot, "services", "zaparoo_service")
+	newTarget := filepath.Join(installRoot, "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingTarget), 0o750))
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(existingTarget, []byte("old service"), 0o700))
+	opts.Staged.payloadFiles = []stagedPayloadFile{
+		{Path: existingStaged, RelativePath: "services/zaparoo_service", Mode: 0o755},
+		{Path: newStaged, RelativePath: "new-helper.sh", Mode: 0o755},
+	}
+
+	require.NoError(t, installStaged(t.Context(), opts))
+	assert.Equal(t, "new service", readFileString(t, existingTarget))
+	assert.Equal(t, "new helper", readFileString(t, newTarget))
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.Len(t, m.PayloadBackups, 2)
+	assert.False(t, m.PayloadBackups[0].OriginalMissing)
+	assert.True(t, m.PayloadBackups[1].OriginalMissing)
+
+	// Seeing the outgoing version means the incoming binary never ran. Abort
+	// payload and binary changes without restoring UserDB.
+	require.NoError(t, runStartupWatchdogWithOps(
+		t.Context(), f.dataDir, testCurrentVersion, defaultWatchdogFileOps(),
+	))
+	assert.Equal(t, "old service", readFileString(t, existingTarget))
+	assert.NoFileExists(t, newTarget)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoFileExists(t, f.snapshotPath, "abort discards the unused snapshot instead of restoring it")
+}
+
+type installPayloadPaths struct {
+	existingStaged string
+	newStaged      string
+	existingTarget string
+	newTarget      string
+}
+
+func addInstallPayloads(t *testing.T, f *installStagedFixture, opts *installOptions) installPayloadPaths {
+	t.Helper()
+
+	installRoot := filepath.Dir(f.targetPath)
+	paths := installPayloadPaths{
+		existingStaged: filepath.Join(f.stagingDir, "scripts", "services", "zaparoo_service"),
+		newStaged:      filepath.Join(f.stagingDir, "scripts", "new-helper.sh"),
+		existingTarget: filepath.Join(installRoot, "services", "zaparoo_service"),
+		newTarget:      filepath.Join(installRoot, "new-helper.sh"),
+	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(paths.existingStaged), 0o750))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(paths.existingStaged, []byte("new service"), 0o755))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(paths.newStaged, []byte("new helper"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(paths.existingTarget), 0o750))
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(paths.existingTarget, []byte("old service"), 0o700))
+	opts.Staged.payloadFiles = []stagedPayloadFile{
+		{Path: paths.existingStaged, RelativePath: "services/zaparoo_service", Mode: 0o755},
+		{Path: paths.newStaged, RelativePath: "new-helper.sh", Mode: 0o755},
+	}
+	return paths
+}
+
+func assertFailedPayloadInstallUndone(
+	t *testing.T, f *installStagedFixture, paths installPayloadPaths,
+) {
+	t.Helper()
+
+	f.assertInstallUndone(t)
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, paths.newTarget)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.True(t, f.backupper.resumed)
+}
+
+func TestInstallStaged_PreQuiesceRefusalLeavesLiveFilesUntouched(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	paths := addInstallPayloads(t, f, opts)
+	gateErr := errors.New("power changed")
+	opts.PreQuiesce = func(context.Context) error { return gateErr }
+
+	err := installStaged(t.Context(), opts)
+	require.ErrorIs(t, err, gateErr)
+	assert.False(t, f.backupper.called)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, paths.newTarget)
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installBackupSuffix))
+	assert.NoDirExists(t, f.stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+}
+
+func TestInstallStaged_PartialPayloadPreparationFailureCleansCandidates(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	paths := addInstallPayloads(t, f, opts)
+	require.NoError(t, os.Mkdir(paths.newTarget, 0o750))
+
+	err := installStaged(t.Context(), opts)
+	require.ErrorContains(t, err, "not a regular file")
+	assert.False(t, f.backupper.called)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installBackupSuffix))
+	assert.NoDirExists(t, f.stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+}
+
+func TestInstallStaged_PostMarkerFailuresRestoreEverything(t *testing.T) {
+	tests := map[string]struct {
+		configure func(*testing.T, *installStagedFixture, *installOptions, installPayloadPaths)
+		want      string
+	}{
+		"payload replacement": {
+			want: "installing payload file",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, paths installPayloadPaths) {
+				failed := false
+				opts.payload.replace = func(source, target string) error {
+					if !failed && target == paths.newTarget {
+						failed = true
+						return errors.New("payload rename failed")
+					}
+					return os.Rename(source, target)
+				}
+			},
+		},
+		"payload directory sync": {
+			want: "flushing installed payload file",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, paths installPayloadPaths) {
+				failed := false
+				opts.payload.syncDirectory = func(dir string) error {
+					if !failed && dir == filepath.Dir(paths.existingTarget) {
+						content, readErr := os.ReadFile(paths.existingTarget) //nolint:gosec // test-owned path
+						if readErr == nil && string(content) == "new service" {
+							failed = true
+							return errors.New("payload directory sync failed")
+						}
+					}
+					return syncDir(dir)
+				}
+			},
+		},
+		"binary replacement": {
+			want: "installing the staged binary",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				opts.binary.replaceRunning = func(string, string) error {
+					return errors.New("binary rename failed")
+				}
+			},
+		},
+		"binary directory sync": {
+			want: "flushing the installed binary",
+			configure: func(_ *testing.T, f *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				failed := false
+				opts.payload.syncDirectory = func(dir string) error {
+					if !failed && dir == filepath.Dir(f.targetPath) {
+						content, readErr := os.ReadFile(f.targetPath) //nolint:gosec // test-owned path
+						if readErr == nil && string(content) != "old binary" {
+							failed = true
+							return errors.New("binary directory sync failed")
+						}
+					}
+					return syncDir(dir)
+				}
+			},
+		},
+		"final marker": {
+			want: "recording the completed update install",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				failed := false
+				opts.payload.saveMarker = func(dir string, marker *pendingMarker) error {
+					if !failed && marker.State == markerInstalled {
+						failed = true
+						return errors.New("final marker sync failed")
+					}
+					return saveMarker(dir, marker)
+				}
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newInstallStagedFixture(t)
+			opts := f.options()
+			paths := addInstallPayloads(t, f, opts)
+			tt.configure(t, f, opts, paths)
+
+			err := installStaged(t.Context(), opts)
+			require.ErrorContains(t, err, tt.want)
+			assertFailedPayloadInstallUndone(t, f, paths)
+		})
+	}
+}
+
+func TestPreparePayloadCandidates_UsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	stagingDir := filepath.Join(root, "staging")
+	serviceDir := filepath.Join(root, "userdata", "system", "services")
+	stagedPath := filepath.Join(stagingDir, "service")
+	targetPath := filepath.Join(serviceDir, "service")
+	binaryPath := filepath.Join(root, "userdata", "system", "zaparoo")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(stagingDir, 0o750))
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(serviceDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("new"), 0o755))
+	require.NoError(t, afero.WriteFile(fs, targetPath, []byte("old"), 0o700))
+	candidatePath := installSidecarPath(targetPath, installCandidateSuffix)
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	require.NoError(t, afero.WriteFile(fs, candidatePath, []byte("stale candidate"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("stale backup"), 0o600))
+	staged := &StagedUpdate{payloadFiles: []stagedPayloadFile{{
+		Path: stagedPath, RelativePath: "services/service", Mode: 0o755,
+	}}}
+
+	backups, err := preparePayloadCandidates(staged, binaryPath, payloadInstallOps{fs: fs})
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.Equal(t, candidatePath, backups[0].CandidatePath)
+	assert.Equal(t, backupPath, backups[0].BackupPath)
+	assert.Equal(t, "new", readAferoFileString(t, fs, candidatePath))
+	assert.Equal(t, "old", readAferoFileString(t, fs, backupPath))
+}
+
+func TestPreparePayloadCandidates_RejectsDirectoryTarget(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	stagedPath := filepath.Join(root, "staging", "service")
+	targetPath := filepath.Join(root, "userdata", "system", "services", "service")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(filepath.Dir(stagedPath), 0o750))
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(targetPath, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("new"), 0o755))
+	staged := &StagedUpdate{payloadFiles: []stagedPayloadFile{{
+		Path: stagedPath, RelativePath: "services/service", Mode: 0o755,
+	}}}
+
+	backups, err := preparePayloadCandidates(
+		staged,
+		filepath.Join(root, "userdata", "system", "zaparoo"),
+		payloadInstallOps{fs: fs},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a regular file")
+	require.Len(t, backups, 1)
+	_, statErr := fs.Stat(backups[0].CandidatePath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func readAferoFileString(t *testing.T, fs afero.Fs, path string) string {
+	t.Helper()
+	content, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	return string(content)
+}
+
+func TestRemovePreparedPayloadUsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	candidatePath := filepath.Join(root, "service.zaparoo-update-new")
+	backupPath := filepath.Join(root, "service.zaparoo-update-backup")
+	require.NoError(t, afero.WriteFile(fs, candidatePath, []byte("candidate"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("backup"), 0o600))
+
+	removePreparedPayload([]payloadBackup{{
+		CandidatePath: candidatePath,
+		BackupPath:    backupPath,
+	}}, payloadInstallOps{fs: fs})
+
+	_, candidateErr := fs.Stat(candidatePath)
+	require.ErrorIs(t, candidateErr, os.ErrNotExist)
+	_, backupErr := fs.Stat(backupPath)
+	require.ErrorIs(t, backupErr, os.ErrNotExist)
+}
+
+func TestCopyPayloadFile_UsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	hostRoot := t.TempDir()
+	stagedPath := filepath.Join(hostRoot, "staged-helper.sh")
+	targetPath := filepath.Join(hostRoot, "target-helper.sh")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(hostRoot, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("helper"), 0o600))
+	ops := payloadInstallOps{fs: fs}
+	require.NoError(t, copyPayloadFile(ops, stagedPath, targetPath, 0o755))
+
+	content, err := afero.ReadFile(fs, targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, "helper", string(content))
+	info, err := fs.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	assert.NoFileExists(t, targetPath, "host filesystem must not receive injected writes")
+}
+
+func TestPreserveCurrentBinary_LeavesBootTargetPresent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "zaparoo")
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(targetPath, []byte("old binary"), 0o755))
+
+	require.NoError(t, preserveCurrentBinary(targetPath, backupPath))
+
+	assert.Equal(t, "old binary", readFileString(t, targetPath))
+	assert.Equal(t, "old binary", readFileString(t, backupPath))
+}
+
+func TestInstallStaged_ReopensUserDBAfterInstallFailure(t *testing.T) {
+	require.NoError(t, errFakeBinary)
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("missing-target"))
+	stagingDir := filepath.Join(stagingRootFor(dataDir), testStageVersion)
+	require.NoError(t, os.MkdirAll(stagingDir, stateDirPerm))
+	stagedPath := filepath.Join(stagingDir, testBinaryName("zaparoo"))
+	fakeBinary, err := os.ReadFile(fakeBinaryPath) //nolint:gosec // package test fixture
+	require.NoError(t, err)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(stagedPath, fakeBinary, 0o755))
+
+	snapshotPath := filepath.Join(dataDir, "backups", "backup-20260818-043000-000000001-update.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotPath), 0o750))
+	require.NoError(t, os.WriteFile(snapshotPath, []byte("snapshot"), 0o600))
+	backupper := &installTestBackupper{snapshot: database.BackupInfo{Path: snapshotPath}}
+
+	err = installStaged(t.Context(), &installOptions{
+		Staged:          &StagedUpdate{Dir: stagingDir, BinaryPath: stagedPath, Version: testStageVersion},
+		UserDB:          backupper,
+		TargetPath:      targetPath,
+		DataDir:         dataDir,
+		PreviousVersion: testCurrentVersion,
+		PlatformID:      testStagePlatform,
+		Trigger:         triggerManual,
+	})
+	require.Error(t, err)
+	assert.True(t, backupper.resumed)
+	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
+}
+
+func TestInstallSidecarPath_PreservesExecutableExtension(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		filepath.Join("bin", "zaparoo"+installBackupSuffix+".exe"),
+		installSidecarPath(filepath.Join("bin", "zaparoo.exe"), installBackupSuffix))
+	assert.Equal(t,
+		filepath.Join("bin", "zaparoo"+installBackupSuffix),
+		installSidecarPath(filepath.Join("bin", "zaparoo"), installBackupSuffix))
+}
+
+func TestInstallStaged_RejectsIncompleteOptions(t *testing.T) {
+	t.Parallel()
+
+	staged := &StagedUpdate{Dir: "staging", BinaryPath: "staged", Version: testStageVersion}
+	backupper := &installTestBackupper{}
+
+	for name, opts := range map[string]*installOptions{
+		"nil options": nil,
+		"no staged release": {
+			UserDB: backupper, TargetPath: "target", DataDir: "data",
+		},
+		"no user database": {
+			Staged: staged, TargetPath: "target", DataDir: "data",
+		},
+		"no target path": {
+			Staged: staged, UserDB: backupper, DataDir: "data",
+		},
+		"no data directory": {
+			Staged: staged, UserDB: backupper, TargetPath: "target",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Error(t, installStaged(t.Context(), opts))
+			assert.Empty(t, backupper.version, "an incomplete install must not touch the user database")
+		})
+	}
+}
+
+// TestInstallStaged_RefusesWhileAnUpdateIsUnresolved keeps a second install from
+// overwriting the binary backup and marker the watchdog still needs to undo the
+// first one.
+func TestInstallStaged_RefusesWhileAnUpdateIsUnresolved(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, &pendingMarker{
+		State:         markerInstalled,
+		TargetPath:    f.targetPath,
+		TargetVersion: "9.9.9",
+	}))
+
+	err := installStaged(t.Context(), f.options())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "9.9.9")
+	assert.False(t, f.backupper.called, "a blocked install must not quiesce the user database")
+
+	m, err := loadMarker(dir)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	assert.Equal(t, "9.9.9", m.TargetVersion, "the unresolved marker must survive untouched")
+}
+
+// TestInstallStaged_ClearsAnOrphanedBinaryBackup covers the retry after an
+// install that finished its cleanup incompletely: the previous backup is stale
+// once the target is present, and keeping it would make the next rollback
+// restore the wrong binary.
+func TestInstallStaged_ClearsAnOrphanedBinaryBackup(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	backupPath := installSidecarPath(f.targetPath, installBackupSuffix)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("orphaned backup"), 0o755))
+
+	require.NoError(t, installStaged(t.Context(), f.options()))
+
+	assert.Equal(t, "old binary", readFileString(t, backupPath),
+		"the backup must describe the binary this install replaced, not the orphan")
+}
+
+func TestInstallStaged_RefusesWhenAnOrphanedBackupHasNoTarget(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	backupPath := installSidecarPath(f.targetPath, installBackupSuffix)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("orphaned backup"), 0o755))
+	require.NoError(t, os.Remove(f.targetPath))
+
+	err := installStaged(t.Context(), f.options())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "orphaned binary backup")
+	assert.Equal(t, "orphaned backup", readFileString(t, backupPath),
+		"the only remaining copy of a binary must not be removed")
+	assert.False(t, f.backupper.called)
+}
+
+// TestInstallStaged_LeavesTheUserDBAloneWhenTheCandidateWillNotRun proves the
+// probe on the target filesystem runs before anything the old version depends
+// on is disturbed.
+func TestInstallStaged_LeavesTheUserDBAloneWhenTheCandidateWillNotRun(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	//nolint:gosec // deliberately not an executable
+	require.NoError(t, os.WriteFile(f.stagedPath, []byte("not a real binary"), 0o755))
+
+	err := installStaged(t.Context(), f.options())
+	require.Error(t, err)
+
+	assert.False(t, f.backupper.called, "the user database must stay open when the candidate fails")
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoDirExists(t, f.stagingDir, "a condemned release must not keep occupying the device")
+}
+
+// TestInstallStaged_CleansUpWhenTheSnapshotFails covers the window between a
+// verified candidate and an armed marker: without the snapshot there is nothing
+// to roll the database back to, so the install must not start.
+func TestInstallStaged_CleansUpWhenTheSnapshotFails(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	f.backupper.err = errors.New("database is busy")
+
+	err := installStaged(t.Context(), f.options())
+	require.Error(t, err)
+	require.ErrorIs(t, err, f.backupper.err)
+
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoDirExists(t, f.stagingDir)
+}
+
+func TestAbortInstall_RestoresTheCurrentBinary(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("zaparoo"))
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	candidatePath := installSidecarPath(targetPath, installCandidateSuffix)
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(targetPath, []byte("half-installed binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("old binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(candidatePath, []byte("candidate"), 0o755))
+
+	snapshotPath := filepath.Join(dataDir, "backups", "backup-20260818-043000-000000001-update.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotPath), 0o750))
+	require.NoError(t, os.WriteFile(snapshotPath, []byte("snapshot"), 0o600))
+	stagingDir := filepath.Join(stagingRootFor(dataDir), testStageVersion)
+	require.NoError(t, os.MkdirAll(stagingDir, stateDirPerm))
+
+	m := &pendingMarker{
+		State:              markerInstalling,
+		TargetPath:         targetPath,
+		BackupPath:         backupPath,
+		StagingDir:         stagingDir,
+		UserDBSnapshotPath: snapshotPath,
+		PreviousVersion:    testCurrentVersion,
+		TargetVersion:      testStageVersion,
+		BinaryReplaced:     true,
+	}
+	require.NoError(t, saveMarker(stateDirFor(dataDir), m))
+
+	require.NoError(t, abortInstall(t.Context(), dataDir, m, candidatePath, installBinaryOps{}))
+
+	assert.Equal(t, "old binary", readFileString(t, targetPath))
+	assert.NoFileExists(t, backupPath)
+	assert.NoFileExists(t, candidatePath)
+	assert.NoFileExists(t, snapshotPath)
+	assert.NoDirExists(t, stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
+}
+
+// A swap that failed left the outgoing binary at the target under its own name,
+// and putting the backup over it is not the no-op it looks like. On a platform
+// that has to vacate the name first it moves the image this process is running
+// from into a hidden name and reopens the window where the device has nothing to
+// start, to install a copy of what is already there.
+func TestAbortInstall_LeavesABinaryTheSwapNeverMoved(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("zaparoo"))
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	candidatePath := installSidecarPath(targetPath, installCandidateSuffix)
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(targetPath, []byte("current binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("current binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(candidatePath, []byte("candidate"), 0o755))
+
+	// No BinaryReplaced: the swap never took the name, which is what every way
+	// it can fail leaves behind.
+	m := &pendingMarker{
+		State:           markerInstalling,
+		TargetPath:      targetPath,
+		BackupPath:      backupPath,
+		PreviousVersion: testCurrentVersion,
+		TargetVersion:   testStageVersion,
+	}
+	require.NoError(t, saveMarker(stateDirFor(dataDir), m))
+
+	binary := vacatingBinaryOps(mappedImageOps(targetPath))
+	swap := binary.replaceRunning
+	swaps := 0
+	binary.replaceRunning = func(source, target string) error {
+		swaps++
+		return swap(source, target)
+	}
+
+	require.NoError(t, abortInstall(t.Context(), dataDir, m, candidatePath, binary))
+
+	assert.Zero(t, swaps, "nothing took the target's name, so nothing has to be put back")
+	assert.Equal(t, "current binary", readFileString(t, targetPath))
+	assert.NoFileExists(t, supersededPathFor(targetPath, 0),
+		"the running image was never moved aside, so no slot was taken")
+	assert.NoFileExists(t, backupPath)
+	assert.NoFileExists(t, candidatePath)
+	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
+}
+
+func TestAbortInstall_FailsWhenNeitherBinaryNorBackupExists(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("zaparoo"))
+
+	err := abortInstall(t.Context(), dataDir, &pendingMarker{
+		State:      markerInstalling,
+		TargetPath: targetPath,
+		BackupPath: installSidecarPath(targetPath, installBackupSuffix),
+	}, "", installBinaryOps{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "neither current binary nor backup")
+}
+
+func TestAbortInstall_WithoutAMarkerDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, abortInstall(t.Context(), t.TempDir(), nil, "", installBinaryOps{}))
+}
+
+// A marker left unreadable by an earlier crash means an update may still be
+// unresolved. Starting a second install on top of it would lose the record of
+// the first, so the install has to refuse rather than assume nothing is pending.
+func TestInstallStaged_RefusesWhenTheMarkerIsUnreadable(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, os.MkdirAll(dir, stateDirPerm))
+	require.NoError(t, os.WriteFile(markerPath(dir), []byte("{not json"), 0o600))
+
+	err := installStaged(t.Context(), f.options())
+
+	require.ErrorContains(t, err, "checking for an unresolved update")
+	assert.False(t, f.backupper.called, "the database must not be quiesced for an install that cannot start")
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+}
+
+// The marker is what makes an install recoverable, so it is written before the
+// binary is swapped. If it cannot be written the install must undo itself
+// completely instead of running a new binary nothing is watching.
+func TestInstallStaged_UndoesEverythingWhenTheMarkerCannotBeArmed(t *testing.T) {
+	skipUnlessDirPermsEnforced(t)
+
+	f := newInstallStagedFixture(t)
+	f.blockStateDir(t)
+
+	err := installStaged(t.Context(), f.options())
+
+	require.ErrorContains(t, err, "recording the start of the update install")
+	assert.True(t, f.backupper.resumed, "the user database must be reopened after a failed install")
+	f.assertInstallUndone(t)
+
+	m, loadErr := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, loadErr)
+	assert.Nil(t, m)
+}
+
+// A database that will not reopen leaves the service running without storage,
+// so that failure has to reach the caller alongside the install failure rather
+// than being lost behind it.
+func TestInstallStaged_ReportsAFailedDatabaseReopen(t *testing.T) {
+	skipUnlessDirPermsEnforced(t)
+
+	f := newInstallStagedFixture(t)
+	f.blockStateDir(t)
+	reopenErr := errors.New("database is locked")
+	f.backupper.resumeErr = reopenErr
+
+	err := installStaged(t.Context(), f.options())
+
+	require.ErrorIs(t, err, reopenErr)
+	require.ErrorContains(t, err, "recording the start of the update install")
+	assert.ErrorContains(t, err, "reopening user database after failed update install")
+}
+
+// When an install fails and the undo fails too the machine is in the state the
+// operator most needs described, so neither failure may be dropped.
+func TestAbortInstallAfterError_ReportsBothFailures(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	backupPath := installSidecarPath(f.targetPath, installBackupSuffix)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("old binary"), 0o755))
+
+	m := &pendingMarker{
+		State:      markerInstalling,
+		TargetPath: filepath.Join(f.dataDir, "gone", "zaparoo"),
+		BackupPath: backupPath,
+	}
+	installErr := errors.New("installing the staged binary")
+
+	err := abortInstallAfterError(t.Context(), f.dataDir, m, "", installBinaryOps{}, installErr)
+
+	require.ErrorIs(t, err, installErr)
+	require.ErrorContains(t, err, "aborting the partial install also failed")
+	require.ErrorContains(t, err, "restoring the current binary after a failed install")
+	assert.FileExists(t, backupPath, "a backup that could not be restored must be kept")
+}
+
+// Windows has to move the running binary aside before the new one can take its
+// name, and what it moved aside stays mapped until the process exits. Unwinding
+// after that point cannot delete it or rename over it, so the old binary has to
+// go back through a name of its own. This drives the whole sequence on the host
+// running the tests rather than leaving it to the one platform that reaches it.
+func TestInstallStaged_UnwindsAVacatingSwapWithoutTouchingTheRunningImage(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	mapped := supersededPathFor(f.targetPath, 0)
+	opts := f.options()
+	opts.binary = vacatingBinaryOps(mappedImageOps(mapped))
+
+	require.NoError(t, installStaged(t.Context(), opts))
+
+	// The swap could not clear what it moved aside, because from here the
+	// process is running out of it.
+	assert.Equal(t, "old binary", readFileString(t, mapped))
+	assert.NotEqual(t, "old binary", readFileString(t, f.targetPath))
+
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.NotNil(t, m)
+
+	require.NoError(t, abortInstall(t.Context(), f.dataDir, m,
+		installSidecarPath(f.targetPath, installCandidateSuffix), opts.binary))
+
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old binary", readFileString(t, mapped),
+		"the image the process is running from must survive the unwind")
+	assert.NoFileExists(t, supersededPathFor(f.targetPath, 1),
+		"the name the unwind had to fall back to is cleared once it is done with it")
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installBackupSuffix))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoFileExists(t, f.snapshotPath)
+	assert.NoDirExists(t, f.stagingDir)
+}
+
+// A retry after that unwind starts with a copy of the old binary still sitting
+// under the superseded name. The process holding it has exited by then, so the
+// sweep at the top of the install is what keeps it from accumulating. It has to
+// reach every slot, not just the first: an unwind that fell back to a later one
+// is exactly the case that leaves a binary behind, and a sweep that stopped at
+// the first free name would never clear it.
+func TestInstallStaged_ClearsAnImageAnEarlierSwapCouldNotRemove(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	mapped := supersededPathFor(f.targetPath, 0)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(mapped, []byte("older binary"), 0o755))
+	stranded := supersededPathFor(f.targetPath, 2)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(stranded, []byte("binary from an older unwind"), 0o755))
+
+	opts := f.options()
+	opts.binary = vacatingBinaryOps(realVacatingOps())
+	require.NoError(t, installStaged(t.Context(), opts))
+
+	assert.NoFileExists(t, mapped, "a name no process is holding any more is reused, not added to")
+	assert.NoFileExists(t, stranded, "the sweep covers every slot an unwind could have fallen back to")
+	assert.NoFileExists(t, supersededPathFor(f.targetPath, 1))
+	assert.Equal(t, "old binary", readFileString(t, installSidecarPath(f.targetPath, installBackupSuffix)))
+}

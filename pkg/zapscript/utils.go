@@ -59,6 +59,39 @@ func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, er
 	}, nil
 }
 
+// parseMacroDuration parses a duration string used in **delay and {delay:N}.
+// A plain integer is treated as milliseconds; any other string is passed to
+// time.ParseDuration so "1s", "500ms", and "1m30s" are all accepted.
+func parseMacroDuration(s string) (time.Duration, error) {
+	if ms, err := strconv.Atoi(s); err == nil {
+		return time.Duration(ms) * time.Millisecond, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	return d, nil
+}
+
+func waitForDelay(ctx context.Context, delay time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
@@ -68,7 +101,9 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	amount, err := strconv.Atoi(env.Cmd.Args[0])
 	if err == nil {
 		log.Info().Msgf("delaying for: %d", amount)
-		time.Sleep(time.Duration(amount) * time.Millisecond)
+		if waitErr := waitForDelay(env.ServiceCtx, time.Duration(amount)*time.Millisecond); waitErr != nil {
+			return platforms.CmdResult{}, waitErr
+		}
 		return platforms.CmdResult{}, nil
 	}
 
@@ -89,7 +124,15 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		}
 		return platforms.CmdResult{}, nil
 	default:
-		return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], err)
+		d, durErr := time.ParseDuration(env.Cmd.Args[0])
+		if durErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], durErr)
+		}
+		log.Info().Msgf("delaying for: %v", d)
+		if waitErr := waitForDelay(env.ServiceCtx, d); waitErr != nil {
+			return platforms.CmdResult{}, waitErr
+		}
+		return platforms.CmdResult{}, nil
 	}
 }
 
@@ -102,9 +145,9 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	execStr := env.Cmd.Args[0]
 
 	if env.Unsafe {
-		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
+		return platforms.CmdResult{}, ErrRemoteSource
 	} else if !env.Cfg.IsExecuteAllowed(execStr) {
-		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrExecuteNotAllowed, execStr)
 	}
 
 	tokenArgs, splitErr := helpers.SplitCommand(execStr)

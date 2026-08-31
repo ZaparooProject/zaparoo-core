@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -59,6 +60,8 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 
 	resp := models.SettingsResponse{
 		UpdateChannel:             env.Config.UpdateChannel(),
+		UpdateCheck:               env.Config.UpdateCheck(),
+		UpdateInstall:             env.Config.UpdateInstall(),
 		RunZapScript:              env.State.RunZapScriptEnabled(),
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
@@ -70,13 +73,32 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersConnect:            readersConnect,
 		SystemDefaults:            systemDefaults,
 		ErrorReporting:            env.Config.ErrorReporting(),
+		Encryption:                env.Config.EncryptionEnabled(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
+		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
+		ProfilesSwapData:          env.Config.ProfilesSwapData(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
+	if isLocalOrAdmin(&env) {
+		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
+		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
+		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
+		playtimeSyncEnabled := env.Config.PlaytimeSyncEnabled()
+		playtimeBaseURL := env.Config.PlaytimeBaseURL()
+		remoteControlEnabled := env.Config.RemoteControlEnabled()
+		remoteControlBaseURL := env.Config.RemoteControlBaseURL()
+		resp.BackupRemoteEnabled = &backupRemoteEnabled
+		resp.BackupRemoteSchedule = &backupRemoteSchedule
+		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
+		resp.PlaytimeSyncEnabled = &playtimeSyncEnabled
+		resp.PlaytimeBaseURL = &playtimeBaseURL
+		resp.RemoteControlEnabled = &remoteControlEnabled
+		resp.RemoteControlBaseURL = &remoteControlBaseURL
+	}
 
 	return resp, nil
 }
@@ -98,15 +120,6 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading mappings")
 	}
 
-	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
-	err = env.Config.LoadCustomLaunchers(launchersDir)
-	if err != nil {
-		log.Error().Err(err).Msg("error loading custom launchers")
-		return nil, errors.New("error loading custom launchers")
-	}
-
-	env.LauncherCache.Refresh(env.Platform, env.Config)
-
 	if env.Player != nil {
 		env.Player.ClearFileCache()
 		env.Player.SetVolume(float64(env.Config.AudioVolume()) / 100.0)
@@ -124,6 +137,28 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
+	// Encryption policy can only be changed from the device itself. Remote
+	// settings changes otherwise require an admin client.
+	if params.Encryption != nil && !env.IsLocal {
+		return nil, models.ClientErrf("encryption setting: %w", ErrLocalhostOnly)
+	}
+	// Local profile PIN prompts are enforced by the UI before sensitive
+	// settings requests.
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
+	}
+
+	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil ||
+		params.PlaytimeSyncEnabled != nil || params.RemoteControlEnabled != nil {
+		if !isLocalOrAdmin(&env) {
+			return nil, models.ClientErrf("online settings require a local or admin client")
+		}
+	}
+
+	releaseConfig := env.Config.AcquireUpdateLock()
+	defer releaseConfig()
 
 	// Pre-flight validation of inputs that depend on runtime state. Run before
 	// any mutations are applied so a validation failure here does not leave
@@ -138,11 +173,25 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	// Reload config from disk before applying mutations so that external
-	// edits (e.g. user hand-editing config.toml) are not lost on save.
-	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
-	// interleave. Needs a config-level transaction lock to fix properly.
+	// edits (e.g. user hand-editing config.toml) are not lost on save or
+	// validated against stale in-memory values.
 	if err := env.Config.Load(); err != nil {
 		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
+	}
+
+	// Installing updates without checking for them is not a state the device
+	// can be in, so the combination is refused rather than stored and quietly
+	// ignored. A client asking for both at once is fine.
+	if params.UpdateInstall != nil && *params.UpdateInstall {
+		checking := env.Config.UpdateCheck()
+		if params.UpdateCheck != nil {
+			checking = *params.UpdateCheck
+		}
+		if !checking {
+			return nil, models.ClientErrf(
+				"installing updates automatically needs automatic update checking turned on",
+			)
+		}
 	}
 
 	if params.RunZapScript != nil {
@@ -153,6 +202,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.UpdateChannel != nil {
 		log.Debug().Str("updateChannel", *params.UpdateChannel).Msg("updating setting")
 		env.Config.SetUpdateChannel(*params.UpdateChannel)
+	}
+
+	if params.UpdateCheck != nil {
+		log.Debug().Bool("updateCheck", *params.UpdateCheck).Msg("updating setting")
+		env.Config.SetUpdateCheck(*params.UpdateCheck)
+	}
+
+	if params.UpdateInstall != nil {
+		log.Debug().Bool("updateInstall", *params.UpdateInstall).Msg("updating setting")
+		env.Config.SetUpdateInstall(*params.UpdateInstall)
 	}
 
 	if params.DebugLogging != nil {
@@ -181,6 +240,31 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ErrorReporting != nil {
 		log.Debug().Bool("errorReporting", *params.ErrorReporting).Msg("updating setting")
 		env.Config.SetErrorReporting(*params.ErrorReporting)
+	}
+
+	if params.Encryption != nil {
+		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
+		env.Config.SetEncryptionEnabled(*params.Encryption)
+	}
+
+	if params.BackupRemoteEnabled != nil {
+		log.Debug().Bool("backupRemoteEnabled", *params.BackupRemoteEnabled).Msg("updating setting")
+		env.Config.SetBackupRemoteEnabled(*params.BackupRemoteEnabled)
+	}
+
+	if params.BackupRemoteSchedule != nil {
+		log.Debug().Str("backupRemoteSchedule", *params.BackupRemoteSchedule).Msg("updating setting")
+		env.Config.SetBackupRemoteSchedule(*params.BackupRemoteSchedule)
+	}
+
+	if params.PlaytimeSyncEnabled != nil {
+		log.Debug().Bool("playtimeSyncEnabled", *params.PlaytimeSyncEnabled).Msg("updating setting")
+		env.Config.SetPlaytimeSync(*params.PlaytimeSyncEnabled)
+	}
+
+	if params.RemoteControlEnabled != nil {
+		log.Debug().Bool("remoteControlEnabled", *params.RemoteControlEnabled).Msg("updating setting")
+		env.Config.SetRemoteControl(*params.RemoteControlEnabled)
 	}
 
 	if params.ReadersScanMode != nil {
@@ -221,6 +305,21 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LaunchGuardRequireConfirm != nil {
 		log.Debug().Bool("launchGuardRequireConfirm", *params.LaunchGuardRequireConfirm).Msg("updating setting")
 		env.Config.SetLaunchGuardRequireConfirm(*params.LaunchGuardRequireConfirm)
+	}
+
+	if params.ProfilesRequireForLaunch != nil {
+		log.Debug().Bool("profilesRequireForLaunch", *params.ProfilesRequireForLaunch).Msg("updating setting")
+		env.Config.SetProfilesRequireForLaunch(*params.ProfilesRequireForLaunch)
+	}
+
+	if params.ProfilesSwapData != nil {
+		log.Debug().Bool("profilesSwapData", *params.ProfilesSwapData).Msg("updating setting")
+		env.Config.SetProfilesSwapData(*params.ProfilesSwapData)
+		// Converge mounts immediately: turning swapping off restores the
+		// shared data state rather than waiting for the next switch.
+		if env.Profiles != nil {
+			env.Profiles.ReconcileData()
+		}
 	}
 
 	if params.ReadersConnect != nil {
@@ -340,6 +439,11 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
 	}
 
 	// Reload config from disk before applying mutations so that external

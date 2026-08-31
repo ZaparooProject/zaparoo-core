@@ -37,7 +37,15 @@ const (
 	nextActionNone nextActionResult = iota
 	nextActionArmed
 	nextActionInvalid
+	// nextActionBlocked separates a configuration denial from a malformed
+	// next action so the API reports "blocked" rather than "invalid_script".
+	nextActionBlocked
 )
+
+// launchOverrideTTL bounds how long an armed one-shot launcher override waits
+// for its next card. Without it, an override armed and then forgotten silently
+// rewrites a launch hours later.
+const launchOverrideTTL = 5 * time.Minute
 
 func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script *gozapscript.Script) nextActionResult {
 	if !svc.State.RunZapScriptEnabled() {
@@ -49,7 +57,7 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 
 	cmd := script.Cmds[0]
 	if svc.Config.IsCommandBlocked(cmd.Name) {
-		return nextActionInvalid
+		return nextActionBlocked
 	}
 	switch cmd.Name {
 	case gozapscript.ZapScriptCmdLaunch:
@@ -62,12 +70,20 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 			log.Warn().Err(err).Msg("failed to evaluate launch override")
 			return nextActionInvalid
 		}
+		resolvedLauncherID = strings.TrimSpace(resolvedLauncherID)
+		// Reject unknown IDs here rather than arming. Otherwise the error only
+		// surfaces on the next card scanned, blamed on that card instead of
+		// this one.
+		if !launcherIDExists(svc, resolvedLauncherID) {
+			log.Warn().Str("launcher", resolvedLauncherID).Msg("launch override launcher not found")
+			return nextActionInvalid
+		}
 		svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-			LauncherID: strings.TrimSpace(resolvedLauncherID),
+			LauncherID: resolvedLauncherID,
 			Source:     *token,
 			CreatedAt:  time.Now(),
 		})
-		log.Info().Str("launcher", strings.TrimSpace(resolvedLauncherID)).Msg("armed one-shot launch override")
+		log.Info().Str("launcher", resolvedLauncherID).Msg("armed one-shot launch override")
 		return nextActionArmed
 	case gozapscript.ZapScriptCmdWrite:
 		if len(cmd.Args) != 1 || strings.TrimSpace(cmd.Args[0]) == "" || !cmd.AdvArgs.IsEmpty() {
@@ -90,6 +106,18 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 	}
 }
 
+// launcherIDExists reports whether a launcher ID resolves, matching the
+// case-insensitive comparison the advanced argument validator uses when the
+// override is later applied to a launch command.
+func launcherIDExists(svc *ServiceContext, launcherID string) bool {
+	for _, id := range zapscript.GetLauncherIDs(svc.Platform, svc.Config) {
+		if strings.EqualFold(id, launcherID) {
+			return true
+		}
+	}
+	return false
+}
+
 func evalNextActionArg(svc *ServiceContext, value string) (string, error) {
 	env := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, nil)
 	reader := gozapscript.NewParser(value)
@@ -110,6 +138,10 @@ func hasNonLauncherAdvArg(args gozapscript.AdvArgs) bool {
 		return true
 	})
 	return hasNonLauncher
+}
+
+func launchOverrideExpired(createdAt time.Time) bool {
+	return !createdAt.IsZero() && time.Since(createdAt) > launchOverrideTTL
 }
 
 func shouldApplyLaunchOverride(token *tokens.Token, inHookContext bool, cmdName string) bool {

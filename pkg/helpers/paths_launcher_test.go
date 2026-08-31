@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -35,6 +36,87 @@ import (
 
 // testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
 var testLauncherCacheMutex syncutil.Mutex
+
+func TestGuessLauncherForPath(t *testing.T) {
+	t.Parallel()
+
+	launchers := []platforms.Launcher{
+		{ID: "GameboyColor", SystemID: systemdefs.SystemGameboyColor, Extensions: []string{".gbc"}},
+		{ID: "SNES", SystemID: systemdefs.SystemSNES, Extensions: []string{".sfc"}},
+		{ID: "PSX", SystemID: systemdefs.SystemPSX, Extensions: []string{".bin"}},
+		{ID: "MegaCD", SystemID: systemdefs.SystemMegaCD, Extensions: []string{".bin"}},
+		{ID: "PCSX2", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
+		{ID: "Play", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
+	}
+	root := string(filepath.Separator)
+
+	tests := []struct {
+		name       string
+		path       string
+		wantSystem string
+		want       bool
+	}{
+		{
+			name:       "folder and extension agree",
+			path:       filepath.Join(root, "media", "fat", "hacks", "GBC", "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+			want:       true,
+		},
+		{
+			name:       "unique extension without alias",
+			path:       filepath.Join(root, "media", "fat", "hacks", "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+			want:       true,
+		},
+		{
+			name:       "folder disambiguates shared extension",
+			path:       filepath.Join(root, "media", "fat", "hacks", "PSX", "Game.bin"),
+			wantSystem: systemdefs.SystemPSX,
+			want:       true,
+		},
+		{
+			name: "shared extension without alias is ambiguous",
+			path: filepath.Join(root, "media", "fat", "hacks", "Game.bin"),
+			want: false,
+		},
+		{
+			name: "duplicate launchers for one system are ambiguous",
+			path: filepath.Join(root, "media", "fat", "hacks", "Game.iso"),
+			want: false,
+		},
+		{
+			name: "folder alias does not resolve duplicate launchers",
+			path: filepath.Join(root, "media", "fat", "hacks", "PS2", "Game.iso"),
+			want: false,
+		},
+		{
+			name: "conflicting folder and extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "SNES", "Game.gbc"),
+			want: false,
+		},
+		{
+			name: "unsupported extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "GBC", "notes.txt"),
+			want: false,
+		},
+		{
+			name: "missing extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "GBC", "README"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			launcher, ok := guessLauncherFromCandidates(tt.path, launchers)
+			assert.Equal(t, tt.want, ok)
+			if tt.want {
+				assert.Equal(t, tt.wantSystem, launcher.SystemID)
+			}
+		})
+	}
+}
 
 func TestPathIsLauncher_AbsoluteFolderNoRootDirs(t *testing.T) {
 	t.Parallel()
@@ -381,6 +463,21 @@ func TestLauncherSpecificity(t *testing.T) {
 	}
 }
 
+func TestPathIsLauncher_SchemeUsesTestFunction(t *testing.T) {
+	t.Parallel()
+
+	launcher := platforms.Launcher{
+		ID:      "Virtual",
+		Schemes: []string{"zaparoo"},
+		Test: func(_ *config.Instance, path string) bool {
+			return path == "zaparoo://expected/Game"
+		},
+	}
+
+	assert.True(t, PathIsLauncher(nil, nil, &launcher, "zaparoo://expected/Game"))
+	assert.False(t, PathIsLauncher(nil, nil, &launcher, "zaparoo://other/Game"))
+}
+
 func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
@@ -492,6 +589,55 @@ func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
 	assert.Equal(t, "FolderAndSystem", launcher.ID, "folder+system launcher should beat system-only")
 }
 
+func TestFindLauncher_GenericOutsideRootsBeatsFallbackCandidates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	root := t.TempDir()
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+
+	genericLauncher := platforms.Launcher{
+		ID:         "Generic",
+		Extensions: []string{".mgl"},
+	}
+	snesLauncher := platforms.Launcher{
+		ID:         "SNES",
+		SystemID:   systemdefs.SystemSNES,
+		Folders:    []string{"SNES"},
+		Extensions: []string{".mgl"},
+	}
+	psxLauncher := platforms.Launcher{
+		ID:         "PSX",
+		SystemID:   systemdefs.SystemPSX,
+		Folders:    []string{"PSX"},
+		Extensions: []string{".mgl"},
+	}
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{genericLauncher, snesLauncher, psxLauncher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	externalPath := filepath.Join(t.TempDir(), "Game.mgl")
+	launcher, err := FindLauncher(cfg, mockPlatform, externalPath)
+	require.NoError(t, err)
+	assert.Equal(t, "Generic", launcher.ID)
+
+	systemPath := filepath.Join(root, "SNES", "Game.mgl")
+	launcher, err = FindLauncher(cfg, mockPlatform, systemPath)
+	require.NoError(t, err)
+	assert.Equal(t, "SNES", launcher.ID)
+}
+
 func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
@@ -547,7 +693,8 @@ func TestFindLauncher_NoMatch(t *testing.T) {
 	}()
 
 	_, err := FindLauncher(cfg, mockPlatform, "/some/random/file.xyz")
-	assert.Error(t, err, "should return error when no launcher matches")
+	require.Error(t, err, "should return error when no launcher matches")
+	assert.ErrorIs(t, err, ErrNoLauncher)
 }
 
 func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {

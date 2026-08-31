@@ -27,27 +27,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	// RetroDECKFlatpakID is the Flatpak application ID for RetroDECK
-	RetroDECKFlatpakID = "net.retrodeck.retrodeck"
+	// RetroDECKFlatpakID is the Flatpak application ID for RetroDECK.
+	RetroDECKFlatpakID = linuxemu.RetroDECKFlatpakID
 )
 
 // RetroDECKPaths holds the paths for RetroDECK installation.
-type RetroDECKPaths struct {
-	// RomsPath is the base path for ROMs (e.g., ~/retrodeck/roms/)
-	RomsPath string
-	// GamelistPath is the base path for ES-DE gamelists (e.g., ~/retrodeck/ES-DE/gamelists/)
-	GamelistPath string
-}
+type RetroDECKPaths = linuxemu.RetroDECKPaths
 
 // DefaultRetroDECKPaths returns the default paths for RetroDECK.
 func DefaultRetroDECKPaths() RetroDECKPaths {
@@ -55,11 +52,7 @@ func DefaultRetroDECKPaths() RetroDECKPaths {
 	if err != nil {
 		homeDir = os.Getenv("HOME")
 	}
-
-	return RetroDECKPaths{
-		RomsPath:     filepath.Join(homeDir, "retrodeck", "roms"),
-		GamelistPath: filepath.Join(homeDir, "retrodeck", "ES-DE", "gamelists"),
-	}
+	return linuxemu.DefaultRetroDECKPaths(homeDir)
 }
 
 // IsRetroDECKInstalled checks if RetroDECK is installed via Flatpak.
@@ -81,6 +74,16 @@ func IsRetroDECKAvailable() bool {
 	return true
 }
 
+func retroDECKLaunchCommand(romPath string) *platforms.LaunchCommand {
+	return &platforms.LaunchCommand{
+		Executable: "flatpak",
+		Args: []string{
+			"run", "--env=LOG_BUFFER=", RetroDECKFlatpakID, romPath,
+		},
+		Env: steamOSLaunchEnvOverrides(),
+	}
+}
+
 // LaunchViaRetroDECK launches a game using RetroDECK's CLI.
 // RetroDECK uses RetroENGINE which accepts a ROM path directly.
 func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error) {
@@ -88,9 +91,10 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 		Str("romPath", romPath).
 		Msg("launching game via RetroDECK")
 
-	// Use flatpak run with the RetroDECK app ID
+	commandSpec := retroDECKLaunchCommand(romPath)
 	//nolint:gosec // G204: romPath is the game to launch, launcher's purpose
-	cmd := exec.CommandContext(ctx, "flatpak", "run", RetroDECKFlatpakID, romPath)
+	cmd := exec.CommandContext(ctx, commandSpec.Executable, commandSpec.Args...)
+	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -107,10 +111,13 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 }
 
 // createRetroDECKLauncher creates a launcher for a specific RetroDECK system.
-func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, paths RetroDECKPaths) platforms.Launcher {
-	return platforms.Launcher{
+func createRetroDECKLauncher(
+	systemFolder string, systemInfo esde.SystemInfo, paths *RetroDECKPaths,
+) platforms.Launcher {
+	launcher := platforms.Launcher{
 		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
+		Groups:             []string{platformshared.LauncherGroupRetroDECK},
 		Lifecycle:          platforms.LifecycleTracked,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 
@@ -124,7 +131,8 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			}
 
 			// Ensure the path is actually within the system dir (not ../other)
-			if filepath.IsAbs(relPath) || relPath[:2] == ".." {
+			if filepath.IsAbs(relPath) || relPath == ".." ||
+				strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 				return false
 			}
 
@@ -137,21 +145,18 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			return true
 		},
 
+		BuildLaunchCommand: func(
+			_ *config.Instance,
+			path string,
+			_ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return retroDECKLaunchCommand(path), nil
+		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			proc, err := LaunchViaRetroDECK(context.Background(), path)
-			if err != nil {
-				return nil, err
-			}
-			// Set up gamescope focus management in Gaming Mode
-			if proc != nil {
-				go gamescope.ManageFocus(proc)
-			}
-			return proc, nil
+			return LaunchViaRetroDECK(context.Background(), path)
 		},
 
 		Kill: func(_ *config.Instance) error {
-			// Revert gamescope focus properties
-			gamescope.RevertFocus()
 			log.Debug().Msg("kill requested for RetroDECK launcher")
 			return nil
 		},
@@ -169,6 +174,8 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			})
 		},
 	}
+	withGamescopeFocus(&launcher)
+	return launcher
 }
 
 // GetRetroDECKLaunchers returns all available RetroDECK launchers.
@@ -216,7 +223,7 @@ func GetRetroDECKLaunchers(_ *config.Instance) []platforms.Launcher {
 			Str("launcherID", systemInfo.GetLauncherID()).
 			Msg("registering RetroDECK launcher")
 
-		launcher := createRetroDECKLauncher(systemFolder, systemInfo, paths)
+		launcher := createRetroDECKLauncher(systemFolder, systemInfo, &paths)
 		result = append(result, launcher)
 	}
 

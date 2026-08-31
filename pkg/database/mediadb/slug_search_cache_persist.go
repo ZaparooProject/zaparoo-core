@@ -94,9 +94,11 @@ func (db *MediaDB) slugSearchCachePath() string {
 // LoadCachedSlugSearchCache reads the persisted slug search cache from disk
 // and installs it into the atomic pointer. Verifies magic, version, and
 // index generation against the live DB before accepting the file. Returns
-// (false, nil) when the file is missing or stale, so the caller can fall
-// back to a SQL rebuild; (true, nil) when a usable cache was loaded;
-// (false, err) on unrecoverable I/O or decode errors.
+// (false, nil) when the file is missing, stale, or only covers selected
+// systems, so the caller can build a complete cache; (true, nil) when a
+// complete cache was loaded; (false, err) on unrecoverable I/O or decode
+// errors. A valid selective cache is still installed so its covered systems
+// remain searchable while the complete cache is built.
 func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
 	path := db.slugSearchCachePath()
 	if path == "" {
@@ -143,9 +145,10 @@ func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
 		Int("entries", cache.entryCount).
 		Int("systems", len(cache.systemRanges)).
 		Int64("generation", gen).
+		Bool("complete", cache.complete).
 		Str("path", path).
 		Msg("slug search cache loaded from disk")
-	return true, nil
+	return cache.complete, nil
 }
 
 // PersistSlugSearchCache writes the current in-memory slug search cache to
@@ -159,6 +162,14 @@ func (db *MediaDB) PersistSlugSearchCache() error {
 	}
 	cache := db.slugSearchCache.Load()
 	if cache == nil || cache.entryCount == 0 {
+		return removePersistedCacheFile(path, slugSearchCacheKind)
+	}
+	// Mid-scan tombstones and trigram delta layers have no on-disk
+	// representation; persisting the raw arrays would resurrect dropped
+	// entries on load. Drop any stale file instead — the next boot rebuilds
+	// from SQL, and the end-of-index full rebuild persists a clean cache.
+	if cache.hasMidScanState() {
+		log.Debug().Msg("skipping slug search cache persist: cache carries mid-scan state")
 		return removePersistedCacheFile(path, slugSearchCacheKind)
 	}
 	gen, err := db.IndexGeneration()

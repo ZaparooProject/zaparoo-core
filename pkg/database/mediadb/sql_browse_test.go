@@ -22,16 +22,41 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type queryCountingDB struct {
+	sqlQueryable
+	queryCalls int
+}
+
+func (db *queryCountingDB) QueryContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (*sql.Rows, error) {
+	db.queryCalls++
+	rows, err := db.sqlQueryable.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("counted query: %w", err)
+	}
+	return rows, nil
+}
 
 func browseTestPath(parts ...string) string {
 	return filepath.ToSlash(filepath.Join(append([]string{string(filepath.Separator)}, parts...)...))
@@ -123,58 +148,6 @@ func TestLogBrowseMediaCountsBySystem_RowsError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlBrowseDescendantCount_Unfiltered(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
-		WithArgs(romsDir).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 273, count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseDescendantCount_SystemFiltered(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE.*s\\.SystemID IN").
-		WithArgs(romsDir, "PSX").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, []systemdefs.System{{ID: "PSX"}})
-	require.NoError(t, err)
-	assert.Equal(t, 273, count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseDescendantCount_QueryError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
-		WithArgs(romsDir).
-		WillReturnError(sql.ErrConnDone)
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
-	require.Error(t, err)
-	assert.Equal(t, 0, count)
-	assert.Contains(t, err.Error(), "browse descendant count")
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestSqlBrowseDirectoriesFromCache_ReturnsSystemCounts(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
@@ -215,7 +188,7 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	romsDir := browseTestDir("roms")
 	mock.ExpectQuery("WITH matched AS").
-		WithArgs(romsDir, romsDir).
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).AddRow("SNES", 2))
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
@@ -227,7 +200,7 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
+func TestSqlBrowseDirectories_ReturnsEmptyWhenReadyCacheParentHasNoChildren(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -241,8 +214,29 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
 	mock.ExpectQuery("SELECT d.Name, c.FileCount").
 		WithArgs(int64(10), "PSX").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(psxDir).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("WITH matched AS").
-		WithArgs(psxDir, psxDir, "PSX").
+		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).AddRow("USA", 273, "PSX"))
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
@@ -254,6 +248,216 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
 	assert.Equal(t, "USA", results[0].Name)
 	assert.Equal(t, 273, results[0].FileCount)
 	assert.Equal(t, []string{"PSX"}, results[0].SystemIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesFromCache_SingleSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// Keyset (AfterName) and overfetch (Limit) are bound after the system filter.
+	mock.ExpectQuery("SELECT d.Name, c.FileCount").
+		WithArgs(int64(10), "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 1).AddRow("Epsilon", 1))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesFromCache_MultiSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// System filter args precede the keyset and overfetch limit.
+	mock.ExpectQuery("SELECT d.Name, SUM").
+		WithArgs(int64(10), "NES", "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("Delta", 1, "SNES").AddRow("Epsilon", 1, "NES"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "NES"}, {ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	// HAVING keyset and LIMIT are bound after the path-prefix args.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 2).AddRow("Epsilon", 2))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: romsDir,
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesForSystems_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	// Path-prefix args, then system filter, then keyset and limit.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("USA", 273, "PSX").AddRow("World", 10, "PSX"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "USA", results[0].Name)
+	assert.Equal(t, "World", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_CacheSingleSystem(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM BrowseDirCounts").
+		WithArgs(int64(10), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(7))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 7, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_CacheNoSystemUsesDistinct(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT d.DBID\\) FROM BrowseDirCounts").
+		WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(13))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 13, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenParentMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(romsDir).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenCacheNotReady(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(9))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, count)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -321,6 +525,200 @@ func TestSqlBrowseRouteCountsFromCache_UsesChildDirCounts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 123, counts[snesRoute].FileCount)
 	assert.Equal(t, []string{"SNES"}, counts[snesRoute].SystemIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Not parallel: the route-context case mutates the package-level count timeout.
+func TestSqlBrowseRouteCountsFromMedia_ReusesPresenceProbeAcrossTimeouts(t *testing.T) {
+	tests := []struct {
+		probeErr            error
+		name                string
+		probeHasMedia       bool
+		routeContextTimeout bool
+		wantUnknownCounts   bool
+	}{
+		{
+			name:              "media present",
+			probeHasMedia:     true,
+			wantUnknownCounts: true,
+		},
+		{
+			name: "no rows",
+		},
+		{
+			name:     "probe timeout",
+			probeErr: context.DeadlineExceeded,
+		},
+		{
+			name:     "probe error",
+			probeErr: errors.New("probe failed"),
+		},
+		{
+			name:                "route context timeout",
+			probeHasMedia:       true,
+			routeContextTimeout: true,
+			wantUnknownCounts:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			probeQueries := 0
+			matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+				if strings.Contains(actualSQL, "SELECT 1") {
+					probeQueries++
+				}
+				return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+			})
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			if tc.routeContextTimeout {
+				originalTimeout := browseRouteCountSubTimeout
+				browseRouteCountSubTimeout = 100 * time.Millisecond
+				t.Cleanup(func() { browseRouteCountSubTimeout = originalTimeout })
+			}
+
+			routeA := browseTestPath("roms", "a")
+			routeB := browseTestPath("roms", "b")
+			expectCountTimeout := func(route string) {
+				t.Helper()
+				expectation := mock.ExpectQuery("SELECT COUNT").
+					WithArgs(browseRouteCacheKey(route), "SNES")
+				if tc.routeContextTimeout {
+					expectation.WillDelayFor(time.Second).WillReturnError(errors.New("interrupted"))
+				} else {
+					expectation.WillReturnError(context.DeadlineExceeded)
+				}
+			}
+			expectCountTimeout(routeA)
+			probeExpectation := mock.ExpectQuery("SELECT 1").WithArgs("SNES")
+			if tc.probeErr != nil {
+				probeExpectation.WillReturnError(tc.probeErr)
+			} else {
+				probeRows := sqlmock.NewRows([]string{"one"})
+				if tc.probeHasMedia {
+					probeRows.AddRow(1)
+				}
+				probeExpectation.WillReturnRows(probeRows)
+			}
+			expectCountTimeout(routeB)
+			// Keep one query pending so the matcher sees an unexpected second probe.
+			mock.ExpectQuery("SELECT sentinel").
+				WillReturnRows(sqlmock.NewRows([]string{"one"}).AddRow(1))
+
+			counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
+				Routes:  []string{routeA, routeB},
+				Systems: []systemdefs.System{{ID: "SNES"}},
+			})
+			require.NoError(t, err)
+			if tc.wantUnknownCounts {
+				require.Len(t, counts, 2)
+				for _, route := range []string{routeA, routeB} {
+					assert.Equal(t, database.BrowseRouteCount{
+						Path:         route,
+						SystemIDs:    []string{"SNES"},
+						CountUnknown: true,
+					}, counts[route])
+				}
+			} else {
+				assert.Empty(t, counts)
+			}
+
+			var sentinel int
+			require.NoError(t, db.QueryRowContext(context.Background(), "SELECT sentinel").Scan(&sentinel))
+			assert.Equal(t, 1, probeQueries)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCountError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	route := browseTestPath("roms", "a")
+	countErr := errors.New("count failed")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(route), "SNES").
+		WillReturnError(countErr)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.ErrorIs(t, err, countErr)
+	assert.Nil(t, counts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringCount(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	probeQueries := 0
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if strings.Contains(actualSQL, "SELECT COUNT") {
+			cancel()
+		}
+		if strings.Contains(actualSQL, "SELECT 1") {
+			probeQueries++
+		}
+		return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	route := browseTestPath("roms", "a")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(route), "SNES").
+		WillReturnError(context.Canceled)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.Nil(t, counts)
+	assert.Zero(t, probeQueries, "caller cancellation must not invoke timeout fallback")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringProbe(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if strings.Contains(actualSQL, "SELECT 1") {
+			cancel()
+		}
+		return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	route := browseTestPath("roms", "a")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(route), "SNES").
+		WillReturnError(context.DeadlineExceeded)
+	mock.ExpectQuery("SELECT 1").
+		WithArgs("SNES").
+		WillReturnError(context.Canceled)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, counts)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -406,4 +804,1112 @@ func TestSqlBrowseRootCountsFromCache_ReturnsZeroForMissingRoot(t *testing.T) {
 	require.NotNil(t, counts[nesRoot])
 	assert.Equal(t, 0, *counts[nesRoot])
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_EmptyResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{}
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_TagTypeAbsent(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// One sqlFindTagType prepare+query per entry in UtilityTags; empty rows =
+	// ErrNoRows = skip. Loop over all entries so the test stays valid if the list grows.
+	for _, ct := range tags.UtilityTags {
+		mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+			ExpectQuery().
+			WithArgs(int64(0), string(ct.Type)).
+			WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
+	}
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_NoFavorites(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 10, Name: "Game A"},
+		{MediaID: 11, Name: "Game B"},
+	}
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+
+	tagRows := sqlmock.NewRows([]string{"DBID", "TypeDBID", "Tag", "DisplayName"}).
+		AddRow(int64(42), int64(5), "favorite", "")
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnRows(tagRows)
+
+	// MediaTags query returns no rows — neither entry has any utility tag.
+	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
+		WithArgs(int64(10), int64(11), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}))
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.Empty(t, results[1].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 20, Name: "Favorited Game"},
+		{MediaID: 21, Name: "Regular Game"},
+	}
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+
+	tagRows := sqlmock.NewRows([]string{"DBID", "TypeDBID", "Tag", "DisplayName"}).
+		AddRow(int64(42), int64(5), "favorite", "")
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnRows(tagRows)
+
+	// Only media ID 20 has the favorite utility tag.
+	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
+		WithArgs(int64(20), int64(21), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).AddRow(int64(20), int64(42)))
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	require.Len(t, results[0].Tags, 1, "favorited entry should have one tag")
+	assert.Equal(t, "favorite", results[0].Tags[0].Tag)
+	assert.Equal(t, "user", results[0].Tags[0].Type)
+	assert.Empty(t, results[1].Tags, "non-favorited entry should have no tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_TagTypeRealDBError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// Simulate a real DB error (not ErrNoRows) on the tag type lookup.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), string(tags.UtilityTags[0].Type)).
+		WillReturnError(sql.ErrConnDone)
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse utility tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_TagRealDBError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// Tag type found; then a real DB error on the tag value lookup.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), string(tags.UtilityTags[0].Type)).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnError(sql.ErrConnDone)
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse utility tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{}
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	assert.NoError(t, err)
+	// No DB operations should occur for empty input.
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func expectImagePropertyTagLookup(mock sqlmock.Sqlmock, ids ...int64) {
+	rows := sqlmock.NewRows([]string{"DBID"})
+	for _, id := range ids {
+		rows.AddRow(id)
+	}
+	mock.ExpectQuery(`SELECT t\.DBID\s+FROM Tags t\s+JOIN TagTypes tt ON tt\.DBID = t\.TypeDBID`+
+		`\s+WHERE tt\.Type = \? AND t\.Tag LIKE \?\s+ORDER BY t\.DBID`).
+		WithArgs(string(tags.TagTypeProperty), imagePropertyValuePrefix+"%").
+		WillReturnRows(rows)
+}
+
+func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 101, Name: "NoCoverGame"},
+		{MediaID: 2, MediaTitleID: 102, Name: "AnotherNoCoverGame"},
+	}
+
+	// Neither title has an image, so both media IDs proceed to fallback.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(101), int64(102), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}))
+	mock.ExpectQuery(`SELECT mp\.MediaDBID`).
+		WithArgs(int64(1), int64(2), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.False(t, results[0].HasCover, "entry with no image property should have HasCover=false")
+	assert.False(t, results[1].HasCover, "entry with no image property should have HasCover=false")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 10, MediaTitleID: 110, Name: "GameWithCover"},
+		{MediaID: 20, MediaTitleID: 120, Name: "GameWithoutCover"},
+	}
+
+	// Neither title has an image; media fallback finds mediaID 10 only.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(110), int64(120), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}))
+	mock.ExpectQuery(`SELECT mp\.MediaDBID`).
+		WithArgs(int64(10), int64(20), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(10)))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.True(t, results[0].HasCover, "entry with image property should have HasCover=true")
+	assert.False(t, results[1].HasCover, "entry without image property should have HasCover=false")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Both media share a title; the title-level cover property means both
+	// should be marked as having a cover.
+	results := []database.SearchResultWithCursor{
+		{MediaID: 30, MediaTitleID: 100, Name: "GameA"},
+		{MediaID: 31, MediaTitleID: 100, Name: "GameA (Rev B)"},
+	}
+
+	// Shared title cover resolves both entries, so no media fallback runs.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(100), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(100)))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.True(t, results[0].HasCover)
+	assert.True(t, results[1].HasCover)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestQueryImagePropertyEntityIDs_ChunksMaximumPage(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	const maxPageSize = 1000
+	entityIDs := make([]int64, maxPageSize)
+	for i := range entityIDs {
+		entityIDs[i] = int64(i + 1)
+	}
+	firstArgs := make([]driver.Value, 0, sqliteMaxParams)
+	for _, id := range entityIDs[:sqliteMaxParams-1] {
+		firstArgs = append(firstArgs, id)
+	}
+	firstArgs = append(firstArgs, int64(901))
+	secondArgs := []driver.Value{int64(999), int64(1000), int64(901)}
+
+	queryPattern := `SELECT mtp\.MediaTitleDBID\s+FROM MediaTitleProperties mtp`
+	mock.ExpectQuery(queryPattern).
+		WithArgs(firstArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1)))
+	mock.ExpectQuery(queryPattern).
+		WithArgs(secondArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1000)))
+
+	covered, err := queryImagePropertyEntityIDs(
+		context.Background(), db, coverPropertyScopeTitle, entityIDs, []int64{901},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{1: {}, 1000: {}}, covered)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 5, MediaTitleID: 105, Name: "SomeGame"},
+	}
+
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(105), int64(901)).
+		WillReturnError(errors.New("db unavailable"))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse cover flags query")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Integration tests use a real SQLite DB to verify the query joins correctly
+// against the canonical tag schema. These catch schema/prefix mismatches that
+// pure sqlmock tests cannot — sqlmock never executes real SQL.
+
+// seedImagePropertyTags inserts the minimal TagTypes/Tags rows needed to call
+// UpsertMediaProperties/UpsertMediaTitleProperties in a bare setupTempMediaDB.
+// A full index run would seed all canonical tags; these tests need only the
+// property type and image-boxart tag.
+func seedImagePropertyTags(t *testing.T, mediaDB *MediaDB) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
+		INSERT OR IGNORE INTO Tags (DBID, TypeDBID, Tag) VALUES (901, 900, 'image-boxart');
+	`)
+	require.NoError(t, err)
+}
+
+func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Insert two media rows: one will get an image property, one will not.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	titleA, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game With Cover"),
+		Name:       "Game With Cover",
+	})
+	require.NoError(t, err)
+	mediaA, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: titleA.DBID,
+		Path:           filepath.Join("roms", "nes", "with_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+
+	titleB, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game Without Cover"),
+		Name:       "Game Without Cover",
+	})
+	require.NoError(t, err)
+	mediaB, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: titleB.DBID,
+		Path:           filepath.Join("roms", "nes", "no_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Write a media-level image property only for mediaA.
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, mediaA.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "with_cover.png")},
+	}))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaA.DBID, MediaTitleID: titleA.DBID, Name: "Game With Cover"},
+		{MediaID: mediaB.DBID, MediaTitleID: titleB.DBID, Name: "Game Without Cover"},
+	}
+
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
+	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
+
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaRef{
+		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
+		{MediaDBID: mediaB.DBID, MediaTitleDBID: titleB.DBID},
+		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
+		{},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{mediaA.DBID: true, mediaB.DBID: false}, statuses)
+}
+
+func TestCoverAvailabilityIndex_AsyncBuildAndInvalidation(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Cached Cover"),
+		Name:       "Cached Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "cached_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "cached.png")},
+	}))
+
+	mediaDB.TrackBackgroundOperation()
+	firstPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), firstPass))
+	require.True(t, firstPass[0].HasCover, "SQL fallback must serve first request")
+	assert.Nil(t, cachedCoverAvailabilityIndex(mediaDB.sql.Load()),
+		"cache build must not compete with existing background work")
+	mediaDB.BackgroundOperationDone()
+
+	buildPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), buildPass))
+	require.True(t, buildPass[0].HasCover)
+	mediaDB.WaitForBackgroundOperations()
+
+	index := cachedCoverAvailabilityIndex(mediaDB.sql.Load())
+	require.NotNil(t, index)
+	assert.True(t, index.hasTitle(title.DBID))
+	assert.False(t, index.hasMedia(media.DBID))
+
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaRef{
+		{MediaDBID: media.DBID, MediaTitleDBID: title.DBID},
+		{MediaDBID: media.DBID + 1, MediaTitleDBID: title.DBID + 1},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{media.DBID: true, media.DBID + 1: false}, statuses)
+
+	require.NoError(t, mediaDB.DeleteMediaTitleProperty(ctx, title.DBID, 901))
+	assert.Nil(t, cachedCoverAvailabilityIndex(mediaDB.sql.Load()), "image deletion must invalidate index")
+
+	secondPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), secondPass))
+	assert.False(t, secondPass[0].HasCover, "fallback must observe deleted cover")
+	mediaDB.WaitForBackgroundOperations()
+
+	index = cachedCoverAvailabilityIndex(mediaDB.sql.Load())
+	require.NotNil(t, index)
+	assert.False(t, index.hasTitle(title.DBID))
+}
+
+func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Two media sharing one title; cover is on the title, not the media.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Shared Title"),
+		Name:       "Shared Title",
+	})
+	require.NoError(t, err)
+	mediaA, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "rev_a.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	mediaB, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "rev_b.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Write the image property at the title level only.
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "shared.png")},
+	}))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaA.DBID, MediaTitleID: title.DBID, Name: "Rev A"},
+		{MediaID: mediaB.DBID, MediaTitleID: title.DBID, Name: "Rev B"},
+	}
+
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
+	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
+}
+
+// TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID verifies
+// that a title-scoped cover is detected even when the result omits MediaTitleID.
+// The cover query resolves the title through the Media row (Media.MediaTitleDBID is
+// NOT NULL), so callers that build results without populating MediaTitleID — such as
+// singleton container aliases — still get correct title-scope cover flags. This
+// guards against the regression where folder-based systems showed a blank grid.
+func TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Title Only Cover"),
+		Name:       "Title Only Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "title_only.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "title_only.png")},
+	}))
+
+	// MediaTitleID deliberately left zero, mirroring a synthetic result.
+	results := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, Name: "Title Only Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+	assert.True(t, results[0].HasCover,
+		"title-scope cover must resolve via the Media row even when MediaTitleID is omitted")
+}
+
+// TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse reproduces the
+// regression where a browse that runs before the image-* property tags are seeded
+// (which happens inside the indexing pipeline) pins an empty tag set in the
+// process-lifetime cache, leaving every later browse reporting HasCover=false until
+// the process restarts. The scrape/index-completion path never invalidates this
+// cache, so the only recovery without this fix is a restart.
+func TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game With Cover"),
+		Name:       "Game With Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "with_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// First browse runs before any image-* property tag exists, mirroring a browse
+	// landing mid-reindex before SeedCanonicalTags. No covers can exist yet, so
+	// HasCover=false here is correct — but it must not be cached for the DB handle.
+	firstPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), firstPass))
+	require.False(t, firstPass[0].HasCover, "no image tags seeded yet, so HasCover must be false")
+
+	// Indexing then seeds the image-* tags and the scraper writes the cover property.
+	seedImagePropertyTags(t, mediaDB)
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "with_cover.png")},
+	}))
+
+	// A subsequent browse on the same DB handle must now see the cover. Without the
+	// empty-result guard in resolveImagePropertyTagDBIDs, the first pass would have
+	// cached an empty tag set and this would still report false.
+	secondPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), secondPass))
+	assert.True(t, secondPass[0].HasCover,
+		"cover must be detected once image tags are seeded, even if an earlier browse ran first")
+}
+
+// Sibling disambiguation is exercised end-to-end in disambiguation_test.go: it
+// now reads stored per-title types (RecomputeSystemDisambiguation) instead of
+// grouping a page in memory, so it is correct across page boundaries.
+
+// TestBrowseFiles_SortNameFallback_Integration verifies that a media row with
+// SortName=” (pre-migration) gets its display name derived from the file path
+// rather than emitting an empty Name field.
+func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Expected Name"),
+		Name:       "Expected Name",
+	})
+	require.NoError(t, err)
+
+	parentDir := browseTestDir("roms", "nes")
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           browseTestPath("roms", "nes", "mygame.nes"),
+		ParentDir:      parentDir,
+		SortName:       "", // intentionally empty — simulates a pre-migration row
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Blank out SortName directly so the scan loop hits the fallback path.
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
+	require.NoError(t, err)
+
+	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		PathPrefix: parentDir,
+		Limit:      10,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "mygame", results[0].Name,
+		"SortName='' should fall back to filename-without-extension")
+}
+
+func TestBrowseOverlayFiles_FirstRootWinsByFilesystemName(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	root1 := browseTestDir("configured", "NES")
+	root2 := browseTestDir("default", "NES")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insert := func(name, path string) database.Media {
+		t.Helper()
+		title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(nesSystem.GetMediaType(), name+path),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		row, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           path,
+			ParentDir:      filepath.ToSlash(filepath.Dir(path)) + "/",
+			SortName:       name,
+		})
+		require.NoError(t, mediaErr)
+		return row
+	}
+	winner := insert("Configured Copy", root1+"Game.nes")
+	insert("Default Copy", root2+"Game.nes")
+	insert("Inside Folder", root1+"Folder/Inside.nes")
+	insert("Hidden By Folder", root2+"Folder")
+	shadowFile := insert("Shadow File", root1+"Shadow")
+	insert("Hidden Directory Media", root2+"Shadow/Inside.nes")
+	insert("Visible Directory Media", root2+"Visible/Inside.nes")
+	unique := insert("Unique", root2+"Unique.nes")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sources := []database.BrowseSource{
+		{PathPrefix: root1, IncludeDirs: true},
+		{PathPrefix: root2, IncludeDirs: true},
+	}
+	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Limit:   10,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	assert.Equal(t,
+		[]int64{winner.DBID, shadowFile.DBID, unique.DBID},
+		[]int64{results[0].MediaID, results[1].MediaID, results[2].MediaID},
+	)
+
+	secondPage, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Cursor: &database.BrowseCursor{
+			SortValue: results[1].SortValue,
+			LastID:    results[1].MediaID,
+		},
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondPage, 1)
+	assert.Equal(t, unique.DBID, secondPage[0].MediaID)
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	assert.Equal(t, []string{"Folder", "Visible"}, []string{dirs[0].Name, dirs[1].Name})
+	assert.Equal(t, root1+"Folder", dirs[0].Path)
+	assert.Equal(t, root2+"Visible", dirs[1].Path)
+
+	queryCounter := &queryCountingDB{sqlQueryable: mediaDB.sql.Load()}
+	firstDirPage, err := sqlBrowseOverlayDirectories(ctx, queryCounter, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Limit:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, firstDirPage, 1)
+	assert.Equal(t, "Folder", firstDirPage[0].Name)
+	assert.Equal(t, 1, queryCounter.queryCalls)
+
+	secondDirPage, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay:   &database.BrowseOverlay{Sources: sources},
+		Systems:   []systemdefs.System{*nesSystem},
+		AfterName: firstDirPage[0].Name,
+		Limit:     1,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondDirPage, 1)
+	assert.Equal(t, "Visible", secondDirPage[0].Name)
+
+	count, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+
+	dirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, dirCount)
+
+	filenameIndex, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Sort:    "filename-asc",
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, browseIndexSchemeNone, filenameIndex.Scheme)
+	assert.Equal(t, 3, filenameIndex.TotalFiles)
+	assert.Empty(t, filenameIndex.Buckets)
+
+	index, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, browseIndexSchemeLatin, index.Scheme)
+	assert.Equal(t, 3, index.TotalFiles)
+	require.Len(t, index.Buckets, 3)
+	assert.Equal(t, []string{"C", "S", "U"}, []string{
+		index.Buckets[0].Key, index.Buckets[1].Key, index.Buckets[2].Key,
+	})
+}
+
+// overlayDirsFixture seeds two overlapping routes plus a third that must
+// contribute no directories, and returns the sources in priority order.
+//
+// The shapes it covers are the ones the merged root view actually produces:
+// the same directory name under two routes (the higher-priority route wins),
+// a directory shadowed by a higher-priority route's file of the same name,
+// a directory only the lower-priority route has, and an IncludeDirs: false
+// route (an ancestor already represented by a more specific route).
+func overlayDirsFixture(t *testing.T, mediaDB *MediaDB) []database.BrowseSource {
+	t.Helper()
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	high := browseTestDir("overlay", "high")
+	low := browseTestDir("overlay", "low")
+	noDirs := browseTestDir("overlay", "nodirs")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insert := func(name, mediaPath string) {
+		t.Helper()
+		title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(nesSystem.GetMediaType(), name+mediaPath),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		_, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           mediaPath,
+			ParentDir:      filepath.ToSlash(filepath.Dir(mediaPath)) + "/",
+			SortName:       name,
+		})
+		require.NoError(t, mediaErr)
+	}
+	// Shared name: both routes have a "Both" directory, high priority wins.
+	insert("High Both", high+"Both/One.nes")
+	insert("High Both Two", high+"Both/Two.nes")
+	insert("Low Both", low+"Both/Three.nes")
+	// Shadowed: high has a file named "Shadow", low has a directory.
+	insert("Shadow File", high+"Shadow")
+	insert("Shadowed Media", low+"Shadow/Inside.nes")
+	// Only in the lower-priority route.
+	insert("Only Low", low+"OnlyLow/Inside.nes")
+	// The IncludeDirs: false route's subdirectory must never be listed.
+	insert("Excluded", noDirs+"Excluded/Inside.nes")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	return []database.BrowseSource{
+		{PathPrefix: high, IncludeDirs: true},
+		{PathPrefix: low, IncludeDirs: true},
+		{PathPrefix: noDirs, IncludeDirs: false},
+	}
+}
+
+func nesSystemForTest(t *testing.T) []systemdefs.System {
+	t.Helper()
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	return []systemdefs.System{*nesSystem}
+}
+
+// TestBrowseOverlayDirectories_CacheMatchesMedia is the assertion the cache
+// routing exists for: the browse cache and the Media scan must return the same
+// merged directory listing, or the merged root view changes depending on
+// whether an index has finished.
+//
+// Recomputing this from Media means scanning every row beneath every route —
+// 66,011 rows for C64 on the #1279 device database, twice per page because
+// BrowseDirCount reruns the same statement. BrowseDirCounts already holds the
+// same names and counts, built from the same IsMissing = 0 rows.
+func TestBrowseOverlayDirectories_CacheMatchesMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	opts := database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: systems,
+	}
+
+	_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+	require.NoError(t, err)
+	require.False(t, usable, "with no cache built the listing must come from media")
+
+	fromMedia, err := mediaDB.BrowseDirectories(ctx, opts)
+	require.NoError(t, err)
+	mediaDirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: opts.Overlay,
+		Systems: systems,
+	})
+	require.NoError(t, err)
+
+	// The expected shape, pinned so a change in either path is visible rather
+	// than the two silently agreeing on something wrong.
+	require.Len(t, fromMedia, 2)
+	assert.Equal(t, []string{"Both", "OnlyLow"}, []string{fromMedia[0].Name, fromMedia[1].Name})
+	assert.Equal(t, 2, fromMedia[0].FileCount, "the higher-priority route's Both wins with its own count")
+	assert.Equal(t, browseTestPath("overlay", "high")+"/Both", fromMedia[0].Path)
+	assert.Equal(t, browseTestPath("overlay", "low")+"/OnlyLow", fromMedia[1].Path)
+	assert.Equal(t, 2, mediaDirCount)
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	_, usable, err = browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+	require.NoError(t, err)
+	require.True(t, usable, "a full rebuild must make the cache serve the listing")
+
+	fromCache, err := mediaDB.BrowseDirectories(ctx, opts)
+	require.NoError(t, err)
+	assert.Equal(t, fromMedia, fromCache)
+
+	cacheDirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: opts.Overlay,
+		Systems: systems,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, mediaDirCount, cacheDirCount)
+}
+
+// TestBrowseOverlayDirectories_CachePagesLikeMedia covers AfterName and Limit,
+// which page the merged root's directory phase.
+func TestBrowseOverlayDirectories_CachePagesLikeMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	overlay := &database.BrowseOverlay{Sources: sources}
+
+	pages := func() [][]database.BrowseDirectoryResult {
+		t.Helper()
+		first, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: overlay,
+			Systems: systems,
+			Limit:   1,
+		})
+		require.NoError(t, err)
+		require.Len(t, first, 1)
+		second, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay:   overlay,
+			Systems:   systems,
+			AfterName: first[0].Name,
+			Limit:     1,
+		})
+		require.NoError(t, err)
+		return [][]database.BrowseDirectoryResult{first, second}
+	}
+
+	fromMedia := pages()
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	assert.Equal(t, fromMedia, pages())
+	assert.Equal(t, "Both", fromMedia[0][0].Name)
+	assert.Equal(t, "OnlyLow", fromMedia[1][0].Name)
+}
+
+// TestBrowseOverlayDirectories_FallsBackWhenCacheCannotAnswer pins the three
+// ways the cache is declined. Each must land on the media scan and return the
+// full listing: serving a partial answer would drop directories that exist.
+func TestBrowseOverlayDirectories_FallsBackWhenCacheCannotAnswer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("route missing from the cache", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+		require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+		// A route absent from BrowseDirs is not a route without subdirectories:
+		// the cache has never seen it, so answering from the cache would hide
+		// the directories media still holds.
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			"DELETE FROM BrowseDirs WHERE Path = ?", sources[1].PathPrefix)
+		require.NoError(t, err)
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "a route the cache never saw must send the listing to media")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+
+	t.Run("cache does not cover the system", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+
+		// A per-system refresh for a different system leaves the cache present
+		// but marked incomplete, which is the mid-index state.
+		other, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+		require.NoError(t, err)
+		require.NoError(t, sqlPopulateBrowseCacheForSystems(ctx, mediaDB.sql.Load(), []int64{other.DBID}))
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "an incomplete cache without this system's rows must not answer")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+
+	t.Run("cache invalidated", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+		require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+			DBConfigBrowseIndexVersion, "not-a-known-version")
+		require.NoError(t, err)
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "an unrecognised cache version must not be served")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+}
+
+// TestBrowseOverlayDirectories_ReadsFromTheCache is what makes the equivalence
+// tests above mean something. They compare two paths that agree by design, so
+// they would pass just as well if the cache were never consulted.
+//
+// Here the cached count is changed to a value the media table cannot produce.
+// If the listing still reports it, the statement read BrowseDirCounts; if it
+// reports the media count, the routing has regressed to the prefix scan this
+// change exists to avoid.
+func TestBrowseOverlayDirectories_ReadsFromTheCache(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	const sentinelCount = 4242
+	res, err := mediaDB.sql.Load().ExecContext(ctx, `
+		UPDATE BrowseDirCounts
+		SET FileCount = ?
+		WHERE ChildDirDBID = (SELECT DBID FROM BrowseDirs WHERE Path = ?)
+			AND ParentDirDBID != ChildDirDBID`,
+		sentinelCount, sources[0].PathPrefix+"Both/")
+	require.NoError(t, err)
+	updated, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), updated, "the fixture must produce exactly one cached count for Both")
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: systems,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	assert.Equal(t, "Both", dirs[0].Name)
+	assert.Equal(t, sentinelCount, dirs[0].FileCount,
+		"the merged root directory listing must come from BrowseDirCounts, not a Media prefix scan")
 }

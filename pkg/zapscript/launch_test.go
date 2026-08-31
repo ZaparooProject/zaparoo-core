@@ -20,17 +20,26 @@
 package zapscript
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
@@ -48,6 +57,150 @@ func launchTestAbsPath(parts ...string) string {
 	return filepath.Join(append([]string{root}, parts...)...)
 }
 
+func TestFindLauncherIn_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	cache := &pathhelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Cache-Only", SystemID: "Audio"},
+	})
+	platformLaunchers := []platforms.Launcher{
+		{ID: "Platform-Launcher", SystemID: "PC"},
+	}
+
+	tests := []struct {
+		name      string
+		launcher  string
+		wantID    string
+		launchers []platforms.Launcher
+	}{
+		{
+			name:      "platform launcher",
+			launchers: platformLaunchers,
+			launcher:  "PLATFORM-LAUNCHER",
+			wantID:    "Platform-Launcher",
+		},
+		{
+			name:     "cache-only launcher",
+			launcher: "CACHE-ONLY",
+			wantID:   "Cache-Only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			launcher := findLauncherIn(tt.launchers, cache, tt.launcher)
+			require.NotNil(t, launcher)
+			assert.Equal(t, tt.wantID, launcher.ID)
+		})
+	}
+}
+
+func TestFindLauncherIn_CaseFoldCollisionIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	cache := &pathhelpers.LauncherCache{}
+	launchers := []platforms.Launcher{
+		{ID: "Steam", SystemID: "PC"},
+		{ID: "steam", SystemID: "PC"},
+	}
+
+	assert.Nil(t, findLauncherIn(launchers, cache, "STEAM"))
+}
+
+func TestMediaIDForHistoryEntry_ResolvesMedia(t *testing.T) {
+	t.Parallel()
+
+	mediaPath := filepath.Join("games", "mario.nes")
+	entry := database.MediaHistoryEntry{SystemID: "nes", MediaPath: mediaPath}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("FindSystemBySystemID", "nes").
+		Return(database.System{DBID: 99, SystemID: "nes"}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(99), mediaPath).
+		Return(&database.Media{DBID: 123}, nil).Once()
+	env := platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
+
+	assert.Equal(t, int64(123), mediaIDForHistoryEntry(&env, &entry))
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestMediaIDForHistoryEntry_ReturnsZeroWhenUnavailable(t *testing.T) {
+	t.Parallel()
+
+	mediaPath := filepath.Join("games", "mario.nes")
+	entry := database.MediaHistoryEntry{SystemID: "nes", MediaPath: mediaPath}
+	dbErr := errors.New("database unavailable")
+
+	tests := []struct {
+		env  func(t *testing.T) platforms.CmdEnv
+		name string
+	}{
+		{
+			name: "nil database",
+			env: func(t *testing.T) platforms.CmdEnv {
+				t.Helper()
+				return platforms.CmdEnv{}
+			},
+		},
+		{
+			name: "system missing",
+			env: func(t *testing.T) platforms.CmdEnv {
+				t.Helper()
+				mockMediaDB := helpers.NewMockMediaDBI()
+				mockMediaDB.On("FindSystemBySystemID", "nes").
+					Return(database.System{}, sql.ErrNoRows).Once()
+				t.Cleanup(func() { mockMediaDB.AssertExpectations(t) })
+				return platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
+			},
+		},
+		{
+			name: "system lookup error",
+			env: func(t *testing.T) platforms.CmdEnv {
+				t.Helper()
+				mockMediaDB := helpers.NewMockMediaDBI()
+				mockMediaDB.On("FindSystemBySystemID", "nes").
+					Return(database.System{}, dbErr).Once()
+				t.Cleanup(func() { mockMediaDB.AssertExpectations(t) })
+				return platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
+			},
+		},
+		{
+			name: "media missing",
+			env: func(t *testing.T) platforms.CmdEnv {
+				t.Helper()
+				mockMediaDB := helpers.NewMockMediaDBI()
+				mockMediaDB.On("FindSystemBySystemID", "nes").
+					Return(database.System{DBID: 99, SystemID: "nes"}, nil).Once()
+				mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(99), mediaPath).
+					Return(nil, nil).Once()
+				t.Cleanup(func() { mockMediaDB.AssertExpectations(t) })
+				return platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
+			},
+		},
+		{
+			name: "media lookup error",
+			env: func(t *testing.T) platforms.CmdEnv {
+				t.Helper()
+				mockMediaDB := helpers.NewMockMediaDBI()
+				mockMediaDB.On("FindSystemBySystemID", "nes").
+					Return(database.System{DBID: 99, SystemID: "nes"}, nil).Once()
+				mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(99), mediaPath).
+					Return(nil, dbErr).Once()
+				t.Cleanup(func() { mockMediaDB.AssertExpectations(t) })
+				return platforms.CmdEnv{Database: &database.Database{MediaDB: mockMediaDB}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := tt.env(t)
+			assert.Zero(t, mediaIDForHistoryEntry(&env, &entry))
+		})
+	}
+}
+
 func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +213,131 @@ func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
 	assert.Equal(t, filepath.Join(launchTestAbsPath("games"), "neogeo", "NEOGEO.zip"), statPath)
 }
 
-// TestCmdLaunch_SystemArgAppliesDefaults verifies that system arg applies system defaults when no explicit launcher
+// TestApplyMediaLauncherOverride_SetsLauncherArg verifies that a media override sets the launcher AdvArg.
+func TestApplyMediaLauncherOverride_SetsLauncherArg(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := &config.Instance{}
+	launchers := []platforms.Launcher{
+		{ID: "Default", SystemID: "NES"},
+		{ID: "RetroArch", SystemID: "NES"},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "retroarch",
+		}}, nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch.title",
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	launcherID := applyMediaLauncherOverride(mockPlatform, &env, 123, "NES")
+
+	assert.Equal(t, "RetroArch", launcherID)
+	assert.Equal(t, "RetroArch", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	absPath := filepath.Join(root, "game.nes")
+	launchers := []platforms.Launcher{
+		{ID: "Default", SystemID: "NES", Folders: []string{root}, Extensions: []string{".nes"}},
+		{ID: "Override", SystemID: "NES"},
+	}
+
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("FindSystemBySystemID", "NES").
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), absPath).
+		Return(&database.Media{DBID: 123, Path: absPath}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "Override",
+		}}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Override"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{absPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	absPath := filepath.Join(root, "game.nes")
+	explicit := platforms.Launcher{ID: "Explicit", SystemID: "NES", Folders: []string{root}}
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicit})
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Explicit"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{absPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "Explicit",
+			}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -158,6 +435,389 @@ launcher = "genesis-default"
 
 	require.NoError(t, err, "cmdLaunch should not return error")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	absPath := filepath.Join(t.TempDir(), "song.mp3")
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		(*platforms.Launcher)(nil),
+		(*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		}),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{absPath},
+		},
+		Cfg: cfg,
+		Playlist: playlists.PlaylistController{
+			Current: &playlists.Playlist{Slot: mediaslot.Background},
+		},
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathAppliesInferredSystemDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	baseLauncher := platforms.Launcher{
+		ID:         "genesis-base",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	altLauncher := platforms.Launcher{
+		ID:         "genesis-alt",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	launchers := []platforms.Launcher{baseLauncher, altLauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesInferredDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	explicitLauncher := platforms.Launcher{
+		ID:         "genesis-explicit",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	altLauncher := platforms.Launcher{
+		ID:         "genesis-alt",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	launchers := []platforms.Launcher{explicitLauncher, altLauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-explicit"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "genesis-explicit",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemDefaultGroupResolvesWithinTargetSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "RA"
+`))
+
+	baseLauncher := platforms.Launcher{
+		ID:         "genesis-base",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	nesRALauncher := platforms.Launcher{ID: "RANES", SystemID: "nes", Groups: []string{"RA"}}
+	genesisRALauncher := platforms.Launcher{ID: "RAGenesis", SystemID: "genesis", Groups: []string{"RA"}}
+	launchers := []platforms.Launcher{baseLauncher, nesRALauncher, genesisRALauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "RAGenesis"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestResolveLauncherRefForSystem_SkipsWrongSystemIDMatch(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	launchers := []platforms.Launcher{
+		{ID: "shared-id", SystemID: "nes"},
+		{ID: "other", SystemID: "genesis"},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+
+	launcherID, found := resolveLauncherRefForSystem(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "shared-id", "genesis")
+
+	assert.False(t, found)
+	assert.Empty(t, launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestApplySystemDefaultLauncher_UsesOrderedGlobalPreference(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native", "RetroDECK"]
+`))
+	launchers := []platforms.Launcher{
+		{
+			ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative},
+			Availability: func(*config.Instance) error { return errors.New("unavailable") },
+		},
+		{ID: "RetroDECKSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupRetroDECK}},
+	}
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "RetroDECKSNES", launcherID)
+	assert.Equal(t, "RetroDECKSNES", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestApplySystemDefaultLauncher_SkipsUninstalledMisterCoreFamily is the
+// MiSTer shape of an ordered preference: the device has LLAPI cores but no
+// unstable nightlies, so the first entry must fall through instead of matching
+// a family that is not installed.
+func TestApplySystemDefaultLauncher_SkipsUninstalledMisterCoreFamily(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Unstable", "LLAPI"]
+`))
+	launchers := []platforms.Launcher{
+		{
+			ID: "UnstableSNES", SystemID: "SNES",
+			Groups:       []string{platformshared.LauncherGroupUnstable},
+			Availability: func(*config.Instance) error { return errors.New("core not installed") },
+		},
+		{ID: "LLAPISNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupLLAPI}},
+		{ID: "SNES", SystemID: "SNES"},
+	}
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "LLAPISNES", launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestApplySystemDefaultLauncher_SystemDefaultBeatsGlobalPreference(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native"]
+
+[[systems.default]]
+system = "SNES"
+launcher = "RetroDECK"
+`))
+	launchers := []platforms.Launcher{
+		{ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative}},
+		{ID: "RetroDECKSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupRetroDECK}},
+	}
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "RetroDECKSNES", launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLaunchClosurePreservesExplicitLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "ExplicitSNES", SystemID: "SNES"}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Once().Return([]platforms.Launcher{launcher})
+	mockPlatform.On("LaunchMedia", cfg, path,
+		mock.MatchedBy(func(selected *platforms.Launcher) bool {
+			return selected != nil && selected.ID == launcher.ID
+		}), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{
+			string(zapscript.KeyLauncher): launcher.ID,
+		})},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, true)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	gateHeld := false
+	published := false
+	mockPlatform.On(
+		"LaunchMedia", cfg, path, (*platforms.Launcher)(nil),
+		(*database.Database)(nil), mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		}),
+	).Run(func(args mock.Arguments) {
+		assert.True(t, gateHeld)
+		opts, ok := args.Get(4).(*platforms.LaunchOptions)
+		require.True(t, ok)
+		opts.ActiveMediaPublisher(&models.ActiveMedia{SystemID: "SNES", Name: "Game"})
+	}).Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		AcquireMediaLaunch: func() (platforms.MediaLaunchAccess, error) {
+			gateHeld = true
+			return platforms.MediaLaunchAccess{
+				SetActiveMedia: func(*models.ActiveMedia) { published = true },
+				Release:        func() { gateHeld = false },
+			}, nil
+		},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, true)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	assert.True(t, published)
+	assert.False(t, gateHeld)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLaunchClosureAppliesSystemDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "SNES"
+launcher = "Native"
+`))
+	launcher := platforms.Launcher{
+		ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative},
+	}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Twice().Return([]platforms.Launcher{launcher})
+	mockPlatform.On("LaunchMedia", cfg, path,
+		mock.MatchedBy(func(selected *platforms.Launcher) bool {
+			return selected != nil && selected.ID == launcher.ID
+		}), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, false)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	assert.Equal(t, launcher.ID, env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -369,6 +1029,224 @@ launcher = "snes-retroarch"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		createDirectPath bool
+	}{
+		{
+			name:             "direct relative path keeps precedence",
+			createDirectPath: true,
+		},
+		{
+			name: "launcher folder resolves from path root",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := helpers.NewMemoryFS()
+			pathRoot := launchTestAbsPath("path-root")
+			directPath := filepath.Join(pathRoot, "snes", "game.sfc")
+			launcherPath := filepath.Join(pathRoot, "Console", "SNES", "game.sfc")
+			require.NoError(t, fs.WriteFile(launcherPath, []byte("launcher"), 0o600))
+
+			wantPath := launcherPath
+			if tt.createDirectPath {
+				require.NoError(t, fs.WriteFile(directPath, []byte("direct"), 0o600))
+				wantPath = directPath
+			}
+
+			cfg := &config.Instance{}
+			launcher := platforms.Launcher{
+				ID:         "snes",
+				SystemID:   "SNES",
+				Folders:    []string{filepath.Join("Console", "SNES")},
+				Extensions: []string{".sfc"},
+			}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+			mockPlatform.On("RootDirs", cfg).Return([]string{})
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+			mockPlatform.On(
+				"LaunchMedia",
+				cfg,
+				wantPath,
+				(*platforms.Launcher)(nil),
+				(*database.Database)(nil),
+				(*platforms.LaunchOptions)(nil),
+			).Return(nil).Once()
+
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "launch",
+					Args: []string{filepath.ToSlash(filepath.Join("snes", "game.sfc"))},
+				},
+				Cfg:      cfg,
+				PathRoot: pathRoot,
+			}
+
+			result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCmdLaunch_SystemArgGuidesExternalRelativePath(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	pathRoot := launchTestAbsPath("external-drive")
+	resolvedPath := filepath.Join(pathRoot, "SomeGame.bin")
+	require.NoError(t, fs.WriteFile(resolvedPath, []byte("game"), 0o600))
+
+	cfg := &config.Instance{}
+	genesisLauncher := platforms.Launcher{
+		ID:         systemdefs.SystemGenesis,
+		SystemID:   systemdefs.SystemGenesis,
+		Folders:    []string{"Genesis"},
+		Extensions: []string{".bin"},
+	}
+	psxLauncher := platforms.Launcher{
+		ID:         systemdefs.SystemPSX,
+		SystemID:   systemdefs.SystemPSX,
+		Folders:    []string{"PSX"},
+		Extensions: []string{".bin"},
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{genesisLauncher, psxLauncher})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+	mockPlatform.On(
+		"LaunchMedia",
+		cfg,
+		resolvedPath,
+		mock.MatchedBy(func(launcher *platforms.Launcher) bool {
+			return launcher != nil && launcher.ID == systemdefs.SystemGenesis
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	reader := zapscript.NewParser("SomeGame.bin?system=Genesis")
+	script, err := reader.ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 1)
+
+	env := platforms.CmdEnv{
+		Cmd:      script.Cmds[0],
+		Cfg:      cfg,
+		PathRoot: pathRoot,
+	}
+	result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "GenesisOne", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}},
+		{ID: "GenesisTwo", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "SomeGame.bin"),
+		systemdefs.SystemGenesis,
+	)
+
+	assert.False(t, found)
+	assert.Empty(t, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemDefaultDoesNotBypassLauncherAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-restricted"
+`))
+	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	launcher := platforms.Launcher{
+		ID:            "genesis-restricted",
+		SystemID:      systemdefs.SystemGenesis,
+		Extensions:    []string{".bin"},
+		AllowListOnly: true,
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{path},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"system": systemdefs.SystemGenesis,
+			}),
+		},
+		Cfg: cfg,
+	}
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorContains(t, err, "file not allowed")
+	mockPlatform.AssertNotCalled(
+		t,
+		"LaunchMedia",
+		cfg,
+		path,
+		mock.Anything,
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemArgDoesNotBypassLauncherAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	launcher := platforms.Launcher{
+		ID:            systemdefs.SystemGenesis,
+		SystemID:      systemdefs.SystemGenesis,
+		Extensions:    []string{".bin"},
+		AllowListOnly: true,
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{path},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"system": systemdefs.SystemGenesis,
+			}),
+		},
+		Cfg: cfg,
+	}
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorContains(t, err, "file not allowed")
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	t.Parallel()
 
@@ -477,7 +1355,7 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Return empty results for the media search
-	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything).
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.SearchResult{}, nil)
 
 	env := platforms.CmdEnv{
@@ -497,9 +1375,866 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestMediaDBLookupContext_UsesTimeoutWithoutServiceContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := mediaDBLookupContext(&platforms.CmdEnv{})
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(mediaDBLookupTimeout), deadline, 200*time.Millisecond)
+}
+
+func TestRandomMediaDBLookupContext_UsesExtendedTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := randomMediaDBLookupContext(&platforms.CmdEnv{})
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(randomMediaDBLookupTimeout), deadline, 200*time.Millisecond)
+	assert.Greater(t, randomMediaDBLookupTimeout, mediaDBLookupTimeout)
+}
+
+func TestMediaDBLookupContext_IgnoresCanceledLauncherContext(t *testing.T) {
+	t.Parallel()
+
+	launcherCtx, launcherCancel := context.WithCancel(context.Background())
+	launcherCancel()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	defer serviceCancel()
+
+	env := platforms.CmdEnv{
+		LauncherCtx: launcherCtx,
+		ServiceCtx:  serviceCtx,
+	}
+	ctx, cancel := mediaDBLookupContext(&env)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("MediaDB lookup context should not use canceled launcher context")
+	default:
+	}
+
+	serviceCancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("MediaDB lookup context should follow service context")
+	}
+}
+
+func TestCmdLaunch_ExactFallbackMediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "snes-launcher", SystemID: "snes", Folders: []string{}},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, "Sonic\\Game").
+		Run(func(args mock.Arguments) {
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
+			<-ctx.Done()
+		}).
+		Return([]database.SearchResult{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{"snes/Sonic\\Game"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCmdSearch_MediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
+			<-ctx.Done()
+		}).
+		Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.search",
+			Args: []string{"sonic"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdSearch(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCmdSearch_AppliesDefaultFromResultSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	altLauncher := platforms.Launcher{ID: "genesis-alt", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{altLauncher})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "sonic" && filters.Limit == 1
+		}),
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "genesis", Path: filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")},
+	}, nil)
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.search",
+			Args: []string{"sonic"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdSearch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdSearch_AppliesMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	overrideLauncher := platforms.Launcher{ID: "genesis-override", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{overrideLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "sonic" && filters.Limit == 1
+		}),
+	).Return([]database.SearchResultWithCursor{
+		{MediaID: 44, SystemID: "genesis", Path: romPath},
+	}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(44)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "genesis-override",
+		}}, nil).Once()
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-override"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.search",
+			Args: []string{"sonic"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdSearch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestOrderedSystemTiersPreservesFallbackOrder(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemNeoGeoMVS)
+	require.NoError(t, err)
+
+	tiers := orderedSystemTiers([]systemdefs.System{*primary, *primary})
+	require.Len(t, tiers, 3)
+	require.Len(t, tiers[0], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeoMVS, tiers[0][0].ID)
+	require.Len(t, tiers[1], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeo, tiers[1][0].ID)
+	require.Len(t, tiers[2], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeoAES, tiers[2][0].ID)
+	assert.Nil(t, orderedSystemTiers(nil))
+}
+
+func TestRandomGameBySystemTier_TriesFallbackAfterPrimaryMiss(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmiga
+		}),
+	).Return(database.SearchResult{SystemID: systemdefs.SystemAmiga, Path: "fallback.adf"}, nil).Once()
+
+	result, err := randomGameBySystemTier(
+		context.Background(), mockMediaDB, &database.MediaQuery{}, orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, systemdefs.SystemAmiga, result.SystemID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRandomGameBySystemTierStopsOnDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	dbErr := errors.New("database unavailable")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32
+		}),
+	).Return(database.SearchResult{}, dbErr).Once()
+
+	_, err = randomGameBySystemTier(
+		context.Background(), mockMediaDB, &database.MediaQuery{}, orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.ErrorIs(t, err, dbErr)
+	mockMediaDB.AssertNumberOfCalls(t, "RandomGameWithQuery", 1)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchMediaBySystemTier_DoesNotCombineFallback(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga
+		}),
+	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmiga, Path: "fallback.adf"}}, nil).Once()
+
+	results, err := searchMediaBySystemTier(
+		context.Background(), mockMediaDB, &database.SearchFilters{Query: "fallback"},
+		orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemAmiga, results[0].SystemID)
+	assert.Equal(t, "fallback.adf", results[0].Path)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchMediaBySystemTierReturnsDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	dbErr := errors.New("database unavailable")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32
+		}),
+	).Return(nil, dbErr).Once()
+
+	_, err = searchMediaBySystemTier(
+		context.Background(), mockMediaDB, &database.SearchFilters{Query: "game"},
+		orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.ErrorIs(t, err, dbErr)
+	mockMediaDB.AssertNumberOfCalls(t, "SearchMediaWithFilters", 1)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestLaunchRandomGameWithRetry_StopContracts(t *testing.T) {
+	t.Parallel()
+
+	terminalErr := errors.New("terminal launch failure")
+	selectionErr := errors.New("reselection failure")
+	tests := []struct {
+		launchErr      error
+		selectErr      error
+		wantErr        error
+		name           string
+		wantLaunches   int
+		wantSelections int
+	}{
+		{
+			name:         "terminal launch error",
+			launchErr:    terminalErr,
+			wantErr:      terminalErr,
+			wantLaunches: 1,
+		},
+		{
+			name:           "reselection error",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			selectErr:      selectionErr,
+			wantErr:        selectionErr,
+			wantLaunches:   1,
+			wantSelections: 1,
+		},
+		{
+			name:           "retry limit",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			wantErr:        pathhelpers.ErrNoLauncher,
+			wantLaunches:   randomLaunchSelectionAttempts,
+			wantSelections: randomLaunchSelectionAttempts - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launches := 0
+			selections := 0
+			_, err := launchRandomGameWithRetry(
+				database.SearchResult{Path: filepath.Join("games", "first.rom")},
+				func() (database.SearchResult, error) {
+					selections++
+					if tt.selectErr != nil {
+						return database.SearchResult{}, tt.selectErr
+					}
+					return database.SearchResult{Path: filepath.Join("games", "next.rom")}, nil
+				},
+				func(database.SearchResult) error {
+					launches++
+					return tt.launchErr
+				},
+			)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantLaunches, launches)
+			assert.Equal(t, tt.wantSelections, selections)
+		})
+	}
+}
+
+func TestCmdRandomSystemWildcardUsesOrderedFallback(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	amigaLauncher := platforms.Launcher{
+		ID: systemdefs.SystemAmiga, SystemID: systemdefs.SystemAmiga, Extensions: []string{".adf"},
+	}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{amigaLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "Amiga", "Fallback.adf")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32 &&
+				query.PathGlob == ""
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmiga &&
+				query.PathGlob == ""
+		}),
+	).Return(database.SearchResult{SystemID: systemdefs.SystemAmiga, Path: romPath}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.random", Args: []string{systemdefs.SystemAmigaCD32 + "/*"}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdSearchUsesOrderedFallback(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	amigaLauncher := platforms.Launcher{
+		ID: systemdefs.SystemAmiga, SystemID: systemdefs.SystemAmiga, Extensions: []string{".adf"},
+	}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{amigaLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "Amiga", "Fallback.adf")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32 &&
+				filters.Query == "fallback"
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga &&
+				filters.Query == "fallback"
+		}),
+	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmiga, Path: romPath}}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdSearch(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.search", Args: []string{systemdefs.SystemAmigaCD32 + "/fallback"}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
+			<-ctx.Done()
+		}).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{"all"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCmdRandom_AppliesDefaultFromResultSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	altLauncher := platforms.Launcher{ID: "genesis-alt", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{altLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{SystemID: "genesis", Path: romPath}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{"all"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AppliesMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	overrideLauncher := platforms.Launcher{ID: "genesis-override", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{overrideLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{MediaID: 55, SystemID: "genesis", Path: romPath}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(55)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "genesis-override",
+		}}, nil).Once()
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-override"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{"all"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathDBBackedGroupDefaultWithinResultSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "RA"
+`))
+
+	launchers := []platforms.Launcher{
+		{ID: "RA-NES", SystemID: "nes", Groups: []string{"RA"}},
+		{ID: "genesis-explicit", SystemID: "genesis"},
+		{ID: "RA-Genesis", SystemID: "genesis", Groups: []string{"RA"}},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+
+	queryPath := filepath.Join(launchTestAbsPath("games"), "GENESIS")
+	romPath := filepath.Join(queryPath, "Sonic.bin")
+	wantPathPrefix := filepath.ToSlash(queryPath)
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == wantPathPrefix
+		}),
+	).Return(database.SearchResult{SystemID: "genesis", Path: romPath}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "RA-Genesis"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{queryPath},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathRetriesUnlaunchableMedia(t *testing.T) {
+	t.Parallel()
+
+	queryPath := filepath.Join(launchTestAbsPath("games"), "SNES")
+	metadataPath := filepath.Join(queryPath, "gamelist.xml")
+	gamePath := filepath.Join(queryPath, "Super Mario World.sfc")
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{SystemID: systemdefs.SystemSNES, Path: metadataPath}, nil).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{SystemID: systemdefs.SystemSNES, Path: gamePath}, nil).Once()
+
+	mockPlatform.On(
+		"LaunchMedia", cfg, metadataPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(pathhelpers.ErrNoLauncher).Once()
+	mockPlatform.On(
+		"LaunchMedia", cfg, gamePath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{queryPath},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathFilesystemFallbackAppliesInferredGroupDefault(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	dir := filepath.Join(rootDir, "GENESIS")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	romPath := filepath.Join(dir, "Sonic.bin")
+	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
+	wantPathPrefix := filepath.ToSlash(dir)
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "RA"
+`))
+
+	launchers := []platforms.Launcher{
+		{ID: "genesis-base", SystemID: "genesis", Folders: []string{"GENESIS"}, Extensions: []string{".bin"}},
+		{ID: "RA-NES", SystemID: "nes", Groups: []string{"RA"}},
+		{ID: "genesis-explicit", SystemID: "genesis"},
+		{ID: "RA-Genesis", SystemID: "genesis", Groups: []string{"RA"}},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == wantPathPrefix
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows)
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "RA-Genesis"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_QueryContainingVirtualMarkerUsesLegacySystemSearch(t *testing.T) {
+	t.Parallel()
+
+	const query = "NES/title://cutscene"
+	mediaPath := filepath.Join(launchTestAbsPath("games"), "NES", "Title Cutscene.nes")
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.MatchedBy(func(mediaQuery *database.MediaQuery) bool {
+		return mediaQuery.PathPrefix == "" &&
+			mediaQuery.PathGlob == "title://cutscene" &&
+			len(mediaQuery.Systems) == 1 &&
+			mediaQuery.Systems[0] == systemdefs.SystemNES
+	})).Return(database.SearchResult{
+		Path:     mediaPath,
+		SystemID: systemdefs.SystemNES,
+	}, nil)
+	mockPlatform.On(
+		"LaunchMedia", cfg, mediaPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Name: "launch.random", Args: []string{query}},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_VirtualPathUsesRecursivePrefixWithTags(t *testing.T) {
+	t.Parallel()
+
+	const virtualRoot = "steam://"
+	const mediaPath = "steam://123/favorite"
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.MatchedBy(func(query *database.MediaQuery) bool {
+		return query.PathPrefix == virtualRoot &&
+			len(query.Tags) == 1 &&
+			query.Tags[0].Type == "user" &&
+			query.Tags[0].Value == "favorite"
+	})).Return(database.SearchResult{Path: mediaPath, SystemID: "Steam"}, nil)
+	mockPlatform.On(
+		"LaunchMedia", cfg, mediaPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{virtualRoot},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				string(zapscript.KeyTags): "user:favorite",
+			}),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestCmdRandom_DoubleSlashPathCleaned verifies that a double-slash prefix
 // (e.g. from **launch.random://path) is normalized before querying the DB.
+// On Windows, //media/fat is a UNC path and filepath.Clean preserves the double
+// slash, so the collapse to single slash is POSIX-only behavior.
 func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("//media/fat is a UNC path on Windows; double-slash collapse is POSIX-only filepath.Clean behavior")
+	}
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -509,6 +2244,7 @@ func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Expect the cleaned path (single slash) in the PathPrefix
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
 			return q.PathPrefix == "/media/fat/_#Insert-Coin/_#Essentials"
 		}),
@@ -541,6 +2277,58 @@ func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+// TestCmdRandom_UNCPathPrefixPreserved is a regression test against PR #921's approach.
+// On Windows, a UNC path such as \\server\share\games must be passed to the DB as
+// //server/share/games (via filepath.ToSlash(filepath.Clean(...))), matching how the
+// media scanner stores those paths. Collapsing the leading // to / would make the prefix
+// never match any stored media and silently return no results.
+func TestCmdRandom_UNCPathPrefixPreserved(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("UNC path handling is Windows-only")
+	}
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	// The scanner stores UNC paths as //server/share/... (via filepath.ToSlash).
+	// The DB prefix must preserve the leading // to match.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == "//server/share/games"
+		}),
+	).Return(database.SearchResult{
+		Path:     "//server/share/games/game.zip",
+		SystemID: "genesis",
+	}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg,
+		"//server/share/games/game.zip",
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{`\\server\share\games`},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestCmdRandom_AbsolutePathFallbackToFilesystem is a regression test for #576.
 // When an absolute path has no entries in the media database, launch.random
 // should fall back to picking a random file directly from disk.
@@ -552,6 +2340,7 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game1.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game2.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o750))
+	wantPathPrefix := filepath.ToSlash(dir)
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -560,8 +2349,9 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Database has no entries for this path
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
-			return q.PathPrefix == dir
+			return q.PathPrefix == wantPathPrefix
 		}),
 	).Return(database.SearchResult{}, sql.ErrNoRows)
 
@@ -593,6 +2383,89 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	dir := launchTestAbsPath("games")
+	require.NoError(t, fs.Fs.MkdirAll(dir, 0o750))
+	romPath := filepath.Join(dir, "game.mra")
+	require.NoError(t, afero.WriteFile(fs.Fs, romPath, []byte("x"), 0o600))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+	mockPlatform.On(
+		"LaunchMedia", cfg, romPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandomWithFS(fs.Fs, mockPlatform, &env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathDatabaseMissWithTagsDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		searchErr error
+		name      string
+	}{
+		{name: "no rows", searchErr: sql.ErrNoRows},
+		{name: "timeout", searchErr: context.DeadlineExceeded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+				Return(database.SearchResult{}, tt.searchErr)
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "launch.random",
+					Args: []string{launchTestAbsPath("games")},
+					AdvArgs: zapscript.NewAdvArgs(map[string]string{
+						string(zapscript.KeyTags): "genre:shmup",
+					}),
+				},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			_, err := cmdRandom(mockPlatform, env)
+
+			require.ErrorIs(t, err, tt.searchErr)
+			mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	t.Parallel()
 
@@ -604,7 +2477,7 @@ func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, sql.ErrNoRows)
 
 	env := platforms.CmdEnv{
@@ -634,7 +2507,7 @@ func TestCmdRandom_AbsolutePathFallback_OnlySubdirectories(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, sql.ErrNoRows)
 
 	env := platforms.CmdEnv{
@@ -663,7 +2536,7 @@ func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, errors.New("connection lost"))
 
 	env := platforms.CmdEnv{

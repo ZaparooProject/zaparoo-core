@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -113,6 +114,108 @@ func TestHandleClients_RemoteRejected(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "ListClients")
 }
 
+func TestHandleClientsCurrent(t *testing.T) {
+	t.Parallel()
+
+	adminCapabilities := []string{
+		string(permissions.CapInput),
+		string(permissions.CapPlaytimeExtend),
+		string(permissions.CapProfilesManage),
+		string(permissions.CapScreenshot),
+		string(permissions.CapSettingsWrite),
+		string(permissions.CapUpdateApply),
+	}
+	memberCapabilities := []string{
+		string(permissions.CapInput),
+		string(permissions.CapScreenshot),
+	}
+	//nolint:govet // Test table field order favors readability.
+	tests := []struct {
+		name                string
+		clientRole          string
+		wantRole            string
+		wantCapabilities    []string
+		wantAccess          permissions.Access
+		isLocal             bool
+		apiKeyAuthenticated bool
+		wantPaired          bool
+	}{
+		{
+			name:             "remote paired member",
+			clientRole:       string(permissions.RoleMember),
+			wantRole:         string(permissions.RoleMember),
+			wantCapabilities: memberCapabilities,
+			wantAccess:       permissions.AccessMember,
+			wantPaired:       true,
+		},
+		{
+			name:             "remote paired admin",
+			clientRole:       string(permissions.RoleAdmin),
+			wantRole:         string(permissions.RoleAdmin),
+			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessAdmin,
+			wantPaired:       true,
+		},
+		{
+			name:             "remote legacy is fail closed",
+			wantCapabilities: []string{},
+			wantAccess:       permissions.AccessLegacy,
+		},
+		{
+			name:                "API key is unpaired admin",
+			wantCapabilities:    adminCapabilities,
+			wantAccess:          permissions.AccessAdmin,
+			apiKeyAuthenticated: true,
+		},
+		{
+			name:             "local unpaired gets local grant",
+			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessLocalhost,
+			isLocal:          true,
+		},
+		{
+			name:             "local paired member gets local grant",
+			clientRole:       string(permissions.RoleMember),
+			wantRole:         string(permissions.RoleMember),
+			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessLocalhost,
+			isLocal:          true,
+			wantPaired:       true,
+		},
+		{
+			name:             "unknown paired role degrades to member",
+			clientRole:       "superuser",
+			wantCapabilities: memberCapabilities,
+			wantAccess:       permissions.AccessMember,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := HandleClientsCurrent(requests.RequestEnv{
+				ClientRole:          tt.clientRole,
+				IsLocal:             tt.isLocal,
+				APIKeyAuthenticated: tt.apiKeyAuthenticated,
+			})
+			require.NoError(t, err)
+			resp, ok := result.(models.ClientsCurrentResponse)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantPaired, resp.Paired)
+			assert.Equal(t, string(tt.wantAccess), resp.Access)
+			assert.Equal(t, tt.wantCapabilities, resp.Capabilities)
+			assert.NotNil(t, resp.Capabilities)
+			if tt.wantPaired {
+				require.NotNil(t, resp.Role)
+				assert.Equal(t, tt.wantRole, *resp.Role)
+			} else {
+				assert.Nil(t, resp.Role)
+			}
+		})
+	}
+}
+
 // Note on revocation semantics: HandleClientsDelete is forward-only —
 // it deletes the row but does not actively close in-flight WebSocket
 // sessions. The "new connections fail after revoke" property is
@@ -125,18 +228,13 @@ func TestHandleClients_RemoteRejected(t *testing.T) {
 func TestHandleClientsDelete_Success(t *testing.T) {
 	t.Parallel()
 
-	mockUserDB := helpers.NewMockUserDBI()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
 	mockUserDB.On("DeleteClient", "client-uuid").Return(nil)
 
 	params, err := json.Marshal(models.ClientsDeleteParams{ClientID: "client-uuid"})
 	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
+	env.Params = params
 
 	result, err := HandleClientsDelete(env)
 	require.NoError(t, err)
@@ -167,18 +265,13 @@ func TestHandleClientsDelete_MissingClientID(t *testing.T) {
 func TestHandleClientsDelete_DatabaseError(t *testing.T) {
 	t.Parallel()
 
-	mockUserDB := helpers.NewMockUserDBI()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
 	mockUserDB.On("DeleteClient", "client-uuid").Return(errors.New("not found"))
 
 	params, err := json.Marshal(models.ClientsDeleteParams{ClientID: "client-uuid"})
 	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
+	env.Params = params
 
 	_, err = HandleClientsDelete(env)
 	require.Error(t, err)

@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -39,23 +40,42 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
+// RunCommandOptions groups optional services used by specific command types.
+type RunCommandOptions struct {
+	WaitForMediaReady  func(context.Context) error
+	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	PlaybackManager    audio.PlaybackManager
+	UI                 *uievents.Service
+	LauncherManager    *state.LauncherManager
+}
+
 var (
-	ErrArgCount      = errors.New("invalid number of arguments")
-	ErrRequiredArgs  = errors.New("arguments are required")
-	ErrRemoteSource  = errors.New("cannot run from remote source")
-	ErrFileNotFound  = errors.New("file not found")
-	ErrNoHistory     = errors.New("no play history available")
-	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
+	ErrArgCount     = errors.New("invalid number of arguments")
+	ErrRequiredArgs = errors.New("arguments are required")
+	ErrRemoteSource = errors.New("cannot run from remote source")
+	ErrFileNotFound = errors.New("file not found")
+	ErrNoHistory    = errors.New("no play history available")
+	// ErrInvalidScript wraps a ZapScript parse failure.
+	ErrInvalidScript = errors.New("invalid ZapScript")
+	// ErrUnknownCommand is returned for a command name with no handler.
+	ErrUnknownCommand = errors.New("unknown command")
+	// ErrCommandBlocked is returned for a command denied by configuration.
+	ErrCommandBlocked = errors.New("command blocked")
+	// ErrExecuteNotAllowed is returned when a command line is denied by the
+	// allow_execute config.
+	ErrExecuteNotAllowed = errors.New("execute not allowed")
+	errAmbiguousPath     = errors.New("ambiguous case-insensitive path")
 )
 
-// getLauncherIDs extracts launcher IDs from the platform for validation context.
-func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
+// GetLauncherIDs extracts launcher IDs from the platform for validation context.
+func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 	launchers := pl.Launchers(cfg)
 	ids := make([]string, len(launchers))
 	for i := range launchers {
@@ -67,7 +87,7 @@ func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 // ParseAdvArgs parses and validates advanced arguments for a command.
 // Returns an error if parsing or validation fails.
 func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
-	ctx := advargs.NewParseContext(getLauncherIDs(pl, env.Cfg))
+	ctx := advargs.NewParseContext(GetLauncherIDs(pl, env.Cfg))
 	if err := advargs.Parse(env.Cmd.AdvArgs.Raw(), dest, ctx); err != nil {
 		return fmt.Errorf("failed to parse advanced args: %w", err)
 	}
@@ -108,6 +128,11 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdControl:    cmdControl,
 			zapscript.ZapScriptCmdScreenshot: cmdScreenshot,
 
+			zapscript.ZapScriptCmdProfile:      cmdProfile,
+			zapscript.ZapScriptCmdProfileClear: cmdProfileClear,
+
+			zapscript.ZapScriptCmdPlaytimeExtend: cmdPlaytimeExtend,
+
 			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
 			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
 			zapscript.ZapScriptCmdMisterScript:    forwardCmd,
@@ -119,6 +144,7 @@ func lookupCmd(name string) (cmdFunc, bool) {
 
 			zapscript.ZapScriptCmdInputKeyboard: cmdKeyboard,
 			zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
+			zapscript.ZapScriptCmdInputText:     cmdInputText,
 			zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
 			zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
 			zapscript.ZapScriptCmdInputCoinP3:   cmdCoinP3,
@@ -145,7 +171,9 @@ func lookupCmd(name string) (cmdFunc, bool) {
 // should not be included in log output.
 func isSensitiveCommand(cmdName string) bool {
 	switch cmdName {
-	case zapscript.ZapScriptCmdHTTPGet,
+	case zapscript.ZapScriptCmdProfile,
+		zapscript.ZapScriptCmdPlaytimeExtend,
+		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
 		zapscript.ZapScriptCmdInputKeyboard,
 		zapscript.ZapScriptCmdInputGamepad,
@@ -278,8 +306,42 @@ func virtualStatPath(lookupPath string, parts []string, end int) string {
 	return filepath.Join(parts[:end]...)
 }
 
+func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
+	roots := make([]string, 0, len(platformRoots)+len(pathRoots))
+	seen := make(map[string]struct{}, len(platformRoots)+len(pathRoots))
+
+	addRoot := func(root string, requireAbsolute bool) {
+		if root == "" {
+			return
+		}
+		cleanRoot := filepath.Clean(root)
+		if requireAbsolute && !filepath.IsAbs(cleanRoot) {
+			return
+		}
+		if _, ok := seen[cleanRoot]; ok {
+			return
+		}
+		seen[cleanRoot] = struct{}{}
+		roots = append(roots, cleanRoot)
+	}
+
+	for _, root := range pathRoots {
+		addRoot(root, true)
+	}
+	for _, root := range platformRoots {
+		addRoot(root, false)
+	}
+	return roots
+}
+
 // Check all games folders for a relative path to a file
-func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
+func findFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	path string,
+	pathRoots ...string,
+) (string, error) {
 	lookupPath := normalizeVirtualLookupPath(path)
 	ps := strings.Split(lookupPath, string(filepath.Separator))
 	statPath := lookupPath
@@ -301,7 +363,7 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 
 	candidates := []string{statPath}
 	if !filepath.IsAbs(statPath) {
-		rootDirs := pl.RootDirs(cfg)
+		rootDirs := pathLookupRoots(pl.RootDirs(cfg), pathRoots...)
 		candidates = make([]string, 0, len(rootDirs))
 		for _, gf := range rootDirs {
 			candidates = append(candidates, filepath.Join(gf, statPath))
@@ -385,9 +447,6 @@ func GetExprEnv(
 }
 
 // RunCommand parses and runs a single ZapScript command.
-// The lm parameter is only needed for media-launching commands (launch guard);
-// pass nil for contexts where media launches are not allowed (e.g. control scripts).
-
 func RunCommand(
 	serviceCtx context.Context,
 	pl platforms.Platform,
@@ -398,16 +457,24 @@ func RunCommand(
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
-	lm *state.LauncherManager,
-	waitForMediaReady func(context.Context) error,
+	opts RunCommandOptions,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
 
-	linkValue, err := checkZapLink(cfg, pl, db, cmd)
-	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", err)
+	// Remote-sourced commands are already fully-formed, pre-validated
+	// structural commands built server-side (see pkg/service/remote). There
+	// is nothing for a ZapLink to legitimately resolve here, and letting one
+	// substitute in server-fetched ZapScript would bypass the remote
+	// operation allowlist entirely.
+	linkValue := ""
+	if token.Source != tokens.SourceRemote {
+		var linkErr error
+		linkValue, linkErr = checkZapLink(cfg, pl, db, cmd)
+		if linkErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
+		}
 	}
 	if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
@@ -453,7 +520,7 @@ func RunCommand(
 	}
 
 	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
-		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
+		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd.Name)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,
 			NewCommands: newCmds,
@@ -461,42 +528,49 @@ func RunCommand(
 	}
 
 	env := platforms.CmdEnv{
-		Cmd:               cmd,
-		Cfg:               cfg,
-		ServiceCtx:        serviceCtx,
-		WaitForMediaReady: waitForMediaReady,
-		Playlist:          plsc,
-		Source:            token.Source,
-		TotalCommands:     totalCmds,
-		CurrentIndex:      currentIndex,
-		Unsafe:            unsafe,
-		Database:          db,
-		ExprEnv:           exprEnv,
+		Cmd:                cmd,
+		Cfg:                cfg,
+		ServiceCtx:         serviceCtx,
+		WaitForMediaReady:  opts.WaitForMediaReady,
+		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		PlaybackManager:    opts.PlaybackManager,
+		UI:                 opts.UI,
+		Playlist:           plsc,
+		Source:             token.Source,
+		PathRoot:           token.PathRoot,
+		// A ZapLink resolves one card command into a whole script, so the
+		// count on the card understates what this token runs. Commands that
+		// insist on running alone have to see the expanded total.
+		TotalCommands: totalCmds + len(newCmds),
+		CurrentIndex:  currentIndex,
+		Unsafe:        unsafe,
+		Database:      db,
+		ExprEnv:       exprEnv,
 	}
 
-	if lm != nil {
-		env.LauncherCtx = lm.GetContext()
+	if opts.LauncherManager != nil {
+		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
 	cmdFn, ok := lookupCmd(cmd.Name)
 	if !ok {
-		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd.Name)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrUnknownCommand, cmd.Name)
 	}
 
 	if cfg.IsCommandBlocked(cmd.Name) {
-		return platforms.CmdResult{}, fmt.Errorf("command blocked: %s", cmd.Name)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandBlocked, cmd.Name)
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
-		if lm == nil {
+		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}
-		if guardErr := lm.TryStartLaunch(); guardErr != nil {
+		if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
-		defer lm.EndLaunch()
-		env.LauncherCtx = lm.GetContext()
+		defer opts.LauncherManager.EndLaunch()
+		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
 	logCmd := cmd.String()
@@ -508,10 +582,16 @@ func RunCommand(
 	res, err := cmdFn(pl, env)
 	if err != nil {
 		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
 		case errors.Is(err, ErrFileNotFound),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),
-			errors.Is(err, ErrNoHistory):
+			errors.Is(err, ErrNoHistory),
+			// Refusals by configuration are the setting working, not a bug.
+			errors.Is(err, ErrExecuteNotAllowed),
+			errors.Is(err, ErrHTTPNotAllowed),
+			errors.Is(err, ErrRemoteSource):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", logCmd)

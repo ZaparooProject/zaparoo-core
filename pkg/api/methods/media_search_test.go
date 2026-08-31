@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -33,10 +34,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -79,6 +82,59 @@ func TestCursorEncodeDecycle(t *testing.T) {
 			assert.Equal(t, *tt.expected, *decoded, "Decoded value should match original")
 		})
 	}
+}
+
+func TestSortedSearchCursorEncodeDecode(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := encodeSortedSearchCursor(&database.SearchResultWithCursor{
+		SortValue: "Bravo",
+		MediaID:   42,
+	}, "name-asc")
+	require.NoError(t, err)
+
+	legacy, sorted, err := decodeMediaSearchCursor(encoded, "name-asc")
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+	require.NotNil(t, sorted)
+	assert.Equal(t, "name-asc", sorted.Sort)
+	assert.Equal(t, "Bravo", sorted.SortValue)
+	assert.Equal(t, int64(42), sorted.LastID)
+
+	_, _, err = decodeMediaSearchCursor(encoded, "name-desc")
+	require.Error(t, err)
+
+	legacyEncoded, err := encodeCursor(42)
+	require.NoError(t, err)
+	_, _, err = decodeMediaSearchCursor(legacyEncoded, "name-asc")
+	require.Error(t, err)
+}
+
+func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {
+	t.Parallel()
+
+	result := searchResultSystem("virtual-system", nil)
+	assert.Equal(t, "virtual-system", result.ID)
+	assert.Equal(t, "virtual-system", result.Name)
+}
+
+func TestSearchResultSystem_UsesLaunchableSystemMap(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
+	encodedID := launchables.EncodeID(id)
+	result := searchResultSystem(encodedID, map[string]launchables.VirtualSystem{
+		encodedID: {
+			ID:       id,
+			Name:     "Chess",
+			Category: "Other",
+		},
+	})
+
+	assert.Equal(t, encodedID, result.ID)
+	assert.Equal(t, "Chess", result.Name)
+	assert.Equal(t, "Other", result.Category)
+	assert.Equal(t, "zaparoo://"+encodedID+"/Chess", result.ZapScript)
 }
 
 func TestDecodeCursor_InvalidInputs(t *testing.T) {
@@ -198,7 +254,130 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		assert.Equal(t, "NES", searchResults.Results[0].System.ID)
 		assert.Equal(t, "Mario Bros", searchResults.Results[0].Name)
 		assert.Equal(t, "/games/mario.nes", searchResults.Results[0].Path)
+		assert.False(t, searchResults.Results[0].HasCover)
 	}
+}
+
+func TestHandleMediaSearch_IncludesCoverStatus(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{
+			{
+				SystemID: "NES", Name: "Covered", Path: filepath.Join("games", "covered.nes"),
+				MediaID: 1, MediaTitleID: 11,
+			},
+			{
+				SystemID: "NES", Name: "Uncovered", Path: filepath.Join("games", "uncovered.nes"),
+				MediaID: 2, MediaTitleID: 22,
+			},
+		}, nil)
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 11},
+		{MediaDBID: 2, MediaTitleDBID: 22},
+	}).Return(map[int64]bool{1: true, 2: false}, nil)
+
+	paramsJSON, err := json.Marshal(models.SearchParams{})
+	require.NoError(t, err)
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, response.Results, 2)
+	assert.True(t, response.Results[0].HasCover)
+	assert.False(t, response.Results[1].HasCover)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaSearch_CoverFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{{
+			SystemID: "NES", Name: "Game", Path: filepath.Join("games", "game.nes"),
+			MediaID: 1, MediaTitleID: 11,
+		}}, nil)
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaRef{{
+		MediaDBID: 1, MediaTitleDBID: 11,
+	}}).Run(func(args mock.Arguments) {
+		ctx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok, "optional enrichment must have a deadline")
+		assert.WithinDuration(t, time.Now().Add(optionalDBEnrichmentTimeout), deadline, time.Second)
+	}).Return(nil, errors.New("cover lookup failed"))
+
+	paramsJSON, err := json.Marshal(models.SearchParams{})
+	require.NoError(t, err)
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, int64(1), response.Results[0].MediaID)
+	assert.True(t, response.Results[0].HasCover)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaSearch_WithExplicitSort(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Sort == "name-asc" && filters.Cursor == nil &&
+				filters.SortCursor == nil && filters.Limit == 3
+		})).Return([]database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Alpha", Path: filepath.Join("games", "alpha.nes"), MediaID: 1, SortValue: "Alpha"},
+		{SystemID: "NES", Name: "Bravo", Path: filepath.Join("games", "bravo.nes"), MediaID: 2, SortValue: "Bravo"},
+		{
+			SystemID: "NES", Name: "Charlie", Path: filepath.Join("games", "charlie.nes"),
+			MediaID: 3, SortValue: "Charlie",
+		},
+	}, nil)
+
+	maxResults := 2
+	sortOrder := "name-asc"
+	paramsJSON, err := json.Marshal(models.SearchParams{MaxResults: &maxResults, Sort: &sortOrder})
+	require.NoError(t, err)
+
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, searchResults.Results, 2)
+	require.NotNil(t, searchResults.Pagination)
+	require.NotNil(t, searchResults.Pagination.NextCursor)
+	legacy, sorted, err := decodeMediaSearchCursor(*searchResults.Pagination.NextCursor, sortOrder)
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+	require.NotNil(t, sorted)
+	assert.Equal(t, "Bravo", sorted.SortValue)
+	assert.Equal(t, int64(2), sorted.LastID)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaSearch_WithCursor(t *testing.T) {
@@ -385,8 +564,12 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 		{Type: "genre", Tag: "RPG"},
 	}
 
-	mockMediaDB.On("GetAllUsedTags",
-		mock.Anything, // context
+	mockMediaDB.On("IndexedSystems").Return([]string{"NES", "SNES"}, nil)
+	mockMediaDB.On("GetSystemTagsCached",
+		mock.Anything,
+		mock.MatchedBy(func(systems []systemdefs.System) bool {
+			return len(systems) == 2
+		}),
 	).Return(expectedTags, nil)
 
 	// Create state
@@ -532,11 +715,11 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	expectedResults := []database.SearchResultWithCursor{
 		{
 			SystemID: "NES", Name: "RPG Game 1", Path: "/games/rpg1.nes", MediaID: 1,
-			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG"}},
 		},
 		{
 			SystemID: "SNES", Name: "RPG Game 2", Path: "/games/rpg2.sfc", MediaID: 2,
-			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG"}},
 		},
 	}
 
@@ -586,8 +769,9 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	require.True(t, ok, "Should return SearchResults")
 	assert.Len(t, searchResults.Results, 2, "Should return all tagged results")
 	assert.Len(t, searchResults.Results[0].Tags, 1, "Results should have tags")
-	assert.Equal(t, "RPG", searchResults.Results[0].Tags[0].Tag)
+	assert.Equal(t, "rpg", searchResults.Results[0].Tags[0].Tag)
 	assert.Equal(t, "genre", searchResults.Results[0].Tags[0].Type)
+	assert.Equal(t, "RPG", searchResults.Results[0].Tags[0].Label)
 
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)
@@ -847,6 +1031,42 @@ func TestResolveSystems_PreservesOrder(t *testing.T) {
 	assert.Equal(t, "SNES", systems[0].ID)
 	assert.Equal(t, "NES", systems[1].ID)
 	assert.Equal(t, "Genesis", systems[2].ID)
+}
+
+func TestHandleMediaSearch_PassesPathPrefix(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	pathPrefix := "steam://44"
+	query := "target"
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.PathPrefix == pathPrefix && filters.Query == query
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil)
+
+	paramsJSON, err := json.Marshal(models.SearchParams{
+		PathPrefix: &pathPrefix,
+		Query:      &query,
+	})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	_, err = HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaSearch_DeduplicatesSystems(t *testing.T) {

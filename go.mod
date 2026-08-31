@@ -1,13 +1,17 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.26.4
+go 1.26.6
 
 require (
-	fyne.io/systray v1.12.1
+	fyne.io/systray v1.12.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/KarpelesLab/gowebp v0.1.1
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/ZaparooProject/go-pn532 v0.22.1
-	github.com/ZaparooProject/go-zapscript v0.11.0
+	github.com/ZaparooProject/go-gameid v0.2.0
+	github.com/ZaparooProject/go-pn532 v0.23.0
+	github.com/ZaparooProject/go-zapscript v0.18.0
+	github.com/ZaparooProject/zaparoo-core/mister v0.0.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -15,18 +19,18 @@ require (
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
-	github.com/creativeprojects/go-selfupdate v1.5.2
+	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/gdamore/tcell/v2 v2.13.9
-	github.com/gen2brain/malgo v0.11.24
-	github.com/getsentry/sentry-go v0.46.2
-	github.com/getsentry/sentry-go/zerolog v0.46.2
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/gdamore/tcell/v2 v2.13.10
+	github.com/gen2brain/malgo v0.11.26
+	github.com/getsentry/sentry-go v0.48.0
+	github.com/getsentry/sentry-go/zerolog v0.48.0
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
-	github.com/go-playground/validator/v10 v10.30.2
+	github.com/go-playground/validator/v10 v10.30.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
 	github.com/godbus/dbus/v5 v5.2.2
@@ -37,45 +41,48 @@ require (
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
-	github.com/mackerelio/go-osstat v0.2.7
-	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/mackerelio/go-osstat v0.2.8
+	github.com/mattn/go-sqlite3 v1.14.50
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
-	github.com/pelletier/go-toml/v2 v2.3.1
-	github.com/pressly/goose/v3 v3.27.1
+	github.com/pelletier/go-toml/v2 v2.4.3
+	github.com/pressly/goose/v3 v3.27.3
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
 	github.com/sasha-s/go-deadlock v0.3.9
-	github.com/schollz/pake/v3 v3.1.1
-	github.com/shirou/gopsutil/v4 v4.26.4
+	github.com/schollz/pake/v3 v3.2.0
+	github.com/shirou/gopsutil/v4 v4.26.7
 	github.com/spf13/afero v1.15.0
-	github.com/stretchr/testify v1.11.1
-	go.bug.st/serial v1.7.1
-	go.etcd.io/bbolt v1.4.3
+	github.com/stretchr/testify v1.12.1
+	go.bug.st/serial v1.8.0
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/goleak v1.3.0
-	golang.design/x/clipboard v0.7.1
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/text v0.37.0
+	golang.design/x/clipboard v0.9.0
+	golang.org/x/image v0.45.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.15.0
-	gopkg.in/ini.v1 v1.67.2
+	gopkg.in/ini.v1 v1.67.3
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	pgregory.net/rapid v1.3.0
 )
 
 require (
-	code.gitea.io/sdk/gitea v0.22.1 // indirect
+	code.gitea.io/sdk/gitea v0.23.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/42wim/httpsig v1.2.3 // indirect
-	github.com/Masterminds/semver/v3 v3.4.0 // indirect
+	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/bodgit/plumbing v1.3.0 // indirect
+	github.com/bodgit/sevenzip v1.6.1 // indirect
+	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
-	github.com/ebitengine/purego v0.10.0 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
@@ -84,13 +91,14 @@ require (
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/google/go-github/v74 v74.0.0 // indirect
-	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/go-github/v86 v86.0.0 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
-	github.com/hashicorp/go-version v1.8.0 // indirect
+	github.com/hashicorp/go-version v1.9.0 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
@@ -100,38 +108,50 @@ require (
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
+	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.21 // indirect
+	github.com/mattn/go-isatty v0.0.23 // indirect
 	github.com/mewkiz/flac v1.0.12 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/miekg/dns v1.1.27 // indirect
+	github.com/nwaples/rardecode/v2 v2.2.2 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
+	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/sethvargo/go-retry v0.3.0 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/sethvargo/go-retry v0.4.0 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/tscholl2/siec v0.0.0-20240310163802-c2c6f6198406 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	gitlab.com/gitlab-org/api/client-go v1.9.1 // indirect
+	gitlab.com/gitlab-org/api/client-go v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go4.org v0.0.0-20200411211856-f5505b9728dd // indirect
+	golang.design/x/x11 v0.2.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
-	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
-	golang.org/x/net v0.54.0 // indirect
-	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
+
+// The mister/ module lives in this repository. Resolving it from the proxy
+// would let Core compile an older catalog than the one checked out beside it,
+// with both test suites still passing, so build it from the tree instead.
+//
+// The require above is a placeholder: the replace means it is never fetched,
+// and it exists only so the module is named. Point it at a real mister/vX.Y.Z
+// once one is tagged, for the benefit of anyone importing Core as a library
+// who also compiles pkg/platforms/mister.
+replace github.com/ZaparooProject/zaparoo-core/mister => ./mister

@@ -20,11 +20,14 @@
 package state
 
 import (
+	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -126,6 +129,132 @@ func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
 		require.Failf(t, "unexpected notification", "method: %s", notification.Method)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func TestReaderWriteActiveTracksOverlappingWrites(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	state.SetReaderWriteActive(true, "reader-1")
+	state.SetReaderWriteActive(true, "reader-1")
+	assert.True(t, state.ReaderWriteActive("reader-1"))
+
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.True(t, state.ReaderWriteActive("reader-1"))
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.False(t, state.ReaderWriteActive("reader-1"))
+
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.False(t, state.ReaderWriteActive("reader-1"))
+}
+
+// The updater asks whether the device is mid-write at all, and writes are
+// recorded against the reader doing them, so an answer that only covers one
+// reader ID is no answer.
+func TestAnyReaderWriteActiveCoversEveryReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	assert.False(t, state.AnyReaderWriteActive())
+
+	state.SetReaderWriteActive(true, "reader-1")
+	assert.True(t, state.AnyReaderWriteActive())
+	// The empty ID is the bucket no production writer records under.
+	assert.False(t, state.ReaderWriteActive())
+
+	state.SetReaderWriteActive(true, "reader-2")
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.True(t, state.AnyReaderWriteActive())
+
+	state.SetReaderWriteActive(false, "reader-2")
+	assert.False(t, state.AnyReaderWriteActive())
+}
+
+func TestWrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	written := &tokens.Token{UID: "written", ReaderID: "reader-1"}
+
+	state.SetReaderWriteActive(true, "reader-1")
+	state.MarkWrittenTagRemoved("reader-1")
+	state.SetWroteToken(written)
+	assert.Equal(t, written, state.GetWroteToken("reader-1"))
+
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.Nil(t, state.GetWroteToken("reader-1"))
+}
+
+func TestWrittenTagRemovalAfterWriteClearsReaderToken(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	written := &tokens.Token{UID: "written", ReaderID: "reader-1"}
+
+	state.SetReaderWriteActive(true, "reader-1")
+	state.SetWroteToken(written)
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.Equal(t, written, state.GetWroteToken("reader-1"))
+
+	state.MarkWrittenTagRemoved("reader-1")
+	assert.Nil(t, state.GetWroteToken("reader-1"))
+}
+
+func TestWrittenTagRemovalDoesNotClearAnotherReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	readerA := &tokens.Token{UID: "written-a", ReaderID: "reader-a"}
+	readerB := &tokens.Token{UID: "written-b", ReaderID: "reader-b"}
+
+	state.SetReaderWriteActive(true, "reader-a")
+	state.SetReaderWriteActive(true, "reader-b")
+	state.MarkWrittenTagRemoved("reader-a")
+	state.SetWroteToken(readerA)
+	state.SetWroteToken(readerB)
+	state.SetReaderWriteActive(false, "reader-a")
+	state.SetReaderWriteActive(false, "reader-b")
+
+	assert.Nil(t, state.GetWroteToken("reader-a"))
+	assert.Equal(t, readerB, state.GetWroteToken("reader-b"))
+}
+
+func TestWroteTokenDefaultReaderCompatibility(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	written := &tokens.Token{UID: "written"}
+
+	state.SetReaderWriteActive(true)
+	state.SetWroteToken(written)
+	assert.True(t, state.ReaderWriteActive())
+	assert.Equal(t, written, state.GetWroteToken())
+	state.MarkWrittenTagRemoved()
+	state.SetReaderWriteActive(false)
+
+	assert.False(t, state.ReaderWriteActive())
+	assert.Nil(t, state.GetWroteToken())
+}
+
+func TestClearWroteTokensPreservesActiveWriteState(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	active := &tokens.Token{UID: "active", ReaderID: "reader-active"}
+	inactive := &tokens.Token{UID: "inactive", ReaderID: "reader-inactive"}
+
+	state.SetReaderWriteActive(true, active.ReaderID)
+	state.SetWroteToken(active)
+	state.SetWroteToken(inactive)
+	state.SetWroteToken(nil)
+
+	assert.True(t, state.ReaderWriteActive(active.ReaderID))
+	assert.Nil(t, state.GetWroteToken(active.ReaderID))
+	assert.Nil(t, state.GetWroteToken(inactive.ReaderID))
+	state.SetReaderWriteActive(false, active.ReaderID)
+	assert.False(t, state.ReaderWriteActive(active.ReaderID))
 }
 
 func TestConsumePendingWrite(t *testing.T) {
@@ -276,4 +405,73 @@ func TestSetOnMediaStartHookNotCalledOnStop(t *testing.T) {
 	if hookCalled {
 		t.Error("OnMediaStart hook should not be called when media stops")
 	}
+}
+
+func TestBackupCoordinatorReleasePublishesFinishedNotification(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, ns := NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(state.StopService)
+
+	lease, err := state.BackupCoordinator().Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	lease.Release()
+
+	select {
+	case notif := <-ns:
+		assert.Equal(t, models.NotificationBackupState, notif.Method)
+		var payload models.BackupStateNotification
+		require.NoError(t, json.Unmarshal(notif.Params, &payload))
+		assert.Equal(t, string(backupcoordinator.OperationRemoteUpload), payload.Operation)
+		assert.True(t, payload.Finished)
+		assert.False(t, payload.Paused)
+		assert.False(t, payload.Throttled)
+	case <-time.After(time.Second):
+		t.Fatal("expected backup.state finished notification")
+	}
+}
+
+// TestLockOrder_RestoreThenLaunchThenPublish walks every path that takes more
+// than one of the three media gates. Built with -tags=deadlock, go-deadlock
+// records the order each path takes them in and panics on the first path that
+// disagrees, so exercising them once each is enough to catch an inversion.
+func TestLockOrder_RestoreThenLaunchThenPublish(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, ns := NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(state.StopService)
+	// Publishing media notifies, and nothing here reads those.
+	t.Cleanup(func() {
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+
+	// A launch takes restore access and then the launch gate, and its
+	// publication capability takes the publish gate under those holds.
+	launchAccess, err := state.AcquireMediaLaunch()
+	require.NoError(t, err)
+	launchAccess.SetActiveMedia(&models.ActiveMedia{SystemID: "test", Name: "launch"})
+	launchAccess.Release()
+	state.SetActiveMedia(nil)
+
+	// A publication from outside a launch takes restore access and then the
+	// publish gate.
+	state.SetActiveMedia(&models.ActiveMedia{SystemID: "test", Name: "test"})
+	state.SetActiveMedia(nil)
+
+	// The updater takes the launch gate and then the publish gate, under the
+	// restore access its caller is already holding.
+	releaseRestore, err := state.TryAcquireRestoreAccess()
+	require.NoError(t, err)
+	releaseGate, err := state.AcquireUpdateMediaGate(t.Context())
+	require.NoError(t, err)
+	releaseGate()
+	releaseRestore()
 }

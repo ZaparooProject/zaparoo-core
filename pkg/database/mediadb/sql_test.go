@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, ` +
+	`m\.SortName, m\.IsMissing ` +
+	`FROM Media m INDEXED BY sqlite_autoindex_Media_1.*` +
+	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
+	`ORDER BY m\.Path`
 
 func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 	t.Parallel()
@@ -65,6 +72,47 @@ func TestSqlGetLastGenerated_Success(t *testing.T) {
 	result, err := sqlGetLastGenerated(context.Background(), db)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1672531200), result.Unix())
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlResetIndexResumeState_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeAttempts, "0").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeCheckpoint, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = sqlResetIndexResumeState(context.Background(), db)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlResetIndexResumeState_CheckpointErrorRollsBack(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeAttempts, "0").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeCheckpoint, "").
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlResetIndexResumeState(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to set index resume checkpoint")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -191,11 +239,19 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 			SystemID: "test-system",
 			Name:     "Test Game",
 			Path:     "/games/test.rom",
+			Slug:     "testgame",
+			MediaID:  42,
 		},
 	}
 
-	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path"}).
-		AddRow(expectedResults[0].SystemID, expectedResults[0].Name, expectedResults[0].Path)
+	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "Slug", "DBID"}).
+		AddRow(
+			expectedResults[0].SystemID,
+			expectedResults[0].Name,
+			expectedResults[0].Path,
+			expectedResults[0].Slug,
+			expectedResults[0].MediaID,
+		)
 
 	// Match the actual SQL query structure
 	mock.ExpectPrepare(`select.*from Systems.*inner join.*MediaTitles.*inner join.*Media.*where.*LIMIT`).
@@ -209,6 +265,8 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	assert.Equal(t, expectedResults[0].SystemID, result[0].SystemID)
 	assert.Equal(t, expectedResults[0].Name, result[0].Name)
 	assert.Equal(t, expectedResults[0].Path, result[0].Path)
+	assert.Equal(t, expectedResults[0].Slug, result[0].Slug)
+	assert.Equal(t, expectedResults[0].MediaID, result[0].MediaID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -283,7 +341,7 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	db := mediaDB.sql
+	db := mediaDB.sql.Load()
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type) VALUES (1, 'genre'), (2, 'platform');
@@ -329,7 +387,7 @@ func TestSqlTruncateSystems_EmptyList(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	err := sqlTruncateSystems(context.Background(), mediaDB.sql, []string{})
+	err := sqlTruncateSystems(context.Background(), mediaDB.sql.Load(), []string{})
 	assert.NoError(t, err)
 }
 
@@ -429,7 +487,7 @@ func TestSqlTruncateSystems_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	err := sqlTruncateSystems(ctx, mediaDB.sql, []string{"NES"})
+	err := sqlTruncateSystems(ctx, mediaDB.sql.Load(), []string{"NES"})
 	require.Error(t, err)
 }
 
@@ -579,15 +637,11 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 		ExpectQuery().
 		// Slug LIKE, SecondarySlug LIKE, tag args doubled for both tag sources
 		WithArgs("NES", "%mario%", "%mario%", "genre", "Action", "genre", "Action", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Mario", "/games/mario.nes", 1))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow("NES", "Mario", "/games/mario.nes", 1, 10, ""))
 
-	// Mock second query: get tags for the media items
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(1, 1).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-			AddRow(1, "Action", "genre"))
+	expectSearchTagsQuery(mock, 1, 10)
 
 	results, err := sqlSearchMediaWithFilters(
 		context.Background(), db, systems, variantGroups, rawWords, tags, nil, nil, 10, includeName,
@@ -598,6 +652,169 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	assert.Equal(t, "NES", results[0].SystemID)
 	assert.Equal(t, "/games/mario.nes", results[0].Path)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func systemIDsAsDriverValues(systems []systemdefs.System) []driver.Value {
+	args := make([]driver.Value, 0, len(systems))
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+	return args
+}
+
+const searchSystemFilterPattern = `(?s)WHERE\s+Systems\.SystemID IN \(\?(,\?)*\) AND\s+` +
+	`Media\.IsMissing = 0.*LIMIT \?`
+
+const searchVariantSystemFilterPattern = `(?s)WHERE\s+Systems\.SystemID IN \(\?(,\?)*\) AND\s+` +
+	`Media\.IsMissing = 0.*MediaTitles\.Slug LIKE.*LIMIT \?`
+
+func expectSearchTagsQuery(mock sqlmock.Sqlmock, mediaID, titleID int64) {
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(mediaID, titleID).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
+	// No disambiguation lookup is expected: these fixtures return an empty
+	// DisambiguationTypes, so attachZapScriptTags skips the query entirely.
+}
+
+func TestSqlSearchMediaWithFilters_AllSystemsTagOnlySkipsSystemFilter(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := systemdefs.AllSystems()
+	require.NotEmpty(t, systems)
+	tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+
+	mock.ExpectPrepare("(?s)WHERE\\s+Media\\.IsMissing = 0.*ORDER BY Media\\.DBID ASC.*LIMIT \\?").
+		ExpectQuery().
+		WithArgs("user", "favorite", "user", "favorite", 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 7, 70, ""))
+	expectSearchTagsQuery(mock, 7, 70)
+
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, nil, nil, tags, nil, nil, 10, false,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, systems[0].ID, results[0].SystemID)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "favorite.rom")), results[0].Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaWithFilters_DuplicateSystemsMissingOneKeepsSystemFilter(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	allSystems := systemdefs.AllSystems()
+	require.GreaterOrEqual(t, len(allSystems), 2)
+	systems := make([]systemdefs.System, 0, len(allSystems))
+	for range allSystems {
+		systems = append(systems, allSystems[0])
+	}
+	tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+	args := systemIDsAsDriverValues(systems)
+	args = append(args, "user", "favorite", "user", "favorite", 10)
+
+	mock.ExpectPrepare(searchSystemFilterPattern).
+		ExpectQuery().
+		WithArgs(args...).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow(allSystems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 8, 80, ""))
+	expectSearchTagsQuery(mock, 8, 80)
+
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, nil, nil, tags, nil, nil, 10, false,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, allSystems[0].ID, results[0].SystemID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaWithFilters_NonTagDrivenKeepsSystemFilter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("include name", func(t *testing.T) {
+		t.Parallel()
+		db, mock, err := testsqlmock.NewSQLMock()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		systems := systemdefs.AllSystems()
+		require.NotEmpty(t, systems)
+		tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+		args := systemIDsAsDriverValues(systems)
+		args = append(args, "user", "favorite", "user", "favorite", 10)
+
+		mock.ExpectPrepare(searchSystemFilterPattern).
+			ExpectQuery().
+			WithArgs(args...).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+			}).AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 9, 90, ""))
+		expectSearchTagsQuery(mock, 9, 90)
+
+		results, err := sqlSearchMediaWithFilters(
+			context.Background(), db, systems, nil, nil, tags, nil, nil, 10, true,
+		)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, systems[0].ID, results[0].SystemID)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("variant groups", func(t *testing.T) {
+		t.Parallel()
+		db, mock, err := testsqlmock.NewSQLMock()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		systems := systemdefs.AllSystems()
+		require.NotEmpty(t, systems)
+		tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+		args := systemIDsAsDriverValues(systems)
+		args = append(args, "%mario%", "%mario%", "user", "favorite", "user", "favorite", 10)
+
+		mock.ExpectPrepare(searchVariantSystemFilterPattern).
+			ExpectQuery().
+			WithArgs(args...).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+			}).AddRow(systems[0].ID, "Mario", filepath.ToSlash(filepath.Join("roms", "mario.rom")), 10, 100, ""))
+		expectSearchTagsQuery(mock, 10, 100)
+
+		results, err := sqlSearchMediaWithFilters(
+			context.Background(), db, systems, [][]string{{"mario"}}, []string{"mario"}, tags, nil, nil, 10, false,
+		)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "mario.rom")), results[0].Path)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestRequestedAllSystemsRequiresUniqueSystemIDs(t *testing.T) {
+	t.Parallel()
+
+	allSystems := systemdefs.AllSystems()
+	require.GreaterOrEqual(t, len(allSystems), 2)
+	duplicatedFirst := make([]systemdefs.System, 0, len(allSystems))
+	for range allSystems {
+		duplicatedFirst = append(duplicatedFirst, allSystems[0])
+	}
+
+	assert.True(t, requestedAllSystems(allSystems))
+	assert.False(t, requestedAllSystems(duplicatedFirst))
 }
 
 func TestSqlGetTags(t *testing.T) {
@@ -701,15 +918,14 @@ func TestSqlPopulateSystemTagsCache_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Expect DELETE statement to clear cache
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
-		ExpectExec().
-		WillReturnResult(sqlmock.NewResult(0, 5)) // Deleted 5 rows
-
-	// Expect INSERT statement to populate cache
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*`).
-		ExpectExec().
-		WillReturnResult(sqlmock.NewResult(1, 10)) // Inserted 10 rows
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnResult(sqlmock.NewResult(1, 4))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCache(context.Background(), db)
 	assert.NoError(t, err)
@@ -722,14 +938,75 @@ func TestSqlPopulateSystemTagsCache_ClearError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Expect DELETE statement to fail
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
-		ExpectExec().
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCache(context.Background(), db)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to clear system tags cache")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_MediaInsertError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to populate media tags cache rows")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_TitleInsertError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to populate title tags cache rows")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_CommitError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnResult(sqlmock.NewResult(1, 4))
+	mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit system tags cache transaction")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -847,15 +1124,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_Success(t *testing.T) {
 	systemStmt.ExpectQuery().WithArgs("snes").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(2))
 
-	// Mock selective delete for these systems
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1, 2).
-		WillReturnResult(sqlmock.NewResult(0, 10)) // Deleted 10 old cache entries
-
-	// Mock selective INSERT for these systems (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
-		ExpectExec().WithArgs(1, 2, 1, 2).
-		WillReturnResult(sqlmock.NewResult(1, 15)) // Inserted 15 new cache entries
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(0, 10))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(1, 9))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err)
@@ -889,15 +1168,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_SingleSystem(t *testing.T) {
 		ExpectQuery().WithArgs("nes").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
-	// Mock selective delete
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Mock selective INSERT (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
-		WillReturnResult(sqlmock.NewResult(1, 8))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err)
@@ -924,13 +1205,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_NonExistentSystem(t *testing.T) {
 		WillReturnError(sql.ErrNoRows) // System not found
 
 	// Should still process NES successfully
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
-		WillReturnResult(sqlmock.NewResult(1, 8))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err, "should continue processing valid systems even if some don't exist")
@@ -952,9 +1237,11 @@ func TestSqlPopulateSystemTagsCacheForSystems_DeleteError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
 	// Mock delete failure
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	require.Error(t, err)
@@ -977,18 +1264,48 @@ func TestSqlPopulateSystemTagsCacheForSystems_InsertError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
 	// Mock delete success
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Mock insert failure (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
 		WillReturnError(sql.ErrTxDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to populate cache for specific systems")
+	assert.Contains(t, err.Error(), "failed to populate media cache rows for specific systems")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCacheForSystems_CommitError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit selective system tags cache transaction")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1006,8 +1323,8 @@ func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query (now always called even when no tag filters)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1040,8 +1357,8 @@ func TestSqlSearchMediaBySlug_WithTags(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa", "genre", "platform", "genre", "platform").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1, ""))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1082,9 +1399,9 @@ func TestSqlSearchMediaBySlug_MultipleResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("genesis", "Sonic the Hedgehog", "/games/sonic.bin", 1).
-			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("genesis", "Sonic the Hedgehog", "/games/sonic.bin", 1, "").
+			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2, ""))
 
 	// Mock tags query (now always called even when no tag filters)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1126,9 +1443,9 @@ func TestSqlSearchMediaBySlug_LoadsTagsWithoutFilters(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World (USA)", "/games/smw-usa.smc", 1).
-			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World (USA)", "/games/smw-usa.smc", 1, "").
+			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2, ""))
 
 	// Mock tags query - returns tags for both ROMs
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1172,7 +1489,7 @@ func TestSqlSearchMediaBySlug_NoResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}))
 
 	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
 
@@ -1195,7 +1512,7 @@ func TestSqlSearchMediaBySlug_WithTagsNoResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "japan", "region", "japan").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}))
 
 	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
 
@@ -1242,8 +1559,8 @@ func TestSqlSearchMediaBySlug_TagsQueryError(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query error
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1305,8 +1622,8 @@ func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query with wrong column count (scan error)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1346,7 +1663,8 @@ func TestCheckForDuplicateMediaTitles_WithDuplicates(t *testing.T) {
 	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
 		WillReturnRows(rows)
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
 	require.NoError(t, err)
 
@@ -1367,14 +1685,17 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	systemID := "nes"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"}).
-		AddRow(int64(1), "/games/mario.nes", "/games/", int64(10), int64(100), "supermariobros", "nes").
-		AddRow(int64(2), "/games/zelda.nes", "/games/", int64(11), int64(100), "legendofzelda", "nes").
-		AddRow(int64(3), "/games/metroid.nes", "/games/", int64(12), int64(100), "metroid", "nes")
+	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "IsMissing"}
+	gamesDir := filepath.Join(string(filepath.Separator), "games")
+	marioPath := filepath.Join(gamesDir, "mario.nes")
+	zeldaPath := filepath.Join(gamesDir, "zelda.nes")
+	metroidPath := filepath.Join(gamesDir, "metroid.nes")
+	rows := sqlmock.NewRows(cols).
+		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.", false).
+		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda", false).
+		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", true)
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
-	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
 
@@ -1383,21 +1704,22 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	// Check first result
 	assert.Equal(t, int64(1), results[0].DBID)
-	assert.Equal(t, "/games/mario.nes", results[0].Path)
-	assert.Equal(t, "/games/", results[0].ParentDir)
+	assert.Equal(t, marioPath, results[0].Path)
+	assert.Equal(t, gamesDir, results[0].ParentDir)
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
-	assert.Equal(t, "supermariobros", results[0].TitleSlug)
+	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
 	assert.Equal(t, "nes", results[0].SystemID)
+	assert.False(t, results[0].IsMissing)
 
 	// Check second result
 	assert.Equal(t, int64(2), results[1].DBID)
-	assert.Equal(t, "/games/zelda.nes", results[1].Path)
-	assert.Equal(t, "legendofzelda", results[1].TitleSlug)
+	assert.Equal(t, zeldaPath, results[1].Path)
+	assert.False(t, results[1].IsMissing)
 
-	// Check third result
+	// Check third result — a missing entry must round-trip IsMissing=true.
 	assert.Equal(t, int64(3), results[2].DBID)
-	assert.Equal(t, "/games/metroid.nes", results[2].Path)
-	assert.Equal(t, "metroid", results[2].TitleSlug)
+	assert.Equal(t, metroidPath, results[2].Path)
+	assert.True(t, results[2].IsMissing)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1410,11 +1732,10 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 
 	systemID := "nonexistent"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"})
+	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "IsMissing"}
+	rows := sqlmock.NewRows(emptyCols)
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
-	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
 
@@ -1431,9 +1752,7 @@ func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
 
 	systemID := "nes"
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
-	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
+	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
 
@@ -1455,9 +1774,7 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "Path"}).
 		AddRow(int64(1), "/games/mario.nes")
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
-	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
 
@@ -1475,13 +1792,13 @@ func TestSqlGetTitlesBySystemID_Success(t *testing.T) {
 
 	systemID := "nes"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID", "SystemID"}).
-		AddRow(int64(1), "supermariobros", "Super Mario Bros", int64(100), "nes").
-		AddRow(int64(2), "legendofzelda", "The Legend of Zelda", int64(100), "nes").
-		AddRow(int64(3), "metroid", "Metroid", int64(100), "nes")
+	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID"}).
+		AddRow(int64(1), "supermariobros", "Super Mario Bros", int64(100)).
+		AddRow(int64(2), "legendofzelda", "The Legend of Zelda", int64(100)).
+		AddRow(int64(3), "metroid", "Metroid", int64(100))
 
-	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
-		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
+		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1517,10 +1834,10 @@ func TestSqlGetTitlesBySystemID_EmptyResult(t *testing.T) {
 
 	systemID := "nonexistent"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID", "SystemID"})
+	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID"})
 
-	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
-		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
+		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1538,8 +1855,8 @@ func TestSqlGetTitlesBySystemID_QueryError(t *testing.T) {
 
 	systemID := "nes"
 
-	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
-		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
+		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1562,8 +1879,8 @@ func TestSqlGetTitlesBySystemID_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "Slug"}).
 		AddRow(int64(1), "supermariobros")
 
-	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
-		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID.*` +
+		`FROM MediaTitles t.*WHERE t\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\)`
 	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
@@ -1588,7 +1905,8 @@ func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
 	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
 		WillReturnRows(rows)
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
 	require.NoError(t, err)
 	assert.Empty(t, duplicates, "Should have no duplicates")
@@ -1603,21 +1921,23 @@ func TestSqlSearchMediaByTitleDBIDs_BasicLookup(t *testing.T) {
 
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), int64(20), 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100).
-			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).
+			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100, 10, "").
+			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200, 20, ""))
 
-	// Tag query (fetchAndAttachTags uses PrepareContext)
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(100, 200, 100, 200).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(100, 200, 10, 20).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
 
 	results, err := sqlSearchMediaByTitleDBIDs(
 		context.Background(), db, []int64{10, 20}, nil, nil, nil, 100)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "Super Mario Bros", results[0].Name)
+	assert.Equal(t, int64(10), results[0].MediaTitleID)
+	assert.Equal(t, int64(20), results[1].MediaTitleID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1638,13 +1958,11 @@ func TestSqlSearchMediaByTitleDBIDs_WithCursor(t *testing.T) {
 	cursor := int64(150)
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), cursor, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200, 10, ""))
 
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(200, 200).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+	expectSearchTagsQuery(mock, 200, 10)
 
 	results, err := sqlSearchMediaByTitleDBIDs(
 		context.Background(), db, []int64{10}, nil, nil, &cursor, 100)
@@ -1662,13 +1980,11 @@ func TestSqlSearchMediaByTitleDBIDs_WithLetter(t *testing.T) {
 	letter := "S"
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), letter, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100, 10, ""))
 
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(100, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+	expectSearchTagsQuery(mock, 100, 10)
 
 	results, err := sqlSearchMediaByTitleDBIDs(
 		context.Background(), db, []int64{10}, nil, &letter, nil, 100)

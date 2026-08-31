@@ -22,24 +22,345 @@
 package mister
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettings_MiSTerResourcePolicies(t *testing.T) {
+	t.Parallel()
+	settings := (&Platform{}).Settings()
+	assert.True(t, settings.DisableZapScriptInTUI)
+	assert.True(t, settings.ResourceConstrained)
+}
+
+func TestResourceTopologyManager_TransitionsAndRestoresOnCancellation(t *testing.T) {
+	leaseStates := make(chan bool, 2)
+	leaseStates <- true
+	leaseStates <- false
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) {
+				return <-leaseStates, nil
+			},
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RetriesFailedMMCAffinityUpdate(t *testing.T) {
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	irqAttempts := 0
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				if active {
+					irqAttempts++
+					if irqAttempts == 1 {
+						return errors.New("MMC affinity update failed")
+					}
+				}
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.True(t, <-coreCalls)
+	select {
+	case active := <-irqCalls:
+		require.True(t, active, "failed MMC update must be retried on next tick")
+	case <-time.After(time.Second):
+		t.Fatal("failed MMC affinity update was not retried")
+	}
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_PersistentMMCAffinityFailureWarnsOnce(t *testing.T) {
+	oldLogger := log.Logger
+	var logs bytes.Buffer
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = oldLogger })
+
+	coreCalls := make(chan bool, 4)
+	irqCalls := make(chan bool, 4)
+	ticks := make(chan time.Time, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				if active {
+					return errors.New("MMC affinity update failed")
+				}
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	for attempt := range 3 {
+		require.True(t, <-coreCalls)
+		require.True(t, <-irqCalls)
+		if attempt < 2 {
+			ticks <- time.Now()
+		}
+	}
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "failed to apply MiSTer MMC IRQ affinity"))
+}
+
+func TestResourceTopologyManager_RestoresIRQAfterCoreRestoreFailure(t *testing.T) {
+	coreCalls := make(chan bool, 2)
+	irqCalls := make(chan bool, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, make(chan time.Time), resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				if !active {
+					return errors.New("core affinity restore failed")
+				}
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RetriesLeaseProbeAfterError(t *testing.T) {
+	leaseCalls := make(chan int, 2)
+	coreCalls := make(chan bool, 2)
+	irqCalls := make(chan bool, 2)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	attempt := 0
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) {
+				attempt++
+				leaseCalls <- attempt
+				if attempt == 1 {
+					return false, errors.New("lease probe failed")
+				}
+				return true, nil
+			},
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.Equal(t, 1, <-leaseCalls)
+	ticks <- time.Now()
+	require.Equal(t, 2, <-leaseCalls)
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestSetMMCAffinityAt(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	interruptsFile := filepath.Join(root, "interrupts")
+	affinityRoot := filepath.Join(root, "irq")
+	affinityDir := filepath.Join(affinityRoot, "42")
+	require.NoError(t, os.MkdirAll(affinityDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		interruptsFile,
+		[]byte(" 42: 1 2 3 4 dw-mci\n"),
+		0o600,
+	))
+	affinityFile := filepath.Join(affinityDir, "smp_affinity_list")
+	require.NoError(t, os.WriteFile(affinityFile, nil, 0o600))
+
+	require.NoError(t, setMMCAffinityAt(interruptsFile, affinityRoot, true))
+	contents, err := os.ReadFile(affinityFile) //nolint:gosec // Controlled test path.
+	require.NoError(t, err)
+	assert.Equal(t, "1", string(contents))
+
+	require.NoError(t, setMMCAffinityAt(interruptsFile, affinityRoot, false))
+	contents, err = os.ReadFile(affinityFile) //nolint:gosec // Controlled test path.
+	require.NoError(t, err)
+	assert.Equal(t, "0-1", string(contents))
+}
+
+func TestFindIRQ(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		interrupts string
+		device     string
+		wantIRQ    int
+		wantFound  bool
+	}{
+		{name: "matching device", interrupts: " 42: 1 2 3 4 dw-mci\n", device: "dw-mci", wantIRQ: 42, wantFound: true},
+		{name: "other device", interrupts: " 42: 1 2 3 4 xhci-hcd\n", device: "dw-mci"},
+		{name: "invalid IRQ", interrupts: " bad: 1 2 3 4 dw-mci\n", device: "dw-mci"},
+		{name: "missing separator", interrupts: "42 dw-mci\n", device: "dw-mci"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			irq, found := findIRQ(tt.interrupts, tt.device)
+			assert.Equal(t, tt.wantIRQ, irq)
+			assert.Equal(t, tt.wantFound, found)
+		})
+	}
+}
+
+func TestMiSTerResourceTopologyPaths(t *testing.T) {
+	t.Parallel()
+	root := string(filepath.Separator)
+	assert.Equal(t, filepath.Join(root, "tmp", "zaparoo", "frontend.active.lock"), frontendResourceLeasePath)
+	assert.Equal(t, filepath.Join(root, "proc", "interrupts"), interruptsPath)
+	assert.Equal(t, filepath.Join(root, "proc", "self", "task"), coreTasksPath)
+	assert.Equal(t, filepath.Join(root, "proc", "irq"), irqAffinityRoot)
+}
+
 // mockLauncherManager is a minimal mock for testing
 type mockLauncherManager struct{}
+
+// recordingLauncherRBFCache stays local because shared test helpers have no
+// MiSTer RBF cache double with call-order recording and configurable refresh errors.
+type recordingLauncherRBFCache struct {
+	fs          afero.Fs
+	forceErr    error
+	persistPath string
+	calls       []string
+}
+
+func (c *recordingLauncherRBFCache) SetFilesystem(fs afero.Fs) {
+	c.calls = append(c.calls, "filesystem")
+	c.fs = fs
+}
+
+func (c *recordingLauncherRBFCache) SetPersistPath(path string) {
+	c.calls = append(c.calls, "persist")
+	c.persistPath = path
+}
+
+func (c *recordingLauncherRBFCache) ForceRefresh() error {
+	c.calls = append(c.calls, "refresh")
+	return c.forceErr
+}
 
 func (*mockLauncherManager) GetContext() context.Context {
 	return context.Background()
@@ -47,6 +368,323 @@ func (*mockLauncherManager) GetContext() context.Context {
 
 func (*mockLauncherManager) NewContext() context.Context {
 	return context.Background()
+}
+
+func TestRefreshLauncherDependencies(t *testing.T) {
+	t.Run("global cache fallback", func(t *testing.T) {
+		// Keep this subtest sequential while replacing the package singleton.
+		oldCache := cores.GlobalRBFCache
+		cache := &cores.RBFCache{}
+		cores.GlobalRBFCache = cache
+		defer func() { cores.GlobalRBFCache = oldCache }()
+
+		platform := &Platform{fs: afero.NewMemMapFs()}
+		require.Nil(t, platform.launcherRBFCache)
+		var refresher platforms.LauncherRefreshProvider = platform
+
+		err := refresher.RefreshLauncherDependencies()
+		require.ErrorIs(t, err, os.ErrNotExist)
+		assert.True(t, cache.NeedsRescan())
+	})
+
+	refreshErr := errors.New("refresh failed")
+	tests := []struct {
+		forceErr error
+		name     string
+	}{
+		{name: "success"},
+		{name: "refresh error", forceErr: refreshErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			cache := &recordingLauncherRBFCache{forceErr: tt.forceErr}
+			platform := &Platform{fs: fs, launcherRBFCache: cache}
+			var refresher platforms.LauncherRefreshProvider = platform
+
+			err := refresher.RefreshLauncherDependencies()
+			if tt.forceErr != nil {
+				require.ErrorIs(t, err, tt.forceErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Same(t, fs, cache.fs)
+			assert.Equal(t,
+				filepath.Join(helpers.DataDir(platform), config.CacheDir, cores.RBFCacheFileName),
+				cache.persistPath,
+			)
+			assert.Equal(t, []string{"filesystem", "persist", "refresh"}, cache.calls)
+		})
+	}
+}
+
+// withRBFCache swaps cores.GlobalRBFCache for a fresh cache built from rbfs,
+// restoring the original on cleanup. Subtests using it must not run in
+// parallel with each other or with anything else touching the global.
+func withRBFCache(t *testing.T, rbfs []cores.RBFInfo) *cores.RBFCache {
+	t.Helper()
+	oldCache := cores.GlobalRBFCache
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs(rbfs)
+	cores.GlobalRBFCache = cache
+	t.Cleanup(func() { cores.GlobalRBFCache = oldCache })
+	return cache
+}
+
+func TestLauncherRuntime_BaseCoreResolved(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend)
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "SNES", runtime.MisterCore.Name)
+	assert.Equal(t, "SNES_20260311.rbf", runtime.MisterCore.File)
+	assert.Equal(t, "_Console/SNES", runtime.MisterCore.MGLPath)
+}
+
+func TestLauncherRuntime_AltCoreResolved(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", Filename: "PSX2XCPU_20240101.rbf",
+			ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU",
+		},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "2XPSX", SystemID: "PSX"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend)
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "PSX2XCPU", runtime.MisterCore.Name)
+}
+
+func TestLauncherRuntime_MissingCore(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend, "still a core-backed launcher")
+	assert.Nil(t, runtime.MisterCore, "core not installed")
+}
+
+func TestLauncherRuntime_NonCoreLauncherIsZeroValue(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "Generic", SystemID: "Generic"})
+
+	assert.Equal(t, models.LauncherRuntime{}, runtime)
+}
+
+func TestLauncherRuntime_LoadPathOverrideChangesReportedCore(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+		{
+			Path: "/media/fat/_Unstable/SNES_20260101.rbf", Filename: "SNES_20260101.rbf",
+			ShortName: "SNES", MglName: "_Unstable/SNES",
+		},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Unstable/SNES"
+`))
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(cfg, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "_Unstable/SNES", runtime.MisterCore.MGLPath)
+}
+
+func TestSetCoreAvailability_ResolvedCoreIsAvailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
+func TestSetCoreAvailability_MissingCoreIsUnavailableWithReason(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/NES_20260311.rbf", Filename: "NES_20260311.rbf",
+			ShortName: "NES", MglName: "_Console/NES",
+		},
+	})
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	err := launchers[0].Availability(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_Console/SNES")
+}
+
+// TestSetCoreAvailability_MissingAltCoreIsUnavailable covers the rule that
+// makes an ordered launchers.preference work: a launcher for a core family the
+// device does not have must report unavailable, even though launching it would
+// silently fall back to the system's stock core.
+func TestSetCoreAvailability_MissingAltCoreIsUnavailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+
+	err := launchers[0].Availability(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_LLAPI/SNES_LLAPI")
+}
+
+// TestSetCoreAvailability_InstalledAltCoreIsAvailable is the other half: once
+// the family's core is on the card the launcher reports available.
+func TestSetCoreAvailability_InstalledAltCoreIsAvailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+		{
+			Path: "/media/fat/_LLAPI/SNES_LLAPI_20260311.rbf", Filename: "SNES_LLAPI_20260311.rbf",
+			ShortName: "SNES_LLAPI", MglName: "_LLAPI/SNES_LLAPI",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
+func TestSetCoreAvailability_NonCoreLauncherLeftAlone(t *testing.T) {
+	withRBFCache(t, nil)
+
+	launchers := []platforms.Launcher{{ID: "Generic", SystemID: "Generic"}}
+	setCoreAvailability(launchers)
+	assert.Nil(t, launchers[0].Availability)
+}
+
+func TestSetCoreAvailability_ExistingAvailabilityIsNotOverwritten(t *testing.T) {
+	withRBFCache(t, nil)
+
+	sentinel := errors.New("custom unavailable")
+	launchers := []platforms.Launcher{{
+		ID: "SNES", SystemID: "SNES",
+		Availability: func(*config.Instance) error { return sentinel },
+	}}
+	setCoreAvailability(launchers)
+	require.ErrorIs(t, launchers[0].Availability(nil), sentinel)
+}
+
+func TestSetCoreAvailability_EmptyCacheFailsOpen(t *testing.T) {
+	// An empty RBF cache means the scan hasn't populated yet, not that no
+	// cores are installed — every core-backed launcher must report
+	// available so a boot-time race doesn't collapse the systems list.
+	withRBFCache(t, nil)
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
+// TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad verifies resolution
+// picks the expected RBF and hands it to the launch step, which is the fake
+// injected here rather than the real off-device hardware write.
+func TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+	launchErr := errors.New("no /dev/MiSTer_cmd")
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return launchErr
+	}}
+	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+	require.ErrorIs(t, err, launchErr)
+	assert.Equal(t, "/media/fat/_Console/SNES_20260311.rbf", captured.Path)
+}
+
+func TestLaunchSystemLauncher_AltCoreResolvesThenAttemptsLoad(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", Filename: "PSX2XCPU_20240101.rbf",
+			ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU",
+		},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+	launchErr := errors.New("no /dev/MiSTer_cmd")
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return launchErr
+	}}
+	err := p.LaunchSystemLauncher(nil, "PSX", &platforms.Launcher{ID: "2XPSX", SystemID: "PSX"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+	require.ErrorIs(t, err, launchErr)
+	assert.Equal(t, "/media/fat/_Other/PSX2XCPU_20240101.rbf", captured.Path)
+}
+
+func TestLaunchSystemLauncher_MissingCore(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/NES_20260311.rbf", Filename: "NES_20260311.rbf",
+			ShortName: "NES", MglName: "_Console/NES",
+		},
+	})
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "core not installed")
+	assert.Contains(t, err.Error(), "_Console/SNES")
+}
+
+func TestLaunchSystemLauncher_NonCoreLauncher(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "Generic", &platforms.Launcher{ID: "Generic", SystemID: "Generic"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no selectable core")
 }
 
 func TestConfigureTLSRootFallback_ConfiguresDefaultsAndCustomTransports(t *testing.T) {
@@ -101,6 +739,63 @@ func restoreTLSRootFallbackHooks(t *testing.T) {
 		configureZapLinkHTTPTransport = oldConfigureZapLinkHTTPTransport
 		configureInstallerHTTPTransport = oldConfigureInstallerHTTPTransport
 	})
+}
+
+func TestIsWidgetScript(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, isWidgetScript("/media/fat/Scripts/test.sh", ""))
+	assert.False(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "-show-text"))
+	assert.True(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "'-show-text'"))
+}
+
+func TestScriptRunMode(t *testing.T) {
+	t.Parallel()
+
+	runScript, widget := scriptRunMode("/media/fat/Scripts/test.sh", "")
+	assert.Equal(t, misterScriptRunFlag, runScript)
+	assert.False(t, widget)
+
+	runScript, widget = scriptRunMode("/media/fat/Scripts/zaparoo.sh", "'-show-text'")
+	assert.Equal(t, misterWidgetRunFlag, runScript)
+	assert.True(t, widget)
+}
+
+func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
+	t.Parallel()
+
+	if scriptIsActive() {
+		t.Skip("MiSTer script already active")
+	}
+
+	tmpDir := t.TempDir()
+	flagPath := filepath.Join(tmpDir, "run_flag")
+	argPath := filepath.Join(tmpDir, "arg")
+	scriptPath := filepath.Join(tmpDir, "script.sh")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$ZAPAROO_RUN_SCRIPT\" > run_flag\n" +
+		"printf '%s' \"$1\" > arg\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
+
+	err := runScript(nil, scriptPath, "hello", true)
+	require.NoError(t, err)
+
+	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, misterScriptRunFlag, string(flag))
+
+	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(arg))
+}
+
+func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	err := p.LaunchSystem(&config.Instance{}, "Menu")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch menu")
 }
 
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
@@ -163,7 +858,16 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			if tt.customKillFunc != nil {
 				launcher.Kill = func(cfg *config.Instance) error {
 					killCalled = true
-					return tt.customKillFunc(cfg)
+					err := tt.customKillFunc(cfg)
+					if err == nil {
+						p.processMu.Lock()
+						proc := p.trackedProcess
+						p.processMu.Unlock()
+						if proc != nil {
+							_ = proc.Signal(syscall.SIGTERM)
+						}
+					}
+					return err
 				}
 			}
 			p.setLastLauncher(&launcher)
@@ -194,6 +898,34 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			assert.Equal(t, tt.customKillCalled, killCalled, "custom Kill called mismatch")
 		})
 	}
+}
+
+func TestStopActiveLauncher_DoesNotReuseStaleKillForScript(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	killCalls := 0
+	launcher := platforms.Launcher{Kill: func(*config.Instance) error {
+		killCalls++
+		p.processMu.Lock()
+		proc := p.trackedProcess
+		p.processMu.Unlock()
+		return proc.Signal(syscall.SIGTERM)
+	}}
+	p.setLastLauncher(&launcher)
+
+	first := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, first.Start())
+	p.SetTrackedProcess(first.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls)
+
+	second := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, second.Start())
+	p.SetTrackedProcess(second.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls, "script stop reused stale launcher Kill hook")
 }
 
 func TestScummVMLauncher_HasCustomKill(t *testing.T) {
@@ -256,6 +988,89 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("StopActiveLauncher did not return after cleanup completed")
 	}
+}
+
+func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.CommandContext(context.Background(), "sleep", "10")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test")
+	require.NoError(t, err)
+
+	require.NoError(t, p.ReturnToMenu())
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before ReturnToMenu returned")
+	}
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(proc.Pid, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond, "tracked console process survived ReturnToMenu")
+}
+
+func processExited(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+
+	const procRoot = "/proc"
+	stat, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat")) //nolint:gosec // Test-owned PID.
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	stateAt := strings.LastIndex(string(stat), ") ")
+	return stateAt >= 0 && len(stat) > stateAt+2 && stat[stateAt+2] == 'Z'
+}
+
+func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	cmd := exec.CommandContext( //nolint:gosec // Fixed test shell; only temp path is variable.
+		context.Background(),
+		"sh",
+		"-c",
+		`trap 'exit 0' TERM; sh -c 'trap "" TERM; while :; do sleep 1; done' & echo $! > "$1"; wait`,
+		"sh",
+		pidPath,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test")
+	require.NoError(t, err)
+
+	var childPID int
+	require.Eventually(t, func() bool {
+		contents, readErr := os.ReadFile(pidPath) //nolint:gosec // Test-owned temporary file.
+		if readErr != nil {
+			return false
+		}
+		childPID, readErr = strconv.Atoi(strings.TrimSpace(string(contents)))
+		return readErr == nil
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before stop returned")
+	}
+
+	// A killed orphan may remain as a zombie until this environment's PID 1
+	// reaps it. Zombies cannot execute; requiring ESRCH alone makes cleanup
+	// correctness depend on the host's reaper.
+	require.Eventually(t, func() bool {
+		return processExited(childPID)
+	}, time.Second, 10*time.Millisecond, "descendant process survived console cleanup")
 }
 
 func TestArcadeCardLaunchCache(t *testing.T) {
@@ -405,11 +1220,41 @@ func TestGamepadPress_ValidButtonsWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestShowLoader_NoDeadlockWithActiveMedia is a regression test for the deadlock
-// that occurred when ShowLoader was called while a game was running.
-// The deadlock happened because ShowLoader held platformMu while calling showNotice,
-// which called runScript, which called StopActiveLauncher - which also needs platformMu.
-func TestShowLoader_NoDeadlockWithActiveMedia(t *testing.T) {
+func TestMinimumUIDisplay(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.Equal(t, 5*time.Second, p.MinimumUIDisplay(models.UIEventKindNotice))
+	assert.Zero(t, p.MinimumUIDisplay(models.UIEventKindLoader))
+}
+
+func TestPresentUIRejectsUnsupportedKind(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	closeFn, err := p.PresentUI(t.Context(), &models.UIEvent{Kind: "future"})
+	require.ErrorIs(t, err, platforms.ErrNotSupported)
+	assert.Nil(t, closeFn)
+}
+
+func TestPresentUIPreviousEventDelayRespectsCancellation(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.lastUIHidden = time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	start := time.Now()
+	closeFn, err := p.PresentUI(ctx, &models.UIEvent{Kind: models.UIEventKindNotice})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, closeFn)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+// TestPresentUI_NoDeadlockWithActiveMedia guards against holding platformMu
+// while renderer startup calls StopActiveLauncher, which also needs platformMu.
+func TestPresentUI_NoDeadlockWithActiveMedia(t *testing.T) {
 	t.Parallel()
 
 	p := NewPlatform()
@@ -425,14 +1270,13 @@ func TestShowLoader_NoDeadlockWithActiveMedia(t *testing.T) {
 		}
 	}
 
-	cfg := &config.Instance{}
-
-	// Run ShowLoader in a goroutine with timeout detection
+	// Run PresentUI in a goroutine with timeout detection.
 	done := make(chan struct{})
 	go func() {
-		// This will fail (no actual script/console), but should NOT deadlock
-		_, _ = p.ShowLoader(cfg, widgetmodels.NoticeArgs{
-			Text: "Test loader",
+		// This will fail (no actual script/console), but should NOT deadlock.
+		_, _ = p.PresentUI(t.Context(), &models.UIEvent{
+			Kind:    models.UIEventKindLoader,
+			Message: "Test loader",
 		})
 		close(done)
 	}()
@@ -442,6 +1286,6 @@ func TestShowLoader_NoDeadlockWithActiveMedia(t *testing.T) {
 	case <-done:
 		// Success - no deadlock
 	case <-time.After(5 * time.Second):
-		t.Fatal("ShowLoader deadlocked - platformMu held during showNotice/StopActiveLauncher")
+		t.Fatal("PresentUI deadlocked while stopping active launcher")
 	}
 }

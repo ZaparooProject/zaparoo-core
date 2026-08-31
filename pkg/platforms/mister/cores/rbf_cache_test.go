@@ -22,9 +22,11 @@
 package cores
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +43,24 @@ func TestRBFCacheRefresh_Basic(t *testing.T) {
 	// On non-MiSTer systems, counts will be 0 (empty cache is valid)
 	assert.GreaterOrEqual(t, systems, 0, "systems count should be non-negative")
 	assert.GreaterOrEqual(t, rbfs, 0, "rbfs count should be non-negative")
+}
+
+func TestRBFCacheSetFilesystemDiscoversCores(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	coreDir := filepath.Join(root, "_Custom Cores", "Cores")
+	require.NoError(t, fs.MkdirAll(coreDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(coreDir, "VGM_MD_MiSTer.rbf"), nil, 0o600))
+
+	cache := &RBFCache{sdRoot: root}
+	cache.SetFilesystem(fs)
+	cache.Refresh()
+
+	rbf, found := cache.GetBySystemID("MegaVGMDrive")
+	require.True(t, found)
+	assert.Equal(t, filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer"), rbf.MglName)
 }
 
 func TestRBFCacheGetByShortName_CaseInsensitive(t *testing.T) {
@@ -173,11 +193,11 @@ func TestRegisterAltCore(t *testing.T) {
 
 	// Verify it was stored
 	cache.mu.RLock()
-	rbfPath, ok := cache.byLauncherID["2XPSX"]
+	rbfPaths, ok := cache.byLauncherID["2XPSX"]
 	cache.mu.RUnlock()
 
 	assert.True(t, ok, "launcher ID should be found")
-	assert.Equal(t, "_Other/PSX2XCPU", rbfPath)
+	assert.Equal(t, []string{"_Other/PSX2XCPU"}, rbfPaths)
 }
 
 func TestRegisterAltCore_MultipleRegistrations(t *testing.T) {
@@ -192,9 +212,9 @@ func TestRegisterAltCore_MultipleRegistrations(t *testing.T) {
 
 	cache.mu.RLock()
 	assert.Len(t, cache.byLauncherID, 3, "should have 3 registered launchers")
-	assert.Equal(t, "_Other/PSX2XCPU", cache.byLauncherID["2XPSX"])
-	assert.Equal(t, "_ConsolePWM/PSX_PWM", cache.byLauncherID["PWMPSX"])
-	assert.Equal(t, "_LLAPI/PSX_LLAPI", cache.byLauncherID["LLAPIPSX"])
+	assert.Equal(t, []string{"_Other/PSX2XCPU"}, cache.byLauncherID["2XPSX"])
+	assert.Equal(t, []string{"_ConsolePWM/PSX_PWM"}, cache.byLauncherID["PWMPSX"])
+	assert.Equal(t, []string{"_LLAPI/PSX_LLAPI"}, cache.byLauncherID["LLAPIPSX"])
 	cache.mu.RUnlock()
 }
 
@@ -268,6 +288,56 @@ func TestGetByLauncherID_ExtractsShortNameFromPath(t *testing.T) {
 	rbf, found := cache.GetByLauncherID("80MHzNintendo64")
 	assert.True(t, found, "should find RBF by extracted short name")
 	assert.Equal(t, "_Other/N64_80MHz", rbf.MglName)
+}
+
+// TestGetByLauncherID_MultipleCandidatesPrefersFirst verifies that when an alt
+// core registers more than one candidate path (e.g. Sinden cores in the modern
+// "Light Gun/" folder or the legacy "_Sinden/" folder), the first candidate
+// that resolves wins when both are installed.
+func TestGetByLauncherID_MultipleCandidatesPrefersFirst(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/Light Gun/NES-Sinden.rbf", ShortName: "NES-Sinden", MglName: "Light Gun/NES-Sinden"},
+		{Path: "/media/fat/_Sinden/NES_Sinden.rbf", ShortName: "NES_Sinden", MglName: "_Sinden/NES_Sinden"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	rbf, found := cache.GetByLauncherID("SindenNES")
+	assert.True(t, found, "registered launcher should be found")
+	assert.Equal(t, "Light Gun/NES-Sinden", rbf.MglName, "should prefer the modern Light Gun path")
+}
+
+// TestGetByLauncherID_MultipleCandidatesFallsBack verifies that resolution falls
+// through to a later candidate when the preferred one is not installed.
+func TestGetByLauncherID_MultipleCandidatesFallsBack(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Sinden/NES_Sinden.rbf", ShortName: "NES_Sinden", MglName: "_Sinden/NES_Sinden"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	rbf, found := cache.GetByLauncherID("SindenNES")
+	assert.True(t, found, "should fall back to the legacy candidate")
+	assert.Equal(t, "_Sinden/NES_Sinden", rbf.MglName)
+}
+
+// TestGetByLauncherID_MultipleCandidatesNoneInstalled verifies that no candidate
+// resolving returns not-found (Resolve then falls back to the base system core).
+func TestGetByLauncherID_MultipleCandidatesNoneInstalled(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/NES_20240101.rbf", ShortName: "NES", MglName: "_Console/NES"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	_, found := cache.GetByLauncherID("SindenNES")
+	assert.False(t, found, "no Sinden candidate installed should not resolve")
 }
 
 // TestRegression_Issue477_AltCoreUsesWrongRBFPath is a regression test for GitHub issue #477.
@@ -368,6 +438,57 @@ func TestRBFCache_Resolve_RetroAchievementsAltCore(t *testing.T) {
 	assert.Equal(t, "_RA_Cores/Cores/NES", got.MglName)
 }
 
+func TestResolveLauncherStrict_MissingAltCoreDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+	cache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	// ResolveLauncher reports what a launch would actually load, which is the
+	// stock core. Strict resolution must not, or every uninstalled alt core
+	// family looks installed.
+	got, ok := cache.ResolveLauncher(nil, "LLAPISNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+
+	_, ok = cache.ResolveLauncherStrict(nil, "LLAPISNES", "SNES")
+	assert.False(t, ok)
+}
+
+func TestResolveLauncherStrict_InstalledAltCoreResolves(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+		{
+			Path:      "/media/fat/_LLAPI/SNES_LLAPI_20240101.rbf",
+			ShortName: "SNES_LLAPI", MglName: "_LLAPI/SNES_LLAPI",
+		},
+	})
+	cache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	got, ok := cache.ResolveLauncherStrict(nil, "LLAPISNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_LLAPI/SNES_LLAPI", got.MglName)
+}
+
+func TestResolveLauncherStrict_StockLauncherStillResolves(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	got, ok := cache.ResolveLauncherStrict(nil, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+}
+
 func TestRBFCache_Resolve_AltCoreFallsBackToSystemID(t *testing.T) {
 	t.Parallel()
 
@@ -391,6 +512,118 @@ func TestRBFCache_Resolve_NotInCache(t *testing.T) {
 	_, err := cache.Resolve(nil, &Core{ID: "Nintendo64", RBF: "_Console/N64"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Nintendo64")
+}
+
+func TestAltCorePaths_NotRegistered(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	assert.Nil(t, cache.AltCorePaths("NotRegistered"))
+}
+
+func TestAltCorePaths_ReturnsRegisteredOrder(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.RegisterAltCore("Sinden", "Light Gun/Core", "_Sinden/Core")
+	assert.Equal(t, []string{"Light Gun/Core", "_Sinden/Core"}, cache.AltCorePaths("Sinden"))
+}
+
+func TestResolveLauncher_LoadPathOverride(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+		{Path: "/media/fat/_Unstable/SNES_20260101.rbf", ShortName: "SNES", MglName: "_Unstable/SNES"},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Unstable/SNES"
+`))
+
+	got, ok := cache.ResolveLauncher(cfg, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Unstable/SNES_20260101.rbf", got.Path)
+}
+
+func TestResolveLauncher_LoadPathInvalidIsAMiss(t *testing.T) {
+	t.Parallel()
+
+	// An explicit but non-resolving load_path must not fall through to the
+	// alt-core or system ID lookups — Resolve treats this as an error, and
+	// ResolveLauncher must treat it as a miss rather than reporting a
+	// different core than the one configured.
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_LLAPI/NonExistentCore"
+`))
+
+	_, ok := cache.ResolveLauncher(cfg, "SNES", "SNES")
+	assert.False(t, ok)
+}
+
+func TestResolveLauncher_AltCoreID(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/PSX_20240101.rbf", ShortName: "PSX", MglName: "_Console/PSX"},
+		{Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU"},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	got, ok := cache.ResolveLauncher(nil, "2XPSX", "PSX")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Other/PSX2XCPU_20240101.rbf", got.Path)
+}
+
+func TestResolveLauncher_AltCoreFallsBackToSystemID(t *testing.T) {
+	t.Parallel()
+
+	// Mirrors Resolve's real launch-time behavior: an alt core whose own
+	// RBF isn't installed silently falls back to the base system core.
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/PSX_20240101.rbf", ShortName: "PSX", MglName: "_Console/PSX"},
+	})
+
+	got, ok := cache.ResolveLauncher(nil, "2XPSX", "PSX")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Console/PSX_20240101.rbf", got.Path)
+}
+
+func TestResolveLauncher_SystemIDOnly(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	got, ok := cache.ResolveLauncher(nil, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+}
+
+func TestResolveLauncher_NotInCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs(nil)
+
+	_, ok := cache.ResolveLauncher(nil, "Nintendo64", "Nintendo64")
+	assert.False(t, ok)
 }
 
 func TestSplitRBFPath(t *testing.T) {
@@ -533,6 +766,174 @@ func TestBuildFromRBFs_PrefersOriginalWhenForkAlsoExists(t *testing.T) {
 	rbf, ok := cache.bySystemID["GBA"]
 	assert.True(t, ok, "original GBA core should be mapped")
 	assert.Equal(t, "_Console/GBA", rbf.MglName)
+}
+
+func TestUnstableCoreBaseName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		shortName string
+		wantBase  string
+		wantOK    bool
+	}{
+		{name: "3DO", shortName: "3DO_unstable_20260715_0995eb", wantBase: "3DO", wantOK: true},
+		{
+			name:      "base with underscore",
+			shortName: "Saturn_DualSDRAM_unstable_20260720_176386",
+			wantBase:  "Saturn_DualSDRAM",
+			wantOK:    true,
+		},
+		{
+			name:      "base with hyphen",
+			shortName: "ZX-Spectrum_unstable_20260713_0746f6",
+			wantBase:  "ZX-Spectrum",
+			wantOK:    true,
+		},
+		{name: "case insensitive marker", shortName: "NES_UNSTABLE_20260720_13773d", wantBase: "NES", wantOK: true},
+		{name: "missing base", shortName: "_unstable_20260715_0995eb"},
+		{name: "invalid date", shortName: "3DO_unstable_2026071_0995eb"},
+		{name: "invalid hash", shortName: "3DO_unstable_20260715_not-hex"},
+		{name: "missing hash", shortName: "3DO_unstable_20260715_"},
+		{name: "extra suffix", shortName: "3DO_unstable_20260715_0995eb_extra"},
+		{name: "different marker", shortName: "3DO_beta_20260715_0995eb"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base, ok := unstableCoreBaseName(tc.shortName)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantBase, base)
+		})
+	}
+}
+
+func TestBuildFromRBFs_UsesUnstableNightlyFallback(t *testing.T) {
+	t.Parallel()
+
+	unstablePath := filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_0995eb.rbf")
+	unstableMGL := filepath.Join("_Unstable", "3DO_unstable_20260715_0995eb")
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      unstablePath,
+		Filename:  filepath.Base(unstablePath),
+		ShortName: "3DO_unstable_20260715_0995eb",
+		MglName:   unstableMGL,
+	}})
+
+	got, err := cache.Resolve(nil, &Core{ID: "3DO", RBF: filepath.Join("_Console", "3DO")})
+	require.NoError(t, err)
+	assert.Equal(t, unstablePath, got.Path)
+	assert.Equal(t, unstableMGL, got.MglName)
+
+	_, exactFound := cache.GetByShortName("3DO")
+	assert.False(t, exactFound, "unstable fallback must not become an exact short-name alias")
+	_, rbfCount := cache.Count()
+	assert.Equal(t, 1, rbfCount)
+}
+
+func TestBuildFromRBFs_PrefersOfficialOverUnstable(t *testing.T) {
+	t.Parallel()
+
+	official := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Console", "3DO_20260717.rbf"),
+		Filename:  "3DO_20260717.rbf",
+		ShortName: "3DO",
+		MglName:   filepath.Join("_Console", "3DO"),
+	}
+	unstable := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_0995eb.rbf"),
+		Filename:  "3DO_unstable_20260715_0995eb.rbf",
+		ShortName: "3DO_unstable_20260715_0995eb",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260715_0995eb"),
+	}
+
+	for _, files := range [][]RBFInfo{{unstable, official}, {official, unstable}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetBySystemID("3DO")
+		require.True(t, ok)
+		assert.Equal(t, official.Path, got.Path)
+	}
+}
+
+func TestBuildFromRBFs_SelectsNewestUnstableNightly(t *testing.T) {
+	t.Parallel()
+
+	older := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260714_ffffff.rbf"),
+		Filename:  "3DO_unstable_20260714_ffffff.rbf",
+		ShortName: "3DO_unstable_20260714_ffffff",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260714_ffffff"),
+	}
+	newer := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_000001.rbf"),
+		Filename:  "3DO_unstable_20260715_000001.rbf",
+		ShortName: "3DO_unstable_20260715_000001",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260715_000001"),
+	}
+
+	for _, files := range [][]RBFInfo{{older, newer}, {newer, older}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetBySystemID("3DO")
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+	}
+}
+
+func TestRBFCache_ForceRefreshBypassesFastPath(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	consoleDir := filepath.Join(root, "_Console")
+	require.NoError(t, fs.MkdirAll(consoleDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(consoleDir, "NES_20260701.rbf"), nil, 0o600))
+
+	cache := &RBFCache{fs: fs, sdRoot: root}
+	cache.Refresh()
+	_, found := cache.GetBySystemID("NES")
+	require.True(t, found)
+
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(consoleDir, "3DO_20260717.rbf"), nil, 0o600))
+	var err error
+	cache.lastDirMtimes, err = snapshotDirMtimesWithFS(fs, root)
+	require.NoError(t, err)
+	cache.lastRootRBFs, err = snapshotRootRBFsWithFS(fs, root)
+	require.NoError(t, err)
+
+	cache.Refresh()
+	_, found = cache.GetBySystemID("3DO")
+	assert.False(t, found, "normal refresh should use unchanged-snapshot fast path")
+
+	require.NoError(t, cache.ForceRefresh())
+	got, found := cache.GetBySystemID("3DO")
+	require.True(t, found)
+	assert.Equal(t, filepath.Join("_Console", "3DO"), got.MglName)
+}
+
+func TestRBFCache_ForceRefreshFailurePreservesCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{
+		fs:     afero.NewMemMapFs(),
+		sdRoot: filepath.Join("missing", "root"),
+	}
+	existing := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Console", "NES_20260701.rbf"),
+		Filename:  "NES_20260701.rbf",
+		ShortName: "NES",
+		MglName:   filepath.Join("_Console", "NES"),
+	}
+	cache.BuildFromRBFs([]RBFInfo{existing})
+
+	require.Error(t, cache.ForceRefresh())
+	got, found := cache.GetBySystemID("NES")
+	require.True(t, found)
+	assert.Equal(t, existing, got)
+	assert.True(t, cache.NeedsRescan())
 }
 
 func TestGetByLauncherID_GlobRegisteredAltCore(t *testing.T) {

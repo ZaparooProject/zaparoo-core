@@ -29,6 +29,24 @@ import (
 // ErrLaunchInProgress is returned when a launch is attempted while another is in progress.
 var ErrLaunchInProgress = errors.New("launch already in progress")
 
+// ErrRunZapScriptDisabled is returned when ZapScript execution is attempted
+// while the user has disabled it via settings.runZapScript. Every source
+// (local scans, mappings, remote operations) is subject to this switch —
+// there is no bypass.
+var ErrRunZapScriptDisabled = errors.New("run ZapScript is disabled")
+
+// ErrLaunchBlockedByHook is returned when the before_media_start hook rejects
+// a launch.
+var ErrLaunchBlockedByHook = errors.New("launch blocked by before_media_start hook")
+
+// ErrLaunchRequiresProfile is returned when profiles.require_for_launch is
+// set and no profile is active.
+var ErrLaunchRequiresProfile = errors.New("launch requires an active profile")
+
+// ErrInvalidNextAction is returned when a one-shot next-action command
+// (launcher override or next-card write) fails validation.
+var ErrInvalidNextAction = errors.New("invalid next-action command")
+
 // LauncherManager manages the lifecycle of launcher contexts across the application.
 // It provides thread-safe access to a shared context that gets canceled whenever
 // a new launcher starts, allowing previous launcher cleanup routines to detect

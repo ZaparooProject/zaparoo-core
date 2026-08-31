@@ -30,19 +30,22 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-func makeMediaTagsUpdateEnv(mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+func makeMediaTagsUpdateEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+	t.Helper()
+	userDB, cleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(cleanup)
 	return requests.RequestEnv{
 		Context:  context.Background(),
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: userDB},
 		Params:   []byte(params),
 	}
 }
@@ -62,20 +65,19 @@ func TestHandleMediaTagsUpdate_AddsFavoriteTag(t *testing.T) {
 	}
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: row}, nil).Once()
-	mockDB.On("BeginTransaction", false).Return(nil).Once()
-	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
-		Return(database.TagType{DBID: 11, Type: string(tags.TagTypeUser)}, nil).Once()
-	mockDB.On("FindOrInsertTag", database.Tag{TypeDBID: 11, Tag: string(tags.TagUserFavorite)}).
-		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
-	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
-		Return(database.MediaTag{DBID: 13, MediaDBID: 1, TagDBID: 12}, nil).Once()
-	mockDB.On("CommitTransaction").Return(nil).Once()
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef(nil),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+	).Return(nil).Once()
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
 		Return([]database.TagInfo{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}}, nil).Once()
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
 		Return([]database.TagInfo{}, nil).Once()
 
-	result, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	result, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
 	require.NoError(t, err)
 
 	resp, ok := result.(models.TagsResponse)
@@ -88,7 +90,7 @@ func TestHandleMediaTagsUpdate_RejectsSearchOperators(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["~user:favorite"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["~user:favorite"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tag operators are not allowed")
 	mockDB.AssertExpectations(t)
@@ -98,7 +100,7 @@ func TestHandleMediaTagsUpdate_RejectsEmptyTags(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":[" "]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":[" "]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tag cannot be empty")
 	mockDB.AssertExpectations(t)
@@ -108,48 +110,55 @@ func TestHandleMediaTagsUpdate_RejectsUnsupportedTags(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only user:favorite can be mutated")
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaTagsUpdate_RollsBackWhenAddFails(t *testing.T) {
+func TestHandleMediaTagsUpdate_ReturnsProjectionError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
-	mockDB.On("BeginTransaction", false).Return(nil).Once()
-	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
-		Return(database.TagType{}, errors.New("tag type insert failed")).Once()
-	mockDB.On("RollbackTransaction").Return(nil).Once()
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef(nil),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+	).Return(errors.New("projection failed")).Once()
 
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to find or insert tag type")
+	assert.Contains(t, err.Error(), "failed to update media tag projection")
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaTagsUpdate_RollsBackWhenCommitFails(t *testing.T) {
+func TestHandleMediaTagsUpdate_RemovesFavoriteTag(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
-	mockDB.On("BeginTransaction", false).Return(nil).Once()
-	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
-		Return(database.TagType{DBID: 11, Type: string(tags.TagTypeUser)}, nil).Once()
-	mockDB.On("FindOrInsertTag", database.Tag{TypeDBID: 11, Tag: string(tags.TagUserFavorite)}).
-		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
-	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
-		Return(database.MediaTag{MediaDBID: 1, TagDBID: 12}, nil).Once()
-	mockDB.On("CommitTransaction").Return(errors.New("commit failed")).Once()
-	mockDB.On("RollbackTransaction").Return(nil).Once()
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+		[]database.MediaTagRef(nil),
+	).Return(nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
+		Return([]database.TagInfo{}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, nil).Once()
 
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to commit media tag update transaction")
+	result, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(
+		t, mockDB, `{"mediaId":1,"remove":["user:favorite"]}`,
+	))
+	require.NoError(t, err)
+	assertTagsDoNotContainFavorite(t, result)
 	mockDB.AssertExpectations(t)
 }
 
@@ -166,9 +175,11 @@ func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 	favoriteID := mediaIDs[0]
 	otherID := mediaIDs[1]
 
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
 	baseEnv := requests.RequestEnv{
 		Context:  ctx,
-		Database: &database.Database{MediaDB: mediaDB},
+		Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
 	}
 
 	addParams := fmt.Sprintf(`{"mediaId":%d,"add":["user:favorite"]}`, favoriteID)
@@ -223,41 +234,21 @@ func mediaTagsUpdateRow() database.MediaFullRow {
 func addTestMediaPaths(t *testing.T, mediaDB database.MediaDBI, paths ...string) []int64 {
 	t.Helper()
 
-	state := newTestScanState()
-	require.NoError(t, mediascanner.SeedCanonicalTags(mediaDB, state))
-	require.NoError(t, mediaDB.BeginTransaction(true))
+	scantest.IndexMediaPaths(t, mediaDB, "NES", paths...)
+
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	byPath := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		byPath[row.Path] = row.DBID
+	}
 	mediaIDs := make([]int64, 0, len(paths))
 	for _, path := range paths {
-		_, mediaID, err := mediascanner.AddMediaPath(
-			mediaDB,
-			state,
-			"NES",
-			path,
-			"",
-			false,
-			false,
-			nil,
-			slugs.MediaTypeGame,
-		)
-		require.NoError(t, err)
-		mediaIDs = append(mediaIDs, int64(mediaID))
+		dbid, ok := byPath[pathutil.CanonicalMediaPath(path)]
+		require.True(t, ok, "indexed media not found for path %s", path)
+		mediaIDs = append(mediaIDs, dbid)
 	}
-	require.NoError(t, mediaDB.CommitTransaction())
-
 	return mediaIDs
-}
-
-func newTestScanState() *database.ScanState {
-	return &database.ScanState{
-		SystemIDs:     make(map[string]int),
-		TitleIDs:      make(map[string]int),
-		MediaIDs:      make(map[string]int),
-		MediaTitleIDs: make(map[int]int),
-		MediaTagIDs:   make(map[int]map[int]struct{}),
-		TagTypeIDs:    make(map[string]int),
-		TagIDs:        make(map[string]int),
-		MissingMedia:  make(map[int]struct{}),
-	}
 }
 
 func withParams(env *requests.RequestEnv, params string) requests.RequestEnv {

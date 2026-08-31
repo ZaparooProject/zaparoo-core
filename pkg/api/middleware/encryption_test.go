@@ -258,9 +258,11 @@ func TestEstablishSession_BlockExpires(t *testing.T) {
 	c, _ := pairedClient(t)
 	db := helpers.NewMockUserDBI()
 	db.On("GetClientByToken", c.AuthToken).Return(c, nil)
+	clock := clockwork.NewFakeClock()
 	mgr := middleware.NewEncryptionGateway(db,
+		middleware.WithClock(clock),
 		middleware.WithFailedFrameThreshold(2),
-		middleware.WithFailedFrameBlockDuration(20*time.Millisecond),
+		middleware.WithFailedFrameBlockDuration(time.Minute),
 	)
 
 	for range 2 {
@@ -284,8 +286,8 @@ func TestEstablishSession_BlockExpires(t *testing.T) {
 	_, _, err := mgr.EstablishSession(frame, "192.168.1.50")
 	require.ErrorIs(t, err, middleware.ErrConnectionBlocked)
 
-	// Wait for block to expire
-	time.Sleep(40 * time.Millisecond)
+	// Advance the fake clock past the block window without relying on CI timer scheduling.
+	clock.Advance(time.Minute + time.Millisecond)
 
 	// Build a valid frame so the next attempt actually succeeds (clears state)
 	salt := randomSalt(t)

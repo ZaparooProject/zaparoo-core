@@ -23,23 +23,23 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/mock"
 )
 
 // MockPlatform is a mock implementation of the Platform interface using testify/mock
 type MockPlatform struct {
 	mock.Mock
+	powerStatus     *power.Status
 	launchedMedia   []string
 	launchedSystems []string
 	keyboardPresses []string
@@ -47,10 +47,37 @@ type MockPlatform struct {
 	mu              syncutil.Mutex
 }
 
-// ID returns the unique ID of this platform
+// PowerStatus reports the device's power state. It is deliberately not a
+// testify expectation: every test that reaches the updater would otherwise
+// have to declare one, and the answer a test does not care about should not
+// depend on whether the machine running it has a wireless mouse.
+func (m *MockPlatform) PowerStatus() (power.Status, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.powerStatus == nil {
+		return power.Status{Source: power.SourceNoBattery}, nil
+	}
+	return *m.powerStatus, nil
+}
+
+// SetPowerStatus fixes what PowerStatus reports.
+func (m *MockPlatform) SetPowerStatus(status power.Status) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.powerStatus = &status
+}
+
+// ID returns the unique ID of this platform. Unstubbed it returns "" rather
+// than panicking: it is read by diagnostics that run on paths a test may not be
+// exercising deliberately, and an incomplete mock should not fail those.
 func (m *MockPlatform) ID() string {
-	args := m.Called()
-	return args.String(0)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "ID" {
+			args := m.Called()
+			return args.String(0)
+		}
+	}
+	return ""
 }
 
 // StartPre runs any necessary platform setup BEFORE the main service has started running
@@ -231,46 +258,6 @@ func (m *MockPlatform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return []platforms.Launcher{}
 }
 
-// ShowNotice displays a string on-screen of the platform device
-func (m *MockPlatform) ShowNotice(cfg *config.Instance, args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	callArgs := m.Called(cfg, args)
-	var fn func() error
-	var duration time.Duration
-	if f, ok := callArgs.Get(0).(func() error); ok {
-		fn = f
-	}
-	if d, ok := callArgs.Get(1).(time.Duration); ok {
-		duration = d
-	}
-	if err := callArgs.Error(2); err != nil {
-		return fn, duration, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return fn, duration, nil
-}
-
-// ShowLoader displays a string on-screen alongside an animation
-func (m *MockPlatform) ShowLoader(cfg *config.Instance, args widgetmodels.NoticeArgs) (func() error, error) {
-	callArgs := m.Called(cfg, args)
-	var fn func() error
-	if f, ok := callArgs.Get(0).(func() error); ok {
-		fn = f
-	}
-	if err := callArgs.Error(1); err != nil {
-		return fn, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return fn, nil
-}
-
-// ShowPicker displays a list picker on-screen of the platform device
-func (m *MockPlatform) ShowPicker(cfg *config.Instance, args widgetmodels.PickerArgs) error {
-	callArgs := m.Called(cfg, args)
-	if err := callArgs.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
 func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
 	args := m.Called()
 	if manager, ok := args.Get(0).(platforms.ConsoleManager); ok {
@@ -361,11 +348,4 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 	m.On("ManagedByPackageManager").Return(false)
 	m.On("Scrapers", mock.AnythingOfType("*config.Instance")).Return(map[string]platforms.Scraper{})
-
-	// Setup common stub functions for UI methods
-	noopFunc := func() error { return nil }
-	m.On("ShowNotice", mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("widgetmodels.NoticeArgs")).Return(noopFunc, time.Duration(0), nil)
-	m.On("ShowLoader", mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("widgetmodels.NoticeArgs")).Return(noopFunc, nil)
 }

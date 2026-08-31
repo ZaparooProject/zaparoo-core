@@ -52,14 +52,24 @@ func TestResolveGamePath(t *testing.T) {
 		assert.Equal(t, want, got)
 	})
 
-	t.Run("absolute path", func(t *testing.T) {
+	t.Run("absolute path outside system root", func(t *testing.T) {
 		t.Parallel()
 
-		// Use the temp directory to create a platform-appropriate absolute path
 		absolutePath := filepath.Join(tmpDir, "different", "path", "game.rom")
-		got := ResolveGamePath(absolutePath, romsBase, "nes")
-		// Absolute paths should be returned cleaned but unchanged
-		assert.Equal(t, filepath.Clean(absolutePath), got)
+		assert.Empty(t, ResolveGamePath(absolutePath, romsBase, "nes"))
+	})
+
+	t.Run("absolute path inside system root", func(t *testing.T) {
+		t.Parallel()
+
+		absolutePath := filepath.Join(romsBase, "nes", "game.rom")
+		assert.Equal(t, absolutePath, ResolveGamePath(absolutePath, romsBase, "nes"))
+	})
+
+	t.Run("parent traversal", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Empty(t, ResolveGamePath("../../outside.rom", romsBase, "nes"))
 	})
 
 	t.Run("nested relative path", func(t *testing.T) {
@@ -68,60 +78,6 @@ func TestResolveGamePath(t *testing.T) {
 		got := ResolveGamePath("./subdir/game.rom", romsBase, "snes")
 		want := filepath.Join(romsBase, "snes", "subdir", "game.rom")
 		assert.Equal(t, want, got)
-	})
-}
-
-func TestReadGameList(t *testing.T) {
-	t.Parallel()
-
-	t.Run("reads valid gamelist.xml", func(t *testing.T) {
-		t.Parallel()
-
-		// Create a temporary gamelist.xml
-		tmpDir := t.TempDir()
-		gamelistContent := `<?xml version="1.0" encoding="UTF-8"?>
-<gameList>
-  <game>
-    <name>Super Mario Bros.</name>
-    <path>./smb.nes</path>
-  </game>
-  <game>
-    <name>Legend of Zelda</name>
-    <path>./zelda.nes</path>
-  </game>
-</gameList>`
-
-		gamelistPath := filepath.Join(tmpDir, "gamelist.xml")
-		err := os.WriteFile(gamelistPath, []byte(gamelistContent), 0o600)
-		require.NoError(t, err)
-
-		gameList, err := ReadGameList(gamelistPath)
-		require.NoError(t, err)
-
-		assert.Len(t, gameList.Games, 2)
-		assert.Equal(t, "Super Mario Bros.", gameList.Games[0].Name)
-		assert.Equal(t, "./smb.nes", gameList.Games[0].Path)
-		assert.Equal(t, "Legend of Zelda", gameList.Games[1].Name)
-		assert.Equal(t, "./zelda.nes", gameList.Games[1].Path)
-	})
-
-	t.Run("returns error for non-existent file", func(t *testing.T) {
-		t.Parallel()
-
-		_, err := ReadGameList("/nonexistent/path/gamelist.xml")
-		require.Error(t, err)
-	})
-
-	t.Run("returns error for invalid XML", func(t *testing.T) {
-		t.Parallel()
-
-		tmpDir := t.TempDir()
-		gamelistPath := filepath.Join(tmpDir, "gamelist.xml")
-		err := os.WriteFile(gamelistPath, []byte("not valid xml"), 0o600)
-		require.NoError(t, err)
-
-		_, err = ReadGameList(gamelistPath)
-		require.Error(t, err)
 	})
 }
 
@@ -152,6 +108,7 @@ func TestScanGamelist(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(nesPath, "smb.nes"), filepath.Join(nesPath, "metroid.nes"))
 
 		cfg := ScannerConfig{
 			RomsBasePath: romsPath,
@@ -202,6 +159,7 @@ func TestScanGamelist(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesGamelistPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(romsPath, "nes", "test.nes"))
 
 		cfg := ScannerConfig{
 			RomsBasePath:     romsPath,
@@ -216,6 +174,34 @@ func TestScanGamelist(t *testing.T) {
 		assert.Equal(t, "Test Game", results[0].Name)
 		// Path should be resolved relative to RomsBasePath, not GamelistBasePath
 		assert.Equal(t, filepath.Join(romsPath, "nes", "test.nes"), results[0].Path)
+	})
+
+	t.Run("rejects paths outside system root", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		romsPath := filepath.Join(tmpDir, "roms")
+		nesPath := filepath.Join(romsPath, "nes")
+		require.NoError(t, os.MkdirAll(nesPath, 0o750))
+		outsidePath := filepath.Join(tmpDir, "outside.nes")
+		require.NoError(t, os.WriteFile(outsidePath, []byte("rom"), 0o600))
+		symlinkPath := filepath.Join(nesPath, "linked.nes")
+		require.NoError(t, os.Symlink(outsidePath, symlinkPath))
+		linkedDir := filepath.Join(nesPath, "linked-dir")
+		require.NoError(t, os.Symlink(t.TempDir(), linkedDir))
+
+		gamelistContent := `<gameList>
+  <game><name>Traversal</name><path>../../outside.nes</path></game>
+  <game><name>Absolute</name><path>` + outsidePath + `</path></game>
+  <game><name>Symlink</name><path>./linked.nes</path></game>
+  <game><name>Missing</name><path>./missing.nes</path></game>
+  <game><name>Missing Through Symlink</name><path>./linked-dir/missing.nes</path></game>
+</gameList>`
+		require.NoError(t, os.WriteFile(filepath.Join(nesPath, "gamelist.xml"), []byte(gamelistContent), 0o600))
+
+		results, err := ScanGamelist(ScannerConfig{RomsBasePath: romsPath, SystemFolder: "nes"})
+		require.NoError(t, err)
+		assert.Empty(t, results)
 	})
 
 	t.Run("skips entries with empty path", func(t *testing.T) {
@@ -239,6 +225,7 @@ func TestScanGamelist(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(nesPath, "game.nes"))
 
 		cfg := ScannerConfig{
 			RomsBasePath: tmpDir,
@@ -277,6 +264,7 @@ func TestEnhanceResultsFromGamelist(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(nesPath, "smb.nes"), filepath.Join(nesPath, "zelda.nes"))
 
 		// Create results with file-based names (before enhancement)
 		results := map[string]platforms.ScanResult{
@@ -338,6 +326,7 @@ func TestEnhanceResultsFromGamelist(t *testing.T) {
 		require.NoError(t, err)
 
 		testPath := filepath.Join(romsPath, "nes", "test.nes")
+		writeTestFiles(t, testPath)
 		results := map[string]platforms.ScanResult{
 			testPath: {Name: "test", Path: testPath},
 		}
@@ -382,6 +371,7 @@ func TestEnhanceResultsFromGamelist(t *testing.T) {
 
 		nonamePath := filepath.Join(tmpDir, "nes", "noname.nes")
 		validPath := filepath.Join(tmpDir, "nes", "valid.nes")
+		writeTestFiles(t, nonamePath, validPath)
 		results := map[string]platforms.ScanResult{
 			nonamePath: {Name: "noname", Path: nonamePath},
 			validPath:  {Name: "valid", Path: validPath},
@@ -400,6 +390,14 @@ func TestEnhanceResultsFromGamelist(t *testing.T) {
 		// valid.nes should be enhanced
 		assert.Equal(t, "Valid Game", results[validPath].Name)
 	})
+}
+
+func writeTestFiles(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, path := range paths {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
+	}
 }
 
 func TestCreateSystemScanner(t *testing.T) {
@@ -422,6 +420,7 @@ func TestCreateSystemScanner(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(nesPath, "test.nes"))
 
 		scanner := CreateSystemScanner(tmpDir, "", "nes")
 		results, err := scanner()
@@ -451,6 +450,7 @@ func TestCreateSystemScanner(t *testing.T) {
 </gameList>`
 		err = os.WriteFile(filepath.Join(nesGamelistPath, "gamelist.xml"), []byte(gamelistContent), 0o600)
 		require.NoError(t, err)
+		writeTestFiles(t, filepath.Join(romsPath, "nes", "game.nes"))
 
 		scanner := CreateSystemScanner(romsPath, gamelistsPath, "nes")
 		results, err := scanner()

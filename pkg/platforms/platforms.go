@@ -27,14 +27,16 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/spf13/afero"
 )
 
@@ -70,6 +72,21 @@ type MediaReadyPlatform interface {
 	WaitForMediaReady(context.Context, *config.Instance, *models.ActiveMedia) error
 }
 
+// InputSession owns keyboard and gamepad inputs held by one durable client
+// connection. Implementations must isolate held input between sessions and
+// release all owned input when ReleaseAll is called.
+type InputSession interface {
+	KeyboardPressSequence(context.Context, []string, time.Duration) error
+	GamepadPressSequence(context.Context, []string, time.Duration) error
+	ReleaseAll() error
+}
+
+// InputSessionProvider is optionally implemented by platforms that support
+// input held across multiple API requests.
+type InputSessionProvider interface {
+	NewInputSession() InputSession
+}
+
 // LauncherLifecycle determines how a launcher process is managed
 type LauncherLifecycle int
 
@@ -80,6 +97,8 @@ const (
 	LifecycleTracked
 	// LifecycleBlocking waits for process to exit naturally
 	LifecycleBlocking
+	// LifecycleExternal launches without a process handle; platform lifecycle tracking publishes ActiveMedia.
+	LifecycleExternal
 )
 
 // StopIntent indicates the reason for stopping a launcher
@@ -92,6 +111,12 @@ const (
 	StopForMenu
 	// StopForConsoleReset means stopping to reset console state (video mode, etc) before new console launch
 	StopForConsoleReset
+)
+
+// System identifiers for platform-level targets.
+const (
+	// SystemMenu identifies the platform's main menu/frontend target.
+	SystemMenu = "menu"
 )
 
 // Running instance identifiers for launchers that communicate with persistent applications.
@@ -111,6 +136,8 @@ const (
 	ControlLoad        = "load"
 	ControlReset       = "reset"
 	ControlTogglePause = "toggle_pause"
+	ControlPause       = "pause"
+	ControlResume      = "resume"
 	ControlStop        = "stop"
 	ControlFastForward = "fast_forward"
 	ControlRewind      = "rewind"
@@ -134,6 +161,13 @@ type Control struct {
 	Script string      // ZapScript string executed via RunControlScript
 }
 
+// MediaLaunchAccess is the state publication capability held for one launch.
+// Release must be called after LaunchMedia returns.
+type MediaLaunchAccess struct {
+	SetActiveMedia func(*models.ActiveMedia)
+	Release        func()
+}
+
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
@@ -141,17 +175,43 @@ type CmdEnv struct {
 	LauncherCtx context.Context
 	// ServiceCtx is canceled during full service shutdown or process stop. Use it
 	// for work tied to service lifetime rather than the current launcher lifetime.
-	ServiceCtx        context.Context
-	WaitForMediaReady func(context.Context) error
-	Playlist          playlists.PlaylistController
-	Cfg               *config.Instance
-	Database          *database.Database
-	ExprEnv           *zapscript.ArgExprEnv
-	Source            string
-	Cmd               zapscript.Command
-	TotalCommands     int
-	CurrentIndex      int
-	Unsafe            bool
+	ServiceCtx         context.Context
+	WaitForMediaReady  func(context.Context) error
+	AcquireMediaLaunch func() (MediaLaunchAccess, error)
+	PlaybackManager    audio.PlaybackManager
+	UI                 *uievents.Service
+	Playlist           playlists.PlaylistController
+	Cfg                *config.Instance
+	Database           *database.Database
+	ExprEnv            *zapscript.ArgExprEnv
+	Source             string
+	// PathRoot is an optional per-token root for resolving relative filesystem paths.
+	PathRoot      string
+	Cmd           zapscript.Command
+	TotalCommands int
+	CurrentIndex  int
+	Unsafe        bool
+}
+
+// ProfileSwitchRequest asks the script runner to change the device's
+// active profile. SwitchID selects a profile by its card switch ID; Clear
+// deactivates the current profile instead.
+type ProfileSwitchRequest struct {
+	SwitchID string
+	Clear    bool
+}
+
+// PlaytimeExtensionRequest asks the script runner to grant extra time to
+// the session currently being limited. AuthorizerSwitchID is the bearer
+// credential from the card; the service layer resolves it and checks the
+// profile's role, so the command layer never sees a verified identity.
+type PlaytimeExtensionRequest struct {
+	// Mode is models.PlaytimeExtendModeDuration or ...ModeToday.
+	Mode string
+	// AuthorizerSwitchID is the switch ID of the authorizing profile.
+	AuthorizerSwitchID string
+	// Duration is the time to add, for duration mode only.
+	Duration time.Duration
 }
 
 // CmdResult returns a summary of what global side effects may or may not have
@@ -159,6 +219,15 @@ type CmdEnv struct {
 type CmdResult struct {
 	// Playlist is the result of the playlist change.
 	Playlist *playlists.Playlist
+	// ProfileSwitch requests the active profile be changed. Commands return
+	// the request as intent; the service layer applies it (same pattern as
+	// Playlist). The scan path activates without a PIN check — possession
+	// of the card is the authorization.
+	ProfileSwitch *ProfileSwitchRequest
+	// PlaytimeExtension requests extra time for the current playtime
+	// session. Like ProfileSwitch this is intent only: the service layer
+	// verifies the authorizing credential and applies the grant.
+	PlaytimeExtension *PlaytimeExtensionRequest
 	// Strategy indicates which matching strategy was used for title-based launches.
 	// Empty for non-title commands. Used for testing and debugging title resolution.
 	Strategy string
@@ -196,10 +265,19 @@ type ScanResult struct {
 
 // LaunchOptions contains optional parameters that can be passed to launchers.
 type LaunchOptions struct {
+	// ActiveMediaPublisher is the launch-scoped publication callback supplied
+	// by Core. Launchers must not retain or invoke it directly.
+	ActiveMediaPublisher func(*models.ActiveMedia)
+	// RenderScale is the preferred internal rendering size as a percentage of
+	// available output dimensions. It does not change physical display mode.
+	RenderScale *int
 	// Action specifies the launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string
+	// RenderResolution is the preferred fixed internal rendering size in
+	// WIDTHxHEIGHT form. It is mutually exclusive with RenderScale.
+	RenderResolution string
 	// SetName specifies a platform-defined launch profile/core name override.
 	// On MiSTer this maps to the MGL <setname> tag.
 	SetName string
@@ -207,14 +285,22 @@ type LaunchOptions struct {
 	// SetName should keep the original game directory. On MiSTer this maps to the
 	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
 	SetNameSameDir string
+	// Slot selects the media slot for launch routing. Empty means primary.
+	Slot string
+}
+
+// LaunchCommand is an executable and argument vector that can be delegated to
+// a platform-owned process runtime without invoking a shell.
+type LaunchCommand struct {
+	Executable string
+	Dir        string
+	Args       []string
+	Env        []string
 }
 
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	// Controls maps control action identifiers to control actions that execute
-	// on active media (e.g., save state, load state, open menu).
-	Controls map[string]Control
 	// Kill function provides custom termination logic for the launcher.
 	// If defined, this function is called instead of signal-based termination
 	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
@@ -227,13 +313,23 @@ type Launcher struct {
 	// Test function returns true if file looks supported by this launcher.
 	// It's checked after all standard extension and folder checks.
 	Test func(*config.Instance, string) bool
+	// Availability checks runtime dependencies. Nil means always available.
+	Availability func(*config.Instance) error
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.
 	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	// BuildLaunchCommand optionally describes the same launch as an executable
+	// and argv for platform runtimes that must own the launched process tree.
+	BuildLaunchCommand func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
 	// WaitForReady optionally blocks until launched media is ready for controls
 	// or raw input. If nil, platform-level readiness is used, then immediate ready.
 	WaitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
+	// Controls maps control action identifiers to control actions that execute
+	// on active media (e.g., save state, load state, open menu).
+	Controls map[string]Control
+	// AvailabilityReason is populated by LauncherCache when runtime dependencies are missing.
+	AvailabilityReason string
 	// UsesRunningInstance identifies which running application instance this launcher
 	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
 	// its own process. When non-empty, platforms should not kill the running app if both
@@ -250,12 +346,22 @@ type Launcher struct {
 	// group. Example: ["Kodi", "KodiTV"] means this launcher matches config entries for
 	// both "Kodi" and "KodiTV".
 	Groups []string
-	// Accepted schemes for URI-style launches.
-	Schemes []string
 	// Extensions to match for files during a standard scan.
 	Extensions []string
+	// ScanExcludes are case-insensitive slash-normalized glob patterns that
+	// prevent matched files from being indexed. Patterns without a slash match
+	// the base filename; patterns with a slash can match any path suffix. They
+	// only affect media scanning; direct path launches can still match the launcher.
+	ScanExcludes []string
+	// ScanDirectoryExcludes are case-insensitive slash-normalized glob patterns
+	// relative to this launcher's Folders. Matching directories are not traversed.
+	// Patterns without a slash match a directory basename; patterns with a slash
+	// can match any relative path suffix. Direct path launches remain unaffected.
+	ScanDirectoryExcludes []string
 	// Folders to scan for files, relative to the root folders of the platform.
 	Folders []string
+	// Accepted schemes for URI-style launches.
+	Schemes []string
 	// Lifecycle determines how the launcher process is managed.
 	Lifecycle LauncherLifecycle
 	// If true, all resolved paths must be in the allow list before they
@@ -266,6 +372,69 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// ScanSkipInternalSymlinks skips symlinks whose target resolves inside this
+	// launcher's Folders during media scanning. The target is indexed under its
+	// own path, so the alias would only duplicate it. Applies to symlinked files
+	// and directories. Direct path launches remain unaffected.
+	ScanSkipInternalSymlinks bool
+	// Available is populated by LauncherCache.
+	Available bool
+}
+
+type BackupPattern struct {
+	Glob     string
+	Contains string
+	All      bool
+}
+
+type BackupDefinition struct {
+	SourceRoot  string
+	RestoreRoot string
+	// RestoreTargetRoot optionally maps RestoreRoot to a platform-discovered
+	// physical category root. It must never be derived from backup contents.
+	RestoreTargetRoot  string
+	Category           string
+	Include            []BackupPattern
+	Exclude            []BackupPattern
+	SourceTrustedRoots []string
+	NonRecursive       bool
+}
+
+type BackupWarning struct {
+	Category string
+	Path     string
+	Reason   string
+}
+
+type BackupPlan struct {
+	Definitions []BackupDefinition
+	Warnings    []BackupWarning
+}
+
+type BackupProvider interface {
+	BackupDefinitions() []BackupDefinition
+}
+
+type UpdatePayloadProvider interface {
+	UpdatePayload() []updatepayload.File
+}
+
+type BackupPlanningProvider interface {
+	BackupPlan() BackupPlan
+}
+
+type BackupPreparingProvider interface {
+	// PrepareBackup returns a non-nil, idempotent cleanup callback on success.
+	// When it returns an error, cleanup is nil and must not be called.
+	PrepareBackup() (BackupPlan, func() error, error)
+}
+
+type BackupRestoreRootProvider interface {
+	BackupRestoreRoot() string
+}
+
+type BackupRestorePreparer interface {
+	PrepareBackupRestore() (func(bool) error, error)
 }
 
 // Settings defines all simple settings/configuration values available for a
@@ -288,6 +457,14 @@ type Settings struct {
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool
+	// DisableZapScriptInTUI prevents token scans from launching media while
+	// the main TUI occupies the platform's primary display. Utility widgets do
+	// not apply this policy because their controls can trigger ZapScript.
+	DisableZapScriptInTUI bool
+	// ResourceConstrained indicates the platform has limited CPU and I/O
+	// capacity. Core uses lower-cost audio processing and cooperatively paces
+	// expensive background media work on these platforms.
+	ResourceConstrained bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.
@@ -317,6 +494,43 @@ type Scraper struct {
 	ID                 string
 	Name               string
 	SupportedSystemIDs []string
+}
+
+// LauncherRefreshProvider is optionally implemented by platforms that cache
+// runtime launcher dependencies and can force their rediscovery.
+type LauncherRefreshProvider interface {
+	RefreshLauncherDependencies() error
+}
+
+// LauncherRuntimeProvider is optionally implemented by platforms that can
+// describe what a launcher actually runs — an FPGA core, a libretro core, an
+// executable. Implementations must be read-only and cheap: they are called
+// once per launcher per request and must not touch the filesystem or trigger
+// a rescan. A zero models.LauncherRuntime means the platform has nothing to
+// say about that launcher.
+type LauncherRuntimeProvider interface {
+	LauncherRuntime(cfg *config.Instance, l *Launcher) models.LauncherRuntime
+}
+
+// SystemLauncherSelector is optionally implemented by platforms where a
+// system can run under more than one launcher (e.g. a MiSTer alt core) and a
+// caller needs to pick which one, with no media loaded. Callers must verify
+// launcher.SystemID matches systemID before calling; implementations are not
+// required to check it themselves.
+type SystemLauncherSelector interface {
+	LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *Launcher) error
+}
+
+// TrackedProcessWaiter is optionally implemented by platforms that coordinate
+// process waiting with StopActiveLauncher. Exactly one caller must reap a process.
+type TrackedProcessWaiter interface {
+	WaitTrackedProcess(*os.Process) error
+}
+
+// TrackedProcessMediaClearer optionally clears active media only when proc
+// remains the process that most recently completed for the platform.
+type TrackedProcessMediaClearer interface {
+	ClearTrackedProcessMedia(*os.Process) bool
 }
 
 // Platform is the central interface that defines how Core interacts with a
@@ -353,7 +567,9 @@ type Platform interface {
 	ScanHook(*tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
-	// RootDirs returns a list of root folders to scan for media files.
+	// RootDirs returns root folders to scan for media files, ordered from
+	// highest to lowest priority. Consumers resolving duplicate relative names
+	// must prefer the first matching root.
 	RootDirs(*config.Instance) []string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
@@ -394,27 +610,6 @@ type Platform interface {
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers(*config.Instance) []Launcher
-	// ShowNotice displays a string on-screen of the platform device. Returns
-	// a function that may be used to manually hide the notice and a minimum
-	// amount of time that should be waited until trying to close the notice,
-	// for platforms where initializing a notice takes time.
-	// TODO: can this just block instead of returning a delay?
-	ShowNotice(
-		*config.Instance,
-		widgetmodels.NoticeArgs,
-	) (func() error, time.Duration, error)
-	// ShowLoader displays a string on-screen of the platform device alongside
-	// an animation indicating something is in progress. Returns a function
-	// that may be used to manually hide the loader and an optional delay to
-	// wait before hiding.
-	// TODO: does this need a close delay returned as well?
-	ShowLoader(*config.Instance, widgetmodels.NoticeArgs) (func() error, error)
-	// ShowPicker displays a list picker on-screen of the platform device with
-	// a list of Zap Link Cmds to choose from. The chosen action will be
-	// forwarded to the local API instance to be run. Returns a function that
-	// may be used to manually cancel and hide the picker.
-	// TODO: it appears to not return said function
-	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
 	// ConsoleManager returns the platform's console manager for TTY/console switching.
 	// Platforms without console switching return NoOpConsoleManager.
 	ConsoleManager() ConsoleManager

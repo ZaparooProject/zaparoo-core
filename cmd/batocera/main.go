@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
@@ -162,17 +163,14 @@ func run() error {
 	}
 
 	// start the tui
-	app, err := tui.BuildMain(
-		cfg, pl,
-		isRunning,
-		path.Join(helpers.DataDir(pl), config.LogFile),
-		"storage")
-	if err != nil {
-		log.Error().Msgf("error setting up UI: %s", err)
-		return fmt.Errorf("error setting up UI: %w", err)
-	}
-
-	err = app.Run()
+	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+		return tui.BuildMain(
+			cfg, pl,
+			isRunning,
+			path.Join(helpers.DataDir(pl), config.LogFile),
+			"storage",
+		)
+	})
 	if err != nil {
 		log.Error().Msgf("error running UI: %s", err)
 		return fmt.Errorf("error running UI: %w", err)

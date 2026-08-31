@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/rs/zerolog/log"
 )
@@ -55,9 +56,37 @@ func HandleClients(env requests.RequestEnv) (any, error) {
 		resp.Clients[i] = models.PairedClient{
 			ClientID:   c.ClientID,
 			ClientName: c.ClientName,
+			Role:       c.Role,
 			CreatedAt:  c.CreatedAt,
 			LastSeenAt: c.LastSeenAt,
 		}
+	}
+	return resp, nil
+}
+
+// HandleClientsCurrent returns the current connection's paired role and
+// effective capabilities. It is available to every accepted API connection.
+//
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleClientsCurrent(env requests.RequestEnv) (any, error) {
+	grant := requestGrant(&env)
+	granted := grant.Capabilities()
+	capabilities := make([]string, len(granted))
+	for i, capability := range granted {
+		capabilities[i] = string(capability)
+	}
+
+	resp := models.ClientsCurrentResponse{
+		Capabilities: capabilities,
+		Access:       string(grant.Access()),
+		Paired:       env.ClientRole != "" && permissions.ValidRole(env.ClientRole),
+	}
+	if resp.Paired {
+		role := env.ClientRole
+		if !permissions.ValidRole(role) {
+			role = string(permissions.RoleMember)
+		}
+		resp.Role = &role
 	}
 	return resp, nil
 }
@@ -80,6 +109,9 @@ func HandleClientsDelete(env requests.RequestEnv) (any, error) {
 	}
 	if params.ClientID == "" {
 		return nil, models.ClientErrf("clientId is required")
+	}
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
 	}
 
 	if err := env.Database.UserDB.DeleteClient(params.ClientID); err != nil {

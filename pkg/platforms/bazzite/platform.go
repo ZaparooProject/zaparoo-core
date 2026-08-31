@@ -34,7 +34,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -47,14 +49,17 @@ import (
 // pre-installed Steam and Lutris, and Heroic available via Flatpak.
 type Platform struct {
 	*linuxbase.Base
-	procScanner  *procscanner.Scanner
-	steamTracker *steamtracker.PlatformIntegration
+	procScanner              *procscanner.Scanner
+	steamTracker             *steamtracker.PlatformIntegration
+	gameMode                 *gamescope.Manager
+	emulationOptionsOverride *linuxemu.Options
 }
 
 // NewPlatform creates a new Bazzite platform instance.
 func NewPlatform() *Platform {
 	return &Platform{
-		Base: linuxbase.NewBase(platformids.Bazzite),
+		Base:     linuxbase.NewBase(platformids.Bazzite),
+		gameMode: gamescope.NewManager(gamescope.SessionOptions{Enabled: true}),
 	}
 }
 
@@ -85,19 +90,17 @@ func (p *Platform) StartPost(
 		return err
 	}
 
-	// Create process scanner for Steam game tracking
+	steamClient := steam.NewClient(steam.DefaultBazziteOptions())
+	if !steamClient.IsSteamInstalled(cfg) {
+		return nil
+	}
 	p.procScanner = procscanner.New()
 	if err := p.procScanner.Start(); err != nil {
 		log.Warn().Err(err).Msg("process scanner failed to start")
 		return nil
 	}
-
-	// Start Steam tracker for external Steam game detection
 	p.steamTracker = steamtracker.NewPlatformIntegration(
-		p.procScanner,
-		p.Base,
-		activeMedia,
-		setActiveMedia,
+		p.procScanner, p.Base, activeMedia, setActiveMedia, steamClient.FindSteamDir(cfg),
 	)
 	p.steamTracker.Start()
 
@@ -106,6 +109,7 @@ func (p *Platform) StartPost(
 
 // Stop stops the platform and cleans up resources.
 func (p *Platform) Stop() error {
+	p.gameMode.RevertFocus()
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
 	}
@@ -114,6 +118,13 @@ func (p *Platform) Stop() error {
 	}
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()
+}
+
+// ReturnToMenu stops active media on Bazzite. The Steam Game Mode shell
+// remains responsible for presenting its menu.
+func (p *Platform) ReturnToMenu() error {
+	//nolint:wrapcheck // Pass-through to the shared Linux process manager.
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 // LaunchMedia launches media using the appropriate launcher.
@@ -132,7 +143,10 @@ func (p *Platform) LaunchMedia(
 // Bazzite supports Steam (native/Flatpak), Lutris (pre-installed),
 // Heroic (Flatpak via Bazaar), WebBrowser, and Generic scripts.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	ls := []platforms.Launcher{
+	steamLauncher := steam.NewSteamLauncher(steam.DefaultBazziteOptions())
+	steamLauncher.Lifecycle = platforms.LifecycleExternal
+	ls := make([]platforms.Launcher, 0, 64)
+	ls = append(ls, []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
@@ -144,7 +158,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiTVShowLauncher(),
 
 		// Steam - support both native (default) and Flatpak
-		steam.NewSteamLauncher(steam.DefaultBazziteOptions()),
+		steamLauncher,
 
 		// Lutris - pre-installed native on Bazzite
 		launchers.NewLutrisLauncher(launchers.LutrisOptions{
@@ -156,12 +170,39 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			CheckFlatpak: true,
 		}),
 
+		// Additional Linux game managers and remote streaming
+		launchers.NewBottlesLauncher(),
+		launchers.NewFaugusLauncher(),
+		launchers.NewMoonlightLauncher(),
+
 		// Web browser for URLs
 		launchers.NewWebBrowserLauncher(),
 
 		// Generic scripts
 		launchers.NewGenericLauncher(),
-	}
+	}...)
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
+	emuOpts := p.emulationOptions()
+	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
+	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
+	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
+	allLaunchers = append(allLaunchers, custom...)
+	allLaunchers = append(allLaunchers, ls...)
+	p.gameMode.WrapLaunchers(allLaunchers)
+	return allLaunchers
+}
+
+func (*Platform) retroArchConfigPath() string {
+	return linuxemu.DesktopRetroArchConfigPath()
+}
+
+func (p *Platform) emulationOptions() linuxemu.Options {
+	if p.emulationOptionsOverride != nil {
+		return *p.emulationOptionsOverride
+	}
+	return linuxemu.DesktopEmulationOptions(
+		p.gameMode, linuxemu.DesktopRetroArchOptions(p.retroArchConfigPath()),
+	)
 }

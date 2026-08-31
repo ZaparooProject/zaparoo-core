@@ -218,48 +218,13 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 			}
 
 			// Step 2: Index path (simulating media scanner pipeline)
-			scanState := &database.ScanState{
-				SystemIDs:     make(map[string]int),
-				TitleIDs:      make(map[string]int),
-				MediaIDs:      make(map[string]int),
-				TagIDs:        make(map[string]int),
-				TagTypeIDs:    make(map[string]int),
-				SystemsIndex:  0,
-				TitlesIndex:   0,
-				MediaIndex:    0,
-				TagsIndex:     0,
-				TagTypesIndex: 0,
-			}
-
-			// Begin transaction
-			err := db.BeginTransaction(false)
-			require.NoError(t, err)
-
-			// Add media path
-			titleIndex, mediaIndex, err := AddMediaPath(
-				db,
-				scanState,
-				tc.systemID,
-				virtualPath,
-				"",    // name
-				false, // noExt
-				false, // stripLeadingNumbers
-				nil,   // cfg
-				"",    // mediaType
-			)
-			require.NoError(t, err, "AddMediaPath should succeed")
-			assert.Positive(t, titleIndex, "Title index should be assigned")
-			assert.Positive(t, mediaIndex, "Media index should be assigned")
-
-			// Commit transaction
-			err = db.CommitTransaction()
-			require.NoError(t, err)
-
-			t.Logf("Indexed: titleIndex=%d, mediaIndex=%d", titleIndex, mediaIndex)
+			indexMediaPaths(t, db, tc.systemID, virtualPath)
 
 			// Step 3: Retrieve from database (simulating launcher retrieval)
-			media, err := db.FindMedia(database.Media{DBID: int64(mediaIndex)})
-			require.NoError(t, err, "Should be able to retrieve media by ID")
+			mediaRows, err := db.GetMediaBySystemID(tc.systemID)
+			require.NoError(t, err, "Should be able to retrieve media")
+			require.Len(t, mediaRows, 1)
+			media := mediaRows[0]
 
 			// Verify path is stored correctly (still encoded)
 			assert.Equal(t, virtualPath, media.Path,
@@ -300,7 +265,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 			t.Logf("Slug: %s", slug)
 
 			// Step 7: Verify title metadata was populated correctly
-			title, err := db.FindMediaTitle(&database.MediaTitle{DBID: int64(titleIndex)})
+			title, err := db.FindMediaTitle(&database.MediaTitle{DBID: media.MediaTitleDBID})
 			require.NoError(t, err, "Should be able to retrieve title")
 
 			assert.NotEmpty(t, title.Slug, "Title slug should be populated")
@@ -373,45 +338,16 @@ func TestVirtualPath_MalformedGracefulHandling(t *testing.T) {
 			db, cleanup := setupTempMediaDB(t)
 			defer cleanup()
 
-			scanState := &database.ScanState{
-				SystemIDs:     make(map[string]int),
-				TitleIDs:      make(map[string]int),
-				MediaIDs:      make(map[string]int),
-				TagIDs:        make(map[string]int),
-				TagTypeIDs:    make(map[string]int),
-				SystemsIndex:  0,
-				TitlesIndex:   0,
-				MediaIndex:    0,
-				TagsIndex:     0,
-				TagTypesIndex: 0,
-			}
-
-			err := db.BeginTransaction(false)
-			require.NoError(t, err)
-
-			_, mediaIndex, err := AddMediaPath(
-				db,
-				scanState,
-				tc.systemID,
-				tc.virtualPath,
-				"",
-				false,
-				false,
-				nil,
-				"",
-			)
+			_, err := indexMediaPathsErr(db, tc.systemID, tc.virtualPath)
 
 			if tc.shouldIndex {
 				require.NoError(t, err, "Should handle malformed path gracefully: %s", tc.expectedBehavior)
-				assert.Positive(t, mediaIndex, "Should assign media index")
-
-				err = db.CommitTransaction()
-				require.NoError(t, err)
 
 				// Verify we can retrieve it
-				retrievedMedia, errFind := db.FindMedia(database.Media{DBID: int64(mediaIndex)})
+				mediaRows, errFind := db.GetMediaBySystemID(tc.systemID)
 				require.NoError(t, errFind)
-				assert.Equal(t, tc.virtualPath, retrievedMedia.Path,
+				require.Len(t, mediaRows, 1)
+				assert.Equal(t, tc.virtualPath, mediaRows[0].Path,
 					"Path should be stored as-is even if malformed")
 
 				t.Logf("✓ Gracefully handled malformed path: %s → %s",
@@ -466,45 +402,13 @@ func TestVirtualPath_HTTPURLHandling(t *testing.T) {
 			db, cleanup := setupTempMediaDB(t)
 			defer cleanup()
 
-			scanState := &database.ScanState{
-				SystemIDs:     make(map[string]int),
-				TitleIDs:      make(map[string]int),
-				MediaIDs:      make(map[string]int),
-				TagIDs:        make(map[string]int),
-				TagTypeIDs:    make(map[string]int),
-				SystemsIndex:  0,
-				TitlesIndex:   0,
-				MediaIndex:    0,
-				TagsIndex:     0,
-				TagTypesIndex: 0,
-			}
-
-			// Seed canonical tags before testing (required for extension tag creation)
-			err := SeedCanonicalTags(db, scanState)
-			require.NoError(t, err)
-
-			err = db.BeginTransaction(false)
-			require.NoError(t, err)
-
-			titleIndex, mediaIndex, err := AddMediaPath(
-				db,
-				scanState,
-				tc.systemID,
-				tc.url,
-				"",
-				false,
-				false,
-				nil,
-				"",
-			)
-			require.NoError(t, err)
-
-			err = db.CommitTransaction()
-			require.NoError(t, err)
+			indexMediaPaths(t, db, tc.systemID, tc.url)
 
 			// Retrieve and verify
-			media, err := db.FindMedia(database.Media{DBID: int64(mediaIndex)})
+			mediaRows, err := db.GetMediaBySystemID(tc.systemID)
 			require.NoError(t, err)
+			require.Len(t, mediaRows, 1)
+			media := mediaRows[0]
 			assert.Equal(t, tc.url, media.Path, "URL should be stored as-is")
 
 			// Verify PathInfo decodes correctly
@@ -515,7 +419,7 @@ func TestVirtualPath_HTTPURLHandling(t *testing.T) {
 			t.Logf("✓ HTTP URL handled: %s → name=%s", tc.url, pathInfo.Name)
 
 			// Verify title was created
-			_, err = db.FindMediaTitle(&database.MediaTitle{DBID: int64(titleIndex)})
+			_, err = db.FindMediaTitle(&database.MediaTitle{DBID: media.MediaTitleDBID})
 			require.NoError(t, err)
 		})
 	}

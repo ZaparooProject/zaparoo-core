@@ -20,15 +20,21 @@
 //nolint:revive // custom validation tags (letter, duration, etc.) are unknown to revive
 package models
 
-import "github.com/ZaparooProject/go-zapscript"
+import (
+	"encoding/json"
+
+	"github.com/ZaparooProject/go-zapscript"
+)
 
 type SearchParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix  *string   `json:"pathPrefix,omitempty"`
 	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
 	Cursor      *string   `json:"cursor,omitempty"`
 	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 	Query       *string   `json:"query"`
 }
 
@@ -36,15 +42,43 @@ type BrowseParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 	Path        *string   `json:"path,omitempty"`
+	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
 	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
 	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
 	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+}
+
+type SystemsParams struct {
+	Tags *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	All  bool      `json:"all,omitempty"`
+}
+
+// LaunchersParams filters the launchers list. Systems is intentionally not
+// validated against known system IDs: launcher system IDs can be launchable
+// or virtual systems outside systemdefs, and an unmatched filter value should
+// return an empty list rather than a validation error.
+type LaunchersParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+}
+
+// RemoteActivityParams requests recent entries from the remote operations
+// ledger. Limit defaults to 20 and is capped at 100.
+type RemoteActivityParams struct {
+	Limit *int `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	// Rebuild discards the media database entirely and indexes from scratch.
+	// Scraped metadata is lost and must be re-scraped; user data (favourites,
+	// launcher overrides) lives in UserDB and is re-applied after indexing.
+	// Incompatible with a systems filter: a fresh database indexed selectively
+	// would silently drop every other system's media.
+	Rebuild *bool `json:"rebuild,omitempty"`
 }
 
 type RunParams struct {
@@ -55,11 +89,23 @@ type RunParams struct {
 	Unsafe bool    `json:"unsafe"`
 }
 
+type UIRespondParams struct {
+	ID       string           `json:"id" validate:"required"`
+	Action   UIResponseAction `json:"action" validate:"required,oneof=dismiss select confirm"`
+	ChoiceID string           `json:"choiceId,omitempty"`
+}
+
 type RunScriptParams struct {
 	Name      *string                  `json:"name"`
 	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`
 	ZapScript int                      `json:"zapscript"`
 	Unsafe    bool                     `json:"unsafe"`
+}
+
+type AllMappingsParams struct {
+	// IncludeReadOnly also returns read-only mappings loaded from the mappings
+	// folder. Defaults to false so older clients keep receiving DB mappings only.
+	IncludeReadOnly bool `json:"includeReadOnly,omitempty"`
 }
 
 type AddMappingParams struct {
@@ -88,6 +134,24 @@ type UpdateMappingParams struct {
 type ReaderWriteParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 	Text     string  `json:"text" validate:"required"`
+}
+
+type BackupNameParams struct {
+	Name string `json:"name" validate:"required"`
+}
+
+type BackupRemoteRestoreParams struct {
+	ID string `json:"id" validate:"required"`
+}
+
+type SettingsAuthStatusParams struct {
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
+}
+
+type SettingsAuthLinkParams struct {
+	// URL overrides the auth server base URL; defaults to the official
+	// Zaparoo API.
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
 }
 
 type ReaderWriteCancelParams struct {
@@ -119,7 +183,12 @@ type UpdateSettingsParams struct {
 	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
 	ErrorReporting            *bool               `json:"errorReporting"`
+	Encryption                *bool               `json:"encryption"`
+	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
+	PlaytimeSyncEnabled       *bool               `json:"playtimeSyncEnabled"`
+	RemoteControlEnabled      *bool               `json:"remoteControlEnabled"`
 	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
@@ -130,6 +199,10 @@ type UpdateSettingsParams struct {
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  *bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          *bool               `json:"profilesSwapData"`
+	UpdateCheck               *bool               `json:"updateCheck"`
+	UpdateInstall             *bool               `json:"updateInstall"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -141,6 +214,21 @@ type UpdatePlaytimeLimitsParams struct {
 	Retention    *int      `json:"retention" validate:"omitempty,gte=0"`
 }
 
+// ExtendPlaytimeParams asks for extra time on the session currently being
+// limited. The recipient is never named by the caller: a grant always
+// applies to the profile governing playtime right now, so it cannot be
+// aimed at somebody else's session.
+type ExtendPlaytimeParams struct {
+	// Duration is the time to add, in Go duration format. Required for
+	// mode "duration" and ignored for "today".
+	Duration *string `json:"duration" validate:"omitempty,duration"`
+	// RequestID makes a grant idempotent across retries. Repeating a
+	// request ID reports the original grant instead of adding more time.
+	RequestID string `json:"requestId" validate:"omitempty,max=128"`
+	// Mode is "duration" or "today".
+	Mode string `json:"mode" validate:"required,oneof=duration today"`
+}
+
 type NewClientParams struct {
 	Name string `json:"name" validate:"required,min=1,max=255"`
 }
@@ -149,11 +237,76 @@ type DeleteClientParams struct {
 	ID string `json:"id" validate:"required,min=1"`
 }
 
+// ClientsPairStartParams configures a new pairing flow. Role is the
+// permission role the paired client will receive ("admin" or "member");
+// empty defaults to member.
+type ClientsPairStartParams struct {
+	Role string `json:"role" validate:"omitempty,oneof=admin member"`
+}
+
+// NewProfileParams creates a profile. Nil limit fields inherit the global
+// config; a "0" duration means explicitly unlimited.
+type NewProfileParams struct {
+	PIN           *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled *bool   `json:"limitsEnabled"`
+	DailyLimit    *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit  *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Name          string  `json:"name" validate:"required,min=1,max=255"`
+	Role          string  `json:"role" validate:"omitempty,oneof=admin member"`
+}
+
+// UpdateProfileParams updates a profile. Omitted fields are unchanged.
+// ClearPIN removes the PIN; ClearLimits resets all limit overrides back to
+// inheriting global config before any limit fields in the same request are
+// applied (clear-then-set); RegenerateSwitchID issues a new switch ID
+// (lost-card replacement).
+type UpdateProfileParams struct {
+	Name               *string `json:"name" validate:"omitempty,min=1,max=255"`
+	PIN                *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled      *bool   `json:"limitsEnabled"`
+	DailyLimit         *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit       *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Role               *string `json:"role" validate:"omitempty,oneof=admin member"`
+	ProfileID          string  `json:"profileId" validate:"required,min=1"`
+	ClearPIN           bool    `json:"clearPin"`
+	ClearLimits        bool    `json:"clearLimits"`
+	RegenerateSwitchID bool    `json:"regenerateSwitchId"`
+}
+
+type DeleteProfileParams struct {
+	ProfileID string `json:"profileId" validate:"required,min=1"`
+}
+
+// SwitchProfileParams switches the device's active profile. Exactly one of
+// ProfileID or SwitchID selects the target; both omitted (or null) means
+// deactivate. PIN is required when the target profile has one set.
+type SwitchProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
+}
+
+// VerifyProfileParams verifies a profile credential without switching.
+// Exactly one of ProfileID (with PIN when the profile has one) or SwitchID
+// (a bearer credential) must be given.
+type VerifyProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
+}
+
 type MediaStartedParams struct {
 	SystemID   string `json:"systemId" validate:"required"`
 	SystemName string `json:"systemName" validate:"required"`
 	MediaPath  string `json:"mediaPath" validate:"required"`
 	MediaName  string `json:"mediaName" validate:"required"`
+	Slot       string `json:"slot,omitempty"`
+}
+
+// ActiveMediaQueryParams holds the optional filter parameters for the media.active method.
+// Slot selects which slot to read; defaults to primary when empty.
+type ActiveMediaQueryParams struct {
+	Slot string `json:"slot,omitempty"`
 }
 
 type UpdateActiveMediaParams struct {
@@ -168,14 +321,16 @@ type MediaStoppedParams struct {
 	MediaName  string `json:"mediaName"`
 	MediaPath  string `json:"mediaPath"`
 	LauncherID string `json:"launcherId"`
+	Slot       string `json:"slot,omitempty"`
 	Elapsed    int    `json:"elapsed"`
 }
 
 type MediaHistoryParams struct {
-	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
-	Cursor      *string   `json:"cursor,omitempty"`
+	Systems       *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	DistinctMedia *bool     `json:"distinctMedia,omitempty"`
+	Limit         *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor        *string   `json:"cursor,omitempty"`
 }
 
 type MediaHistoryTopParams struct {
@@ -199,10 +354,24 @@ type MediaTagsUpdateParams struct {
 	Remove  []string `json:"remove,omitempty" validate:"omitempty,dive,min=1"`
 }
 
+type MediaMetaUpdateParams struct {
+	MediaID *int64          `json:"mediaId,omitempty"`
+	System  string          `json:"system" validate:"omitempty,min=1"`
+	Path    string          `json:"path"   validate:"omitempty,min=1"`
+	Media   json.RawMessage `json:"media,omitempty"`
+}
+
 type MediaImageParams struct {
-	MediaID    *int64   `json:"mediaId,omitempty"`
+	MediaID *int64 `json:"mediaId,omitempty"`
+	// MaxSize is a hint for the longest edge (in pixels) of the returned image.
+	// The server resizes down to fit a MaxSize×MaxSize box and caches the result;
+	// omit it to receive the full-size image. Requests are snapped to a small set
+	// of standard sizes server-side, so the returned image may be larger than
+	// requested — clients should downscale to their final display size.
+	MaxSize    *int32   `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`
 	Path       string   `json:"path"              validate:"omitempty,min=1"`
+	Delivery   string   `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
 	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
 }
 
@@ -221,6 +390,7 @@ type MediaLookupParams struct {
 type MediaControlParams struct {
 	Args   map[string]string `json:"args,omitempty"`
 	Action string            `json:"action" validate:"required,min=1"`
+	Slot   string            `json:"slot,omitempty"`
 }
 
 type DeleteInboxParams struct {
@@ -243,4 +413,11 @@ type InputGamepadParams struct {
 type MediaTitleParseParams struct {
 	SystemID string `json:"systemId" validate:"required,min=1"`
 	Path     string `json:"path" validate:"required,min=1"`
+}
+
+// UpdateApplyParams are the optional arguments to update.apply. Force lets a
+// person go ahead while something is playing that a restart will close; it does
+// not get past anything that would risk their data.
+type UpdateApplyParams struct {
+	Force bool `json:"force"`
 }

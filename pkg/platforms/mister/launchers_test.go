@@ -29,9 +29,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +50,7 @@ func TestCheckInZip_NonZipPath(t *testing.T) {
 		"/path/to/game.rom",
 		"/path/to/game.bin",
 		"/path/to/game.ZIP.backup",
+		"/media/fat/games/NEOGEO/mslug.neo",
 		"",
 	}
 
@@ -306,6 +312,59 @@ func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
 	}
 }
 
+func TestResolveFramebufferMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		renderResolution  string
+		defaultResolution string
+		renderScale       int
+		defaultScale      int
+		expect            framebufferMode
+		expectError       bool
+	}{
+		{name: "video default", defaultScale: 33, expect: framebufferMode{divisor: 3}},
+		{name: "ScummVM default", defaultResolution: "640x480", expect: framebufferMode{width: 640, height: 480}},
+		{name: "half scale", renderScale: 50, expect: framebufferMode{divisor: 2}},
+		{name: "exact override", renderResolution: "800x600", expect: framebufferMode{width: 800, height: 600}},
+		{name: "unsupported scale", renderScale: 75, expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var opts *platforms.LaunchOptions
+			if tt.renderScale != 0 || tt.renderResolution != "" {
+				opts = &platforms.LaunchOptions{RenderResolution: tt.renderResolution}
+				if tt.renderScale != 0 {
+					renderScale := tt.renderScale
+					opts.RenderScale = &renderScale
+				}
+			}
+			mode, err := resolveFramebufferMode(opts, tt.defaultScale, tt.defaultResolution)
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expect, mode)
+		})
+	}
+}
+
+func TestResolveFramebufferMode_RejectsConflictingOptions(t *testing.T) {
+	t.Parallel()
+
+	renderScale := 50
+	_, err := resolveFramebufferMode(&platforms.LaunchOptions{
+		RenderScale:      &renderScale,
+		RenderResolution: "640x480",
+	}, videoRenderScale, "")
+	require.Error(t, err)
+}
+
 func TestBuildFvpCommand(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +426,35 @@ func TestBuildFvpCommand_DifferentPaths(t *testing.T) {
 	}
 }
 
+func TestScummVMKill_SendsCtrlQWithoutWaiting(t *testing.T) {
+	t.Parallel()
+
+	pressed := make(chan string, 1)
+	kill := scummVMKill(func(keys string) error {
+		pressed <- keys
+		return nil
+	})
+
+	err := kill(&config.Instance{})
+	require.NoError(t, err)
+
+	select {
+	case keys := <-pressed:
+		assert.Equal(t, "{ctrl+q}", keys)
+	default:
+		t.Fatal("ScummVM Kill did not send ctrl+q")
+	}
+}
+
+func TestScummVMKill_PropagatesKeyboardError(t *testing.T) {
+	t.Parallel()
+
+	kill := scummVMKill(func(string) error { return assert.AnError })
+	err := kill(&config.Instance{})
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "failed to send ctrl+q")
+}
+
 func TestBuildScummVMCommand(t *testing.T) {
 	t.Parallel()
 
@@ -388,8 +476,11 @@ func TestBuildScummVMCommand(t *testing.T) {
 	assert.Contains(t, cmd.Args, "--opl-driver=db")
 	assert.Contains(t, cmd.Args, "--output-rate=48000")
 
-	// Verify working directory
+	// Verify process-group tracking without creating a new session.
 	assert.Equal(t, scummvmBaseDir, cmd.Dir)
+	require.NotNil(t, cmd.SysProcAttr)
+	assert.True(t, cmd.SysProcAttr.Setpgid)
+	assert.False(t, cmd.SysProcAttr.Setsid)
 
 	// Verify environment variables - check that our custom ones are set
 	hasCustomHome := false
@@ -453,6 +544,258 @@ func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
 	require.NotNil(t, found, "LLAPISuperGrafx launcher should exist")
 	assert.Equal(t, "SuperGrafx", found.SystemID,
 		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
+}
+
+func TestCreateLaunchersAppliesDefaultScanExcludes(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var colecoLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemColecoVision {
+			colecoLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, colecoLauncher, "ColecoVision launcher should exist")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.rom")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.vhd")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.zip/boot.vhd")
+}
+
+func TestCreateLaunchersUsesCatalogScanMetadata(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	byID := make(map[string]platforms.Launcher, len(launchers))
+	for _, launcher := range launchers {
+		byID[launcher.ID] = launcher
+	}
+
+	customScannerSystems := map[string]struct{}{
+		"Amiga":  {},
+		"NeoGeo": {},
+		"ao486":  {},
+	}
+	for _, definition := range catalog.All() {
+		launcher, ok := byID[definition.ID]
+		if !ok {
+			_, customScanner := customScannerSystems[definition.ID]
+			require.True(t, customScanner, "catalog-backed launcher %s missing", definition.ID)
+			continue
+		}
+		assert.Equal(t, definition.Folders, launcher.Folders, definition.ID)
+		assert.Equal(t, definition.Extensions, launcher.Extensions, definition.ID)
+	}
+}
+
+func TestArcadeLauncherExtensions(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var arcadeLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "Arcade" {
+			arcadeLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
+	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
+	assert.Equal(t, arcadeOrganizerScanDirectoryExcludes, arcadeLauncher.ScanDirectoryExcludes)
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_Organized")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_1 A-E")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_4 Video & Inputs")
+	assert.True(t, arcadeLauncher.ScanSkipInternalSymlinks,
+		"Arcade Organizer aliases resolve inside _Arcade and must not be indexed twice")
+	assert.Contains(t, arcadeLauncher.Extensions, ".mra")
+	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
+}
+
+func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+	launchers = append(launchers, createVideoLauncher(pl), createScummVMLauncher(pl))
+	launchers = enableMGLIndexing(launchers)
+
+	findLauncher := func(id string) *platforms.Launcher {
+		for i := range launchers {
+			if launchers[i].ID == id {
+				return &launchers[i]
+			}
+		}
+		return nil
+	}
+
+	snesLauncher := findLauncher("SNES")
+	require.NotNil(t, snesLauncher, "SNES launcher should exist")
+	assert.Contains(t, snesLauncher.Extensions, ".mgl")
+
+	dualRAMLauncher := findLauncher("DualRAM3DO")
+	require.NotNil(t, dualRAMLauncher, "DualRAM3DO launcher should exist")
+	assert.NotContains(t, dualRAMLauncher.Extensions, ".mgl")
+
+	genericLauncher := findLauncher("Generic")
+	require.NotNil(t, genericLauncher, "Generic launcher should exist")
+	assert.Equal(t, 1, countExtension(genericLauncher.Extensions, ".mgl"))
+
+	arcadeLauncher := findLauncher("Arcade")
+	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
+	assert.Equal(t, 1, countExtension(arcadeLauncher.Extensions, ".mgl"))
+
+	videoLauncher := findLauncher("GenericVideo")
+	require.NotNil(t, videoLauncher, "GenericVideo launcher should exist")
+	assert.NotContains(t, videoLauncher.Extensions, ".mgl")
+
+	scummVMLauncher := findLauncher("ScummVM")
+	require.NotNil(t, scummVMLauncher, "ScummVM launcher should exist")
+	assert.NotContains(t, scummVMLauncher.Extensions, ".mgl")
+}
+
+func TestRecentMediaLaunchers(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	tests := []struct {
+		name       string
+		id         string
+		systemID   string
+		folders    []string
+		extensions []string
+	}{
+		{
+			name: "Apple IIGS", id: systemdefs.SystemAppleIIGS, systemID: systemdefs.SystemAppleIIGS,
+			folders:    []string{"Apple-IIgs"},
+			extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
+		},
+		{
+			name: "Apple Lisa", id: systemdefs.SystemAppleLisa, systemID: systemdefs.SystemAppleLisa,
+			folders: []string{"LISA"}, extensions: []string{".img", ".vhd"},
+		},
+		{
+			name: "Intellivision ROM", id: systemdefs.SystemIntellivision,
+			systemID: systemdefs.SystemIntellivision,
+			folders:  []string{"Intellivision"}, extensions: []string{".rom", ".int", ".bin"},
+		},
+		{
+			name: "MegaVGMDrive", id: "MegaVGMDrive", systemID: systemdefs.SystemAudio,
+			folders: []string{"MegaVGMDrive"}, extensions: []string{".vgm"},
+		},
+		{
+			name: "OpenBOR default", id: systemdefs.SystemOpenBOR, systemID: systemdefs.SystemOpenBOR,
+			folders: []string{"OpenBOR"}, extensions: []string{".pak"},
+		},
+		{
+			name: "OpenBOR 7533", id: "OpenBOR7533", systemID: systemdefs.SystemOpenBOR,
+			extensions: []string{".pak"},
+		},
+		{
+			name: "PICO-8", id: systemdefs.SystemPico8, systemID: systemdefs.SystemPico8,
+			folders: []string{"PICO-8"}, extensions: []string{".p8"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tt.id {
+					found = &launchers[i]
+					break
+				}
+			}
+
+			require.NotNil(t, found, "%s launcher should exist", tt.id)
+			assert.Equal(t, tt.systemID, found.SystemID)
+			assert.ElementsMatch(t, tt.folders, found.Folders)
+			for _, ext := range tt.extensions {
+				assert.Contains(t, found.Extensions, ext)
+			}
+			assert.NotNil(t, found.Launch)
+		})
+	}
+}
+
+func TestPico8LauncherFiltering(t *testing.T) {
+	t.Parallel()
+
+	platform := NewPlatform()
+	launchers := CreateLaunchers(platform)
+	var pico8Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemPico8 {
+			pico8Launcher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, pico8Launcher)
+
+	root := filepath.Join(misterconfig.SDRootDir, "games", "PICO-8")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "P8 cart", path: filepath.Join(root, "Celeste.p8"), want: true},
+		{name: "P8 PNG cart", path: filepath.Join(root, "Celeste.p8.png"), want: true},
+		{name: "uppercase P8 PNG cart", path: filepath.Join(root, "CELESTE.P8.PNG"), want: true},
+		{name: "unrelated PNG", path: filepath.Join(root, "cover.png"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, helpers.PathIsLauncher(&config.Instance{}, platform, pico8Launcher, tt.path))
+		})
+	}
+}
+
+func TestLaunchAltCoreCandidatesUsesAvailableFallback(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	cache := &cores.RBFCache{}
+	cores.GlobalRBFCache = cache
+	defer func() {
+		cores.GlobalRBFCache = oldCache
+	}()
+
+	fallbackPath := filepath.Join("_Other", "OpenBOR_7533")
+	cache.BuildFromRBFs([]cores.RBFInfo{
+		{
+			Path:     filepath.Join("media", "fat", "_Other", "OpenBOR_7533.rbf"),
+			Filename: "OpenBOR_7533.rbf", ShortName: "OpenBOR_7533", MglName: fallbackPath,
+		},
+	})
+
+	_ = launchAltCoreCandidates(
+		systemdefs.SystemOpenBOR,
+		systemdefs.SystemOpenBOR,
+		filepath.Join("_Other", "OpenBOR_4086"),
+		fallbackPath,
+	)
+
+	resolved, ok := cache.GetByLauncherID(systemdefs.SystemOpenBOR)
+	require.True(t, ok)
+	assert.Equal(t, fallbackPath, resolved.MglName)
+}
+
+func countExtension(extensions []string, want string) int {
+	count := 0
+	for _, extension := range extensions {
+		if strings.EqualFold(extension, want) {
+			count++
+		}
+	}
+	return count
 }
 
 // Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
@@ -519,19 +862,27 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"RANES":          "RA_NES",
-		"RASNES":         "RA_SNES",
-		"RAGameboy":      "RA_Gameboy",
-		"RAGBA":          "RA_GBA",
-		"RANintendo64":   "RA_N64",
-		"RAPSX":          "RA_PSX",
-		"RAMegaDrive":    "RA_MegaDrive",
-		"RAMegaCD":       "RA_MegaCD",
-		"RASMS":          "RA_SMS",
-		"RANeoGeo":       "RA_NeoGeo",
-		"RATurboGrafx16": "RA_TurboGrafx16",
-		"RAAtari7800":    "RA_Atari7800",
-		"RAS32X":         "RA_S32X",
+		"RANES":            "RA_NES",
+		"RAFDS":            "RA_FDS",
+		"RASNES":           "RA_SNES",
+		"RAGameboy":        "RA_Gameboy",
+		"RAGameboyColor":   "RA_GBC",
+		"RAGameGear":       "RA_GameGear",
+		"RASuperGameboy":   "RA_SGB",
+		"RAGBA":            "RA_GBA",
+		"RANintendo64":     "RA_N64",
+		"RAPSX":            "RA_PSX",
+		"RAMegaDrive":      "RA_MegaDrive",
+		"RAMegaCD":         "RA_MegaCD",
+		"RASMS":            "RA_SMS",
+		"RANeoGeo":         "RA_NeoGeo",
+		"RANeoGeoCD":       "RA_NeoGeoCD",
+		"RATurboGrafx16":   "RA_TurboGrafx16",
+		"RATurboGrafx16CD": "RA_TurboGrafx16CD",
+		"RAAtari2600":      "RA_Atari7800",
+		"RAAtari7800":      "RA_Atari7800",
+		"RAS32X":           "RA_S32X",
+		"RASaturn":         "RA_Saturn",
 	}
 
 	for launcherID, want := range cases {
@@ -541,6 +892,55 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 			got, ok := retroAchievementsSetName(launcherID)
 			require.True(t, ok)
 			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestRetroAchievementsSetNameSameDirRegression(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		launcherID  string
+		wantSetName string
+		wantSameDir bool
+	}{
+		{launcherID: "RANES", wantSetName: "RA_NES", wantSameDir: true},
+		{launcherID: "RASNES", wantSetName: "RA_SNES", wantSameDir: true},
+		{launcherID: "RAGameboy", wantSetName: "RA_Gameboy", wantSameDir: true},
+		{launcherID: "RAGBA", wantSetName: "RA_GBA", wantSameDir: true},
+		{launcherID: "RANintendo64", wantSetName: "RA_N64", wantSameDir: true},
+		{launcherID: "RAPSX", wantSetName: "RA_PSX", wantSameDir: true},
+		{launcherID: "RAMegaDrive", wantSetName: "RA_MegaDrive", wantSameDir: true},
+		{launcherID: "RAMegaCD", wantSetName: "RA_MegaCD", wantSameDir: true},
+		{launcherID: "RASMS", wantSetName: "RA_SMS", wantSameDir: true},
+		{launcherID: "RANeoGeo", wantSetName: "RA_NeoGeo", wantSameDir: true},
+		{launcherID: "RATurboGrafx16", wantSetName: "RA_TurboGrafx16", wantSameDir: true},
+		{launcherID: "RAAtari2600", wantSetName: "RA_Atari7800", wantSameDir: true},
+		{launcherID: "RAAtari7800", wantSetName: "RA_Atari7800", wantSameDir: true},
+		{launcherID: "RAS32X", wantSetName: "RA_S32X", wantSameDir: true},
+		{launcherID: "RASaturn", wantSetName: "RA_Saturn", wantSameDir: true},
+		{launcherID: "RAFDS", wantSetName: "RA_FDS", wantSameDir: false},
+		{launcherID: "RAGameboyColor", wantSetName: "RA_GBC", wantSameDir: false},
+		{launcherID: "RAGameGear", wantSetName: "RA_GameGear", wantSameDir: false},
+		{launcherID: "RANeoGeoCD", wantSetName: "RA_NeoGeoCD", wantSameDir: false},
+		{launcherID: "RASuperGameboy", wantSetName: "RA_SGB", wantSameDir: false},
+		{launcherID: "RATurboGrafx16CD", wantSetName: "RA_TurboGrafx16CD", wantSameDir: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.launcherID, func(t *testing.T) {
+			t.Parallel()
+
+			core := cores.Core{ID: tc.launcherID}
+			err := configureAltCoreWithDefaultSetName(
+				&core, tc.launcherID, "_RA_Cores/Cores/Gameboy", tc.wantSetName, tc.wantSameDir, nil,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.launcherID, core.LauncherID)
+			assert.Equal(t, "_RA_Cores/Cores/Gameboy", core.RBF)
+			assert.Equal(t, tc.wantSetName, core.SetName)
+			assert.Equal(t, tc.wantSameDir, core.SetNameSameDir)
 		})
 	}
 }
@@ -676,8 +1076,12 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		systemID string
 	}{
 		{"RANES", "NES"},
+		{"RAFDS", "FDS"},
 		{"RASNES", "SNES"},
 		{"RAGameboy", "Gameboy"},
+		{"RAGameboyColor", "GameboyColor"},
+		{"RAGameGear", "GameGear"},
+		{"RASuperGameboy", "SuperGameboy"},
 		{"RAGBA", "GBA"},
 		{"RANintendo64", "Nintendo64"},
 		{"RAPSX", "PSX"},
@@ -685,9 +1089,13 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		{"RAMegaCD", "MegaCD"},
 		{"RASMS", "MasterSystem"},
 		{"RANeoGeo", "NeoGeo"},
+		{"RANeoGeoCD", "NeoGeoCD"},
 		{"RATurboGrafx16", "TurboGrafx16"},
+		{"RATurboGrafx16CD", "TurboGrafx16CD"},
+		{"RAAtari2600", "Atari2600"},
 		{"RAAtari7800", "Atari7800"},
 		{"RAS32X", "Sega32X"},
+		{"RASaturn", "Saturn"},
 	}
 
 	for _, tc := range cases {
@@ -704,6 +1112,188 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 			require.NotNil(t, found, "%s launcher should exist", tc.id)
 			assert.Equal(t, tc.systemID, found.SystemID,
 				"%s must inherit slots from %s", tc.id, tc.systemID)
+			assert.Contains(t, found.Groups, platformshared.LauncherGroupRetroAchievements)
 		})
 	}
+}
+
+// TestAltCoreLauncherGroups pins every alt core family to its config group.
+// The counts are exact: a new alt core launcher that the path classifier does
+// not recognise fails here rather than silently missing from preference.
+func TestAltCoreLauncherGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	counts := map[string]int{}
+	for i := range launchers {
+		for _, group := range launchers[i].Groups {
+			counts[group]++
+		}
+	}
+
+	cases := []struct {
+		group string
+		want  int
+	}{
+		{platformshared.LauncherGroupRetroAchievements, 21},
+		{platformshared.LauncherGroupDB9, 32},
+		{platformshared.LauncherGroupLLAPI, 18},
+		{platformshared.LauncherGroupSinden, 7},
+		{platformshared.LauncherGroupPWM, 5},
+		{platformshared.LauncherGroupDualRAM, 7},
+		{platformshared.LauncherGroupUnstable, 45},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, counts[tc.group], "launcher count for group %s", tc.group)
+	}
+
+	members := []struct {
+		id    string
+		group string
+	}{
+		{"LLAPISNES", platformshared.LauncherGroupLLAPI},
+		{"LLAPI80MHzNintendo64", platformshared.LauncherGroupLLAPI},
+		{"DB9MegaDrive", platformshared.LauncherGroupDB9},
+		{"DB9GBAAccuracy", platformshared.LauncherGroupDB9},
+		{"SindenNES", platformshared.LauncherGroupSinden},
+		{"PWMPSX", platformshared.LauncherGroupPWM},
+		{"PWM2XPSX", platformshared.LauncherGroupPWM},
+		{"DualRAMJaguar", platformshared.LauncherGroupDualRAM},
+		{"RASNES", platformshared.LauncherGroupRetroAchievements},
+	}
+	for _, tc := range members {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, tc.id)
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Contains(t, found.Groups, tc.group)
+		})
+	}
+}
+
+// TestDB9DualRAMLaunchersAreInBothGroups covers the reason classification reads
+// registered RBF paths instead of ID prefixes: these cores are a DB9 fork build
+// *and* a dual-SDRAM build, and no prefix rule can say both.
+func TestDB9DualRAMLaunchersAreInBothGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"DB9DualRAMPSX", "DB9DualRAMSaturn"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found)
+			assert.Equal(t,
+				[]string{platformshared.LauncherGroupDB9, platformshared.LauncherGroupDualRAM},
+				found.Groups,
+				"the family group must come first so Groups[0] identifies the distribution",
+			)
+		})
+	}
+}
+
+// TestStockLaunchersHaveNoGroup keeps the stock cores out of every group, so a
+// preference entry naming a family never resolves to the default core.
+func TestStockLaunchersHaveNoGroup(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"SNES", "NES", "PSX", "Saturn", "Genesis", "2XPSX", "80MHzNintendo64"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found, "%s launcher should exist", id)
+			assert.Empty(t, found.Groups)
+		})
+	}
+}
+
+func TestRetroAchievementsAtari2600LauncherMetadata(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "RAAtari2600" {
+			found = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "RAAtari2600 launcher should exist")
+	assert.Equal(t, "Atari2600", found.SystemID)
+	assert.ElementsMatch(t, []string{"ATARI7800", "Atari2600"}, found.Folders)
+	assert.Contains(t, found.Extensions, ".a26")
+	require.NotNil(t, found.Test)
+	assert.True(t, found.Test(nil, filepath.Join("roms", "Atari2600", "game.bin")))
+	assert.False(t, found.Test(nil, filepath.Join("roms", "ATARI7800", "game.bin")))
+}
+
+func TestConfigureAtari2600AltCore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to RA Atari7800 setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, "RAAtari2600", core.LauncherID)
+		assert.Equal(t, "_RA_Cores/Cores/Atari7800", core.RBF)
+		assert.Equal(t, "RA_Atari7800", core.SetName)
+		assert.True(t, core.SetNameSameDir)
+		require.Len(t, core.Slots, 1)
+		assert.ElementsMatch(t, []string{".a26", ".bin"}, core.Slots[0].Exts)
+		require.NotNil(t, core.Slots[0].Mgl)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Delay)
+		assert.Equal(t, "f", core.Slots[0].Mgl.Method)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Index)
+	})
+
+	t.Run("launch options override setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", &platforms.LaunchOptions{
+			SetName:        "Custom_Atari",
+			SetNameSameDir: "no",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "Custom_Atari", core.SetName)
+		assert.False(t, core.SetNameSameDir)
+	})
+}
+
+func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "RAAtari2600" {
+			found = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "RAAtari2600 launcher should exist")
+
+	_, err := found.Launch(nil, filepath.Join("roms", "Atari2600", "game.a26"), &platforms.LaunchOptions{
+		SetName: "!invalid",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid set_name")
 }

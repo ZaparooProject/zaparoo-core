@@ -21,6 +21,7 @@ package service
 
 import (
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	zscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 )
@@ -71,6 +72,26 @@ func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 	return false
 }
 
+// scriptActivatesProfileBeforeLaunch reports whether the script contains a
+// profile command before its first media-launching command. Such a
+// combo card (profile switch + favorite game in one scan) satisfies the
+// require-profile launch gate: by the time the launch command runs, the
+// switch will have activated a profile, or failed and aborted the script.
+func scriptActivatesProfileBeforeLaunch(script *zapscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if cmd.Name == zapscript.ZapScriptCmdProfile {
+			return true
+		}
+		if zscript.IsMediaLaunchingCommand(cmd.Name) {
+			return false
+		}
+	}
+	return false
+}
+
 // scriptHasMediaDisruptingCommand checks if any command in the script would
 // change or stop the currently playing media. Used by launch guard.
 func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
@@ -78,11 +99,45 @@ func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
 		return false
 	}
 	for _, cmd := range script.Cmds {
+		if !zscript.IsMediaDisruptingCommand(cmd.Name) {
+			continue
+		}
+		if commandTargetsBackgroundSlot(cmd) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func commandTargetsBackgroundSlot(cmd zapscript.Command) bool {
+	if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) &&
+		cmd.Name != zapscript.ZapScriptCmdStop {
+		return false
+	}
+	slot, err := mediaslot.Normalize(cmd.AdvArgs.Get(zapscript.KeySlot))
+	return err == nil && slot == mediaslot.Background
+}
+
+// shouldPlayScanSuccessSound reports whether scan feedback should play for the
+// script. Suppressed only when the script's media commands all target the
+// background slot, so the sound doesn't clash with background music starting; a
+// mixed script that also launches primary media keeps normal feedback.
+func shouldPlayScanSuccessSound(script *zapscript.Script) bool {
+	if script == nil {
+		return true
+	}
+	hasBackground := false
+	for _, cmd := range script.Cmds {
+		if commandTargetsBackgroundSlot(cmd) {
+			hasBackground = true
+			continue
+		}
 		if zscript.IsMediaDisruptingCommand(cmd.Name) {
 			return true
 		}
 	}
-	return false
+	return !hasBackground
 }
 
 // injectCommands inserts new commands into the command slice after the given index.
@@ -101,12 +156,17 @@ func injectCommands(cmds []zapscript.Command, afterIndex int, newCmds []zapscrip
 
 // playlistNeedsUpdate determines if a playlist update requires action.
 // Returns false if the current item and playing state are unchanged.
+// ForceRelaunch bypasses dedup so the same track can be re-launched (e.g. repeat=one).
 func playlistNeedsUpdate(incoming, active *playlists.Playlist) bool {
 	if incoming == nil || active == nil {
 		return true // nil cases handled separately by caller
 	}
-	// No update needed if current item and playing state are the same
-	if incoming.Current() == active.Current() && incoming.Playing == active.Playing {
+	if incoming.ForceRelaunch {
+		return true
+	}
+	// No update needed if current item, playing state, and repeat mode are the same.
+	if incoming.Current() == active.Current() && incoming.Playing == active.Playing &&
+		incoming.Loop == active.Loop && incoming.LoopOne == active.LoopOne {
 		return false
 	}
 	return true

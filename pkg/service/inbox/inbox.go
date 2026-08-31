@@ -44,8 +44,21 @@ const (
 
 // Category constants for deduplication
 const (
-	CategoryNone            = "" // No deduplication
-	CategoryUpdateAvailable = "update_available"
+	CategoryNone                             = "" // No deduplication
+	CategoryMediaDBCorruptionRecovery        = "mediadb_corruption_recovery"
+	CategoryMediaDBCorruptionRecoveryFailure = "mediadb_corruption_recovery_failure"
+	CategoryMediaDBCorruptionRecoveryLimit   = "mediadb_corruption_recovery_limit"
+	CategoryMediaDBInterruptedRebuild        = "mediadb_interrupted_rebuild"
+	CategoryMediaDBSchemaReset               = "mediadb_schema_reset"
+	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
+	CategoryUpdateAvailable                  = "update_available"
+	CategoryUpdateResult                     = "update_result"
+	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"
+	CategoryBackupRemoteQuotaExceeded        = "backup_remote_quota_exceeded"
+	CategoryBackupRemoteUnlinked             = "backup_remote_unlinked"
+	CategoryBackupRemoteFailed               = "backup_remote_failed"
+	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"
+	CategoryBackupRemoteStale                = "backup_remote_stale"
 )
 
 // MessageOptions configures optional fields for inbox messages.

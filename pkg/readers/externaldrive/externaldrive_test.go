@@ -21,6 +21,7 @@ package externaldrive
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -396,7 +397,9 @@ func TestProcessEvents_MountEvent(t *testing.T) {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token, "Should receive token from mount event")
 		assert.Equal(t, TokenType, scan.Token.Type)
-		assert.Contains(t, scan.Token.Text, tokenContents)
+		assert.Equal(t, tokenContents, scan.Token.Text)
+		assert.Equal(t, hex.EncodeToString([]byte(tokenContents)), scan.Token.Data)
+		assert.Equal(t, filepath.Clean(tempDir), scan.Token.PathRoot)
 		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")
@@ -534,7 +537,9 @@ func TestHandleMountEvent_WithValidToken(t *testing.T) {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token)
 		assert.Equal(t, TokenType, scan.Token.Type)
-		assert.Contains(t, scan.Token.Text, "**launch.system:nes")
+		assert.Equal(t, tokenContents, scan.Token.Text)
+		assert.Equal(t, hex.EncodeToString([]byte(tokenContents)), scan.Token.Data)
+		assert.Equal(t, filepath.Clean(tempDir), scan.Token.PathRoot)
 		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")

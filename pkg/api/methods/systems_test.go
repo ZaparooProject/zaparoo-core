@@ -1,0 +1,265 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package methods
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+func TestHandleSystems_IncludesIndexedAndAvailableLauncherSystems(t *testing.T) {
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "NES", Count: 12}}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "indexed", SystemID: "NES"},
+		{ID: "available", SystemID: "SNES"},
+		{
+			ID:           "unavailable",
+			SystemID:     "Genesis",
+			Availability: func(*config.Instance) error { return errors.New("not installed") },
+		},
+	})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	assert.Equal(t, map[string]int{"NES": 12, "SNES": 0}, systemResponseMediaCounts(response))
+	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_IncludesUnindexedAvailable3DO(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "3DO", SystemID: "3DO"}})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"3DO"}, systemResponseIDs(response))
+	assert.Equal(t, map[string]int{"3DO": 0}, systemResponseMediaCounts(response))
+	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_AllIncludesUnavailableLauncherSystems(t *testing.T) {
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "NES", Count: 5}}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "available", SystemID: "SNES"},
+		{
+			ID:           "unavailable",
+			SystemID:     "Genesis",
+			Availability: func(*config.Instance) error { return errors.New("not installed") },
+		},
+	})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"all":true}`),
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES", "Genesis"}, systemResponseIDs(response))
+	assert.Equal(t, map[string]int{"NES": 5, "SNES": 0, "Genesis": 0}, systemResponseMediaCounts(response))
+	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_CountFailureFallsBackWithoutMediaCount(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, nil, errors.New("count failed"))
+	mockMediaDB.On("IndexedSystems").Return([]string{"NES"}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "snes", SystemID: "SNES"}})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	assert.Empty(t, systemResponseMediaCounts(response))
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_TaggedReturnsMatchingCounts(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On(
+		"SystemMediaCounts",
+		mock.Anything,
+		mock.MatchedBy(func(tagFilters []zapscript.TagFilter) bool {
+			return len(tagFilters) == 1 &&
+				tagFilters[0].Type == "user" &&
+				tagFilters[0].Value == "favorite" &&
+				tagFilters[0].Operator == zapscript.TagOperatorAND
+		}),
+	).Return([]database.SystemMediaCount{
+		{SystemID: "NES", Count: 4},
+		{SystemID: "SNES", Count: 7},
+	}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes", SystemID: "NES"},
+		{ID: "snes", SystemID: "SNES"},
+		{ID: "genesis", SystemID: "Genesis"},
+	})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"all":true,"tags":["user:favorite"]}`),
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	require.Len(t, response.Systems, 2)
+	require.NotNil(t, response.Systems[0].MediaCount)
+	require.NotNil(t, response.Systems[1].MediaCount)
+	assert.Equal(t, 4, *response.Systems[0].MediaCount)
+	assert.Equal(t, 7, *response.Systems[1].MediaCount)
+	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_WhitespaceOnlyTagsUseUnfilteredBehavior(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "NES", Count: 3}}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "snes", SystemID: "SNES"}})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"tags":["   "]}`),
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	assert.Equal(t, map[string]int{"NES": 3, "SNES": 0}, systemResponseMediaCounts(response))
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_TaggedRejectsInvalidTag(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	result, err := HandleSystems(requests.RequestEnv{
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Params:   json.RawMessage(`{"tags":["favorite"]}`),
+	})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse tag filters")
+	mockMediaDB.AssertNotCalled(t, "SystemMediaCounts", mock.Anything, mock.Anything)
+}
+
+func TestHandleSystems_RejectsInvalidParams(t *testing.T) {
+	result, err := HandleSystems(requests.RequestEnv{Params: json.RawMessage(`{"all":"yes"}`)})
+
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid params")
+}
+
+func expectUntaggedSystemMediaCounts(
+	mockMediaDB *testhelpers.MockMediaDBI,
+	counts []database.SystemMediaCount,
+	err error,
+) {
+	mockMediaDB.On(
+		"SystemMediaCounts",
+		mock.Anything,
+		mock.MatchedBy(func(tagFilters []zapscript.TagFilter) bool { return len(tagFilters) == 0 }),
+	).Return(counts, err)
+}
+
+func systemResponseIDs(response models.SystemsResponse) []string {
+	ids := make([]string, len(response.Systems))
+	for i := range response.Systems {
+		ids[i] = response.Systems[i].ID
+	}
+	return ids
+}
+
+func systemResponseMediaCounts(response models.SystemsResponse) map[string]int {
+	counts := make(map[string]int)
+	for i := range response.Systems {
+		if response.Systems[i].MediaCount != nil {
+			counts[response.Systems[i].ID] = *response.Systems[i].MediaCount
+		}
+	}
+	return counts
+}

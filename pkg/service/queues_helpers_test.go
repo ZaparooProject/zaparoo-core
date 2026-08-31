@@ -20,11 +20,15 @@
 package service
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldRunBeforeMediaStartHook(t *testing.T) {
@@ -306,6 +310,10 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 	}
 }
 
+func testSlotAdvArgs(slot string) gozapscript.AdvArgs {
+	return gozapscript.NewAdvArgs(map[string]string{string(gozapscript.KeySlot): slot})
+}
+
 func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 	t.Parallel()
 
@@ -337,6 +345,46 @@ func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 			name: "playlist.next is disrupting",
 			script: &gozapscript.Script{
 				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdPlaylistNext}},
+			},
+			expected: true,
+		},
+		{
+			name: "background launch is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdLaunch,
+					AdvArgs: testSlotAdvArgs(mediaslot.Background),
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "background playlist command is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdPlaylistNext,
+					AdvArgs: testSlotAdvArgs(mediaslot.Background),
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "background stop is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdStop,
+					AdvArgs: testSlotAdvArgs(mediaslot.Background),
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "invalid launch slot remains disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdLaunch,
+					AdvArgs: testSlotAdvArgs("badslot"),
+				}},
 			},
 			expected: true,
 		},
@@ -382,6 +430,68 @@ func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 			t.Parallel()
 			result := scriptHasMediaDisruptingCommand(tt.script)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestShouldPlayScanSuccessSound(t *testing.T) {
+	t.Parallel()
+
+	songPath := filepath.Join("games", "song.mp3")
+	musicPath := filepath.Join("games", "music.pls")
+	gamePath := filepath.Join("games", "game.sfc")
+
+	tests := []struct {
+		name     string
+		script   string
+		expected bool
+	}{
+		{
+			name:     "primary launch plays success",
+			script:   "**launch:" + songPath,
+			expected: true,
+		},
+		{
+			name:     "background launch suppresses success",
+			script:   fmt.Sprintf("**launch:%s?slot=background", songPath),
+			expected: false,
+		},
+		{
+			name:     "background playlist command suppresses success",
+			script:   fmt.Sprintf("**playlist.play:%s?slot=background", musicPath),
+			expected: false,
+		},
+		{
+			name:     "non-media background arg still plays success",
+			script:   "**echo:hello?slot=background",
+			expected: true,
+		},
+		{
+			name:     "invalid slot falls back to normal success",
+			script:   fmt.Sprintf("**launch:%s?slot=badslot", songPath),
+			expected: true,
+		},
+		{
+			name:     "mixed primary launch and background music plays success",
+			script:   fmt.Sprintf("**launch:%s||**launch:%s?slot=background", gamePath, songPath),
+			expected: true,
+		},
+		{
+			name:     "background launch with utility command suppresses success",
+			script:   fmt.Sprintf("**launch:%s?slot=background||**echo:hello", songPath),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parser := gozapscript.NewParser(tt.script)
+			script, err := parser.ParseScript()
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected, shouldPlayScanSuccessSound(&script))
 		})
 	}
 }
@@ -534,5 +644,29 @@ func TestPlaylistNeedsUpdate(t *testing.T) {
 		result := playlistNeedsUpdate(incoming, active)
 
 		assert.True(t, result)
+	})
+
+	t.Run("different repeat mode needs update", func(t *testing.T) {
+		t.Parallel()
+
+		incoming := makePlaylist("**launch:game.rom", true)
+		incoming.Loop = true
+		active := makePlaylist("**launch:game.rom", true)
+
+		result := playlistNeedsUpdate(incoming, active)
+
+		assert.True(t, result)
+	})
+
+	t.Run("ForceRelaunch bypasses same-state dedup", func(t *testing.T) {
+		t.Parallel()
+
+		incoming := makePlaylist("**launch:game.rom", true)
+		incoming.ForceRelaunch = true
+		active := makePlaylist("**launch:game.rom", true)
+
+		result := playlistNeedsUpdate(incoming, active)
+
+		assert.True(t, result, "ForceRelaunch must defeat same-state dedup")
 	})
 }

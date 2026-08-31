@@ -70,7 +70,7 @@ func FuzzStartSession(f *testing.F) {
 		notifChan := make(chan models.Notification, 16)
 
 		mgr := NewPairingManager(db, notifChan)
-		_, _, err := mgr.StartPairing()
+		_, _, err := mgr.StartPairing("member")
 		if err != nil {
 			t.Fatalf("StartPairing failed: %v", err)
 		}

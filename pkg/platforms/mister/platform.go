@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/misterdocs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -51,6 +54,42 @@ import (
 	"github.com/spf13/afero"
 )
 
+const (
+	misterNamesFile           = "names.txt"
+	amigaVisionGamesListing   = "listings/games.txt"
+	amigaVisionDemosListing   = "listings/demos.txt"
+	amigaVisionGamesBrowseDir = "Games"
+	amigaVisionDemosBrowseDir = "Demos"
+)
+
+type amigaVisionListing struct {
+	Path      string
+	BrowseDir string
+}
+
+type amigaVisionVirtualPath struct {
+	InstallPath string
+	ListingName string
+	GameName    string
+}
+
+type launcherRBFCache interface {
+	SetFilesystem(afero.Fs)
+	SetPersistPath(string)
+	ForceRefresh() error
+}
+
+var (
+	amigaVisionListings = []amigaVisionListing{
+		{Path: amigaVisionGamesListing, BrowseDir: amigaVisionGamesBrowseDir},
+		{Path: amigaVisionDemosListing, BrowseDir: amigaVisionDemosBrowseDir},
+	}
+	amigaVisionMGLPaths = []string{
+		filepath.Join(misterconfig.SDRootDir, "_Computer", "Amiga.mgl"),
+		filepath.Join(misterconfig.SDRootDir, "_Computer", "Amiga 500.mgl"),
+	}
+)
+
 // arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
 type arcadeCardLaunchCache struct {
 	timestamp time.Time
@@ -60,6 +99,8 @@ type arcadeCardLaunchCache struct {
 
 type Platform struct {
 	shared.LinuxInput
+	ctx                 context.Context
+	fs                  afero.Fs
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
@@ -75,18 +116,30 @@ type Platform struct {
 	activeMedia         func() *models.ActiveMedia
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
+	profileData         *profileDataManager
+	launchShortCore     func(string) error
+	launchBasicFile     func(string) error
+	launchCoreAtRBF     func(cores.RBFInfo) error
+	closeConsole        func() error
+	launcherRBFCache    launcherRBFCache
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
+	trackedProcessGroup bool
 	processMu           syncutil.RWMutex
 	platformMu          syncutil.Mutex
 }
 
 func NewPlatform() *Platform {
 	p := &Platform{
-		platformMu: syncutil.Mutex{},
+		platformMu:      syncutil.Mutex{},
+		fs:              afero.NewOsFs(),
+		launchShortCore: mgls.LaunchShortCore,
+		launchBasicFile: mgls.LaunchBasicFile,
+		launchCoreAtRBF: mgls.LaunchCoreAtRBF,
 	}
 	p.consoleManager = newConsoleManager(p)
+	p.profileData = newProfileDataManager(p.fs)
 	return p
 }
 
@@ -136,6 +189,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
+		newOperatorReader(cfg, p.fs),
 		simpleserial.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
@@ -182,7 +236,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	// path when nfc.csv is absent; <10ms parse otherwise).
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
-		log.Error().Msgf("error loading mappings: %s", err)
+		// A malformed nfc.csv is user-supplied data, not a code fault; log at
+		// Warn so it stays out of Sentry while remaining visible locally.
+		log.Warn().Msgf("error loading mappings: %s", err)
 	} else {
 		p.SetDB(uids, texts)
 		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
@@ -203,27 +259,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	p.stopMappingsWatcher = closeMappingsWatcher
 	p.platformMu.Unlock()
 
-	go p.deferredStartPre()
-
 	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
 		Msg("StartPre finished")
 	return nil
-}
-
-// deferredStartPre runs the StartPre work that does not need to complete
-// before the JSON-RPC API binds: only the picker directory bootstrap.
-// Runs once per process; failures are logged and tolerated. The initial
-// CSV mappings load and the mappings watcher both start synchronously
-// in StartPre so LookupMapping never sees nil maps and Stop() can never
-// race the watcher's stopper assignment.
-func (*Platform) deferredStartPre() {
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
-			log.Error().Err(err).Msg("failed to create picker directory")
-		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
-			log.Error().Err(err).Msg("failed to write picker selected file")
-		}
-	}
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -264,11 +302,14 @@ func (p *Platform) StartPost(
 	db *database.Database,
 	scheduler *idle.Scheduler,
 ) error {
+	p.ctx = ctx
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+	StartResourceTopologyManager(ctx)
 
 	tr, stopTr, err := tracker.StartTracker(
+		ctx,
 		cfg,
 		p,
 		activeMedia,
@@ -295,14 +336,15 @@ func (p *Platform) StartPost(
 		}
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
-		if err != nil {
-			log.Error().Msgf("failed to download arcade database: %s", err)
-		}
-
-		if arcadeDbUpdated {
+		switch {
+		case err != nil:
+			// Non-fatal: an embedded arcade database is used as a fallback. Download
+			// failures are usually network/rate-limit issues, not code faults.
+			log.Warn().Msgf("failed to download arcade database: %s", err)
+		case arcadeDbUpdated:
 			log.Info().Msg("arcade database updated")
 			tr.ReloadNameMap()
-		} else {
+		default:
 			log.Info().Msg("arcade database is up to date")
 		}
 
@@ -326,7 +368,23 @@ func (p *Platform) StartPost(
 		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
 	}
 
-	// If the RBF cache loaded from disk but its directory mtimes drifted,
+	// One-time cleanup: resolve legacy MediaHistory rows recorded under a
+	// bare arcade set name (from before the tracker could canonicalize
+	// externally detected arcade launches) to their real .mra path and
+	// identity. Deferred to the idle scheduler for the same reason as the
+	// arcade DB update; the task itself retries internally until it
+	// succeeds, since Schedule only runs it once.
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-history-backfill",
+			5*time.Second, 300*time.Second,
+			func(ctx context.Context) { tracker.RunArcadeHistoryBackfill(ctx, db, tr) },
+		)
+	} else {
+		log.Debug().Msg("no idle scheduler; skipping arcade history backfill")
+	}
+
+	// If the RBF cache loaded from disk but its shallow manifest drifted,
 	// the persisted entries are still serving requests but a rescan is
 	// needed to pick up any added/removed cores. Defer the rescan to the
 	// idle scheduler so it doesn't compete with the launcher's first
@@ -340,6 +398,12 @@ func (p *Platform) StartPost(
 			5*time.Second, 60*time.Second,
 			func(_ context.Context) {
 				cores.GlobalRBFCache.Refresh()
+				// The launcher cache's Available/AvailabilityReason and
+				// LauncherRuntime detail were computed against the RBF
+				// cache as it stood before this rescan; rebuild it so a
+				// core added or removed since boot is reflected without
+				// requiring a manual launchers.refresh call.
+				helpers.GlobalLauncherCache.Refresh(p, cfg)
 			},
 		)
 	}
@@ -372,23 +436,32 @@ func (p *Platform) Stop() error {
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	if p.trackedProcess != proc {
+		p.processDone = nil
+		p.trackedProcessGroup = false
+	}
 	p.trackedProcess = proc
 }
 
-// setTrackedProcessWithCleanup sets the tracked process and its cleanup completion channel
-func (p *Platform) setTrackedProcessWithCleanup(proc *os.Process, done chan struct{}) {
+// setTrackedProcessWithCleanup sets tracked process lifecycle state.
+func (p *Platform) setTrackedProcessWithCleanup(proc *os.Process, done chan struct{}, processGroup bool) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 	p.trackedProcess = proc
 	p.processDone = done
+	p.trackedProcessGroup = processGroup
 }
 
-// clearTrackedProcess clears both the tracked process and its cleanup channel
-func (p *Platform) clearTrackedProcess() {
+// clearTrackedProcess clears lifecycle state when proc is still current.
+func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	if p.trackedProcess != proc {
+		return
+	}
 	p.trackedProcess = nil
 	p.processDone = nil
+	p.trackedProcessGroup = false
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
@@ -424,163 +497,319 @@ func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return misterconfig.RootDirs(cfg)
 }
 
+func (p *Platform) filesystem() afero.Fs {
+	if p.fs != nil {
+		return p.fs
+	}
+	return afero.NewOsFs()
+}
+
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    misterconfig.DataDir,
-		ConfigDir:  misterconfig.DataDir,
-		TempDir:    misterconfig.TempDir,
-		LogDir:     misterconfig.TempDir,
-		ZipsAsDirs: true,
+		DataDir:               misterconfig.DataDir,
+		ConfigDir:             misterconfig.DataDir,
+		TempDir:               misterconfig.TempDir,
+		LogDir:                misterconfig.TempDir,
+		ZipsAsDirs:            true,
+		DisableZapScriptInTUI: true,
+		ResourceConstrained:   true,
+	}
+}
+
+func signalTrackedProcess(proc *os.Process, processGroup bool, signal syscall.Signal) error {
+	if processGroup {
+		if err := syscall.Kill(-proc.Pid, signal); err != nil {
+			return fmt.Errorf("signal process group: %w", err)
+		}
+		return nil
+	}
+	if err := proc.Signal(signal); err != nil {
+		return fmt.Errorf("signal process: %w", err)
+	}
+	return nil
+}
+
+func trackedProcessGroupAlive(proc *os.Process, processGroup bool) bool {
+	if !processGroup {
+		return false
+	}
+	return !errors.Is(syscall.Kill(-proc.Pid, 0), syscall.ESRCH)
+}
+
+func killRemainingProcessGroup(proc *os.Process, processGroup bool) {
+	if !trackedProcessGroupAlive(proc, processGroup) {
+		return
+	}
+
+	log.Warn().Msg("tracked process group still alive after leader exit, sending SIGKILL")
+	if err := signalTrackedProcess(proc, true, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		log.Warn().Err(err).Msg("failed to SIGKILL remaining process group")
+		return
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for trackedProcessGroupAlive(proc, true) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForTrackedProcess(proc *os.Process, done chan struct{}) chan struct{} {
+	if done != nil {
+		return done
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		_, _ = proc.Wait()
+		close(waitDone)
+	}()
+	return waitDone
+}
+
+func stopTrackedProcess(proc *os.Process, done chan struct{}, processGroup bool, gracefulStop func() error) {
+	const (
+		gracefulTimeout = 5 * time.Second
+		termTimeout     = 2 * time.Second
+		killTimeout     = 500 * time.Millisecond
+	)
+
+	waitDone := waitForTrackedProcess(proc, done)
+	gracefulSent := false
+	if gracefulStop != nil {
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := gracefulStop(); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed, falling back to SIGTERM")
+		} else {
+			gracefulSent = true
+		}
+	}
+	if !gracefulSent {
+		log.Debug().Msg("sending SIGTERM to tracked process")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGTERM); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGTERM tracked process")
+		}
+	}
+
+	stopped := false
+	select {
+	case <-waitDone:
+		stopped = true
+		log.Debug().Msg("tracked process cleanup completed")
+	case <-time.After(gracefulTimeout):
+	}
+
+	if !stopped && gracefulSent {
+		log.Warn().Msg("custom graceful stop timed out, sending SIGTERM")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGTERM); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGTERM tracked process")
+		}
+		select {
+		case <-waitDone:
+			stopped = true
+			log.Debug().Msg("tracked process cleanup completed after SIGTERM")
+		case <-time.After(termTimeout):
+		}
+	}
+
+	if !stopped {
+		log.Warn().Msg("tracked process stop timed out, sending SIGKILL")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGKILL); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGKILL tracked process")
+		}
+		select {
+		case <-waitDone:
+			log.Debug().Msg("tracked process cleanup completed after SIGKILL")
+		case <-time.After(killTimeout):
+			log.Warn().Msg("tracked process cleanup timed out after SIGKILL")
+		}
+	}
+
+	killRemainingProcessGroup(proc, processGroup)
+}
+
+func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
+	return BackupDefinitions(p.Settings())
+}
+
+func (p *Platform) PrepareBackup() (platforms.BackupPlan, func() error, error) {
+	definitions := BackupDefinitions(p.Settings())
+	if p.profileData == nil {
+		return platforms.BackupPlan{Definitions: definitions}, func() error { return nil }, nil
+	}
+	return p.profileData.prepareBackup(p.Settings(), definitions)
+}
+
+func (p *Platform) PrepareBackupRestore() (func(bool) error, error) {
+	if p.profileData == nil {
+		return func(bool) error { return nil }, nil
+	}
+	return p.profileData.prepareBackupRestore()
+}
+
+func (p *Platform) BackupRestoreRoot() string {
+	return BackupRestoreRoot(p.Settings())
+}
+
+func BackupRestoreRoot(settings platforms.Settings) string {
+	return filepath.Dir(settings.DataDir)
+}
+
+func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition {
+	root := BackupRestoreRoot(settings)
+	return []platforms.BackupDefinition{
+		{
+			Category:     "settings",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "MiSTer.ini"},
+				{Glob: "MiSTer_alt_*.ini"},
+				{Glob: "MiSTer_*.ini"},
+				{Glob: "MiSTer.ini.*"},
+				{Glob: "downloader.ini"},
+				{Glob: filepath.Base(misterconfig.LegacyMappingsPath)},
+				{Glob: misterNamesFile},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: "MiSTer_example.ini"}},
+		},
+		{
+			Category:    "settings",
+			SourceRoot:  filepath.Join(root, "config"),
+			RestoreRoot: "config",
+			Include: []platforms.BackupPattern{
+				{Glob: "*.cfg"},
+				{Glob: "*.dat"},
+				{Glob: "*.f2"},
+			},
+			Exclude: []platforms.BackupPattern{{Contains: "_recent"}},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   filepath.Join(root, "linux"),
+			RestoreRoot:  "linux",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:    "inputs",
+			SourceRoot:  filepath.Join(root, "config", "inputs"),
+			RestoreRoot: filepath.Join("config", "inputs"),
+			Include: []platforms.BackupPattern{
+				{Glob: "*.map"},
+				{Glob: "*.zip"},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: filepath.Join("renamed", "*")}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include: []platforms.BackupPattern{
+				{Contains: "/saves/"},
+				{Glob: profileNameFile},
+			},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/savestates/"}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "saves"),
+			RestoreRoot: "saves",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "savestates"),
+			RestoreRoot: "savestates",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
 	}
 }
 
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
-	// Store intent before cancelling context so cleanup goroutine can read it
 	p.processMu.Lock()
 	p.stopIntent = intent
+	proc := p.trackedProcess
+	done := p.processDone
+	processGroup := p.trackedProcessGroup
 	p.processMu.Unlock()
 
-	// Check if we have a tracked process before attempting to stop it
-	p.processMu.Lock()
-	hadTrackedProcess := p.trackedProcess != nil
-	p.processMu.Unlock()
-
-	// Invalidate old launcher context ONLY for preemption (new launcher starting)
-	// EXCEPT for console launchers which need cleanup goroutine to run
-	// For StopForMenu and StopForConsoleReset, we need cleanup to run to unlock VT
-	cancelContextNow := intent == platforms.StopForPreemption && !hadTrackedProcess
-
-	// Console launchers (video/ScummVM): delay context cancellation until after cleanup
-
-	if cancelContextNow {
-		if p.launcherManager != nil {
-			p.launcherManager.NewContext()
-		}
+	if proc == nil && intent == platforms.StopForPreemption && p.launcherManager != nil {
+		p.launcherManager.NewContext()
 	}
 
-	// Check if launcher has custom Kill function
+	// Capture the current launcher cleanup before clearing it. Script-tracked
+	// processes do not set lastLauncher and must not inherit a stale Kill hook.
 	p.platformMu.Lock()
 	customKill := p.lastLauncher.Kill
+	if proc != nil {
+		p.lastLauncher = platforms.Launcher{}
+	}
 	p.platformMu.Unlock()
 
-	// Use custom Kill if defined (e.g., keyboard input for ScummVM)
-	if customKill != nil {
-		log.Debug().Msg("using custom Kill function for launcher")
-		if err := customKill(&config.Instance{}); err != nil {
-			log.Warn().Err(err).Msg("custom Kill function failed")
-		}
-		// Custom Kill function used - skip signal-based termination entirely
-		// The process will exit on its own via the custom method
-	} else {
-		// Stop tracked process if it exists using signal-based termination
-		p.processMu.Lock()
-		if p.trackedProcess != nil {
-			proc := p.trackedProcess
-
-			// Staged termination approach:
-			// 1. Try SIGTERM first (allows SDL cleanup to run)
-			// 2. Wait 5 seconds
-			// 3. If still running, force kill with SIGKILL
-			// 4. After process dies, deallocate the VT to reset all state
-			log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
-			if err := proc.Signal(syscall.SIGTERM); err != nil {
-				log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
-				p.trackedProcess = nil
-				p.processMu.Unlock()
-			} else {
-				p.trackedProcess = nil
-				p.processMu.Unlock()
-
-				// Wait for graceful exit with timeout
-				done := make(chan error, 1)
-				go func() {
-					_, err := proc.Wait()
-					done <- err
-				}()
-
-				select {
-				case err := <-done:
-					if err != nil {
-						log.Debug().Err(err).Msg("process exited after SIGTERM")
-					} else {
-						log.Debug().Msg("process exited gracefully after SIGTERM")
-					}
-				case <-time.After(5 * time.Second):
-					// SIGTERM didn't work within 5 seconds - force kill
-					log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
-					if err := proc.Kill(); err != nil {
-						log.Warn().Err(err).Msg("failed to SIGKILL process")
-					} else {
-						// Wait for SIGKILL to complete (should be fast)
-						select {
-						case <-done:
-							log.Debug().Msg("process killed with SIGKILL")
-						case <-time.After(500 * time.Millisecond):
-							log.Warn().Msg("SIGKILL took too long")
-						}
-					}
-				}
+	if proc != nil {
+		var gracefulStop func() error
+		if customKill != nil {
+			gracefulStop = func() error {
+				return customKill(&config.Instance{})
 			}
-		} else {
-			p.processMu.Unlock()
+		}
+		stopTrackedProcess(proc, done, processGroup, gracefulStop)
+		if done == nil {
+			p.clearTrackedProcess(proc)
 		}
 	}
 
-	// Clear active media
 	p.setActiveMedia(nil)
 
-	// Return to menu if needed - but ONLY for launchers without tracked processes
-	// Console launchers (video/ScummVM) have cleanup goroutines that call ReturnToMenu
-	// FPGA/MGL launchers have no cleanup goroutine, so we must call it here
-	if intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset {
-		if !hadTrackedProcess {
-			// No cleanup goroutine will run - we must call ReturnToMenu ourselves
-			log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
-			if err := p.ReturnToMenu(); err != nil {
-				log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
-			}
-		} else {
-			log.Debug().Msg("tracked process existed - cleanup goroutine will call ReturnToMenu")
+	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
+		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
+		if err := p.ReturnToMenu(); err != nil {
+			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
 		}
 	}
 
-	// For console launchers during preemption, wait for cleanup to complete
-	// before cancelling context. This ensures console state (VT, cursor, video mode)
-	// is properly cleaned up before the new launcher starts.
-	if intent == platforms.StopForPreemption && hadTrackedProcess {
-		// Get the cleanup completion channel
-		p.processMu.Lock()
-		done := p.processDone
-		p.processMu.Unlock()
-
-		if done != nil {
-			log.Debug().Msg("waiting for console launcher cleanup to complete")
-			select {
-			case <-done:
-				log.Debug().Msg("console launcher cleanup completed")
-			case <-time.After(2 * time.Second):
-				// Safety valve: don't hang if process becomes a zombie
-				log.Warn().Msg("timeout waiting for console cleanup (2s)")
-			}
-		}
-
-		// Now invalidate the launcher context to prevent any further operations
-		if p.launcherManager != nil {
-			p.launcherManager.NewContext()
-		}
+	if intent == platforms.StopForPreemption && proc != nil && p.launcherManager != nil {
+		p.launcherManager.NewContext()
 	}
 
 	return nil
 }
 
 func (p *Platform) ReturnToMenu() error {
+	p.processMu.Lock()
+	hasTrackedProcess := p.trackedProcess != nil
+	p.processMu.Unlock()
+	if hasTrackedProcess {
+		return p.StopActiveLauncher(platforms.StopForMenu)
+	}
+
 	// Restore console cursor state on both TTYs
 	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
 		log.Warn().Err(err).Msg("failed to restore tty1 cursor")
 	}
-	if launcherConsoleVT != f9ConsoleVT {
-		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
-			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", launcherConsoleVT)
+	if armLauncherVT != f9ConsoleVT {
+		if err := p.consoleManager.Restore(armLauncherVT); err != nil {
+			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", armLauncherVT)
 		}
 	}
 
@@ -612,7 +841,7 @@ func (*Platform) isFPGAActive() bool {
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	// Handle menu specially - launch menu core directly
-	if strings.EqualFold(id, "menu") {
+	if strings.EqualFold(id, platforms.SystemMenu) {
 		if err := mistermain.LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
@@ -626,6 +855,28 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 
 	err = mgls.LaunchCore(cfg, p, system)
 	if err != nil {
+		return fmt.Errorf("failed to launch core: %w", err)
+	}
+	return nil
+}
+
+// LaunchSystemLauncher implements platforms.SystemLauncherSelector, loading
+// the specific core a launcher maps to (e.g. an alt core) instead of the
+// system's default. The caller (cmdSystem) has already verified launcher
+// belongs to systemID.
+func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *platforms.Launcher) error {
+	if !misterCoreBacked(launcher.ID, systemID) {
+		return fmt.Errorf("launcher has no selectable core: %s", launcher.ID)
+	}
+	rbfInfo, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcher.ID, systemID)
+	if !ok {
+		return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcher.ID, systemID))
+	}
+	launch := p.launchCoreAtRBF
+	if launch == nil {
+		launch = mgls.LaunchCoreAtRBF
+	}
+	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
 	return nil
@@ -653,6 +904,7 @@ func (p *Platform) LaunchMedia(
 		Int("available_launchers", len(launchers)).
 		Msg("launching media")
 	err := platforms.DoLaunch(&platforms.LaunchParams{
+		Context:        p.ctx,
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: p.setActiveMedia,
@@ -826,15 +1078,28 @@ func collectNeoGeoRomsetEntries(
 		}
 
 		base := info.Name()
-		if info.IsDir() {
+		isDirectory := info.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 {
+			targetInfo, statErr := fs.Stat(path)
+			isDirectory = statErr == nil && targetInfo.IsDir()
+			log.Debug().Str("path", path).Bool("directory", isDirectory).
+				Msg("neogeo symlink candidate found")
+		}
+		if isDirectory {
 			if base == "__MACOSX" || strings.HasPrefix(base, ".") {
-				return filepath.SkipDir
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 
 			markerPath := filepath.Join(path, ".zaparooignore")
 			if _, statErr := fs.Stat(markerPath); statErr == nil {
 				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
-				return filepath.SkipDir
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 		}
 
@@ -843,7 +1108,9 @@ func collectNeoGeoRomsetEntries(
 		isZip := filepath.Ext(lowerBase) == ".zip"
 		if isZip {
 			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
-		} else if !info.IsDir() {
+		} else if !isDirectory {
+			// Plain files such as .neo are already in the walked results;
+			// applyNeoGeoRomsetNames names those in place.
 			return nil
 		}
 
@@ -926,6 +1193,33 @@ func filterNeoGeoGameContents(
 		filtered = append(filtered, r)
 	}
 	return filtered
+}
+
+// applyNeoGeoRomsetNames sets Name on .neo results whose filename stem
+// matches a romsets.xml entry, so a standalone mslug.neo gets the same
+// title as mslug.zip. It must run after filterNeoGeoGameContents so .neo
+// files inside romset zips and folders are already gone. NoExt is left
+// false so the extension tag is kept, and Path is never changed. Results
+// are updated in place; the return value is the number of entries named.
+func applyNeoGeoRomsetNames(results []platforms.ScanResult, romsetNames map[string]string) int {
+	named := 0
+	for i := range results {
+		if results[i].Name != "" {
+			continue
+		}
+		base := filepath.Base(results[i].Path)
+		ext := filepath.Ext(base)
+		if !strings.EqualFold(ext, ".neo") {
+			continue
+		}
+		altName, ok := romsetNames[strings.ToLower(strings.TrimSuffix(base, ext))]
+		if !ok {
+			continue
+		}
+		results[i].Name = altName
+		named++
+	}
+	return named
 }
 
 // filterNeoGeoZipToNeoOnly filters results when no romsets.xml is available.
@@ -1012,28 +1306,230 @@ func isPreferredAmigaVisionPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(filepath.Clean(path)), filepath.Join("games", "amiga"))
 }
 
+func isAmigaVisionListingFile(path string) bool {
+	cleanPath := filepath.ToSlash(strings.ToLower(filepath.Clean(path)))
+	for _, listing := range amigaVisionListings {
+		if strings.HasSuffix(cleanPath, "/"+filepath.ToSlash(listing.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterAmigaVisionListingFiles(results []platforms.ScanResult) []platforms.ScanResult {
+	filtered := make([]platforms.ScanResult, 0, len(results))
+	for _, result := range results {
+		if isAmigaVisionListingFile(result.Path) {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
+	return filtered
+}
+
+func amigaVisionVirtualPathParts(path string) (amigaVisionVirtualPath, bool) {
+	dir := filepath.Dir(path)
+	switch strings.ToLower(filepath.Base(dir)) {
+	case strings.ToLower(amigaVisionGamesBrowseDir):
+		return amigaVisionVirtualPath{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "games.txt",
+			GameName:    filepath.Base(path),
+		}, true
+	case strings.ToLower(amigaVisionDemosBrowseDir):
+		return amigaVisionVirtualPath{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "demos.txt",
+			GameName:    filepath.Base(path),
+		}, true
+	default:
+		return amigaVisionVirtualPath{}, false
+	}
+}
+
+func amigaVisionListingContainsGame(installPath, listingName, gameName string) bool {
+	f, err := os.Open(filepath.Join(installPath, "listings", listingName)) //nolint:gosec // Internal amiga listing path
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("unable to close amiga txt")
+		}
+	}()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if scanner.Text() == gameName {
+			return true
+		}
+	}
+	return false
+}
+
+func isAmigaVisionVirtualPath(path string) bool {
+	virtualPath, ok := amigaVisionVirtualPathParts(path)
+	if !ok {
+		return false
+	}
+	return hasAmigaVisionImage(virtualPath.InstallPath) ||
+		amigaVisionListingContainsGame(virtualPath.InstallPath, virtualPath.ListingName, virtualPath.GameName)
+}
+
+func scanAmigaVisionListingFile(path, installPath string, listing amigaVisionListing) []platforms.ScanResult {
+	f, err := os.Open(path) //nolint:gosec // Internal amiga games/demos path
+	if err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("unable to open amiga txt")
+		return nil
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("path", path).Msg("unable to close amiga txt")
+		}
+	}()
+
+	var results []platforms.ScanResult
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		name := strings.TrimSpace(scanner.Text())
+		if name == "" {
+			continue
+		}
+		results = append(results, platforms.ScanResult{
+			Path:  filepath.Join(installPath, listing.BrowseDir, name),
+			NoExt: true,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("unable to scan amiga txt")
+	}
+	return results
+}
+
+func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platforms.ScanResult {
+	results := make([]platforms.ScanResult, 0, len(mglPaths))
+	for _, mglPath := range mglPaths {
+		if _, err := os.Stat(mglPath); err != nil {
+			continue
+		}
+		name := filepath.Base(mglPath)
+		results = append(results, platforms.ScanResult{
+			Path: filepath.Join(installPath, name),
+			Name: strings.TrimSuffix(name, filepath.Ext(name)),
+		})
+	}
+	return results
+}
+
+func (p *Platform) RefreshLauncherDependencies() error {
+	cache := p.launcherRBFCache
+	if cache == nil {
+		cache = cores.GlobalRBFCache
+	}
+	cache.SetFilesystem(p.filesystem())
+	cache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
+	if err := cache.ForceRefresh(); err != nil {
+		return fmt.Errorf("force refresh RBF cache: %w", err)
+	}
+	return nil
+}
+
+// misterCoreBacked reports whether a launcher is backed by an FPGA core:
+// either a registered alt core, or its system has a default RBF.
+func misterCoreBacked(launcherID, systemID string) bool {
+	if cores.GlobalRBFCache.AltCorePaths(launcherID) != nil {
+		return true
+	}
+	system, ok := cores.Systems[systemID]
+	return ok && system.RBF != ""
+}
+
+// misterExpectedCorePath names the RBF a core-backed launcher looks for,
+// used to explain an unavailable launcher.
+func misterExpectedCorePath(launcherID, systemID string) string {
+	if paths := cores.GlobalRBFCache.AltCorePaths(launcherID); len(paths) > 0 {
+		return paths[0]
+	}
+	if system, ok := cores.Systems[systemID]; ok {
+		return system.RBF
+	}
+	return systemID
+}
+
+// LauncherRuntime implements platforms.LauncherRuntimeProvider, reporting
+// the FPGA core a launcher loads. It never rescans the filesystem — it only
+// reads whatever the RBF cache currently holds, which Launchers keeps fresh.
+func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) models.LauncherRuntime {
+	if !misterCoreBacked(l.ID, l.SystemID) {
+		return models.LauncherRuntime{}
+	}
+	runtime := models.LauncherRuntime{Backend: models.LauncherBackendMisterCore}
+	if info, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, l.ID, l.SystemID); ok {
+		runtime.MisterCore = &models.MisterCoreInfo{
+			Name:    info.ShortName,
+			File:    info.Filename,
+			MGLPath: info.MglName,
+		}
+	}
+	return runtime
+}
+
+// setCoreAvailability wires an Availability check onto every core-backed
+// launcher that doesn't already define one, so Available/AvailabilityReason
+// reflect whether the launcher's RBF is actually installed on the SD card.
+// Only called over the built-in launcher set, never over user-configured
+// custom launchers, whose SystemID may coincide with a core-backed system
+// without the launcher itself being core-backed.
+func setCoreAvailability(launchers []platforms.Launcher) {
+	for i := range launchers {
+		l := &launchers[i]
+		if l.Availability != nil || !misterCoreBacked(l.ID, l.SystemID) {
+			continue
+		}
+		launcherID, systemID := l.ID, l.SystemID
+		l.Availability = func(cfg *config.Instance) error {
+			// An empty cache means the RBF scan hasn't populated yet (e.g.
+			// at boot, before the deferred rescan completes), not that no
+			// cores are installed. Fail open rather than reporting every
+			// core-backed launcher unavailable.
+			if systems, _ := cores.GlobalRBFCache.Count(); systems == 0 {
+				return nil
+			}
+			// Strict: an alt core launcher whose own RBF is missing falls
+			// back to the stock core at launch time, but reporting that as
+			// available makes every uninstalled family (LLAPI, DB9, ...) look
+			// installed and lets an ordered launchers.preference match a group
+			// the device does not have.
+			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, launcherID, systemID); ok {
+				return nil
+			}
+			return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcherID, systemID))
+		}
+	}
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories
 	// and returns early when nothing has changed, so the syscall cost per
 	// call is bounded to ~one readdir plus one stat per top-level _* dir.
+	cores.GlobalRBFCache.SetFilesystem(p.filesystem())
 	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 
-	aGamesPath := "listings/games.txt"
-	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
 		ID:         systemdefs.SystemAmiga,
 		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(_ *config.Instance, path string) bool {
-			if strings.Contains(path, aGamesPath) || strings.Contains(path, aDemosPath) {
+			if isAmigaVisionListingFile(path) || isAmigaVisionVirtualMGLPath(path) {
 				return true
 			}
-			return false
+
+			return isAmigaVisionVirtualPath(path)
 		},
-		Launch: launch(p, systemdefs.SystemAmiga),
+		Launch: launchAmiga(p),
 		Scanner: func(
 			ctx context.Context,
 			cfg *config.Instance,
@@ -1048,7 +1544,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			log.Info().Msg("starting amigavision scan")
 
-			var fullPaths []string
+			results = filterAmigaVisionListingFiles(results)
 
 			s, err := systemdefs.GetSystem(systemdefs.SystemAmiga)
 			if err != nil {
@@ -1070,35 +1566,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				default:
 				}
 
-				for _, txt := range []string{aGamesPath, aDemosPath} {
-					tp, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, txt))
-					if err == nil {
-						f, err := os.Open(tp) //nolint:gosec // Internal amiga games/demos path
-						if err != nil {
-							log.Warn().Err(err).Msg("unable to open amiga txt")
-							continue
-						}
-
-						scanner := bufio.NewScanner(f)
-						for scanner.Scan() {
-							fp := filepath.Join(sf.Path, txt, scanner.Text())
-							fullPaths = append(fullPaths, fp)
-						}
-
-						err = f.Close()
-						if err != nil {
-							log.Warn().Err(err).Msg("unable to close amiga txt")
-						}
+				for _, listing := range amigaVisionListings {
+					tp, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, listing.Path))
+					if err != nil {
+						continue
 					}
+					results = append(results, scanAmigaVisionListingFile(tp, sf.Path, listing)...)
 				}
-			}
-
-			for _, p := range fullPaths {
-				results = append(results, platforms.ScanResult{
-					Path:  p,
-					Name:  filepath.Base(p),
-					NoExt: true,
-				})
+				results = append(results, amigaVisionMGLScanResults(sf.Path, amigaVisionMGLPaths)...)
 			}
 
 			log.Debug().Int("results", len(results)).Msg("amigavision scan completed")
@@ -1135,6 +1610,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			log.Info().Msg("starting neogeo scan")
+			inputResultCount := len(results)
+			filteredResultCount := 0
+			namedResultCount := 0
+			addedResultCount := 0
+			romsetDefinitionCount := 0
 			romsetsFilename := "romsets.xml"
 			names := make(map[string]string)
 
@@ -1144,13 +1624,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			sfs := mediascanner.GetSystemPaths(ctx, cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
-			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
 
 			// Collect NEOGEO paths for filtering
 			neogeoPaths := make([]string, len(sfs))
 			for i, sf := range sfs {
 				neogeoPaths[i] = sf.Path
 			}
+			log.Debug().Int("paths", len(sfs)).Strs("roots", neogeoPaths).Msg("neogeo scan paths found")
 
 			// First pass: load all romsets from all directories
 			for _, sf := range sfs {
@@ -1160,28 +1640,41 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				default:
 				}
 
-				rsf, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, romsetsFilename))
-				if err == nil {
-					romsets, readErr := readRomsets(rsf)
-					if readErr != nil {
-						log.Warn().Err(readErr).Msg("unable to read romsets")
-						continue
-					}
+				expectedRomsetsPath := filepath.Join(sf.Path, romsetsFilename)
+				rsf, findErr := mediascanner.FindPath(ctx, expectedRomsetsPath)
+				if findErr != nil {
+					log.Debug().Err(findErr).Str("path", expectedRomsetsPath).Msg("neogeo romsets not found")
+					continue
+				}
 
-					for _, romset := range romsets {
-						// Handle comma-separated romset name aliases
-						for _, name := range strings.Split(romset.Name, ",") {
-							names[strings.ToLower(strings.TrimSpace(name))] = romset.AltName
-						}
+				romsets, readErr := readRomsets(rsf)
+				if readErr != nil {
+					log.Warn().Err(readErr).Str("path", rsf).Msg("unable to read neogeo romsets")
+					continue
+				}
+
+				romsetDefinitionCount += len(romsets)
+				for _, romset := range romsets {
+					// Handle comma-separated romset name aliases
+					for _, name := range strings.Split(romset.Name, ",") {
+						names[strings.ToLower(strings.TrimSpace(name))] = romset.AltName
 					}
 				}
+				log.Debug().Str("path", rsf).Int("romsets", len(romsets)).Int("totalAliases", len(names)).
+					Msg("neogeo romsets loaded")
 			}
 
+			resultsBeforeFilter := len(results)
 			if len(names) == 0 {
-				log.Warn().Msg("no valid romsets.xml found, applying fallback filter for zip contents")
+				log.Warn().Strs("roots", neogeoPaths).
+					Msg("no valid romsets.xml found, applying fallback filter for zip contents")
 				results = filterNeoGeoZipToNeoOnly(results)
 			} else {
 				results = filterNeoGeoGameContents(results, names, neogeoPaths)
+				namedResultCount = applyNeoGeoRomsetNames(results, names)
+			}
+			if removed := resultsBeforeFilter - len(results); removed > 0 {
+				filteredResultCount = removed
 			}
 
 			// Second pass: read directories recursively and add launchable romset entries.
@@ -1206,80 +1699,122 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 						continue
 					}
 					results = append(results, entries...)
+					addedResultCount += len(entries)
+					log.Debug().Str("path", sf.Path).Int("matches", len(entries)).
+						Msg("neogeo romset root scanned")
 				}
 			}
 
-			log.Debug().Int("results", len(results)).Msg("neogeo scan completed")
+			log.Debug().Int("roots", len(sfs)).Int("romsets", romsetDefinitionCount).
+				Int("aliases", len(names)).Int("input", inputResultCount).Int("filtered", filteredResultCount).
+				Int("named", namedResultCount).Int("added", addedResultCount).Int("results", len(results)).
+				Msg("neogeo scan completed")
 
 			return results, nil
 		},
 	}
 
-	ls := CreateLaunchers(p)
-	ls = append(ls, amiga, neogeo, createVideoLauncher(p), createScummVMLauncher(p))
+	neogeo, neogeoMVS := addNeoGeoMVSLauncher(p, &neogeo)
+	ls := addArcadeSystemLaunchers(p, CreateLaunchers(p))
+	ls = append(
+		ls, amiga, neogeo, neogeoMVS,
+		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
+	)
+	setCoreAvailability(ls)
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	return append(custom, ls...)
 }
 
-func (p *Platform) ShowNotice(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
-	p.platformMu.Unlock()
-
-	if needsDelay {
-		log.Debug().Msg("waiting for previous notice to finish")
-		time.Sleep(3 * time.Second)
+func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {
+	if kind == models.UIEventKindNotice {
+		return preNoticeTime()
 	}
-
-	completePath, err := showNotice(p, args.Text, false)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return func() error {
-		p.platformMu.Lock()
-		defer p.platformMu.Unlock()
-		p.lastUIHidden = time.Now()
-		return hideNotice(completePath)
-	}, preNoticeTime(), nil
+	return 0
 }
 
-func (p *Platform) ShowLoader(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
+func (p *Platform) PresentUI(
+	ctx context.Context,
+	event *models.UIEvent,
 ) (func() error, error) {
+	const orphanTimeoutSeconds = int(time.Hour / time.Second)
+
 	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
-
 	if needsDelay {
-		log.Debug().Msg("waiting for previous notice to finish")
-		time.Sleep(3 * time.Second)
+		log.Debug().Msg("waiting for previous UI event to finish")
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
-	completePath, err := showNotice(p, args.Text, true)
-	if err != nil {
-		return nil, err
+	closeEvent := func(argsPath string) func() error {
+		return func() error {
+			p.platformMu.Lock()
+			defer p.platformMu.Unlock()
+			p.lastUIHidden = time.Now()
+			return hideNotice(p.filesystem(), argsPath)
+		}
 	}
 
-	return func() error {
-		p.platformMu.Lock()
-		defer p.platformMu.Unlock()
-		p.lastUIHidden = time.Now()
-		return hideNotice(completePath)
-	}, nil
-}
-
-func (p *Platform) ShowPicker(
-	_ *config.Instance,
-	args widgetmodels.PickerArgs,
-) error {
-	return showPicker(p, args)
+	switch event.Kind {
+	case models.UIEventKindNotice, models.UIEventKindLoader:
+		text := event.Message
+		if text == "" {
+			text = event.Title
+		}
+		argsPath, err := showNotice(p, widgetmodels.NoticeArgs{
+			Text:        text,
+			EventID:     event.ID,
+			Timeout:     orphanTimeoutSeconds,
+			Dismissible: event.Dismissible,
+		}, event.Kind == models.UIEventKindLoader)
+		if err != nil {
+			return nil, err
+		}
+		return closeEvent(argsPath), nil
+	case models.UIEventKindPicker, models.UIEventKindConfirm:
+		items := make([]widgetmodels.PickerItem, 0, len(event.Choices))
+		selected := -1
+		if event.Kind == models.UIEventKindConfirm {
+			items = append(items, widgetmodels.PickerItem{
+				Name:   "Confirm",
+				Action: models.UIResponseActionConfirm,
+			})
+			selected = 0
+		} else {
+			for i, choice := range event.Choices {
+				items = append(items, widgetmodels.PickerItem{
+					ID:     choice.ID,
+					Name:   choice.Label,
+					Action: models.UIResponseActionSelect,
+				})
+				if choice.ID == event.SelectedChoiceID {
+					selected = i
+				}
+			}
+		}
+		argsPath, err := showPicker(p, &widgetmodels.PickerArgs{
+			Title:       event.Title,
+			Message:     event.Message,
+			EventID:     event.ID,
+			Items:       items,
+			Selected:    selected,
+			Timeout:     orphanTimeoutSeconds,
+			Dismissible: event.Dismissible,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return closeEvent(argsPath), nil
+	default:
+		return nil, platforms.ErrNotSupported
+	}
 }
 
 func (p *Platform) ConsoleManager() platforms.ConsoleManager {
@@ -1315,8 +1850,10 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	docs := misterdocs.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, docs.ID: docs}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

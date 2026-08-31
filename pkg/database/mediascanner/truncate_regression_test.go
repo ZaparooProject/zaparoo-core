@@ -99,23 +99,21 @@ func assertFKIntegrity(t *testing.T, ctx context.Context, sqlDB *sql.DB) { //nol
 	}
 }
 
-// indexSystems fully indexes the given systems via AddMediaPath inside a single transaction.
+// indexSystems fully indexes the given systems through the staging pipeline.
 func indexSystems(
 	t *testing.T,
 	db database.MediaDBI,
-	state *database.ScanState,
 	systems []string,
 	batch testdata.TestBatch,
 ) {
 	t.Helper()
-	require.NoError(t, db.BeginTransaction(false))
 	for _, sys := range systems {
+		paths := make([]string, 0, len(batch.Entries[sys]))
 		for _, entry := range batch.Entries[sys] {
-			_, _, err := AddMediaPath(db, state, sys, entry.Path, "", false, false, nil, "")
-			require.NoError(t, err, "AddMediaPath failed for system %s", sys)
+			paths = append(paths, entry.Path)
 		}
+		indexMediaPaths(t, db, sys, paths...)
 	}
-	require.NoError(t, db.CommitTransaction())
 }
 
 // TestTruncateResume_SharedTagsPreserved guards against the orphan tag cleanup
@@ -139,24 +137,14 @@ func TestTruncateResume_SharedTagsPreserved(t *testing.T) {
 	// or "RPG" MediaTag, creating shared Tags rows in the DB.
 	batch := testdata.CreateReproducibleBatch([]string{"NES", "C64"}, 15)
 
-	state := &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: make(map[string]int),
-		TagIDs:     make(map[string]int),
-	}
-	require.NoError(t, SeedCanonicalTags(db, state))
-
 	// Fully index NES, then partially index C64 (5 of 15 files — simulates interrupt).
-	indexSystems(t, db, state, []string{"NES"}, batch)
+	indexSystems(t, db, []string{"NES"}, batch)
 
-	require.NoError(t, db.BeginTransaction(false))
+	partialPaths := make([]string, 0, 5)
 	for _, entry := range batch.Entries["C64"][:5] {
-		_, _, err := AddMediaPath(db, state, "C64", entry.Path, "", false, false, nil, "")
-		require.NoError(t, err)
+		partialPaths = append(partialPaths, entry.Path)
 	}
-	require.NoError(t, db.CommitTransaction())
+	indexMediaPaths(t, db, "C64", partialPaths...)
 
 	// Record how many tags the NES system references before truncating C64.
 	sqlDB := db.UnsafeGetSQLDb()
@@ -234,25 +222,15 @@ func TestTruncateResume_MultipleSystemsIndexed(t *testing.T) {
 	allSystems[len(fullSystems)] = partialSystem
 	batch := testdata.CreateReproducibleBatch(allSystems, gamesPerSystem)
 
-	state := &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: make(map[string]int),
-		TagIDs:     make(map[string]int),
-	}
-	require.NoError(t, SeedCanonicalTags(db, state))
-
 	// Step 1: fully index the non-C64 systems.
-	indexSystems(t, db, state, fullSystems, batch)
+	indexSystems(t, db, fullSystems, batch)
 
 	// Step 2: partially index C64 (simulates the mid-index interrupt).
-	require.NoError(t, db.BeginTransaction(false))
+	partialPaths := make([]string, 0, partialGameCount)
 	for _, entry := range batch.Entries[partialSystem][:partialGameCount] {
-		_, _, err := AddMediaPath(db, state, partialSystem, entry.Path, "", false, false, nil, "")
-		require.NoError(t, err)
+		partialPaths = append(partialPaths, entry.Path)
 	}
-	require.NoError(t, db.CommitTransaction())
+	indexMediaPaths(t, db, partialSystem, partialPaths...)
 
 	sqlDB := db.UnsafeGetSQLDb()
 
@@ -283,37 +261,13 @@ func TestTruncateResume_MultipleSystemsIndexed(t *testing.T) {
 	// Step 5: no FK violations in the remaining data.
 	assertFKIntegrity(t, ctx, sqlDB)
 
-	// Step 6: re-index C64 from scratch — mirrors the production resume path.
-	// PopulateScanStateFromDB is called before the main loop in mediascanner.go,
-	// then the partial system is truncated and re-indexed.
-	resumeState := &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: state.TagTypeIDs,
-		TagIDs:     state.TagIDs,
-	}
-	require.NoError(t, PopulateScanStateFromDB(ctx, db, resumeState))
-	delete(resumeState.SystemIDs, partialSystem)
-
-	allTags, err := db.GetAllTags()
-	require.NoError(t, err)
-	tagTypeByDBID := make(map[int64]string, len(resumeState.TagTypeIDs))
-	for tt, id := range resumeState.TagTypeIDs {
-		tagTypeByDBID[int64(id)] = tt
-	}
-	resumeState.TagIDs = make(map[string]int, len(allTags))
-	for _, tag := range allTags {
-		resumeState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
-	}
-	require.NoError(t, SeedCanonicalTags(db, resumeState))
-
-	require.NoError(t, db.BeginTransaction(false))
+	// Step 6: re-index C64 from scratch — mirrors the production resume path,
+	// which re-stages the partial system and reconciles idempotently.
+	resumePaths := make([]string, 0, gamesPerSystem)
 	for _, entry := range batch.Entries[partialSystem] {
-		_, _, addErr := AddMediaPath(db, resumeState, partialSystem, entry.Path, "", false, false, nil, "")
-		require.NoError(t, addErr, "re-index must not fail with UNIQUE or FK violation")
+		resumePaths = append(resumePaths, entry.Path)
 	}
-	require.NoError(t, db.CommitTransaction())
+	indexMediaPaths(t, db, partialSystem, resumePaths...)
 
 	// Step 7: final counts — all systems complete, no duplicates, no FK violations.
 	var finalTotal int

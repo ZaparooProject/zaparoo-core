@@ -88,6 +88,136 @@ func (m *MockSettingsService) UpdateSettings(ctx context.Context, params *models
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+func (m *MockSettingsService) ReloadCore(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) CreateBackup(ctx context.Context) (string, error) {
+	args := m.Called(ctx)
+	return args.String(0), args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) ListBackups(ctx context.Context) ([]map[string]any, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	backups, ok := args.Get(0).([]map[string]any)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return backups, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) InspectBackup(ctx context.Context, name string) (map[string]any, error) {
+	args := m.Called(ctx, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	backup, ok := args.Get(0).(map[string]any)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return backup, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) DeleteBackup(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) RestoreBackup(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) GetBackupStatus(ctx context.Context) (*models.BackupStatusResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	status, ok := args.Get(0).(*models.BackupStatusResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return status, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) RunRemoteBackup(ctx context.Context) (*RemoteBackupRun, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	run, ok := args.Get(0).(*RemoteBackupRun)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return run, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	backups, ok := args.Get(0).([]RemoteBackupItem)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return backups, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) RestoreRemoteBackup(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
+	args := m.Called(ctx)
+	link, ok := args.Get(0).(*models.AuthLinkStatusResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return link, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) GetAuthLinkStatus(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
+	args := m.Called(ctx)
+	link, ok := args.Get(0).(*models.AuthLinkStatusResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return link, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) CancelAuthLink(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) Unlink(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) GetRemoteActivity(ctx context.Context) (*models.RemoteActivityResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	activity, ok := args.Get(0).(*models.RemoteActivityResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return activity, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupGetRemoteActivity configures the mock to return remote activity entries.
+func (m *MockSettingsService) SetupGetRemoteActivity(activity *models.RemoteActivityResponse) {
+	m.On("GetRemoteActivity", mock.Anything).Return(activity, nil)
+}
+
 // GetSystems mocks fetching systems.
 func (m *MockSettingsService) GetSystems(ctx context.Context) ([]models.System, error) {
 	args := m.Called(ctx)
@@ -119,6 +249,38 @@ func (m *MockSettingsService) SetupUpdateSettingsSuccess() {
 // SetupUpdateSettingsError configures the mock to return an error on update.
 func (m *MockSettingsService) SetupUpdateSettingsError(err error) {
 	m.On("UpdateSettings", mock.Anything, mock.Anything).Return(err)
+}
+
+func (m *MockSettingsService) SetupReloadCore(err error) {
+	m.On("ReloadCore", mock.Anything).Return(err)
+}
+
+func (m *MockSettingsService) SetupGetBackupStatus(status *models.BackupStatusResponse) {
+	m.On("GetBackupStatus", mock.Anything).Return(status, nil)
+}
+
+func (m *MockSettingsService) SetupCreateBackup(name string) {
+	m.On("CreateBackup", mock.Anything).Return(name, nil)
+}
+
+func (m *MockSettingsService) SetupListBackups(backups []map[string]any) {
+	m.On("ListBackups", mock.Anything).Return(backups, nil)
+}
+
+func (m *MockSettingsService) SetupInspectBackup(backup map[string]any) {
+	m.On("InspectBackup", mock.Anything, mock.AnythingOfType("string")).Return(backup, nil)
+}
+
+func (m *MockSettingsService) SetupInspectBackupError(err error) {
+	m.On("InspectBackup", mock.Anything, mock.AnythingOfType("string")).Return(nil, err)
+}
+
+func (m *MockSettingsService) SetupDeleteBackupSuccess() {
+	m.On("DeleteBackup", mock.Anything, mock.AnythingOfType("string")).Return(nil)
+}
+
+func (m *MockSettingsService) SetupRestoreBackupSuccess() {
+	m.On("RestoreBackup", mock.Anything, mock.AnythingOfType("string")).Return(nil)
 }
 
 // SetupGetSystems configures the mock to return systems.
@@ -190,6 +352,8 @@ func (m *MockSettingsService) CancelWriteTag(ctx context.Context) error {
 }
 
 // SearchMedia mocks searching for media.
+//
+//nolint:gocritic // Value parameter implements the SettingsService interface used by TUI tests.
 func (m *MockSettingsService) SearchMedia(
 	ctx context.Context,
 	params models.SearchParams,
@@ -233,4 +397,123 @@ func (m *MockSettingsService) SetupSearchMedia(results *models.SearchResults) {
 // SetupSearchMediaError configures the mock to return an error on search.
 func (m *MockSettingsService) SetupSearchMediaError(err error) {
 	m.On("SearchMedia", mock.Anything, mock.Anything).Return(nil, err)
+}
+
+// VerifyProfileManagement mocks one administrator credential check.
+func (m *MockSettingsService) VerifyProfileManagement(ctx context.Context, profileID, pin string) error {
+	args := m.Called(ctx, profileID, pin)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetProfiles mocks fetching profiles.
+func (m *MockSettingsService) GetProfiles(ctx context.Context) (*models.ProfilesResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profiles, ok := args.Get(0).(*models.ProfilesResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profiles, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetActiveProfile mocks fetching the active profile.
+func (m *MockSettingsService) GetActiveProfile(ctx context.Context) (*models.ActiveProfile, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	active, ok := args.Get(0).(*models.ActiveProfile)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return active, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// NewProfile mocks creating a profile.
+func (m *MockSettingsService) NewProfile(
+	ctx context.Context,
+	params *models.NewProfileParams,
+) (*models.ProfileResponse, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profile, ok := args.Get(0).(*models.ProfileResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profile, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// UpdateProfile mocks updating a profile.
+func (m *MockSettingsService) UpdateProfile(
+	ctx context.Context,
+	params *models.UpdateProfileParams,
+) (*models.ProfileResponse, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profile, ok := args.Get(0).(*models.ProfileResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profile, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// DeleteProfile mocks removing a profile.
+func (m *MockSettingsService) DeleteProfile(ctx context.Context, profileID string) error {
+	args := m.Called(ctx, profileID)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SwitchProfile mocks switching the active profile.
+func (m *MockSettingsService) SwitchProfile(ctx context.Context, params *models.SwitchProfileParams) error {
+	args := m.Called(ctx, params)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupGetProfiles configures the mock to return profiles.
+func (m *MockSettingsService) SetupGetProfiles(profiles *models.ProfilesResponse) {
+	m.On("GetProfiles", mock.Anything).Return(profiles, nil)
+}
+
+// SetupGetActiveProfile configures the mock to return the active profile
+// (nil means the shared profile).
+func (m *MockSettingsService) SetupGetActiveProfile(active *models.ActiveProfile) {
+	m.On("GetActiveProfile", mock.Anything).Return(active, nil)
+}
+
+// GetClients mocks fetching paired clients.
+func (m *MockSettingsService) GetClients(ctx context.Context) (*models.ClientsResponse, error) {
+	args := m.Called(ctx)
+	if clients, ok := args.Get(0).(*models.ClientsResponse); ok {
+		return clients, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// StartClientPairing mocks starting client pairing.
+func (m *MockSettingsService) StartClientPairing(
+	ctx context.Context, role string,
+) (*models.ClientsPairStartResponse, error) {
+	args := m.Called(ctx, role)
+	if pairing, ok := args.Get(0).(*models.ClientsPairStartResponse); ok {
+		return pairing, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// CancelClientPairing mocks canceling pairing.
+func (m *MockSettingsService) CancelClientPairing(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// DeleteClient mocks revoking a paired client.
+func (m *MockSettingsService) DeleteClient(ctx context.Context, clientID string) error {
+	args := m.Called(ctx, clientID)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }

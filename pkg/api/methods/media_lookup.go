@@ -111,14 +111,15 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	return models.MediaLookupResponse{
 		Match: &models.MediaLookupMatch{
-			MediaID:    result.Result.MediaID,
-			RelPath:    relPath,
-			System:     resultSystem,
-			Name:       result.Result.Name,
-			Path:       result.Result.Path,
-			ZapScript:  zapScript,
-			Tags:       result.Result.Tags,
-			Confidence: result.Confidence,
+			MediaID:            result.Result.MediaID,
+			RelPath:            relPath,
+			System:             resultSystem,
+			Name:               result.Result.Name,
+			Path:               result.Result.Path,
+			ZapScript:          zapScript,
+			Tags:               result.Result.Tags,
+			DisambiguatingTags: result.Result.ZapScriptTags,
+			Confidence:         result.Confidence,
 		},
 	}, nil
 }

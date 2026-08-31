@@ -198,6 +198,19 @@ func (r *TestAppRunner) RunError() error {
 }
 
 // WaitForCondition waits for a condition to be true, with a timeout.
+// uiSettleTimeout is how long the WaitFor* helpers keep polling before they give
+// up. It is only ever paid by a failing assertion: WaitForCondition polls every
+// 5ms and returns the moment the condition holds, so a generous value costs a
+// passing test nothing.
+//
+// The previous 100ms and 500ms deadlines were tight enough that a loaded machine
+// could miss a redraw that was on its way — `go test -race ./pkg/...` failed
+// TestShowBackupRestoreConfirm_CallsService_Integration and
+// TestBuildAdvancedSettingsMenu_ReloadCore_Integration this way, both passing on
+// their own. A deadline is not the right place to encode how quickly the UI
+// ought to react; assert on what the screen shows instead.
+const uiSettleTimeout = 5 * time.Second
+
 func (*TestAppRunner) WaitForCondition(condition func() bool, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

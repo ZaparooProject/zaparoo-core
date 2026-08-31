@@ -22,10 +22,12 @@ package methods
 import (
 	"fmt"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
@@ -36,7 +38,15 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
+	slot, err := mediaslot.Normalize(params.Slot)
+	if err != nil {
+		return nil, models.ClientErrf("invalid slot: %w", err)
+	}
+
 	media := env.State.ActiveMedia()
+	if slot == mediaslot.Background {
+		media = env.State.BackgroundMedia()
+	}
 	if media == nil {
 		return nil, models.ClientErrf("no active media")
 	}
@@ -61,10 +71,18 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	log.Info().Str("action", params.Action).Str("launcher", media.LauncherID).Msg("executing media control action")
 
-	var err error
+	controlArgs := params.Args
+	if media.LauncherID == platforms.NativeAudioLauncherID {
+		controlArgs = make(map[string]string, len(params.Args)+1)
+		for k, v := range params.Args {
+			controlArgs[k] = v
+		}
+		controlArgs[string(gozapscript.KeySlot)] = slot
+	}
+
 	switch {
 	case control.Func != nil:
-		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: params.Args})
+		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: controlArgs})
 	case control.Script != "":
 		exprEnv := zapscript.GetExprEnv(env.Platform, env.Config, env.State, nil, nil)
 		err = zapscript.RunControlScript(env.Context, env.Platform, env.Config, env.Database, control.Script, &exprEnv)
@@ -73,6 +91,18 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
+	}
+	if params.Action == platforms.ControlStop {
+		switch {
+		case slot == mediaslot.Background:
+			env.State.SetBackgroundMedia(nil)
+			env.State.SetBackgroundPlaylist(nil)
+		case media.LauncherID == platforms.NativeAudioLauncherID:
+			// Native audio has no OS process, so no platform tracker clears the
+			// primary media on an explicit stop, and the drain callback ignores
+			// non-natural drains.
+			env.State.SetActiveMedia(nil)
+		}
 	}
 
 	return NoContent{}, nil

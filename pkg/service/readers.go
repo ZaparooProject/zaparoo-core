@@ -20,8 +20,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -36,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -47,6 +50,91 @@ var ErrNoStagedToken = errors.New("no staged token to confirm")
 type toConnectDevice struct {
 	connectionString string
 	device           config.ReadersConnect
+}
+
+const maxPendingHoldRemovals = 32
+
+type holdTokenKey struct {
+	uid      string
+	text     string
+	pathRoot string
+}
+
+type pendingRemovalHook struct {
+	cancel     context.CancelFunc
+	token      tokens.Token
+	generation uint64
+}
+
+type removalHookResult struct {
+	err        error
+	token      tokens.Token
+	generation uint64
+}
+
+func newHoldTokenKey(token *tokens.Token) holdTokenKey {
+	return holdTokenKey{
+		uid:      token.UID,
+		text:     token.Text,
+		pathRoot: token.PathRoot,
+	}
+}
+
+func recordPendingHoldRemoval(pending map[holdTokenKey]tokens.Token, token *tokens.Token) {
+	if len(pending) >= maxPendingHoldRemovals {
+		for key := range pending {
+			delete(pending, key)
+			break
+		}
+	}
+	pending[newHoldTokenKey(token)] = *token
+}
+
+func hookHasDelayCommand(scriptText string) bool {
+	parser := gozapscript.NewParser(scriptText)
+	script, err := parser.ParseScript()
+	if err != nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if cmd.Name == gozapscript.ZapScriptCmdDelay {
+			return true
+		}
+	}
+	return false
+}
+
+func startDelayedRemovalHook(
+	ctx context.Context,
+	svc *ServiceContext,
+	script string,
+	token *tokens.Token,
+	generation uint64,
+	results chan<- removalHookResult,
+) *pendingRemovalHook {
+	tokenCopy := *token
+	cancelReady := make(chan context.CancelFunc, 1)
+	go func() {
+		hookCtx, hookCancel := context.WithCancel(ctx)
+		defer hookCancel()
+		cancelReady <- hookCancel
+
+		err := runHookWithContext(hookCtx, svc, "on_remove", script, nil, nil)
+		select {
+		case results <- removalHookResult{
+			err:        err,
+			token:      tokenCopy,
+			generation: generation,
+		}:
+		case <-ctx.Done():
+		}
+	}()
+
+	return &pendingRemovalHook{
+		cancel:     <-cancelReady,
+		token:      tokenCopy,
+		generation: generation,
+	}
 }
 
 // isPathConnected checks if any connected reader is using the given path.
@@ -200,7 +288,7 @@ func runBeforeExitHook(
 			}
 
 			if err := runHook(svc, "before_exit", defaults.BeforeExit, nil, nil); err != nil {
-				log.Error().Err(err).Msg("error running before_exit script")
+				logHookError(err, "before_exit")
 			}
 
 			break
@@ -208,16 +296,20 @@ func runBeforeExitHook(
 	}
 }
 
+func cancelTimedExit(exitTimer clockwork.Timer, exitGeneration *atomic.Uint64) bool {
+	exitGeneration.Add(1)
+	return exitTimer != nil && exitTimer.Stop()
+}
+
 func timedExit(
 	svc *ServiceContext,
 	clock clockwork.Clock,
 	exitTimer clockwork.Timer,
+	exitGeneration *atomic.Uint64,
+	owner *tokens.Token,
 ) clockwork.Timer {
-	if exitTimer != nil {
-		stopped := exitTimer.Stop()
-		if stopped {
-			log.Debug().Msg("cancelling previous exit timer")
-		}
+	if cancelTimedExit(exitTimer, exitGeneration) {
+		log.Debug().Msg("cancelling previous exit timer")
 	}
 
 	if !svc.Config.HoldModeEnabled() {
@@ -225,37 +317,53 @@ func timedExit(
 		return exitTimer
 	}
 
-	// Only hardware readers support hold mode exit
-	lastToken := svc.State.GetLastScanned()
-	if lastToken.Source != tokens.SourceReader {
-		log.Debug().Str("source", lastToken.Source).Msg("skipping exit timer for non-reader source")
+	if owner.Source != tokens.SourceReader {
+		log.Debug().Str("source", owner.Source).Msg("skipping exit timer for non-reader source")
 		return exitTimer
 	}
 
-	// Check if the reader supports removal detection
-	r, ok := svc.State.GetReader(lastToken.ReaderID)
+	// Only hardware readers that report removal can own hold-mode media.
+	r, ok := svc.State.GetReader(owner.ReaderID)
 	if !ok {
-		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader not found in state, skipping exit timer")
+		log.Debug().Str("readerID", owner.ReaderID).Msg("reader not found in state, skipping exit timer")
 		return exitTimer
 	}
 	if !readers.HasCapability(r, readers.CapabilityRemovable) {
-		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
+		log.Debug().Str("readerID", owner.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
 		return exitTimer
 	}
 
+	ownerCopy := *owner
 	timerLen := time.Duration(float64(svc.Config.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
 	exitTimer = clock.NewTimer(timerLen)
+	timer := exitTimer
+	generation := exitGeneration.Add(1)
 
 	go func() {
 		select {
-		case <-exitTimer.Chan():
+		case <-timer.Chan():
 		case <-svc.State.GetContext().Done():
 			return
 		}
 
+		if exitGeneration.Load() != generation {
+			log.Debug().Msg("stale exit timer expired, cancelling exit")
+			return
+		}
 		if !svc.Config.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
+			return
+		}
+
+		softwareToken := svc.State.GetSoftwareToken()
+		if !helpers.TokensEqual(&ownerCopy, softwareToken) {
+			log.Debug().Msg("hold owner changed, cancelling exit")
+			return
+		}
+		activeCard := svc.State.GetActiveCard()
+		if helpers.TokensEqual(&ownerCopy, &activeCard) {
+			log.Debug().Msg("hold owner reinserted, cancelling exit")
 			return
 		}
 
@@ -264,18 +372,21 @@ func timedExit(
 			log.Debug().Msg("no active media, cancelling exit")
 			return
 		}
-
-		if svc.State.GetSoftwareToken() == nil {
-			log.Debug().Msg("no active software token, cancelling exit")
-			return
-		}
-
 		if svc.Config.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
 			log.Debug().Msg("active system ignored in config, cancelling exit")
 			return
 		}
 
+		if exitGeneration.Load() != generation {
+			return
+		}
 		runBeforeExitHook(svc, *activeMedia)
+
+		softwareToken = svc.State.GetSoftwareToken()
+		if exitGeneration.Load() != generation || !helpers.TokensEqual(&ownerCopy, softwareToken) {
+			log.Debug().Msg("hold owner changed during before_exit, cancelling exit")
+			return
+		}
 
 		log.Info().Msg("exiting media")
 		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
@@ -283,6 +394,13 @@ func timedExit(
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
+		if svc.PlaylistQueue != nil {
+			select {
+			case svc.PlaylistQueue <- nil:
+			case <-svc.State.GetContext().Done():
+				return
+			}
+		}
 		select {
 		case svc.LaunchSoftwareQueue <- nil:
 		case <-svc.State.GetContext().Done():
@@ -318,12 +436,75 @@ func readerManager(
 
 	proc := &scanPreprocessor{}
 	connectScanSeen := make(map[string]bool)
+	pendingRemovals := make(map[holdTokenKey]tokens.Token)
+	removalHookResults := make(chan removalHookResult, 1)
 	var exitTimer clockwork.Timer
+	var exitGeneration atomic.Uint64
+	var removalHookGeneration uint64
+	var activeRemovalHook *pendingRemovalHook
+
+	scheduleHoldRemoval := func(removedToken *tokens.Token) {
+		key := newHoldTokenKey(removedToken)
+		recordPendingHoldRemoval(pendingRemovals, removedToken)
+		softwareToken := svc.State.GetSoftwareToken()
+		if !helpers.TokensEqual(removedToken, softwareToken) {
+			log.Debug().Msg("removed token does not own active media, skipping exit timer")
+			return
+		}
+		delete(pendingRemovals, key)
+		exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, removedToken)
+	}
 
 	var stagedToken *tokens.Token
-	var guardTimeout <-chan time.Time
+	var guardUI *uievents.Handle
+	var guardResults <-chan uievents.Result
 	var guardDelay <-chan time.Time
 	var delayExpired bool
+
+	resetGuardState := func() {
+		stagedToken = nil
+		guardUI = nil
+		guardResults = nil
+		guardDelay = nil
+		delayExpired = false
+	}
+	completeGuard := func(outcome models.UIOutcome) error {
+		var err error
+		if guardUI != nil {
+			err = guardUI.Complete(outcome)
+		}
+		resetGuardState()
+		if err != nil {
+			return fmt.Errorf("complete launch guard UI event: %w", err)
+		}
+		return nil
+	}
+	cancelGuard := func() {
+		if err := completeGuard(models.UIOutcomeCancelled); err != nil {
+			log.Debug().Err(err).Msg("launch guard: cancellation lost resolution race")
+		}
+	}
+	applyGuardResult := func(result uievents.Result) error {
+		staged := stagedToken
+		resetGuardState()
+		if result.Resolution.Outcome != models.UIOutcomeConfirmed {
+			log.Info().Str("outcome", string(result.Resolution.Outcome)).
+				Msg("launch guard: staged token resolved without launch")
+			return nil
+		}
+		if staged == nil || svc.State.ActiveMedia() == nil {
+			log.Info().Msg("launch guard: ignoring confirmation after media stopped")
+			return nil
+		}
+		confirmed := *staged
+		svc.State.SetActiveCard(confirmed)
+		select {
+		case itq <- confirmed:
+			return nil
+		case <-svc.State.GetContext().Done():
+			return svc.State.GetContext().Err()
+		}
+	}
 
 	var autoDetector *AutoDetector
 	if svc.Config.AutoDetect() {
@@ -419,6 +600,10 @@ preprocessing:
 		var scan *tokens.Token
 		var readerError bool
 		var scanSource string
+		var scanReaderID string
+		var scanProperties []readers.ScanProperty
+		var reinsertedDuringRemovalHook bool
+		var writtenTagRemoved bool
 
 		select {
 		case <-svc.State.GetContext().Done():
@@ -436,29 +621,66 @@ preprocessing:
 			scan = t.Token
 			readerError = t.ReaderError
 			scanSource = t.Source
+			scanReaderID = t.ReaderID
+			if scan != nil && scan.ReaderID != "" {
+				scanReaderID = scan.ReaderID
+			}
+			scanProperties = t.Properties
+			writtenTagRemoved = t.WrittenTagRemoved
+		case hookResult := <-removalHookResults:
+			if activeRemovalHook == nil || hookResult.generation != activeRemovalHook.generation {
+				continue preprocessing
+			}
+			activeRemovalHook.cancel()
+			activeRemovalHook = nil
+			switch {
+			case !hookErrorBlocks(hookResult.err):
+				scheduleHoldRemoval(&hookResult.token)
+			case errors.Is(hookResult.err, context.Canceled):
+				log.Debug().Msg("on_remove hook cancelled")
+			default:
+				log.Warn().Err(hookResult.err).Msg("on_remove hook blocked exit, media will keep running")
+			}
+			continue preprocessing
 		case stoken := <-svc.LaunchSoftwareQueue:
-			// a token has been launched that starts software, used for managing exits
+			// A token has launched primary software and now owns hold-mode exit.
 			log.Debug().Msgf("new software token: %v", stoken)
-			if exitTimer != nil && !helpers.TokensEqual(stoken, svc.State.GetSoftwareToken()) {
-				if stopped := exitTimer.Stop(); stopped {
-					log.Info().Msg("different software token inserted, cancelling exit")
+			if activeRemovalHook != nil && !helpers.TokensEqual(stoken, &activeRemovalHook.token) {
+				activeRemovalHook.cancel()
+				activeRemovalHook = nil
+				removalHookGeneration++
+				log.Debug().Msg("software token changed, cancelling delayed on_remove hook")
+			}
+			currentSoftwareToken := svc.State.GetSoftwareToken()
+			if stoken == nil || !helpers.TokensEqual(stoken, currentSoftwareToken) {
+				if cancelTimedExit(exitTimer, &exitGeneration) {
+					log.Info().Msg("software token changed, cancelling exit")
 				}
 			}
 			svc.State.SetSoftwareToken(stoken)
+			if stoken != nil {
+				key := newHoldTokenKey(stoken)
+				if removedToken, ok := pendingRemovals[key]; ok && helpers.TokensEqual(stoken, &removedToken) {
+					delete(pendingRemovals, key)
+					exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, stoken)
+				}
+			}
 			continue preprocessing
 		case result := <-svc.ConfirmQueue:
-			// API confirm request — launch the staged token if one exists.
-			// API confirm bypasses any active delay.
-			if stagedToken == nil {
+			// Legacy API confirm remains launch-guard-specific and bypasses delay.
+			if stagedToken == nil || svc.State.ActiveMedia() == nil {
+				if stagedToken != nil {
+					cancelGuard()
+				}
 				result <- ErrNoStagedToken
 				continue preprocessing
 			}
 			log.Info().Msgf("launch guard: API confirmed staged token: %v", stagedToken)
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
 			confirmed := *stagedToken
-			stagedToken = nil
+			if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
+				result <- ErrNoStagedToken
+				continue preprocessing
+			}
 			svc.State.SetActiveCard(confirmed)
 			select {
 			case itq <- confirmed:
@@ -468,8 +690,27 @@ preprocessing:
 			}
 			result <- nil
 			continue preprocessing
+		case uiResult, ok := <-guardResults:
+			if !ok {
+				guardResults = nil
+				continue preprocessing
+			}
+			if err := applyGuardResult(uiResult); err != nil {
+				break preprocessing
+			}
+			continue preprocessing
+		case <-svc.LaunchGuardCancel:
+			if stagedToken != nil {
+				log.Info().Msg("launch guard: media stopped, cancelling staged token")
+				cancelGuard()
+			}
+			continue preprocessing
 		case <-guardDelay:
-			// Delay period expired — token is now ready for re-tap confirmation
+			// Delay period expired — token is now ready for re-tap confirmation.
+			if stagedToken == nil {
+				guardDelay = nil
+				continue preprocessing
+			}
 			log.Info().Msg("launch guard: delay expired, ready for confirmation")
 			delayExpired = true
 			guardDelay = nil
@@ -483,53 +724,69 @@ preprocessing:
 			path, enabled := svc.Config.ReadySoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.ReadySound, "ready")
 			continue preprocessing
-		case <-guardTimeout:
-			// Staged token expired
-			log.Info().Msg("launch guard: staged token expired")
-			stagedToken = nil
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
+		}
+
+		if writtenTagRemoved {
+			log.Info().Str("readerID", scanReaderID).Msg("written tag removed, allowing next scan to launch")
+			svc.State.MarkWrittenTagRemoved(scanReaderID)
 			continue preprocessing
 		}
 
-		// If a scan arrives while the timeout is also ready, process the timeout
-		// first. Otherwise Go's random select order can confirm an expired token.
-		if stagedToken != nil && guardTimeout != nil {
+		// A reader may report the tag while its write operation is reading or
+		// verifying NDEF. Never mutate scan or hold state for that callback.
+		if scan != nil && svc.State.ReaderWriteActive(scanReaderID) {
+			log.Info().Str("readerID", scanReaderID).Msg("suppressing token scan during reader write")
+			continue preprocessing
+		}
+
+		if scan != nil && activeRemovalHook != nil &&
+			helpers.TokensEqual(scan, &activeRemovalHook.token) {
+			activeRemovalHook.cancel()
+			activeRemovalHook = nil
+			removalHookGeneration++
+			reinsertedDuringRemovalHook = true
+			log.Info().Msg("removed token reinserted, cancelling delayed on_remove hook")
+		}
+
+		// If a scan races a terminal UI result, process resolution first. This
+		// prevents a re-tap from confirming a token whose Core timeout won.
+		if stagedToken != nil && guardResults != nil {
 			select {
-			case <-guardTimeout:
-				log.Info().Msg("launch guard: staged token expired")
-				stagedToken = nil
-				guardTimeout = nil
-				guardDelay = nil
-				delayExpired = false
+			case uiResult, ok := <-guardResults:
+				if !ok {
+					guardResults = nil
+					continue preprocessing
+				}
+				if err := applyGuardResult(uiResult); err != nil {
+					break preprocessing
+				}
+				continue preprocessing
 			default:
 			}
 		}
 
-		// Clear stale staged token if media has stopped since staging
+		// Clear stale staged token if media stopped before cancellation arrived.
 		if stagedToken != nil && svc.State.ActiveMedia() == nil {
 			log.Info().Msg("launch guard: media stopped, clearing stale staged token")
-			stagedToken = nil
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
+			cancelGuard()
 		}
 
 		// Launch guard confirmation: check BEFORE the preprocessor so that
 		// a re-scan of the staged token is not eaten as a duplicate. This is
 		// needed for barcode scanners which don't send removal events between
 		// scans — the preprocessor would see the re-scan as a duplicate.
-		if scan != nil && stagedToken != nil &&
+		if scan != nil && !reinsertedDuringRemovalHook && stagedToken != nil &&
 			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() {
 			if helpers.TokensEqual(scan, stagedToken) && svc.State.ActiveMedia() != nil {
 				if !delayExpired {
-					// Re-tap during delay period — reset both timers as punishment
+					// Re-tap during delay period — reset both timers as punishment.
 					log.Info().Msg("launch guard: re-tap during delay, resetting timers")
-					timeout := svc.Config.LaunchGuardTimeout()
+					timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
 					delay := svc.Config.LaunchGuardDelay()
-					if timeout > 0 {
-						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					if guardUI != nil {
+						if err := guardUI.Update(uievents.Update{Timeout: &timeout}); err != nil {
+							log.Warn().Err(err).Msg("launch guard: failed to reset UI expiry")
+						}
 					}
 					if delay > 0 {
 						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
@@ -538,12 +795,13 @@ preprocessing:
 					continue preprocessing
 				}
 				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
-				guardTimeout = nil
-				guardDelay = nil
-				delayExpired = false
 				confirmed := *stagedToken
-				stagedToken = nil
-				// Let the preprocessor know what's on the reader now
+				if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
+					log.Info().Err(err).Msg("launch guard: re-tap lost resolution race")
+					proc.Process(scan, readerError)
+					continue preprocessing
+				}
+				// Let the preprocessor know what's on the reader now.
 				proc.Process(scan, readerError)
 				svc.State.SetActiveCard(confirmed)
 				select {
@@ -552,6 +810,14 @@ preprocessing:
 					break preprocessing
 				}
 				continue preprocessing
+			}
+		}
+
+		var removedToken *tokens.Token
+		if scan == nil && !readerError {
+			if previous := proc.PrevToken(); previous != nil {
+				previousCopy := *previous
+				removedToken = &previousCopy
 			}
 		}
 
@@ -564,6 +830,8 @@ preprocessing:
 			continue preprocessing
 
 		case scanNewToken:
+			delete(pendingRemovals, newHoldTokenKey(scan))
+
 			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
 			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" && !connectScanSeen[scan.ReaderID] {
 				connectScanSeen[scan.ReaderID] = true
@@ -585,7 +853,7 @@ preprocessing:
 					Value: scan.Text,
 					Data:  scan.Data,
 				}
-				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); err != nil {
+				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); hookErrorBlocks(err) {
 					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
 					continue preprocessing
 				}
@@ -593,36 +861,37 @@ preprocessing:
 
 			svc.State.SetActiveCard(*scan)
 
-			if exitTimer != nil {
-				stopped := exitTimer.Stop()
-				stoken := svc.State.GetSoftwareToken()
-				if stopped && helpers.TokensEqual(scan, stoken) {
-					log.Info().Msg("same token reinserted, cancelling exit")
-					continue preprocessing
-				} else if stopped {
-					log.Info().Msg("new token inserted, restarting exit timer")
-					exitTimer = timedExit(svc, clock, exitTimer)
+			if reinsertedDuringRemovalHook {
+				continue preprocessing
+			}
+
+			if exitTimer != nil && helpers.TokensEqual(scan, svc.State.GetSoftwareToken()) {
+				if cancelTimedExit(exitTimer, &exitGeneration) {
+					log.Info().Msg("hold owner reinserted, cancelling exit")
 				}
+				continue preprocessing
 			}
 
 			// avoid launching a token that was just written by a reader
 			// NOTE: This check requires both UID and Text to match (see helpers.TokensEqual).
-			wt := svc.State.GetWroteToken()
+			wt := svc.State.GetWroteToken(scanReaderID)
 			if wt != nil && helpers.TokensEqual(scan, wt) {
-				log.Info().Msg("skipping launching just written token")
-				svc.State.SetWroteToken(nil)
+				log.Info().Str("readerID", scanReaderID).Msg("skipping launching just written token")
+				svc.State.SetWroteTokenForReader(scanReaderID, nil)
 				continue preprocessing
 			}
-			svc.State.SetWroteToken(nil)
+			svc.State.SetWroteTokenForReader(scanReaderID, nil)
 
 			if handlePendingWrite(svc, scan, player) {
 				continue preprocessing
 			}
 
+			resolveTokenProperties(svc.State.GetContext(), svc, scan, scanProperties)
+
 			// Launch guard: when enabled and media is playing, stage tokens that
 			// would disrupt the current media (launches, playlist changes, stop).
 			// Utility commands (coin, keyboard, execute, etc.) pass through.
-			if svc.Config.LaunchGuardEnabled() && svc.State.ActiveMedia() != nil {
+			if !reinsertedDuringRemovalHook && svc.Config.LaunchGuardEnabled() && svc.State.ActiveMedia() != nil {
 				mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, *scan)
 				scriptText := scan.Text
 				if hasMapping {
@@ -649,10 +918,28 @@ preprocessing:
 					path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
 					helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
 
-					if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
-						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					message := scan.Text
+					if message == "" {
+						message = scan.UID
+					}
+					if svc.UI == nil {
+						log.Error().Msg("launch guard: UI event service unavailable")
 					} else {
-						guardTimeout = nil
+						timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
+						handle, openErr := svc.UI.Open(svc.State.GetContext(), &uievents.Request{
+							Kind:             models.UIEventKindConfirm,
+							Title:            "Change game?",
+							Message:          message,
+							Timeout:          timeout,
+							Dismissible:      true,
+							SkipHostRenderer: true,
+						})
+						if openErr != nil {
+							log.Error().Err(openErr).Msg("launch guard: failed to open UI event")
+						} else {
+							guardUI = handle
+							guardResults = handle.Results
+						}
 					}
 
 					if delay := svc.Config.LaunchGuardDelay(); delay > 0 {
@@ -682,30 +969,58 @@ preprocessing:
 			if pt := proc.PrevToken(); pt != nil && pt.ReaderID != "" {
 				delete(connectScanSeen, pt.ReaderID)
 			}
-			if exitTimer != nil {
-				if stopped := exitTimer.Stop(); stopped {
-					log.Debug().Msg("cancelled exit timer due to reader error")
-				}
+			if activeRemovalHook != nil {
+				activeRemovalHook.cancel()
+				activeRemovalHook = nil
+				removalHookGeneration++
+				log.Debug().Msg("cancelled delayed on_remove hook due to reader error")
+			}
+			if cancelTimedExit(exitTimer, &exitGeneration) {
+				log.Debug().Msg("cancelled exit timer due to reader error")
 			}
 			svc.State.SetActiveCard(tokens.Token{})
 
 		case scanNormalRemoval:
 			log.Info().Msg("token was removed")
 
-			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
+			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans.
 			svc.State.SetActiveCard(tokens.Token{})
 
-			// Run on_remove hook; errors skip exit timer but card state is already cleared
+			// Run on_remove hook for every normal removal. Delayed hooks run outside
+			// the reader loop so reinserting the removed token can cancel them.
 			onRemoveScript := svc.Config.ReadersScan().OnRemove
 			if svc.Config.HoldModeEnabled() && onRemoveScript != "" {
-				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
+				if removedToken != nil && hookHasDelayCommand(onRemoveScript) {
+					if activeRemovalHook != nil {
+						activeRemovalHook.cancel()
+					}
+					removalHookGeneration++
+					activeRemovalHook = startDelayedRemovalHook(
+						svc.State.GetContext(),
+						svc,
+						onRemoveScript,
+						removedToken,
+						removalHookGeneration,
+						removalHookResults,
+					)
+					continue preprocessing
+				}
+				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); hookErrorBlocks(err) {
 					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
 					continue preprocessing
 				}
 			}
 
-			exitTimer = timedExit(svc, clock, exitTimer)
+			if removedToken != nil {
+				scheduleHoldRemoval(removedToken)
+			}
 		}
+	}
+
+	if activeRemovalHook != nil {
+		activeRemovalHook.cancel()
+		activeRemovalHook = nil
+		log.Debug().Msg("cancelled delayed on_remove hook during reader manager shutdown")
 	}
 
 	// daemon shutdown

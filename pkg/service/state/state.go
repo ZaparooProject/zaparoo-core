@@ -29,10 +29,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,42 +48,60 @@ import (
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
 type PendingLaunchOverride struct {
+	Source     tokens.Token
 	CreatedAt  time.Time
 	LauncherID string
-	Source     tokens.Token
 }
 
 type PendingWrite struct {
+	Source    tokens.Token
 	CreatedAt time.Time
 	Payload   string
-	Source    tokens.Token
+}
+
+type readerWriteState struct {
+	wroteToken                *tokens.Token
+	activeWrites              int
+	clearWroteTokenAfterWrite bool
 }
 
 type State struct {
+	activeToken           tokens.Token
+	lastScanned           tokens.Token
 	platform              platforms.Platform
 	ctx                   context.Context
-	ctxCancelFunc         context.CancelFunc
 	softwareToken         *tokens.Token
-	wroteToken            *tokens.Token
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
+	ctxCancelFunc         context.CancelFunc
 	readers               map[string]readers.Reader
+	readerWrites          map[string]*readerWriteState
 	Notifications         chan<- models.Notification
 	activeMedia           *models.ActiveMedia
+	backgroundMedia       *models.ActiveMedia
+	activeProfile         *models.ActiveProfile
 	activePlaylist        *playlists.Playlist
+	backgroundPlaylist    *playlists.Playlist
 	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
+	onMediaStopHook       func()
+	pendingLaunchOverride *PendingLaunchOverride
+	pendingWrite          *PendingWrite
+	backupCoordinator     *backupcoordinator.Coordinator
 	launcherManager       *LauncherManager
+	uiEvents              *uievents.Service
 	bootUUID              string
-	lastScanned           tokens.Token
-	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
+	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
+	mediaLaunchMu         syncutil.RWMutex
+	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
-	stopService           bool
 	restartRequested      bool
+	restorePendingRestart bool
 	runZapScript          bool
+	backgroundAutoPaused  bool
+	mediaDBRecoveryActive bool
+	stopService           bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -88,16 +109,69 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 	// without dropping critical user-facing notifications (tokens, readers, media state)
 	ns := make(chan models.Notification, 500)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
-	return &State{
-		runZapScript:    true,
-		platform:        platform,
-		readers:         make(map[string]readers.Reader),
-		Notifications:   ns,
-		ctx:             ctx,
-		ctxCancelFunc:   ctxCancelFunc,
-		launcherManager: NewLauncherManager(),
-		bootUUID:        bootUUID,
-	}, ns
+	state = &State{
+		runZapScript:      true,
+		platform:          platform,
+		readers:           make(map[string]readers.Reader),
+		readerWrites:      make(map[string]*readerWriteState),
+		Notifications:     ns,
+		ctx:               ctx,
+		ctxCancelFunc:     ctxCancelFunc,
+		launcherManager:   NewLauncherManager(),
+		backupCoordinator: backupcoordinator.New(),
+		bootUUID:          bootUUID,
+	}
+	// Terminal backup.state event: clients showing a paused/throttled backup
+	// banner clear it when the operation's lease is released.
+	state.backupCoordinator.SetOnWriteFinished(func(kind backupcoordinator.OperationKind) {
+		notifications.BackupState(ns, models.BackupStateNotification{
+			Operation: string(kind),
+			Finished:  true,
+		})
+	})
+	return state, ns
+}
+
+func (s *State) BackupCoordinator() *backupcoordinator.Coordinator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backupCoordinator
+}
+
+// SetMediaDBRecoveryActive records whether automatic media database recovery
+// currently owns the recovery workflow.
+func (s *State) SetMediaDBRecoveryActive(active bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mediaDBRecoveryActive = active
+}
+
+// MediaDBRecoveryActive reports whether automatic media database recovery is
+// currently running.
+func (s *State) MediaDBRecoveryActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mediaDBRecoveryActive
+}
+
+// SetUIEvents stores the process-wide UI event service.
+func (s *State) SetUIEvents(service *uievents.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uiEvents = service
+}
+
+// UIEvents returns the process-wide UI event service.
+func (s *State) UIEvents() *uievents.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.uiEvents
 }
 
 func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-use parameter in state setter
@@ -138,6 +212,49 @@ func (s *State) GetActiveCard() tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeToken
+}
+
+// SetActiveProfile sets or clears (nil) the device's active profile and
+// broadcasts a profiles.active notification. The snapshot is stored by
+// value internally so callers cannot mutate state through the pointer.
+func (s *State) SetActiveProfile(profile *models.ActiveProfile) {
+	s.mu.Lock()
+
+	if profile == nil && s.activeProfile == nil {
+		// ignore duplicate deactivations
+		s.mu.Unlock()
+		return
+	}
+
+	var stored *models.ActiveProfile
+	if profile != nil {
+		profileCopy := *profile
+		stored = &profileCopy
+	}
+	s.activeProfile = stored
+
+	// Prepare notification payload inside lock, send outside
+	var payload *models.ActiveProfile
+	if stored != nil {
+		payloadCopy := *stored
+		payload = &payloadCopy
+	}
+
+	s.mu.Unlock()
+
+	notifications.ProfilesActiveChanged(s.Notifications, models.ProfilesActiveNotification{Profile: payload})
+}
+
+// ActiveProfile returns a copy of the device's active profile snapshot, or
+// nil when no profile is active.
+func (s *State) ActiveProfile() *models.ActiveProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeProfile == nil {
+		return nil
+	}
+	profileCopy := *s.activeProfile
+	return &profileCopy
 }
 
 func (s *State) GetLastScanned() tokens.Token {
@@ -188,6 +305,24 @@ func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStartHook = hook
+}
+
+func (s *State) SetOnMediaStopHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onMediaStopHook = hook
+}
+
+func (s *State) BackgroundAutoPaused() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundAutoPaused
+}
+
+func (s *State) SetBackgroundAutoPaused(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backgroundAutoPaused = v
 }
 
 // GetReader returns the Reader for a given ReaderID.
@@ -282,16 +417,131 @@ func (s *State) GetSoftwareToken() *tokens.Token {
 	return s.softwareToken
 }
 
-func (s *State) SetWroteToken(token *tokens.Token) {
+func (s *State) SetReaderWriteActive(active bool, readerIDs ...string) {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
 	s.mu.Lock()
-	s.wroteToken = token
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if active {
+		if writeState == nil {
+			writeState = &readerWriteState{}
+			s.readerWrites[readerID] = writeState
+		}
+		writeState.activeWrites++
+		return
+	}
+	if writeState == nil || writeState.activeWrites == 0 {
+		return
+	}
+	writeState.activeWrites--
+	if writeState.activeWrites == 0 && writeState.clearWroteTokenAfterWrite {
+		writeState.wroteToken = nil
+		writeState.clearWroteTokenAfterWrite = false
+	}
+	if writeState.activeWrites == 0 && writeState.wroteToken == nil {
+		delete(s.readerWrites, readerID)
+	}
 }
 
-func (s *State) GetWroteToken() *tokens.Token {
+func (s *State) ReaderWriteActive(readerIDs ...string) bool {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.wroteToken
+	writeState := s.readerWrites[readerID]
+	return writeState != nil && writeState.activeWrites > 0
+}
+
+// AnyReaderWriteActive reports whether any reader is part-way through writing
+// a token.
+//
+// ReaderWriteActive answers for one reader and defaults to the empty ID, which
+// no production caller records under: writes are tracked per reader by
+// Reader.ID(). A caller that wants to know whether the device is mid-write at
+// all — the updater, before it restarts the service — has to ask about every
+// reader, not about a reader that does not exist.
+func (s *State) AnyReaderWriteActive() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, writeState := range s.readerWrites {
+		if writeState != nil && writeState.activeWrites > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) MarkWrittenTagRemoved(readerIDs ...string) {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		return
+	}
+	if writeState.activeWrites > 0 {
+		writeState.clearWroteTokenAfterWrite = true
+		return
+	}
+	delete(s.readerWrites, readerID)
+}
+
+func (s *State) SetWroteToken(token *tokens.Token) {
+	if token == nil {
+		s.mu.Lock()
+		for readerID, writeState := range s.readerWrites {
+			writeState.wroteToken = nil
+			if writeState.activeWrites == 0 {
+				delete(s.readerWrites, readerID)
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+	s.SetWroteTokenForReader(token.ReaderID, token)
+}
+
+func (s *State) SetWroteTokenForReader(readerID string, token *tokens.Token) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		if token == nil {
+			return
+		}
+		writeState = &readerWriteState{}
+		s.readerWrites[readerID] = writeState
+	}
+	writeState.wroteToken = token
+	if writeState.activeWrites == 0 && writeState.clearWroteTokenAfterWrite {
+		delete(s.readerWrites, readerID)
+		return
+	}
+	if writeState.activeWrites == 0 && token == nil {
+		delete(s.readerWrites, readerID)
+	}
+}
+
+func (s *State) GetWroteToken(readerIDs ...string) *tokens.Token {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		return nil
+	}
+	return writeState.wroteToken
 }
 
 func (s *State) SetPendingLaunchOverride(pending *PendingLaunchOverride) {
@@ -352,15 +602,173 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
+func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundPlaylist
+}
+
+func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
+	s.mu.Lock()
+	s.backgroundPlaylist = playlist
+	s.mu.Unlock()
+}
+
 var (
-	ErrNoActiveMedia      = errors.New("no active media")
-	ErrActiveMediaChanged = errors.New("active media changed")
+	ErrNoActiveMedia          = errors.New("no active media")
+	ErrActiveMediaChanged     = errors.New("active media changed")
+	ErrRestoreInProgress      = errors.New("backup restore is in progress")
+	ErrMediaLaunchInProgress  = errors.New("media launch is in progress")
+	ErrRestoreRestartRequired = errors.New("backup restore restart is pending")
 )
+
+func (s *State) restoreAccessAfterLock() (func(), error) {
+	s.mu.RLock()
+	pendingRestart := s.restorePendingRestart
+	s.mu.RUnlock()
+	if pendingRestart {
+		s.mediaRestoreMu.RUnlock()
+		return nil, ErrRestoreRestartRequired
+	}
+	return s.mediaRestoreMu.RUnlock, nil
+}
+
+func (s *State) TryAcquireRestoreAccess() (func(), error) {
+	if !s.mediaRestoreMu.TryRLock() {
+		return nil, ErrRestoreInProgress
+	}
+	return s.restoreAccessAfterLock()
+}
+
+func (s *State) AcquireRestoreAccess() (func(), error) {
+	s.mediaRestoreMu.RLock()
+	return s.restoreAccessAfterLock()
+}
+
+func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
+	releaseRestore, err := s.TryAcquireRestoreAccess()
+	if err != nil {
+		return platforms.MediaLaunchAccess{}, err
+	}
+
+	// Stop operations take the exclusive side of this gate. Holding the read
+	// side through Platform.LaunchMedia keeps stop requests behind platform
+	// launch settling and active-media readiness setup.
+	s.mediaLaunchMu.RLock()
+	if err := s.ctx.Err(); err != nil {
+		s.mediaLaunchMu.RUnlock()
+		releaseRestore()
+		return platforms.MediaLaunchAccess{}, err
+	}
+
+	var accessMu syncutil.Mutex
+	held := true
+	return platforms.MediaLaunchAccess{
+		SetActiveMedia: func(media *models.ActiveMedia) {
+			accessMu.Lock()
+			if !held {
+				accessMu.Unlock()
+				s.SetActiveMedia(media)
+				return
+			}
+			s.publishActiveMedia(media, true)
+			accessMu.Unlock()
+		},
+		Release: func() {
+			accessMu.Lock()
+			defer accessMu.Unlock()
+			if !held {
+				return
+			}
+			held = false
+			s.mediaLaunchMu.RUnlock()
+			releaseRestore()
+		},
+	}, nil
+}
+
+// AcquireMediaStop waits for in-flight media launches, then prevents another
+// launch from starting until the returned release function is called.
+func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
+	return acquireExclusiveGate(ctx, &s.mediaLaunchMu)
+}
+
+// AcquireUpdateMediaGate waits for in-flight launches and ActiveMedia
+// publications, then prevents either from starting until release. The updater
+// holds this gate from its final safety check through restart cancellation.
+func (s *State) AcquireUpdateMediaGate(ctx context.Context) (func(), error) {
+	releaseLaunch, err := s.AcquireMediaStop(ctx)
+	if err != nil {
+		return nil, err
+	}
+	releasePublish, err := acquireExclusiveGate(ctx, &s.activeMediaPublishMu)
+	if err != nil {
+		releaseLaunch()
+		return nil, err
+	}
+	return func() {
+		releasePublish()
+		releaseLaunch()
+	}, nil
+}
+
+func acquireExclusiveGate(ctx context.Context, gate *syncutil.RWMutex) (func(), error) {
+	const retryInterval = 5 * time.Millisecond
+
+	retry := time.NewTicker(retryInterval)
+	defer retry.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		// TryLock avoids registering a writer that would keep blocking new
+		// readers after this request is canceled.
+		if gate.TryLock() {
+			return gate.Unlock, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-retry.C:
+		}
+	}
+}
+
+func (s *State) BeginRestoreGate() (func(bool), error) {
+	if !s.mediaRestoreMu.TryLock() {
+		return nil, ErrMediaLaunchInProgress
+	}
+	s.mu.RLock()
+	pendingRestart := s.restorePendingRestart
+	s.mu.RUnlock()
+	if pendingRestart {
+		s.mediaRestoreMu.Unlock()
+		return nil, ErrRestoreRestartRequired
+	}
+	return func(success bool) {
+		if success {
+			s.mu.Lock()
+			s.restorePendingRestart = true
+			s.mu.Unlock()
+		}
+		s.mediaRestoreMu.Unlock()
+	}, nil
+}
 
 func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeMedia
+}
+
+func (s *State) BackgroundMedia() *models.ActiveMedia {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundMedia
 }
 
 func (s *State) ActiveMediaReady() bool {
@@ -422,6 +830,48 @@ func (s *State) MarkActiveMediaReady(gen uint64) {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	s.publishActiveMedia(media, false)
+}
+
+func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld bool) {
+	if media != nil {
+		if err := s.ctx.Err(); err != nil {
+			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
+			return
+		}
+
+		// Restore access comes first. The service takes these three locks in
+		// one order everywhere — restore, then launch, then publish — and
+		// taking them in any other order closes a cycle between this, a media
+		// launch, and the updater's gate.
+		if !restoreAccessHeld {
+			release, err := s.TryAcquireRestoreAccess()
+			if errors.Is(err, ErrRestoreInProgress) {
+				s.backupCoordinator.CancelRestore()
+				release, err = s.AcquireRestoreAccess()
+			}
+			if err != nil {
+				log.Warn().Err(err).Msg("active media update rejected during backup restore")
+				return
+			}
+			defer release()
+		}
+
+		// This gate is separate from mediaLaunchMu because normal launch code
+		// already holds that lock when it publishes ActiveMedia. External
+		// lifecycle trackers do not, so every publication takes this read side.
+		s.activeMediaPublishMu.RLock()
+		defer s.activeMediaPublishMu.RUnlock()
+		if err := s.ctx.Err(); err != nil {
+			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
+			return
+		}
+	}
+
+	s.updateActiveMediaState(media)
+}
+
+func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another
@@ -433,8 +883,9 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		return
 	}
 
-	// Capture hook reference inside lock
+	// Capture hook references inside lock
 	hook := s.onMediaStartHook
+	stopHook := s.onMediaStopHook
 
 	if media == nil {
 		// media has stopped
@@ -450,12 +901,20 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		stoppedParams := buildMediaStoppedParams(oldMedia)
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
+		// Run the hook synchronously (outside the lock) so callers observe its
+		// effects before their next step — the launch path stops native audio and
+		// then decides whether to pause background music, which must happen after
+		// any auto-resume the hook performs.
+		if stopHook != nil {
+			stopHook()
+		}
 		return
 	}
 
+	media.Slot = mediaslot.Primary
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
@@ -471,6 +930,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -496,13 +956,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		changedStoppedParams := buildMediaStoppedParams(oldMedia)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -517,7 +978,55 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.mu.Unlock()
 }
 
-func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParams {
+func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
+	s.mu.Lock()
+	oldMedia := s.backgroundMedia
+	if oldMedia == nil && media == nil {
+		s.mu.Unlock()
+		return
+	}
+
+	if media == nil {
+		s.backgroundMedia = nil
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		return
+	}
+
+	media.Slot = mediaslot.Background
+	if oldMedia == nil {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       mediaslot.Background,
+		})
+		return
+	}
+
+	if !oldMedia.Equal(media) {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       mediaslot.Background,
+		})
+		return
+	}
+
+	s.mu.Unlock()
+}
+
+func buildMediaStoppedParams(media *models.ActiveMedia, slot string) models.MediaStoppedParams {
 	elapsed := max(0, int(time.Since(media.Started).Seconds()))
 	return models.MediaStoppedParams{
 		SystemID:   media.SystemID,
@@ -525,6 +1034,7 @@ func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParam
 		MediaName:  media.Name,
 		MediaPath:  media.Path,
 		LauncherID: media.LauncherID,
+		Slot:       slot,
 		Elapsed:    elapsed,
 	}
 }

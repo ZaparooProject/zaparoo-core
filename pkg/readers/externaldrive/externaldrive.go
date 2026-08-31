@@ -494,6 +494,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
 		ReaderID: r.ReaderID(),
+		PathRoot: filepath.Clean(foundMount),
 	}
 
 	// Before adding token, verify device is still mounted (race condition protection)
@@ -523,8 +524,9 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 	// Emit scan event
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  token,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    token,
 	}:
 		log.Info().
 			Str("device_id", event.DeviceID).
@@ -554,8 +556,9 @@ func (r *Reader) handleUnmountEvent(deviceID string) {
 	// Emit removal scan
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  nil,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    nil,
 	}:
 		log.Info().
 			Str("device_id", deviceID).

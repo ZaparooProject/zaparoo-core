@@ -183,6 +183,7 @@ Examples:
 - First paren tag → region if it matches the known region list (USA, Europe, Japan, etc.)
 - Subsequent tags → language, version, dev status
 - Multi-value: `(En,Fr,De)` → `lang:en`, `lang:fr`, `lang:de`
+- MiSTer Arcade `(Region YYMMDD)` packs a region and romset build date in one group: `(World 931005)` → `region:world`, `builddate:1993-10-05`. The date is also accepted as `YYYYMMDD` or `YYYY-MM-DD`, and the region/date may be comma-separated (`(EU, 961004)`).
 
 **Step 4: Square bracket tags** — always dump info or modifications:
 - `[!]` → `dump:verified`, `[b]` → `dump:bad`, `[h]` → `hack:yes`, `[T+En]` → `translation:en`
@@ -195,6 +196,9 @@ Example:
 
 "Zelda (Europe) (En,Fr,De,Es,It).gba"
   → [region:eu, lang:en, lang:fr, lang:de, lang:es, lang:it]
+
+"X-Men Vs. Street Fighter (Europe 961004).mra"
+  → [region:eu, builddate:1996-10-04]
 ```
 
 ---

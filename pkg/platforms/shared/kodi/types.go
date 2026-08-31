@@ -38,8 +38,9 @@ type Movie struct {
 
 // TVShow represents a TV show in Kodi's library
 type TVShow struct {
-	Label string `json:"label"`
-	ID    int    `json:"tvshowid"`
+	UniqueIDs map[string]string `json:"uniqueid,omitempty"`
+	Label     string            `json:"label"`
+	ID        int               `json:"tvshowid"`
 }
 
 // Episode represents a TV episode in Kodi's library

@@ -55,19 +55,6 @@ func ParentDirForMediaPath(path string) string {
 	return ""
 }
 
-func sqlUpdateMediaParentDir(ctx context.Context, db sqlQueryable, mediaDBID int64, parentDir string) error {
-	if _, err := db.ExecContext(
-		ctx,
-		`UPDATE Media SET ParentDir = ? WHERE DBID = ?`,
-		parentDir,
-		mediaDBID,
-	); err != nil {
-		return fmt.Errorf("failed to update media parent dir: %w", err)
-	}
-
-	return nil
-}
-
 func sqlTemporaryParentDirRepairVersionCurrent(ctx context.Context, db sqlQueryable) (bool, error) {
 	var version string
 	err := db.QueryRowContext(ctx,
@@ -113,7 +100,7 @@ func sqlMarkTemporaryParentDirRepairComplete(ctx context.Context, db sqlQueryabl
 }
 
 func (db *MediaDB) runTemporaryParentDirRepair(ctx context.Context, pauser *syncutil.Pauser) error {
-	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql)
+	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql.Load())
 	if err != nil {
 		return err
 	}
@@ -122,12 +109,12 @@ func (db *MediaDB) runTemporaryParentDirRepair(ctx context.Context, pauser *sync
 		return nil
 	}
 
-	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql)
+	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql.Load())
 	if err != nil {
 		return err
 	}
 	if !pending {
-		markErr := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql)
+		markErr := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql.Load())
 		if markErr != nil {
 			return markErr
 		}
@@ -143,12 +130,12 @@ func (db *MediaDB) runTemporaryParentDirRepair(ctx context.Context, pauser *sync
 		return err
 	}
 
-	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql); err != nil {
+	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql.Load()); err != nil {
 		return err
 	}
 
 	if stats.Updated > 0 {
-		if err := sqlInvalidateBrowseCache(ctx, db.sql); err != nil {
+		if err := sqlInvalidateBrowseCache(ctx, db.sql.Load()); err != nil {
 			return fmt.Errorf("failed to invalidate browse cache after temporary parent dir repair: %w", err)
 		}
 	}
@@ -210,7 +197,7 @@ func (db *MediaDB) repairMediaParentDirs(
 func (db *MediaDB) loadParentDirRepairRows(
 	ctx context.Context, lastDBID int64, limit int,
 ) ([]parentDirRepairRow, error) {
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, Path, ParentDir
 		FROM Media
 		WHERE DBID > ? AND ParentDir = ''
@@ -242,7 +229,7 @@ func (db *MediaDB) loadParentDirRepairRows(
 }
 
 func (db *MediaDB) updateParentDirRepairRows(ctx context.Context, rows []parentDirRepairRow) (int64, error) {
-	tx, err := db.sql.BeginTx(ctx, nil)
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin temporary parent dir repair transaction: %w", err)
 	}

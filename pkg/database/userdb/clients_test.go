@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -31,14 +32,14 @@ import (
 )
 
 const (
-	clientSelectByTokenRe = `SELECT DBID, ClientID, ClientName, AuthToken, ` +
+	clientSelectByTokenRe = `SELECT DBID, ClientID, ClientName, AuthToken, Role, ` +
 		`PairingKey, CreatedAt, LastSeenAt FROM Clients WHERE AuthToken = \?`
-	clientSelectListRe = `SELECT DBID, ClientID, ClientName, AuthToken, ` +
+	clientSelectListRe = `SELECT DBID, ClientID, ClientName, AuthToken, Role, ` +
 		`PairingKey, CreatedAt, LastSeenAt FROM Clients ORDER BY CreatedAt DESC`
 )
 
 var clientRowColumns = []string{
-	"DBID", "ClientID", "ClientName", "AuthToken", "PairingKey", "CreatedAt", "LastSeenAt",
+	"DBID", "ClientID", "ClientName", "AuthToken", "Role", "PairingKey", "CreatedAt", "LastSeenAt",
 }
 
 func newTestClient() *database.Client {
@@ -47,6 +48,7 @@ func newTestClient() *database.Client {
 		ClientID:   "client-uuid-1",
 		ClientName: "Test App",
 		AuthToken:  "auth-token-uuid",
+		Role:       "admin",
 		PairingKey: []byte("0123456789abcdef0123456789abcdef"),
 		CreatedAt:  1700000000,
 		LastSeenAt: 1700000100,
@@ -61,7 +63,7 @@ func TestSqlCreateClient_Success(t *testing.T) {
 
 	c := newTestClient()
 	mock.ExpectQuery(`INSERT INTO Clients`).
-		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).
+		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(int64(42)))
 
 	err = sqlCreateClient(context.Background(), db, c)
@@ -95,7 +97,7 @@ func TestSqlCreateClient_DatabaseError(t *testing.T) {
 
 	c := newTestClient()
 	mock.ExpectQuery(`INSERT INTO Clients`).
-		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).
+		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlCreateClient(context.Background(), db, c)
@@ -114,7 +116,7 @@ func TestSqlGetClientByToken_Success(t *testing.T) {
 	mock.ExpectQuery(clientSelectByTokenRe).
 		WithArgs(c.AuthToken).
 		WillReturnRows(sqlmock.NewRows(clientRowColumns).
-			AddRow(int64(7), c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt))
+			AddRow(int64(7), c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt))
 
 	got, err := sqlGetClientByToken(context.Background(), db, c.AuthToken)
 	require.NoError(t, err)
@@ -123,6 +125,7 @@ func TestSqlGetClientByToken_Success(t *testing.T) {
 	assert.Equal(t, c.ClientID, got.ClientID)
 	assert.Equal(t, c.ClientName, got.ClientName)
 	assert.Equal(t, c.AuthToken, got.AuthToken)
+	assert.Equal(t, c.Role, got.Role)
 	assert.Equal(t, c.PairingKey, got.PairingKey)
 	assert.Equal(t, c.CreatedAt, got.CreatedAt)
 	assert.Equal(t, c.LastSeenAt, got.LastSeenAt)
@@ -155,8 +158,8 @@ func TestSqlListClients_Success(t *testing.T) {
 	key1 := []byte("key-1-key-1-key-1-key-1-key-1-12")
 	key2 := []byte("key-2-key-2-key-2-key-2-key-2-12")
 	rows := sqlmock.NewRows(clientRowColumns).
-		AddRow(int64(1), "id-1", "App One", "tok-1", key1, int64(1000), int64(2000)).
-		AddRow(int64(2), "id-2", "App Two", "tok-2", key2, int64(1100), int64(2100))
+		AddRow(int64(1), "id-1", "App One", "tok-1", "admin", key1, int64(1000), int64(2000)).
+		AddRow(int64(2), "id-2", "App Two", "tok-2", "member", key2, int64(1100), int64(2100))
 
 	mock.ExpectQuery(clientSelectListRe).WillReturnRows(rows)
 
@@ -164,7 +167,9 @@ func TestSqlListClients_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "id-1", got[0].ClientID)
+	assert.Equal(t, "admin", got[0].Role)
 	assert.Equal(t, "id-2", got[1].ClientID)
+	assert.Equal(t, "member", got[1].Role)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -207,11 +212,41 @@ func TestSqlDeleteClient_NotFound(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM Clients WHERE ClientID = \?`).
 		WithArgs("missing").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT Role FROM Clients WHERE ClientID = \?`).
+		WithArgs("missing").
+		WillReturnError(sql.ErrNoRows)
 
 	err = sqlDeleteClient(context.Background(), db, "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "client not found")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteClient_LastAdminProtected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	first := newTestClient()
+	second := newTestClient()
+	second.ClientID = "client-uuid-2"
+	second.ClientName = "Second Admin"
+	second.AuthToken = "auth-token-uuid-2"
+	require.NoError(t, db.CreateClient(first))
+	require.NoError(t, db.CreateClient(second))
+
+	err := sqlDeleteClient(context.Background(), db.sql.Load(), first.ClientID)
+	require.NoError(t, err)
+	_, err = db.GetClientByToken(first.AuthToken)
+	require.Error(t, err)
+
+	err = sqlDeleteClient(context.Background(), db.sql.Load(), second.ClientID)
+	require.ErrorIs(t, err, ErrLastClientAdmin)
+	remaining, err := db.GetClientByToken(second.AuthToken)
+	require.NoError(t, err)
+	assert.Equal(t, second.ClientID, remaining.ClientID)
 }
 
 func TestSqlUpdateClientLastSeen_Success(t *testing.T) {

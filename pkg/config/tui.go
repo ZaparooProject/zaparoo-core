@@ -38,6 +38,7 @@ type TUIConfig struct {
 	CRTMode                bool   `toml:"crt_mode"`
 	OnScreenKeyboard       bool   `toml:"on_screen_keyboard"`
 	ErrorReportingPrompted bool   `toml:"error_reporting_prompted"`
+	EncryptionPrompted     bool   `toml:"encryption_prompted"`
 }
 
 // tuiConfigRaw is used for TOML unmarshalling with pointer fields
@@ -49,6 +50,7 @@ type tuiConfigRaw struct {
 	CRTMode                *bool   `toml:"crt_mode"`
 	OnScreenKeyboard       *bool   `toml:"on_screen_keyboard"`
 	ErrorReportingPrompted *bool   `toml:"error_reporting_prompted"`
+	EncryptionPrompted     *bool   `toml:"encryption_prompted"`
 }
 
 const (
@@ -113,6 +115,9 @@ func applyTUIDefaults(raw tuiConfigRaw, platformID string) TUIConfig {
 	}
 	if raw.ErrorReportingPrompted != nil {
 		cfg.ErrorReportingPrompted = *raw.ErrorReportingPrompted
+	}
+	if raw.EncryptionPrompted != nil {
+		cfg.EncryptionPrompted = *raw.EncryptionPrompted
 	}
 	return cfg
 }

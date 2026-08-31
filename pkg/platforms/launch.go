@@ -20,22 +20,32 @@
 package platforms
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
+const activeMediaLookupTimeout = 2 * time.Second
+
 // LaunchParams contains all dependencies required for launching media.
 type LaunchParams struct {
+	// Context scopes best-effort post-launch metadata lookups.
+	Context        context.Context
 	Platform       Platform
 	Config         *config.Instance
 	SetActiveMedia func(*models.ActiveMedia)
@@ -95,6 +105,14 @@ func nativeLaunchPath(path string) string {
 	return filepath.FromSlash(path)
 }
 
+func activeMediaLookupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
+	return context.WithTimeout(parent, activeMediaLookupTimeout)
+}
+
 // DoLaunch launches the given path and updates the active media with it if
 // it was successful. The getDisplayName callback extracts a display name from the path.
 func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
@@ -106,23 +124,52 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	if params.Options == nil {
 		params.Options = &LaunchOptions{}
 	}
+	publishActiveMedia := params.SetActiveMedia
+	if params.Options.ActiveMediaPublisher != nil {
+		publishActiveMedia = params.Options.ActiveMediaPublisher
+	}
 	if params.Options.Action == "" {
 		params.Options.Action = action
 	}
-
-	// Stop any currently running launcher before starting new one
-	// This ensures tracked processes (like videos) are stopped even when
-	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
-	// uses a running instance (e.g., Kodi), in which case the platform's
-	// shouldKeepRunningInstance logic will handle stopping if needed.
-	if params.Launcher.UsesRunningInstance == "" {
-		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
-			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
+	if params.Config != nil && params.Options.RenderScale == nil && params.Options.RenderResolution == "" {
+		defaults := params.Config.LookupLauncherDefaults(params.Launcher.ID, params.Launcher.Groups)
+		params.Options.RenderScale = defaults.RenderScale
+		params.Options.RenderResolution = defaults.RenderResolution
+	}
+	if params.Options.RenderScale != nil && params.Options.RenderResolution != "" {
+		return errors.New("render_scale and render_resolution are mutually exclusive")
+	}
+	if params.Options.RenderScale != nil && *params.Options.RenderScale <= 0 {
+		return errors.New("render_scale must be positive")
+	}
+	if params.Options.RenderResolution != "" {
+		if _, _, renderErr := config.ValidateRenderResolution(params.Options.RenderResolution); renderErr != nil {
+			return fmt.Errorf("validate render_resolution: %w", renderErr)
 		}
+	}
+
+	slot, slotErr := mediaslot.Normalize(params.Options.Slot)
+	if slotErr != nil {
+		return fmt.Errorf("normalize slot: %w", slotErr)
+	}
+	if slot == mediaslot.Background && params.Launcher.ID != NativeAudioLauncherID {
+		return fmt.Errorf("background slot only supports %s launcher", NativeAudioLauncherID)
 	}
 
 	if params.Launcher.Launch == nil {
 		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
+	}
+	if params.Launcher.Availability != nil {
+		if err := params.Launcher.Availability(params.Config); err != nil {
+			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+		}
+	}
+
+	// Stop any currently running launcher only after validating the replacement.
+	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
+		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
+			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
+		}
 	}
 
 	// Convert DB paths (forward slashes) to OS-native format for launcher
@@ -140,34 +187,31 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 		log.Debug().Msgf("launched tracked process for: %s", params.Path)
 	case LifecycleBlocking:
-		go func() {
-			log.Debug().Msgf("launching blocking process for: %s", params.Path)
-			proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
-			if err != nil {
-				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
-				params.SetActiveMedia(nil)
-				return
-			}
+		log.Debug().Msgf("launching blocking process for: %s", params.Path)
+		proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
 
-			if proc != nil {
-				params.Platform.SetTrackedProcess(proc)
+		if proc != nil {
+			params.Platform.SetTrackedProcess(proc)
 
-				_, waitErr := proc.Wait()
-				if waitErr != nil {
-					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", params.Path)
-				} else {
-					log.Debug().Msgf("blocking process completed for: %s", params.Path)
-				}
-
-				params.SetActiveMedia(nil)
-				log.Debug().Msgf("cleared active media after blocking process ended: %s", params.Path)
-			}
-		}()
-	case LifecycleFireAndForget:
+			// Start waiting only after DoLaunch has finished publishing ActiveMedia.
+			// Otherwise a fast process can clear media before this function sets it,
+			// leaving stale active state behind.
+			defer func() {
+				go waitForBlockingProcess(params.Platform, proc, params.SetActiveMedia, params.Path)
+			}()
+		}
+	case LifecycleFireAndForget, LifecycleExternal:
 		_, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
+	}
+
+	if slot == mediaslot.Background {
+		return nil
 	}
 
 	// "details" action just shows info page, doesn't launch a game
@@ -175,20 +219,26 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		log.Debug().Msg("skipping ActiveMedia for details action")
 		return nil
 	}
+	if params.Launcher.Lifecycle == LifecycleExternal {
+		log.Debug().Msg("deferring ActiveMedia to external platform lifecycle tracker")
+		return nil
+	}
 
-	// Try to look up SystemID from MediaDB if launcher doesn't have one
+	// Look up the indexed display name from MediaDB. SearchMediaPathExact
+	// requires at least one system to search - a launcher without a
+	// SystemID has nothing to scope the search to, so displayName stays the
+	// filename-parsed fallback in that case, same as before.
 	systemID := params.Launcher.SystemID
 	displayName := tags.ParseTitleFromFilename(getDisplayName(params.Path), false)
 
-	if params.DB != nil && params.DB.MediaDB != nil {
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(nil, params.Path)
-		if searchErr == nil && len(results) > 0 {
-			if systemID == "" && results[0].SystemID != "" {
-				systemID = results[0].SystemID
-			}
-			if results[0].Name != "" {
-				displayName = results[0].Name
-			}
+	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
+		ctx, cancel := activeMediaLookupContext(params.Context)
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(
+			ctx, []systemdefs.System{{ID: systemID}}, params.Path,
+		)
+		cancel()
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			displayName = results[0].Name
 		}
 	}
 
@@ -224,7 +274,38 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		activeMedia.SystemID, activeMedia.SystemName, activeMedia.Path, activeMedia.Name, activeMedia.LauncherID,
 	)
 
-	params.SetActiveMedia(activeMedia)
+	publishActiveMedia(activeMedia)
 
 	return nil
+}
+
+func waitForBlockingProcess(
+	platform Platform,
+	proc *os.Process,
+	setActiveMedia func(*models.ActiveMedia),
+	path string,
+) {
+	var waitErr error
+	if waiter, ok := platform.(TrackedProcessWaiter); ok {
+		waitErr = waiter.WaitTrackedProcess(proc)
+	} else {
+		_, waitErr = proc.Wait()
+	}
+	if waitErr != nil {
+		log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", path)
+	} else {
+		log.Debug().Msgf("blocking process completed for: %s", path)
+	}
+
+	if clearer, ok := platform.(TrackedProcessMediaClearer); ok {
+		if clearer.ClearTrackedProcessMedia(proc) {
+			log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+		} else {
+			log.Debug().Msgf("skipped stale active-media clear after blocking process ended: %s", path)
+		}
+		return
+	}
+
+	setActiveMedia(nil)
+	log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
 }

@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -91,7 +92,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd.ExpectedCalls = nil
 		opts := command.StartOptions{HideWindow: true}
 		args := []string{"/c", "start", "steam://rungameid/730"}
-		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", args).Return(nil)
+		mockCmd.On("StartWithOptions", mock.Anything, opts, helpers.ComSpec(), args).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
@@ -108,7 +109,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd.ExpectedCalls = nil
 		opts := command.StartOptions{HideWindow: true}
 		args := []string{"/c", "start", "steam://rungameid/730"}
-		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", args).Return(nil)
+		mockCmd.On("StartWithOptions", mock.Anything, opts, helpers.ComSpec(), args).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 

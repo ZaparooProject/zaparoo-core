@@ -81,6 +81,9 @@ func setupTraceBenchMediaDB(b *testing.B, rows int, collector *sqlTraceCollector
 	registerTraceBenchDriverOnce.Do(func() {
 		sql.Register(sqliteTraceBenchDriver, &sqlite3.SQLiteDriver{
 			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				if err := registerMediaSQLiteCollations(conn); err != nil {
+					return err
+				}
 				return conn.SetTrace(&sqlite3.TraceConfig{
 					Callback:  collector.callback,
 					EventMask: sqlite3.TraceStmt | sqlite3.TraceProfile,
@@ -96,7 +99,8 @@ func setupTraceBenchMediaDB(b *testing.B, rows int, collector *sqlTraceCollector
 	require.NoError(b, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	mediaDB := &MediaDB{sql: sqlDB, dbPath: dbPath, ctx: context.Background()}
+	mediaDB := &MediaDB{dbPath: dbPath, ctx: context.Background()}
+	mediaDB.sql.Store(sqlDB)
 	require.NoError(b, mediaDB.Allocate())
 	seedBenchScraperDB(b, mediaDB, rows)
 

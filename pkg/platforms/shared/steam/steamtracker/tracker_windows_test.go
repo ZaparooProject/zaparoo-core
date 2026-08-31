@@ -83,7 +83,7 @@ func TestTracker_OnAppIDChange_GameStop(t *testing.T) {
 
 	tracker := New(
 		nil,
-		func(appID int) {
+		func(appID, _ int) {
 			stopCalled <- appID
 		},
 	)

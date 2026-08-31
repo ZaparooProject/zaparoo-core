@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -47,8 +48,9 @@ import (
 // full launcher support including Kodi, Steam, Lutris, and Heroic.
 type Platform struct {
 	*linuxbase.Base
-	procScanner  *procscanner.Scanner
-	steamTracker *steamtracker.PlatformIntegration
+	procScanner              *procscanner.Scanner
+	steamTracker             *steamtracker.PlatformIntegration
+	emulationOptionsOverride *linuxemu.Options
 }
 
 // NewPlatform creates a new Linux platform instance.
@@ -85,25 +87,21 @@ func (p *Platform) StartPost(
 		return err
 	}
 
-	// Only start Steam tracker if Steam is installed
 	steamClient := steam.NewClient(steam.DefaultLinuxOptions())
-	if steamClient.IsSteamInstalled(cfg) {
-		p.procScanner = procscanner.New()
-		if err := p.procScanner.Start(); err != nil {
-			log.Warn().Err(err).Msg("process scanner failed to start")
-			return nil
-		}
-
-		p.steamTracker = steamtracker.NewPlatformIntegration(
-			p.procScanner,
-			p.Base,
-			activeMedia,
-			setActiveMedia,
-		)
-		p.steamTracker.Start()
-	} else {
-		log.Debug().Msg("steam not installed, skipping steam tracker")
+	if !steamClient.IsSteamInstalled(cfg) {
+		log.Debug().Msg("Steam not installed, skipping process scanner")
+		return nil
 	}
+
+	p.procScanner = procscanner.New()
+	if err := p.procScanner.Start(); err != nil {
+		log.Warn().Err(err).Msg("process scanner failed to start")
+		return nil
+	}
+	p.steamTracker = steamtracker.NewPlatformIntegration(
+		p.procScanner, p.Base, activeMedia, setActiveMedia, steamClient.FindSteamDir(cfg),
+	)
+	p.steamTracker.Start()
 
 	return nil
 }
@@ -140,10 +138,13 @@ func (p *Platform) LaunchMedia(
 }
 
 // Launchers returns the available launchers for Linux.
-// Linux supports the full set of launchers: Kodi (8 types), Steam,
-// Lutris, Heroic, WebBrowser, and Generic scripts.
+// Linux supports Kodi, Steam, native/Flatpak game stores, web URLs,
+// generic scripts, and discovered emulator integrations.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	ls := []platforms.Launcher{
+	steamLauncher := steam.NewSteamLauncher(steam.DefaultLinuxOptions())
+	steamLauncher.Lifecycle = platforms.LifecycleExternal
+	ls := make([]platforms.Launcher, 0, 64)
+	ls = append(ls, []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
@@ -155,7 +156,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiTVShowLauncher(),
 
 		// Steam - support native, Flatpak, and Snap
-		steam.NewSteamLauncher(steam.DefaultLinuxOptions()),
+		steamLauncher,
 
 		// Lutris - check both native and Flatpak
 		launchers.NewLutrisLauncher(launchers.LutrisOptions{
@@ -167,12 +168,29 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			CheckFlatpak: true,
 		}),
 
+		// Additional Linux game managers and remote streaming
+		launchers.NewBottlesLauncher(),
+		launchers.NewFaugusLauncher(),
+		launchers.NewMoonlightLauncher(),
+
 		// Web browser for URLs
 		launchers.NewWebBrowserLauncher(),
 
 		// Generic scripts
 		launchers.NewGenericLauncher(),
-	}
+	}...)
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
+	emuOpts := p.emulationOptions()
+	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
+	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
+	return append(custom, ls...)
+}
+
+func (p *Platform) emulationOptions() linuxemu.Options {
+	if p.emulationOptionsOverride != nil {
+		return *p.emulationOptionsOverride
+	}
+	return linuxemu.DesktopEmulationOptions(nil, linuxRetroArchOptions())
 }

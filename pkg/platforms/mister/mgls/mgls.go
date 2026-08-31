@@ -24,8 +24,8 @@ package mgls
 import (
 	"bytes"
 	"encoding/xml"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	s "strings"
@@ -35,9 +35,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	mglgen "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgl"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
+
+type commandInterfaceWriter struct {
+	open func() (io.WriteCloser, error)
+}
 
 // MRA represents the structure of a MiSTer Arcade ROM file.
 type MRA struct {
@@ -45,6 +51,32 @@ type MRA struct {
 	SetName string   `xml:"setname"`
 	Name    string   `xml:"name"`
 	Rbf     string   `xml:"rbf"`
+}
+
+func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
+	return commandInterfaceWriter{
+		open: func() (io.WriteCloser, error) {
+			return fs.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
+		},
+	}
+}
+
+func (w commandInterfaceWriter) Write(p []byte) (int, error) {
+	cmd, err := w.open()
+	if err != nil {
+		return 0, fmt.Errorf("failed to open command interface: %w", err)
+	}
+	defer func() {
+		if closeErr := cmd.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close command interface")
+		}
+	}()
+
+	n, err := cmd.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write command interface: %w", err)
+	}
+	return n, nil
 }
 
 // ReadMRA parses an MRA file and returns the MRA struct with extracted metadata.
@@ -71,60 +103,11 @@ func ReadMRA(path string) (MRA, error) {
 	return mra, nil
 }
 
-// xmlEscapeAttr escapes XML-reserved characters for use in attribute values.
-// MiSTer's MGL parser (SXMLC) decodes these entities when reading paths.
-func xmlEscapeAttr(v string) string {
-	r := s.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-	)
-	return r.Replace(v)
-}
-
+// GenerateMgl is retained for compatibility. New dependency-light callers
+// should use mgl.Generate directly.
 func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
-	if core == nil {
-		return "", errors.New("no core supplied for MGL generation")
-	}
-
-	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
-
-	if core.SetName != "" {
-		sameDir := ""
-		if core.SetNameSameDir {
-			sameDir = " same_dir=\"1\""
-		}
-
-		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, xmlEscapeAttr(core.SetName))
-	}
-
-	if path == "" {
-		mgl += "</mistergamedescription>"
-		return mgl, nil
-	} else if override != "" {
-		mgl += override
-		mgl += "</mistergamedescription>"
-		return mgl, nil
-	}
-
-	mglDef, err := cores.PathToMGLDef(core, path)
-	if err != nil {
-		return "", fmt.Errorf("failed to get MGL definition: %w", err)
-	}
-
-	mgl += fmt.Sprintf(
-		"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
-		mglDef.Delay, mglDef.Method, mglDef.Index, xmlEscapeAttr(path),
-	)
-
-	if mglDef.ResetDelay > 0 {
-		mgl += fmt.Sprintf("\t<reset delay=\"%d\" hold=\"%d\"/>\n",
-			mglDef.ResetDelay, mglDef.ResetHold)
-	}
-
-	mgl += "</mistergamedescription>"
-	return mgl, nil
+	//nolint:wrapcheck // Compatibility wrapper preserves the dependency-light package error.
+	return mglgen.Generate(core, rbfPath, path, override)
 }
 
 func writeTempFile(content string) (string, error) {
@@ -154,15 +137,15 @@ func validateLoadCorePath(path string) error {
 	return nil
 }
 
-func launchFile(path string) error {
+func launchFileWithDefaults(path string) error {
+	fs := afero.NewOsFs()
+	return launchFile(fs, newCommandInterfaceWriter(fs), path)
+}
+
+func launchFile(fs afero.Fs, commandWriter io.Writer, path string) error {
 	validationErr := validateLoadCorePath(path)
 	if validationErr != nil {
 		return validationErr
-	}
-
-	_, err := os.Stat(misterconfig.CmdInterface)
-	if err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	lowerPath := s.ToLower(path)
@@ -170,19 +153,13 @@ func launchFile(path string) error {
 		return fmt.Errorf("not a valid launch file: %s", path)
 	}
 
-	log.Debug().Str("file", path).Msg("sending to command interface")
-	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("failed to open command interface: %w", err)
+	if _, err := fs.Stat(path); err != nil {
+		return fmt.Errorf("launch file not accessible: %w", err)
 	}
-	defer func() {
-		if err := cmd.Close(); err != nil {
-			log.Error().Err(err).Msg("failed to close command interface")
-		}
-	}()
 
+	log.Debug().Str("file", path).Msg("sending to command interface")
 	command := "load_core " + path
-	if _, err := fmt.Fprintln(cmd, command); err != nil {
+	if _, err := fmt.Fprintln(commandWriter, command); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 	log.Info().Str("command", command).Msg("command interface launch request sent")
@@ -216,7 +193,7 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	return launchFile(tmpFile)
+	return launchFileWithDefaults(tmpFile)
 }
 
 // LaunchShortCore attempts to launch a core with a short path, as per what's
@@ -232,7 +209,7 @@ func LaunchShortCore(path string) error {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
-	return launchFile(tmpFile)
+	return launchFileWithDefaults(tmpFile)
 }
 
 // writeCurrentPath writes the CURRENTPATH, FULLPATH, and FILESELECT files
@@ -279,14 +256,14 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 
 	switch ext {
 	case ".mra":
-		err := launchFile(path)
+		err := launchFileWithDefaults(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 		writeCurrentPath(path)
 		log.Debug().Str("path", path).Msg("arcade game launched via MRA")
 	case ".mgl":
-		err := launchFile(path)
+		err := launchFileWithDefaults(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
@@ -324,7 +301,17 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 	if err != nil {
 		return fmt.Errorf("resolving core RBF: %w", err)
 	}
-	path := rbfInfo.Path
+	return loadCoreAtPath(rbfInfo.Path)
+}
+
+// LaunchCoreAtRBF loads an already-resolved RBF directly, bypassing system-ID
+// based resolution. Used when a caller has picked a specific launcher/alt core
+// rather than the system's default.
+func LaunchCoreAtRBF(rbfInfo cores.RBFInfo) error {
+	return loadCoreAtPath(rbfInfo.Path)
+}
+
+func loadCoreAtPath(path string) error {
 	validationErr := validateLoadCorePath(path)
 	if validationErr != nil {
 		return validationErr
@@ -358,19 +345,19 @@ func LaunchBasicFile(path string) error {
 	ext := s.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".mra":
-		err = launchFile(path)
+		err = launchFileWithDefaults(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 		writeCurrentPath(path)
 	case ".mgl":
-		err = launchFile(path)
+		err = launchFileWithDefaults(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 		isGame = true
 	case ".rbf":
-		err = launchFile(path)
+		err = launchFileWithDefaults(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}

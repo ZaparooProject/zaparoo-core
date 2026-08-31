@@ -22,15 +22,444 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
+
+// imagePropertyValuePrefix is the common prefix for all image property tag
+// values stored in the Tags table (e.g. "image-boxart", "image-screenshot").
+// The "property:" type part lives in TagTypes.Type; Tags.Tag holds only the
+// value, so the LIKE filter uses this value-only prefix paired with a
+// TagTypes join on tt.Type = tags.TagTypeProperty.
+const imagePropertyValuePrefix = "image-"
+
+type coverPropertyScope uint8
+
+type coverAvailabilityIndex struct {
+	mediaIDs []int64
+	titleIDs []int64
+}
+
+type coverAvailabilityCacheEntry struct {
+	index      *coverAvailabilityIndex
+	generation uint64
+	building   bool
+}
+
+const (
+	coverPropertyScopeMedia coverPropertyScope = iota
+	coverPropertyScopeTitle
+
+	browseSortRankPrefixAsc  = "rank-prefix-asc"
+	browseSortRankPrefixDesc = "rank-prefix-desc"
+	browseSortDatePrefixAsc  = "date-prefix-asc"
+	browseSortDatePrefixDesc = "date-prefix-desc"
+
+	browseSlowCoverFlagsThreshold = 2 * time.Second
+	browseSlowFilesThreshold      = 5 * time.Second
+)
+
+// browseCacheState describes whether the browse cache can serve a query and, if
+// so, whether it is up to date. A populated cache is served even when stale (its
+// counts may lag behind the latest media changes) because that is far cheaper than
+// the full media scan the fallback performs on a large library, and a background
+// refresh corrects the drift. Only an absent cache forces the fallback.
+type browseCacheState int
+
+const (
+	// browseCacheAbsent means no cache rows exist (e.g. a brand-new DB mid first
+	// index, or an unexpected version that predates the current table schema).
+	// Callers must use the media-scan fallback.
+	browseCacheAbsent browseCacheState = iota
+	// browseCacheStale means cache rows exist but were invalidated by a media
+	// change. Callers serve from the cache and a refresh should be scheduled.
+	browseCacheStale
+	// browseCacheFresh means cache rows exist and match the current schema
+	// version. Callers serve from the cache with no refresh needed.
+	browseCacheFresh
+)
+
+// browseRouteCountSubTimeout bounds each per-route COUNT(*) in the cache-absent
+// media-scan fallback. A broad system root (e.g. one covering ~1M files) can
+// exceed the whole request budget on a cold SD card; capping each route keeps
+// one slow route from starving the rest or blowing the request deadline, and
+// lets the route degrade to a cheap presence probe instead of failing the entire
+// browse. browseRouteProbeSubTimeout bounds that presence probe. Both are vars
+// (not consts) so tests can shrink them to force the degrade path deterministically.
+var (
+	browseRouteCountSubTimeout = 4 * time.Second
+	browseRouteProbeSubTimeout = 2 * time.Second
+)
+
+// utilityTagCache memoises resolved utility tag DBIDs per DB connection so
+// fetchAndAttachUtilityTags avoids 2 PK-lookup queries per browse page.
+// Keyed by the db handle itself so closed handles cannot be confused with later
+// handles that reuse the same pointer address. Cleared by clearUtilityTagCache
+// when utility tag DBIDs can change.
+var (
+	utilityTagCacheMu  syncutil.RWMutex
+	utilityTagCacheMap map[sqlQueryable]map[int64]database.TagInfo
+)
+
+func clearUtilityTagCache() {
+	utilityTagCacheMu.Lock()
+	defer utilityTagCacheMu.Unlock()
+	utilityTagCacheMap = nil
+}
+
+func clearUtilityTagCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	utilityTagCacheMu.Lock()
+	defer utilityTagCacheMu.Unlock()
+	if utilityTagCacheMap == nil {
+		return
+	}
+	delete(utilityTagCacheMap, db)
+	if len(utilityTagCacheMap) == 0 {
+		utilityTagCacheMap = nil
+	}
+}
+
+// imagePropertyTagCache memoises image property tag DBIDs per DB handle so
+// fetchAndAttachCoverFlags avoids joining Tags/TagTypes and LIKE-scanning on
+// every browse page. Cleared with utility tags because both depend on tag DBIDs.
+var (
+	imagePropertyTagCacheMu  syncutil.RWMutex
+	imagePropertyTagCacheMap map[sqlQueryable][]int64
+)
+
+func clearImagePropertyTagCache() {
+	imagePropertyTagCacheMu.Lock()
+	defer imagePropertyTagCacheMu.Unlock()
+	imagePropertyTagCacheMap = nil
+}
+
+func clearImagePropertyTagCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	imagePropertyTagCacheMu.Lock()
+	defer imagePropertyTagCacheMu.Unlock()
+	if imagePropertyTagCacheMap == nil {
+		return
+	}
+	delete(imagePropertyTagCacheMap, db)
+	if len(imagePropertyTagCacheMap) == 0 {
+		imagePropertyTagCacheMap = nil
+	}
+}
+
+// coverAvailabilityCache stores immutable sorted ID sets per database handle.
+// Production database handles are registered with an owner so first use can
+// build in the background while the request uses the bounded SQL fallback.
+var (
+	coverAvailabilityCacheMu  syncutil.RWMutex
+	coverAvailabilityCacheMap map[sqlQueryable]*coverAvailabilityCacheEntry
+	coverAvailabilityOwnerMap map[sqlQueryable]*MediaDB
+)
+
+func clearCoverAvailabilityCache() {
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	coverAvailabilityCacheMap = nil
+}
+
+func clearCoverAvailabilityCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		return
+	}
+	entry.generation++
+	entry.index = nil
+}
+
+func registerCoverAvailabilityCacheOwner(db sqlQueryable, owner *MediaDB) {
+	if db == nil || owner == nil {
+		return
+	}
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	if coverAvailabilityOwnerMap == nil {
+		coverAvailabilityOwnerMap = make(map[sqlQueryable]*MediaDB)
+	}
+	coverAvailabilityOwnerMap[db] = owner
+}
+
+func unregisterCoverAvailabilityCacheOwner(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	delete(coverAvailabilityOwnerMap, db)
+	delete(coverAvailabilityCacheMap, db)
+}
+
+func cachedCoverAvailabilityIndex(db sqlQueryable) *coverAvailabilityIndex {
+	coverAvailabilityCacheMu.RLock()
+	defer coverAvailabilityCacheMu.RUnlock()
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		return nil
+	}
+	return entry.index
+}
+
+func ensureCoverAvailabilityIndexBuild(db sqlQueryable, imageTagIDs []int64) {
+	coverAvailabilityCacheMu.Lock()
+	owner := coverAvailabilityOwnerMap[db]
+	if owner == nil {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	// Avoid a full property-index scan while indexing or optimization owns the
+	// database. Requests keep using the bounded SQL fallback and a later request
+	// starts the build once background work is idle.
+	if owner.HasBackgroundOperations() {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	if coverAvailabilityCacheMap == nil {
+		coverAvailabilityCacheMap = make(map[sqlQueryable]*coverAvailabilityCacheEntry)
+	}
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		entry = &coverAvailabilityCacheEntry{}
+		coverAvailabilityCacheMap[db] = entry
+	}
+	if entry.index != nil || entry.building {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	entry.building = true
+	generation := entry.generation
+	coverAvailabilityCacheMu.Unlock()
+
+	tagIDs := append([]int64(nil), imageTagIDs...)
+	owner.TrackBackgroundOperation()
+	go func() {
+		defer owner.BackgroundOperationDone()
+		index, err := buildCoverAvailabilityIndex(context.WithoutCancel(owner.ctx), db, tagIDs)
+
+		coverAvailabilityCacheMu.Lock()
+		current := coverAvailabilityCacheMap[db]
+		if current == entry {
+			entry.building = false
+			if err == nil && entry.generation == generation {
+				entry.index = index
+			}
+		}
+		coverAvailabilityCacheMu.Unlock()
+
+		if err != nil {
+			log.Debug().Err(err).Msg("cover availability index build failed; retaining SQL fallback")
+		}
+	}()
+}
+
+func (index *coverAvailabilityIndex) hasMedia(id int64) bool {
+	return sortedInt64sContain(index.mediaIDs, id)
+}
+
+func (index *coverAvailabilityIndex) hasTitle(id int64) bool {
+	return sortedInt64sContain(index.titleIDs, id)
+}
+
+func sortedInt64sContain(ids []int64, id int64) bool {
+	if id <= 0 {
+		return false
+	}
+	pos := sort.Search(len(ids), func(i int) bool { return ids[i] >= id })
+	return pos < len(ids) && ids[pos] == id
+}
+
+// prefixPolicyCache memoises detected browse prefix policies per DB handle and
+// directory. Detection reads every Media.Path in the directory, which costs
+// 40-70ms per browse on SD-card hardware; the policy only changes when media
+// is reindexed, so it is cached until invalidateCaches clears it. Keyed by the
+// db handle itself for the same reason as utilityTagCacheMap.
+var (
+	prefixPolicyCacheMu  syncutil.RWMutex
+	prefixPolicyCacheMap map[sqlQueryable]map[string]browseprefix.Policy
+)
+
+func clearPrefixPolicyCache() {
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	prefixPolicyCacheMap = nil
+}
+
+func clearPrefixPolicyCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	if prefixPolicyCacheMap == nil {
+		return
+	}
+	delete(prefixPolicyCacheMap, db)
+	if len(prefixPolicyCacheMap) == 0 {
+		prefixPolicyCacheMap = nil
+	}
+}
+
+func prefixPolicyCacheKey(pathPrefix string, systems []systemdefs.System) string {
+	if len(systems) == 0 {
+		return pathPrefix
+	}
+	ids := make([]string, len(systems))
+	for i, sys := range systems {
+		ids[i] = sys.ID
+	}
+	sort.Strings(ids)
+	return pathPrefix + "\x00" + strings.Join(ids, "\x00")
+}
+
+func cachedPrefixPolicy(db sqlQueryable, key string) (browseprefix.Policy, bool) {
+	prefixPolicyCacheMu.RLock()
+	defer prefixPolicyCacheMu.RUnlock()
+	if prefixPolicyCacheMap == nil {
+		return browseprefix.Policy{}, false
+	}
+	policy, ok := prefixPolicyCacheMap[db][key]
+	return policy, ok
+}
+
+func storePrefixPolicy(db sqlQueryable, key string, policy browseprefix.Policy) {
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	if prefixPolicyCacheMap == nil {
+		prefixPolicyCacheMap = make(map[sqlQueryable]map[string]browseprefix.Policy)
+	}
+	if prefixPolicyCacheMap[db] == nil {
+		prefixPolicyCacheMap[db] = make(map[string]browseprefix.Policy)
+	}
+	prefixPolicyCacheMap[db][key] = policy
+}
+
+// resolveUtilityTagDBIDs returns a map from DB tag DBID → TagInfo for each
+// entry in tags.UtilityTags. Results are memoised per db handle so each
+// MediaDB instance (or test mock) has its own cache slot, and
+// clearUtilityTagCache clears all slots when utility tag DBIDs can change.
+func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]database.TagInfo, error) {
+	utilityTagCacheMu.RLock()
+	if utilityTagCacheMap != nil {
+		if cached, ok := utilityTagCacheMap[db]; ok {
+			utilityTagCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	utilityTagCacheMu.RUnlock()
+
+	tagInfoByDBID := make(map[int64]database.TagInfo, len(tags.UtilityTags))
+	for _, ct := range tags.UtilityTags {
+		tagTypeRow, err := sqlFindTagType(ctx, db, database.TagType{Type: string(ct.Type)})
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("browse utility tags: look up tag type %q: %w", ct.Type, err)
+			}
+			continue
+		}
+		tagRow, err := sqlFindTag(ctx, db, database.Tag{
+			TypeDBID: tagTypeRow.DBID,
+			Tag:      string(ct.Value),
+		})
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("browse utility tags: look up tag %q: %w", ct.Value, err)
+			}
+			continue
+		}
+		tagInfoByDBID[tagRow.DBID] = database.TagInfo{
+			Tag:  string(ct.Value),
+			Type: string(ct.Type),
+		}
+	}
+
+	utilityTagCacheMu.Lock()
+	if utilityTagCacheMap == nil {
+		utilityTagCacheMap = make(map[sqlQueryable]map[int64]database.TagInfo)
+	}
+	utilityTagCacheMap[db] = tagInfoByDBID
+	utilityTagCacheMu.Unlock()
+	return tagInfoByDBID, nil
+}
+
+func resolveImagePropertyTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
+	imagePropertyTagCacheMu.RLock()
+	if imagePropertyTagCacheMap != nil {
+		if cached, ok := imagePropertyTagCacheMap[db]; ok {
+			imagePropertyTagCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	imagePropertyTagCacheMu.RUnlock()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT t.DBID
+		FROM Tags t
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE tt.Type = ? AND t.Tag LIKE ?
+		ORDER BY t.DBID`, string(tags.TagTypeProperty), imagePropertyValuePrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("browse image property tags query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tagIDs []int64
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("browse image property tags scan: %w", scanErr)
+		}
+		tagIDs = append(tagIDs, id)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse image property tags rows: %w", rowsErr)
+	}
+
+	// Never cache an empty result. The image-* property tags are seeded during
+	// indexing (SeedCanonicalTags), so a browse that runs before they exist would
+	// otherwise pin an empty set for the process lifetime — making every entry report
+	// HasCover=false until the process restarts, since the scrape/index-completion
+	// path does not invalidate this cache. Re-querying while empty is cheap; once the
+	// tags exist the non-empty result is cached normally.
+	if len(tagIDs) == 0 {
+		return tagIDs, nil
+	}
+
+	imagePropertyTagCacheMu.Lock()
+	if imagePropertyTagCacheMap == nil {
+		imagePropertyTagCacheMap = make(map[sqlQueryable][]int64)
+	}
+	imagePropertyTagCacheMap[db] = tagIDs
+	imagePropertyTagCacheMu.Unlock()
+	return tagIDs, nil
+}
 
 func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
 	if len(systems) == 0 {
@@ -47,31 +476,56 @@ func browseSystemFilterClause(column string, systems []systemdefs.System) (claus
 	return column + " IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
+// sqlBrowseCacheServeable reports whether the browse cache should be used to
+// answer a query (either fresh or stale-but-present).
+func sqlBrowseCacheServeable(state browseCacheState) bool {
+	return state != browseCacheAbsent
+}
+
+// sqlBrowseCacheReady reports whether a browse query can be served from the cache.
+// It returns true for both fresh and stale-but-present caches; see
+// sqlBrowseCacheStatus for the finer-grained state used to trigger refreshes.
 func sqlBrowseCacheReady(ctx context.Context, db sqlQueryable) (bool, error) {
+	state, err := sqlBrowseCacheStatus(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	return sqlBrowseCacheServeable(state), nil
+}
+
+// sqlBrowseCacheStatus resolves the current browse cache state. A cache is
+// serveable only when its version is recognised (current schema version or the
+// invalidation sentinel, which shares the same table schema) AND rows exist. Any
+// other version value is treated as absent so the fallback rebuilds it rather than
+// serving rows from a schema that may not match.
+func sqlBrowseCacheStatus(ctx context.Context, db sqlQueryable) (browseCacheState, error) {
 	var version string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
 		DBConfigBrowseIndexVersion,
 	).Scan(&version)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return browseCacheAbsent, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse cache readiness query: %w", err)
+		return browseCacheAbsent, fmt.Errorf("browse cache readiness query: %w", err)
 	}
-	if version != browseCacheSchemaVersion {
-		return false, nil
+	if version != browseCacheSchemaVersion && version != browseCacheInvalidatedVersion {
+		return browseCacheAbsent, nil
 	}
 
 	var exists int
 	err = db.QueryRowContext(ctx, `SELECT 1 FROM BrowseDirs LIMIT 1`).Scan(&exists)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return browseCacheAbsent, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse cache table readiness query: %w", err)
+		return browseCacheAbsent, fmt.Errorf("browse cache table readiness query: %w", err)
 	}
-	return true, nil
+	if version == browseCacheSchemaVersion {
+		return browseCacheFresh, nil
+	}
+	return browseCacheStale, nil
 }
 
 func sqlBrowseDirID(ctx context.Context, db sqlQueryable, dirPath string) (id int64, ok bool, err error) {
@@ -92,18 +546,29 @@ func splitBrowseSystemIDs(ids string) []string {
 	return uniqueBrowseSystemIDs(strings.Split(ids, ","))
 }
 
+func browseOverlaySources(overlay *database.BrowseOverlay) []database.BrowseSource {
+	if overlay == nil {
+		return nil
+	}
+	return overlay.Sources
+}
+
 func sqlBrowseDirectories(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayDirectories(ctx, db, opts)
+	}
+
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 	if ready {
-		results, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
-		if cacheErr != nil || len(results) > 0 {
+		results, parentFound, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
+		if cacheErr != nil || parentFound {
 			return results, cacheErr
 		}
 
@@ -123,6 +588,265 @@ func sqlBrowseDirectories(
 	return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
 }
 
+// browseOverlayDirectFilesCTE names the files sitting directly in each route, so
+// a directory can be dropped when a higher-priority route already provides that
+// name as a file. Shared by both overlay directory statements; the caller
+// appends the system filter's args when systemClause is non-empty.
+func browseOverlayDirectFilesCTE(systemClause string) string {
+	query := `direct_files AS (
+			SELECT sources.priority,
+				substr(m.Path, length(m.ParentDir) + 1) AS name
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE m.IsMissing = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+	}
+	return query + `
+		)`
+}
+
+// browseOverlayDirectoryTail collapses the candidate directories to one entry
+// per name, letting the highest-priority route win, and drops any shadowed by a
+// higher-priority route's direct file. Identical for both statements: only the
+// directory_candidates CTE above it differs between them.
+const browseOverlayDirectoryTail = `ranked AS (
+			SELECT directory_candidates.*,
+				ROW_NUMBER() OVER (PARTITION BY name ORDER BY priority ASC) AS source_rank
+			FROM directory_candidates
+			WHERE NOT EXISTS (
+				SELECT 1 FROM direct_files
+				WHERE direct_files.priority < directory_candidates.priority
+					AND direct_files.name = directory_candidates.name
+			)
+		)
+		SELECT name, file_count, system_ids, parent_dir || name
+		FROM ranked
+		WHERE source_rank = 1`
+
+// sqlBrowseOverlayDirectories lists the merged immediate subdirectories of an
+// overlay's routes, preferring the browse cache and falling back to Media.
+//
+// The overlay branch used to go straight to Media while every other browse entry
+// point routed through the cache. Recomputing a route's child directories means
+// scanning every media row beneath it: on the #1279 device database that is
+// 66,011 rows for C64, and BrowseDirCount runs the same statement a second time
+// per page just to take len(dirs). BrowseDirCounts already holds those names and
+// counts, built from the same IsMissing = 0 rows, so the two agree by
+// construction.
+func sqlBrowseOverlayDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	sources := browseOverlaySources(opts.Overlay)
+	parentIDs, usable, err := browseOverlayCacheParents(ctx, db, sources, opts.Systems)
+	if err != nil {
+		return nil, err
+	}
+	if usable {
+		return sqlBrowseOverlayDirectoriesFromCache(ctx, db, opts, sources, parentIDs)
+	}
+	return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
+}
+
+// browseOverlayCacheParents resolves each directory-contributing route to its
+// BrowseDirs row and reports whether the cache can answer the listing.
+//
+// A route missing from BrowseDirs does not mean "this route has no
+// subdirectories" — it means the cache has never seen that path, and serving
+// from it would silently drop directories Media still holds. Any such route
+// sends the whole statement to the fallback, matching how
+// sqlBrowseDirectories treats a parent it cannot find.
+func browseOverlayCacheParents(
+	ctx context.Context,
+	db sqlQueryable,
+	sources []database.BrowseSource,
+	systems []systemdefs.System,
+) (parentIDs []int64, usable bool, err error) {
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil || !ready {
+		return nil, false, err
+	}
+	covered, err := sqlBrowseCacheCoversSystems(ctx, db, systems)
+	if err != nil || !covered {
+		return nil, false, err
+	}
+
+	parentIDs = make([]int64, len(sources))
+	for i := range sources {
+		if !sources[i].IncludeDirs {
+			continue
+		}
+		id, ok, dirErr := sqlBrowseDirID(ctx, db, browseRouteCacheKey(sources[i].PathPrefix))
+		if dirErr != nil {
+			return nil, false, dirErr
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		parentIDs[i] = id
+	}
+	return parentIDs, true, nil
+}
+
+func sqlBrowseOverlayDirectoriesFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+	sources []database.BrowseSource,
+	parentIDs []int64,
+) ([]database.BrowseDirectoryResult, error) {
+	query, args := browseOverlayDirectoriesCacheQuery(opts, sources, parentIDs)
+	return runBrowseOverlayDirectories(ctx, db, query, args, opts)
+}
+
+// browseOverlayDirectoriesCacheQuery builds the cache-backed statement and its
+// arguments. Separate from the exec so the query-plan regression test measures
+// the statement production actually runs rather than a copy of it, matching
+// browseOverlayFileCountQuery.
+func browseOverlayDirectoriesCacheQuery(
+	opts database.BrowseDirectoriesOptions,
+	sources []database.BrowseSource,
+	parentIDs []int64,
+) (query string, args []any) {
+	values := make([]string, len(sources))
+	args = make([]any, 0, len(sources)*4+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, parentIDs[i], i, sources[i].IncludeDirs)
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	query = `WITH sources(parent_dir, parent_id, priority, include_dirs) AS (VALUES ` +
+		strings.Join(values, ",") + `),
+		directory_candidates AS (
+			SELECT sources.parent_dir,
+				sources.priority,
+				child.Name AS name,
+				SUM(counts.FileCount) AS file_count,
+				GROUP_CONCAT(DISTINCT s.SystemID) AS system_ids
+			FROM sources
+			INNER JOIN BrowseDirCounts counts
+				ON counts.ParentDirDBID = sources.parent_id
+				-- v3 self rows are the parent's own direct-file count, not a child.
+				AND counts.ChildDirDBID != counts.ParentDirDBID
+			INNER JOIN BrowseDirs child ON child.DBID = counts.ChildDirDBID
+			INNER JOIN Systems s ON s.DBID = counts.SystemDBID
+			WHERE sources.include_dirs = 1 AND child.IsVirtual = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+			GROUP BY sources.parent_dir, sources.priority, child.DBID, child.Name
+		), ` + browseOverlayDirectFilesCTE(systemClause)
+	if systemClause != "" {
+		args = append(args, systemArgs...)
+	}
+	return query + `, ` + browseOverlayDirectoryTail, args
+}
+
+func sqlBrowseOverlayDirectoriesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	query, args := browseOverlayDirectoriesMediaQuery(opts)
+	return runBrowseOverlayDirectories(ctx, db, query, args, opts)
+}
+
+// browseOverlayDirectoriesMediaQuery builds the fallback statement, which
+// derives the child directories by scanning every media row beneath each route.
+// Factored out alongside browseOverlayDirectoriesCacheQuery so the plan test can
+// compare the two shapes.
+func browseOverlayDirectoriesMediaQuery(
+	opts database.BrowseDirectoriesOptions,
+) (query string, args []any) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args = make([]any, 0, len(sources)*3+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	query = `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		matched_dirs AS (
+			SELECT sources.parent_dir,
+				sources.priority,
+				substr(m.Path, length(sources.parent_dir) + 1) AS rest,
+				s.SystemID
+			FROM sources
+			INNER JOIN Media m
+				ON m.Path >= sources.parent_dir
+				AND m.Path < sources.parent_dir || char(1114111)
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE sources.include_dirs = 1 AND m.IsMissing = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+		), directory_candidates AS (
+			SELECT parent_dir,
+				priority,
+				substr(rest, 1, instr(rest, '/') - 1) AS name,
+				COUNT(*) AS file_count,
+				GROUP_CONCAT(DISTINCT SystemID) AS system_ids
+			FROM matched_dirs
+			WHERE instr(rest, '/') > 0
+			GROUP BY parent_dir, priority, name
+		), ` + browseOverlayDirectFilesCTE(systemClause)
+	if systemClause != "" {
+		args = append(args, systemArgs...)
+	}
+	return query + `, ` + browseOverlayDirectoryTail, args
+}
+
+// runBrowseOverlayDirectories appends the paging clauses both overlay directory
+// statements end with and reads the rows.
+func runBrowseOverlayDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	if opts.AfterName != "" {
+		query += ` AND ` + browseNaturalSortExpr("name") + ` > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY ` + browseNaturalSortExpr("name") + ` ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse overlay directories query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseDirectoryResult
+	for rows.Next() {
+		var result database.BrowseDirectoryResult
+		var systemIDs string
+		if scanErr := rows.Scan(&result.Name, &result.FileCount, &systemIDs, &result.Path); scanErr != nil {
+			return nil, fmt.Errorf("browse overlay directories scan: %w", scanErr)
+		}
+		result.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, result)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse overlay directories rows: %w", rowsErr)
+	}
+	return results, nil
+}
+
 func sqlBrowseDirectoriesFromMediaFallback(
 	ctx context.Context,
 	db sqlQueryable,
@@ -131,7 +855,16 @@ func sqlBrowseDirectoriesFromMediaFallback(
 	if len(opts.Systems) > 0 {
 		return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
 	}
-	return sqlBrowseDirectoriesFromMedia(ctx, db, opts.PathPrefix)
+	return sqlBrowseDirectoriesFromMedia(ctx, db, opts)
+}
+
+// browseDirLimitClause returns a trailing LIMIT clause and its args for a
+// directory listing. A limit of 0 means no limit (full listing).
+func browseDirLimitClause(limit int) (clause string, args []any) {
+	if limit > 0 {
+		return " LIMIT ?", []any{limit}
+	}
+	return "", nil
 }
 
 func browseSystemIDsForLog(systems []systemdefs.System) []string {
@@ -149,13 +882,17 @@ func sqlBrowseDirectoriesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
-) ([]database.BrowseDirectoryResult, error) {
+) ([]database.BrowseDirectoryResult, bool, error) {
 	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return nil, err
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
 	}
 	if len(opts.Systems) == 1 {
-		return sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
+		results, cacheErr := sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts)
+		return results, true, cacheErr
 	}
 
 	args := []any{parentID}
@@ -169,11 +906,19 @@ func sqlBrowseDirectoriesFromCache(
 		query += ` AND ` + systemClause
 		args = append(args, systemArgs...)
 	}
-	query += ` GROUP BY d.DBID, d.Name ORDER BY d.Name ASC`
+	if opts.AfterName != "" {
+		query += ` AND ` + browseNaturalSortExpr("d.Name") + ` > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` GROUP BY d.DBID, d.Name ORDER BY ` + browseNaturalSortExpr("d.Name") + ` ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("browse cache directories query: %w", err)
+		return nil, true, fmt.Errorf("browse cache directories query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -182,32 +927,44 @@ func sqlBrowseDirectoriesFromCache(
 		var r database.BrowseDirectoryResult
 		var systemIDs string
 		if scanErr := rows.Scan(&r.Name, &r.FileCount, &systemIDs); scanErr != nil {
-			return nil, fmt.Errorf("browse cache directories scan: %w", scanErr)
+			return nil, true, fmt.Errorf("browse cache directories scan: %w", scanErr)
 		}
 		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse cache directories rows: %w", rowsErr)
+		return nil, true, fmt.Errorf("browse cache directories rows: %w", rowsErr)
 	}
-	return results, nil
+	return results, true, nil
 }
 
 func sqlBrowseDirectoriesFromCacheForSingleSystem(
 	ctx context.Context,
 	db sqlQueryable,
 	parentID int64,
-	systemID string,
+	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	rows, err := db.QueryContext(ctx, `SELECT d.Name, c.FileCount
+	systemID := opts.Systems[0].ID
+	args := []any{parentID, systemID}
+	query := `SELECT d.Name, c.FileCount
 		FROM BrowseDirCounts c
 		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
 		INNER JOIN Systems s ON c.SystemDBID = s.DBID
 		WHERE c.ParentDirDBID = ?
 			AND c.ChildDirDBID != c.ParentDirDBID
 			AND d.IsVirtual = 0
-			AND s.SystemID = ?
-		ORDER BY d.Name ASC`, parentID, systemID)
+			AND s.SystemID = ?`
+	if opts.AfterName != "" {
+		query += ` AND ` + browseNaturalSortExpr("d.Name") + ` > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY ` + browseNaturalSortExpr("d.Name") + ` ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse cache single-system directories query: %w", err)
 	}
@@ -231,22 +988,30 @@ func sqlBrowseDirectoriesFromCacheForSingleSystem(
 func sqlBrowseDirectoriesFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
-	pathPrefix string,
+	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	rows, err := db.QueryContext(ctx,
-		`WITH matched AS (
+	pathCondition, pathArgs := browsePathPrefixCondition("Path", opts.PathPrefix)
+	args := append([]any{opts.PathPrefix}, pathArgs...)
+	query := `WITH matched AS (
 			 SELECT substr(Path, length(?) + 1) AS Rest
 			 FROM Media
-			 WHERE IsMissing = 0 AND Path LIKE ? || '%'
+			 WHERE IsMissing = 0 AND ` + pathCondition + `
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount
 		 FROM matched
 		 WHERE instr(Rest, '/') > 0
-		 GROUP BY Name
-		 ORDER BY Name ASC`,
-		pathPrefix, pathPrefix,
-	)
+		 GROUP BY Name`
+	if opts.AfterName != "" {
+		query += ` HAVING ` + browseNaturalSortExpr("Name") + ` > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY ` + browseNaturalSortExpr("Name") + ` ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories media query: %w", err)
 	}
@@ -272,25 +1037,33 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
-	args := make([]any, 0, 2+len(systemArgs))
-	args = append(args, opts.PathPrefix, opts.PathPrefix)
+	pathCondition, pathArgs := browsePathPrefixCondition("m.Path", opts.PathPrefix)
+	args := make([]any, 0, 1+len(pathArgs)+len(systemArgs))
+	args = append(args, opts.PathPrefix)
+	args = append(args, pathArgs...)
 	args = append(args, systemArgs...)
-	rows, err := db.QueryContext(ctx,
-		`WITH matched AS (
+	query := `WITH matched AS (
 			 SELECT substr(m.Path, length(?) + 1) AS Rest, s.SystemID
 			 FROM Media m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause+`
+			 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount,
 			GROUP_CONCAT(DISTINCT SystemID)
 		 FROM matched
 		 WHERE instr(Rest, '/') > 0
-		 GROUP BY Name
-		 ORDER BY Name ASC`,
-		args...,
-	)
+		 GROUP BY Name`
+	if opts.AfterName != "" {
+		query += ` HAVING ` + browseNaturalSortExpr("Name") + ` > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY ` + browseNaturalSortExpr("Name") + ` ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories by system media query: %w", err)
 	}
@@ -312,47 +1085,218 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	return results, nil
 }
 
-func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
-	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "mt.Name")
-	conditions := make([]string, 0, 3+len(letterClauses))
-	conditions = append(conditions, `m.ParentDir = ?`, `m.IsMissing = 0`)
+func browsePathPrefixCondition(column, pathPrefix string) (condition string, args []any) {
+	if upper := stringPrefixUpperBound(pathPrefix); upper != "" {
+		return column + ` >= ? AND ` + column + ` < ?`, []any{pathPrefix, upper}
+	}
+	return column + ` LIKE ? || '%'`, []any{pathPrefix}
+}
+
+func browseFilesFilterCondition(
+	opts *database.BrowseFilesOptions,
+	includeParent bool,
+) (where string, args []any) {
+	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "m.SortName")
+	// Most browse scopes are bounded enough for correlated candidate probes.
+	// Required favorites are exceptionally sparse in production, so drive from
+	// that reverse-index set and probe any remaining filters per candidate.
+	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m")
+	conditions := make([]string, 0, 3+len(letterClauses)+len(tagClauses))
+	if includeParent {
+		conditions = append(conditions, `m.ParentDir = ?`)
+		args = append(args, opts.PathPrefix)
+	}
+	conditions = append(conditions, `m.IsMissing = 0`)
 	conditions = append(conditions, letterClauses...)
 
-	args = make([]any, 0, 1+len(letterArgs))
-	args = append(args, opts.PathPrefix)
 	args = append(args, letterArgs...)
 	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
 		conditions = append(conditions, systemClause)
 		args = append(args, systemArgs...)
 	}
+	conditions = append(conditions, tagClauses...)
+	args = append(args, tagArgs...)
 
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseSortClause(sortOrder string) string {
+func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
+	return browseFilesFilterCondition(opts, true)
+}
+
+func browseFilenameExpr() string {
+	return `substr(m.Path, length(m.ParentDir) + 1)`
+}
+
+func browseNaturalSortExpr(expr string) string {
+	return expr + " COLLATE " + browseDirectoryCollationName
+}
+
+func browseTitleSortExpr() string {
+	return "m.SortName COLLATE " + browseTitleCollationName
+}
+
+func browseRankPrefixSortExpr() string {
+	filename := browseFilenameExpr()
+	return `CASE WHEN substr(` + filename + `, 1, 1) BETWEEN '0' AND '9' ` +
+		`THEN printf('%010d:%s', CAST(` + filename + ` AS INTEGER), ` + filename + `) ` +
+		`ELSE 'zzzzzzzzzz:' || m.SortName END`
+}
+
+func browseSortExpr(sortOrder string) string {
 	switch sortOrder {
-	case "name-desc":
-		return "mt.Name DESC, m.DBID DESC"
-	case "filename-asc":
-		return "m.Path ASC, m.DBID ASC"
-	case "filename-desc":
-		return "m.Path DESC, m.DBID DESC"
+	case "filename-asc", "filename-desc":
+		return "m.Path"
+	case browseSortRankPrefixAsc, browseSortRankPrefixDesc:
+		return browseRankPrefixSortExpr()
+	case browseSortDatePrefixAsc, browseSortDatePrefixDesc:
+		return browseFilenameExpr()
 	default:
-		return "mt.Name ASC, m.DBID ASC"
+		return browseTitleSortExpr()
+	}
+}
+
+func browseSortClause(sortOrder string) string {
+	expr := browseSortExpr(sortOrder)
+	switch sortOrder {
+	case "name-desc", "filename-desc", browseSortRankPrefixDesc, browseSortDatePrefixDesc:
+		return expr + " DESC, m.DBID DESC"
+	default:
+		return expr + " ASC, m.DBID ASC"
 	}
 }
 
 func browseCursorCondition(sortOrder string) string {
+	expr := browseSortExpr(sortOrder)
 	switch sortOrder {
-	case "name-desc":
-		return ` AND (mt.Name, m.DBID) < (?, ?)`
-	case "filename-asc":
-		return ` AND (m.Path, m.DBID) > (?, ?)`
-	case "filename-desc":
-		return ` AND (m.Path, m.DBID) < (?, ?)`
+	case "name-desc", "filename-desc", browseSortRankPrefixDesc, browseSortDatePrefixDesc:
+		return ` AND (` + expr + `, m.DBID) < (?, ?)`
 	default:
-		return ` AND (mt.Name, m.DBID) > (?, ?)`
+		return ` AND (` + expr + `, m.DBID) > (?, ?)`
 	}
+}
+
+func resolveBrowseSortMode(ctx context.Context, db sqlQueryable, opts *database.BrowseFilesOptions) string {
+	if opts.Cursor != nil && opts.Cursor.SortMode != "" {
+		return opts.Cursor.SortMode
+	}
+	if opts.Letter != nil {
+		return opts.Sort
+	}
+	if opts.Sort != "" && opts.Sort != "name-asc" && opts.Sort != "name-desc" {
+		return opts.Sort
+	}
+
+	cacheKey := prefixPolicyCacheKey(opts.PathPrefix, opts.Systems)
+	policy, cached := cachedPrefixPolicy(db, cacheKey)
+	if !cached {
+		var err error
+		policy, err = detectBrowsePrefixPolicy(ctx, db, opts.PathPrefix, opts.Systems)
+		if err != nil {
+			log.Debug().Err(err).Str("path", opts.PathPrefix).Msg("browse prefix policy detection failed")
+			return opts.Sort
+		}
+		storePrefixPolicy(db, cacheKey, policy)
+	}
+	if !policy.Enabled {
+		return opts.Sort
+	}
+	desc := opts.Sort == "name-desc"
+	switch policy.Kind {
+	case browseprefix.KindRank:
+		if desc {
+			return browseSortRankPrefixDesc
+		}
+		return browseSortRankPrefixAsc
+	case browseprefix.KindDate:
+		if desc {
+			return browseSortDatePrefixDesc
+		}
+		return browseSortDatePrefixAsc
+	default:
+		return opts.Sort
+	}
+}
+
+func detectBrowsePrefixPolicy(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+	systems []systemdefs.System,
+) (browseprefix.Policy, error) {
+	conditions := []string{`m.ParentDir = ?`, `m.IsMissing = 0`}
+	args := []any{pathPrefix}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems); systemClause != "" {
+		conditions = append(conditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+
+	// Sample rather than scan: the policy is a fraction-vs-threshold heuristic, so a
+	// bounded sample estimates the ratio without reading every path under a directory
+	// that may hold ~1M files on large libraries. DBID is the rowid, so the ParentDir
+	// index yields either DBID direction without sorting the partition, and each scan
+	// stops at the limit.
+	base := `SELECT m.DBID, m.Path
+		FROM Media m
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		WHERE ` + strings.Join(conditions, " AND ")
+	limit := fmt.Sprintf(" LIMIT %d", browseprefix.DefaultSampleLimit)
+
+	ids, paths, err := queryBrowsePrefixSample(ctx, db, base+" ORDER BY m.DBID ASC"+limit, args)
+	if err != nil {
+		return browseprefix.Policy{}, err
+	}
+	// A truncated forward sample is order-biased: DBID order is insertion
+	// (filesystem walk) order, and numbered-prefix files sort to the front of a
+	// directory, so the head of a large mixed directory over-represents exactly
+	// the pattern the heuristic looks for. Blend in an equally cheap sample from
+	// the other end of the partition to decorrelate the estimate.
+	if len(paths) == browseprefix.DefaultSampleLimit {
+		tailIDs, tailPaths, tailErr := queryBrowsePrefixSample(ctx, db, base+" ORDER BY m.DBID DESC"+limit, args)
+		if tailErr != nil {
+			return browseprefix.Policy{}, tailErr
+		}
+		seen := make(map[int64]struct{}, len(ids))
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+		for i, id := range tailIDs {
+			if _, ok := seen[id]; !ok {
+				paths = append(paths, tailPaths[i])
+			}
+		}
+	}
+	return browseprefix.DetectPolicyForPaths(paths, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles), nil
+}
+
+// queryBrowsePrefixSample runs one bounded sample scan for prefix-policy
+// detection, returning the sampled media DBIDs (for overlap dedup between the
+// forward and backward scans) alongside their paths.
+func queryBrowsePrefixSample(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+) (ids []int64, paths []string, err error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("browse prefix detection query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var path string
+		if scanErr := rows.Scan(&id, &path); scanErr != nil {
+			return nil, nil, fmt.Errorf("browse prefix detection scan: %w", scanErr)
+		}
+		ids = append(ids, id)
+		paths = append(paths, path)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, nil, fmt.Errorf("browse prefix detection rows: %w", rowsErr)
+	}
+	return ids, paths, nil
 }
 
 func sqlBrowseFiles(
@@ -360,7 +1304,138 @@ func sqlBrowseFiles(
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayFilesFromMedia(ctx, db, opts)
+	}
 	return sqlBrowseFilesFromMedia(ctx, db, opts)
+}
+
+// overlayHigherPriorityDirectoryCondition drops a directory that a
+// higher-priority route also provides, so an overlaid path shows one entry
+// rather than one per route.
+//
+// INDEXED BY idx_media_browse_sort is load-bearing, not a hint. This runs as a
+// correlated subquery once per candidate row, and its ParentDir bounds are
+// built by concatenation from the outer row, so the planner cannot see them as
+// a range at plan time. Left to choose, it picked media_missing_idx —
+// IsMissing = 0 matches every row in the table, so each candidate scanned the
+// whole of Media and only then filtered on ParentDir.
+//
+// Measured on the #1279 device database (229,553 rows): browsing a 4-file
+// directory took 64 ms, and a 20,131-file directory did not finish in ten
+// minutes. Against idx_media_browse_sort (ParentDir, IsMissing, ...) the same
+// two are 0.6 ms and 22 ms, because the bounds become a covering range scan.
+// The index is created by the base schema migration and recreated by
+// CreateSecondaryIndexes, so it is always present.
+const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
+	SELECT 1
+	FROM sources higher
+	INNER JOIN Media descendant INDEXED BY idx_media_browse_sort ON descendant.IsMissing = 0
+	WHERE higher.priority < sources.priority
+		AND higher.include_dirs = 1
+		AND descendant.ParentDir >= higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/'
+		AND descendant.ParentDir < higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
+)`
+
+func sqlBrowseOverlayFilesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		 ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		)`
+
+	filterOpts := *opts
+	filterOpts.Systems = nil
+	where, filterArgs := browseFilesFilterCondition(&filterOpts, false)
+	args = append(args, filterArgs...)
+	sortMode := opts.Sort
+	sortExpr := browseTitleSortExpr()
+	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
+		sortExpr = browseFilenameExpr()
+	}
+	query += ` SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+		mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
+		FROM ranked
+		INNER JOIN Media m ON m.DBID = ranked.DBID
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+		WHERE ranked.source_rank = 1 AND ` + where
+	if opts.Cursor != nil {
+		op := ">"
+		if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
+			op = "<"
+		}
+		query += ` AND (` + sortExpr + `, m.DBID) ` + op + ` (?, ?)`
+		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
+	}
+	direction := "ASC"
+	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
+		direction = "DESC"
+	}
+	query += ` ORDER BY ` + sortExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
+	args = append(args, opts.Limit)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse overlay files query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.SearchResultWithCursor
+	for rows.Next() {
+		var r database.SearchResultWithCursor
+		if scanErr := rows.Scan(
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.DisambiguationTypes, &r.SortValue,
+		); scanErr != nil {
+			return nil, fmt.Errorf("browse overlay files scan: %w", scanErr)
+		}
+		if r.Name == "" {
+			base := filepath.Base(r.Path)
+			if ext := filepath.Ext(base); ext != "" {
+				base = base[:len(base)-len(ext)]
+			}
+			r.Name = base
+		}
+		r.SortMode = sortMode
+		results = append(results, r)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse overlay files rows: %w", rowsErr)
+	}
+	if err = fetchAndAttachUtilityTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files tags: %w", err)
+	}
+	if err = fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files cover flags: %w", err)
+	}
+	if err = attachZapScriptTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files disambiguation: %w", err)
+	}
+	return results, nil
 }
 
 func sqlBrowseFilesFromMedia(
@@ -369,16 +1444,21 @@ func sqlBrowseFilesFromMedia(
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
 	where, args := browseFilesBaseCondition(opts)
-	query := `SELECT s.SystemID, mt.Name, m.Path, m.DBID
+	sortModeStarted := time.Now()
+	sortMode := resolveBrowseSortMode(ctx, db, opts)
+	sortModeElapsed := time.Since(sortModeStarted)
+	sortExpr := browseSortExpr(sortMode)
+	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` +
+		`mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
 		FROM Media m
-		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 		WHERE ` + where
 	if opts.Cursor != nil {
-		query += browseCursorCondition(opts.Sort)
+		query += browseCursorCondition(sortMode)
 		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
 	}
-	query += ` ORDER BY ` + browseSortClause(opts.Sort) + ` LIMIT ?`
+	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?`
 	args = append(args, opts.Limit)
 
 	queryStarted := time.Now()
@@ -391,9 +1471,21 @@ func sqlBrowseFilesFromMedia(
 	var results []database.SearchResultWithCursor
 	for rows.Next() {
 		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
+		if scanErr := rows.Scan(
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.DisambiguationTypes, &r.SortValue,
+		); scanErr != nil {
 			return nil, fmt.Errorf("browse files scan: %w", scanErr)
 		}
+		// SortName is '' on rows that pre-date the migration; derive a display
+		// name from the filename so the grid is never empty until reindex.
+		if r.Name == "" {
+			base := filepath.Base(r.Path)
+			if ext := filepath.Ext(base); ext != "" {
+				base = base[:len(base)-len(ext)]
+			}
+			r.Name = base
+		}
+		r.SortMode = sortMode
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
@@ -402,89 +1494,638 @@ func sqlBrowseFilesFromMedia(
 	queryElapsed := time.Since(queryStarted)
 
 	tagsStarted := time.Now()
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := fetchAndAttachUtilityTags(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files tags: %w", err)
 	}
 	tagsElapsed := time.Since(tagsStarted)
 
-	log.Debug().
+	coverFlagsStarted := time.Now()
+	if err := fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse files cover flags: %w", err)
+	}
+	coverFlagsElapsed := time.Since(coverFlagsStarted)
+
+	// Populate ZapScriptTags from the title's precomputed disambiguating types
+	// (single indexed lookup). Title-global, so it is correct regardless of how
+	// siblings fall across pages or sort order.
+	siblingsStarted := time.Now()
+	if err := attachZapScriptTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse files disambiguation: %w", err)
+	}
+	siblingsElapsed := time.Since(siblingsStarted)
+	browseElapsed := sortModeElapsed + queryElapsed + tagsElapsed + coverFlagsElapsed + siblingsElapsed
+
+	logEvent := log.Debug()
+	message := "browse files step timing"
+	if coverFlagsElapsed >= browseSlowCoverFlagsThreshold || browseElapsed >= browseSlowFilesThreshold {
+		logEvent = log.Warn()
+		message = "slow browse files step timing"
+	}
+	logEvent.
 		Str("pathPrefix", opts.PathPrefix).
 		Strs("systems", browseSystemIDsForLog(opts.Systems)).
 		Int("rows", len(results)).
+		Dur("duration", browseElapsed).
+		Dur("sortModeDuration", sortModeElapsed).
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", tagsElapsed).
-		Msg("browse files step timing")
-	if len(results) == 0 && opts.Cursor == nil {
-		descendants, countErr := sqlBrowseDescendantCount(ctx, db, opts.PathPrefix, opts.Systems)
-		if countErr != nil {
-			log.Debug().
-				Err(countErr).
-				Str("pathPrefix", opts.PathPrefix).
-				Strs("systems", browseSystemIDsForLog(opts.Systems)).
-				Msg("browse files descendant diagnostic failed")
-		} else {
-			event := log.Debug()
-			if descendants > 0 {
-				event = log.Warn()
-			}
-			event.
-				Str("pathPrefix", opts.PathPrefix).
-				Strs("systems", browseSystemIDsForLog(opts.Systems)).
-				Int("directFiles", 0).
-				Int("descendantFiles", descendants).
-				Msg("browse files returned no direct media")
-		}
-	}
+		Dur("coverFlagsDuration", coverFlagsElapsed).
+		Dur("siblingsDuration", siblingsElapsed).
+		Msg(message)
 	return results, nil
 }
 
-func sqlBrowseDescendantCount(
+// fetchAndAttachCoverFlags sets HasCover on each result based on whether the
+// media or its title has at least one image property row. Image property tag
+// DBIDs are resolved once per database handle, so every browse page can check
+// MediaProperties/MediaTitleProperties directly without joining Tags/TagTypes
+// or LIKE-scanning tag strings. Results with no image property get HasCover=false.
+//
+// The title-scope check keys off MediaTitleID. A caller that builds results
+// without populating it (e.g. a synthetic singleton container alias) would
+// otherwise silently skip title-scoped covers, blanking the grid for folder-based
+// systems. backfillMissingTitleIDs resolves any missing IDs first, so cover flags
+// are correct regardless of which fields the caller filled in.
+func fetchAndAttachCoverFlags(
 	ctx context.Context,
 	db sqlQueryable,
-	pathPrefix string,
-	systems []systemdefs.System,
-) (int, error) {
-	conditions := []string{`m.IsMissing = 0`, `m.Path LIKE ? || '%'`}
-	args := []any{pathPrefix}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems); systemClause != "" {
-		conditions = append(conditions, systemClause)
-		args = append(args, systemArgs...)
+	results []database.SearchResultWithCursor,
+) error {
+	if len(results) == 0 {
+		return nil
 	}
 
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*)
-		 FROM Media m
-		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-		 WHERE `+strings.Join(conditions, " AND "),
-		args...,
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("browse descendant count: %w", err)
+	imageTagIDs, err := resolveImagePropertyTagDBIDs(ctx, db)
+	if err != nil {
+		return fmt.Errorf("browse cover flags image tags: %w", err)
 	}
-	return count, nil
+	if len(imageTagIDs) == 0 {
+		return nil
+	}
+
+	if err = backfillMissingTitleIDs(ctx, db, results); err != nil {
+		return fmt.Errorf("browse cover flags backfill title ids: %w", err)
+	}
+
+	if coverIndex := cachedCoverAvailabilityIndex(db); coverIndex != nil {
+		for i := range results {
+			results[i].HasCover = coverIndex.hasTitle(results[i].MediaTitleID) ||
+				coverIndex.hasMedia(results[i].MediaID)
+		}
+		return nil
+	}
+	ensureCoverAvailabilityIndexBuild(db, imageTagIDs)
+
+	// Scrapers normally store artwork at title scope. Resolve title covers first,
+	// then query media-scope properties only for entries that remain uncovered.
+	// This preserves media-level overrides without probing both property tables
+	// for every result.
+	titleIDs := make([]int64, 0, len(results))
+	titleIndex := make(map[int64][]int, len(results))
+	for i := range results {
+		if results[i].MediaTitleID == 0 {
+			continue
+		}
+		if _, ok := titleIndex[results[i].MediaTitleID]; !ok {
+			titleIDs = append(titleIDs, results[i].MediaTitleID)
+		}
+		titleIndex[results[i].MediaTitleID] = append(titleIndex[results[i].MediaTitleID], i)
+	}
+
+	if len(titleIDs) > 0 {
+		coveredTitleIDs, queryErr := queryImagePropertyEntityIDs(
+			ctx, db, coverPropertyScopeTitle, titleIDs, imageTagIDs,
+		)
+		if queryErr != nil {
+			return fmt.Errorf("browse cover flags query: %w", queryErr)
+		}
+		for id := range coveredTitleIDs {
+			for _, idx := range titleIndex[id] {
+				results[idx].HasCover = true
+			}
+		}
+	}
+
+	mediaIDs := make([]int64, 0, len(results))
+	mediaIndex := make(map[int64][]int, len(results))
+	for i := range results {
+		if results[i].HasCover || results[i].MediaID <= 0 {
+			continue
+		}
+		if _, ok := mediaIndex[results[i].MediaID]; !ok {
+			mediaIDs = append(mediaIDs, results[i].MediaID)
+		}
+		mediaIndex[results[i].MediaID] = append(mediaIndex[results[i].MediaID], i)
+	}
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+
+	coveredMediaIDs, err := queryImagePropertyEntityIDs(
+		ctx, db, coverPropertyScopeMedia, mediaIDs, imageTagIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("browse cover flags query: %w", err)
+	}
+	for id := range coveredMediaIDs {
+		for _, idx := range mediaIndex[id] {
+			results[idx].HasCover = true
+		}
+	}
+	return nil
+}
+
+func buildCoverAvailabilityIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	imageTagIDs []int64,
+) (*coverAvailabilityIndex, error) {
+	started := time.Now()
+	titleIDs, err := queryAllImagePropertyEntityIDs(ctx, db, coverPropertyScopeTitle, imageTagIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load title cover IDs: %w", err)
+	}
+	mediaIDs, err := queryAllImagePropertyEntityIDs(ctx, db, coverPropertyScopeMedia, imageTagIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load media cover IDs: %w", err)
+	}
+	index := &coverAvailabilityIndex{
+		titleIDs: sortAndCompactInt64s(titleIDs),
+		mediaIDs: sortAndCompactInt64s(mediaIDs),
+	}
+	log.Debug().
+		Int("titleIDs", len(index.titleIDs)).
+		Int("mediaIDs", len(index.mediaIDs)).
+		Int("bytes", (cap(index.titleIDs)+cap(index.mediaIDs))*8).
+		Dur("duration", time.Since(started)).
+		Msg("cover availability index built")
+	return index, nil
+}
+
+func queryAllImagePropertyEntityIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	scope coverPropertyScope,
+	imageTagIDs []int64,
+) ([]int64, error) {
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	var query string
+	switch scope {
+	case coverPropertyScopeMedia:
+		query = `SELECT json_group_array(MediaDBID) FROM (
+			SELECT mp.MediaDBID, mp.TypeTagDBID
+			FROM MediaProperties mp
+			WHERE mp.TypeTagDBID IN (` + tagPlaceholders + `)
+			ORDER BY mp.MediaDBID, mp.TypeTagDBID)`
+	case coverPropertyScopeTitle:
+		query = `SELECT json_group_array(MediaTitleDBID) FROM (
+			SELECT mtp.MediaTitleDBID, mtp.TypeTagDBID
+			FROM MediaTitleProperties mtp
+			WHERE mtp.TypeTagDBID IN (` + tagPlaceholders + `)
+			ORDER BY mtp.MediaTitleDBID, mtp.TypeTagDBID)`
+	default:
+		return nil, fmt.Errorf("unknown cover property scope %d", scope)
+	}
+
+	args := make([]any, len(imageTagIDs))
+	for i, id := range imageTagIDs {
+		args[i] = id
+	}
+	// ORDER BY matches each table's unique covering index. SQLite scans that
+	// compact index sequentially and returns one aggregate value, avoiding both
+	// random table reads and one CGO row crossing per stored property.
+	var rawIDs string
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&rawIDs); err != nil {
+		return nil, fmt.Errorf("query all cover IDs: %w", err)
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(rawIDs), &ids); err != nil {
+		return nil, fmt.Errorf("decode cover IDs: %w", err)
+	}
+	return ids, nil
+}
+
+func sortAndCompactInt64s(ids []int64) []int64 {
+	if len(ids) < 2 {
+		return ids
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	write := 1
+	for read := 1; read < len(ids); read++ {
+		if ids[read] == ids[write-1] {
+			continue
+		}
+		ids[write] = ids[read]
+		write++
+	}
+	return ids[:write]
+}
+
+func queryImagePropertyEntityIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	scope coverPropertyScope,
+	entityIDs []int64,
+	imageTagIDs []int64,
+) (map[int64]struct{}, error) {
+	if len(entityIDs) == 0 || len(imageTagIDs) == 0 {
+		return map[int64]struct{}{}, nil
+	}
+
+	var table, alias, entityColumn string
+	switch scope {
+	case coverPropertyScopeMedia:
+		table, alias, entityColumn = "MediaProperties", "mp", "MediaDBID"
+	case coverPropertyScopeTitle:
+		table, alias, entityColumn = "MediaTitleProperties", "mtp", "MediaTitleDBID"
+	default:
+		return nil, fmt.Errorf("unknown cover property scope %d", scope)
+	}
+
+	chunkSize := sqliteMaxParams - len(imageTagIDs)
+	if chunkSize <= 0 {
+		return nil, fmt.Errorf("too many image property tag IDs: %d", len(imageTagIDs))
+	}
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	covered := make(map[int64]struct{})
+	for start := 0; start < len(entityIDs); start += chunkSize {
+		chunk := entityIDs[start:min(start+chunkSize, len(entityIDs))]
+		entityPlaceholders := prepareVariadic("?", ",", len(chunk))
+		query := `SELECT ` + alias + `.` + entityColumn + `
+			FROM ` + table + ` ` + alias + `
+			WHERE ` + alias + `.` + entityColumn + ` IN (` + entityPlaceholders + `)
+			  AND ` + alias + `.TypeTagDBID IN (` + tagPlaceholders + `)`
+
+		args := make([]any, 0, len(chunk)+len(imageTagIDs))
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		for _, id := range imageTagIDs {
+			args = append(args, id)
+		}
+
+		if err := queryImagePropertyEntityIDChunk(ctx, db, query, args, covered); err != nil {
+			return nil, err
+		}
+	}
+	return covered, nil
+}
+
+func queryImagePropertyEntityIDChunk(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+	covered map[int64]struct{},
+) (err error) {
+	//nolint:gosec // Caller selects table identifiers from fixed constants and generates placeholders internally.
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("query cover entity IDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close cover entity ID rows: %w", closeErr)
+		}
+	}()
+
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("scan cover entity ID: %w", scanErr)
+		}
+		covered[id] = struct{}{}
+	}
+	return rows.Err()
+}
+
+func fetchCoverStatuses(
+	ctx context.Context, db sqlQueryable, refs []database.MediaRef,
+) (map[int64]bool, error) {
+	statuses := make(map[int64]bool, len(refs))
+	results := make([]database.SearchResultWithCursor, 0, len(refs))
+	seen := make(map[int64]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.MediaDBID <= 0 {
+			continue
+		}
+		if _, ok := seen[ref.MediaDBID]; ok {
+			continue
+		}
+		seen[ref.MediaDBID] = struct{}{}
+		statuses[ref.MediaDBID] = false
+		results = append(results, database.SearchResultWithCursor{
+			MediaID:      ref.MediaDBID,
+			MediaTitleID: ref.MediaTitleDBID,
+		})
+	}
+	if err := fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, err
+	}
+	for i := range results {
+		statuses[results[i].MediaID] = results[i].HasCover
+	}
+	return statuses, nil
+}
+
+// backfillMissingTitleIDs populates MediaTitleID for any result that has a MediaID
+// but no MediaTitleID, resolving it from the Media row (Media.MediaTitleDBID is NOT
+// NULL). Callers that already set MediaTitleID — the file-browse path — pay nothing:
+// the function returns before querying when no result is missing a title ID. The
+// lookup is a single primary-key IN query, so it stays cheap for the alias path.
+func backfillMissingTitleIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	missing := make([]int64, 0)
+	byMediaID := make(map[int64][]int)
+	for i := range results {
+		if results[i].MediaTitleID != 0 || results[i].MediaID == 0 {
+			continue
+		}
+		if _, ok := byMediaID[results[i].MediaID]; !ok {
+			missing = append(missing, results[i].MediaID)
+		}
+		byMediaID[results[i].MediaID] = append(byMediaID[results[i].MediaID], i)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(missing))
+	args := make([]any, len(missing))
+	for i, id := range missing {
+		args[i] = id
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	rows, err := db.QueryContext(ctx,
+		`SELECT DBID, MediaTitleDBID FROM Media WHERE DBID IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("query media title ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var mediaID, titleID int64
+		if scanErr := rows.Scan(&mediaID, &titleID); scanErr != nil {
+			return fmt.Errorf("scan media title id: %w", scanErr)
+		}
+		for _, idx := range byMediaID[mediaID] {
+			results[idx].MediaTitleID = titleID
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("media title id rows: %w", err)
+	}
+	return nil
+}
+
+// fetchAndAttachUtilityTags attaches every tag in tags.UtilityTags to any
+// result that has one. A browse page normally has few or no utility-tagged
+// entries, so the query returns near-zero rows against the composite PRIMARY
+// KEY(MediaDBID, TagDBID) index on MediaTags. Full metadata tags are
+// intentionally excluded from browse — the grid only needs utility tags; the
+// detail pane fetches everything via media.meta.
+//
+// Utility tag DBID resolution is memoised in utilityTagCacheMap and only re-run
+// when clearUtilityTagCache is called after tag dictionary changes.
+//
+// Assumption: utility tags are media-level user tags — no title-level join is
+// needed. Add a title-level leg here if a future utility tag lives at the title
+// level.
+func fetchAndAttachUtilityTags(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	tagInfoByDBID, err := resolveUtilityTagDBIDs(ctx, db)
+	if err != nil {
+		return err
+	}
+	if len(tagInfoByDBID) == 0 {
+		// None of the utility tags exist in the DB yet — nothing to attach.
+		return nil
+	}
+
+	mediaIDs := make([]int64, len(results))
+	for i := range results {
+		mediaIDs[i] = results[i].MediaID
+	}
+
+	tagDBIDs := make([]int64, 0, len(tagInfoByDBID))
+	for id := range tagInfoByDBID {
+		tagDBIDs = append(tagDBIDs, id)
+	}
+
+	mediaPH := prepareVariadic("?", ",", len(mediaIDs))
+	tagPH := prepareVariadic("?", ",", len(tagDBIDs))
+	args := make([]any, 0, len(mediaIDs)+len(tagDBIDs))
+	for _, id := range mediaIDs {
+		args = append(args, id)
+	}
+	for _, id := range tagDBIDs {
+		args = append(args, id)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	query := `SELECT mt.MediaDBID, mt.TagDBID FROM MediaTags mt
+		WHERE mt.MediaDBID IN (` + mediaPH + `) AND mt.TagDBID IN (` + tagPH + `)`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse utility tags query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	toAttach := make(map[int64][]database.TagInfo)
+	for rows.Next() {
+		var mediaDBID, tagDBID int64
+		if scanErr := rows.Scan(&mediaDBID, &tagDBID); scanErr != nil {
+			return fmt.Errorf("browse utility tags scan: %w", scanErr)
+		}
+		if info, ok := tagInfoByDBID[tagDBID]; ok {
+			toAttach[mediaDBID] = append(toAttach[mediaDBID], info)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("browse utility tags rows: %w", err)
+	}
+
+	for i := range results {
+		if infos, ok := toAttach[results[i].MediaID]; ok {
+			results[i].Tags = append(results[i].Tags, infos...)
+		}
+	}
+	return nil
 }
 
 func sqlBrowseFileCount(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseFileCountOptions,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayFileCount(ctx, db, opts)
+	}
+
+	// Letter and tag scopes need row-level predicates absent from compact cache.
+	// Unfiltered directory totals can use v3's parent=self direct-file rows.
+	if opts.Letter == nil && len(opts.Tags) == 0 && browseRouteCacheKey(opts.PathPrefix) != "/" {
+		ready, err := sqlBrowseCacheReady(ctx, db)
+		if err != nil {
+			return 0, err
+		}
+		if ready {
+			count, cacheUsable, cacheErr := sqlBrowseDirectFileCountFromCache(ctx, db, opts)
+			if cacheErr != nil || cacheUsable {
+				return count, cacheErr
+			}
+		}
+	}
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
+}
+
+// browseOverlayFileCountQuery builds the overlay file-count statement and its
+// arguments. Separate from the exec so the query-plan regression test can
+// measure the statement production actually runs rather than a copy of it.
+func browseOverlayFileCountQuery(
+	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+) (query string, args []any) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args = make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	filterOpts := &database.BrowseFilesOptions{
+		Letter: opts.Letter,
+		Tags:   opts.Tags,
+	}
+	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	args = append(args, filterArgs...)
+	return `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		)
+		SELECT COUNT(*)
+		FROM ranked
+		INNER JOIN Media m ON m.DBID = ranked.DBID
+		WHERE ranked.source_rank = 1 AND ` + where, args
+}
+
+func sqlBrowseOverlayFileCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
+) (int, error) {
+	query, args := browseOverlayFileCountQuery(opts)
+	var count int
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse overlay file count: %w", err)
+	}
+	return count, nil
+}
+
+func sqlBrowseDirectFileCountFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
+) (count int, cacheUsable bool, err error) {
+	covered, err := sqlBrowseCacheCoversSystems(ctx, db, opts.Systems)
+	if err != nil || !covered {
+		return 0, false, err
+	}
+
+	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+
+	args := []any{parentID}
+	query := `SELECT COALESCE(SUM(c.FileCount), 0)
+		FROM BrowseDirCounts c
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID = c.ParentDirDBID`
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&count); scanErr != nil {
+		return 0, true, fmt.Errorf("browse cache direct file count: %w", scanErr)
+	}
+	return count, true, nil
+}
+
+func sqlBrowseCacheCoversSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+) (bool, error) {
+	var complete string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigBrowseIndexComplete,
+	).Scan(&complete)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("browse cache coverage query: %w", err)
+	}
+	if complete == "1" {
+		return true, nil
+	}
+	if len(systems) == 0 {
+		return false, nil
+	}
+
+	systemIDs := make([]string, len(systems))
+	for i := range systems {
+		systemIDs[i] = systems[i].ID
+	}
+	expected := len(uniqueBrowseSystemIDs(systemIDs))
+	systemClause, args := browseSystemFilterClause("s.SystemID", systems)
+	var covered int
+	query := `SELECT COUNT(DISTINCT s.SystemID)
+		FROM BrowseDirCounts c
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE ` + systemClause
+	if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&covered); scanErr != nil {
+		return false, fmt.Errorf("browse cache system coverage query: %w", scanErr)
+	}
+	return covered == expected, nil
 }
 
 func sqlBrowseFileCountFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseFileCountOptions,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
 	where, args := browseFilesBaseCondition(&database.BrowseFilesOptions{
 		PathPrefix: opts.PathPrefix,
 		Letter:     opts.Letter,
 		Systems:    opts.Systems,
+		Tags:       opts.Tags,
 	})
 	query := `SELECT COUNT(*)
 		FROM Media m
-		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE ` + where
 	var count int
@@ -492,6 +2133,345 @@ func sqlBrowseFileCountFromMedia(
 		return 0, fmt.Errorf("browse file count: %w", err)
 	}
 	return count, nil
+}
+
+// sqlBrowseDirCount returns the total number of immediate child directories
+// under a path prefix, routed the same way as the directory listing (cache when
+// ready and the parent is present, media otherwise) so the count matches what
+// the listing pages through.
+func sqlBrowseDirCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (int, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		dirs, overlayErr := sqlBrowseOverlayDirectories(ctx, db, database.BrowseDirectoriesOptions{
+			Overlay: opts.Overlay,
+			Systems: opts.Systems,
+		})
+		return len(dirs), overlayErr
+	}
+
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	if ready {
+		count, parentFound, cacheErr := sqlBrowseDirCountFromCache(ctx, db, opts)
+		if cacheErr != nil || parentFound {
+			return count, cacheErr
+		}
+	}
+	return sqlBrowseDirCountFromMedia(ctx, db, opts)
+}
+
+func sqlBrowseDirCountFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (count int, parentFound bool, err error) {
+	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return 0, false, nil
+	}
+
+	args := []any{parentID}
+	base := `FROM BrowseDirCounts c
+		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID != c.ParentDirDBID AND d.IsVirtual = 0`
+	if len(opts.Systems) == 1 {
+		base += ` AND s.SystemID = ?`
+		args = append(args, opts.Systems[0].ID)
+		if scanErr := db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, args...).Scan(&count); scanErr != nil {
+			return 0, true, fmt.Errorf("browse cache single-system dir count: %w", scanErr)
+		}
+		return count, true, nil
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	if systemClause != "" {
+		base += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	if scanErr := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT d.DBID) `+base, args...).Scan(&count); scanErr != nil {
+		return 0, true, fmt.Errorf("browse cache dir count: %w", scanErr)
+	}
+	return count, true, nil
+}
+
+func sqlBrowseDirCountFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (int, error) {
+	var (
+		inner string
+		args  []any
+	)
+	if len(opts.Systems) > 0 {
+		systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+		pathCondition, pathArgs := browsePathPrefixCondition("m.Path", opts.PathPrefix)
+		args = append(args, opts.PathPrefix)
+		args = append(args, pathArgs...)
+		args = append(args, systemArgs...)
+		inner = `WITH matched AS (
+				 SELECT substr(m.Path, length(?) + 1) AS Rest
+				 FROM Media m
+				 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+				 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
+			 )
+			 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name
+			 FROM matched
+			 WHERE instr(Rest, '/') > 0
+			 GROUP BY Name`
+	} else {
+		pathCondition, pathArgs := browsePathPrefixCondition("Path", opts.PathPrefix)
+		args = append(args, opts.PathPrefix)
+		args = append(args, pathArgs...)
+		inner = `WITH matched AS (
+				 SELECT substr(Path, length(?) + 1) AS Rest
+				 FROM Media
+				 WHERE IsMissing = 0 AND ` + pathCondition + `
+			 )
+			 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name
+			 FROM matched
+			 WHERE instr(Rest, '/') > 0
+			 GROUP BY Name`
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+inner+`)`, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse dir count from media: %w", err)
+	}
+	return count, nil
+}
+
+const (
+	browseIndexSchemeLatin = "latin"
+	browseIndexSchemeNone  = "none"
+)
+
+// sqlBrowseIndex computes the first-character bucket facet for a browse scope:
+// per-bucket counts plus each bucket's first-row keyset, from which a seek
+// cursor is derived so a media.browse page lands on the bucket's first item.
+// Buckets are returned in the active sort order (matching scroll order), not a
+// hard-coded alphabet.
+//
+// The rail is only meaningful when rows are ordered alphabetically by SortName.
+// When resolveBrowseSortMode picks a filename / rank-prefix / date-prefix
+// ordering, the first-character mapping would not match the displayed order, so
+// the result reports scheme "none" with no buckets.
+func sqlBrowseIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayIndex(ctx, db, opts)
+	}
+
+	filesOpts := &database.BrowseFilesOptions{
+		PathPrefix: opts.PathPrefix,
+		Sort:       opts.Sort,
+		Systems:    opts.Systems,
+		Tags:       opts.Tags,
+	}
+	sortMode := resolveBrowseSortMode(ctx, db, filesOpts)
+	if browseSortExpr(sortMode) != browseTitleSortExpr() {
+		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
+			PathPrefix: opts.PathPrefix,
+			Systems:    opts.Systems,
+			Tags:       opts.Tags,
+		})
+		if err != nil {
+			return database.BrowseIndexResult{}, err
+		}
+		return database.BrowseIndexResult{
+			Scheme:     browseIndexSchemeNone,
+			SortMode:   sortMode,
+			TotalFiles: total,
+		}, nil
+	}
+
+	where, args := browseFilesBaseCondition(filesOpts)
+	// Only join Systems when a system filter is active; browseFilesBaseCondition
+	// references s.SystemID solely for that filter, so an unfiltered facet would
+	// otherwise pay one PK lookup per row for nothing.
+	join := ""
+	if len(opts.Systems) > 0 {
+		join = " INNER JOIN Systems s ON m.SystemDBID = s.DBID"
+	}
+	bucketExpr := browseBucketKeyExpr("m.SortName")
+	// The window orders by the browse sort expression, which idx_media_browse_sort
+	// already provides (ParentDir, IsMissing equality then naturally collated
+	// SortName, DBID), so the window needs no sort; only the GROUP BY (folded
+	// bucket, not index order) uses a transient btree. rn gives each row's
+	// position so MIN(rn) per bucket finds the first row, joined back for its keyset.
+	desc := sortMode == "name-desc"
+
+	query := `WITH ordered AS (
+		SELECT ` + bucketExpr + ` AS bucket,
+			m.SortName AS sortValue,
+			m.DBID AS dbid,
+			ROW_NUMBER() OVER (ORDER BY ` + browseSortClause(sortMode) + `) AS rn
+		FROM Media m` + join + `
+		WHERE ` + where + `
+	), counts AS (
+		SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
+	)
+	SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
+	FROM ordered o
+	INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
+	ORDER BY o.rn`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse index query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := database.BrowseIndexResult{Scheme: browseIndexSchemeLatin, SortMode: sortMode}
+	for rows.Next() {
+		var (
+			bucket    string
+			sortValue string
+			dbid      int64
+			count     int
+			firstRN   int64
+		)
+		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
+			return database.BrowseIndexResult{}, fmt.Errorf("browse index scan: %w", scanErr)
+		}
+		// Nudge the tiebreaker so the strict keyset comparison includes this row:
+		// ascending uses (>) so subtract one; descending uses (<) so add one.
+		cursorID := dbid - 1
+		if desc {
+			cursorID = dbid + 1
+		}
+		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
+			Key:       bucket,
+			SortValue: sortValue,
+			LastID:    cursorID,
+			Count:     count,
+			// rn is 1-based; the bucket's first item is its 0-based file offset.
+			Offset:  int(firstRN - 1),
+			AtStart: len(result.Buckets) == 0,
+		})
+		result.TotalFiles += count
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse index rows: %w", rowsErr)
+	}
+	return result, nil
+}
+
+func sqlBrowseOverlayIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
+		total, err := sqlBrowseOverlayFileCount(ctx, db, database.BrowseFileCountOptions{
+			Overlay: opts.Overlay,
+			Systems: opts.Systems,
+			Tags:    opts.Tags,
+		})
+		if err != nil {
+			return database.BrowseIndexResult{}, err
+		}
+		return database.BrowseIndexResult{
+			Scheme:     browseIndexSchemeNone,
+			SortMode:   opts.Sort,
+			TotalFiles: total,
+		}, nil
+	}
+
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	filterOpts := &database.BrowseFilesOptions{Tags: opts.Tags}
+	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	args = append(args, filterArgs...)
+	desc := opts.Sort == "name-desc"
+	direction := "ASC"
+	if desc {
+		direction = "DESC"
+	}
+	bucketExpr := browseBucketKeyExpr("m.SortName")
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		), ordered AS (
+			SELECT ` + bucketExpr + ` AS bucket,
+				m.SortName AS sortValue,
+				m.DBID AS dbid,
+				ROW_NUMBER() OVER (ORDER BY ` + browseTitleSortExpr() + ` ` + direction +
+		`, m.DBID ` + direction + `) AS rn
+			FROM ranked
+			INNER JOIN Media m ON m.DBID = ranked.DBID
+			WHERE ranked.source_rank = 1 AND ` + where + `
+		), counts AS (
+			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
+		)
+		SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
+		FROM ordered o
+		INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
+		ORDER BY o.rn`
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := database.BrowseIndexResult{
+		Scheme:   browseIndexSchemeLatin,
+		SortMode: opts.Sort,
+	}
+	for rows.Next() {
+		var bucket, sortValue string
+		var dbid, firstRN int64
+		var count int
+		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
+			return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index scan: %w", scanErr)
+		}
+		cursorID := dbid - 1
+		if desc {
+			cursorID = dbid + 1
+		}
+		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
+			Key:       bucket,
+			SortValue: sortValue,
+			LastID:    cursorID,
+			Count:     count,
+			Offset:    int(firstRN - 1),
+			AtStart:   len(result.Buckets) == 0,
+		})
+		result.TotalFiles += count
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index rows: %w", rowsErr)
+	}
+	return result, nil
 }
 
 func sqlBrowseVirtualSchemes(
@@ -662,13 +2642,18 @@ func sqlBrowseRouteCountsFromCache(
 		args := append([]any{dirID}, systemArgs...)
 		var count int
 		var systemIDs sql.NullString
-		err = db.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(c.FileCount), 0), GROUP_CONCAT(DISTINCT s.SystemID)
+		query := `SELECT COALESCE(SUM(c.FileCount), 0), GROUP_CONCAT(DISTINCT s.SystemID)
 			 FROM BrowseDirCounts c
 			 INNER JOIN Systems s ON c.SystemDBID = s.DBID
-			 WHERE c.ChildDirDBID = ? AND `+systemClause,
-			args...,
-		).Scan(&count, &systemIDs)
+			 WHERE c.ChildDirDBID = ?`
+		// v3 self rows are direct-file counts and would double-count a route's
+		// parent→child subtree total. Root's historical self row is the global
+		// filesystem total and remains authoritative for the root route.
+		if browseRouteCacheKey(route) != "/" {
+			query += ` AND c.ParentDirDBID != c.ChildDirDBID`
+		}
+		query += ` AND ` + systemClause
+		err = db.QueryRowContext(ctx, query, args...).Scan(&count, &systemIDs)
 		if err != nil {
 			return nil, fmt.Errorf("browse cache route counts query: %w", err)
 		}
@@ -694,30 +2679,134 @@ func sqlBrowseRouteCountsFromMedia(
 		return counts, nil
 	}
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	// The presence probe depends only on the system filter, so reuse its
+	// outcome across every route count that times out during this call.
+	var (
+		probeAttempted bool
+		probeHasMedia  bool
+		probeErr       error
+	)
 	for _, route := range opts.Routes {
 		prefix := browseRouteCacheKey(route)
 		args := append([]any{prefix}, systemArgs...)
+
+		routeCtx, cancel := context.WithTimeout(ctx, browseRouteCountSubTimeout)
 		var count int
 		var systemIDs sql.NullString
-		if err := db.QueryRowContext(ctx,
+		err := db.QueryRowContext(routeCtx,
 			`SELECT COUNT(*), GROUP_CONCAT(DISTINCT s.SystemID)
 			 FROM Media m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause,
 			args...,
-		).Scan(&count, &systemIDs); err != nil {
-			return nil, fmt.Errorf("browse route counts media scan: %w", err)
-		}
-		if count == 0 {
+		).Scan(&count, &systemIDs)
+		// The driver may surface an expired sub-timeout as its own "interrupted"
+		// error rather than the context error, so remember the deadline state
+		// itself (before cancel() overwrites it) as the authoritative signal.
+		timedOut := errors.Is(routeCtx.Err(), context.DeadlineExceeded)
+		cancel()
+
+		if err == nil {
+			if count == 0 {
+				continue
+			}
+			counts[route] = database.BrowseRouteCount{
+				Path:      route,
+				FileCount: count,
+				SystemIDs: splitBrowseSystemIDs(systemIDs.String),
+			}
 			continue
 		}
-		counts[route] = database.BrowseRouteCount{
-			Path:      route,
-			FileCount: count,
-			SystemIDs: splitBrowseSystemIDs(systemIDs.String),
+
+		// The caller's context (the whole request) is done: stop, don't degrade.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", ctxErr)
 		}
+		// A real error (not our sub-timeout) should surface.
+		if !timedOut && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("browse route counts media scan: %w", err)
+		}
+
+		// The exact COUNT timed out for this route. Degrade, don't die: probe
+		// cheaply whether the filtered systems have any media. Candidate routes
+		// come from those systems' configured and indexed roots, so a positive
+		// result keeps the route browsable without another path-prefix scan. If
+		// the probe finds nothing (or itself times out), drop the route and keep
+		// browsing the rest.
+		if !probeAttempted {
+			probeHasMedia, probeErr = sqlBrowseRouteHasMedia(ctx, db, systemClause, systemArgs)
+			probeAttempted = true
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", ctxErr)
+		}
+		if probeErr != nil {
+			log.Warn().Err(probeErr).Str("route", route).
+				Msg("browse route count timed out and presence probe failed; skipping route")
+			continue
+		}
+		if !probeHasMedia {
+			continue
+		}
+		log.Warn().Str("route", route).
+			Msg("browse route count timed out; serving route with unknown file count")
+		degraded := database.BrowseRouteCount{
+			Path:         route,
+			CountUnknown: true,
+		}
+		// The timed-out query was what resolved the route's system membership.
+		// With a single-system filter the membership is still exact — the probe
+		// only matched media for that system — so keep the API's systemId intact.
+		// With multiple filter systems the subset is unknowable here; leave it
+		// empty rather than claiming systems the route may not contain.
+		if len(opts.Systems) == 1 {
+			degraded.SystemIDs = []string{opts.Systems[0].ID}
+		}
+		counts[route] = degraded
 	}
 	return counts, nil
+}
+
+// sqlBrowseRouteHasMedia is the cheap presence probe used when an exact route
+// COUNT(*) exceeds its sub-timeout. Candidate routes are already scoped to the
+// requested systems, so this probes those systems through Media.SystemDBID and
+// avoids the case-insensitive path LIKE scan that caused the exact count to time
+// out. It has its own short sub-timeout so a slow database still cannot block the
+// whole browse.
+func sqlBrowseRouteHasMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	systemClause string,
+	systemArgs []any,
+) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, browseRouteProbeSubTimeout)
+	defer cancel()
+
+	var one int
+	err := db.QueryRowContext(probeCtx,
+		`SELECT 1
+		 FROM Media m
+		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE m.IsMissing = 0 AND `+systemClause+`
+		 LIMIT 1`,
+		systemArgs...,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		// A probe sub-timeout is not a hard failure: report "unknown" as absent
+		// so the caller drops just this route instead of failing the browse. The
+		// driver may report the expired sub-timeout as its own "interrupted"
+		// error, so check the probe context's deadline too, not just the error.
+		timedOut := errors.Is(probeCtx.Err(), context.DeadlineExceeded) ||
+			errors.Is(err, context.DeadlineExceeded)
+		if ctx.Err() == nil && timedOut {
+			return false, nil
+		}
+		return false, fmt.Errorf("browse route presence probe: %w", err)
+	}
+	return true, nil
 }
 
 // sqlBrowseSystemRootCandidates resolves a list of filesystem roots
@@ -910,10 +2999,11 @@ func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string
 			continue
 		}
 		var dbCount int
-		if scanErr := db.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`,
-			dirID,
-		).Scan(&dbCount); scanErr != nil {
+		query := `SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`
+		if browseRouteCacheKey(root) != "/" {
+			query += ` AND ParentDirDBID != ChildDirDBID`
+		}
+		if scanErr := db.QueryRowContext(ctx, query, dirID).Scan(&dbCount); scanErr != nil {
 			return nil, fmt.Errorf("browse cache root counts query: %w", scanErr)
 		}
 		c := dbCount

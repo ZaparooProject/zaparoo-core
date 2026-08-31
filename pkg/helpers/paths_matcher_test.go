@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPathHasPrefixNormalized(t *testing.T) {
@@ -100,6 +101,89 @@ func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 	assert.Equal(t, `c:\roms\custom\game.rom`, matcherSeen)
 }
 
+func TestLauncherMatcher_SchemeUsesTestFunction(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:       "VirtualLauncher",
+		SystemID: "Virtual",
+		Schemes:  []string{"zaparoo"},
+		Test: func(_ *config.Instance, path string) bool {
+			return path == "zaparoo://expected/Game"
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFile("Virtual", "zaparoo://expected/Game"))
+	assert.False(t, matcher.MatchSystemFile("Virtual", "zaparoo://other/Game"))
+}
+
+func TestLauncherMatcher_NilPlatformDoesNotSynthesizeMediaPaths(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:         "NESLauncher",
+		SystemID:   "NES",
+		Folders:    []string{"roms"},
+		Extensions: []string{".nes"},
+	}
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{launcher})
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, nil)
+	assert.False(t, matcher.MatchSystemFile("NES", filepath.Join("media", "nes", "game.nes")))
+}
+
+func TestLauncherMatcher_FindLauncherNoMatch(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:         "NESLauncher",
+		SystemID:   "NES",
+		Extensions: []string{".nes"},
+	}
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{launcher})
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, nil)
+	_, err := matcher.FindLauncher(filepath.Join("media", "games", "gamelist.xml"))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoLauncher)
+}
+
 func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()
@@ -153,6 +237,124 @@ func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 
 	// Dot file
 	assert.False(t, matcher.MatchSystemFile("NES", "/roms/nes/.hidden.nes"))
+}
+
+func TestLauncherMatcher_MatchSystemFileForScanExcludes(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:           "NESLauncher",
+			SystemID:     "NES",
+			Folders:      []string{"nes"},
+			Extensions:   []string{".rom", ".vhd", ".sav", ".srm"},
+			ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd", "*.sav"},
+		},
+	})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+
+	gamePath := filepath.Join(rootDir, "nes", "game.rom")
+	assert.True(t, matcher.MatchSystemFile("NES", gamePath))
+	assert.True(t, matcher.MatchSystemFileForScan("NES", gamePath))
+
+	bootPath := filepath.Join(rootDir, "nes", "boot.rom")
+	assert.True(t, matcher.MatchSystemFile("NES", bootPath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", bootPath))
+
+	zipBootPath := filepath.Join(rootDir, "nes", "boot.zip", "boot.vhd")
+	assert.True(t, matcher.MatchSystemFile("NES", zipBootPath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", zipBootPath))
+
+	wildcardSavePath := filepath.Join(rootDir, "nes", "zelda.sav")
+	assert.True(t, matcher.MatchSystemFile("NES", wildcardSavePath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", wildcardSavePath))
+
+	nonMatchingWildcardPath := filepath.Join(rootDir, "nes", "zelda.srm")
+	assert.True(t, matcher.MatchSystemFile("NES", nonMatchingWildcardPath))
+	assert.True(t, matcher.MatchSystemFileForScan("NES", nonMatchingWildcardPath))
+}
+
+func TestLauncherMatcher_ShouldSkipScanDirectory(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:                    "Arcade",
+			SystemID:              "Arcade",
+			Folders:               []string{"_Arcade"},
+			Extensions:            []string{".mra"},
+			ScanDirectoryExcludes: []string{"_Organized"},
+		},
+		{
+			ID:                    "SharedFiltered",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:       "SharedUnfiltered",
+			SystemID: "Shared",
+			Folders:  []string{filepath.Join("shared", "generated")},
+		},
+		{
+			ID:                    "SharedSkippedFiltered",
+			SystemID:              "SharedSkipped",
+			Folders:               []string{"shared-skipped"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                 "SharedSkippedNonFilesystem",
+			SystemID:           "SharedSkipped",
+			Folders:            []string{"shared-skipped"},
+			SkipFilesystemScan: true,
+		},
+	})
+
+	cfg := &config.Instance{}
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	organized := filepath.Join(rootDir, "_Arcade", "_oRgAnIzEd")
+	assert.True(t, matcher.ShouldSkipScanDirectory("Arcade", organized))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "_Arcade")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "_Arcade", "alternatives")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "other", "_Organized")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Shared", filepath.Join(rootDir, "shared", "generated")),
+		"one launcher must not hide a directory needed by another launcher")
+	sharedSkipped := filepath.Join(rootDir, "shared-skipped", "generated")
+	assert.True(t, matcher.ShouldSkipScanDirectory("SharedSkipped", sharedSkipped),
+		"a non-filesystem launcher must not prevent a filesystem launcher from excluding a directory")
+
+	aliasPath := filepath.Join(organized, "Pooyan.mra")
+	assert.True(t, matcher.MatchSystemFile("Arcade", aliasPath),
+		"scan directory exclusions must not affect direct launches")
 }
 
 func TestLauncherMatcher_RootSlashAndDotFolder(t *testing.T) {

@@ -37,6 +37,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type amigaVisionLaunchTarget struct {
+	InstallPath string
+	ListingName string
+	GameName    string
+	Virtual     bool
+}
+
 func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string) error {
 	var biosPath string
 
@@ -168,15 +175,45 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	return mgl, nil
 }
 
-func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
-	dirPath := strings.ToLower(filepath.Dir(path))
-	if !strings.HasSuffix(dirPath, "listings/games.txt") && !strings.HasSuffix(dirPath, "listings/demos.txt") {
-		return "", nil
+func amigaVisionLaunchParts(path string) (amigaVisionLaunchTarget, bool) {
+	dir := filepath.Dir(path)
+	dirPath := strings.ToLower(filepath.ToSlash(dir))
+	if strings.HasSuffix(dirPath, "listings/games.txt") || strings.HasSuffix(dirPath, "listings/demos.txt") {
+		return amigaVisionLaunchTarget{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..", "..")),
+			ListingName: filepath.Base(dir),
+			GameName:    filepath.Base(path),
+		}, true
 	}
 
-	gameName := filepath.Base(path)
-	listingName := filepath.Base(filepath.Dir(path))
-	installPath := filepath.Clean(filepath.Join(filepath.Dir(path), "..", ".."))
+	switch strings.ToLower(filepath.Base(dir)) {
+	case "games":
+		return amigaVisionLaunchTarget{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "games.txt",
+			GameName:    filepath.Base(path),
+			Virtual:     true,
+		}, true
+	case "demos":
+		return amigaVisionLaunchTarget{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "demos.txt",
+			GameName:    filepath.Base(path),
+			Virtual:     true,
+		}, true
+	default:
+		return amigaVisionLaunchTarget{}, false
+	}
+}
+
+func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
+	target, ok := amigaVisionLaunchParts(path)
+	if !ok {
+		return "", nil
+	}
+	installPath := target.InstallPath
+	listingName := target.ListingName
+	gameName := target.GameName
 	bootImagePath := amigaVisionBootImagePath(installPath)
 	bootImageFound := bootImagePath != ""
 	log.Debug().
@@ -189,13 +226,21 @@ func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 		Msg("AmigaVision launch hook detected listing entry")
 	if !bootImageFound {
 		activeInstallPath := findAmigaVisionInstallPath(cfg, listingName, gameName)
-		if activeInstallPath != "" {
+		switch {
+		case activeInstallPath != "":
 			log.Debug().
 				Str("candidate_install_path", installPath).
 				Str("active_install_path", activeInstallPath).
 				Msg("AmigaVision launch hook using active install path")
 			installPath = activeInstallPath
-		} else {
+		case target.Virtual && !amigaListingContains(installPath, listingName, gameName):
+			log.Debug().
+				Str("candidate_install_path", installPath).
+				Str("game", gameName).
+				Str("listing", listingName).
+				Msg("AmigaVision virtual path ignored: no boot image or listing match")
+			return "", nil
+		default:
 			log.Warn().
 				Str("candidate_install_path", installPath).
 				Str("game", gameName).

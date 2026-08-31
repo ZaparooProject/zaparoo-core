@@ -184,6 +184,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 				log.Warn().Msg("reader error, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    r.ReaderID(),
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -201,6 +202,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 				log.Warn().Msg("reader disconnected, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    r.ReaderID(),
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -303,8 +305,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 			}
 
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  token,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    token,
 			}
 
 			r.lastToken = token
@@ -335,8 +338,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 			}
 
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  nil,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    nil,
 			}
 
 			r.lastToken = nil
@@ -359,8 +363,8 @@ func (r *ACR122PCSC) Close() error {
 	return nil
 }
 
-// TODO: this is a hack workaround to stop some log spam, probably the Detect
-// functions on readers should actually return an error instead of ""
+// PCSC reader listing can fail repeatedly when the service or hardware is absent.
+// Detect returns an empty string for "no reader", so log the first failure only.
 var detectErrorOnce sync.Once
 
 func (r *ACR122PCSC) Detect(connected []string) string {

@@ -57,7 +57,7 @@ func TokensEqual(a, b *tokens.Token) bool {
 		return false
 	}
 
-	return a.UID == b.UID && a.Text == b.Text
+	return a.UID == b.UID && a.Text == b.Text && a.PathRoot == b.PathRoot
 }
 
 func GetMd5Hash(filePath string) (string, error) {
@@ -248,10 +248,52 @@ func findEOCD(tail []byte) int {
 	return -1
 }
 
+const (
+	zipCentralDirectoryReadChunk = 256 * 1024
+	zipEntryYieldInterval        = 200
+)
+
+func readZipCentralDirectory(
+	ctx context.Context,
+	f *os.File,
+	buf []byte,
+	offset int64,
+	yield func() error,
+) error {
+	for start := 0; start < len(buf); start += zipCentralDirectoryReadChunk {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := min(start+zipCentralDirectoryReadChunk, len(buf))
+		n, err := f.ReadAt(buf[start:end], offset+int64(start))
+		if err != nil {
+			return fmt.Errorf("reading ZIP central directory chunk: %w", err)
+		}
+		if n != end-start {
+			return io.ErrUnexpectedEOF
+		}
+		if yield != nil {
+			if yieldErr := yield(); yieldErr != nil {
+				return yieldErr
+			}
+		}
+	}
+	return nil
+}
+
 // ListZip returns a slice of all filenames in a zip file.
 // It reads only the central directory, avoiding the zip.File/FileHeader
 // allocations that archive/zip performs per entry.
 func ListZip(filePath string) ([]string, error) {
+	return ListZipWithYield(context.Background(), filePath, nil)
+}
+
+// ListZipWithYield lists ZIP filenames while allowing long central-directory
+// reads and parsing to yield cooperatively or stop on context cancellation.
+func ListZipWithYield(ctx context.Context, filePath string, yield func() error) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(filePath) //nolint:gosec // G304: caller-controlled path, same as archive/zip.OpenReader
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zip file: %w", err)
@@ -358,7 +400,7 @@ func ListZip(filePath string) ([]string, error) {
 	}
 
 	cd := make([]byte, cdSize)
-	if _, err := f.ReadAt(cd, cdOffset); err != nil {
+	if err := readZipCentralDirectory(ctx, f, cd, cdOffset, yield); err != nil {
 		return nil, fmt.Errorf("failed to read central directory: %w", err)
 	}
 
@@ -371,6 +413,14 @@ func ListZip(filePath string) ([]string, error) {
 	names := make([]string, 0, entryCount)
 	pos := 0
 	for pos+zipCDHdrSize <= len(cd) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(names) > 0 && len(names)%zipEntryYieldInterval == 0 && yield != nil {
+			if err := yield(); err != nil {
+				return nil, err
+			}
+		}
 		if binary.LittleEndian.Uint32(cd[pos:]) != zipSigCentralDir {
 			break
 		}

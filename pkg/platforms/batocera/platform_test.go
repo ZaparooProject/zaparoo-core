@@ -9,6 +9,7 @@ package batocera
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,11 +19,158 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
+func TestSettings_UpdatePayload(t *testing.T) {
+	t.Parallel()
+
+	files := (&Platform{}).UpdatePayload()
+	require.Len(t, files, 7)
+	byArchivePath := make(map[string]updatepayload.File, len(files))
+	for _, file := range files {
+		byArchivePath[file.ArchivePath] = file
+	}
+
+	tests := []struct {
+		name string
+		want updatepayload.File
+	}{
+		{
+			name: "game selected hook",
+			want: updatepayload.File{
+				SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
+					"game-selected", "zaparoo_game_select.sh"),
+				ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+				InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "multimedia keys",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
+				ArchivePath: "scripts/configs/multimedia_keys.conf",
+				InstallPath: "configs/multimedia_keys.conf",
+				Mode:        0o644,
+			},
+		},
+		{
+			name: "content downloader image",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
+				ArchivePath: "scripts/content_downloader.png",
+				InstallPath: "content_downloader.png",
+				Mode:        0o644,
+			},
+		},
+		{
+			name: "ports launcher",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
+				ArchivePath: "scripts/ports/Zaparoo.sh",
+				InstallPath: "../roms/ports/Zaparoo.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "service",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+				ArchivePath: "scripts/services/zaparoo_service",
+				InstallPath: "services/zaparoo_service",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "wrapper",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
+				ArchivePath: "scripts/zaparoo_wrapper.sh",
+				InstallPath: "zaparoo_wrapper.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "write game",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
+				ArchivePath: "scripts/zaparoo_write_game.sh",
+				InstallPath: "zaparoo_write_game.sh",
+				Mode:        0o755,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := byArchivePath[tt.want.ArchivePath]
+			require.True(t, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPresentUIForwardsPassiveEvents(t *testing.T) {
+	// MockESAPIServer binds to hardcoded port 1234.
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	p := &Platform{}
+
+	tests := []struct {
+		name  string
+		event models.UIEvent
+	}{
+		{
+			name: "notice message",
+			event: models.UIEvent{
+				Kind:    models.UIEventKindNotice,
+				Title:   "Ignored title",
+				Message: "Notice message",
+			},
+		},
+		{
+			name: "loader title fallback",
+			event: models.UIEvent{
+				Kind:  models.UIEventKindLoader,
+				Title: "Loading",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			closeFn, err := p.PresentUI(t.Context(), &tt.event)
+			require.NoError(t, err)
+			require.NotNil(t, closeFn)
+			require.NoError(t, closeFn())
+		})
+	}
+
+	assert.Equal(t, []string{"Notice message", "Loading"}, mockESAPI.Notifications())
+}
+
+func TestPresentUIRejectsInteractiveEvents(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	for _, kind := range []models.UIEventKind{
+		models.UIEventKindPicker,
+		models.UIEventKindConfirm,
+	} {
+		closeFn, err := p.PresentUI(t.Context(), &models.UIEvent{Kind: kind})
+		require.ErrorIs(t, err, platforms.ErrNotSupported)
+		assert.Nil(t, closeFn)
+	}
+}
 
 // TestKodiLocalLauncherExists tests that KodiLocal launcher exists
 func TestKodiLocalLauncherExists(t *testing.T) {
@@ -815,6 +963,23 @@ func TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu(t *testing.T) {
 	assert.NoError(t, err, "ReturnToMenu should handle no active media gracefully")
 }
 
+func TestLaunchSystem_MenuUsesReturnToMenu(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithNoRunningGame()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{cfg: cfg}
+	platform.activeMedia = func() *models.ActiveMedia { return nil }
+	platform.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+	err = platform.LaunchSystem(cfg, "Menu")
+	assert.NoError(t, err)
+}
+
 // TestStartPost_ESAPIUnavailable tests that StartPost handles ES API unavailability gracefully
 func TestStartPost_ESAPIUnavailable(t *testing.T) {
 	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running
@@ -1129,6 +1294,22 @@ func TestRootDirs_AlwaysIncludesDefaultPath(t *testing.T) {
 	roots := platform.RootDirs(cfg)
 
 	assert.Contains(t, roots, "/userdata/roms", "default ROM path must always be included")
+}
+
+func TestRefreshLauncherDependencies_InvalidatesESConfig(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{
+		esConfigCache: &ESSystemConfig{Systems: map[string]ESSystem{
+			"nes": {Name: "nes"},
+		}},
+	}
+	var refresher platforms.LauncherRefreshProvider = platform
+
+	require.NoError(t, refresher.RefreshLauncherDependencies())
+	platform.esConfigMu.RLock()
+	defer platform.esConfigMu.RUnlock()
+	assert.Nil(t, platform.esConfigCache)
 }
 
 // TestRootDirs_IncludesESDiscoveredPaths verifies that paths from ES config

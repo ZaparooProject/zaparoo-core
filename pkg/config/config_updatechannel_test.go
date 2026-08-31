@@ -59,7 +59,7 @@ func TestUpdateChannel(t *testing.T) {
 
 			cfg := &Instance{
 				vals: Values{
-					UpdateChannel: tt.channel,
+					Updates: Updates{Channel: tt.channel},
 				},
 			}
 
@@ -76,10 +76,10 @@ func TestSetUpdateChannel(t *testing.T) {
 		vals: Values{},
 	}
 
-	assert.Nil(t, cfg.vals.UpdateChannel)
+	assert.Nil(t, cfg.vals.Updates.Channel)
 
 	cfg.SetUpdateChannel("beta")
-	assert.NotNil(t, cfg.vals.UpdateChannel)
+	assert.NotNil(t, cfg.vals.Updates.Channel)
 	assert.Equal(t, "beta", cfg.UpdateChannel())
 
 	cfg.SetUpdateChannel("stable")

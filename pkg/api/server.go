@@ -43,6 +43,7 @@ import (
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -52,6 +53,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -72,7 +74,11 @@ var allowedOrigins = []string{
 	"http://localhost",      // Fallback/development
 }
 
-const websocketMaxMessageSize = 4 * 1024 * 1024
+const (
+	websocketMaxMessageSize        = 4 * 1024 * 1024
+	webSocketAuthenticationTimeout = 10 * time.Second
+	maxLoggedRequestIDLen          = 128
+)
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
@@ -99,6 +105,11 @@ var JSONRPCErrorInternalError = models.ErrorObject{
 	Message: "Internal error",
 }
 
+var JSONRPCErrorServerBusy = models.ErrorObject{
+	Code:    -32000,
+	Message: "Server busy",
+}
+
 func makeJSONRPCError(code int, message string) models.ErrorObject {
 	return models.ErrorObject{
 		Code:    code,
@@ -112,9 +123,17 @@ func newWebSocketSession() *melody.Melody {
 	return session
 }
 
-// logSafeRequest logs a request but avoids logging sensitive or large content
+func requestIDForLog(id models.RPCID) string {
+	value := id.String()
+	if len(value) <= maxLoggedRequestIDLen {
+		return value
+	}
+	return value[:maxLoggedRequestIDLen-3] + "..."
+}
+
+// logSafeRequest logs a request but avoids logging sensitive or large content.
 func logSafeRequest(req *models.RequestObject) {
-	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
+	log.Debug().Str("method", req.Method).Str("requestId", requestIDForLog(req.ID)).Msg("received request")
 }
 
 // logSafeResponse logs a response but redacts large or binary fields. Any
@@ -142,6 +161,7 @@ func logSafeResponse(result any) {
 		log.Debug().
 			Str("typeTag", resp.TypeTag).
 			Str("contentType", resp.ContentType).
+			Str("delivery", resp.Delivery).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
 	case models.MediaMetaResponse:
@@ -169,8 +189,66 @@ type RequestTracker interface {
 	RequestEnded()
 }
 
+type methodDefinition struct {
+	handler       func(requests.RequestEnv) (any, error)
+	legacyAllowed bool
+}
+
 type MethodMap struct {
 	sync.Map
+}
+
+// unauthenticatedBootstrapMethods lists JSON-RPC authentication bootstrap
+// methods reachable before authentication on every platform. Transport-level
+// network restrictions still apply.
+//
+//nolint:gochecknoglobals // immutable authentication bootstrap policy
+var unauthenticatedBootstrapMethods = map[string]bool{
+	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
+	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
+}
+
+// legacyAllowedMethods freezes methods reachable by compatibility clients on
+// approved appliance platforms. Missing and newly added methods fail closed.
+//
+//nolint:gochecknoglobals // immutable compatibility policy
+var legacyAllowedMethods = map[string]bool{
+	models.MethodLaunch: true, models.MethodRun: true, models.MethodStop: true,
+	models.MethodConfirm: true, models.MethodUI: true, models.MethodUIRespond: true,
+	models.MethodTokens: true, models.MethodHistory: true,
+	models.MethodMedia: true, models.MethodMediaGenerate: true,
+	models.MethodMediaGenerateCancel: true, models.MethodMediaGenerateResume: true,
+	models.MethodMediaIndex: true, models.MethodMediaSearch: true, models.MethodMediaBrowse: true,
+	models.MethodMediaBrowseIndex: true, models.MethodMediaTags: true,
+	models.MethodMediaTagsUpdate: true, models.MethodMediaMetaUpdate: true,
+	models.MethodMediaActive: true, models.MethodMediaActiveUpdate: true,
+	models.MethodMediaCleanOrphans: true, models.MethodMediaHistory: true,
+	models.MethodMediaHistoryLatest: true, models.MethodMediaHistoryTop: true,
+	models.MethodMediaLookup: true, models.MethodMediaMeta: true, models.MethodMediaImage: true,
+	models.MethodScrapers: true, models.MethodMediaScrape: true,
+	models.MethodMediaScrapeStatus: true, models.MethodMediaScrapeCancel: true,
+	models.MethodMediaScrapeResume: true, models.MethodMediaControl: true,
+	models.MethodMediaTitleParse: true,
+	models.MethodSettings:        true, models.MethodSettingsUpdate: true,
+	models.MethodSettingsReload: true, models.MethodSettingsLogsDownload: true,
+	models.MethodSettingsBackupStatus: true, models.MethodPlaytimeLimits: true,
+	models.MethodPlaytimeLimitsUpdate: true, models.MethodPlaytime: true,
+	models.MethodSystems: true, models.MethodLaunchers: true, models.MethodLaunchersRefresh: true,
+	models.MethodMappings: true, models.MethodMappingsNew: true,
+	models.MethodMappingsDelete: true, models.MethodMappingsUpdate: true,
+	models.MethodMappingsReload: true,
+	models.MethodReaders:        true, models.MethodReadersWrite: true,
+	models.MethodReadersWriteCancel: true,
+	models.MethodInputKeyboard:      true, models.MethodInputGamepad: true,
+	models.MethodScreenshot: true, models.MethodVersion: true, models.MethodHealthCheck: true,
+	models.MethodInbox: true, models.MethodInboxDelete: true, models.MethodInboxClear: true,
+	models.MethodClientsCurrent: true,
+	models.MethodProfiles:       true, models.MethodProfilesNew: true,
+	models.MethodProfilesUpdate: true, models.MethodProfilesDelete: true,
+	models.MethodProfilesActive: true, models.MethodProfilesSwitch: true,
+	models.MethodProfilesVerify:    true,
+	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
+	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
 }
 
 func (m *MethodMap) Store(key, value any) {
@@ -197,6 +275,7 @@ func isValidMethodName(name string) bool {
 func (m *MethodMap) AddMethod(
 	name string,
 	handler func(requests.RequestEnv) (any, error),
+	legacyAccess ...bool,
 ) error {
 	if name == "" {
 		return errors.New("method name cannot be empty")
@@ -204,21 +283,38 @@ func (m *MethodMap) AddMethod(
 		return fmt.Errorf("method name contains invalid characters: %s", name)
 	} else if _, exists := m.GetMethod(name); exists {
 		return fmt.Errorf("method already exists: %s", name)
+	} else if len(legacyAccess) > 1 {
+		return errors.New("method legacy access accepts at most one value")
 	}
-	m.Store(strings.ToLower(name), handler)
+	legacyAllowed := len(legacyAccess) == 1 && legacyAccess[0]
+	m.Store(strings.ToLower(name), methodDefinition{
+		handler:       handler,
+		legacyAllowed: legacyAllowed,
+	})
 	return nil
 }
 
+func (m *MethodMap) getDefinition(name string) (methodDefinition, bool) {
+	value, ok := m.Load(strings.ToLower(name))
+	if !ok {
+		return methodDefinition{}, false
+	}
+	definition, ok := value.(methodDefinition)
+	if ok {
+		return definition, true
+	}
+	// Direct Store is retained for focused tests and extension compatibility,
+	// but fails closed for legacy authority.
+	handler, ok := value.(func(requests.RequestEnv) (any, error))
+	if !ok {
+		return methodDefinition{}, false
+	}
+	return methodDefinition{handler: handler}, true
+}
+
 func (m *MethodMap) GetMethod(name string) (func(requests.RequestEnv) (any, error), bool) {
-	fn, ok := m.Load(strings.ToLower(name))
-	if !ok {
-		return nil, false
-	}
-	method, ok := fn.(func(requests.RequestEnv) (any, error))
-	if !ok {
-		return nil, false
-	}
-	return method, true
+	definition, ok := m.getDefinition(name)
+	return definition.handler, ok
 }
 
 func (m *MethodMap) ListMethods() []string {
@@ -235,10 +331,12 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch:  methods.HandleRun, // DEPRECATED
-		models.MethodRun:     methods.HandleRun,
-		models.MethodStop:    methods.HandleStop,
-		models.MethodConfirm: methods.HandleConfirm,
+		models.MethodLaunch:    methods.HandleRun, // DEPRECATED
+		models.MethodRun:       methods.HandleRun,
+		models.MethodStop:      methods.HandleStop,
+		models.MethodConfirm:   methods.HandleConfirm,
+		models.MethodUI:        methods.HandleUI,
+		models.MethodUIRespond: methods.HandleUIRespond,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -250,12 +348,15 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaIndex:          methods.HandleGenerateMedia,
 		models.MethodMediaSearch:         methods.HandleMediaSearch,
 		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
+		models.MethodMediaBrowseIndex:    methods.HandleMediaBrowseIndex,
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaTagsUpdate:     methods.HandleMediaTagsUpdate,
+		models.MethodMediaMetaUpdate:     methods.HandleMediaMetaUpdate,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
 		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
 		models.MethodMediaHistory:        methods.HandleMediaHistory,
+		models.MethodMediaHistoryLatest:  methods.HandleMediaHistoryLatest,
 		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
 		models.MethodMediaLookup:         methods.HandleMediaLookup,
 		models.MethodMediaMeta:           methods.HandleMediaMeta,
@@ -268,13 +369,23 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
-		models.MethodSettings:             methods.HandleSettings,
-		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
-		models.MethodSettingsReload:       methods.HandleSettingsReload,
-		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
-		models.MethodPlaytimeLimits:       methods.HandlePlaytimeLimits,
-		models.MethodPlaytimeLimitsUpdate: methods.HandlePlaytimeLimitsUpdate,
-		models.MethodPlaytime:             methods.HandlePlaytime,
+		models.MethodSettings:                    methods.HandleSettings,
+		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:              methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload:        methods.HandleLogsDownload,
+		models.MethodSettingsBackup:              methods.HandleBackup,
+		models.MethodSettingsBackupList:          methods.HandleBackupList,
+		models.MethodSettingsBackupInspect:       methods.HandleBackupInspect,
+		models.MethodSettingsBackupDelete:        methods.HandleBackupDelete,
+		models.MethodSettingsBackupRestore:       methods.HandleBackupRestore,
+		models.MethodSettingsBackupStatus:        methods.HandleBackupStatus,
+		models.MethodSettingsBackupRemoteRun:     methods.HandleBackupRemoteRun,
+		models.MethodSettingsBackupRemoteList:    methods.HandleBackupRemoteList,
+		models.MethodSettingsBackupRemoteRestore: methods.HandleBackupRemoteRestore,
+		models.MethodPlaytimeLimits:              methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:                    methods.HandlePlaytime,
+		models.MethodPlaytimeExtend:              methods.HandlePlaytimeExtend,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -297,6 +408,7 @@ func NewMethodMap() *MethodMap {
 				env.State.ListReaders(),
 				&ls,
 				env.State.SetWroteToken,
+				func(readerID string, active bool) { env.State.SetReaderWriteActive(active, readerID) },
 			)
 		},
 		models.MethodReadersWriteCancel: func(env requests.RequestEnv) (any, error) {
@@ -318,15 +430,35 @@ func NewMethodMap() *MethodMap {
 		models.MethodInboxDelete: methods.HandleInboxDelete,
 		models.MethodInboxClear:  methods.HandleInboxClear,
 		// clients (paired API clients)
-		models.MethodClients:       methods.HandleClients,
-		models.MethodClientsDelete: methods.HandleClientsDelete,
+		models.MethodClients:        methods.HandleClients,
+		models.MethodClientsCurrent: methods.HandleClientsCurrent,
+		models.MethodClientsDelete:  methods.HandleClientsDelete,
+
+		models.MethodProfiles:       methods.HandleProfiles,
+		models.MethodProfilesNew:    methods.HandleProfilesNew,
+		models.MethodProfilesUpdate: methods.HandleProfilesUpdate,
+		models.MethodProfilesDelete: methods.HandleProfilesDelete,
+		models.MethodProfilesActive: methods.HandleProfilesActive,
+		models.MethodProfilesSwitch: methods.HandleProfilesSwitch,
+		models.MethodProfilesVerify: methods.HandleProfilesVerify,
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
 		},
+		models.MethodSettingsAuthStatus: methods.HandleSettingsAuthStatus,
+		models.MethodSettingsAuthUnlink: methods.HandleSettingsAuthUnlink,
+		models.MethodSettingsAuthLink: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleSettingsAuthLink(env, zapscript.FetchWellKnown)
+		},
+		models.MethodSettingsAuthLinkStatus: methods.HandleSettingsAuthLinkStatus,
+		models.MethodSettingsAuthLinkCancel: methods.HandleSettingsAuthLinkCancel,
+		models.MethodRemoteActivity:         methods.HandleRemoteActivity,
 		// update
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)
+		},
+		models.MethodUpdateStatus: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateStatus(env, updater.Status)
 		},
 		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
@@ -334,7 +466,7 @@ func NewMethodMap() *MethodMap {
 	}
 
 	for name, fn := range defaultMethods {
-		err := m.AddMethod(name, fn)
+		err := m.AddMethod(name, fn, legacyAllowedMethods[name])
 		if err != nil {
 			log.Error().Err(err).Msgf("error adding default method: %s", name)
 		}
@@ -365,6 +497,32 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 	}
 }
 
+// legacyAdmissionMiddleware rejects unauthenticated remote API transports on
+// platforms without an explicit compatibility policy. It runs after API-key
+// middleware so a valid key is recognized as admin authority.
+func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if apimiddleware.IsLoopbackAddr(r.RemoteAddr) ||
+				apimiddleware.APIKeyAuthenticated(r) || permissions.LegacyEnabled(platformID) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+		})
+	}
+}
+
+// apiMethodManagesRestoreAccess lists methods that coordinate with the
+// backup-restore gate themselves instead of taking the shared read lock:
+// the restore methods hold the write side, and media.active.update resolves
+// its own access so an active game can cancel an in-flight restore.
+func apiMethodManagesRestoreAccess(method string) bool {
+	return method == models.MethodSettingsBackupRestore ||
+		method == models.MethodSettingsBackupRemoteRestore ||
+		method == models.MethodMediaActiveUpdate
+}
+
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
 //
@@ -376,18 +534,52 @@ func handleRequest(
 ) (any, *models.ErrorObject) {
 	logSafeRequest(&req)
 
-	fn, ok := methodMap.GetMethod(req.Method)
+	definition, ok := methodMap.getDefinition(req.Method)
 	if !ok {
 		log.Warn().Str("method", req.Method).Msg("unknown method")
 		return nil, &JSONRPCErrorMethodNotFound
 	}
+	grant := methods.GrantForRequest(&env)
+	if grant.Access() == permissions.AccessLegacy {
+		bootstrapAllowed := unauthenticatedBootstrapMethods[strings.ToLower(req.Method)]
+		legacyAllowed := permissions.LegacyEnabled(env.PlatformID) && definition.legacyAllowed
+		if !bootstrapAllowed && !legacyAllowed {
+			rpcError := makeJSONRPCError(1, methods.ErrForbidden.Error())
+			return nil, &rpcError
+		}
+	}
+
+	if env.State != nil && !apiMethodManagesRestoreAccess(req.Method) {
+		release, accessErr := env.State.TryAcquireRestoreAccess()
+		if accessErr != nil {
+			log.Warn().Err(accessErr).Str("method", req.Method).Msg("API request rejected during backup restore")
+			rpcError := makeJSONRPCError(1, accessErr.Error())
+			return nil, &rpcError
+		}
+		defer release()
+	}
 
 	env.Params = req.Params
 
-	resp, err := fn(env)
+	resp, err := definition.handler(env)
 	if err != nil {
+		var catErr *models.CategorizedError
+		if errors.As(err, &catErr) {
+			// The producer already logged the cause at the right level; the
+			// wire only gets the safe message and the category.
+			log.Warn().Err(catErr.Err).Str("method", req.Method).
+				Str("category", catErr.Category).Msg("method reported failure")
+			return nil, &models.ErrorObject{
+				Code:    1,
+				Message: catErr.Message,
+				Data:    models.ErrorData{Category: catErr.Category},
+			}
+		}
+		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
-		if errors.As(err, &clientErr) {
+		if errors.As(err, &quietErr) {
+			log.Debug().Err(err).Str("method", req.Method).Msg("client error")
+		} else if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
 		} else {
 			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")
@@ -397,6 +589,28 @@ func handleRequest(
 		return nil, &rpcError
 	}
 	return resp, nil
+}
+
+func logWebSocketTransportTiming(
+	id models.RPCID,
+	responseType string,
+	encrypted bool,
+	responseBytes int,
+	marshalDuration time.Duration,
+	writeDuration time.Duration,
+	writeErr error,
+) {
+	event := log.Debug().
+		Str("requestId", requestIDForLog(id)).
+		Str("responseType", responseType).
+		Bool("encrypted", encrypted).
+		Int("responseBytes", responseBytes).
+		Dur("marshalDuration", marshalDuration).
+		Dur("writeDuration", writeDuration)
+	if writeErr != nil {
+		event = event.Err(writeErr)
+	}
+	event.Msg("websocket response transport timing")
 }
 
 // sendWSResponse marshals a method result and sends it to the client.
@@ -409,13 +623,20 @@ func sendWSResponse(session *melody.Session, id models.RPCID, result any) error 
 		Result:  result,
 	}
 
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling response: %w", err)
 	}
 
-	if err := session.Write(data); err != nil {
-		return fmt.Errorf("failed to write websocket response: %w", err)
+	writeStarted := time.Now()
+	writeErr := session.Write(data)
+	logWebSocketTransportTiming(
+		id, "result", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("failed to write websocket response: %w", writeErr)
 	}
 	return nil
 }
@@ -430,14 +651,20 @@ func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorOb
 		Error:   &errObj,
 	}
 
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling error response: %w", err)
 	}
 
-	err = session.Write(data)
-	if err != nil {
-		return fmt.Errorf("failed to write to session: %w", err)
+	writeStarted := time.Now()
+	writeErr := session.Write(data)
+	logWebSocketTransportTiming(
+		id, "error", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("failed to write to session: %w", writeErr)
 	}
 	return nil
 }
@@ -458,7 +685,7 @@ func handleResponse(resp models.ResponseObject) error {
 	// whole map would flood the debug log. Error messages cross the same
 	// 4 MB WS boundary, so cap them too.
 	const maxErrorMessageLen = 200
-	ev := log.Debug().Interface("id", resp.ID)
+	ev := log.Debug().Str("requestId", requestIDForLog(resp.ID))
 	if resp.Error != nil {
 		ev = ev.Int("errorCode", resp.Error.Code)
 		msg := resp.Error.Message
@@ -674,6 +901,58 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 	return result
 }
 
+// localHostNames returns the names a browser on the LAN can reach this device
+// by. That is the OS hostname plus the ".local" forms an mDNS responder
+// publishes for it: responders derive the host record from the OS hostname, so
+// a device called "mister" answers to "mister.local" regardless of what
+// instance name Core advertises over DNS-SD. Hostnames that are already fully
+// qualified contribute their short label too, because avahi publishes the short
+// name under ".local" while the bundled responder appends the suffix to the
+// whole name. Results are deduplicated case-insensitively.
+func localHostNames(hostname string) []string {
+	hostname = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
+	if hostname == "" {
+		return nil
+	}
+
+	candidates := []string{hostname}
+	if !strings.HasSuffix(strings.ToLower(hostname), ".local") {
+		candidates = append(candidates, hostname+".local")
+	}
+	if label, _, found := strings.Cut(hostname, "."); found && label != "" {
+		candidates = append(candidates, label+".local")
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, candidate)
+	}
+
+	return result
+}
+
+// expandHostNameOrigins allows each host name over HTTP and HTTPS, with and
+// without the API port. The port-less forms cover reverse proxies serving Core
+// on a default port.
+func expandHostNameOrigins(names []string, port int) []string {
+	result := make([]string, 0, len(names)*4)
+	for _, name := range names {
+		result = append(result,
+			"http://"+name,
+			"https://"+name,
+			fmt.Sprintf("http://%s:%d", name, port),
+			fmt.Sprintf("https://%s:%d", name, port),
+		)
+	}
+	return result
+}
+
 // expandLocalIPOrigins creates allowed origins for current local interface IPs.
 func expandLocalIPOrigins(localIPs []string, port int) []string {
 	result := make([]string, 0, len(localIPs)*2)
@@ -798,16 +1077,28 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 // On any send-side encryption failure (counter exhaustion, AEAD setup
 // error, write failure) the session is closed: a desynced session
 // cannot recover and keeping it open hides the bug from the client.
+func writeNotificationFrame(
+	writeFn func([]byte) error,
+	cs *apimiddleware.ClientSession,
+	authState webSocketAuthState,
+	plaintext []byte,
+) error {
+	if cs != nil {
+		if err := cs.SendEncryptedFrame(plaintext, writeFn); err != nil {
+			return fmt.Errorf("encrypt notification: %w", err)
+		}
+		return nil
+	}
+	if authState != webSocketAuthPlaintext {
+		return nil
+	}
+	return writeFn(plaintext)
+}
+
 func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	cs := getClientSession(s)
-	if cs == nil {
-		if err := s.Write(plaintext); err != nil {
-			logWSWriteError(err, "broadcasting plaintext notification")
-		}
-		return
-	}
-	if err := cs.SendEncryptedFrame(plaintext, s.Write); err != nil {
-		logWSWriteError(err, "broadcasting encrypted notification")
+	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
+		logWSWriteError(err, "broadcasting notification")
 		closeMelodySession(s)
 	}
 }
@@ -907,7 +1198,14 @@ func processRequestObject(
 		}
 
 		// ID is present (could be null or valid value) - this is a request that needs a response
+		started := time.Now()
 		resp, rpcError := handleRequest(methodMap, env, req)
+		log.Debug().
+			Str("method", req.Method).
+			Str("requestId", requestIDForLog(req.ID)).
+			Dur("duration", time.Since(started)).
+			Bool("error", rpcError != nil).
+			Msg("api request handled")
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
@@ -955,9 +1253,12 @@ func handleWSMessage(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	tracker RequestTracker,
@@ -998,6 +1299,10 @@ func handleWSMessage(
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
 		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
+		platformID := ""
+		if !isLocal {
+			platformID = platform.ID()
+		}
 		var sourceIP string
 		if clientIP != nil {
 			sourceIP = clientIP.String()
@@ -1044,7 +1349,7 @@ func handleWSMessage(
 		// Heartbeat ping/pong runs on the decrypted plaintext so encrypted
 		// sessions get an encrypted pong, and remote plaintext probes are
 		// rejected by decryptIncomingFrame before reaching this point.
-		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session)
+		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session, platform)
 
 		if bytes.Equal(plaintext, []byte("ping")) {
 			if err := dispatcher.enqueuePong(cs, tracker); err != nil {
@@ -1058,23 +1363,60 @@ func handleWSMessage(
 		}
 
 		env := requests.RequestEnv{
-			Context:       st.GetContext(),
-			Platform:      platform,
-			Config:        cfg,
-			State:         st,
-			Database:      db,
-			LimitsManager: limitsManager,
-			LauncherCache: helpers.GlobalLauncherCache,
-			Player:        player,
-			TokenQueue:    inTokenQueue,
-			ConfirmQueue:  confirmQueue,
-			IndexPauser:   indexPauser,
-			ScrapePauser:  scrapePauser,
-			IsLocal:       isLocal,
-			ClientID:      session.Request.RemoteAddr,
+			Context:         st.GetContext(),
+			Platform:        platform,
+			Config:          cfg,
+			State:           st,
+			Database:        db,
+			LimitsManager:   limitsManager,
+			Profiles:        profilesSvc,
+			LauncherCache:   helpers.GlobalLauncherCache,
+			Player:          player,
+			PlaybackManager: playbackManager,
+			UI:              st.UIEvents(),
+			TokenQueue:      inTokenQueue,
+			ConfirmQueue:    confirmQueue,
+			IndexPauser:     indexPauser,
+			ScrapePauser:    scrapePauser,
+			BackupPauser:    backupPauser,
+			InputSession:    dispatcher.inputSession,
+			PlatformID:      platformID,
+			IsLocal:         isLocal,
+			ClientID:        session.Request.RemoteAddr,
 		}
+		if cs != nil {
+			env.ClientRole = cs.ClientRole()
+		}
+		env.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(session.Request)
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
+			var queueFullErr *wsRequestQueueFullError
+			if errors.As(err, &queueFullErr) {
+				log.Warn().
+					Str("method", queueFullErr.method).
+					Str("requestId", requestIDForLog(queueFullErr.requestID)).
+					Str("priority", queueFullErr.priority.String()).
+					Int("queueDepth", queueFullErr.depth).
+					Int("queueCapacity", queueFullErr.capacity).
+					Msg("websocket request rejected because queue is full")
+				if queueFullErr.requestID.IsAbsent() {
+					endTrackedRequest()
+					return
+				}
+				dispatcher.enqueueResponse(&wsResponseJob{
+					result: requestResult{
+						ID:          queueFullErr.requestID,
+						Error:       &JSONRPCErrorServerBusy,
+						ShouldReply: true,
+					},
+					cs:      cs,
+					tracker: tracker,
+					method:  queueFullErr.method,
+				})
+				handoffTrackedRequest()
+				return
+			}
+
 			log.Warn().Err(err).Msg("failed to queue websocket request")
 			endTrackedRequest()
 			if sendErr := sendWSEncryptedError(
@@ -1149,6 +1491,7 @@ func decryptIncomingFrame(
 			return nil, nil, false
 		}
 		setClientSession(session, newSession)
+		setWebSocketAuthState(session, webSocketAuthEncrypted)
 		return pt, newSession, true
 	}
 
@@ -1216,12 +1559,19 @@ func sendWSEncryptedResponse(
 		ID:      id,
 		Result:  result,
 	}
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
 	}
-	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
-		return fmt.Errorf("send encrypted response: %w", err)
+	writeStarted := time.Now()
+	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	logWebSocketTransportTiming(
+		id, "result", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("send encrypted response: %w", writeErr)
 	}
 	return nil
 }
@@ -1244,12 +1594,19 @@ func sendWSEncryptedError(
 		ID:      id,
 		Error:   &rpcErr,
 	}
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal error response: %w", err)
 	}
-	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
-		return fmt.Errorf("send encrypted error: %w", err)
+	writeStarted := time.Now()
+	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	logWebSocketTransportTiming(
+		id, "error", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("send encrypted error: %w", writeErr)
 	}
 	return nil
 }
@@ -1263,9 +1620,12 @@ func handlePostRequest(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1304,27 +1664,42 @@ func handlePostRequest(
 			return
 		}
 
-		// Derive from r.Context() (already has APIRequestTimeout from middleware)
-		// but also cancel on app shutdown via st.GetContext().
-		reqCtx, reqCancel := context.WithCancel(r.Context())
-		context.AfterFunc(st.GetContext(), reqCancel)
-		defer reqCancel()
+		// Apply a method-specific deadline while preserving client-disconnect
+		// cancellation from the HTTP request and app-shutdown cancellation.
+		method := methodFromAPIRequestPayload(body)
+		reqCtx, reqCancel := requestContextForAPIMethod(r.Context(), method)
+		stopAppCancel := context.AfterFunc(st.GetContext(), reqCancel)
+		defer func() {
+			stopAppCancel()
+			reqCancel()
+		}()
 
+		isLocal := apimiddleware.IsLoopbackAddr(r.RemoteAddr)
+		platformID := ""
+		if !isLocal {
+			platformID = platform.ID()
+		}
 		env := requests.RequestEnv{
-			Context:       reqCtx,
-			Platform:      platform,
-			Config:        cfg,
-			State:         st,
-			Database:      db,
-			LimitsManager: limitsManager,
-			LauncherCache: helpers.GlobalLauncherCache,
-			Player:        player,
-			TokenQueue:    inTokenQueue,
-			ConfirmQueue:  confirmQueue,
-			IndexPauser:   indexPauser,
-			ScrapePauser:  scrapePauser,
-			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
-			ClientID:      r.RemoteAddr,
+			Context:             reqCtx,
+			Platform:            platform,
+			Config:              cfg,
+			State:               st,
+			Database:            db,
+			LimitsManager:       limitsManager,
+			Profiles:            profilesSvc,
+			LauncherCache:       helpers.GlobalLauncherCache,
+			Player:              player,
+			PlaybackManager:     playbackManager,
+			UI:                  st.UIEvents(),
+			TokenQueue:          inTokenQueue,
+			ConfirmQueue:        confirmQueue,
+			IndexPauser:         indexPauser,
+			ScrapePauser:        scrapePauser,
+			BackupPauser:        backupPauser,
+			PlatformID:          platformID,
+			IsLocal:             isLocal,
+			ClientID:            r.RemoteAddr,
+			APIKeyAuthenticated: apimiddleware.APIKeyAuthenticated(r),
 		}
 
 		result := processRequestObject(methodMap, env, body)
@@ -1335,7 +1710,10 @@ func handlePostRequest(
 		}
 
 		var respBody []byte
+		responseType := "result"
+		marshalStarted := time.Now()
 		if result.Error != nil {
+			responseType = "error"
 			errorResp := models.ResponseErrorObject{
 				JSONRPC: "2.0",
 				ID:      result.ID,
@@ -1360,16 +1738,28 @@ func handlePostRequest(
 				return
 			}
 		}
+		marshalDuration := time.Since(marshalStarted)
 
+		writeStarted := time.Now()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, err = w.Write(respBody)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to write response")
+		writtenBytes, writeErr := w.Write(respBody)
+		if writeErr != nil {
+			log.Error().Err(writeErr).Msg("failed to write response")
 		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+		log.Debug().
+			Str("method", method).
+			Str("requestId", requestIDForLog(result.ID)).
+			Str("responseType", responseType).
+			Int("responseBytes", len(respBody)).
+			Int("writtenBytes", writtenBytes).
+			Dur("marshalDuration", marshalDuration).
+			Dur("writeDuration", time.Since(writeStarted)).
+			Bool("writeError", writeErr != nil).
+			Msg("http response transport timing")
 		if result.AfterWrite != nil {
 			result.AfterWrite()
 		}
@@ -1385,16 +1775,18 @@ func Start(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
-	mdnsHostname string,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) error {
 	return StartWithReady(
-		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, tracker, nil,
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
+		notifBroker, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
 	)
 }
 
@@ -1409,11 +1801,13 @@ func StartWithReady(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
-	mdnsHostname string,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 	ready chan<- error,
 ) error {
@@ -1423,12 +1817,39 @@ func StartWithReady(
 		}
 	}
 
+	methods.InitMediaThumbCache(platform)
+
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
 	listenAddr := cfg.APIListen()
 	if _, portStr, err := net.SplitHostPort(listenAddr); err == nil && portStr != "" {
 		if p, err := strconv.Atoi(portStr); err == nil {
 			port = p
+		}
+	}
+
+	log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
+	log.Debug().Msg("HTTP server attempting to bind")
+
+	// Bind before reporting startup success so callers can fail fast when the
+	// configured API port is already in use, and before the origin lists are
+	// built so a port-zero bind resolves to the port they advertise.
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+	if err != nil {
+		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+		log.Error().Err(bindErr).Msg("failed to bind to port")
+		notifyReady(bindErr)
+		st.StopService()
+		return bindErr
+	}
+
+	// If port 0 was requested, adopt the port actually bound so callers can
+	// discover it and every allowed origin carries the real port.
+	if port == 0 {
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			port = addr.Port
+			_ = cfg.SetAPIPort(port)
 		}
 	}
 
@@ -1447,29 +1868,18 @@ func StartWithReady(
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	// Build static origins (base + mDNS + OS hostname). Local IP origins are
+	// Build static origins (base + host names). Local IP origins are
 	// checked dynamically because network interfaces may appear after startup.
 	staticOrigins := buildStaticAllowedOrigins(baseOrigins, nil, port)
 
-	if mdnsHostname != "" {
-		mdnsLocal := mdnsHostname + ".local"
-		staticOrigins = append(staticOrigins,
-			"http://"+mdnsLocal,
-			"https://"+mdnsLocal,
-			fmt.Sprintf("http://%s:%d", mdnsLocal, port),
-			fmt.Sprintf("https://%s:%d", mdnsLocal, port),
-		)
-		log.Debug().Str("hostname", mdnsLocal).Msg("added mDNS hostname to allowed origins")
+	hostname, hostErr := os.Hostname()
+	if hostErr != nil {
+		log.Warn().Err(hostErr).Msg("could not read OS hostname for allowed origins")
 	}
-
-	if hostname, err := os.Hostname(); err == nil && hostname != "" {
-		staticOrigins = append(staticOrigins,
-			"http://"+hostname,
-			"https://"+hostname,
-			fmt.Sprintf("http://%s:%d", hostname, port),
-			fmt.Sprintf("https://%s:%d", hostname, port),
-		)
-		log.Debug().Str("hostname", hostname).Msg("added OS hostname to allowed origins")
+	hostNames := localHostNames(hostname)
+	if len(hostNames) > 0 {
+		staticOrigins = append(staticOrigins, expandHostNameOrigins(hostNames, port)...)
+		log.Debug().Strs("hostnames", hostNames).Msg("added host names to allowed origins")
 	}
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
@@ -1523,11 +1933,11 @@ func StartWithReady(
 	// Register pairing RPC methods. These close over the pairingMgr so
 	// they must be added after it is created, not in NewMethodMap().
 	if err := methodMap.AddMethod(models.MethodClientsPairStart,
-		methods.HandleClientsPairStart(pairingMgr)); err != nil {
+		methods.HandleClientsPairStart(pairingMgr), false); err != nil {
 		log.Error().Err(err).Msg("error adding clients.pair.start method")
 	}
 	if err := methodMap.AddMethod(models.MethodClientsPairCancel,
-		methods.HandleClientsPairCancel(pairingMgr)); err != nil {
+		methods.HandleClientsPairCancel(pairingMgr), false); err != nil {
 		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
 	}
 
@@ -1568,7 +1978,11 @@ func StartWithReady(
 	// this errorHandler in an infinite recursion. Closing the underlying
 	// conn directly causes writePump to fail on its next write, exit, and
 	// run the normal session close path.
+	session.HandleConnect(func(s *melody.Session) {
+		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
+	})
 	session.HandleDisconnect(func(s *melody.Session) {
+		stopWebSocketAuthDeadline(s)
 		closeWSDispatcher(s)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {
@@ -1631,8 +2045,19 @@ func StartWithReady(
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
+			if !apimiddleware.IsLoopbackAddr(r.RemoteAddr) &&
+				!apimiddleware.APIKeyAuthenticated(r) && !permissions.LegacyEnabled(platform.ID()) {
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
 		}
-		err := session.HandleRequest(w, r)
+		authState := webSocketAuthPlaintext
+		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
+			authState = webSocketAuthPending
+		}
+		err := session.HandleRequestWithKeys(w, r, map[string]any{
+			melodySessionAuthStateKey: authState,
+		})
 		if err != nil {
 			log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
 		}
@@ -1669,15 +2094,20 @@ func StartWithReady(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		// JSON-RPC method policy is the authority boundary here. Keeping POST
+		// dispatch reachable preserves explicitly open authentication bootstrap
+		// methods; all missing or newly registered methods still fail closed in
+		// handleRequest.
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		// Method handlers apply their own deadline after parsing JSON-RPC.
+		// Server ReadTimeout bounds body reads without limiting backup work.
 
 		postHandler := handlePostRequest(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
-			db, limitsManager, player,
-			indexPauser, scrapePauser, tracker,
+			db, limitsManager, profilesSvc, player, playbackManager,
+			indexPauser, scrapePauser, backupPauser, tracker,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1706,6 +2136,7 @@ func StartWithReady(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(legacyAdmissionMiddleware(platform.ID()))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 
@@ -1715,13 +2146,10 @@ func StartWithReady(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
-	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
-		rateLimiter,
-		handleWSMessage(
-			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, tracker,
-		),
+	session.HandleMessage(handleWSMessage(
+		methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
+		db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
+		encGateway, lastSeenTracker, tracker,
 	))
 
 	// Static app assets
@@ -1749,32 +2177,10 @@ func StartWithReady(
 		Addr:              cfg.APIListen(),
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       config.APIRequestTimeout,
 	}
 
 	serverDone := make(chan error, 1)
-
-	log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
-	log.Debug().Msg("HTTP server attempting to bind")
-
-	// Create the listener before reporting startup success so callers can fail
-	// fast when the configured API port is already in use.
-	lc := &net.ListenConfig{}
-	listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
-	if err != nil {
-		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
-		log.Error().Err(bindErr).Msg("failed to bind to port")
-		notifyReady(bindErr)
-		st.StopService()
-		return bindErr
-	}
-
-	// If port 0 was requested, update config with the actual bound port
-	// so callers can discover which port the server is listening on.
-	if port == 0 {
-		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-			_ = cfg.SetAPIPort(addr.Port)
-		}
-	}
 
 	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
 	notifyReady(nil)

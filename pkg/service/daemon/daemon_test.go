@@ -215,6 +215,81 @@ func TestPrepareBinary_NormalizesReusedCachedBinaryPermissions(t *testing.T) {
 	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
 }
 
+func TestPrepareBinary_UsesValidManifestCache(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.NotEqual(t, srcPath, launchPath)
+}
+
+func TestPrepareBinary_UsesCacheWhenOnlyChangeTimeDrifts(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	manifest, err := readServiceBinaryManifest(afero.NewOsFs(), svc.pl.Settings().DataDir)
+	require.NoError(t, err)
+	manifest.ServiceChangeTimeNS++
+	require.NoError(t, writeServiceBinaryManifest(afero.NewOsFs(), svc.pl.Settings().DataDir, manifest))
+
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.NotEqual(t, srcPath, launchPath)
+}
+
+func TestStart_CacheMissLaunchesCachedCopy(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	sourcePath := writeFakeServiceScript(t, pidFile, eventLog)
+	t.Setenv(config.AppEnv, sourcePath)
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && requireServiceRunning(t, svc) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	assert.True(t, requireServiceRunning(t, svc))
+	assert.FileExists(t, filepath.Join(settings.DataDir, serviceManifestName))
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "started:")
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	replacement := fmt.Sprintf("#!/bin/sh\nprintf 'replaced\\n' >> %q\nprintf '%%s' \"$$\" > %q\n", eventLog, pidFile)
+	//nolint:gosec // test overwrites a test-controlled fake service script
+	require.NoError(t, os.WriteFile(sourcePath, []byte(replacement), 0o700))
+	require.NoError(t, svc.Start())
+
+	content, err = os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "replaced")
+	currentPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, pid, currentPID)
+}
+
 func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
 	t.Parallel()
 
@@ -732,6 +807,7 @@ func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
 	t.Setenv(config.AppEnv, srcPath)
 
 	cfg, err := svc.restartExecConfig(
+		"",
 		[]string{"old-cache", "-service", "exec"},
 		[]string{"A=B", config.AppEnv + "=/old/path"},
 	)
@@ -743,6 +819,47 @@ func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
 	assert.FileExists(t, cfg.serviceBin)
 	assert.Equal(t, []string{cfg.serviceBin, "-service", "exec"}, cfg.args)
 	assert.Contains(t, cfg.env, config.AppEnv+"="+srcPath)
+}
+
+func TestRestartExecConfigUsesRollbackTargetWithoutAppEnv(t *testing.T) {
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	targetPath := filepath.Join(srcDir, "restored-zaparoo.sh")
+	require.NoError(t, os.WriteFile(targetPath, []byte("restored-binary"), 0o600))
+	t.Setenv(config.AppEnv, "")
+
+	cfg, err := svc.restartExecConfig(
+		targetPath,
+		[]string{"failed-cache", "-service", "exec"},
+		[]string{"A=B"},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, targetPath, cfg.binPath)
+	assert.Contains(t, cfg.env, config.AppEnv+"="+targetPath)
+	cached, err := os.ReadFile(cfg.serviceBin) //nolint:gosec // test-owned path
+	require.NoError(t, err)
+	assert.Equal(t, []byte("restored-binary"), cached)
+}
+
+// A rollback that names a binary which is no longer there must fail loudly:
+// exec'ing whatever the stale cache happens to hold would silently undo the
+// rollback.
+func TestRestartExecConfigFailsWhenRollbackTargetIsMissing(t *testing.T) {
+	svc := newTestService(t)
+	t.Setenv(config.AppEnv, "")
+
+	missing := filepath.Join(t.TempDir(), "restored-zaparoo.sh")
+	cfg, err := svc.restartExecConfig(
+		missing,
+		[]string{"failed-cache", "-service", "exec"},
+		[]string{"A=B"},
+	)
+
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Empty(t, cfg.serviceBin)
+	assert.Empty(t, cfg.args)
 }
 
 func TestRunningRemovesStalePIDFile(t *testing.T) {
@@ -1117,13 +1234,48 @@ func TestWaitForServicePidFile_FailsWhenProcessExits(t *testing.T) {
 	assert.Contains(t, err.Error(), "exited before writing pidfile")
 }
 
-func TestStart_FailsWhenServiceWritesPidfileThenExits(t *testing.T) {
+// TestWaitForServicePidFile_FailsWhenProcessExitsAfterWritingPidfile covers the
+// branch where the pidfile holds the expected PID but that process is already
+// gone — a service that got far enough to announce itself and then died.
+//
+// It is driven at this level rather than through Start because Start races the
+// process's death: it polls, and a poll that lands while the doomed process is
+// still alive sees a live matching PID and reports the service ready. Reaping
+// the process first and writing the pidfile afterwards makes the state the
+// branch describes, without depending on scheduling.
+func TestWaitForServicePidFile_FailsWhenProcessExitsAfterWritingPidfile(t *testing.T) {
 	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
-	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nexit 0\n", pidFile)
-	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, script))
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
+	require.NoError(t, process.Start())
+	pid := process.Process.Pid
+	// Reap so the PID is fully released; see the sibling test for why a zombie
+	// would still look alive.
+	require.NoError(t, process.Wait())
+
+	require.NoError(t, os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600))
+
+	err := svc.waitForServicePidFile(pid, time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited after writing pidfile")
+}
+
+// TestStart_FailsWhenServiceExitsDuringStartup is the end-to-end counterpart:
+// a service process that dies during startup must surface as a Start error
+// rather than a successful launch.
+//
+// The fake service exits without writing a pidfile, which is the one startup
+// death Start can detect deterministically. Whether the poll observes the exit
+// immediately or the wait runs to its deadline, neither outcome is ready, so
+// there is no scheduling window in which this passes for the wrong reason.
+func TestStart_FailsWhenServiceExitsDuringStartup(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, "#!/bin/sh\nexit 0\n"))
 
 	err := svc.Start()
 	require.Error(t, err)

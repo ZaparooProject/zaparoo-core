@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -76,6 +77,111 @@ func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
 		t.Fatal("REST run handler blocked on token queue after service cancellation")
 	}
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+}
+
+// Literal parentheses make net/url preserve RawPath, so chi returns an
+// encoded wildcard even though URL.Path is already decoded.
+func TestHandleRunRestDecodesPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		requestPath string
+		remoteAddr  string
+		allowRun    string
+		wantText    string
+	}{
+		{
+			name:        "plain path with encoded space",
+			requestPath: "/run/SNES/Super%20Metroid.sfc",
+			wantText:    "SNES/Super Metroid.sfc",
+		},
+		{
+			name:        "path with parentheses and encoded space",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
+		{
+			name:        "literal percent escape is not decoded twice",
+			requestPath: "/run/_Arcade/Percent%2520Name.mra",
+			wantText:    "_Arcade/Percent%20Name.mra",
+		},
+		{
+			name:        "decoded path is used for remote authorization",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			remoteAddr:  "192.0.2.1:1234",
+			allowRun:    "[service]\nallow_run = ['\\*\\*launch:_Arcade/Youjyuden \\(JP\\)\\.mra']",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Instance{}
+			if tt.allowRun != "" {
+				require.NoError(t, cfg.LoadTOML(tt.allowRun))
+			}
+
+			platform := mocks.NewMockPlatform()
+			platform.SetupBasicMock()
+			st, _ := state.NewState(platform, "test-boot-uuid")
+			t.Cleanup(st.StopService)
+
+			tokenQueue := make(chan tokens.Token, 1)
+			router := chi.NewRouter()
+			router.Get("/run/*", HandleRunRest(cfg, st, tokenQueue))
+
+			req := httptest.NewRequestWithContext(
+				context.Background(), http.MethodGet, tt.requestPath, http.NoBody,
+			)
+			req.RemoteAddr = tt.remoteAddr
+			if req.RemoteAddr == "" {
+				req.RemoteAddr = "127.0.0.1:1234"
+			}
+			recorder := httptest.NewRecorder()
+
+			router.ServeHTTP(recorder, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			select {
+			case token := <-tokenQueue:
+				assert.Equal(t, tt.wantText, token.Text)
+				assert.Nil(t, token.Completion, "REST run stays fire-and-forget")
+			default:
+				t.Fatal("REST run handler did not send token to queue")
+			}
+		})
+	}
+}
+
+func TestHandleRunRestRejectsMalformedEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	tokenQueue := make(chan tokens.Token, 1)
+	handler := HandleRunRest(&config.Instance{}, st, tokenQueue)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/run/invalid", http.NoBody)
+	req.URL.RawPath = "/run/%ZZ"
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("*", "%ZZ")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	select {
+	case token := <-tokenQueue:
+		t.Fatalf("REST run handler queued malformed token: %q", token.Text)
+	default:
+	}
 }
 
 func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
@@ -606,10 +712,11 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 
 func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 	tests := []struct {
-		name          string
-		params        string
-		errorContains string
-		wantError     bool
+		name               string
+		params             string
+		errorContains      string
+		optimizationStatus string
+		wantError          bool
 	}{
 		{
 			name:      "no parameters - all systems",
@@ -627,9 +734,10 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:      "single valid system",
-			params:    `{"systems": ["NES"]}`,
-			wantError: false,
+			name:               "single valid system with stale optimization status",
+			params:             `{"systems": ["NES"]}`,
+			optimizationStatus: mediadb.IndexingStatusRunning,
+			wantError:          false,
 		},
 		{
 			name:      "multiple valid systems",
@@ -662,8 +770,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockUserDB := &helpers.MockUserDBI{}
 			mockMediaDB := helpers.NewMockMediaDBI()
 
-			// Mock optimization status check
-			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			// Persisted optimization state is restart intent, not process ownership.
+			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
 
 			// Mock additional methods that might be called
@@ -709,6 +817,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 
 			// Mock total media count
 			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+			mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
 
 			// Mock optimized JOIN methods for PopulateScanStateFromDB
 			mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()

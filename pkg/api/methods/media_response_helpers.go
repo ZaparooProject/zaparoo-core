@@ -21,11 +21,18 @@ package methods
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/rs/zerolog/log"
 )
+
+const optionalDBEnrichmentTimeout = 500 * time.Millisecond
 
 type mediaPathRef struct {
 	SystemID string
@@ -49,44 +56,206 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 	if env == nil || env.Database == nil {
 		return nil
 	}
-	return mediaIDsByPath(env.Context, env.Database.MediaDB, refs)
+	ctx, cancel := optionalDBEnrichmentContext(env.Context)
+	defer cancel()
+	return mediaIDsByPath(ctx, env.Database.MediaDB, refs)
+}
+
+func optionalDBEnrichmentContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
+	return context.WithTimeout(parent, optionalDBEnrichmentTimeout)
+}
+
+// enrichPlaybackState fills playback details on an ActiveMedia entry when the entry
+// belongs to the native-audio launcher and a PlaybackManager is available. slot is
+// the normalized slot string ("primary" or "background").
+func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, slot string) {
+	if env.PlaybackManager == nil {
+		return
+	}
+	if entry.LauncherID != platforms.NativeAudioLauncherID {
+		return
+	}
+	state := env.PlaybackManager.State(slot)
+	posMs := state.Position.Milliseconds()
+	durMs := state.Duration.Milliseconds()
+	entry.PositionMs = &posMs
+	entry.DurationMs = &durMs
+	switch {
+	case state.Paused:
+		entry.PlaybackState = models.MediaPlaybackStatePaused
+	case state.Playing:
+		entry.PlaybackState = models.MediaPlaybackStatePlaying
+	default:
+		entry.PlaybackState = models.MediaPlaybackStateStopped
+	}
+}
+
+// toPlaylistState converts the internal Playlist representation to the API model.
+func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
+	items := make([]models.PlaylistItemInfo, 0, len(p.Items))
+	for _, item := range p.Items {
+		items = append(items, models.PlaylistItemInfo{
+			Name:      item.Name,
+			ZapScript: item.ZapScript,
+		})
+	}
+
+	repeat := "none"
+	switch {
+	case p.LoopOne:
+		repeat = "one"
+	case p.Loop:
+		repeat = "all"
+	}
+
+	return models.PlaylistState{
+		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
+		Items:   items,
+		Index:   p.Index,
+		Total:   len(p.Items),
+		Playing: p.Playing,
+		Repeat:  repeat,
+	}
+}
+
+func resolveMediaPathIDs(
+	ctx context.Context, db database.MediaDBI, refs []mediaPathRef,
+) (map[mediaPathRef]database.MediaPathID, error) {
+	if db == nil || len(refs) == 0 {
+		return map[mediaPathRef]database.MediaPathID{}, nil
+	}
+
+	wanted := make(map[mediaPathRef]bool, len(refs))
+	paths := make([]string, 0, len(refs))
+	seenPaths := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if ref.SystemID == "" || ref.Path == "" || wanted[ref] {
+			continue
+		}
+		wanted[ref] = true
+		if !seenPaths[ref.Path] {
+			seenPaths[ref.Path] = true
+			paths = append(paths, ref.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return map[mediaPathRef]database.MediaPathID{}, nil
+	}
+
+	started := time.Now()
+	rows, err := db.FindMediaIDsByPaths(ctx, paths)
+	if err != nil {
+		return nil, fmt.Errorf("resolve media IDs by path: %w", err)
+	}
+
+	resolved := make(map[mediaPathRef]database.MediaPathID, len(rows))
+	for _, row := range rows {
+		if row.DBID <= 0 {
+			continue
+		}
+		ref := mediaPathRef{SystemID: row.SystemID, Path: row.Path}
+		if wanted[ref] {
+			resolved[ref] = row
+		}
+	}
+
+	log.Debug().
+		Int("refs", len(refs)).
+		Int("paths", len(paths)).
+		Int("resolved", len(resolved)).
+		Dur("duration", time.Since(started)).
+		Msg("media ID enrichment timing")
+	return resolved, nil
+}
+
+func resolveMediaIDsByPath(
+	ctx context.Context, db database.MediaDBI, refs []mediaPathRef,
+) (map[mediaPathRef]int64, error) {
+	rows, err := resolveMediaPathIDs(ctx, db, refs)
+	if err != nil {
+		return nil, err
+	}
+	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	for ref, row := range rows {
+		mediaIDs[ref] = row.DBID
+	}
+	return mediaIDs, nil
 }
 
 func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathRef) map[mediaPathRef]int64 {
-	if db == nil || len(refs) == 0 {
+	mediaIDs, err := resolveMediaIDsByPath(ctx, db, refs)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media IDs by path")
 		return nil
 	}
-
-	pathsBySystem := make(map[string][]string)
-	seen := make(map[mediaPathRef]bool)
-	for _, ref := range refs {
-		if ref.SystemID == "" || ref.Path == "" || seen[ref] {
-			continue
-		}
-		seen[ref] = true
-		pathsBySystem[ref.SystemID] = append(pathsBySystem[ref.SystemID], ref.Path)
-	}
-
-	mediaIDs := make(map[mediaPathRef]int64)
-	for systemID, paths := range pathsBySystem {
-		system, err := db.FindSystemBySystemID(systemID)
-		if err != nil {
-			log.Debug().Err(err).Str("system", systemID).Msg("could not resolve media IDs for system")
-			continue
-		}
-
-		mediaByPath, err := db.FindMediaBySystemAndPaths(ctx, system.DBID, paths)
-		if err != nil {
-			log.Debug().Err(err).Str("system", systemID).Msg("could not resolve media IDs by path")
-			continue
-		}
-
-		for path, media := range mediaByPath {
-			if media.DBID > 0 {
-				mediaIDs[mediaPathRef{SystemID: systemID, Path: path}] = media.DBID
-			}
-		}
-	}
-
 	return mediaIDs
+}
+
+// resolvedMediaRefs flattens resolved rows into media IDs keyed by path ref
+// and a MediaRef list deduplicated by media DBID in entry order, ready for
+// batch cover-status and tag lookups.
+func resolvedMediaRefs(
+	order []mediaPathRef, rows map[mediaPathRef]database.MediaPathID,
+) (map[mediaPathRef]int64, []database.MediaRef) {
+	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	refs := make([]database.MediaRef, 0, len(rows))
+	seen := make(map[int64]struct{}, len(rows))
+	for _, ref := range order {
+		row := rows[ref]
+		if row.DBID <= 0 {
+			continue
+		}
+		mediaIDs[ref] = row.DBID
+		if _, ok := seen[row.DBID]; ok {
+			continue
+		}
+		seen[row.DBID] = struct{}{}
+		refs = append(refs, database.MediaRef{
+			MediaDBID:      row.DBID,
+			MediaTitleDBID: row.MediaTitleDBID,
+		})
+	}
+	return mediaIDs, refs
+}
+
+// mediaTagsByRefs batch-loads tags for resolved media rows. The bool reports
+// whether tags are known: false means the lookup failed, so callers must omit
+// tags rather than report the media as untagged.
+func mediaTagsByRefs(
+	ctx context.Context, db database.MediaDBI, refs []database.MediaRef,
+) (map[int64][]database.TagInfo, bool) {
+	if db == nil || len(refs) == 0 {
+		return map[int64][]database.TagInfo{}, true
+	}
+	started := time.Now()
+	tags, err := db.GetMediaTagsByMediaRefs(ctx, refs)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media tags by ref")
+		return nil, false
+	}
+	log.Debug().
+		Int("refs", len(refs)).
+		Int("tagged", len(tags)).
+		Dur("duration", time.Since(started)).
+		Msg("media tag enrichment timing")
+	return tags, true
+}
+
+// mediaEntryTags returns the tags for one response entry: nil (omitted from
+// JSON) when the media is unresolved or tags are unknown, and an empty slice
+// when the media is indexed but untagged.
+func mediaEntryTags(known bool, mediaID int64, tags map[int64][]database.TagInfo) []database.TagInfo {
+	if !known || mediaID <= 0 {
+		return nil
+	}
+	if entryTags := tags[mediaID]; entryTags != nil {
+		return entryTags
+	}
+	return []database.TagInfo{}
 }

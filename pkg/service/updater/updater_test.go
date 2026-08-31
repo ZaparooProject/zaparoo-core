@@ -22,37 +22,29 @@ package updater
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-type stubSource struct {
-	data string
-}
-
-func (stubSource) ListReleases(context.Context, selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
-	return nil, nil
-}
-
-func (s stubSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
-	if s.data == "" {
-		return nil, selfupdate.ErrAssetNotFound
-	}
-
-	return io.NopCloser(strings.NewReader(s.data)), nil
+func linuxOptions() Options {
+	return Options{PlatformID: "linux", Channel: config.UpdateChannelStable}
 }
 
 func TestCheck_DevelopmentVersion(t *testing.T) {
@@ -64,7 +56,7 @@ func TestCheck_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			result, err := Check(t.Context(), "linux", "stable")
+			result, err := Check(t.Context(), linuxOptions())
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Nil(t, result)
 		})
@@ -80,7 +72,7 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			version, err := Apply(t.Context(), "linux", "stable")
+			version, err := Apply(t.Context(), linuxOptions())
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Empty(t, version)
 		})
@@ -89,28 +81,77 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 
 func alwaysOnline(_ context.Context, _ int) bool { return true }
 
-func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
+// A package manager owning the install is a reason not to install, not a
+// reason not to look. Someone whose package manager is lagging behind has no
+// other way to find out.
+func TestCheckAndNotify_ManagedInstallStillChecks(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{} // AutoUpdate is nil
+	cfg := &config.Instance{} // Updates.Check is nil
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
-		return true
+		return false
 	}, Check, true)
 
-	assert.False(t, waitCalled)
+	assert.True(t, waitCalled)
+}
+
+func TestRolloutHeld_UsesSelectedReleaseWhenChannelsShareVersion(t *testing.T) {
+	t.Parallel()
+
+	stable := &otameta.Release{
+		TagName: "v2.10.0",
+		Channel: config.UpdateChannelStable,
+		Rollout: 0,
+	}
+	beta := &otameta.Release{
+		TagName: "v2.10.0",
+		Channel: config.UpdateChannelBeta,
+		Rollout: 100,
+	}
+
+	assert.True(t, rolloutHeld("device-1", stable))
+	assert.False(t, rolloutHeld("device-1", beta))
+}
+
+func TestInstallAdvice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		platformID string
+		want       string
+		managed    bool
+	}{
+		{platformID: platformids.Mister, managed: false, want: "Use the App or TUI to update."},
+		{platformID: platformids.Mister, managed: true, want: "Run update_all to install it."},
+		{
+			platformID: platformids.Batocera, managed: true,
+			want: "Install it through the Batocera package manager.",
+		},
+		{
+			platformID: platformids.Linux, managed: true,
+			want: "Your package manager installs updates on this device.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.platformID+"/"+strconv.FormatBool(tt.managed), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, installAdvice(tt.platformID, tt.managed))
+		})
+	}
 }
 
 func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(false)
+	cfg.SetUpdateCheck(false)
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
 		return true
 	}, Check, false)
@@ -124,18 +165,18 @@ func TestCheckAndNotify_DevelopmentVersion(t *testing.T) {
 	t.Cleanup(func() { config.AppVersion = original })
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, Check, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, Check, false)
 }
 
 func TestCheckAndNotify_NoInternet(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		return false
 	}, Check, false)
 }
@@ -144,7 +185,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	mockUserDB := helpers.NewMockUserDBI()
 	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
@@ -155,7 +196,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	ns := make(chan models.Notification, 10)
 	inboxSvc := inbox.NewService(mockUserDB, ns)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0",
@@ -164,7 +205,62 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 		}, nil
 	}
 
-	CheckAndNotify(t.Context(), cfg, "linux", inboxSvc, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), inboxSvc, alwaysOnline, checkFn, false)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestCheckAndNotify_DeduplicatesOfferedVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetUpdateCheck(true)
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.Anything).
+		Return(&database.InboxMessage{DBID: 1}, nil).Once()
+	inboxSvc := inbox.NewService(mockUserDB, make(chan models.Notification, 10))
+	opts := linuxOptions()
+	opts.DataDir = t.TempDir()
+	checkFn := func(context.Context, Options) (*Result, error) {
+		return &Result{
+			CurrentVersion: "2.9.0", LatestVersion: "2.10.0",
+			UpdateAvailable: true,
+		}, nil
+	}
+
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, false)
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, "2.10.0", lastOfferedVersion(stateDirFor(opts.DataDir)))
+}
+
+// A package-managed device still gets told a release exists, so the message has
+// to point at the thing that actually installs it there.
+func TestCheckAndNotify_ManagedInstallBodyNamesThePackageManager(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetUpdateCheck(true)
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return strings.Contains(msg.Body, "Run update_all to install it.")
+	})).Return(&database.InboxMessage{DBID: 1}, nil)
+
+	ns := make(chan models.Notification, 10)
+	inboxSvc := inbox.NewService(mockUserDB, ns)
+
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
+		return &Result{
+			CurrentVersion:  "2.9.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: true,
+		}, nil
+	}
+
+	opts := Options{PlatformID: platformids.Mister, Channel: config.UpdateChannelStable}
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, true)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -173,12 +269,12 @@ func TestCheckAndNotify_BetaChannel(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 	cfg.SetUpdateChannel(config.UpdateChannelBeta)
 
 	var receivedChannel string
-	checkFn := func(_ context.Context, _, channel string) (*Result, error) {
-		receivedChannel = channel
+	checkFn := func(_ context.Context, opts Options) (*Result, error) {
+		receivedChannel = opts.Channel
 		return &Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -186,18 +282,20 @@ func TestCheckAndNotify_BetaChannel(t *testing.T) {
 		}, nil
 	}
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	// The caller-supplied channel is deliberately wrong: the configured channel
+	// must win, or a stale Options would pin a device to the wrong track.
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 
-	assert.Equal(t, "beta", receivedChannel)
+	assert.Equal(t, config.UpdateChannelBeta, receivedChannel)
 }
 
 func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -206,21 +304,21 @@ func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 }
 
 func TestCheckAndNotify_CheckError(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return nil, errors.New("network timeout")
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 }
 
 func TestCheck_CancelledContext(t *testing.T) {
@@ -231,9 +329,116 @@ func TestCheck_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	result, err := Check(ctx, "linux", "stable")
+	result, err := Check(ctx, linuxOptions())
 	require.Error(t, err)
 	assert.Nil(t, result)
+}
+
+func TestUpdatePayloadFilesOnlyForUnmanagedInstall(t *testing.T) {
+	t.Parallel()
+
+	payload := []updatepayload.File{{ArchivePath: "scripts/helper.sh"}}
+	assert.Equal(t, payload, updatePayloadFiles(&Options{Payload: payload}))
+	assert.Empty(t, updatePayloadFiles(&Options{Payload: payload, Managed: true}))
+	assert.Empty(t, updatePayloadFiles(&Options{}))
+}
+
+func TestAutoInstallReleaseAllowed(t *testing.T) {
+	t.Parallel()
+
+	held := &otameta.Release{TagName: "v2.10.0", Rollout: 0}
+	full := &otameta.Release{TagName: "v2.10.0", Rollout: 100}
+	require.NoError(t, autoInstallReleaseAllowed(&Options{Mode: ModeManual, Managed: true}, held))
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, Managed: true}, full),
+		errAutoInstallIneligible)
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, DeviceID: "device-1"}, held),
+		errAutoInstallIneligible)
+	assert.NoError(t, autoInstallReleaseAllowed(&Options{Mode: ModeAuto}, full))
+}
+
+// A release that already failed to start here must not be installed again on
+// its own. Nothing else declines it, so without this the device repeats the
+// download, snapshot, swap and restore every time it checks.
+func TestAutoInstallReleaseAllowed_RefusesAVersionThisDeviceRolledBack(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		At:          time.Date(2026, 8, 28, 9, 21, 0, 0, time.UTC),
+		Outcome:     outcomeRolledBack,
+		FromVersion: "2.90.1",
+		ToVersion:   "2.90.2",
+	}))
+	bad := &otameta.Release{TagName: "v2.90.2", Rollout: 100}
+
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, DataDir: dataDir}, bad),
+		errAutoInstallIneligible,
+		"the automatic path must not retry a version that failed here")
+
+	// A person asking for it again is asking on purpose.
+	assert.NoError(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeManual, DataDir: dataDir}, bad),
+		"a manual apply must still be able to retry it")
+
+	// A later release has not failed here, so it is offered normally.
+	assert.NoError(t, autoInstallReleaseAllowed(
+		&Options{Mode: ModeAuto, DataDir: dataDir},
+		&otameta.Release{TagName: "v2.90.3", Rollout: 100},
+	), "a newer version is a different release")
+}
+
+func TestRolledBackHere(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	assert.False(t, rolledBackHere(dataDir, "2.90.2"), "no recorded result yet")
+	assert.False(t, rolledBackHere("", "2.90.2"))
+
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		Outcome:     outcomeSucceeded,
+		FromVersion: "2.90.0",
+		ToVersion:   "2.90.1",
+	}))
+	assert.False(t, rolledBackHere(dataDir, "2.90.1"), "a version that installed cleanly is not blocked")
+
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		Outcome:     outcomeRolledBack,
+		FromVersion: "2.90.1",
+		ToVersion:   "2.90.2",
+	}))
+	assert.True(t, rolledBackHere(dataDir, "2.90.2"))
+	assert.False(t, rolledBackHere(dataDir, "2.90.3"), "only the version that failed is blocked")
+	assert.False(t, rolledBackHere(dataDir, ""))
+}
+
+func TestPreviouslyRolledBack(t *testing.T) {
+	t.Parallel()
+
+	rolledBack := &OutcomeReport{Outcome: string(outcomeRolledBack), ToVersion: "2.90.2"}
+	assert.True(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.2", LastResult: rolledBack}))
+	assert.False(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.3", LastResult: rolledBack}),
+		"a newer offer is not the release that failed")
+	assert.False(t, PreviouslyRolledBack(&Result{
+		LatestVersion: "2.90.2",
+		LastResult:    &OutcomeReport{Outcome: string(outcomeSucceeded), ToVersion: "2.90.2"},
+	}))
+	assert.False(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.2"}))
+	assert.False(t, PreviouslyRolledBack(nil))
+}
+
+func TestApply_UpdateInProgress(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+	applyInProgress.Store(true)
+	t.Cleanup(func() { applyInProgress.Store(false) })
+
+	version, err := Apply(t.Context(), Options{})
+	require.ErrorIs(t, err, ErrUpdateInProgress)
+	assert.Empty(t, version)
 }
 
 func TestApply_CancelledContext(t *testing.T) {
@@ -244,135 +449,329 @@ func TestApply_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	version, err := Apply(ctx, "linux", "stable")
-	require.Error(t, err)
+	opts := linuxOptions()
+	opts.UserDB = &installTestBackupper{}
+	opts.DataDir = t.TempDir()
+
+	version, err := Apply(ctx, opts)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, version)
 }
 
-func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) {
-	t.Parallel()
+func TestApply_RejectsIncompleteOptions(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/checksums.txt.sig", r.URL.Path)
-		_, _ = w.Write([]byte("signature"))
-	}))
-	t.Cleanup(server.Close)
+	withDataDir := linuxOptions()
+	withDataDir.DataDir = t.TempDir()
 
-	source := &validationChainHTTPSource{
-		source:    stubSource{},
-		transport: http.DefaultTransport.(*http.Transport).Clone(),
+	withUserDB := linuxOptions()
+	withUserDB.UserDB = &installTestBackupper{}
+
+	for name, opts := range map[string]Options{
+		"no user database":   withDataDir,
+		"no data directory":  withUserDB,
+		"neither of the two": linuxOptions(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			version, err := Apply(t.Context(), opts)
+			require.Error(t, err)
+			assert.Empty(t, version)
+		})
 	}
-	release := testValidationChainRelease(server.URL)
-
-	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, reader.Close())
-	}()
-
-	data, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, []byte("signature"), data)
 }
 
-func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
+// An update that has not been confirmed or rolled back yet owns the binary
+// backup and the marker, so a second Apply must refuse before it reaches the
+// network rather than overwrite them.
+func TestApply_RefusesWhileAnUpdateIsUnresolved(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	require.NoError(t, saveMarker(stateDirFor(dataDir), &pendingMarker{
+		State:         markerConfirming,
+		TargetVersion: "2.2.0",
+	}))
+
+	opts := linuxOptions()
+	opts.UserDB = &installTestBackupper{}
+	opts.DataDir = dataDir
+
+	version, err := Apply(t.Context(), opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2.2.0")
+	assert.Empty(t, version)
+}
+
+func TestClearDeferralForRelease(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil release returns error", func(t *testing.T) {
-		t.Parallel()
-
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), nil, 1)
-		require.ErrorIs(t, err, selfupdate.ErrInvalidRelease)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("delegates primary asset", func(t *testing.T) {
-		t.Parallel()
-
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 1)
-		require.NoError(t, err)
-		defer func() {
-			require.NoError(t, reader.Close())
-		}()
-
-		data, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		assert.Equal(t, "primary", string(data))
-	})
-
-	t.Run("delegates first validation asset", func(t *testing.T) {
-		t.Parallel()
-
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 2)
-		require.NoError(t, err)
-		defer func() {
-			require.NoError(t, reader.Close())
-		}()
-
-		data, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		assert.Equal(t, "primary", string(data))
-	})
-
-	t.Run("unknown asset returns error", func(t *testing.T) {
-		t.Parallel()
-
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 99)
-		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("empty nested validation URL returns error", func(t *testing.T) {
-		t.Parallel()
-
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		release := testValidationChainRelease("")
-		release.ValidationChain[1].ValidationAssetURL = ""
-		reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
-		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("non-OK nested validation response returns error", func(t *testing.T) {
-		t.Parallel()
-
-		server := httptest.NewServer(http.NotFoundHandler())
-		t.Cleanup(server.Close)
-
-		source := &validationChainHTTPSource{
-			source:    stubSource{data: "primary"},
-			transport: http.DefaultTransport.(*http.Transport).Clone(),
-		}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(server.URL), 3)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "status code 404")
-		assert.Nil(t, reader)
-	})
-}
-
-func testValidationChainRelease(serverURL string) *selfupdate.Release {
-	return &selfupdate.Release{
-		AssetID:           1,
-		ValidationAssetID: 2,
-		//nolint:govet // Field order is fixed by go-selfupdate's exported Release type.
-		ValidationChain: []struct {
-			ValidationAssetID                       int64
-			ValidationAssetName, ValidationAssetURL string
-		}{
-			{
-				ValidationAssetID:   2,
-				ValidationAssetName: "checksums.txt",
-				ValidationAssetURL:  serverURL + "/checksums.txt",
-			},
-			{
-				ValidationAssetID:   3,
-				ValidationAssetName: "checksums.txt.sig",
-				ValidationAssetURL:  serverURL + "/checksums.txt.sig",
-			},
+	tests := []struct {
+		name            string
+		recordedVersion string
+		releaseVersion  string
+		wantDeferral    bool
+	}{
+		{
+			name:            "matching release keeps deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.5.0",
+			wantDeferral:    true,
+		},
+		{
+			name:            "different release clears deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.6.0",
 		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), "updater")
+			require.NoError(t, recordDeferral(dir, tt.recordedVersion, ReasonActiveMedia))
+			before := peekDeferralState(dir)
+			require.NotNil(t, before)
+
+			require.NoError(t, clearDeferralForRelease(dir, tt.releaseVersion))
+			after := peekDeferralState(dir)
+			if !tt.wantDeferral {
+				assert.Nil(t, after)
+				return
+			}
+			require.NotNil(t, after)
+			assert.Equal(t, before.Version, after.Version)
+			assert.Equal(t, before.Reason, after.Reason)
+			assert.Equal(t, before.Since, after.Since)
+		})
+	}
+}
+
+func TestNoteGate_NoGateConfigured(t *testing.T) {
+	t.Parallel()
+
+	result := &Result{}
+	noteGate(t.Context(), &Options{}, result, filepath.Join(t.TempDir(), "updater"), "v2.5.0")
+
+	assert.Empty(t, result.BlockedReason)
+	assert.Empty(t, result.BlockedMessage)
+}
+
+func TestNoteGate_NothingInTheWay(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{Power: externalPower}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Empty(t, result.BlockedReason)
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+}
+
+func TestNoteGate_SoftSignalStartsTheClock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{
+		Power:       externalPower,
+		ActiveMedia: alwaysTrue,
+	}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Equal(t, ReasonActiveMedia, result.BlockedReason)
+	assert.NotEmpty(t, result.BlockedMessage)
+	assert.True(t, result.BlockedForceable, "a person may go ahead through their own game")
+
+	// Something that will pass on its own is what the automatic install's
+	// patience is measured against, so the check writes it down.
+	deferral := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, deferral)
+	assert.Equal(t, ReasonActiveMedia, deferral.Reason)
+}
+
+func TestNoteGate_HardSignalIsReportedButNotDeferred(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{
+		Power:          externalPower,
+		IndexingStatus: statusFn(mediadb.IndexingStatusRunning),
+	}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Equal(t, ReasonMediaIndexing, result.BlockedReason)
+	assert.False(t, result.BlockedForceable)
+	// Indexing never times out into being safe, so there is no clock to start.
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+}
+
+func TestNoteGate_ReportsWithoutTakingAnyGate(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	restoreTaken, mediaTaken := false, false
+	opts := &Options{Gate: &GateDeps{
+		Power: externalPower,
+		AcquireRestore: func() (func(), error) {
+			restoreTaken = true
+			return func() {}, nil
+		},
+		AcquireMediaGate: func(context.Context) (func(), error) {
+			mediaTaken = true
+			return func() {}, nil
+		},
+	}}
+	noteGate(t.Context(), opts, &Result{}, dir, "v2.5.0")
+
+	// A check only reports. Taking either gate would block backups and
+	// launches every time a client asked whether an update was available.
+	assert.False(t, restoreTaken)
+	assert.False(t, mediaTaken)
+}
+
+// Status answers from disk. The check that produced those findings is the only
+// thing that talks to the network, so nothing here may need it.
+func TestStatus_AnswersFromRecordedFindingsWithoutTheNetwork(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordScheduledCheck(stateDir, true))
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	// No manifest, no server, no baseURL: reaching for any of them would fail
+	// rather than quietly fall back.
+	result := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, result)
+	assert.Equal(t, "2.10.0", result.CurrentVersion)
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+	assert.True(t, result.UpdateAvailable)
+	assert.Equal(t, "stable", result.Channel)
+	assert.False(t, result.CheckedAt.IsZero(), "must say how old the answer is")
+}
+
+// The recorded findings describe the moment the check ran. Once the update has
+// been installed they would otherwise keep offering a version already running.
+func TestStatus_DoesNotOfferAVersionAlreadyInstalled(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.11.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	require.NoError(t, recordCheckFindings(stateDirFor(dataDir), &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	result := Status(t.Context(), Options{DataDir: dataDir})
+	require.NotNil(t, result)
+	assert.False(t, result.UpdateAvailable, "recomputed against the running version")
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+}
+
+// A check refuses outright on a development build. Status is what a screen
+// shows, and "this is a dev build so updates do not apply" is the useful answer.
+func TestStatus_ReportsADevelopmentBuildInsteadOfRefusing(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "abc1234-dev"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	_, checkErr := Check(t.Context(), Options{DataDir: t.TempDir()})
+	require.ErrorIs(t, checkErr, ErrDevelopmentVersion, "premise: a check refuses here")
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Equal(t, "abc1234-dev", result.CurrentVersion)
+	assert.Equal(t, EligibilityDevelopment, result.Eligibility)
+	assert.False(t, result.UpdateAvailable)
+}
+
+// Nothing has checked yet. Saying so is different from saying it is up to date.
+func TestStatus_SaysNothingIsKnownBeforeTheFirstCheck(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+	assert.True(t, result.CheckedAt.IsZero(), "no check has happened, so there is no time to report")
+}
+
+// withdrawnManifest is a manifest whose only release cannot be installed here,
+// which is what a device sees once a release has been withdrawn.
+func withdrawnManifest(generation int64) string {
+	return fmt.Sprintf(`manifest_version: 1
+generation: %d
+issued_at: 2026-08-17T02:00:00Z
+key_id: test1
+last_release_id: 1
+last_asset_id: 10
+releases:
+  - id: 1
+    name: v2.16.1
+    tag_name: v2.16.1
+    channel: stable
+    published_at: 2026-08-10T00:00:00Z
+    assets:
+      - id: 10
+        name: zaparoo-zapos_arm64-2.16.1.tar.gz
+        size: 8123456
+        sha256: aaaa
+        url: https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/zaparoo-zapos_arm64-2.16.1.tar.gz
+`, generation)
+}
+
+// Withdrawing a release is the emergency stop, so a check that finds nothing
+// left to install has to say so durably. Recording only when a release was
+// found would leave the previous offer standing, and Status would keep offering
+// a version that no longer exists until some later check happened to find a
+// different one.
+func TestCheck_ForgetsAnOfferOnceTheReleaseIsWithdrawn(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.16.1",
+		UpdateAvailable: true,
+	}))
+	require.True(t, Status(t.Context(), Options{DataDir: dataDir}).UpdateAvailable,
+		"the offer has to be there before the check that should clear it")
+
+	ms := newManifestServer(t, withdrawnManifest(9))
+	src := ms.source(stateDir, "linux", "amd64")
+	previous := newSession
+	newSession = func(Options) (*session, error) {
+		return &session{source: src, close: func() {}}, nil
+	}
+	t.Cleanup(func() { newSession = previous })
+
+	result, err := Check(t.Context(), Options{
+		DataDir: dataDir, Channel: "stable", PlatformID: "linux",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+
+	// The result alone is not the fix: what Status reports afterwards is.
+	status := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, status)
+	assert.Empty(t, status.LatestVersion, "the withdrawn version must stop being offered")
+	assert.False(t, status.UpdateAvailable)
 }

@@ -30,8 +30,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
 type RequestEnv struct {
@@ -39,19 +41,34 @@ type RequestEnv struct {
 	// state context (st.GetContext()) with config.APIRequestTimeout, so it
 	// cancels on app shutdown and on timeout. For HTTP, it should also cancel
 	// when the HTTP connection closes.
-	Context       context.Context
-	Platform      platforms.Platform
-	Config        *config.Instance
-	State         *state.State
-	Database      *database.Database
-	LimitsManager *playtime.LimitsManager
-	LauncherCache *helpers.LauncherCache
-	Player        audio.Player
-	TokenQueue    chan<- tokens.Token
-	ConfirmQueue  chan<- chan error
-	IndexPauser   *syncutil.Pauser
-	ScrapePauser  *syncutil.Pauser
-	ClientID      string
-	Params        json.RawMessage
-	IsLocal       bool
+	Context         context.Context
+	Platform        platforms.Platform
+	Config          *config.Instance
+	State           *state.State
+	Database        *database.Database
+	LimitsManager   *playtime.LimitsManager
+	Profiles        *profiles.Service
+	LauncherCache   *helpers.LauncherCache
+	Player          audio.Player
+	PlaybackManager audio.PlaybackManager
+	UI              *uievents.Service
+	TokenQueue      chan<- tokens.Token
+	ConfirmQueue    chan<- chan error
+	IndexPauser     *syncutil.Pauser
+	ScrapePauser    *syncutil.Pauser
+	BackupPauser    *syncutil.Pauser
+	// InputSession is non-nil only for durable transports such as WebSocket.
+	// It owns keyboard and gamepad inputs held across requests.
+	InputSession platforms.InputSession
+	ClientID     string
+	PlatformID   string
+	// ClientRole is the paired client's permission role ("admin" or
+	// "member"), or "" when the request carries no paired identity (local
+	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.
+	ClientRole string
+	Params     json.RawMessage
+	IsLocal    bool
+	// APIKeyAuthenticated is true when static API-key middleware authenticated
+	// this non-paired request. It grants admin authority, not localhost access.
+	APIKeyAuthenticated bool
 }

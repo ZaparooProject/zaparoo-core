@@ -20,34 +20,73 @@
 package methods
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
-var mediaOperationMu syncutil.Mutex
-
-func startIndexingIfNoScrape() error {
-	mediaOperationMu.Lock()
-	defer mediaOperationMu.Unlock()
-
-	if scrapingStatusInstance.isRunning() {
-		return models.ClientErrf("scraping is in progress")
-	}
-	if !statusInstance.startIfNotRunning() {
-		return models.ClientErrf("indexing already in progress")
-	}
-	return nil
+type mediaWriteClientConflictError struct {
+	cause   error
+	message string
 }
 
-func startScrapingIfNoIndex(scraperID string) error {
-	mediaOperationMu.Lock()
-	defer mediaOperationMu.Unlock()
+func (e *mediaWriteClientConflictError) Error() string { return e.message }
+func (e *mediaWriteClientConflictError) Unwrap() error { return e.cause }
 
-	if statusInstance.isRunning() {
-		return models.ClientErrf("media indexing is in progress")
+func mediaWriteClientError(err error, requested database.MediaWriteOperation) error {
+	var conflict *database.MediaWriteConflictError
+	if !errors.As(err, &conflict) {
+		return err
 	}
-	if !scrapingStatusInstance.startIfNotRunning(scraperID) {
-		return models.ClientErrf("scraping already in progress")
+
+	message := "media database maintenance in progress"
+	switch {
+	case conflict.Active == database.MediaWriteOperationIndexing && requested == database.MediaWriteOperationIndexing:
+		message = "indexing already in progress"
+	case conflict.Active == database.MediaWriteOperationIndexing:
+		message = "media indexing is in progress"
+	case conflict.Active == database.MediaWriteOperationScraping && requested == database.MediaWriteOperationScraping:
+		message = "scraping already in progress"
+	case conflict.Active == database.MediaWriteOperationScraping:
+		message = "scraping is in progress"
+	case conflict.Active == database.MediaWriteOperationOptimization:
+		message = "database optimization in progress"
 	}
-	return nil
+	return models.ClientErr(&mediaWriteClientConflictError{cause: err, message: message})
+}
+
+func startIndexing(mediaDB database.MediaDBI) (*database.MediaWriteLease, error) {
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return nil, fmt.Errorf("get media database write coordinator for indexing: %w", err)
+	}
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	if err != nil {
+		return nil, mediaWriteClientError(err, database.MediaWriteOperationIndexing)
+	}
+	if !statusInstance.startIfNotRunning() {
+		lease.Release()
+		return nil, models.ClientErrf("indexing already in progress")
+	}
+	return lease, nil
+}
+
+func startScraping(
+	mediaDB database.MediaDBI, scraperID string, force bool,
+) (*database.MediaWriteLease, error) {
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return nil, fmt.Errorf("get media database write coordinator for scraping: %w", err)
+	}
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	if err != nil {
+		return nil, mediaWriteClientError(err, database.MediaWriteOperationScraping)
+	}
+	if !scrapingStatusInstance.startIfNotRunning(scraperID, force) {
+		lease.Release()
+		return nil, models.ClientErrf("scraping already in progress")
+	}
+	return lease, nil
 }

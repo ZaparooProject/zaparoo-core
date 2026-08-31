@@ -23,148 +23,733 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
 	"runtime"
+	"sync/atomic"
+	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
-const updateURL = "https://updates.zaparoo.org/"
+const (
+	updateURL = "https://updates.zaparoo.org/"
 
-var ErrDevelopmentVersion = errors.New("update check skipped for development version")
+	// updateOwner and updateRepo name the path the manifest is published under.
+	updateOwner = "ZaparooProject"
+	updateRepo  = "zaparoo-core"
+)
+
+var (
+	ErrDevelopmentVersion    = errors.New("update check skipped for development version")
+	ErrUpdateInProgress      = errors.New("update already in progress")
+	errAutoInstallIneligible = errors.New("automatic update install is not eligible")
+	applyMu                  syncutil.Mutex
+	applyInProgress          atomic.Bool
+	eligibilityPreflight     platformPreflightCache
+)
+
+type platformPreflightCache struct {
+	results map[string]error
+	mu      syncutil.Mutex
+}
+
+func (c *platformPreflightCache) check(fs afero.Fs, goos, targetPath string) error {
+	key := goos + "\x00" + targetPath
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if result, ok := c.results[key]; ok {
+		return result
+	}
+	result := preflightPlatform(fs, goos, targetPath)
+	if c.results == nil {
+		c.results = make(map[string]error)
+	}
+	c.results[key] = result
+	return result
+}
+
+// Eligibility says whether this device can take an OTA update at all, ahead of
+// any question about whether one is available.
+const (
+	// EligibilityEligible means OTA updates work here.
+	EligibilityEligible = "eligible"
+	// EligibilityDevelopment means this is a build from source, which has no
+	// release to compare itself against.
+	EligibilityDevelopment = "development"
+	// EligibilityManaged means a package manager owns this install and should
+	// be the one updating it.
+	EligibilityManaged = "managed"
+	// EligibilityUnsupported means this install cannot replace its own binary,
+	// so the update has to come from wherever it was installed from. On Windows
+	// that is an install directory this process cannot write to.
+	EligibilityUnsupported = "unsupported"
+)
+
+// EligibilityCanOfferUpdates reports whether looking for a release could change
+// what this device is told. It is false for the states whose answer is fixed by
+// what the install is rather than by what has been released, so a caller can
+// skip a request whose result it would have to discard.
+//
+// Shared because the answer decides whether a person's explicit "update now"
+// contacts the network, and two copies of that rule drifting apart would mean
+// one entry point silently reporting a stale answer.
+func EligibilityCanOfferUpdates(eligibility string) bool {
+	switch eligibility {
+	case EligibilityDevelopment, EligibilityManaged, EligibilityUnsupported:
+		return false
+	default:
+		return true
+	}
+}
+
+// Options describes the device an update is being resolved for.
+//
+//nolint:govet // Field order groups updater dependencies and device settings.
+type Options struct {
+	UserDB UpdateBackupper
+	// Progress is called as the update moves through its stages, when the
+	// caller wants to follow along. Nil reports nothing.
+	Progress ProgressFn
+	// PreQuiesce runs at the last moment an install can still be called off.
+	// The second power check goes here.
+	PreQuiesce func(context.Context) error
+	// Gate is what the device is busy with. A check uses it to report what
+	// would stop an update going ahead right now; nil reports nothing.
+	Gate       *GateDeps
+	Payload    []updatepayload.File
+	PlatformID string
+	Channel    string
+	DataDir    string
+	// DeviceID is this device's identifier, used to work out whether a staged
+	// rollout has reached it yet. Empty means only fully released versions
+	// count as rolled out.
+	DeviceID string
+	// Mode is who asked. It decides how the install is recorded and, for
+	// automatic installs, that nothing may be forced.
+	Mode Mode
+	// Managed says a package manager owns this install, which the check
+	// reports as the reason OTA updates do not apply here.
+	Managed bool
+}
+
+// OutcomeReport is how the last update finished, for a client that was not
+// connected when it happened. The confirm and rollback stages run on the boot
+// after the restart, before any client is back, so this is the only way they
+// are ever seen.
+type OutcomeReport struct {
+	At          time.Time `json:"at"`
+	Outcome     string    `json:"outcome"`
+	FromVersion string    `json:"fromVersion,omitempty"`
+	ToVersion   string    `json:"toVersion,omitempty"`
+	Detail      string    `json:"detail,omitempty"`
+}
 
 type Result struct {
-	CurrentVersion  string
-	LatestVersion   string
-	ReleaseNotes    string
-	UpdateAvailable bool
+	CheckedAt        time.Time
+	DeferredSince    time.Time
+	LastResult       *OutcomeReport
+	Eligibility      string
+	ReleaseNotes     string
+	Channel          string
+	LatestVersion    string
+	DeferredReason   string
+	BlockedReason    string
+	BlockedMessage   string
+	CurrentVersion   string
+	UpdateAvailable  bool
+	RolloutHeld      bool
+	BlockedForceable bool
 }
 
-func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
+// session is one update operation's source and the transport backing it.
+type session struct {
+	source *verifiedSource
+	// close releases the transport's pooled connections. Callers must defer it:
+	// each operation builds a fresh transport, so without it the keep-alive
+	// connections and their goroutines outlive the operation until the idle
+	// timeout expires.
+	close func()
+}
+
+// newSession builds the source an operation reads signed metadata from. It is a
+// variable so a test can supply one backed by a local server; nothing in the
+// product ever assigns to it.
+var newSession = makeUpdater
+
+func makeUpdater(opts Options) (*session, error) { //nolint:gocritic // hugeParam
+	// tlsroots hands back a transport this updater owns outright, so setting the
+	// header timeout here does not affect anything else in the process.
 	transport := tlsroots.Transport(nil)
-	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
-		BaseURL:   updateURL,
-		Transport: transport,
-	})
-	if err != nil {
-		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating update source: %w", err)
-	}
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 
-	filter := fmt.Sprintf("^zaparoo-%s_%s", platformID, runtime.GOARCH)
-
-	validator, err := newSignedChecksumValidator()
-	if err != nil {
-		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating validator: %w", err)
-	}
-
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:     &validationChainHTTPSource{source: source, transport: transport},
-		Validator:  validator,
-		Filters:    []string{filter},
-		Prerelease: channel == config.UpdateChannelBeta,
-	})
-	if err != nil {
-		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating updater: %w", err)
-	}
-
-	repo := selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core")
-	return updater, repo, nil
+	return &session{
+		source: &verifiedSource{
+			baseURL:    updateURL,
+			transport:  transport,
+			stateDir:   stateDirFor(opts.DataDir),
+			platformID: opts.PlatformID,
+			goarch:     runtime.GOARCH,
+			verify:     otameta.Verify,
+		},
+		close: transport.CloseIdleConnections,
+	}, nil
 }
 
-func Check(ctx context.Context, platformID, channel string) (*Result, error) {
+// latestRelease fetches the verified manifest and returns the release this
+// device should be offered, or nil when there is none.
+func (s *session) latestRelease(ctx context.Context, channel string) (*otameta.Release, error) {
+	if err := s.source.load(ctx, updateOwner, updateRepo); err != nil {
+		return nil, fmt.Errorf("reading update metadata: %w", err)
+	}
+	release, err := s.source.selectRelease(channel)
+	if err != nil {
+		return nil, fmt.Errorf("selecting the latest release: %w", err)
+	}
+	return release, nil
+}
+
+// newerThanCurrent reports whether version is an upgrade from the running
+// build. A version neither side can read is not an upgrade: the decision that
+// replaces the binary is not one to make on a guess.
+func newerThanCurrent(version string) (bool, error) {
+	candidate, err := semver.NewVersion(version)
+	if err != nil {
+		return false, fmt.Errorf("reading the offered version %q: %w", version, err)
+	}
+	current, err := semver.NewVersion(config.AppVersion)
+	if err != nil {
+		return false, fmt.Errorf("reading the running version %q: %w", config.AppVersion, err)
+	}
+	return candidate.GreaterThan(current), nil
+}
+
+func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocritic // hugeParam
 	if config.IsDevelopmentVersion() {
 		return nil, ErrDevelopmentVersion
 	}
 
-	updater, repo, err := makeUpdater(ctx, platformID, channel)
+	s, err := newSession(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+
+	release, err := s.latestRelease(ctx, opts.Channel)
 	if err != nil {
 		return nil, err
 	}
 
-	release, found, err := updater.DetectLatest(ctx, repo)
-	if err != nil {
-		return nil, fmt.Errorf("detecting latest release: %w", err)
-	}
-
+	stateDir := stateDirFor(opts.DataDir)
 	result := &Result{
 		CurrentVersion: config.AppVersion,
+		Channel:        opts.Channel,
+		Eligibility:    eligibilityFor(&opts),
+		CheckedAt:      time.Now().UTC(),
+		LastResult:     lastOutcome(stateDir),
 	}
 
-	if found {
-		result.LatestVersion = release.Version()
-		result.UpdateAvailable = release.GreaterThan(config.AppVersion)
+	if release != nil {
+		version := otameta.VersionFromTag(release.TagName)
+		upgrade, err := newerThanCurrent(version)
+		if err != nil {
+			return nil, err
+		}
+		result.LatestVersion = version
+		if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
+			log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
+		}
+		result.UpdateAvailable = upgrade
 		result.ReleaseNotes = release.ReleaseNotes
+
+		if result.UpdateAvailable {
+			result.RolloutHeld = rolloutHeld(opts.DeviceID, release)
+			noteGate(ctx, &opts, result, stateDir, version)
+			if deferral := peekDeferral(stateDir, version); deferral != nil {
+				result.DeferredReason = deferral.Reason
+				result.DeferredSince = deferral.Since
+			}
+		}
+	}
+
+	// Recorded even when nothing applies, because "nothing applies" is a
+	// conclusion this check reached and not a check that failed. Returning
+	// before this would leave the previous findings standing, so a release that
+	// has since been withdrawn would keep being offered by Status for as long
+	// as no later check found a different one — which is exactly the situation
+	// withdrawing a release exists to end.
+	if err := recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   result.LatestVersion,
+		UpdateAvailable: result.UpdateAvailable,
+		RolloutHeld:     result.RolloutHeld,
+	}); err != nil {
+		log.Warn().Err(err).Msg("could not record what this update check found")
 	}
 
 	return result, nil
 }
 
-func Apply(ctx context.Context, platformID, channel string) (string, error) {
+// Status answers from what this device already knows, without contacting the
+// release server or writing anything.
+//
+// A check is expensive in a way that matters on the platforms Core runs on: it
+// fetches and verifies signed metadata and writes the result to the data
+// directory, which on MiSTer is a write onto exfat. That cost is why unpaired
+// clients are refused one. Anything that wants to show update state whenever a
+// screen is drawn has to be able to ask without paying it.
+//
+// The answer is as fresh as the last check, and CheckedAt says when that was,
+// so a caller can be honest about how old it is rather than implying it just
+// looked. Unlike a check, this reports normally on a development build instead
+// of refusing: saying which version is running and that updates do not apply to
+// it is exactly what someone looking at the screen wants to know.
+func Status(ctx context.Context, opts Options) *Result { //nolint:gocritic // hugeParam
+	stateDir := stateDirFor(opts.DataDir)
+	st := stateSnapshot(stateDir)
+
+	result := &Result{
+		CurrentVersion: config.AppVersion,
+		Channel:        opts.Channel,
+		Eligibility:    eligibilityFor(&opts),
+		LastResult:     lastOutcome(stateDir),
+	}
+	if st.LastCheckAt != nil {
+		result.CheckedAt = *st.LastCheckAt
+	}
+	if st.LastCheck == nil {
+		return result
+	}
+
+	result.LatestVersion = st.LastCheck.LatestVersion
+	result.RolloutHeld = st.LastCheck.RolloutHeld
+	// Recomputed rather than replayed. The recorded answer was true when the
+	// check ran, and the most likely reason it is not true now is that the
+	// update it describes has since been installed, so reporting it back would
+	// keep offering a version already running.
+	if upgrade, err := newerThanCurrent(result.LatestVersion); err == nil {
+		result.UpdateAvailable = upgrade
+	}
+	if !result.UpdateAvailable {
+		return result
+	}
+
+	readGate(ctx, &opts, result)
+	if deferral := peekDeferral(stateDir, result.LatestVersion); deferral != nil {
+		result.DeferredReason = deferral.Reason
+		result.DeferredSince = deferral.Since
+	}
+	return result
+}
+
+func clearDeferralForRelease(stateDir, version string) error {
+	deferral := peekDeferralState(stateDir)
+	if deferral == nil || deferral.Version == version {
+		return nil
+	}
+	return clearDeferral(stateDir, deferral.Version)
+}
+
+// noteGate records what is currently in the way of installing a version. A
+// signal that will pass on its own — someone playing a game, a busy API — also
+// starts the clock an automatic install eventually runs out of patience with,
+// so it is written to disk; the rest is only reported.
+//
+// This only ever reports, so the gate is asked with nothing to acquire: a check
+// must not stop the user launching something while it answers.
+func noteGate(ctx context.Context, opts *Options, result *Result, stateDir, version string) {
+	decision, reporting, ok := readGate(ctx, opts, result)
+	if !ok || !decision.Expires {
+		return
+	}
+	now := time.Now().UTC()
+	if reporting.Now != nil {
+		now = reporting.Now().UTC()
+	}
+	if err := recordDeferralAt(stateDir, version, decision.Reason, now); err != nil {
+		log.Warn().Err(err).Msg("could not record why an update is waiting")
+	}
+}
+
+// readGate fills in what is currently in the way of installing, and reports
+// whether anything was. It writes nothing, so a caller that only wants to
+// describe the situation can use it on its own.
+//
+// The gate is asked with nothing to acquire: describing what is in the way must
+// not stop the user launching something while it answers.
+func readGate(
+	ctx context.Context, opts *Options, result *Result,
+) (decision GateDecision, reporting GateDeps, blocked bool) {
+	if opts.Gate == nil {
+		return GateDecision{}, GateDeps{}, false
+	}
+	reporting = *opts.Gate
+	reporting.AcquireRestore = nil
+	reporting.AcquireMediaGate = nil
+	decision, err := CanApplyUpdate(ctx, &reporting, ModeManual, false)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not read what is in the way of an update")
+		return GateDecision{}, reporting, false
+	}
+	decision.Release()
+	if decision.OK {
+		return decision, reporting, false
+	}
+	result.BlockedReason = decision.Reason
+	result.BlockedMessage = decision.Message
+	result.BlockedForceable = decision.Forceable
+	return decision, reporting, true
+}
+
+// installAdvice says how this device gets a new release. A package manager
+// reconciles the files it owns against its own index, so an update installed
+// behind its back is undone the next time it runs — pointing someone at an
+// update button there would waste their time and confuse them when the version
+// went backwards.
+func installAdvice(platformID string, managed bool) string {
+	if !managed {
+		return "Use the App or TUI to update."
+	}
+	switch platformID {
+	case platformids.Mister:
+		return "Run update_all to install it."
+	case platformids.Batocera:
+		return "Install it through the Batocera package manager."
+	default:
+		return "Your package manager installs updates on this device."
+	}
+}
+
+// eligibilityFor says whether OTA updates apply to this install at all.
+func eligibilityFor(opts *Options) string {
+	switch {
+	case config.IsDevelopmentVersion():
+		return EligibilityDevelopment
+	case eligibilityPreflight.check(afero.NewOsFs(), runtime.GOOS, currentBinaryPath()) != nil:
+		// Checked before Managed because this one is a refusal Apply enforces,
+		// while Managed only says the package manager should be doing it.
+		return EligibilityUnsupported
+	case opts.Managed:
+		return EligibilityManaged
+	default:
+		return EligibilityEligible
+	}
+}
+
+// currentBinaryPath resolves the executable an update would replace, or an
+// empty string when it cannot be resolved. Eligibility is only advice, so a
+// path this build cannot work out is left for Apply to report properly.
+func currentBinaryPath() string {
+	path, err := restart.BinaryPath()
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve the binary an update would replace")
+		return ""
+	}
+	return path
+}
+
+// rolloutHeld reports whether the selected release's staged rollout has not
+// reached this device yet. Using the selected release matters when channels
+// contain semver-equal tags with different rollout percentages.
+func autoInstallReleaseAllowed(opts *Options, release *otameta.Release) error {
+	if opts == nil || opts.Mode != ModeAuto {
+		return nil
+	}
+	if opts.Managed {
+		return fmt.Errorf("%w: install is managed by a package manager", errAutoInstallIneligible)
+	}
+	if rolloutHeld(opts.DeviceID, release) {
+		return fmt.Errorf("%w: release is not rolled out to this device", errAutoInstallIneligible)
+	}
+	if version := releaseVersion(release); rolledBackHere(opts.DataDir, version) {
+		return fmt.Errorf("%w: %s already failed to start on this device",
+			errAutoInstallIneligible, version)
+	}
+	return nil
+}
+
+func releaseVersion(release *otameta.Release) string {
+	if release == nil {
+		return ""
+	}
+	return otameta.VersionFromTag(release.TagName)
+}
+
+// rolledBackHere reports whether this exact version was already installed here
+// and had to be rolled back.
+//
+// Nothing else declines it. Without this an automatic install repeats the whole
+// download, snapshot, swap and restore on every check for as long as the bad
+// release stays published, which on a device whose owner is not watching is a
+// loop nobody sees: the inbox keeps one row per category, so the tenth failure
+// looks exactly like the first.
+//
+// Only automatic installs are declined. A person asking for it again is asking
+// on purpose, and a later version is a different release that has not failed.
+func rolledBackHere(dataDir, version string) bool {
+	if dataDir == "" || version == "" {
+		return false
+	}
+	last := lastOutcome(stateDirFor(dataDir))
+	if last == nil {
+		return false
+	}
+	return last.Outcome == string(outcomeRolledBack) && last.ToVersion == version
+}
+
+// PreviouslyRolledBack reports the same refusal as the one Apply enforces, from
+// a check result a caller already has. Apply is the authority; this lets a
+// scheduler skip the work instead of arranging an install that will be refused.
+func PreviouslyRolledBack(result *Result) bool {
+	return result != nil && result.LastResult != nil &&
+		result.LastResult.Outcome == string(outcomeRolledBack) &&
+		result.LastResult.ToVersion == result.LatestVersion
+}
+
+func rolloutHeld(deviceID string, release *otameta.Release) bool {
+	if release == nil {
+		return false
+	}
+	return !RolloutEligible(deviceID, release.TagName, release.Rollout)
+}
+
+// lastOutcome reports how the previous update finished, whether or not it has
+// already been shown. A client asking now was not necessarily the client that
+// saw it the first time.
+func lastOutcome(dir string) *OutcomeReport {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st := loadState(dir)
+	if st.LastResult == nil {
+		return nil
+	}
+	return &OutcomeReport{
+		At:          st.LastResult.At,
+		Outcome:     string(st.LastResult.Outcome),
+		FromVersion: st.LastResult.FromVersion,
+		ToVersion:   st.LastResult.ToVersion,
+		Detail:      st.LastResult.Detail,
+	}
+}
+
+func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocritic // hugeParam
 	if config.IsDevelopmentVersion() {
 		return "", ErrDevelopmentVersion
 	}
+	if !applyInProgress.CompareAndSwap(false, true) {
+		return "", ErrUpdateInProgress
+	}
+	defer applyInProgress.Store(false)
 
-	u, repo, err := makeUpdater(ctx, platformID, channel)
-	if err != nil {
+	if opts.UserDB == nil {
+		return "", errors.New("applying an update needs the user database")
+	}
+	if opts.DataDir == "" {
+		return "", errors.New("applying an update needs the platform data directory")
+	}
+
+	applyMu.Lock()
+	defer applyMu.Unlock()
+
+	trigger := triggerManual
+	if opts.Mode == ModeAuto {
+		trigger = triggerAuto
+	}
+	report := newProgressReporter(opts.Progress, trigger)
+	// Anything that stops the update from here on is worth telling the client
+	// about, whatever stage it happened at.
+	fail := func(err error) (string, error) {
+		report.failed(err)
 		return "", err
 	}
 
-	// When running as a daemon subprocess, the binary is a temp copy and
-	// os.Executable() would point to it. ZAPAROO_APP holds the path to
-	// the original binary that should be updated instead.
-	var release *selfupdate.Release
-	if appPath := os.Getenv(config.AppEnv); appPath != "" {
-		release, err = u.UpdateCommand(ctx, appPath, config.AppVersion, repo)
-	} else {
-		release, err = u.UpdateSelf(ctx, config.AppVersion, repo)
-	}
-	if err != nil {
-		return "", fmt.Errorf("applying update: %w", err)
+	if err := ensureNoPendingUpdate(opts.DataDir); err != nil {
+		return fail(err)
 	}
 
-	return release.Version(), nil
+	s, err := newSession(opts)
+	if err != nil {
+		return fail(err)
+	}
+	defer s.close()
+
+	report.stage(ProgressChecking)
+	manifestRelease, err := s.latestRelease(ctx, opts.Channel)
+	if err != nil {
+		return fail(err)
+	}
+	if manifestRelease == nil {
+		return fail(fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion))
+	}
+	version := otameta.VersionFromTag(manifestRelease.TagName)
+	upgrade, err := newerThanCurrent(version)
+	if err != nil {
+		return fail(err)
+	}
+	if !upgrade {
+		return fail(fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion))
+	}
+	if eligibilityErr := autoInstallReleaseAllowed(&opts, manifestRelease); eligibilityErr != nil {
+		return fail(eligibilityErr)
+	}
+	report.setVersion(version)
+
+	targetPath, err := restart.BinaryPath()
+	if err != nil {
+		return fail(fmt.Errorf("resolving the binary to update: %w", err))
+	}
+	// Checked here rather than at the top of Apply so that a device already on
+	// the newest version is told that, instead of being told its platform is
+	// unsupported. Everything below this point costs the user something the
+	// install can never spend well.
+	if platformErr := preflightPlatform(afero.NewOsFs(), runtime.GOOS, targetPath); platformErr != nil {
+		return fail(platformErr)
+	}
+	stagingRoot := stagingRootFor(opts.DataDir)
+	if spaceErr := preflightSpace(&opts, manifestRelease, targetPath, stagingRoot); spaceErr != nil {
+		return fail(spaceErr)
+	}
+	stageOpts := &StageOptions{
+		Release:        manifestRelease,
+		PlatformID:     opts.PlatformID,
+		Arch:           runtime.GOARCH,
+		OS:             runtime.GOOS,
+		TargetPath:     targetPath,
+		StagingRoot:    stagingRoot,
+		CurrentVersion: config.AppVersion,
+		progress:       report,
+	}
+	stageOpts.payload = updatePayloadFiles(&opts)
+	staged, err := Stage(ctx, stageOpts)
+	if err != nil {
+		return fail(fmt.Errorf("staging update: %w", err))
+	}
+
+	if err := installStaged(ctx, &installOptions{
+		Staged:             staged,
+		UserDB:             opts.UserDB,
+		TargetPath:         targetPath,
+		DataDir:            opts.DataDir,
+		PreviousVersion:    config.AppVersion,
+		PlatformID:         opts.PlatformID,
+		ManifestGeneration: s.source.manifestGeneration(),
+		Trigger:            trigger,
+		PreQuiesce:         opts.PreQuiesce,
+		progress:           report,
+	}); err != nil {
+		return fail(fmt.Errorf("installing update: %w", err))
+	}
+
+	// The version on offer has been taken, so nothing is waiting on it any
+	// more. A failure to say so is not worth failing an installed update over.
+	if err := clearDeferral(stateDirFor(opts.DataDir), staged.Version); err != nil {
+		log.Warn().Err(err).Msg("could not clear the recorded update deferral")
+	}
+
+	report.stage(ProgressRestarting)
+	return staged.Version, nil
+}
+
+// preflightSpace sizes the update from the verified manifest and refuses one
+// that cannot fit. The asset lookup here is a size lookup only: Stage repeats it
+// along with the version and upgrade-floor checks, so a selection failure is
+// left for Stage to report with its own error rather than reported twice.
+func updatePayloadFiles(opts *Options) []updatepayload.File {
+	if opts == nil || opts.Managed {
+		return nil
+	}
+	return append([]updatepayload.File(nil), opts.Payload...)
+}
+
+func preflightSpace(opts *Options, release *otameta.Release, targetPath, stagingRoot string) error {
+	asset, err := otameta.SelectAsset(release, opts.PlatformID, runtime.GOARCH)
+	if err != nil {
+		return nil //nolint:nilerr // Stage reports this properly a moment later
+	}
+	payloadSize := int64(0)
+	if len(updatePayloadFiles(opts)) > 0 {
+		payloadSize = maxStagedPayloadBytes
+	}
+	return checkFreeSpace(&spaceNeeds{
+		archiveSize: asset.Size,
+		payloadSize: payloadSize,
+		targetPath:  targetPath,
+		stagingRoot: stagingRoot,
+		userDBPath:  filepath.Join(opts.DataDir, config.UserDbFile),
+	})
+}
+
+func ensureNoPendingUpdate(dataDir string) error {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	m, err := loadMarker(stateDirFor(dataDir))
+	if err != nil {
+		return fmt.Errorf("checking for an unresolved update: %w", err)
+	}
+	if m != nil {
+		return fmt.Errorf("an update to %s is still unresolved", m.TargetVersion)
+	}
+	return nil
 }
 
 // CheckFn is the signature for a function that checks for updates.
-type CheckFn func(ctx context.Context, platformID, channel string) (*Result, error)
+type CheckFn func(ctx context.Context, opts Options) (*Result, error)
 
-// CheckAndNotify checks for updates and posts an inbox message if one is
-// available. Intended to be called as a fire-and-forget goroutine on startup.
+// CheckAndNotify checks for updates and posts a version-deduplicated inbox
+// message when one is available. The service scheduler calls it periodically.
 func CheckAndNotify(
 	ctx context.Context,
 	cfg *config.Instance,
-	platformID string,
+	opts Options, //nolint:gocritic // hugeParam
 	inboxSvc *inbox.Service,
 	waitFn func(context.Context, int) bool,
 	checkFn CheckFn,
 	managedInstall bool,
 ) {
-	if !cfg.AutoUpdate(!managedInstall) {
-		log.Debug().Msg("auto-update disabled, skipping update check")
+	if !cfg.UpdateCheck() {
+		log.Debug().Msg("update checking is off, skipping update check")
 		return
 	}
 
 	if !waitFn(ctx, 30) {
 		log.Warn().Msg("no internet connectivity, skipping update check")
+		if err := recordScheduledCheck(stateDirFor(opts.DataDir), false); err != nil {
+			log.Warn().Err(err).Msg("could not record failed scheduled update check")
+		}
 		return
 	}
 	if ctx.Err() != nil {
 		return
 	}
 
-	channel := cfg.UpdateChannel()
-	result, err := checkFn(ctx, platformID, channel)
+	opts.Channel = cfg.UpdateChannel()
+	opts.DeviceID = cfg.DeviceID()
+	opts.Managed = managedInstall
+	result, err := checkFn(ctx, opts)
 	if errors.Is(err, ErrDevelopmentVersion) {
 		log.Debug().Msg("development version, skipping update check")
 		return
 	}
 	if err != nil {
 		log.Warn().Err(err).Msg("update check failed")
+		if stateErr := recordScheduledCheck(stateDirFor(opts.DataDir), false); stateErr != nil {
+			log.Warn().Err(stateErr).Msg("could not record failed scheduled update check")
+		}
 		return
+	}
+	if stateErr := recordScheduledCheck(stateDirFor(opts.DataDir), true); stateErr != nil {
+		log.Warn().Err(stateErr).Msg("could not record successful scheduled update check")
 	}
 
 	if !result.UpdateAvailable {
@@ -177,16 +762,31 @@ func CheckAndNotify(
 	if ctx.Err() != nil {
 		return
 	}
+	// A release still rolling out has not reached this device. Announcing it
+	// anyway would have everyone install on the first day, which is the one
+	// thing a staged rollout exists to prevent. Asking for it by hand still
+	// works, and update.check says why it is being held back.
+	if result.RolloutHeld {
+		log.Debug().
+			Str("latest", result.LatestVersion).
+			Msg("update is not rolled out to this device yet")
+		return
+	}
 
 	log.Info().
 		Str("current", result.CurrentVersion).
 		Str("latest", result.LatestVersion).
 		Msg("update available")
 
+	stateDir := stateDirFor(opts.DataDir)
+	if lastOfferedVersion(stateDir) == result.LatestVersion {
+		return
+	}
 	title := fmt.Sprintf("Zaparoo %s is available", result.LatestVersion)
 	body := fmt.Sprintf(
-		"Currently on %s. Use the App or TUI to update.",
+		"Currently on %s. %s",
 		result.CurrentVersion,
+		installAdvice(opts.PlatformID, managedInstall),
 	)
 
 	if err := inboxSvc.Add(
@@ -196,5 +796,9 @@ func CheckAndNotify(
 		inbox.WithSeverity(inbox.SeverityInfo),
 	); err != nil {
 		log.Error().Err(err).Msg("failed to add update inbox message")
+		return
+	}
+	if err := recordOfferedVersion(stateDir, result.LatestVersion); err != nil {
+		log.Warn().Err(err).Msg("could not record offered update version")
 	}
 }

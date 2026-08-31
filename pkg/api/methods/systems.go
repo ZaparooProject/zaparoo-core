@@ -20,42 +20,136 @@
 package methods
 
 import (
+	"fmt"
+	"time"
+
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/rs/zerolog/log"
 )
 
 func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received systems request")
+	started := time.Now()
+	log.Debug().Msg("received systems request")
 
-	indexed, err := env.Database.MediaDB.IndexedSystems()
-	if err != nil {
-		log.Error().Err(err).Msgf("error getting indexed systems")
-		indexed = []string{}
+	var params models.SystemsParams
+	if len(env.Params) > 0 {
+		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
 	}
 
-	if len(indexed) == 0 {
-		log.Warn().Msg("no indexed systems found")
-	}
-
-	respSystems := make([]models.System, 0)
-
-	for _, id := range indexed {
-		system, err := systemdefs.GetSystem(id)
+	tagged := params.Tags != nil && len(*params.Tags) > 0
+	var tagFilters []zapscript.TagFilter
+	if tagged {
+		var err error
+		tagFilters, err = filters.ParseTagFilters(*params.Tags)
 		if err != nil {
-			log.Error().Err(err).Msgf("error getting system: %s", id)
+			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
+		}
+		tagged = len(tagFilters) > 0
+	}
+
+	countsStarted := time.Now()
+	mediaCounts := make(map[string]int)
+	mediaCountsAvailable := false
+	var indexed []string
+	if tagged {
+		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, tagFilters)
+		if err != nil {
+			return nil, fmt.Errorf("error getting tagged system media counts: %w", err)
+		}
+		indexed = make([]string, 0, len(counts))
+		for _, count := range counts {
+			if count.SystemID == "" || count.Count <= 0 {
+				continue
+			}
+			indexed = append(indexed, count.SystemID)
+			mediaCounts[count.SystemID] = count.Count
+		}
+		mediaCountsAvailable = true
+	} else {
+		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, nil)
+		if err == nil {
+			indexed = make([]string, 0, len(counts))
+			for _, count := range counts {
+				if count.SystemID == "" || count.Count <= 0 {
+					continue
+				}
+				indexed = append(indexed, count.SystemID)
+				mediaCounts[count.SystemID] = count.Count
+			}
+			mediaCountsAvailable = true
+		} else {
+			log.Error().Err(err).Msg("error getting system media counts")
+			indexed, err = env.Database.MediaDB.IndexedSystems()
+			if err != nil {
+				log.Error().Err(err).Msg("error getting indexed systems")
+				indexed = []string{}
+			}
+		}
+	}
+
+	countsDuration := time.Since(countsStarted)
+	if len(indexed) == 0 {
+		log.Debug().Msg("no indexed systems found")
+	}
+
+	assemblyStarted := time.Now()
+	systemIDs := make([]string, 0, len(indexed))
+	seenCandidates := make(map[string]struct{}, len(indexed))
+	addSystemID := func(id string) {
+		if id == "" {
+			return
+		}
+		if tagged {
+			if _, ok := mediaCounts[id]; !ok {
+				return
+			}
+		}
+		if _, ok := seenCandidates[id]; ok {
+			return
+		}
+		seenCandidates[id] = struct{}{}
+		systemIDs = append(systemIDs, id)
+	}
+	for _, id := range indexed {
+		addSystemID(id)
+	}
+
+	if env.LauncherCache != nil {
+		launchers := env.LauncherCache.GetAllLaunchers()
+		for i := range launchers {
+			if !params.All && !launchers[i].Available {
+				continue
+			}
+			addSystemID(launchers[i].SystemID)
+		}
+	}
+
+	respSystems := make([]models.System, 0, len(systemIDs))
+	rendered := make(map[string]struct{}, len(systemIDs))
+	for _, id := range systemIDs {
+		system, systemErr := systemdefs.GetSystem(id)
+		if systemErr != nil {
+			log.Debug().Err(systemErr).Msgf("system has no static definition: %s", id)
 			continue
 		}
 
-		sr := models.System{
-			ID: system.ID,
+		sr := models.System{ID: system.ID}
+		if mediaCountsAvailable {
+			count := mediaCounts[id]
+			sr.MediaCount = &count
 		}
-
-		sm, err := assets.GetSystemMetadata(id)
-		if err != nil {
-			log.Error().Err(err).Msgf("error getting system metadata: %s", id)
+		sm, metadataErr := assets.GetSystemMetadata(id)
+		if metadataErr != nil {
+			log.Error().Err(metadataErr).Msgf("error getting system metadata: %s", id)
 		} else {
 			sr.Name = sm.Name
 			sr.Category = sm.Category
@@ -66,11 +160,44 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 				sr.Manufacturer = &sm.Manufacturer
 			}
 		}
-
 		respSystems = append(respSystems, sr)
+		rendered[id] = struct{}{}
 	}
 
-	return models.SystemsResponse{
-		Systems: respSystems,
-	}, nil
+	if env.LauncherCache != nil {
+		for _, system := range env.LauncherCache.GetLaunchableSystems() {
+			id := launchables.EncodeID(system.ID)
+			if _, ok := rendered[id]; ok {
+				continue
+			}
+			var mediaCount *int
+			if tagged {
+				if _, ok := mediaCounts[id]; !ok {
+					continue
+				}
+			}
+			if mediaCountsAvailable {
+				count := mediaCounts[id]
+				mediaCount = &count
+			}
+			rendered[id] = struct{}{}
+			respSystems = append(respSystems, models.System{
+				MediaCount: mediaCount,
+				ID:         id,
+				Name:       system.Name,
+				Category:   system.Category,
+				ZapScript:  system.ZapScript(),
+			})
+		}
+	}
+
+	log.Debug().
+		Bool("tagged", tagged).
+		Int("indexedSystems", len(indexed)).
+		Int("responseSystems", len(respSystems)).
+		Dur("countsDuration", countsDuration).
+		Dur("assemblyDuration", time.Since(assemblyStarted)).
+		Dur("totalDuration", time.Since(started)).
+		Msg("systems request completed")
+	return models.SystemsResponse{Systems: respSystems}, nil
 }

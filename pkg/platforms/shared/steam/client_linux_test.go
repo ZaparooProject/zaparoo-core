@@ -134,6 +134,28 @@ func TestClientFindSteamDir(t *testing.T) {
 		assert.Equal(t, customPath, result)
 	})
 
+	t.Run("prefers_populated_flatpak_over_empty_native_path", func(t *testing.T) {
+		home := withTempHome(t)
+
+		emptyNativePath := filepath.Join(home, ".local", "share", "Steam")
+		require.NoError(t, os.MkdirAll(emptyNativePath, 0o750))
+		flatpakPath := filepath.Join(home, ".var", "app", FlatpakSteamID, ".steam", "steam")
+		require.NoError(t, os.MkdirAll(filepath.Join(flatpakPath, "steamapps"), 0o750))
+
+		fs := testhelpers.NewMemoryFS()
+		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+		require.NoError(t, err)
+
+		client := NewClient(Options{
+			CheckFlatpak: true,
+			FallbackPath: "/fallback/steam",
+		})
+
+		result := client.FindSteamDir(cfg)
+
+		assert.Equal(t, flatpakPath, result)
+	})
+
 	t.Run("checks_flatpak_path_when_enabled", func(t *testing.T) {
 		home := withTempHome(t)
 

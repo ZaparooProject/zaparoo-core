@@ -23,10 +23,110 @@ package linuxinput
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// keyEvent records a single keyboard event (down or up) for assertion in tests.
+type keyEvent struct {
+	kind string // "down" or "up"
+	code int
+}
+
+// recordingKeyboard records key events in order for assertion in tests.
+type recordingKeyboard struct {
+	events []keyEvent
+}
+
+func (r *recordingKeyboard) KeyPress(code int) error {
+	r.events = append(r.events, keyEvent{"down", code}, keyEvent{"up", code})
+	return nil
+}
+
+func (r *recordingKeyboard) KeyDown(code int) error {
+	r.events = append(r.events, keyEvent{"down", code})
+	return nil
+}
+
+func (r *recordingKeyboard) KeyUp(code int) error {
+	r.events = append(r.events, keyEvent{"up", code})
+	return nil
+}
+
+func (*recordingKeyboard) FetchSyspath() (string, error) { return "", nil }
+func (*recordingKeyboard) Close() error                  { return nil }
+
+// TestCombo_ReleasesInReverseOrder verifies that Combo calls KeyUp in the reverse
+// order of KeyDown: base key released before modifier.
+func TestCombo_ReleasesInReverseOrder(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	kbd := Keyboard{Device: rec, Delay: 0}
+
+	// 42 = LeftShift, 30 = A
+	require.NoError(t, kbd.Combo(42, 30))
+
+	want := []keyEvent{
+		{"down", 42}, // Shift down
+		{"down", 30}, // A down
+		{"up", 30},   // A up  ← base key released BEFORE modifier
+		{"up", 42},   // Shift up
+	}
+	assert.Equal(t, want, rec.events, "release order should be reverse of press order")
+}
+
+// TestCombo_ThreeKeys_ReleasesInReverseOrder covers a three-key chord.
+func TestCombo_ThreeKeys_ReleasesInReverseOrder(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	kbd := Keyboard{Device: rec, Delay: 0}
+
+	// 29 = LeftCtrl, 42 = LeftShift, 1 = Esc
+	require.NoError(t, kbd.Combo(29, 42, 1))
+
+	want := []keyEvent{
+		{"down", 29},
+		{"down", 42},
+		{"down", 1},
+		{"up", 1},  // Esc up first (last pressed)
+		{"up", 42}, // Shift up
+		{"up", 29}, // Ctrl up last (first pressed)
+	}
+	assert.Equal(t, want, rec.events)
+}
+
+// TestCombo_SingleKey behaves identically to a Press.
+func TestCombo_SingleKey(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	kbd := Keyboard{Device: rec, Delay: 0}
+
+	require.NoError(t, kbd.Combo(28)) // Enter
+
+	want := []keyEvent{{"down", 28}, {"up", 28}}
+	assert.Equal(t, want, rec.events)
+}
+
+// TestPress_RespectsDelay checks that Press sleeps between KeyDown and KeyUp.
+func TestPress_RespectsDelay(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	delay := 5 * time.Millisecond
+	kbd := Keyboard{Device: rec, Delay: delay}
+
+	start := time.Now()
+	require.NoError(t, kbd.Press(30))
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, delay, "Press should sleep at least Delay between down and up")
+	assert.Equal(t, []keyEvent{{"down", 30}, {"up", 30}}, rec.events)
+}
 
 func TestParseKeyCombo(t *testing.T) {
 	t.Parallel()

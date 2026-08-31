@@ -71,8 +71,8 @@ var (
 // Note: Years like (1999) are extracted as tags (year:1999) by the tag parser,
 // allowing users to filter by year when needed: launch.title Movie/Matrix (+year:1999)
 //
-// TODO: Scene releases use bare years without parentheses (Movie.Name.1999.1080p),
-// but we can't safely strip them without breaking movies with years in their titles
+// Scene releases use bare years without parentheses (Movie.Name.1999.1080p),
+// but we intentionally keep them to avoid breaking movies with years in their titles
 // (e.g., "2001: A Space Odyssey", "1917", "1984"). For now, we only strip years in
 // parentheses/brackets. This means scene releases will include the year in the slug
 // (e.g., "Matrix 1999" vs "Matrix" from standard naming). Cross-format matching happens

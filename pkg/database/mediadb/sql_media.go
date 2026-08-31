@@ -24,21 +24,21 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+	"strconv"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
 const insertMediaSQL = `INSERT INTO Media
-	(DBID, MediaTitleDBID, SystemDBID, Path, ParentDir)
-	VALUES (?, ?, ?, ?, ?)`
+	(DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName)
+	VALUES (?, ?, ?, ?, ?, ?)`
 
-func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (database.Media, error) {
+func sqlFindMedia(ctx context.Context, db sqlQueryable, media *database.Media) (database.Media, error) {
 	var row database.Media
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, MediaTitleDBID, SystemDBID, Path, ParentDir
+		DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName
 		from Media
 		where DBID = ?
 		or (
@@ -73,6 +73,7 @@ func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (d
 		&row.SystemDBID,
 		&row.Path,
 		&row.ParentDir,
+		&row.SortName,
 	)
 	if err != nil {
 		return row, fmt.Errorf("failed to scan media row: %w", err)
@@ -80,7 +81,7 @@ func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (d
 	return row, nil
 }
 
-func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row database.Media) (database.Media, error) {
+func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row *database.Media) (database.Media, error) {
 	var dbID any
 	if row.DBID != 0 {
 		dbID = row.DBID
@@ -93,21 +94,22 @@ func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row dat
 		row.SystemDBID,
 		row.Path,
 		row.ParentDir,
+		row.SortName,
 	)
 	if err != nil {
-		return row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
+		return *row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
 	}
 
 	lastID, err := res.LastInsertId()
 	if err != nil {
-		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
+		return *row, fmt.Errorf("failed to get last insert ID for media: %w", err)
 	}
 
 	row.DBID = lastID
-	return row, nil
+	return *row, nil
 }
 
-func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (database.Media, error) {
+func sqlInsertMedia(ctx context.Context, db *sql.DB, row *database.Media) (database.Media, error) {
 	var dbID any
 	if row.DBID != 0 {
 		dbID = row.DBID
@@ -115,7 +117,7 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 
 	stmt, err := db.PrepareContext(ctx, insertMediaSQL)
 	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert media statement: %w", err)
+		return *row, fmt.Errorf("failed to prepare insert media statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -130,65 +132,44 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		row.SystemDBID,
 		row.Path,
 		row.ParentDir,
+		row.SortName,
 	)
 	if err != nil {
-		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
+		return *row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
 
 	lastID, err := res.LastInsertId()
 	if err != nil {
-		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
+		return *row, fmt.Errorf("failed to get last insert ID for media: %w", err)
 	}
 
 	row.DBID = lastID
-	return row, nil
+	return *row, nil
 }
 
-func sqlUpdateMediaTitle(ctx context.Context, db sqlQueryable, mediaDBID, mediaTitleDBID int64) error {
-	if _, err := db.ExecContext(
-		ctx,
-		`UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`,
-		mediaTitleDBID,
-		mediaDBID,
-	); err != nil {
-		return fmt.Errorf("failed to update media title: %w", err)
+func sqlGetCachedMediaCount(ctx context.Context, db *sql.DB, name string) (count int, ok bool, err error) {
+	var raw string
+	err = db.QueryRowContext(ctx, "SELECT Value FROM DBConfig WHERE Name = ?", name).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
 	}
-
-	return nil
-}
-
-func sqlDeleteMediaTags(ctx context.Context, db sqlQueryable, mediaDBID int64) error {
-	if _, err := db.ExecContext(ctx, `DELETE FROM MediaTags WHERE MediaDBID = ?`, mediaDBID); err != nil {
-		return fmt.Errorf("failed to delete media tags: %w", err)
-	}
-
-	return nil
-}
-
-func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
-	rows, err := db.QueryContext(ctx,
-		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir FROM Media ORDER BY DBID")
 	if err != nil {
-		return nil, fmt.Errorf("failed to query media: %w", err)
+		return 0, false, fmt.Errorf("failed to get cached %s: %w", name, err)
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	media := make([]database.Media, 0)
-	for rows.Next() {
-		var m database.Media
-		if err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir); err != nil {
-			return nil, fmt.Errorf("failed to scan media: %w", err)
-		}
-		media = append(media, m)
+	count, err = strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to parse cached %s: %w", name, err)
 	}
-	return media, rows.Err()
+	return count, true, nil
 }
 
 func sqlGetTotalMediaCount(ctx context.Context, db *sql.DB) (int, error) {
+	if count, ok, err := sqlGetCachedMediaCount(ctx, db, DBConfigMediaTotalCount); err != nil {
+		log.Debug().Err(err).Msg("failed to use cached total media count")
+	} else if ok {
+		return count, nil
+	}
+
 	var count int
 	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&count)
 	if err != nil {
@@ -197,103 +178,34 @@ func sqlGetTotalMediaCount(ctx context.Context, db *sql.DB) (int, error) {
 	return count, nil
 }
 
-// sqlGetMediaWithFullPath retrieves all media with their associated title and system information using JOIN queries.
-func sqlGetMediaWithFullPath(ctx context.Context, db *sql.DB) ([]database.MediaWithFullPath, error) {
-	query := `
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
-		FROM Media m
-		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		ORDER BY m.DBID
-	`
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query media with full path: %w", err)
+func sqlGetMissingMediaCount(ctx context.Context, db *sql.DB) (int, error) {
+	if count, ok, err := sqlGetCachedMediaCount(ctx, db, DBConfigMediaMissingCount); err != nil {
+		log.Debug().Err(err).Msg("failed to use cached missing media count")
+	} else if ok {
+		return count, nil
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
 
-	media := make([]database.MediaWithFullPath, 0)
-	for rows.Next() {
-		var m database.MediaWithFullPath
-		var systemDBID int64 // Temporary variable for the extra field
-		if err := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
-		}
-		media = append(media, m)
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media WHERE IsMissing = 1").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get missing media count: %w", err)
 	}
-	return media, rows.Err()
+	return count, nil
 }
 
-// sqlGetMediaWithFullPathExcluding retrieves all media with their
-// associated title and system information, excluding those belonging to
-// systems in the excludeSystemIDs list
-func sqlGetMediaWithFullPathExcluding(
-	ctx context.Context,
-	db *sql.DB,
-	excludeSystemIDs []string,
-) ([]database.MediaWithFullPath, error) {
-	if len(excludeSystemIDs) == 0 {
-		return sqlGetMediaWithFullPath(ctx, db)
-	}
-
-	// Build placeholders for the IN clause
-	placeholders := make([]string, len(excludeSystemIDs))
-	args := make([]any, len(excludeSystemIDs))
-	for i, systemID := range excludeSystemIDs {
-		placeholders[i] = "?"
-		args[i] = systemID
-	}
-
-	//nolint:gosec // using parameterized placeholders, not user input
-	query := fmt.Sprintf(`
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
-		FROM Media m
-		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID NOT IN (%s)
-		ORDER BY m.DBID
-	`, strings.Join(placeholders, ","))
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query media with full path excluding %v: %w", excludeSystemIDs, err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	media := make([]database.MediaWithFullPath, 0)
-	for rows.Next() {
-		var m database.MediaWithFullPath
-		var systemDBID int64 // Temporary variable for the extra field
-		if err := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
-		}
-		media = append(media, m)
-	}
-	return media, rows.Err()
-}
-
-// sqlGetMediaBySystemID retrieves all media for a specific system with their associated title and system information.
+// sqlGetMediaBySystemID retrieves all media for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
+// Single-table query on Media: this runs once per system over every media row,
+// and no caller reads TitleSlug, so the MediaTitles join would only add a
+// per-row B-tree probe. SystemID is filled from the argument. Ordering by Path
+// lets SQLite stream from the UNIQUE(SystemDBID, Path) index instead of
+// filtering by system and then building a temp sort by DBID for large systems.
 func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
 	query := `
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
-		FROM Media m
-		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
-		ORDER BY m.DBID
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
+		FROM Media m INDEXED BY sqlite_autoindex_Media_1
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		ORDER BY m.Path
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
 	if err != nil {
@@ -308,72 +220,15 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 	media := make([]database.MediaWithFullPath, 0)
 	for rows.Next() {
 		var m database.MediaWithFullPath
-		var systemDBID int64 // Temporary variable for the extra field
 		if err := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID,
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &m.IsMissing,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
 		}
+		m.SystemID = systemID
 		media = append(media, m)
 	}
 	return media, rows.Err()
-}
-
-// sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks
-// of 500 to stay within SQLite variable limits.
-func sqlBulkSetMediaMissing(ctx context.Context, db sqlQueryable, dbids map[int]struct{}) error {
-	if len(dbids) == 0 {
-		return nil
-	}
-
-	ids := make([]int, 0, len(dbids))
-	for id := range dbids {
-		ids = append(ids, id)
-	}
-
-	const chunkSize = 500
-	for i := 0; i < len(ids); i += chunkSize {
-		end := i + chunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[i:end]
-
-		placeholders := prepareVariadic("?", ",", len(chunk))
-		args := make([]any, len(chunk))
-		for j, id := range chunk {
-			args[j] = id
-		}
-
-		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
-		stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 1 WHERE IsMissing = 0 AND DBID IN (%s)", placeholders)
-		if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
-			return fmt.Errorf("failed to bulk set media missing: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// sqlResetMissingFlags clears IsMissing for all media belonging to the given system DBIDs.
-func sqlResetMissingFlags(ctx context.Context, db sqlQueryable, systemDBIDs []int) error {
-	if len(systemDBIDs) == 0 {
-		return nil
-	}
-
-	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
-	args := make([]any, len(systemDBIDs))
-	for i, id := range systemDBIDs {
-		args[i] = id
-	}
-
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
-	stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 0 WHERE IsMissing = 1 AND SystemDBID IN (%s)", placeholders)
-	if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
-		return fmt.Errorf("failed to reset missing flags: %w", err)
-	}
-
-	return nil
 }
 
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.

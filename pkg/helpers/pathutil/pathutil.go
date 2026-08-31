@@ -25,7 +25,11 @@ package pathutil
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
+
+var mediaPathURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)
 
 // ExeDir returns the directory containing the currently running executable.
 // Returns an empty string if the executable path cannot be determined.
@@ -35,6 +39,17 @@ func ExeDir() string {
 		return ""
 	}
 	return filepath.Dir(exe)
+}
+
+// CanonicalMediaPath normalizes a persisted media path to media.db's storage
+// format. Filesystem paths are cleaned and stored with forward slashes; URI
+// paths are kept unchanged.
+func CanonicalMediaPath(path string) string {
+	if path == "" || mediaPathURI.MatchString(path) {
+		return path
+	}
+	path = strings.ReplaceAll(path, `\`, string(filepath.Separator))
+	return filepath.ToSlash(filepath.Clean(path))
 }
 
 // ResolveRelativePath resolves a path relative to ExeDir if it is not

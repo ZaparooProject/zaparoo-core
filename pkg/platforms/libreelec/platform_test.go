@@ -16,6 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettings_AllowsZapScriptAlongsideTUI(t *testing.T) {
+	t.Parallel()
+	assert.False(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
 // TestLibreELECHasKodiLaunchers tests that LibreELEC includes all Kodi launchers
 func TestLibreELECHasKodiLaunchers(t *testing.T) {
 	t.Parallel()

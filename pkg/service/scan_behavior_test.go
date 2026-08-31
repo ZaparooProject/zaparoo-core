@@ -29,10 +29,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -50,14 +52,67 @@ const (
 )
 
 type scanBehaviorEnv struct {
-	st         *state.State
-	cfg        *config.Instance
-	scanQueue  chan readers.Scan
-	clock      *clockwork.FakeClock
-	launchCh   chan string
-	stopCh     chan struct{}
-	keyboardCh chan string
-	romsDir    string
+	st          *state.State
+	cfg         *config.Instance
+	userDB      *testhelpers.MockUserDBI
+	svc         *ServiceContext
+	launchHook  *launchHook
+	historyHook *historyHook
+	scanQueue   chan readers.Scan
+	itq         chan tokens.Token
+	clock       *clockwork.FakeClock
+	launchCh    chan string
+	stopCh      chan struct{}
+	keyboardCh  chan string
+	historyCh   chan database.HistoryEntry
+	romsDir     string
+}
+
+// launchHook lets a test intercept the mock platform's LaunchMedia for one
+// path before it publishes active media: it can block, panic, or record.
+// The mock's LaunchMedia expectation is registered once with Maybe(), which
+// never exhausts, so a per-test On() would never be consulted.
+type launchHook struct {
+	fn func(path string)
+	mu syncutil.Mutex
+}
+
+func (h *launchHook) set(fn func(path string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *launchHook) call(path string) {
+	h.mu.Lock()
+	fn := h.fn
+	h.mu.Unlock()
+	if fn != nil {
+		fn(path)
+	}
+}
+
+// historyHook intercepts a history write while it is in progress, so a test
+// can prove what has and has not happened by the time it lands. Registered
+// once with the AddHistory expectation for the same reason as launchHook.
+type historyHook struct {
+	fn func(he *database.HistoryEntry)
+	mu syncutil.Mutex
+}
+
+func (h *historyHook) set(fn func(he *database.HistoryEntry)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *historyHook) call(he *database.HistoryEntry) {
+	h.mu.Lock()
+	fn := h.fn
+	h.mu.Unlock()
+	if fn != nil {
+		fn(he)
+	}
 }
 
 func setupScanBehavior(
@@ -101,9 +156,23 @@ mode = "unrestricted"`))
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil).Maybe()
 	st.SetReader(mockReader)
 
+	// historyCh mirrors every history write so tests can assert on outcomes
+	// without reaching into the mock's call log. Sends never block: a test
+	// that writes more entries than the buffer simply loses the oldest.
+	historyCh := make(chan database.HistoryEntry, 64)
+
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
-	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Maybe()
+	histHook := &historyHook{}
+	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		if he, ok := args.Get(0).(*database.HistoryEntry); ok && he != nil {
+			histHook.call(he)
+			select {
+			case historyCh <- *he:
+			default:
+			}
+		}
+	}).Maybe()
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
 
 	mockMediaDB := testhelpers.NewMockMediaDBI()
@@ -116,6 +185,7 @@ mode = "unrestricted"`))
 	launchCh := make(chan string, 10)
 	stopCh := make(chan struct{}, 10)
 	keyboardCh := make(chan string, 10)
+	hook := &launchHook{}
 
 	// LaunchMedia sets active media in state (simulating real platform behavior)
 	// and signals launchCh so tests can observe launches.
@@ -127,11 +197,18 @@ mode = "unrestricted"`))
 		mock.Anything,
 	).Return(nil).Run(func(args mock.Arguments) {
 		path := args.String(1)
-		st.SetActiveMedia(&models.ActiveMedia{
+		hook.call(path)
+		media := &models.ActiveMedia{
 			SystemID: "mock",
 			Path:     path,
 			Name:     path,
-		})
+		}
+		opts, ok := args.Get(4).(*platforms.LaunchOptions)
+		if ok && opts != nil && opts.ActiveMediaPublisher != nil {
+			opts.ActiveMediaPublisher(media)
+		} else {
+			st.SetActiveMedia(media)
+		}
 		launchCh <- path
 	}).Maybe()
 
@@ -168,8 +245,10 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		Profiles:            profiles.NewService(db, st),
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		BackgroundWG:        &sync.WaitGroup{},
 	}
 
 	var wg sync.WaitGroup
@@ -186,6 +265,8 @@ mode = "unrestricted"`))
 	t.Cleanup(func() {
 		st.StopService()
 		wg.Wait()
+		// Launch goroutines outlive the worker; join them before goleak looks.
+		svc.BackgroundWG.Wait()
 		for {
 			select {
 			case <-notifCh:
@@ -197,14 +278,20 @@ mode = "unrestricted"`))
 	})
 
 	return &scanBehaviorEnv{
-		st:         st,
-		cfg:        cfg,
-		scanQueue:  scanQueue,
-		clock:      fakeClock,
-		romsDir:    romsDir,
-		launchCh:   launchCh,
-		stopCh:     stopCh,
-		keyboardCh: keyboardCh,
+		st:          st,
+		cfg:         cfg,
+		userDB:      mockUserDB,
+		svc:         svc,
+		launchHook:  hook,
+		historyHook: histHook,
+		scanQueue:   scanQueue,
+		itq:         itq,
+		clock:       fakeClock,
+		romsDir:     romsDir,
+		launchCh:    launchCh,
+		stopCh:      stopCh,
+		keyboardCh:  keyboardCh,
+		historyCh:   historyCh,
 	}
 }
 
@@ -303,14 +390,20 @@ func (env *scanBehaviorEnv) waitForKeyboard(t *testing.T) string {
 // token back through lsq and readerManager has set it in state.
 func (env *scanBehaviorEnv) waitForSoftwareToken(t *testing.T) {
 	t.Helper()
+	env.waitForSoftwareTokenUID(t, "")
+}
+
+func (env *scanBehaviorEnv) waitForSoftwareTokenUID(t *testing.T, uid string) {
+	t.Helper()
 	deadline := time.After(behaviorTimeout)
 	for {
-		if env.st.GetSoftwareToken() != nil {
+		softwareToken := env.st.GetSoftwareToken()
+		if softwareToken != nil && (uid == "" || softwareToken.UID == uid) {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for software token to be set")
+			t.Fatalf("timed out waiting for software token UID=%q", uid)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -350,6 +443,21 @@ func (env *scanBehaviorEnv) waitForTimerStopped(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for exit timer to be stopped")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (env *scanBehaviorEnv) waitForPlaylistCleared(t *testing.T) {
+	t.Helper()
+	deadline := time.After(behaviorTimeout)
+	for {
+		if env.st.GetActivePlaylist() == nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for active playlist to clear")
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -440,6 +548,9 @@ func TestScanBehavior_Tap_ManualExitResetsState(t *testing.T) {
 
 	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	env.waitForLaunch(t)
+	// LaunchMedia returns before processTokenQueue completes the software-token
+	// roundtrip. Wait for it so the manual exit cannot race that prior launch.
+	env.waitForSoftwareToken(t)
 
 	env.simulateManualExit()
 
@@ -469,12 +580,77 @@ func TestScanBehavior_HoldImmediate_RemovalClosesGame(t *testing.T) {
 
 	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
-	// Wait for the software token roundtrip through lsq before removal,
-	// otherwise the 0s timer fires before software token is set.
 	env.waitForSoftwareToken(t)
 
 	env.sendRemoval()
 	env.waitForStop(t)
+}
+
+// TestScanBehavior_HoldImmediate_OnRemoveDisabledZapScriptStillClosesGame pins
+// that a disabled "run ZapScript" setting is treated as the on_remove hook's
+// prior silent no-op, not a hook failure: without hookErrorBlocks excluding
+// the sentinel, readers.go's on_remove call site would treat it as a real
+// hook failure and leave the game running on removal.
+func TestScanBehavior_HoldImmediate_OnRemoveDisabledZapScriptStillClosesGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = "**echo:should not run"`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	// Disable only after the game is running, since this also gates the
+	// launch command itself, not just the on_remove hook under test.
+	env.st.SetRunZapScript(false)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_HoldImmediate_FastRemovalClosesAfterLaunchOwnershipArrives(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.sendRemoval()
+
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_HoldImmediate_UtilityRemovalDoesNotCloseGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendCommandScan("keyboard", "**input.keyboard:{f2}")
+	env.waitForKeyboard(t)
+	env.sendRemoval()
+
+	env.expectNoStop(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+}
+
+func TestScanBehavior_HoldImmediate_OwnerRemovalClearsPrimaryPlaylist(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	playlist := playlists.NewPlaylist("playlist", "Playlist", []playlists.PlaylistItem{{ZapScript: "game"}})
+	playlist.Playing = true
+	env.st.SetActivePlaylist(playlist)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+	env.waitForPlaylistCleared(t)
 }
 
 func TestScanBehavior_HoldImmediate_ManualExitNoRelaunch(t *testing.T) {
@@ -506,6 +682,74 @@ func TestScanBehavior_HoldImmediate_ManualExitThenRemoveNoReload(t *testing.T) {
 // ============================================================================
 // Hold mode delayed tests
 // ============================================================================
+
+func TestScanBehavior_HoldDelayedOnRemove_ReinsertCancelsHookWithoutRelaunch(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10s||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.sendRemoval()
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+
+	env.expectNoLaunch(t)
+	env.expectNoStop(t)
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("unexpected delayed on_remove keyboard command: %s", key)
+	case <-time.After(noEventWait):
+	}
+}
+
+func TestScanBehavior_HoldDelayedOnRemove_AbsentTokenCompletesHookAndExit(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.sendRemoval()
+	require.Equal(t, "{escape}", env.waitForKeyboard(t))
+	env.waitForStop(t)
+}
+
+// TestScanBehavior_HoldDelayedOnRemove_DisabledZapScriptStillClosesGame pins
+// the same fix as the immediate on_remove variant, for the delayed hook path
+// consumed via removalHookResults: a disabled "run ZapScript" setting must
+// not block the exit, and since the whole hook script (including its delay
+// command) never runs when disabled, the keyboard command it would have sent
+// must not fire either.
+func TestScanBehavior_HoldDelayedOnRemove_DisabledZapScriptStillClosesGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.st.SetRunZapScript(false)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("unexpected keyboard command from a hook that should not have run: %s", key)
+	case <-time.After(noEventWait):
+	}
+}
 
 func TestScanBehavior_HoldDelayed_RemovalClosesAfterDelay(t *testing.T) {
 	t.Parallel()
@@ -546,14 +790,18 @@ func TestScanBehavior_HoldDelayed_DifferentCardLaunchesImmediately(t *testing.T)
 
 	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
-	env.waitForSoftwareToken(t)
+	env.waitForSoftwareTokenUID(t, "gameA")
 
 	env.sendRemoval()
 	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
 	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "gameB")
+
+	env.clock.Advance(10 * time.Second)
+	env.expectNoStop(t)
 }
 
-func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
+func TestScanBehavior_HoldDelayed_CommandDoesNotResetCountdown(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
@@ -563,31 +811,15 @@ func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
 
 	env.sendRemoval()
 
-	// First command card resets the 5s countdown.
-	env.sendCommandScan("cmd1", "**input.keyboard:coin")
+	env.sendCommandScan("cmd1", "**input.keyboard:{f2}")
 	env.waitForKeyboard(t)
-
-	// Advance 4s (< 5s exit_delay). If the timer was reset by the command,
-	// there's 1s remaining. If it wasn't, 4s > original timer and it would fire.
-	env.clock.Advance(4 * time.Second)
-
-	// Second command card resets the countdown again.
-	env.sendCommandScan("cmd2", "**input.keyboard:start")
-	env.waitForKeyboard(t)
-
-	// Advance another 4s (total 8s > 5s). Only passes if the second command
-	// truly reset the timer — otherwise the first command's timer (1s remaining)
-	// would have fired.
 	env.clock.Advance(4 * time.Second)
 	env.expectNoStop(t)
 
-	// Reinsert original game card — cancels timer, session continues.
-	env.sendGameScan("game1", env.gamePath("game.rom"))
-	env.waitForActiveCard(t, "game1")
-	env.waitForTimerStopped(t)
-
-	env.clock.Advance(10 * time.Second)
-	env.expectNoStop(t)
+	env.sendCommandScan("cmd2", "**input.keyboard:{f3}")
+	env.waitForKeyboard(t)
+	env.clock.Advance(time.Second)
+	env.waitForStop(t)
 }
 
 func TestScanBehavior_HoldDelayed_ManualExitNoRelaunch(t *testing.T) {

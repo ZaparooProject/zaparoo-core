@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
 const (
@@ -34,13 +36,33 @@ const (
 	DBConfigOptimizationStatus              = "OptimizationStatus"
 	DBConfigOptimizationStep                = "OptimizationStep"
 	DBConfigIndexingStatus                  = "IndexingStatus"
+	DBConfigScrapingStatus                  = "ScrapingStatus"
+	DBConfigScrapingOperation               = "ScrapingOperation"
 	DBConfigLastIndexedSystem               = "LastIndexedSystem"
 	DBConfigIndexingSystems                 = "IndexingSystems"
+	DBConfigIndexingPlanSystems             = "IndexingPlanSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigBrowseIndexComplete             = "BrowseIndexComplete"
+	DBConfigMediaTotalCount                 = "MediaTotalCount"
+	DBConfigMediaMissingCount               = "MediaMissingCount"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
+	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
+	DBConfigIndexResumeCheckpoint           = "IndexResumeCheckpoint"
+	DBConfigDisambiguationVersion           = "DisambiguationVersion"
+	DBConfigDisambiguationBackfillCursor    = "DisambiguationBackfillCursor"
+	DBConfigCanonicalTagVocabHash           = "CanonicalTagVocabHash"
 
 	temporaryRepairParentDirVersion = "1"
+
+	// disambiguationAlgoVersion identifies the current title-disambiguation
+	// algorithm (the recompute query plus the ZapScriptTagTypes mapping feeding
+	// it). Indexing only recomputes DisambiguationTypes for titles whose media or
+	// tags changed, so values stored by an older algorithm are never revisited by
+	// reindexing alone; a stamp mismatch triggers a one-time background backfill
+	// instead (see runDisambiguationBackfill). Bump this whenever the recompute
+	// query or the ZapScriptTagTypes mapping changes.
+	disambiguationAlgoVersion = "1"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
@@ -53,6 +75,40 @@ func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set last generated timestamp: %w", err)
+	}
+	return nil
+}
+
+func sqlRefreshMediaCounts(ctx context.Context, db sqlQueryable) error {
+	var total, missing int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN IsMissing != 0 THEN 1 ELSE 0 END), 0)
+		FROM Media`,
+	).Scan(&total, &missing); err != nil {
+		return fmt.Errorf("failed to count media rows: %w", err)
+	}
+	for _, count := range []struct {
+		name  string
+		value int
+	}{
+		{name: DBConfigMediaTotalCount, value: total},
+		{name: DBConfigMediaMissingCount, value: missing},
+	} {
+		if _, err := db.ExecContext(ctx,
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+			count.name, strconv.Itoa(count.value),
+		); err != nil {
+			return fmt.Errorf("failed to set %s: %w", count.name, err)
+		}
+	}
+	return nil
+}
+
+func sqlInvalidateMediaCountCache(ctx context.Context, db sqlQueryable, names ...string) error {
+	for _, name := range names {
+		if _, err := db.ExecContext(ctx, "DELETE FROM DBConfig WHERE Name = ?", name); err != nil {
+			return fmt.Errorf("failed to invalidate %s: %w", name, err)
+		}
 	}
 	return nil
 }
@@ -131,6 +187,87 @@ func sqlGetOptimizationStep(ctx context.Context, db *sql.DB) (string, error) {
 	return step, nil
 }
 
+func sqlSetIndexResumeAttempts(ctx context.Context, db sqlQueryable, attempts int) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexResumeAttempts,
+		strconv.Itoa(attempts),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set index resume attempts: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexResumeAttempts(ctx context.Context, db sqlQueryable) (int, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexResumeAttempts,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get index resume attempts: %w", err)
+	}
+	attempts, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse index resume attempts: %w", err)
+	}
+	return attempts, nil
+}
+
+func sqlSetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable, checkpoint string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexResumeCheckpoint,
+		checkpoint,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set index resume checkpoint: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable) (string, error) {
+	var checkpoint string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexResumeCheckpoint,
+	).Scan(&checkpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get index resume checkpoint: %w", err)
+	}
+	return checkpoint, nil
+}
+
+func sqlResetIndexResumeState(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin index resume reset transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := sqlSetIndexResumeAttempts(ctx, tx, 0); err != nil {
+		return err
+	}
+	if err := sqlSetIndexResumeCheckpoint(ctx, tx, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit index resume reset transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
@@ -155,6 +292,75 @@ func sqlGetIndexingStatus(ctx context.Context, db *sql.DB) (string, error) {
 		return "", fmt.Errorf("failed to get indexing status: %w", err)
 	}
 	return status, nil
+}
+
+func sqlSetScrapingStatus(ctx context.Context, db sqlQueryable, status string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigScrapingStatus,
+		status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set scraping status: %w", err)
+	}
+	return nil
+}
+
+func sqlGetScrapingStatus(ctx context.Context, db *sql.DB) (string, error) {
+	var status string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigScrapingStatus,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get scraping status: %w", err)
+	}
+	return status, nil
+}
+
+func sqlSetScrapingOperation(ctx context.Context, db sqlQueryable, operation database.ScrapingOperation) error {
+	operationJSON, err := json.Marshal(operation)
+	if err != nil {
+		return fmt.Errorf("failed to marshal scraping operation: %w", err)
+	}
+	_, err = db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigScrapingOperation,
+		string(operationJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set scraping operation: %w", err)
+	}
+	return nil
+}
+
+func sqlGetScrapingOperation(ctx context.Context, db *sql.DB) (database.ScrapingOperation, bool, error) {
+	var operationJSON string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigScrapingOperation,
+	).Scan(&operationJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return database.ScrapingOperation{}, false, nil
+	} else if err != nil {
+		return database.ScrapingOperation{}, false, fmt.Errorf("failed to get scraping operation: %w", err)
+	}
+
+	var operation database.ScrapingOperation
+	if err := json.Unmarshal([]byte(operationJSON), &operation); err != nil {
+		return database.ScrapingOperation{}, false, fmt.Errorf("failed to unmarshal scraping operation: %w", err)
+	}
+	return operation, true, nil
+}
+
+func sqlClearScrapingOperation(ctx context.Context, db sqlQueryable) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM DBConfig WHERE Name = ?", DBConfigScrapingOperation)
+	if err != nil {
+		return fmt.Errorf("failed to clear scraping operation: %w", err)
+	}
+	return nil
 }
 
 func sqlSetLastIndexedSystem(ctx context.Context, db sqlQueryable, systemID string) error {
@@ -224,38 +430,54 @@ func sqlBumpIndexGeneration(ctx context.Context, db sqlQueryable) (int64, error)
 	return next, nil
 }
 
-func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+func sqlSetSystemListConfig(ctx context.Context, db sqlQueryable, name string, systemIDs []string) error {
 	systemsJSON, err := json.Marshal(systemIDs)
 	if err != nil {
-		return fmt.Errorf("failed to marshal systems to JSON: %w", err)
+		return fmt.Errorf("failed to marshal %s to JSON: %w", name, err)
 	}
 	_, err = db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
-		DBConfigIndexingSystems,
+		name,
 		string(systemsJSON),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to set indexing systems: %w", err)
+		return fmt.Errorf("failed to set %s: %w", name, err)
 	}
 	return nil
 }
 
-func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+func sqlGetSystemListConfig(ctx context.Context, db *sql.DB, name string) ([]string, error) {
 	var systemsJSON string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
-		DBConfigIndexingSystems,
+		name,
 	).Scan(&systemsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to get indexing systems: %w", err)
+		return nil, fmt.Errorf("failed to get %s: %w", name, err)
 	}
 
 	var systemIDs []string
 	err = json.Unmarshal([]byte(systemsJSON), &systemIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal indexing systems: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal %s: %w", name, err)
 	}
 	return systemIDs, nil
+}
+
+func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+	return sqlSetSystemListConfig(ctx, db, DBConfigIndexingSystems, systemIDs)
+}
+
+func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingSystems)
+}
+
+func sqlSetIndexingPlanSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+	return sqlSetSystemListConfig(ctx, db, DBConfigIndexingPlanSystems, systemIDs)
+}
+
+func sqlGetIndexingPlanSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingPlanSystems)
 }

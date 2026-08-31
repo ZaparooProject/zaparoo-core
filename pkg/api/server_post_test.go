@@ -22,15 +22,19 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -52,9 +56,21 @@ type fakeRequestTracker struct {
 func (f *fakeRequestTracker) RequestStarted() { f.started.Add(1) }
 func (f *fakeRequestTracker) RequestEnded()   { f.ended.Add(1) }
 
+type apiPlaybackStub struct{}
+
+func (*apiPlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*apiPlaybackStub) Stop(_ string) error                             { return nil }
+func (*apiPlaybackStub) Pause(_ string) error                            { return nil }
+func (*apiPlaybackStub) Resume(_ string) error                           { return nil }
+func (*apiPlaybackStub) TogglePause(_ string) error                      { return nil }
+func (*apiPlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*apiPlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
+
 // createTestPostHandler creates a POST handler with mocked dependencies for testing.
-// The returned tracker counts RequestStarted/RequestEnded calls so tests can
-// assert balance.
+// Requests created by httptest use its reserved remote address by default; the
+// wrapper treats that default as loopback. Tests exercising remote authority
+// must set a different RemoteAddr explicitly. The returned tracker counts
+// RequestStarted/RequestEnded calls so tests can assert balance.
 func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeRequestTracker) {
 	t.Helper()
 
@@ -63,17 +79,23 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 	// Add test methods
 	err := methodMap.AddMethod("test.echo", func(_ requests.RequestEnv) (any, error) {
 		return map[string]string{"echo": "success"}, nil
-	})
+	}, true)
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.error", func(_ requests.RequestEnv) (any, error) {
 		return nil, errors.New("test error")
-	})
+	}, true)
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
 		return nil, models.ClientErrf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
-	})
+	}, true)
+	require.NoError(t, err)
+
+	err = methodMap.AddMethod("test.categorized", func(_ requests.RequestEnv) (any, error) {
+		cause := fmt.Errorf("%w: /media/fat/games/secret.sfc", zapscript.ErrFileNotFound)
+		return nil, models.CategorizedErr(models.ErrorCategoryMediaNotFound, "media not found", cause)
+	}, true)
 	require.NoError(t, err)
 
 	platform := mocks.NewMockPlatform()
@@ -101,12 +123,110 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 
 	confirmQueue := make(chan chan error, 10)
 	tracker := &fakeRequestTracker{}
-	handler := handlePostRequest(
+	playbackManager := &apiPlaybackStub{}
+	postHandler := handlePostRequest(
 		methodMap, platform, cfg, st,
 		tokenQueue, confirmQueue, db,
-		nil, nil, nil, nil, tracker,
+		nil, nil, nil, playbackManager, nil, nil, nil, tracker,
 	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.RemoteAddr == "192.0.2.1:1234" {
+			r.RemoteAddr = "127.0.0.1:1234"
+		}
+		postHandler(w, r)
+	})
 	return handler, methodMap, tracker
+}
+
+func TestHandlePostRequest_AppliesMethodSpecificTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		method  string
+		timeout time.Duration
+	}{
+		{name: "normal request", method: "test.timeout", timeout: config.APIRequestTimeout},
+		{name: "backup request", method: models.MethodSettingsBackup, timeout: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, methodMap, _ := createTestPostHandler(t)
+			deadlineCh := make(chan time.Time, 1)
+			methodMap.Store(tt.method, methodDefinition{
+				handler: func(env requests.RequestEnv) (any, error) {
+					deadline, ok := env.Context.Deadline()
+					if !ok {
+						deadline = time.Time{}
+					}
+					deadlineCh <- deadline
+					return map[string]bool{"ok": true}, nil
+				},
+				legacyAllowed: true,
+			})
+
+			reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"` + tt.method + `"}`
+			//nolint:noctx // test helper, no context needed
+			req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			beforeRequest := time.Now()
+			handler(rr, req)
+			require.Equal(t, http.StatusOK, rr.Code)
+
+			select {
+			case deadline := <-deadlineCh:
+				if tt.timeout == 0 {
+					assert.True(t, deadline.IsZero(), "backup request must not have a whole-operation deadline")
+				} else {
+					assert.WithinDuration(t, beforeRequest.Add(tt.timeout), deadline, time.Second)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handler did not report request deadline")
+			}
+		})
+	}
+}
+
+func TestHandlePostRequest_InjectsPlaybackManager(t *testing.T) {
+	t.Parallel()
+
+	methodMap := NewMethodMap()
+	playbackManager := &apiPlaybackStub{}
+	err := methodMap.AddMethod("test.playback", func(env requests.RequestEnv) (any, error) {
+		assert.Same(t, playbackManager, env.PlaybackManager)
+		return map[string]bool{"ok": true}, nil
+	}, true)
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfigWithPort(fs, t.TempDir(), 0)
+	require.NoError(t, err)
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	tokenQueue := make(chan tokens.Token, 1)
+	confirmQueue := make(chan chan error, 1)
+	handler := handlePostRequest(
+		methodMap, platform, cfg, st, tokenQueue, confirmQueue, db,
+		nil, nil, nil, playbackManager, nil, nil, nil, nil,
+	)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.playback"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
 // TestHandlePostRequest_ValidRequest tests that a valid JSON-RPC request returns HTTP 200.
@@ -135,6 +255,26 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 	assert.Equal(t, int64(1), tracker.started.Load(), "RequestStarted should fire once")
 	assert.Equal(t, tracker.started.Load(), tracker.ended.Load(),
 		"RequestStarted and RequestEnded must balance")
+}
+
+func TestHandlePostRequest_RejectsUnpairedRemoteOnUnknownPlatform(t *testing.T) {
+	t.Parallel()
+
+	handler, _, _ := createTestPostHandler(t)
+	reqBody := `{"jsonrpc":"2.0","id":"current-client","method":"clients.current"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "198.51.100.1:1234"
+	recorder := httptest.NewRecorder()
+
+	handler(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response models.ResponseObject
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.NotNil(t, response.Error)
+	assert.Contains(t, response.Error.Message, "client role does not permit")
 }
 
 // TestHandlePostRequest_InvalidJSON tests that malformed JSON returns HTTP 200 with JSON-RPC parse error.
@@ -291,6 +431,34 @@ func TestHandlePostRequest_ExpectedError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
 	assert.Contains(t, resp.Error.Message, "no control capabilities")
+}
+
+// TestHandlePostRequest_CategorizedError tests that a CategorizedError puts
+// its category in error.data and only the safe message on the wire.
+func TestHandlePostRequest_CategorizedError(t *testing.T) {
+	t.Parallel()
+
+	handler, _, _ := createTestPostHandler(t)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.categorized"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "/media/fat", "cause must not reach the wire")
+
+	var resp models.ResponseErrorObject
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, 1, resp.Error.Code)
+	assert.Equal(t, "media not found", resp.Error.Message)
+	data, ok := resp.Error.Data.(map[string]any)
+	require.True(t, ok, "error.data should be an object, got %T", resp.Error.Data)
+	assert.Equal(t, models.ErrorCategoryMediaNotFound, data["category"])
 }
 
 // TestHandlePostRequest_OversizedBody tests that oversized request bodies are rejected.
@@ -561,7 +729,7 @@ func TestHandlePostRequest_ResponseWithCallback(t *testing.T) {
 			Result:     map[string]string{"status": "updated"},
 			AfterWrite: func() { afterWriteCalled = true },
 		}, nil
-	})
+	}, true)
 	require.NoError(t, err)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.callback"}`

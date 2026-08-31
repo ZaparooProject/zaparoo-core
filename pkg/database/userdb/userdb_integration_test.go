@@ -581,11 +581,156 @@ func TestClientAuthTokenColonCheckConstraint_Integration(t *testing.T) {
 	// *sql.DB. The Clients table CHECK clause must reject the colon-bearing
 	// token without any Go-level validation involved.
 	pairingKey := []byte("key-x-key-x-key-x-key-x-key-x-ab")
-	_, err := userDB.sql.ExecContext(context.Background(), `
+	_, err := userDB.sql.Load().ExecContext(context.Background(), `
 		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
 		VALUES (?, ?, ?, ?, ?, ?);
 	`, "raw-id", "Raw App", "evil:token", pairingKey, int64(1700000000), int64(1700000000))
 	require.Error(t, err, "SQL CHECK constraint must reject AuthToken containing ':'")
 	assert.Contains(t, err.Error(), "CHECK",
 		"the failure should originate from a CHECK constraint, not a different error path")
+}
+
+// TestSumMediaPlayTimeForDay_Integration verifies sqlSumMediaPlayTimeForDay against
+// real SQLite data, covering cross-midnight pro-rating, active-session exclusion,
+// pre-day exclusion, and multi-session summation.
+func TestSumMediaPlayTimeForDay_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	dayStart := time.Date(2025, 6, 13, 0, 0, 0, 0, time.UTC)
+
+	t.Run("no sessions returns zero", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), total)
+	})
+
+	t.Run("session entirely within today uses PlayTime", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		startTime := time.Date(2025, 6, 13, 10, 0, 0, 0, time.UTC)
+		endTime := time.Date(2025, 6, 13, 11, 0, 0, 0, time.UTC)
+
+		dbid, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-a",
+			StartTime: startTime,
+			CreatedAt: startTime,
+			UpdatedAt: startTime,
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.CloseMediaHistory(dbid, endTime, 3600))
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3600), total)
+	})
+
+	t.Run("cross-midnight session pro-rates to today only", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		// Started yesterday 23:00, ended today 00:30 — 5400s total, 1800s after midnight.
+		startTime := time.Date(2025, 6, 12, 23, 0, 0, 0, time.UTC)
+		endTime := time.Date(2025, 6, 13, 0, 30, 0, 0, time.UTC)
+
+		dbid, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-b",
+			StartTime: startTime,
+			CreatedAt: startTime,
+			UpdatedAt: startTime,
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.CloseMediaHistory(dbid, endTime, 5400))
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		// SQL pro-rates: endTime - dayStart = 1800s (30 minutes after midnight)
+		assert.Equal(t, int64(1800), total)
+	})
+
+	t.Run("session entirely before today is excluded", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		startTime := time.Date(2025, 6, 12, 8, 0, 0, 0, time.UTC)
+		endTime := time.Date(2025, 6, 12, 9, 0, 0, 0, time.UTC)
+
+		dbid, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-c",
+			StartTime: startTime,
+			CreatedAt: startTime,
+			UpdatedAt: startTime,
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.CloseMediaHistory(dbid, endTime, 3600))
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), total) // WHERE EndTime > dayStart excludes yesterday-only sessions
+	})
+
+	t.Run("active session without EndTime is excluded", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		startTime := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+
+		_, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-d",
+			StartTime: startTime,
+			CreatedAt: startTime,
+			UpdatedAt: startTime,
+			PlayTime:  600,
+		})
+		require.NoError(t, err)
+		// No CloseMediaHistory call — EndTime remains NULL.
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), total)
+	})
+
+	t.Run("multiple sessions sum correctly", func(t *testing.T) {
+		t.Parallel()
+		db, cleanup := setupTempUserDB(t)
+		defer cleanup()
+
+		// Session 1: today 10:00–11:00 (PlayTime = 3600)
+		start1 := time.Date(2025, 6, 13, 10, 0, 0, 0, time.UTC)
+		end1 := time.Date(2025, 6, 13, 11, 0, 0, 0, time.UTC)
+		dbid1, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-e1",
+			StartTime: start1,
+			CreatedAt: start1,
+			UpdatedAt: start1,
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.CloseMediaHistory(dbid1, end1, 3600))
+
+		// Session 2: cross-midnight (yesterday 23:00 → today 00:30), 1800s today
+		start2 := time.Date(2025, 6, 12, 23, 0, 0, 0, time.UTC)
+		end2 := time.Date(2025, 6, 13, 0, 30, 0, 0, time.UTC)
+		dbid2, err := db.AddMediaHistory(&database.MediaHistoryEntry{
+			ID:        "test-uuid-e2",
+			StartTime: start2,
+			CreatedAt: start2,
+			UpdatedAt: start2,
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.CloseMediaHistory(dbid2, end2, 5400))
+
+		total, err := db.SumMediaPlayTimeForDay(dayStart)
+		require.NoError(t, err)
+		assert.Equal(t, int64(5400), total) // 3600 + 1800
+	})
 }

@@ -22,11 +22,17 @@ package config
 import (
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
+
+const DefaultPlaytimeBaseURL = DefaultOnlineBaseURL
 
 // Playtime configures play time tracking and limits.
 type Playtime struct {
 	Retention *int           `toml:"retention,omitempty"`
+	Sync      *bool          `toml:"sync,omitempty"`
+	BaseURL   string         `toml:"base_url,omitempty"`
 	Limits    PlaytimeLimits `toml:"limits,omitempty"`
 }
 
@@ -50,6 +56,47 @@ func (c *Instance) PlaytimeRetention() int {
 	return *c.vals.Playtime.Retention
 }
 
+// PlaytimeBaseURL returns the API base URL used for play-history sync.
+func (c *Instance) PlaytimeBaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Playtime.BaseURL == "" {
+		return DefaultPlaytimeBaseURL
+	}
+	return c.vals.Playtime.BaseURL
+}
+
+// SetPlaytimeBaseURL validates, normalizes, and stores the play-history API base URL.
+func (c *Instance) SetPlaytimeBaseURL(rawURL string) error {
+	if err := ValidatePlaytimeBaseURL(rawURL); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.BaseURL = normalizeRemoteBaseURL(rawURL)
+	return nil
+}
+
+func ValidatePlaytimeBaseURL(rawURL string) error {
+	return validateRemoteBaseURL(rawURL, "playtime")
+}
+
+// PlaytimeSyncEnabled reports whether the user explicitly consented to
+// upload play history to the linked online account. Unset defaults to false:
+// account linking alone never grants play-history upload consent.
+func (c *Instance) PlaytimeSyncEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Playtime.Sync != nil && *c.vals.Playtime.Sync
+}
+
+// SetPlaytimeSync enables or disables play-history sync.
+func (c *Instance) SetPlaytimeSync(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Sync = &enabled
+}
+
 // PlaytimeLimitsEnabled returns true if play time limits are enabled.
 func (c *Instance) PlaytimeLimitsEnabled() bool {
 	c.mu.RLock()
@@ -70,6 +117,9 @@ func (c *Instance) DailyLimit() time.Duration {
 	}
 	d, err := time.ParseDuration(c.vals.Playtime.Limits.Daily)
 	if err != nil {
+		log.Warn().
+			Str("value", c.vals.Playtime.Limits.Daily).
+			Msg("playtime: invalid daily limit duration in config, limit disabled")
 		return 0
 	}
 	return d
@@ -85,6 +135,9 @@ func (c *Instance) SessionLimit() time.Duration {
 	}
 	d, err := time.ParseDuration(c.vals.Playtime.Limits.Session)
 	if err != nil {
+		log.Warn().
+			Str("value", c.vals.Playtime.Limits.Session).
+			Msg("playtime: invalid session limit duration in config, limit disabled")
 		return 0
 	}
 	return d

@@ -12,12 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
@@ -28,10 +28,53 @@ import (
 )
 
 const (
-	f9ConsoleVT       = "1"
-	launcherConsoleVT = "7"
-	scriptConsoleVT   = "3"
+	f9ConsoleVT             = "1"
+	armLauncherVT           = "3"
+	scriptConsoleVT         = "2"
+	frontendConsoleVT       = "7"
+	videoRenderScale        = 33
+	scummVMRenderResolution = "640x480"
 )
+
+type framebufferMode struct {
+	width   int
+	height  int
+	divisor int
+}
+
+var mglIndexingSkippedLaunchers = map[string]struct{}{
+	"GenericVideo": {},
+	"ScummVM":      {},
+}
+
+var misterDefaultScanExcludes = []string{
+	"boot.rom",
+	"boot.vhd",
+	"boot.zip/boot.vhd",
+	"blank.vhd",
+	"blank.zip/blank.vhd",
+	"empty_hdd.zip/boot.vhd",
+}
+
+// arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
+// Organizer script generates: its ORGDIR_DIRECTORIES category folders plus the
+// default _Organized container. They hold symlinks (or copies, with
+// NO_SYMLINKS) of MRAs that are already indexed under _Arcade. The script can
+// write the category folders straight into _Arcade instead of under
+// _Organized, so the container name alone is not enough.
+var arcadeOrganizerScanDirectoryExcludes = []string{
+	"_Organized",
+	"_1 0-9",
+	"_1 A-E",
+	"_1 F-K",
+	"_1 L-Q",
+	"_1 R-T",
+	"_1 U-Z",
+	"_2 Region",
+	"_3 Collections",
+	"_4 Video & Inputs",
+	"_5 Extra Software",
+}
 
 func checkInZip(path string) string {
 	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
@@ -39,8 +82,18 @@ func checkInZip(path string) string {
 	}
 
 	fileInfo, err := os.Stat(path)
-	if err != nil || fileInfo.IsDir() {
-		log.Error().Err(err).Msgf("failed to access the zip file at path: %s", path)
+	if err != nil {
+		// A token pointing to a zip that isn't present is a user/data condition,
+		// not a code fault; keep it out of Sentry. Other stat errors stay visible.
+		if os.IsNotExist(err) {
+			log.Warn().Err(err).Msgf("zip file not found at path: %s", path)
+		} else {
+			log.Error().Err(err).Msgf("failed to access the zip file at path: %s", path)
+		}
+		return path
+	}
+	if fileInfo.IsDir() {
+		log.Error().Msgf("expected a zip file but found a directory: %s", path)
 		return path
 	}
 
@@ -93,6 +146,43 @@ func checkInZip(path string) string {
 
 	log.Warn().Str("zip", path).Int("files", len(zipReader.File)).Msgf("no suitable file found in zip archive")
 	return path
+}
+
+func resolveAmigaVisionVirtualMGLPath(path string) string {
+	if filepath.Ext(strings.ToLower(path)) != ".mgl" {
+		return path
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+
+	base := filepath.Base(path)
+	for _, mglPath := range amigaVisionMGLPaths {
+		if !strings.EqualFold(base, filepath.Base(mglPath)) {
+			continue
+		}
+		if _, err := os.Stat(mglPath); err == nil {
+			return mglPath
+		}
+	}
+	return path
+}
+
+func isAmigaVisionVirtualMGLPath(path string) bool {
+	if filepath.Ext(strings.ToLower(path)) != ".mgl" {
+		return false
+	}
+	if !hasAmigaVisionImage(filepath.Dir(path)) {
+		return false
+	}
+	return resolveAmigaVisionVirtualMGLPath(path) != path
+}
+
+func launchAmiga(pl platforms.Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	genericLaunch := launch(pl, systemdefs.SystemAmiga)
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		return genericLaunch(cfg, resolveAmigaVisionVirtualMGLPath(path), opts)
+	}
 }
 
 func launch(
@@ -175,9 +265,18 @@ func launchArcade(
 }
 
 func launchSinden(
+	launcherID string,
 	systemID string,
 	rbfName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	// Modern setups (update_all / MrLightgun) deploy Sinden cores to
+	// "Light Gun/<Core>-Sinden", older ones to "_Sinden/<Core>_Sinden".
+	// Register both; the modern path is preferred when present.
+	newRBF := "Light Gun/" + rbfName + "-Sinden"
+	oldRBF := "_Sinden/" + rbfName + "_Sinden"
+	setName := rbfName + "_Sinden"
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, newRBF, oldRBF)
+
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
@@ -186,28 +285,13 @@ func launchSinden(
 		path = checkInZip(path)
 
 		sn := *s
-
-		newRBF := "Light Gun/" + rbfName + "-Sinden"
-		oldRBF := "_Sinden/" + rbfName + "_Sinden"
-
-		newMatches, err := filepath.Glob(filepath.Join(misterconfig.SDRootDir, newRBF) + "*")
-		if err != nil {
-			log.Debug().Err(err).Msg("error checking for new Sinden RBF")
-		}
-		if len(newMatches) > 0 {
-			sn.RBF = newRBF
-		} else {
-			// just fallback on trying the old path
-			sn.RBF = oldRBF
-		}
-
-		sn.SetName = rbfName + "_Sinden"
-		sn.SetNameSameDir = true
-		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+		if setNameErr := configureAltCoreWithDefaultSetName(
+			&sn, launcherID, newRBF, setName, true, opts,
+		); setNameErr != nil {
 			return nil, setNameErr
 		}
 
-		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching Sinden: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -313,7 +397,18 @@ func launchAltCore(
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "")
+	return launchAltCoreCandidates(launcherID, systemID, rbfPath)
+}
+
+func launchAltCoreCandidates(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	fallbackRBFPaths ...string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(
+		launcherID, systemID, rbfPath, "", false, fallbackRBFPaths...,
+	)
 }
 
 func launchDB9Core(
@@ -330,15 +425,33 @@ func launchAltCoreWithSetName(
 	rbfPath string,
 	setName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName)
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, true)
+}
+
+func launchAltCoreWithSetNameSameDir(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	setName string,
+	sameDir bool,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, sameDir)
 }
 
 func retroAchievementsSetName(launcherID string) (string, bool) {
 	switch launcherID {
-	case "RAAtari7800":
+	case "RAAtari2600", "RAAtari7800":
 		return "RA_Atari7800", true
+	case "RAFDS":
+		return "RA_FDS", true
 	case "RAGameboy":
 		return "RA_Gameboy", true
+	case "RAGameboyColor":
+		return "RA_GBC", true
+	case "RAGameGear":
+		return "RA_GameGear", true
+	case "RASuperGameboy":
+		return "RA_SGB", true
 	case "RAGBA":
 		return "RA_GBA", true
 	case "RAMegaCD":
@@ -347,6 +460,8 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 		return "RA_MegaDrive", true
 	case "RANeoGeo":
 		return "RA_NeoGeo", true
+	case "RANeoGeoCD":
+		return "RA_NeoGeoCD", true
 	case "RANES":
 		return "RA_NES", true
 	case "RANintendo64":
@@ -359,11 +474,134 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 		return "RA_SMS", true
 	case "RASNES":
 		return "RA_SNES", true
+	case "RASaturn":
+		return "RA_Saturn", true
 	case "RATurboGrafx16":
 		return "RA_TurboGrafx16", true
+	case "RATurboGrafx16CD":
+		return "RA_TurboGrafx16CD", true
 	default:
 		return "", false
 	}
+}
+
+// altCorePath is a registered alt core RBF path split for classification.
+// lowerName is precomputed because most rules need a case-insensitive check
+// and CreateLaunchers reruns on every Launchers call.
+type altCorePath struct {
+	dir       string
+	lowerName string
+}
+
+func newAltCorePath(rbfPath string) altCorePath {
+	dir, shortName := splitAltCorePath(rbfPath)
+	return altCorePath{dir: dir, lowerName: strings.ToLower(shortName)}
+}
+
+// altCoreGroupRule classifies a launcher by the RBF paths it registers with the
+// global cache. Paths are ground truth: the launcher ID is not, because IDs
+// like DB9DualRAMPSX and PWM2XPSX belong to more than one family and no prefix
+// rule can express that.
+type altCoreGroupRule struct {
+	match func(p altCorePath) bool
+	group string
+}
+
+// altCoreGroupRules is ordered. Primary families (the distribution a core came
+// from) come first so Groups[0] identifies the family; secondary attributes
+// like dual-SDRAM follow. Callers such as the browse scheme map read Groups[0].
+var altCoreGroupRules = []altCoreGroupRule{
+	{
+		group: shared.LauncherGroupRetroAchievements,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_RA_Cores/Cores") },
+	},
+	{
+		group: shared.LauncherGroupLLAPI,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_LLAPI") },
+	},
+	{
+		group: shared.LauncherGroupSinden,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "Light Gun") || dirWithin(p.dir, "_Sinden")
+		},
+	},
+	{
+		// The PWM database sorts overclocked builds into a _Turbo subfolder.
+		group: shared.LauncherGroupPWM,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_ConsolePWM") },
+	},
+	{
+		group: shared.LauncherGroupUnstable,
+		match: func(p altCorePath) bool { return strings.Contains(p.lowerName, "_unstable_") },
+	},
+	{
+		group: shared.LauncherGroupDB9,
+		match: func(p altCorePath) bool { return strings.HasSuffix(p.lowerName, "_db9") },
+	},
+	{
+		group: shared.LauncherGroupDualRAM,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "_Console (Dual SDRAM)") ||
+				strings.Contains(p.lowerName, "_dualsdram")
+		},
+	},
+}
+
+func splitAltCorePath(rbfPath string) (dir, shortName string) {
+	if idx := strings.LastIndex(rbfPath, "/"); idx >= 0 {
+		return rbfPath[:idx], rbfPath[idx+1:]
+	}
+	return "", rbfPath
+}
+
+// dirWithin reports whether dir is want or a folder inside it.
+func dirWithin(dir, want string) bool {
+	if strings.EqualFold(dir, want) {
+		return true
+	}
+	return len(dir) > len(want) && strings.EqualFold(dir[:len(want)+1], want+"/")
+}
+
+// altCoreGroups returns the config groups a launcher belongs to, derived from
+// every RBF path it registered. A launcher with no registered paths is a stock
+// core launcher and gets no group.
+func altCoreGroups(launcherID string, scratch []altCorePath) ([]string, []altCorePath) {
+	rbfPaths := cores.GlobalRBFCache.AltCorePaths(launcherID)
+	if len(rbfPaths) == 0 {
+		return nil, scratch
+	}
+
+	paths := scratch[:0]
+	for _, rbfPath := range rbfPaths {
+		paths = append(paths, newAltCorePath(rbfPath))
+	}
+
+	var groups []string
+	for _, rule := range altCoreGroupRules {
+		for _, path := range paths {
+			if rule.match(path) {
+				groups = append(groups, rule.group)
+				break
+			}
+		}
+	}
+	return groups, paths
+}
+
+// applyAltCoreLauncherGroups tags every alt core launcher with the groups its
+// registered RBF paths imply. Must run after the launcher slice is built, since
+// the launch constructors are what register those paths.
+func applyAltCoreLauncherGroups(launchers []platforms.Launcher) []platforms.Launcher {
+	var scratch []altCorePath
+	for i := range launchers {
+		var groups []string
+		groups, scratch = altCoreGroups(launchers[i].ID, scratch)
+		if len(groups) == 0 {
+			continue
+		}
+		launchers[i].Groups = append(launchers[i].Groups, groups...)
+	}
+	return launchers
 }
 
 func launchRetroAchievementsCore(
@@ -378,14 +616,48 @@ func launchRetroAchievementsCore(
 	return launchAltCoreWithSetName(launcherID, systemID, rbfPath, setName)
 }
 
+func launchRetroAchievementsCoreNoSameDir(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	setName, ok := retroAchievementsSetName(launcherID)
+	if !ok {
+		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
+	}
+	return launchAltCoreWithSetNameSameDir(launcherID, systemID, rbfPath, setName, false)
+}
+
+func configureAltCoreWithDefaultSetName(
+	core *cores.Core,
+	launcherID string,
+	rbfPath string,
+	setName string,
+	setNameSameDir bool,
+	opts *platforms.LaunchOptions,
+) error {
+	core.LauncherID = launcherID
+	core.RBF = rbfPath
+	if setName != "" {
+		core.SetName = setName
+		core.SetNameSameDir = setNameSameDir
+	}
+	return applySetNameOptions(core, opts)
+}
+
 func launchAltCoreWithDefaultSetName(
 	launcherID string,
 	systemID string,
 	rbfPath string,
 	setName string,
+	setNameSameDir bool,
+	fallbackRBFPaths ...string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	// Register alt core during launcher creation
-	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
+	// Register alt core during launcher creation.
+	rbfPaths := make([]string, 0, 1+len(fallbackRBFPaths))
+	rbfPaths = append(rbfPaths, rbfPath)
+	rbfPaths = append(rbfPaths, fallbackRBFPaths...)
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPaths...)
 
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
@@ -395,13 +667,9 @@ func launchAltCoreWithDefaultSetName(
 		path = checkInZip(path)
 
 		sn := *s
-		sn.LauncherID = launcherID
-		sn.RBF = rbfPath
-		if setName != "" {
-			sn.SetName = setName
-			sn.SetNameSameDir = true
-		}
-		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+		if setNameErr := configureAltCoreWithDefaultSetName(
+			&sn, launcherID, rbfPath, setName, setNameSameDir, opts,
+		); setNameErr != nil {
 			return nil, setNameErr
 		}
 
@@ -491,9 +759,60 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 	}
 }
 
+func pico8CartTest(_ *config.Instance, path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasSuffix(lowerPath, ".p8") || strings.HasSuffix(lowerPath, ".p8.png")
+}
+
+func atari2600BinTest(_ *config.Instance, path string) bool {
+	lowerPath := strings.ToLower(path)
+	// TODO: really, this should specifically check on the root dirs,
+	// 		 but we'd need to modify the test function to have access
+	//       to the platform interface. it's probably a safe enough bet
+	//       that something in an atari2600 subdir is for atari2600
+	if (strings.Contains(lowerPath, "/atari2600/") ||
+		strings.Contains(lowerPath, "/atari 2600/")) &&
+		filepath.Ext(lowerPath) == ".bin" {
+		return true
+	}
+	return false
+}
+
+func applyAtari2600Slots(core *cores.Core) {
+	core.Slots = []cores.Slot{
+		{
+			Exts: []string{".a26", ".bin"},
+			Mgl: &cores.MGLParams{
+				Delay:  1,
+				Method: "f",
+				Index:  1,
+			},
+		},
+	}
+}
+
+func configureAtari2600AltCore(
+	core *cores.Core,
+	launcherID string,
+	rbfPath string,
+	opts *platforms.LaunchOptions,
+) error {
+	core.LauncherID = launcherID
+	core.RBF = rbfPath
+	if setName, ok := retroAchievementsSetName(launcherID); ok {
+		core.SetName = setName
+		core.SetNameSameDir = true
+	}
+	if setNameErr := applySetNameOptions(core, opts); setNameErr != nil {
+		return setNameErr
+	}
+	applyAtari2600Slots(core)
+	return nil
+}
+
 func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		s, err := cores.GetCore("Atari2600")
+		s, err := cores.GetCore(systemdefs.SystemAtari2600)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
 		}
@@ -503,15 +822,37 @@ func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) 
 		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
 			return nil, setNameErr
 		}
-		sn.Slots = []cores.Slot{
-			{
-				Exts: []string{".a26", ".bin"},
-				Mgl: &cores.MGLParams{
-					Delay:  1,
-					Method: "f",
-					Index:  1,
-				},
-			},
+		applyAtari2600Slots(&sn)
+
+		err = mgls.LaunchGame(cfg, &sn, path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to launch game: %w", err)
+		}
+
+		err = activegame.SetActiveGame(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil, nil
+	}
+}
+
+func launchAtari2600AltCore(
+	launcherID string,
+	rbfPath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
+
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		s, err := cores.GetCore(systemdefs.SystemAtari2600)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
+		}
+		path = checkInZip(path)
+
+		sn := *s
+		if configureErr := configureAtari2600AltCore(&sn, launcherID, rbfPath, opts); configureErr != nil {
+			return nil, configureErr
 		}
 
 		err = mgls.LaunchGame(cfg, &sn, path)
@@ -525,6 +866,59 @@ func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) 
 		}
 		return nil, nil
 	}
+}
+
+func resolveFramebufferMode(
+	opts *platforms.LaunchOptions,
+	defaultScale int,
+	defaultResolution string,
+) (framebufferMode, error) {
+	var renderScale *int
+	renderResolution := ""
+	if opts != nil {
+		renderScale = opts.RenderScale
+		renderResolution = opts.RenderResolution
+	}
+	if renderScale != nil && renderResolution != "" {
+		return framebufferMode{}, errors.New("render_scale and render_resolution are mutually exclusive")
+	}
+	if renderScale == nil && renderResolution == "" {
+		if defaultScale > 0 {
+			renderScale = &defaultScale
+		} else {
+			renderResolution = defaultResolution
+		}
+	}
+
+	if renderScale != nil {
+		divisors := map[int]int{100: 1, 50: 2, 33: 3, 25: 4}
+		divisor, ok := divisors[*renderScale]
+		if !ok {
+			return framebufferMode{}, fmt.Errorf(
+				"unsupported MiSTer render_scale %d: use 25, 33, 50, or 100", *renderScale,
+			)
+		}
+		return framebufferMode{divisor: divisor}, nil
+	}
+
+	width, height, err := config.ValidateRenderResolution(renderResolution)
+	if err != nil {
+		return framebufferMode{}, fmt.Errorf("validate MiSTer render_resolution: %w", err)
+	}
+	return framebufferMode{width: width, height: height}, nil
+}
+
+func applyFramebufferMode(mode framebufferMode, format string) error {
+	if mode.divisor > 0 {
+		if err := mistermain.SetFramebufferScaled(mode.divisor, format); err != nil {
+			return fmt.Errorf("set scaled framebuffer: %w", err)
+		}
+		return nil
+	}
+	if err := mistermain.SetFramebufferExact(mode.width, mode.height, format); err != nil {
+		return fmt.Errorf("set exact framebuffer: %w", err)
+	}
+	return nil
 }
 
 // buildFvpCommand constructs the command for launching fvp video player.
@@ -547,21 +941,17 @@ func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
 }
 
 func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-		// videoDivisor controls the framebuffer resolution divisor for video playback.
-		// Using fb_cmd0 (scaled mode):
-		//   - divisor 3: ~640x360 on 1920x1080, ~853x480 on 2560x1440
-		//   - Scales to fill entire screen (no borders)
-		const videoDivisor = 3
-
+	return func(_ *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
 
-		log.Info().
-			Int("divisor", videoDivisor).
-			Str("path", path).
-			Msg("video playback starting")
+		framebuffer, err := resolveFramebufferMode(opts, videoRenderScale, "")
+		if err != nil {
+			return nil, fmt.Errorf("resolve video render size: %w", err)
+		}
+
+		log.Info().Str("path", path).Msg("video playback starting")
 
 		// Capture launcher context for staleness detection and cancellation
 		launcherCtx := pl.launcherManager.GetContext()
@@ -572,10 +962,9 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 			return nil, err
 		}
 
-		// Set scaled video mode for video playback
-		if modeErr := mistermain.SetVideoModeScaled(videoDivisor); modeErr != nil {
-			return nil, fmt.Errorf("failed to set scaled video mode (divisor %d): %w",
-				videoDivisor, modeErr)
+		if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB32); modeErr != nil {
+			_ = cm.Close()
+			return nil, fmt.Errorf("failed to set video render size: %w", modeErr)
 		}
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
@@ -583,7 +972,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 		cmd := buildFvpCommand(launcherCtx, path)
 
 		// Build cleanup function that will be called on completion/crash
-		restoreFunc := createConsoleRestoreFunc(pl, cm)
+		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Start process and manage lifecycle
 		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
@@ -601,7 +990,10 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 		targetID,
 	)
 
-	// Set environment variables
+	// ScummVM's SDL VT backend requires the inherited session. Unlike FVP,
+	// starting it in a new session causes an immediate SIGHUP on MiSTer. A
+	// separate process group preserves that session while allowing descendant cleanup.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(),
 		"HOME="+scummvmBaseDir,
 		"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
@@ -616,7 +1008,7 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 
 // launchScummVM returns a launcher function for ScummVM games on MiSTer.
 func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
@@ -629,6 +1021,11 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 
 		if targetID == "" {
 			return nil, errors.New("no ScummVM target ID specified in path")
+		}
+
+		framebuffer, err := resolveFramebufferMode(opts, 0, scummVMRenderResolution)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ScummVM render size: %w", err)
 		}
 
 		log.Info().Str("target", targetID).Msg("ScummVM game launching")
@@ -648,10 +1045,9 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 			return nil, err
 		}
 
-		// Set video mode for ScummVM (640x480 RGB16)
-		// Matches original MiSTer_ScummVM: vmode -r 640 480 rgb16
-		if err := mistermain.SetVideoModeExact(640, 480, mistermain.VideoModeFormatRGB16); err != nil {
-			return nil, fmt.Errorf("failed to set video mode: %w", err)
+		if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB16); modeErr != nil {
+			_ = cm.Close()
+			return nil, fmt.Errorf("failed to set ScummVM render size: %w", modeErr)
 		}
 
 		// Start MIDIMeister if available
@@ -667,7 +1063,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 		cmd := buildScummVMCommand(launcherCtx, scummvmBinary, targetID)
 
 		// Build cleanup function that will be called on completion/crash
-		restoreFunc := createConsoleRestoreFunc(pl, cm)
+		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Wrap restore to also stop MIDI if we started it
 		restoreWithMIDI := func() {
@@ -682,6 +1078,15 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 	}
 }
 
+func scummVMKill(keyboardPress func(string) error) func(*config.Instance) error {
+	return func(_ *config.Instance) error {
+		if err := keyboardPress("{ctrl+q}"); err != nil {
+			return fmt.Errorf("failed to send ctrl+q: %w", err)
+		}
+		return nil
+	}
+}
+
 // createScummVMLauncher creates a Launcher definition for ScummVM games.
 func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
@@ -692,43 +1097,9 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
 		Launch:             launchScummVM(pl),
-		// Kill uses keyboard input instead of signals to avoid VT lock issues.
-		// ScummVM's VT management doesn't handle SIGKILL properly and causes
-		// kernel-level VT locks requiring a reboot. Ctrl+q triggers clean exit.
-		// This function blocks until ScummVM exits (up to 5 seconds) to prevent
-		// new launches from starting during VT cleanup.
-		Kill: func(_ *config.Instance) error {
-			// Send Ctrl+q to trigger ScummVM's clean exit
-			if err := pl.KeyboardPress("{ctrl+q}"); err != nil {
-				return fmt.Errorf("failed to send ctrl+q: %w", err)
-			}
-
-			// Wait for process to exit cleanly (up to 5 seconds)
-			pl.processMu.Lock()
-			proc := pl.trackedProcess
-			pl.processMu.Unlock()
-
-			if proc == nil {
-				// No tracked process, nothing to wait for
-				return nil
-			}
-
-			// Wait for process exit with timeout
-			done := make(chan error, 1)
-			go func() {
-				_, err := proc.Wait()
-				done <- err
-			}()
-
-			select {
-			case <-done:
-				log.Debug().Msg("ScummVM exited cleanly after ctrl+q")
-				return nil
-			case <-time.After(5 * time.Second):
-				log.Warn().Msg("ScummVM did not exit within 5 seconds")
-				return errors.New("timeout waiting for ScummVM to exit")
-			}
-		},
+		// ScummVM needs a keyboard-triggered graceful exit to avoid VT locks.
+		// Shared process lifecycle code owns waiting and timeout escalation.
+		Kill: scummVMKill(pl.KeyboardPress),
 	}
 }
 
@@ -744,10 +1115,62 @@ func createVideoLauncher(pl *Platform) platforms.Launcher {
 	}
 }
 
+func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launcher := &launchers[i]
+		if !launcherSupportsFolderMGL(launcher) || launcherHasExtension(launcher, ".mgl") {
+			continue
+		}
+		launcher.Extensions = append(launcher.Extensions, ".mgl")
+	}
+
+	return launchers
+}
+
+func applyCatalogScanMetadata(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		definition, err := catalog.Get(launchers[i].ID)
+		if err != nil {
+			continue
+		}
+		launchers[i].Folders = definition.Folders
+		launchers[i].Extensions = definition.Extensions
+	}
+	return launchers
+}
+
+func applyDefaultScanExcludes(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" || len(launcher.Folders) == 0 || launcher.SkipFilesystemScan {
+			continue
+		}
+		launcher.ScanExcludes = append(launcher.ScanExcludes, misterDefaultScanExcludes...)
+	}
+	return launchers
+}
+
+func launcherSupportsFolderMGL(launcher *platforms.Launcher) bool {
+	if _, skipped := mglIndexingSkippedLaunchers[launcher.ID]; skipped {
+		return false
+	}
+	return launcher.SystemID != "" && len(launcher.Folders) > 0 &&
+		!launcher.SkipFilesystemScan && launcher.Launch != nil
+}
+
+func launcherHasExtension(launcher *platforms.Launcher, extension string) bool {
+	for _, ext := range launcher.Extensions {
+		if strings.EqualFold(ext, extension) {
+			return true
+		}
+	}
+	return false
+}
+
 // CreateLaunchers creates all standard MiSTer launchers for the given platform.
 // This is exported for use by MiSTeX and other MiSTer variants.
 func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
-	return []platforms.Launcher{
+	launchers := []platforms.Launcher{
 		// Consoles
 		{
 			ID:         systemdefs.System3DO,
@@ -805,19 +1228,15 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"ATARI7800", "Atari2600"},
 			Extensions: []string{".a26"},
 			Launch:     launchAtari2600(),
-			Test: func(_ *config.Instance, path string) bool {
-				lowerPath := strings.ToLower(path)
-				// TODO: really, this should specifically check on the root dirs,
-				// 		 but we'd need to modify the test function to have access
-				//       to the platform interface. it's probably a safe enough bet
-				//       that something in an atari2600 subdir is for atari2600
-				if (strings.Contains(lowerPath, "/atari2600/") ||
-					strings.Contains(lowerPath, "/atari 2600/")) &&
-					filepath.Ext(lowerPath) == ".bin" {
-					return true
-				}
-				return false
-			},
+			Test:       atari2600BinTest,
+		},
+		{
+			ID:         "RAAtari2600",
+			SystemID:   systemdefs.SystemAtari2600,
+			Folders:    []string{"ATARI7800", "Atari2600"},
+			Extensions: []string{".a26"},
+			Launch:     launchAtari2600AltCore("RAAtari2600", "_RA_Cores/Cores/Atari7800"),
+			Test:       atari2600BinTest,
 		},
 		{
 			ID:       "LLAPIAtari2600",
@@ -844,6 +1263,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAtari7800),
 		},
 		{
+			ID:       "RAAtari7800",
+			SystemID: systemdefs.SystemAtari7800,
+			Launch: launchRetroAchievementsCore(
+				"RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800",
+			),
+		},
+		{
 			ID:       "DB9Atari7800",
 			SystemID: systemdefs.SystemAtari7800,
 			Launch:   launchDB9Core("DB9Atari7800", systemdefs.SystemAtari7800, "Atari7800"),
@@ -852,13 +1278,6 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPIAtari7800",
 			SystemID: systemdefs.SystemAtari7800,
 			Launch:   launchAltCore("LLAPIAtari7800", systemdefs.SystemAtari7800, "_LLAPI/Atari7800_LLAPI"),
-		},
-		{
-			ID:       "RAAtari7800",
-			SystemID: systemdefs.SystemAtari7800,
-			Launch: launchRetroAchievementsCore(
-				"RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800",
-			),
 		},
 		{
 			ID:         systemdefs.SystemAtariLynx,
@@ -935,6 +1354,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemFDS),
 		},
 		{
+			ID:       "RAFDS",
+			SystemID: systemdefs.SystemFDS,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAFDS", systemdefs.SystemFDS, "_RA_Cores/Cores/NES",
+			),
+		},
+		{
 			ID:         systemdefs.SystemGamate,
 			SystemID:   systemdefs.SystemGamate,
 			Folders:    []string{"Gamate"},
@@ -973,6 +1399,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGameboyColor),
 		},
 		{
+			ID:       "RAGameboyColor",
+			SystemID: systemdefs.SystemGameboyColor,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAGameboyColor", systemdefs.SystemGameboyColor, "_RA_Cores/Cores/Gameboy",
+			),
+		},
+		{
 			ID:         systemdefs.SystemGameboy2P,
 			SystemID:   systemdefs.SystemGameboy2P,
 			Folders:    []string{"GAMEBOY2P"},
@@ -990,6 +1423,20 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"SMS", "GameGear"},
 			Extensions: []string{".gg"},
 			Launch:     launch(pl, systemdefs.SystemGameGear),
+		},
+		{
+			ID:       "RAGameGear",
+			SystemID: systemdefs.SystemGameGear,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAGameGear", systemdefs.SystemGameGear, "_RA_Cores/Cores/SMS",
+			),
+		},
+		{
+			ID:         systemdefs.SystemGameGear2P,
+			SystemID:   systemdefs.SystemGameGear2P,
+			Folders:    []string{"GameGear2P"},
+			Extensions: []string{".gg"},
+			Launch:     launch(pl, systemdefs.SystemGameGear2P),
 		},
 		{
 			ID:         systemdefs.SystemGameNWatch,
@@ -1059,12 +1506,12 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenGenesis",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchSinden(systemdefs.SystemGenesis, "Genesis"),
+			Launch:   launchSinden("SindenGenesis", systemdefs.SystemGenesis, "Genesis"),
 		},
 		{
 			ID:       "SindenMegaDrive",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchSinden(systemdefs.SystemGenesis, "MegaDrive"),
+			Launch:   launchSinden("SindenMegaDrive", systemdefs.SystemGenesis, "MegaDrive"),
 		},
 		{
 			ID:       "LLAPIMegaDrive",
@@ -1092,7 +1539,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemIntellivision,
 			SystemID:   systemdefs.SystemIntellivision,
 			Folders:    []string{"Intellivision"},
-			Extensions: []string{".int", ".bin"},
+			Extensions: []string{".rom", ".int", ".bin"},
 			Launch:     launch(pl, systemdefs.SystemIntellivision),
 		},
 		{
@@ -1124,7 +1571,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenSMS",
 			SystemID: systemdefs.SystemMasterSystem,
-			Launch:   launchSinden(systemdefs.SystemMasterSystem, "SMS"),
+			Launch:   launchSinden("SindenSMS", systemdefs.SystemMasterSystem, "SMS"),
 		},
 		{
 			ID:       "LLAPISMS",
@@ -1153,7 +1600,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenMegaCD",
 			SystemID: systemdefs.SystemMegaCD,
-			Launch:   launchSinden(systemdefs.SystemMegaCD, "MegaCD"),
+			Launch:   launchSinden("SindenMegaCD", systemdefs.SystemMegaCD, "MegaCD"),
 		},
 		{
 			ID:       "LLAPIMegaCD",
@@ -1209,6 +1656,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemNeoGeoCD),
 		},
 		{
+			ID:       "RANeoGeoCD",
+			SystemID: systemdefs.SystemNeoGeoCD,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RANeoGeoCD", systemdefs.SystemNeoGeoCD, "_RA_Cores/Cores/NeoGeo",
+			),
+		},
+		{
 			ID:         systemdefs.SystemNeoGeoPocket,
 			SystemID:   systemdefs.SystemNeoGeoPocket,
 			Folders:    []string{"NGP"},
@@ -1232,7 +1686,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenNES",
 			SystemID: systemdefs.SystemNES,
-			Launch:   launchSinden(systemdefs.SystemNES, "NES"),
+			Launch:   launchSinden("SindenNES", systemdefs.SystemNES, "NES"),
 		},
 		{
 			ID:         systemdefs.SystemNESMusic,
@@ -1338,7 +1792,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchSinden(systemdefs.SystemPSX, "PSX"),
+			Launch:   launchSinden("SindenPSX", systemdefs.SystemPSX, "PSX"),
 		},
 		{
 			ID:       "2XPSX",
@@ -1414,6 +1868,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemSuperGameboy),
 		},
 		{
+			ID:       "RASuperGameboy",
+			SystemID: systemdefs.SystemSuperGameboy,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RASuperGameboy", systemdefs.SystemSuperGameboy, "_RA_Cores/Cores/Gameboy",
+			),
+		},
+		{
 			ID:       "DB9SuperGameboy",
 			SystemID: systemdefs.SystemSuperGameboy,
 			Launch:   launchDB9Core("DB9SuperGameboy", systemdefs.SystemSuperGameboy, "SGB"),
@@ -1436,6 +1897,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"Saturn"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemSaturn),
+		},
+		{
+			ID:       "RASaturn",
+			SystemID: systemdefs.SystemSaturn,
+			Launch: launchRetroAchievementsCore(
+				"RASaturn", systemdefs.SystemSaturn, "_RA_Cores/Cores/Saturn",
+			),
 		},
 		{
 			ID:       "LLAPISaturn",
@@ -1487,7 +1955,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenSNES",
 			SystemID: systemdefs.SystemSNES,
-			Launch:   launchSinden(systemdefs.SystemSNES, "SNES"),
+			Launch:   launchSinden("SindenSNES", systemdefs.SystemSNES, "SNES"),
 		},
 		{
 			ID:         systemdefs.SystemSNESMusic,
@@ -1538,6 +2006,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"TGFX16-CD"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemTurboGrafx16CD),
+		},
+		{
+			ID:       "RATurboGrafx16CD",
+			SystemID: systemdefs.SystemTurboGrafx16CD,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RATurboGrafx16CD", systemdefs.SystemTurboGrafx16CD, "_RA_Cores/Cores/TurboGrafx16",
+			),
 		},
 		{
 			ID:         systemdefs.SystemVC4000,
@@ -1642,6 +2117,20 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"Apple-II"},
 			Extensions: []string{".dsk", ".do", ".po", ".nib", ".hdv"},
 			Launch:     launch(pl, systemdefs.SystemAppleII),
+		},
+		{
+			ID:         systemdefs.SystemAppleIIGS,
+			SystemID:   systemdefs.SystemAppleIIGS,
+			Folders:    []string{"Apple-IIgs"},
+			Extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
+			Launch:     launch(pl, systemdefs.SystemAppleIIGS),
+		},
+		{
+			ID:         systemdefs.SystemAppleLisa,
+			SystemID:   systemdefs.SystemAppleLisa,
+			Folders:    []string{"LISA"},
+			Extensions: []string{".img", ".vhd"},
+			Launch:     launch(pl, systemdefs.SystemAppleLisa),
 		},
 		{
 			ID:         systemdefs.SystemAquarius,
@@ -1939,11 +2428,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 		// Other
 		{
-			ID:         systemdefs.SystemArcade,
-			SystemID:   systemdefs.SystemArcade,
-			Folders:    []string{"_Arcade"},
-			Extensions: []string{".mra"},
-			Launch:     launchArcade(pl, systemdefs.SystemArcade),
+			ID:                       systemdefs.SystemArcade,
+			SystemID:                 systemdefs.SystemArcade,
+			Folders:                  []string{"_Arcade"},
+			Extensions:               []string{".mra", ".mgl"},
+			ScanDirectoryExcludes:    arcadeOrganizerScanDirectoryExcludes,
+			ScanSkipInternalSymlinks: true,
+			Launch:                   launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,
@@ -1958,6 +2449,41 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"Chip8"},
 			Extensions: []string{".ch8"},
 			Launch:     launch(pl, systemdefs.SystemChip8),
+		},
+		{
+			ID:         "MegaVGMDrive",
+			SystemID:   systemdefs.SystemAudio,
+			Folders:    []string{"MegaVGMDrive"},
+			Extensions: []string{".vgm"},
+			Launch:     launch(pl, "MegaVGMDrive"),
+		},
+		{
+			ID:         systemdefs.SystemOpenBOR,
+			SystemID:   systemdefs.SystemOpenBOR,
+			Folders:    []string{"OpenBOR"},
+			Extensions: []string{".pak"},
+			Launch: launchAltCoreCandidates(
+				systemdefs.SystemOpenBOR,
+				systemdefs.SystemOpenBOR,
+				filepath.Join("_Other", "OpenBOR_4086"),
+				filepath.Join("_Other", "OpenBOR_7533"),
+			),
+		},
+		{
+			ID:         "OpenBOR7533",
+			SystemID:   systemdefs.SystemOpenBOR,
+			Extensions: []string{".pak"},
+			Launch: launchAltCore(
+				"OpenBOR7533", systemdefs.SystemOpenBOR, filepath.Join("_Other", "OpenBOR_7533"),
+			),
+		},
+		{
+			ID:         systemdefs.SystemPico8,
+			SystemID:   systemdefs.SystemPico8,
+			Folders:    []string{"PICO-8"},
+			Extensions: []string{".p8"},
+			Test:       pico8CartTest,
+			Launch:     launch(pl, systemdefs.SystemPico8),
 		},
 		{
 			ID:         systemdefs.SystemGroovy,
@@ -1979,8 +2505,17 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 				if err != nil {
 					return nil, fmt.Errorf("failed to set active game: %w", err)
 				}
-				return nil, nil
+				return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 			},
 		},
 	}
+
+	unstable := createUnstableLaunchers()
+	all := make([]platforms.Launcher, 0, len(launchers)+len(unstable))
+	all = append(all, launchers...)
+	all = append(all, unstable...)
+
+	return applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
+		applyAltCoreLauncherGroups(all),
+	)))
 }

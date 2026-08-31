@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"strings"
@@ -29,20 +30,213 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResumeAndScheduleStartupMediaWork_ResumeBypassesAPIIdleWait(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	scheduler := idle.NewWithClock(clock)
+	scheduler.RequestStarted()
+	deferred := make(chan bool, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer scheduler.Wait()
+	defer scheduler.RequestEnded()
+	defer cancel()
+
+	resumeCalls := 0
+	resumeAndScheduleStartupMediaWork(
+		ctx,
+		scheduler,
+		&database.Database{MediaDB: testhelpers.NewMockMediaDBI()},
+		func() bool {
+			resumeCalls++
+			return true
+		},
+		func(_ context.Context, resumeStarted bool) {
+			deferred <- resumeStarted
+		},
+	)
+
+	assert.Equal(t, 1, resumeCalls, "index resume must run before waiting for API idle")
+	select {
+	case <-deferred:
+		t.Fatal("deferred startup work ran while API request was active")
+	default:
+	}
+
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	clock.Advance(startupMediaIdleMaximumWait + time.Second)
+	select {
+	case resumeStarted := <-deferred:
+		assert.True(t, resumeStarted)
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred startup work did not run after maximum idle wait")
+	}
+}
+
+func TestResumeAndScheduleStartupMediaWork_SkipsDeferredWithNilMediaDB(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	scheduler := idle.NewWithClock(clock)
+	deferred := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resumeCalls := 0
+	resumeAndScheduleStartupMediaWork(
+		ctx,
+		scheduler,
+		&database.Database{},
+		func() bool {
+			resumeCalls++
+			return false
+		},
+		func(context.Context, bool) {
+			deferred <- struct{}{}
+		},
+	)
+
+	assert.Equal(t, 1, resumeCalls)
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	clock.Advance(startupMediaIdleQuietWindow + time.Second)
+	scheduler.Wait()
+
+	select {
+	case <-deferred:
+		t.Fatal("deferred startup work ran with nil media database")
+	default:
+	}
+}
+
+func TestWaitForBackupShutdownDoesNotTearDownBeforeLeaseRelease(t *testing.T) {
+	t.Parallel()
+	coordinator := backupcoordinator.New()
+	lease, err := coordinator.Begin(
+		context.Background(), backupcoordinator.OperationLocalRestore, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, time.Second)
+	}()
+
+	select {
+	case <-lease.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel active restore lease")
+	}
+	select {
+	case <-waitDone:
+		t.Fatal("shutdown returned before restore lease released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	lease.Release()
+	select {
+	case waitErr := <-waitDone:
+		require.NoError(t, waitErr)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after restore lease released")
+	}
+}
+
+func TestWaitForBackupShutdownReturnsAtHardDeadline(t *testing.T) {
+	t.Parallel()
+	coordinator := backupcoordinator.New()
+	lease, err := coordinator.Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, 50*time.Millisecond)
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		require.Error(t, waitErr)
+		require.ErrorIs(t, waitErr, context.DeadlineExceeded)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("shutdown did not return at hard deadline")
+	}
+	_, _, active := coordinator.Active()
+	assert.True(t, active, "timed-out lease remains active until its owner releases it")
+}
+
+func TestStart_RollbackStateUncertainStopsInitialization(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	cfg := &config.Instance{}
+	initialized := false
+
+	result, err := startWith(
+		mockPlatform,
+		cfg,
+		func(context.Context, string, string) error {
+			return updater.ErrRollbackStateUncertain
+		},
+		func(platforms.Platform, *config.Instance) (*StartResult, error) {
+			initialized = true
+			return &StartResult{}, nil
+		},
+	)
+
+	require.ErrorIs(t, err, updater.ErrRollbackStateUncertain)
+	assert.Nil(t, result)
+	assert.False(t, initialized, "service initialization must not run with uncertain rollback state")
+}
+
+func TestStart_NonRecoveryWatchdogErrorContinuesInitialization(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	cfg := &config.Instance{}
+	want := &StartResult{}
+
+	result, err := startWith(
+		mockPlatform,
+		cfg,
+		func(context.Context, string, string) error {
+			return errors.New("unreadable updater state")
+		},
+		func(gotPlatform platforms.Platform, gotCfg *config.Instance) (*StartResult, error) {
+			assert.Same(t, mockPlatform, gotPlatform)
+			assert.Same(t, cfg, gotCfg)
+			return want, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Same(t, want, result)
+}
 
 func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -62,7 +256,7 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 
 	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, testRoot, "127.0.0.1", tcpAddr.Port)
 	require.NoError(t, err)
-	cfg.SetAutoUpdate(false)
+	cfg.SetUpdateCheck(false)
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("mock-platform")
@@ -136,9 +330,24 @@ scan_history = 7
 	mockUserDB := &testhelpers.MockUserDBI{}
 	db := &database.Database{UserDB: mockUserDB}
 	mockUserDB.On("CleanupHistory", 7).Return(int64(2), nil).Once()
-	mockUserDB.On("CleanupMediaHistory", 14).Return(int64(3), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", 14, false).Return(int64(3), nil).Once()
 
-	cleanupHistoryRetention(context.Background(), cfg, db)
+	cleanupHistoryRetention(context.Background(), cfg, db, false)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestCleanupHistoryRetention_ProtectsUnsyncedPlayHistory(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetPlaytimeRetention(14)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockUserDB.On("CleanupHistory", 30).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", 14, true).Return(int64(2), nil).Once()
+
+	cleanupHistoryRetention(context.Background(), cfg, db, true)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -151,14 +360,645 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	db := &database.Database{UserDB: mockUserDB}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	mockUserDB.On("CleanupHistory", 30).Run(func(_ mock.Arguments) {
 		cancel()
 	}).Return(int64(1), nil).Once()
 
-	cleanupHistoryRetention(ctx, cfg, db)
+	cleanupHistoryRetention(ctx, cfg, db, false)
 
 	mockUserDB.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)
+}
+
+type testDrainCallbackRegistrar struct {
+	callbacks map[string]func(natural bool)
+}
+
+func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func(natural bool)) {
+	if r.callbacks == nil {
+		r.callbacks = make(map[string]func(natural bool))
+	}
+	r.callbacks[slot] = fn
+}
+
+func TestWireNativeAudioDrainCallbacks_ClearsMediaOnNaturalDrain(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "primary.mp3", "Primary", platforms.NativeAudioLauncherID,
+	))
+	st.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "background.mp3", "Background", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.ActiveMedia())
+	require.NotNil(t, st.BackgroundMedia())
+
+	plq := make(chan *playlists.Playlist, 1)
+	svc := &ServiceContext{State: st, PlaylistQueue: plq}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	require.Contains(t, registrar.callbacks, mediaslot.Primary)
+	require.Contains(t, registrar.callbacks, mediaslot.Background)
+	// Primary callback clears ActiveMedia when native audio still owns it.
+	registrar.callbacks[mediaslot.Primary](true)
+	// Background callback with natural=true and no playlist clears BackgroundMedia.
+	registrar.callbacks[mediaslot.Background](true)
+	assert.Nil(t, st.ActiveMedia())
+	assert.Nil(t, st.BackgroundMedia())
+}
+
+func TestWireNativeAudioDrainCallbacks_PrimaryDrainKeepsOtherLaunchersMedia(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	// A game launched out-of-band owns active media while the audio track drains.
+	st.SetActiveMedia(models.NewActiveMedia(
+		"SNES", "SNES", "game.sfc", "Game", "mister-launcher",
+	))
+
+	svc := &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	registrar.callbacks[mediaslot.Primary](true)
+	assert.NotNil(t, st.ActiveMedia(), "natural audio drain must not clear another launcher's media")
+}
+
+func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "background.mp3", "Background", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.BackgroundMedia())
+
+	plq := make(chan *playlists.Playlist, 1)
+	svc := &ServiceContext{State: st, PlaylistQueue: plq}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	// natural=false (explicit stop/replace) must not clear or advance anything.
+	registrar.callbacks[mediaslot.Background](false)
+	assert.NotNil(t, st.BackgroundMedia())
+}
+
+// newAdvanceTestSvc creates a minimal ServiceContext for advanceBackgroundPlaylist tests.
+func newAdvanceTestSvc(t *testing.T) (svc *ServiceContext, cleanup func()) {
+	t.Helper()
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	cleanup = func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	}
+	svc = &ServiceContext{
+		State:         st,
+		PlaylistQueue: make(chan *playlists.Playlist, 2),
+	}
+	return svc, cleanup
+}
+
+type resumePlaybackStub struct {
+	resumeErr error
+	resumed   []string
+}
+
+func (*resumePlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*resumePlaybackStub) Stop(_ string) error                             { return nil }
+func (*resumePlaybackStub) Pause(_ string) error                            { return nil }
+func (*resumePlaybackStub) TogglePause(_ string) error                      { return nil }
+func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*resumePlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
+func (s *resumePlaybackStub) Resume(slot string) error {
+	s.resumed = append(s.resumed, slot)
+	return s.resumeErr
+}
+
+func TestResumeBackgroundAfterMediaStop_ClearsAutoPauseOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+	playback := &resumePlaybackStub{}
+	svc.PlaybackManager = playback
+	svc.State.SetBackgroundAutoPaused(true)
+
+	resumeBackgroundAfterMediaStop(svc)
+
+	assert.Equal(t, []string{mediaslot.Background}, playback.resumed)
+	assert.False(t, svc.State.BackgroundAutoPaused())
+}
+
+func TestResumeBackgroundAfterMediaStop_KeepsAutoPauseOnFailure(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+	playback := &resumePlaybackStub{resumeErr: errors.New("resume failed")}
+	svc.PlaybackManager = playback
+	svc.State.SetBackgroundAutoPaused(true)
+
+	resumeBackgroundAfterMediaStop(svc)
+
+	assert.Equal(t, []string{mediaslot.Background}, playback.resumed)
+	assert.True(t, svc.State.BackgroundAutoPaused())
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected playlist enqueue: %+v", got)
+	default:
+	}
+}
+
+// makeMultiTrackPlaylist returns a playlist at the given index with 3 items.
+func makeMultiTrackPlaylist(idx int, loop, loopOne bool) *playlists.Playlist {
+	return &playlists.Playlist{
+		ID:      "bg-list",
+		Name:    "bg",
+		Slot:    mediaslot.Background,
+		Items:   []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}, {ZapScript: "c"}},
+		Index:   idx,
+		Playing: true,
+		Loop:    loop,
+		LoopOne: loopOne,
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOffAdvancesWithinPlaylist(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(0, false, false) // idx=0, 2 more tracks remain
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	require.NotNil(t, svc.State.GetBackgroundPlaylist())
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 1, got.Index, "should advance to index 1")
+		assert.True(t, got.Playing)
+		assert.False(t, got.ForceRelaunch)
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOffStopsAtEnd(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(2, false, false) // idx=2 is last
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	assert.Nil(t, svc.State.GetBackgroundPlaylist(), "playlist must be cleared")
+	assert.Nil(t, svc.State.BackgroundMedia(), "background media must be cleared")
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected enqueue: %+v", got)
+	default:
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatAllWrapsToFirst(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(2, true, false) // idx=2 is last, Loop=true
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 0, got.Index, "should wrap back to index 0")
+		assert.True(t, got.Playing)
+		assert.True(t, got.Loop)
+		assert.False(t, got.ForceRelaunch)
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOneSameTrack(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(1, false, true) // idx=1, LoopOne=true
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 1, got.Index, "should stay on same index")
+		assert.True(t, got.LoopOne)
+		assert.True(t, got.ForceRelaunch, "ForceRelaunch must be set to defeat dedup")
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatAllSingleItemUsesForceRelaunch(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := &playlists.Playlist{
+		ID:      "single",
+		Name:    "single",
+		Slot:    mediaslot.Background,
+		Items:   []playlists.PlaylistItem{{ZapScript: "only-track"}},
+		Index:   0,
+		Playing: true,
+		Loop:    true,
+	}
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 0, got.Index, "single-item loop stays at index 0")
+		assert.True(t, got.Loop)
+		assert.True(t, got.ForceRelaunch, "single-item loop needs ForceRelaunch")
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_NilPlaylistClearsBackgroundMedia(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	// No playlist set — single-track background.
+	svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, svc.State.BackgroundMedia())
+
+	advanceBackgroundPlaylist(svc)
+
+	assert.Nil(t, svc.State.BackgroundMedia(), "single-track end must clear background media")
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected enqueue: %+v", got)
+	default:
+	}
+}
+
+func TestRecoverInterruptedMediaDBRecreate_RestoresPendingState(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.True(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRecoverInterruptedMediaDBRecreate_StatusErrorReleasesBackgroundOperation(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(assert.AnError).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRecoverInterruptedMediaDBRecreate_RejectsAmbiguousState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		statusErr        error
+		lastGeneratedErr error
+		hasMediaErr      error
+		name             string
+		status           string
+		hasMedia         bool
+		checkGenerated   bool
+		checkMedia       bool
+	}{
+		{
+			name:      "indexing status unavailable",
+			statusErr: assert.AnError,
+		},
+		{
+			name:   "index already pending",
+			status: mediadb.IndexingStatusPending,
+		},
+		{
+			name:             "last generation unavailable",
+			lastGeneratedErr: assert.AnError,
+			checkGenerated:   true,
+		},
+		{
+			name:           "media rows unavailable",
+			hasMediaErr:    assert.AnError,
+			checkGenerated: true,
+			checkMedia:     true,
+		},
+		{
+			name:           "database still has media",
+			hasMedia:       true,
+			checkGenerated: true,
+			checkMedia:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			mockMediaDB.On("GetIndexingStatus").Return(tt.status, tt.statusErr).Once()
+			if tt.checkGenerated {
+				mockMediaDB.On("GetLastGenerated").Return(time.Time{}, tt.lastGeneratedErr).Once()
+			}
+			if tt.checkMedia {
+				mockMediaDB.On("HasAnyMedia").Return(tt.hasMedia, tt.hasMediaErr).Once()
+			}
+
+			recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+			assert.False(t, recovered)
+			mockMediaDB.AssertExpectations(t)
+			mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+		})
+	}
+}
+
+func TestRecoverInterruptedMediaDBRecreate_CacheFailuresKeepRecoveryPending(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		rebuildErr  error
+		persistErr  error
+		name        string
+		callPersist bool
+	}{
+		{
+			name:       "cache rebuild fails",
+			rebuildErr: assert.AnError,
+		},
+		{
+			name:        "cache persistence fails",
+			persistErr:  assert.AnError,
+			callPersist: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+			mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+			mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+			mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+			mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+			mockMediaDB.On("RebuildSlugSearchCache").Return(tt.rebuildErr).Once()
+			if tt.callPersist {
+				mockMediaDB.On("PersistSlugSearchCache").Return(tt.persistErr).Once()
+			}
+			mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+			recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+			assert.True(t, recovered)
+			mockMediaDB.AssertExpectations(t)
+			if !tt.callPersist {
+				mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+			}
+		})
+	}
+}
+
+func TestRecoverInterruptedMediaDBRecreate_IgnoresFirstInstall(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, false)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertNotCalled(t, "GetIndexingStatus")
+}
+
+func TestRecoverInterruptedMediaDBRecreate_IgnoresCompletedEmptyIndex(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "SetIndexingStatus", mock.Anything)
+}
+
+func TestRebuildStartupSlugSearchCache_SkipsWhenLoaded(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	rebuildStartupSlugSearchCache(mockMediaDB, true)
+
+	mockMediaDB.AssertNotCalled(t, "GetIndexingStatus")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_StatusErrorSkipsRebuild(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_RebuildErrorReleasesBackgroundOperation(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(assert.AnError).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_SkipsDuringIndexing(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+	mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_RebuildsWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestIndexingStatusNeedsResume(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		hasMediaErr error
+		name        string
+		status      string
+		hasMedia    bool
+		expected    bool
+		checkRows   bool
+		expectedErr bool
+	}{
+		{
+			name:     "pending",
+			status:   mediadb.IndexingStatusPending,
+			expected: true,
+		},
+		{
+			name:      "failed empty database",
+			status:    mediadb.IndexingStatusFailed,
+			expected:  true,
+			checkRows: true,
+		},
+		{
+			name:      "failed database with media",
+			status:    mediadb.IndexingStatusFailed,
+			hasMedia:  true,
+			checkRows: true,
+		},
+		{
+			name:        "failed media check",
+			status:      mediadb.IndexingStatusFailed,
+			hasMediaErr: assert.AnError,
+			checkRows:   true,
+			expectedErr: true,
+		},
+		{
+			name:   "cancelled",
+			status: mediadb.IndexingStatusCancelled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			if tt.checkRows {
+				mockMediaDB.On("HasAnyMedia").Return(tt.hasMedia, tt.hasMediaErr).Once()
+			}
+
+			actual, err := indexingStatusNeedsResume(tt.status, mockMediaDB)
+
+			if tt.expectedErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.expected, actual)
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
 }
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
@@ -184,9 +1024,12 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 
 	// Mock database to return "completed" status (no interruption)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	// A clean state resets the resume-attempt counter.
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	started := checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	assert.False(t, started)
 
 	mockMediaDB.AssertExpectations(t)
 
@@ -227,7 +1070,8 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	started := checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	assert.True(t, started)
 
 	// Wait for async operation to start and complete
 	// With minimal system list (just NES), this should complete quickly
@@ -374,6 +1218,20 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
+func TestCheckAndResumeIndexing_FailedStatusMediaCheckError(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, assert.AnError).Once()
+
+	started := checkAndResumeIndexing(nil, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+
+	assert.False(t, started)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "ResetIndexResumeAttempts")
+}
+
 func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
 	methods.ClearIndexingStatus()
@@ -395,8 +1253,11 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	// Create mock state
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	// Mock database to return "failed" status (should not resume)
+	// A failed update over a still-usable database should not auto-resume.
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil)
+	mockMediaDB.On("HasAnyMedia").Return(true, nil)
+	// A non-interrupted state resets the resume-attempt counter.
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
@@ -407,6 +1268,249 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
+func TestCheckAndResumeIndexing_StopsAfterMaxNoProgressResumeAttempts(t *testing.T) {
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Wire an inbox so the stall-limit branch can surface a user-facing message.
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(m *database.InboxMessage) bool {
+		return m.Category == inboxservice.CategoryMediaIndexResumeLimit &&
+			m.Severity == inboxservice.SeverityWarning
+	})).Return(&database.InboxMessage{}, nil)
+	st.SetInbox(inboxservice.NewService(mockUserDB, st.Notifications))
+
+	// Simulate a reindex that keeps getting interrupted at the same durable
+	// checkpoint. The next resume attempt reaches the no-progress stall limit.
+	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
+	require.NoError(t, db.MediaDB.SetLastIndexedSystem("NES"))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
+	for range maxIndexNoProgressResumeAttempts - 1 {
+		_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+		require.NoError(t, incErr)
+	}
+
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+
+	// The wedged index must be cancelled, not relaunched, so the library stays
+	// browsable rather than looping the reindex on every boot.
+	status, err := db.MediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, mediadb.IndexingStatusCancelled, status)
+	assert.False(t, methods.IsIndexing(), "indexing must not be relaunched past the no-progress limit")
+
+	// The user must be told why indexing stopped, via a resume-limit inbox message.
+	mockUserDB.AssertCalled(t, "AddInboxMessage", mock.Anything)
+}
+
+func TestRecordIndexResumeCheckpoint_ProgressMovedResetsAttempts(t *testing.T) {
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	require.NoError(t, db.MediaDB.SetLastIndexedSystem("SNES"))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
+	_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	require.NoError(t, incErr)
+
+	attempts, stalled, err := recordIndexResumeCheckpoint(db.MediaDB)
+	require.NoError(t, err)
+	assert.False(t, stalled)
+	assert.Equal(t, 0, attempts)
+
+	storedAttempts, err := db.MediaDB.GetIndexResumeAttempts()
+	require.NoError(t, err)
+	assert.Equal(t, 0, storedAttempts)
+
+	checkpoint, err := db.MediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, indexResumeCheckpointPrefix+"SNES", checkpoint)
+}
+
+func TestCheckAndResumeIndexing_LeaseConflictDoesNotConsumeResumeBudget(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	scrapeLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	require.NoError(t, err)
+	defer scrapeLease.Release()
+
+	pl := mocks.NewMockPlatform()
+	st, _ := state.NewState(pl, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	started := checkAndResumeIndexing(
+		pl, nil, &database.Database{MediaDB: mockMediaDB}, st, nil,
+	)
+
+	assert.False(t, started)
+	mockMediaDB.AssertNotCalled(t, "GetLastIndexedSystem")
+	mockMediaDB.AssertNotCalled(t, "IncrementIndexResumeAttempts")
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryIndexing)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCompleted))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
+	_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	require.NoError(t, incErr)
+
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+
+	attempts, err := db.MediaDB.GetIndexResumeAttempts()
+	require.NoError(t, err)
+	assert.Equal(t, 0, attempts, "a clean indexing state must reset the resume-attempt counter")
+	checkpoint, err := db.MediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Empty(t, checkpoint, "a clean indexing state must clear the resume checkpoint")
+}
+
+func TestCheckAndResumeScraping_StatusErrorDoesNothing(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return("", assert.AnError).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "GetScrapingOperation")
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mock.Anything)
+}
+
+func TestCheckAndResumeScraping_OperationReadErrorDoesNotMarkFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, assert.AnError).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mock.Anything)
+}
+
+func TestCheckAndResumeScraping_MissingOperationMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_UnavailableScraperMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	operation := database.ScrapingOperation{ScraperID: "missing-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", (*config.Instance)(nil)).Return(map[string]platforms.Scraper{}).Once()
+
+	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_WriteConflictPreservesDurableOperation(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	indexLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, err)
+	defer indexLease.Release()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertNotCalled(t, "GetScrapingOperation")
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)
+	mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
+	assert.Equal(t, database.MediaWriteOperationIndexing, mockMediaDB.ActiveMediaWriteOperation())
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryScraping)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	operation := database.ScrapingOperation{ScraperID: "test-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingOperation", operation).Return(assert.AnError).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockMediaDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", cfg).Return(map[string]platforms.Scraper{
+		"test-scraper": {
+			ID:   "test-scraper",
+			Name: "Test Scraper",
+			Scrape: func(
+				context.Context, *config.Instance, platforms.Platform, afero.Fs,
+				*database.Database, scraper.ScrapeOptions, platforms.ScraperCustomOptions,
+				chan<- scraper.ScrapeUpdate,
+			) error {
+				return nil
+			},
+		},
+	}).Twice()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	checkAndResumeScraping(mockPlatform, cfg, &database.Database{MediaDB: mockMediaDB}, st, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {
 	t.Parallel()
 
@@ -415,11 +1519,12 @@ func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {
 	pauser := syncutil.NewPauser()
 	notifChan := make(chan models.Notification, 1)
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Run(func(args mock.Arguments) {
-		callback, ok := args.Get(0).(func(bool))
-		require.True(t, ok)
-		callback(true)
-	}).Once()
+	mockMediaDB.On("RunBackgroundOptimizationWithLease", mock.Anything, pauser, mock.Anything).
+		Run(func(args mock.Arguments) {
+			callback, ok := args.Get(0).(func(bool))
+			require.True(t, ok)
+			callback(true)
+		}).Return(nil).Once()
 
 	checkAndResumeOptimization(db, notifChan, pauser)
 
@@ -442,7 +1547,9 @@ func TestCheckAndResumeOptimization_CompletedStatus(t *testing.T) {
 	checkAndResumeOptimization(db, make(chan models.Notification, 1), nil)
 
 	mockMediaDB.AssertExpectations(t)
-	mockMediaDB.AssertNotCalled(t, "RunBackgroundOptimization", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(
+		t, "RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, mock.Anything,
+	)
 }
 
 func TestStartPublishers_NoPublishers(t *testing.T) {
@@ -518,13 +1625,38 @@ func TestRunMediaDBStartupMaintenance_PassesPauserToTemporaryRepairOptimization(
 	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
 	mockMediaDB.On("PersistTagCache").Return(nil).Once()
 	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
-	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Once()
+	mockMediaDB.On("RunBackgroundOptimizationWithLease", mock.Anything, pauser, mock.Anything).
+		Return(nil).Once()
 	mockMediaDB.On("BackgroundOperationDone").Once()
 
 	runMediaDBStartupMaintenance(ctx, mockMediaDB, pauser, false)
 
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRunMediaDBStartupMaintenance_LeaseConflictDefersTemporaryRepair(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	ctx := context.Background()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+	scrapeLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	require.NoError(t, err)
+	defer scrapeLease.Release()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, nil, true)
+
+	mockMediaDB.AssertNotCalled(
+		t, "RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, mock.Anything,
+	)
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryMaintenance)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -541,6 +1673,22 @@ func TestRunMediaDBStartupMaintenance_SkipsRebuildWhenCachePersisted(t *testing.
 
 	mockMediaDB.AssertExpectations(t)
 	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
+}
+
+func TestRunMediaDBStartupMaintenance_SkipsMaintenanceBeforeIndexResume(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	ctx := context.Background()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, nil, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
+	mockMediaDB.AssertNotCalled(t, "TemporaryRepairJobsPending", mock.Anything)
 }
 
 func TestStartPublishers_DisabledPublisher(t *testing.T) {
@@ -772,5 +1920,37 @@ func TestCheckAndResumeIndexing_WaitGroupRace(t *testing.T) {
 			// Clean up after waiting for all operations
 			cleanup()
 		})
+	}
+}
+
+// An update is only committed once the version that installed it has stayed up
+// for a while. Shutting down before then proves nothing, so the wait must be
+// abandoned and the marker left for the next boot to judge.
+func TestConfirmPendingUpdate_ShutdownAbandonsTheWait(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for len(notifCh) > 0 {
+			<-notifCh
+		}
+	})
+
+	dataDir := t.TempDir()
+	st.StopService()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		confirmPendingUpdate(st, dataDir)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(updateConfirmDelay):
+		t.Fatal("confirmPendingUpdate kept waiting after the service shut down")
 	}
 }

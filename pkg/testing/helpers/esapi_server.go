@@ -22,6 +22,7 @@ package helpers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -35,10 +36,11 @@ import (
 // It listens on localhost:1234 (the hardcoded ES API port) to intercept API calls during tests.
 type MockESAPIServer struct {
 	*http.Server
-	listener    net.Listener
-	runningGame *esapi.RunningGameResponse
-	isRunning   bool
-	mu          syncutil.Mutex
+	listener      net.Listener
+	runningGame   *esapi.RunningGameResponse
+	notifications []string
+	isRunning     bool
+	mu            syncutil.Mutex
 }
 
 // NewMockESAPIServer creates a mock EmulationStation API server on localhost:1234.
@@ -136,7 +138,20 @@ func (*MockESAPIServer) handleLaunch(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (*MockESAPIServer) handleNotify(w http.ResponseWriter, _ *http.Request) {
-	// Simulate notification - just return OK
+func (m *MockESAPIServer) Notifications() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.notifications...)
+}
+
+func (m *MockESAPIServer) handleNotify(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read notification", http.StatusBadRequest)
+		return
+	}
+	m.mu.Lock()
+	m.notifications = append(m.notifications, string(body))
+	m.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 }

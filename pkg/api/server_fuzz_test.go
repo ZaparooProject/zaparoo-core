@@ -71,9 +71,11 @@ func FuzzProcessRequestObject(f *testing.F) {
 	f.Add([]byte(`{"jsonrpc":"2.0","method":"\u65e5\u672c\u8a9e","id":1}`))
 
 	methodMap := &MethodMap{}
-	methodMap.Store("test.echo", func(env requests.RequestEnv) (any, error) {
+	if err := methodMap.AddMethod("test.echo", func(env requests.RequestEnv) (any, error) {
 		return env.Params, nil
-	})
+	}, true); err != nil {
+		f.Fatal(err)
+	}
 
 	f.Fuzz(func(t *testing.T, msg []byte) {
 		env := requests.RequestEnv{

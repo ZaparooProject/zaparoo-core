@@ -28,14 +28,45 @@ import (
 	"github.com/google/uuid"
 )
 
+type UIChoice struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type UIEvent struct {
+	CreatedAt        time.Time   `json:"createdAt"`
+	ExpiresAt        *time.Time  `json:"expiresAt,omitempty"`
+	ID               string      `json:"id"`
+	Kind             UIEventKind `json:"kind"`
+	Title            string      `json:"title,omitempty"`
+	Message          string      `json:"message,omitempty"`
+	SelectedChoiceID string      `json:"selectedChoiceId,omitempty"`
+	Choices          []UIChoice  `json:"choices,omitempty"`
+	Dismissible      bool        `json:"dismissible"`
+}
+
+type UIResolution struct {
+	ID       string    `json:"id"`
+	Outcome  UIOutcome `json:"outcome"`
+	ChoiceID string    `json:"choiceId,omitempty"`
+}
+
+type UIStateResponse struct {
+	Events   []UIEvent      `json:"events"`
+	Resolved []UIResolution `json:"resolved"`
+	Revision uint64         `json:"revision"`
+}
+
 type SearchResultMedia struct {
-	RelPath   *string            `json:"relativePath,omitempty"`
-	System    System             `json:"system"`
-	Name      string             `json:"name"`
-	Path      string             `json:"path"`
-	ZapScript string             `json:"zapScript"`
-	Tags      []database.TagInfo `json:"tags"`
-	MediaID   int64              `json:"mediaId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type PaginationInfo struct {
@@ -55,17 +86,19 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
-	SystemID  *string            `json:"systemId,omitempty"`
-	RelPath   *string            `json:"relativePath,omitempty"`
-	ZapScript *string            `json:"zapScript,omitempty"`
-	FileCount *int               `json:"fileCount,omitempty"`
-	Group     *string            `json:"group,omitempty"`
-	Name      string             `json:"name"`
-	Path      string             `json:"path"`
-	Type      string             `json:"type"`
-	SystemIDs []string           `json:"systemIds,omitempty"`
-	Tags      []database.TagInfo `json:"tags,omitempty"`
-	MediaID   int64              `json:"mediaId,omitempty"`
+	SystemID           *string            `json:"systemId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	ZapScript          *string            `json:"zapScript,omitempty"`
+	FileCount          *int               `json:"fileCount,omitempty"`
+	Group              *string            `json:"group,omitempty"`
+	Path               string             `json:"path"`
+	Type               string             `json:"type"`
+	Name               string             `json:"name"`
+	SystemIDs          []string           `json:"systemIds,omitempty"`
+	Tags               []database.TagInfo `json:"tags,omitempty"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type BrowseResults struct {
@@ -73,25 +106,66 @@ type BrowseResults struct {
 	Path       string          `json:"path"`
 	Entries    []BrowseEntry   `json:"entries"`
 	TotalFiles int             `json:"totalFiles"`
+	TotalDirs  int             `json:"totalDirs"`
+}
+
+// BrowseIndexGroup is one first-character section of a browse list. Key is the
+// stable bucket identifier and Label is what to display (equal for the Latin
+// scheme; separated so a future locale scheme can show a glyph differing from
+// the key). Cursor is an opaque media.browse cursor positioned just before the
+// bucket's first row: passing it to media.browse with the same scope returns a
+// continuous page that begins at the bucket. Clients must treat Key and Cursor
+// as opaque. Offset is the 0-based position of the bucket's first item among
+// the scope's media files (excluding any leading directories), for clients that
+// jump to a position in the full list rather than reload from the cursor.
+type BrowseIndexGroup struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Cursor string `json:"cursor"`
+	Count  int    `json:"count"`
+	Offset int    `json:"offset"`
+}
+
+// BrowseIndexResults is the response for media.browse.index. Scheme reports the
+// collation used to derive buckets ("latin"), or "none" when no letter rail
+// applies to the scope (non-alphabetical sort, or a root listing); Groups is
+// then empty. Groups is authoritative and already ordered for the active sort;
+// clients render it as-is without assuming any alphabet.
+type BrowseIndexResults struct {
+	Scheme     string             `json:"scheme"`
+	Groups     []BrowseIndexGroup `json:"groups"`
+	TotalFiles int                `json:"totalFiles"`
 }
 
 type SettingsResponse struct {
+	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
+	PlaytimeSyncEnabled       *bool              `json:"playtimeSyncEnabled,omitempty"`
+	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
+	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
+	BackupRemoteBaseURL       *string            `json:"backupRemoteBaseUrl,omitempty"`
+	RemoteControlBaseURL      *string            `json:"remoteControlBaseUrl,omitempty"`
+	PlaytimeBaseURL           *string            `json:"playtimeBaseUrl,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
-	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
+	AudioVolume               int                `json:"audioVolume"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
-	AudioVolume               int                `json:"audioVolume"`
+	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
+	Encryption                bool               `json:"encryption"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          bool               `json:"profilesSwapData"`
+	UpdateCheck               bool               `json:"updateCheck"`
+	UpdateInstall             bool               `json:"updateInstall"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -111,17 +185,26 @@ type PlaytimeStatusResponse struct {
 	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
 	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
 	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
-	State                 string  `json:"state"`
-	SessionActive         bool    `json:"sessionActive"`
-	LimitsEnabled         bool    `json:"limitsEnabled"`
+	// SessionExtension is the time granted on top of the configured session
+	// limit for the current session. Omitted when nothing was granted.
+	SessionExtension *string `json:"sessionExtension,omitempty"`
+	// SessionExtendedUntil is when a session-limit waiver lapses, RFC3339.
+	// While it is set the session limit is not enforced and
+	// sessionRemaining is omitted; the daily limit still applies.
+	SessionExtendedUntil *string `json:"sessionExtendedUntil,omitempty"`
+	State                string  `json:"state"`
+	SessionActive        bool    `json:"sessionActive"`
+	LimitsEnabled        bool    `json:"limitsEnabled"`
 }
 
 type System struct {
 	ReleaseDate  *string `json:"releaseDate,omitempty"`
 	Manufacturer *string `json:"manufacturer,omitempty"`
+	MediaCount   *int    `json:"mediaCount,omitempty"`
 	ID           string  `json:"id,omitempty"`
 	Name         string  `json:"name,omitempty"`
 	Category     string  `json:"category,omitempty"`
+	ZapScript    string  `json:"zapScript,omitempty"`
 }
 
 type SystemsResponse struct {
@@ -153,7 +236,11 @@ type MappingResponse struct {
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
-	Enabled  bool   `json:"enabled"`
+	// Source identifies where the mapping came from: "database" or "file".
+	Source string `json:"source"`
+	// ReadOnly is true for mappings that can't be edited via the API (file mappings).
+	ReadOnly bool `json:"readOnly"`
+	Enabled  bool `json:"enabled"`
 }
 
 type TokenResponse struct {
@@ -174,16 +261,55 @@ type PlaytimeLimitWarningParams struct {
 	Remaining string `json:"remaining"`
 }
 
+// PlaytimeExtendedParams is the payload of the playtime.extended
+// notification. Profiles are identified by ID only: the switch ID that
+// authorized a card grant is a bearer credential and is never published.
+type PlaytimeExtendedParams struct {
+	Mode string `json:"mode"`
+	// Duration is what this grant added. Omitted for a day waiver.
+	Duration string `json:"duration,omitempty"`
+	// Expires is when a day waiver lapses, RFC3339. Omitted otherwise.
+	Expires string `json:"expires,omitempty"`
+	// SessionExtension is the session's accumulated duration grant.
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	// ProfileID is the recipient. Empty is the shared profile.
+	ProfileID string `json:"profileId,omitempty"`
+	// GrantedBy is the profile that authorized the grant.
+	GrantedBy string `json:"grantedBy,omitempty"`
+}
+
+// ExtendPlaytimeResponse reports what a playtime.extend request granted.
+type ExtendPlaytimeResponse struct {
+	Mode             string `json:"mode"`
+	Duration         string `json:"duration,omitempty"`
+	Expires          string `json:"expires,omitempty"`
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	ProfileID        string `json:"profileId,omitempty"`
+	// Replayed is true when a repeated requestId matched an earlier grant
+	// and no additional time was added.
+	Replayed bool `json:"replayed"`
+}
+
 type IndexingStatusResponse struct {
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
 	CurrentStep        *int    `json:"currentStep,omitempty"`
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
 	TotalMedia         *int    `json:"totalMedia,omitempty"`
-	Exists             bool    `json:"exists"`
-	Indexing           bool    `json:"indexing"`
-	Optimizing         bool    `json:"optimizing"`
-	Paused             bool    `json:"paused"`
+	// MissingMedia is the count of indexed media flagged missing on disk —
+	// what media.clean.orphans would remove.
+	MissingMedia *int `json:"missingMedia,omitempty"`
+	// SystemsCompleted/SystemsTotal report per-system indexing coverage so
+	// clients can serve partial results while a scan is still running.
+	SystemsCompleted *int `json:"systemsCompleted,omitempty"`
+	SystemsTotal     *int `json:"systemsTotal,omitempty"`
+	Exists           bool `json:"exists"`
+	Indexing         bool `json:"indexing"`
+	Optimizing       bool `json:"optimizing"`
+	Paused           bool `json:"paused"`
+	// Throttled reports that indexing is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
 }
 
 type ReaderResponse struct {
@@ -201,8 +327,14 @@ type MediaHistoryResponseEntry struct {
 	MediaPath  string  `json:"mediaPath"`
 	LauncherID string  `json:"launcherId"`
 	StartedAt  string  `json:"startedAt"`
-	PlayTime   int     `json:"playTime"`
-	MediaID    int64   `json:"mediaId,omitempty"`
+	// Tags is nil when the media is unresolved or tag enrichment failed
+	// (key omitted) and an empty slice when the media is indexed but
+	// untagged (serialised as []). omitzero keeps that distinction;
+	// omitempty would drop the empty array.
+	Tags     []database.TagInfo `json:"tags,omitzero"`
+	PlayTime int                `json:"playTime"`
+	MediaID  int64              `json:"mediaId,omitempty"`
+	HasCover bool               `json:"hasCover"`
 }
 
 type MediaHistoryResponse struct {
@@ -210,16 +342,32 @@ type MediaHistoryResponse struct {
 	Entries    []MediaHistoryResponseEntry `json:"entries"`
 }
 
+type MediaHistoryLatestEntry struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaName  string `json:"mediaName"`
+	MediaPath  string `json:"mediaPath"`
+	LauncherID string `json:"launcherId"`
+	StartedAt  string `json:"startedAt"`
+}
+
+type MediaHistoryLatestResponse struct {
+	Entry *MediaHistoryLatestEntry `json:"entry"`
+}
+
 type MediaHistoryTopEntry struct {
-	RelPath       *string `json:"relativePath,omitempty"`
-	SystemID      string  `json:"systemId"`
-	SystemName    string  `json:"systemName"`
-	MediaName     string  `json:"mediaName"`
-	MediaPath     string  `json:"mediaPath"`
-	LastPlayedAt  string  `json:"lastPlayedAt"`
-	TotalPlayTime int     `json:"totalPlayTime"`
-	SessionCount  int     `json:"sessionCount"`
-	MediaID       int64   `json:"mediaId,omitempty"`
+	RelPath      *string `json:"relativePath,omitempty"`
+	SystemID     string  `json:"systemId"`
+	SystemName   string  `json:"systemName"`
+	MediaName    string  `json:"mediaName"`
+	MediaPath    string  `json:"mediaPath"`
+	LastPlayedAt string  `json:"lastPlayedAt"`
+	// Tags follows the same nil-omitted / empty-array rule as
+	// MediaHistoryResponseEntry.Tags.
+	Tags          []database.TagInfo `json:"tags,omitzero"`
+	TotalPlayTime int                `json:"totalPlayTime"`
+	SessionCount  int                `json:"sessionCount"`
+	MediaID       int64              `json:"mediaId,omitempty"`
 }
 
 type MediaHistoryTopResponse struct {
@@ -259,6 +407,7 @@ type MediaMetaTitleResponse struct {
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
 	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	LauncherOverride    *string                          `json:"launcherOverride,omitempty"`
 	Path                string                           `json:"path"`
 	ParentDir           string                           `json:"parentDir"`
 	Tags                []database.TagInfo               `json:"tags"`
@@ -282,12 +431,14 @@ type MediaMetaBatchResponse struct {
 }
 
 // MediaImageResponse is the response for the media.image method.
-// It contains the best-match image for a media record, base64-encoded.
+// Inline delivery contains Data; local-path delivery contains LocalPath.
 type MediaImageResponse struct {
 	Extension   *string `json:"extension,omitempty"`
 	ContentType string  `json:"contentType"`
-	Data        string  `json:"data"`    // base64-encoded blob
-	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
+	Data        string  `json:"data,omitempty"`      // base64-encoded blob
+	Delivery    string  `json:"delivery"`            // "inline" or "localPath"
+	LocalPath   string  `json:"localPath,omitempty"` // transient Core-owned thumbnail path
+	TypeTag     string  `json:"typeTag"`             // e.g. "property:image-boxart"
 }
 
 type ScrapeSystemProgressResponse struct {
@@ -318,17 +469,22 @@ type ScrapingStatusResponse struct {
 	Scraping           bool                          `json:"scraping"`
 	Done               bool                          `json:"done"`
 	Paused             bool                          `json:"paused"`
+	// Throttled reports that scraping is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
+	Force     bool `json:"force"`
 }
 
 type MediaLookupMatch struct {
-	RelPath    *string            `json:"relativePath,omitempty"`
-	System     System             `json:"system"`
-	Name       string             `json:"name"`
-	Path       string             `json:"path"`
-	ZapScript  string             `json:"zapScript"`
-	Tags       []database.TagInfo `json:"tags"`
-	MediaID    int64              `json:"mediaId,omitempty"`
-	Confidence float64            `json:"confidence"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	Confidence         float64            `json:"confidence"`
 }
 
 type MediaLookupResponse struct {
@@ -351,16 +507,28 @@ type ScrapersResponse struct {
 	Scrapers []ScraperInfo `json:"scrapers"`
 }
 
+type MediaPlaybackState string
+
+const (
+	MediaPlaybackStatePlaying MediaPlaybackState = "playing"
+	MediaPlaybackStatePaused  MediaPlaybackState = "paused"
+	MediaPlaybackStateStopped MediaPlaybackState = "stopped"
+)
+
 type ActiveMedia struct {
-	RelPath          *string   `json:"relativePath,omitempty"`
-	Started          time.Time `json:"started"`
-	LauncherID       string    `json:"launcherId"`
-	SystemID         string    `json:"systemId"`
-	SystemName       string    `json:"systemName"`
-	Path             string    `json:"mediaPath"`
-	Name             string    `json:"mediaName"`
-	LauncherControls []string  `json:"launcherControls,omitempty"`
-	MediaID          int64     `json:"mediaId,omitempty"`
+	Started          time.Time          `json:"started"`
+	RelPath          *string            `json:"relativePath,omitempty"`
+	PositionMs       *int64             `json:"positionMs,omitempty"`
+	DurationMs       *int64             `json:"durationMs,omitempty"`
+	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
+	LauncherID       string             `json:"launcherId"`
+	SystemID         string             `json:"systemId"`
+	SystemName       string             `json:"systemName"`
+	Path             string             `json:"mediaPath"`
+	Name             string             `json:"mediaName"`
+	Slot             string             `json:"slot,omitempty"`
+	LauncherControls []string           `json:"launcherControls,omitempty"`
+	MediaID          int64              `json:"mediaId,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.
@@ -372,6 +540,7 @@ func NewActiveMedia(systemID, systemName, path, name, launcherID string) *Active
 		SystemName: systemName,
 		Path:       path,
 		Name:       name,
+		Slot:       "primary",
 	}
 }
 
@@ -383,6 +552,9 @@ type ActiveMediaResponse struct {
 
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if with == nil {
+		return false
+	}
+	if a.Slot != with.Slot {
 		return false
 	}
 	if a.SystemID != with.SystemID {
@@ -437,9 +609,29 @@ type HealthCheckResponse struct {
 	Status string `json:"status"`
 }
 
+// PlaylistItemInfo is one entry in a PlaylistState.
+type PlaylistItemInfo struct {
+	Name      string `json:"name"`
+	ZapScript string `json:"zapScript"`
+}
+
+// PlaylistState describes the current state of a playlist slot as exposed by
+// the media response. Repeat is one of "none", "all", or "one".
+type PlaylistState struct {
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Slot    string             `json:"slot"`
+	Repeat  string             `json:"repeat"`
+	Items   []PlaylistItemInfo `json:"items"`
+	Index   int                `json:"index"`
+	Total   int                `json:"total"`
+	Playing bool               `json:"playing"`
+}
+
 type MediaResponse struct {
-	Database IndexingStatusResponse `json:"database"`
-	Active   []ActiveMediaResponse  `json:"active"`
+	Database  IndexingStatusResponse `json:"database"`
+	Active    []ActiveMediaResponse  `json:"active"`
+	Playlists []PlaylistState        `json:"playlists,omitempty"`
 }
 
 type TokensResponse struct {
@@ -468,15 +660,68 @@ type MediaTitleParseResponse struct {
 	SlugWordCount int     `json:"slugWordCount"`
 }
 
+// Launcher backend identifiers. Reused by pkg/config for custom launcher
+// definitions, so this is the one place the vocabulary is defined.
+const (
+	LauncherBackendCommand    = "command"
+	LauncherBackendMisterCore = "mister_core"
+)
+
+// LauncherRuntime describes what a launcher actually runs, when the platform
+// knows. It is embedded in Launcher so its fields flatten into the JSON
+// response rather than nesting under a "runtime" key. A zero value (empty
+// Backend) means the platform has nothing to say for this launcher.
+type LauncherRuntime struct {
+	MisterCore *MisterCoreInfo `json:"misterCore,omitempty"`
+	Backend    string          `json:"backend,omitempty"`
+}
+
+// MisterCoreInfo describes the FPGA core a MiSTer launcher loads. Absent
+// when the core is not installed on the SD card; Launcher's Available and
+// AvailabilityReason fields say why.
+type MisterCoreInfo struct {
+	// Name is the RBF short name, e.g. "3DO".
+	Name string `json:"name"`
+	// File is the installed RBF's filename, e.g. "3DO_20250101.rbf". Encodes
+	// the installed core version; absent from Name and MGLPath.
+	File string `json:"file"`
+	// MGLPath is the SD-relative core identity used to launch it, e.g.
+	// "_Console (Dual SDRAM)/3DO". Never an absolute filesystem path.
+	MGLPath string `json:"mglPath"`
+}
+
 type Launcher struct {
-	ID         string   `json:"id"`
-	SystemID   string   `json:"systemId,omitempty"`
-	SystemName string   `json:"systemName,omitempty"`
-	Groups     []string `json:"groups,omitempty"`
+	LauncherRuntime
+	ID                 string   `json:"id"`
+	SystemID           string   `json:"systemId,omitempty"`
+	SystemName         string   `json:"systemName,omitempty"`
+	AvailabilityReason string   `json:"availabilityReason,omitempty"`
+	Groups             []string `json:"groups,omitempty"`
+	Available          bool     `json:"available"`
+	Default            bool     `json:"default,omitempty"`
 }
 
 type LaunchersResponse struct {
 	Launchers []Launcher `json:"launchers"`
+}
+
+// RemoteActivityEntry is one owner-facing row of the remote operations
+// ledger. OriginKind is "first_party" or "api_key"; OriginKeyName is set
+// only for the latter. State reflects the ledger's lifecycle
+// ("executing", "terminal", "void", "expired") for entries that never
+// reached a result.
+type RemoteActivityEntry struct {
+	CreatedAt     string `json:"createdAt"`
+	OperationType string `json:"operationType"`
+	OriginKind    string `json:"originKind"`
+	OriginKeyName string `json:"originKeyName,omitempty"`
+	State         string `json:"state"`
+	Status        string `json:"status,omitempty"`
+	ErrorCode     string `json:"errorCode,omitempty"`
+}
+
+type RemoteActivityResponse struct {
+	Entries []RemoteActivityEntry `json:"entries"`
 }
 
 type ReaderInfo struct {
@@ -512,6 +757,7 @@ type InboxResponse struct {
 type PairedClient struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
+	Role       string `json:"role"`
 	CreatedAt  int64  `json:"createdAt"`
 	LastSeenAt int64  `json:"lastSeenAt"`
 }
@@ -519,6 +765,18 @@ type PairedClient struct {
 // ClientsResponse is the response for the clients RPC method.
 type ClientsResponse struct {
 	Clients []PairedClient `json:"clients"`
+}
+
+// ClientsCurrentResponse describes the current connection's paired identity
+// and effective role capabilities. Role is null when the connection has no
+// paired identity; capabilities remain populated from its legacy grant.
+//
+//nolint:govet // Field order follows the established wire contract.
+type ClientsCurrentResponse struct {
+	Role         *string  `json:"role"`
+	Capabilities []string `json:"capabilities"`
+	Access       string   `json:"access"`
+	Paired       bool     `json:"paired"`
 }
 
 // ClientsDeleteParams is the parameters object for the clients.delete RPC method.
@@ -539,15 +797,209 @@ type ClientsPairedNotification struct {
 	ClientName string `json:"clientName"`
 }
 
+// ProfileResponse represents a device profile in API responses. The PIN
+// hash is never exposed — only whether a PIN is set. SwitchID is a bearer
+// credential (presenting it authorizes a PIN-free switch on every path),
+// so it is only included for privileged clients that need it for
+// card-writing UX; for other clients it is omitted.
+type ProfileResponse struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	LastUsedAt    *int64  `json:"lastUsedAt,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	SwitchID      string  `json:"switchId,omitempty"`
+	CreatedAt     int64   `json:"createdAt"`
+	LastUpdatedAt int64   `json:"lastUpdatedAt"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesResponse is the response for the profiles RPC method.
+type ProfilesResponse struct {
+	Profiles []ProfileResponse `json:"profiles"`
+}
+
+// ProfileVerifyResponse is the response for the profiles.verify RPC
+// method: the identity of the profile whose credential was verified.
+// Verification grants nothing server-side — the client owns whatever it
+// unlocks with it.
+type ProfileVerifyResponse struct {
+	ProfileID string `json:"profileId"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	HasPIN    bool   `json:"hasPin"`
+}
+
+// ActiveProfile is a snapshot of the device's active profile, held in
+// service state and broadcast on the profiles.active notification. It
+// carries the resolved limit overrides so the playtime hot path never
+// touches the database. Nil limit fields mean "inherit global config".
+type ActiveProfile struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesActiveNotification is the payload for the profiles.active
+// notification. Profile is null when the device has no active profile.
+type ProfilesActiveNotification struct {
+	Profile *ActiveProfile `json:"profile"`
+}
+
+// ProfilesDataNotification is the payload for the profiles.data
+// notification, reporting the state of profile data swapping (save files
+// etc.) after a profile change. ProfileID is empty for the shared profile.
+// Status is one of the ProfilesData* constants; Reason is a human-readable
+// explanation for failed/unavailable statuses.
+type ProfilesDataNotification struct {
+	ProfileID string `json:"profileId"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 type SettingsAuthClaimResponse struct {
 	Domains []string `json:"domains"`
 }
 
+type SettingsAuthStatusResponse struct {
+	Linked bool `json:"linked"`
+}
+
+// SettingsAuthUnlinkResponse lists the domains whose credentials were
+// removed by settings.auth.unlink.
+type SettingsAuthUnlinkResponse struct {
+	Domains []string `json:"domains"`
+}
+
+// Auth link session statuses (settings.auth.link).
+const (
+	AuthLinkStatusNone      = "none"
+	AuthLinkStatusPending   = "pending"
+	AuthLinkStatusApproved  = "approved"
+	AuthLinkStatusFailed    = "failed"
+	AuthLinkStatusCancelled = "cancelled"
+)
+
+// AuthLinkStatusResponse is the state of the reverse (QR / user code) device
+// link flow. It is returned by settings.auth.link and
+// settings.auth.link.status, and pushed as the auth.link.status notification
+// on every transition. Notifications omit user codes and verification URLs.
+type AuthLinkStatusResponse struct {
+	ExpiresAt               *time.Time `json:"expiresAt,omitempty"`
+	Status                  string     `json:"status"`
+	UserCode                string     `json:"userCode,omitempty"`
+	VerificationURL         string     `json:"verificationUrl,omitempty"`
+	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
+	Error                   string     `json:"error,omitempty"`
+}
+
+type BackupCategoryStatus struct {
+	Files   int64 `json:"files"`
+	Bytes   int64 `json:"bytes"`
+	Enabled bool  `json:"enabled"`
+}
+
+type BackupWarning struct {
+	Category string `json:"category"`
+	Path     string `json:"path"`
+	Reason   string `json:"reason"`
+}
+
+type BackupStatusEntry struct {
+	LastRunAt             *string                         `json:"lastRunAt,omitempty"`
+	LastSuccessAt         *string                         `json:"lastSuccessAt,omitempty"`
+	LastSnapshotCreatedAt *string                         `json:"lastSnapshotCreatedAt,omitempty"`
+	AvailabilityCheckedAt *string                         `json:"availabilityCheckedAt,omitempty"`
+	DeviceName            *string                         `json:"deviceName,omitempty"`
+	LinkedAt              *string                         `json:"linkedAt,omitempty"`
+	Categories            map[string]BackupCategoryStatus `json:"categories,omitempty"`
+	Schedule              string                          `json:"schedule,omitempty"`
+	LastError             string                          `json:"lastError,omitempty"`
+	Availability          string                          `json:"availability,omitempty"`
+	LastStatus            string                          `json:"lastStatus"`
+	Warnings              []BackupWarning                 `json:"warnings,omitempty"`
+	LastBackupSize        int64                           `json:"lastBackupSize"`
+	SkippedFiles          int                             `json:"skippedFiles,omitempty"`
+	Linked                bool                            `json:"linked,omitempty"`
+	Enabled               bool                            `json:"enabled"`
+	// LastRunNoChanges marks the most recent successful run as verified-
+	// unchanged: the server already held an identical snapshot, so nothing
+	// new was stored. LastSuccessAt still advances on such runs;
+	// LastSnapshotCreatedAt is when the stored content last changed.
+	LastRunNoChanges bool `json:"lastRunNoChanges,omitempty"`
+}
+
+type BackupStatusResponse struct {
+	ActiveSince     *string           `json:"activeSince,omitempty"`
+	ActiveOperation string            `json:"activeOperation,omitempty"`
+	Local           BackupStatusEntry `json:"local"`
+	Remote          BackupStatusEntry `json:"remote"`
+}
+
+// BackupStateNotification is the payload for the backup.state notification,
+// sent while a backup operation is running whenever its pause/throttle state
+// changes in response to a game starting or stopping, and once with Finished
+// set when the operation ends (whatever its outcome). Operation is the
+// active operation kind from settings.backup.status (e.g. "remote-upload").
+type BackupStateNotification struct {
+	Operation string `json:"operation,omitempty"`
+	Paused    bool   `json:"paused"`
+	Throttled bool   `json:"throttled"`
+	Finished  bool   `json:"finished,omitempty"`
+}
+
 type UpdateCheckResponse struct {
-	CurrentVersion  string `json:"currentVersion"`
-	LatestVersion   string `json:"latestVersion,omitempty"`
-	ReleaseNotes    string `json:"releaseNotes,omitempty"`
-	UpdateAvailable bool   `json:"updateAvailable"`
+	DeferredSince   *time.Time        `json:"deferredSince,omitempty"`
+	LastResult      *UpdateLastResult `json:"lastResult,omitempty"`
+	BlockedBy       *UpdateBlockedBy  `json:"blockedBy,omitempty"`
+	CheckedAt       *time.Time        `json:"checkedAt,omitempty"`
+	CurrentVersion  string            `json:"currentVersion"`
+	ReleaseNotes    string            `json:"releaseNotes,omitempty"`
+	Channel         string            `json:"channel,omitempty"`
+	Eligibility     string            `json:"eligibility,omitempty"`
+	DeferredReason  string            `json:"deferredReason,omitempty"`
+	LatestVersion   string            `json:"latestVersion,omitempty"`
+	UpdateAvailable bool              `json:"updateAvailable"`
+	RolloutHeld     bool              `json:"rolloutHeld,omitempty"`
+	AutoInstall     bool              `json:"autoInstall"`
+}
+
+// UpdateBlockedBy is what the device is busy with that stops an update being
+// installed. Forceable means a person may go ahead anyway by passing force to
+// update.apply, which is true for things that only cost them their session and
+// false for anything that risks their data.
+type UpdateBlockedBy struct {
+	Reason    string `json:"reason"`
+	Message   string `json:"message"`
+	Forceable bool   `json:"forceable"`
+}
+
+// UpdateLastResult is how the previous update finished.
+type UpdateLastResult struct {
+	At          time.Time `json:"at"`
+	Outcome     string    `json:"outcome"`
+	FromVersion string    `json:"fromVersion,omitempty"`
+	ToVersion   string    `json:"toVersion,omitempty"`
+	Detail      string    `json:"detail,omitempty"`
+}
+
+// UpdateStateNotification is the payload for the update.state notification,
+// sent while an update is being applied. The stages after the restart —
+// confirming, succeeded and rolledBack — happen before any client is back, so
+// they are reported by update.check's lastResult rather than here.
+type UpdateStateNotification struct {
+	Stage           string `json:"stage"`
+	Version         string `json:"version,omitempty"`
+	Trigger         string `json:"trigger,omitempty"`
+	Error           string `json:"error,omitempty"`
+	BytesDownloaded int64  `json:"bytesDownloaded,omitempty"`
+	BytesTotal      int64  `json:"bytesTotal,omitempty"`
 }
 
 type UpdateApplyResponse struct {

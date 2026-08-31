@@ -21,7 +21,9 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -32,6 +34,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateQueryHash_PreservesPathCase(t *testing.T) {
+	t.Parallel()
+
+	mediaDB := &MediaDB{}
+	upperPrefix, err := mediaDB.generateQueryHash(&database.MediaQuery{PathPrefix: filepath.Join("roms", "SNES")})
+	require.NoError(t, err)
+	lowerPrefix, err := mediaDB.generateQueryHash(&database.MediaQuery{PathPrefix: filepath.Join("roms", "snes")})
+	require.NoError(t, err)
+	assert.NotEqual(t, upperPrefix, lowerPrefix)
+}
 
 func TestFetchAndAttachTags_EmptyResults(t *testing.T) {
 	t.Parallel()
@@ -66,7 +79,7 @@ func TestFetchAndAttachTags_SingleResultNoTags(t *testing.T) {
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
 		WithArgs(int64(1), int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}))
 
 	err = fetchAndAttachTags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -91,10 +104,10 @@ func TestFetchAndAttachTags_SingleResultWithTags(t *testing.T) {
 	}
 
 	// Mock the tags query with multiple tags
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Action", "genre").
-		AddRow(int64(1), "Nintendo", "publisher").
-		AddRow(int64(1), "1985", "year")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Action", "genre", "Action").
+		AddRow(int64(1), "Nintendo", "publisher", "Nintendo").
+		AddRow(int64(1), "1985", "year", "1985")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -108,6 +121,7 @@ func TestFetchAndAttachTags_SingleResultWithTags(t *testing.T) {
 	assert.Equal(t, "genre", results[0].Tags[0].Type)
 	assert.Equal(t, "Nintendo", results[0].Tags[1].Tag)
 	assert.Equal(t, "publisher", results[0].Tags[1].Type)
+	assert.Equal(t, "Nintendo", results[0].Tags[1].Label)
 	assert.Equal(t, "1985", results[0].Tags[2].Tag)
 	assert.Equal(t, "year", results[0].Tags[2].Type)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -129,10 +143,10 @@ func TestFetchAndAttachTags_YearTagPresent(t *testing.T) {
 	}
 
 	// Mock the tags query with a 4-digit year tag
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Action", "genre").
-		AddRow(int64(1), "1985", "year").
-		AddRow(int64(1), "Nintendo", "publisher")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Action", "genre", "Action").
+		AddRow(int64(1), "1985", "year", "1985").
+		AddRow(int64(1), "Nintendo", "publisher", "Nintendo")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -201,8 +215,8 @@ func TestFetchAndAttachTags_VariousYearTags(t *testing.T) {
 				},
 			}
 
-			tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-				AddRow(int64(1), tt.yearTag, tt.yearType)
+			tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+				AddRow(int64(1), tt.yearTag, tt.yearType, tt.yearTag)
 
 			mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 				ExpectQuery().
@@ -248,13 +262,13 @@ func TestFetchAndAttachTags_MultipleResults(t *testing.T) {
 	}
 
 	// Mock the tags query with tags for multiple media items
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Action", "genre").
-		AddRow(int64(1), "1985", "year").
-		AddRow(int64(2), "Adventure", "genre").
-		AddRow(int64(2), "1986", "year").
-		AddRow(int64(3), "Platform", "genre").
-		AddRow(int64(3), "1990", "year")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Action", "genre", "Action").
+		AddRow(int64(1), "1985", "year", "1985").
+		AddRow(int64(2), "Adventure", "genre", "Adventure").
+		AddRow(int64(2), "1986", "year", "1986").
+		AddRow(int64(3), "Platform", "genre", "Platform").
+		AddRow(int64(3), "1990", "year", "1990")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -285,6 +299,79 @@ func TestFetchAndAttachTags_MultipleResults(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFetchAndAttachTags_ResultTitleIDsAvoidMediaJoin(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "nes", Name: "Game", Path: filepath.Join("games", "a.nes")},
+		{MediaID: 2, MediaTitleID: 10, SystemID: "nes", Name: "Game", Path: filepath.Join("games", "b.nes")},
+		{MediaID: 3, MediaTitleID: 30, SystemID: "snes", Name: "Other", Path: filepath.Join("games", "c.sfc")},
+	}
+
+	tagRows := sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(0, int64(1), "Rev A", "rev", "Revision A").
+		AddRow(1, int64(10), "Action", "genre", "Action").
+		AddRow(1, int64(30), "1990", "year", "1990")
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(tagRows)
+
+	err = fetchAndAttachTags(context.Background(), db, results)
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre", Label: "Action"},
+		{Tag: "Rev A", Type: "rev", Label: "Revision A"},
+	}, results[0].Tags)
+	assert.Equal(t, []database.TagInfo{{Tag: "Action", Type: "genre", Label: "Action"}}, results[1].Tags)
+	assert.Equal(t, []database.TagInfo{{Tag: "1990", Type: "year", Label: "1990"}}, results[2].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAppendTagInfo_DedupesByTypeTagAndKeepsLabel(t *testing.T) {
+	t.Parallel()
+
+	tagsMap := make(map[int64][]database.TagInfo)
+	seen := make(map[int64]map[tagKey]int)
+
+	appendTagInfo(tagsMap, seen, 1, "nintendo", "publisher", "")
+	appendTagInfo(tagsMap, seen, 1, "nintendo", "publisher", "Nintendo")
+	appendTagInfo(tagsMap, seen, 1, "nintendo", "publisher", "Nintendo Co.")
+
+	require.Len(t, tagsMap[1], 1)
+	assert.Equal(t, database.TagInfo{Tag: "nintendo", Type: "publisher", Label: "Nintendo"}, tagsMap[1][0])
+}
+
+func TestFetchAndAttachTags_ResultTitleIDsNoTagsSkipsFullFetch(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "nes", Name: "Game A", Path: filepath.Join("games", "a.nes")},
+		{MediaID: 2, MediaTitleID: 20, SystemID: "nes", Name: "Game B", Path: filepath.Join("games", "b.nes")},
+	}
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(10), int64(20)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
+
+	err = fetchAndAttachTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.Empty(t, results[1].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFetchAndAttachTags_TagsWithMissingTypeDBID(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -301,9 +388,9 @@ func TestFetchAndAttachTags_TagsWithMissingTypeDBID(t *testing.T) {
 	}
 
 	// Mock tags where some have empty type (from LEFT JOIN with missing TypeDBID)
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "untyped-tag", "").
-		AddRow(int64(1), "genre-tag", "genre")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "untyped-tag", "", "Untyped Tag").
+		AddRow(int64(1), "genre-tag", "genre", "Genre Tag")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -373,8 +460,8 @@ func TestFetchAndAttachTags_ScanError(t *testing.T) {
 	}
 
 	// Return row with wrong column types to cause scan error
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow("invalid", "tag", "type") // MediaDBID should be int64, not string
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow("invalid", "tag", "type", "label") // MediaDBID should be int64, not string
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -398,8 +485,8 @@ func TestFetchAndAttachTags_RowsError(t *testing.T) {
 	}
 
 	rowsErr := errors.New("rows iteration error")
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "tag1", "type1").
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "tag1", "type1", "Tag 1").
 		RowError(0, rowsErr)
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
@@ -429,11 +516,11 @@ func TestFetchAndAttachTags_MultipleYearTags(t *testing.T) {
 	}
 
 	// Multiple year tags - all should be attached
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Action", "genre").
-		AddRow(int64(1), "1985", "year").
-		AddRow(int64(1), "1986", "year").
-		AddRow(int64(1), "1987", "year")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Action", "genre", "Action").
+		AddRow(int64(1), "1985", "year", "1985").
+		AddRow(int64(1), "1986", "year", "1986").
+		AddRow(int64(1), "1987", "year", "1987")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -445,6 +532,41 @@ func TestFetchAndAttachTags_MultipleYearTags(t *testing.T) {
 	assert.Len(t, results[0].Tags, 4) // All tags are attached
 	assert.Equal(t, "1985", results[0].Tags[1].Tag)
 	assert.Equal(t, "year", results[0].Tags[1].Type)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAttachTagsAndDisambiguation_ReusesFetchedMediaTags(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{{
+		MediaID:             1,
+		MediaTitleID:        10,
+		DisambiguationTypes: "release,region",
+	}}
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(1), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*Tags\.Tag.*TagTypes\.Type`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SourceKind", "SourceDBID", "Tag", "DisplayName", "Type",
+		}).
+			AddRow(0, int64(1), "USA", "USA", "release").
+			AddRow(0, int64(1), "us", "United States", "region").
+			AddRow(1, int64(10), "Global", "Global", "release").
+			AddRow(1, int64(10), "Action", "Action", "genre"))
+
+	require.NoError(t, attachTagsAndDisambiguation(context.Background(), db, results))
+	require.Len(t, results[0].Tags, 4)
+	assert.Equal(t, []database.TagInfo{
+		{Type: "region", Tag: "us", Label: "United States"},
+		{Type: "release", Tag: "USA", Label: "USA"},
+	}, results[0].ZapScriptTags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -462,22 +584,25 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 	includeName := false
 
 	// Mock the main media query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{
+		"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+	}).AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), int64(10), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID IN`).
 		ExpectQuery().
 		WithArgs("nes", "%mario%", "%mario%", limit). // Slug LIKE, SecondarySlug LIKE
 		WillReturnRows(mediaRows)
 
-	// Mock the tags query
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Action", "genre").
-		AddRow(int64(1), "1985", "year")
-
-	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
+	// Mock direct tag lookup using media and title IDs from the result query.
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(1), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
+	tagRows := sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "DisplayName", "Type"}).
+		AddRow(0, int64(1), "Action", "Action", "genre").
+		AddRow(1, int64(10), "1985", "1985", "year")
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*Tags\.Tag.*TagTypes\.Type`).
 		ExpectQuery().
-		WithArgs(int64(1), int64(1)).
+		WithArgs(int64(1), int64(10)).
 		WillReturnRows(tagRows)
 
 	results, err := sqlSearchMediaWithFilters(
@@ -486,6 +611,7 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "Super Mario Bros", results[0].Name)
+	assert.Equal(t, int64(10), results[0].MediaTitleID)
 	assert.Len(t, results[0].Tags, 2)
 	assert.Equal(t, "Action", results[0].Tags[0].Tag)
 	assert.Equal(t, "1985", results[0].Tags[1].Tag)
@@ -500,8 +626,8 @@ func TestSqlSearchMediaBySlug_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug = \?`).
 		ExpectQuery().
@@ -509,8 +635,8 @@ func TestSqlSearchMediaBySlug_IntegrationWithTags(t *testing.T) {
 		WillReturnRows(mediaRows)
 
 	// Mock the tags query
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Platform", "genre")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Platform", "genre", "Platform")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -535,8 +661,8 @@ func TestSqlSearchMediaBySecondarySlug_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/smb.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/smb.nes", int64(1), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.SecondarySlug = \?`).
 		ExpectQuery().
@@ -544,8 +670,8 @@ func TestSqlSearchMediaBySecondarySlug_IntegrationWithTags(t *testing.T) {
 		WillReturnRows(mediaRows)
 
 	// Mock the tags query
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Nintendo", "publisher")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Nintendo", "publisher", "Nintendo")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -570,9 +696,9 @@ func TestSqlSearchMediaBySlugPrefix_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1)).
-		AddRow("nes", "Super Mario Bros 2", "/games/mario2.nes", int64(2))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "").
+		AddRow("nes", "Super Mario Bros 2", "/games/mario2.nes", int64(2), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug LIKE \?`).
 		ExpectQuery().
@@ -580,10 +706,10 @@ func TestSqlSearchMediaBySlugPrefix_IntegrationWithTags(t *testing.T) {
 		WillReturnRows(mediaRows)
 
 	// Mock the tags query
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Platform", "genre").
-		AddRow(int64(2), "Platform", "genre").
-		AddRow(int64(2), "Sequel", "series")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Platform", "genre", "Platform").
+		AddRow(int64(2), "Platform", "genre", "Platform").
+		AddRow(int64(2), "Sequel", "series", "Sequel")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -609,9 +735,9 @@ func TestSqlSearchMediaBySlugIn_IntegrationWithTags(t *testing.T) {
 	slugList := []string{"super-mario-bros", "the-legend-of-zelda"}
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1)).
-		AddRow("nes", "The Legend of Zelda", "/games/zelda.nes", int64(2))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "").
+		AddRow("nes", "The Legend of Zelda", "/games/zelda.nes", int64(2), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug IN`).
 		ExpectQuery().
@@ -619,10 +745,10 @@ func TestSqlSearchMediaBySlugIn_IntegrationWithTags(t *testing.T) {
 		WillReturnRows(mediaRows)
 
 	// Mock the tags query
-	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
-		AddRow(int64(1), "Platform", "genre").
-		AddRow(int64(2), "Adventure", "genre").
-		AddRow(int64(2), "RPG", "genre")
+	tagRows := sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type", "DisplayName"}).
+		AddRow(int64(1), "Platform", "genre", "Platform").
+		AddRow(int64(2), "Adventure", "genre", "Adventure").
+		AddRow(int64(2), "RPG", "genre", "RPG")
 
 	mock.ExpectPrepare(`SELECT.*MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
@@ -672,152 +798,340 @@ func TestSqlSearchMediaBySlugIn_AllEmptySlugs(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_Empty(t *testing.T) {
+func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) {
 	t.Parallel()
-	results := []database.SearchResultWithCursor{}
-	computeZapScriptTags(results)
-	assert.Empty(t, results)
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	pathPrefix := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "media", "fat", "_Arcade", "_Organized", "_Horizontal",
+	)) + "/"
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), `+
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.Path >= \? `+
+			`AND Media\.Path < \? AND Media\.IsMissing = 0`,
+	).WithArgs(pathPrefix, stringPrefixUpperBound(pathPrefix)).WillReturnRows(
+		sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42),
+	)
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* `+
+			`WHERE Media\.Path >= \? AND Media\.Path < \? AND Media\.IsMissing = 0 `+
+			`AND Media\.DBID = \? LIMIT 1`,
+	).WithArgs(pathPrefix, stringPrefixUpperBound(pathPrefix), int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("Arcade", pathPrefix+"game.mra", 42),
+	)
+
+	result, stats, err := sqlRandomGameWithQueryAndStats(context.Background(), db, &database.MediaQuery{
+		PathPrefix: pathPrefix,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, pathPrefix+"game.mra", result.Path)
+	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_SingleResult(t *testing.T) {
+func TestSelectWeightedSystemUsing(t *testing.T) {
 	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1989"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
-		},
+
+	counts := []database.SystemMediaCount{
+		{SystemID: "NES", Count: 2},
+		{SystemID: "SNES", Count: 3},
+		{SystemID: "Genesis", Count: 100},
+		{SystemID: "Empty", Count: 0},
 	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "single result should have no disambiguating tags")
-	assert.NotNil(t, results[0].ZapScriptTags, "ZapScriptTags should be initialized, not nil")
+	systems := []string{"NES", "SNES", "Empty"}
+
+	tests := []struct {
+		name   string
+		want   string
+		offset int
+	}{
+		{name: "first NES row", offset: 0, want: "NES"},
+		{name: "last NES row", offset: 1, want: "NES"},
+		{name: "first SNES row", offset: 2, want: "SNES"},
+		{name: "last SNES row", offset: 4, want: "SNES"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selected, err := selectWeightedSystemUsing(
+				counts,
+				systems,
+				func(total int) (int, error) {
+					require.Equal(t, 5, total)
+					return tt.offset, nil
+				},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, selected)
+		})
+	}
 }
 
-func TestComputeZapScriptTags_SiblingsDifferentYear(t *testing.T) {
+func TestSelectWeightedSystemUsing_NoMatchingMedia(t *testing.T) {
 	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1989"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
+
+	selected, err := selectWeightedSystemUsing(
+		[]database.SystemMediaCount{{SystemID: "NES", Count: 10}},
+		[]string{"SNES"},
+		func(int) (int, error) {
+			t.Fatal("random selection should not run without eligible media")
+			return 0, nil
 		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1990"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
-		},
-	}
-	computeZapScriptTags(results)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	assert.Equal(t, "year", results[0].ZapScriptTags[0].Type)
-	assert.Equal(t, "1989", results[0].ZapScriptTags[0].Tag)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, "year", results[1].ZapScriptTags[0].Type)
-	assert.Equal(t, "1990", results[1].ZapScriptTags[0].Tag)
+	)
+
+	assert.Empty(t, selected)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
-func TestComputeZapScriptTags_SiblingsSameYear(t *testing.T) {
+func TestSelectWeightedSystemUsing_RandomError(t *testing.T) {
 	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
+
+	randomErr := errors.New("random selection failed")
+	selected, err := selectWeightedSystemUsing(
+		[]database.SystemMediaCount{{SystemID: "NES", Count: 10}},
+		[]string{"NES"},
+		func(int) (int, error) {
+			return 0, randomErr
 		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "same year across siblings should not disambiguate")
-	assert.Empty(t, results[1].ZapScriptTags)
+	)
+
+	assert.Empty(t, selected)
+	assert.ErrorIs(t, err, randomErr)
 }
 
-func TestComputeZapScriptTags_MixedDisambiguation(t *testing.T) {
+func TestSQLRandomGameWithQuery_SystemStatsAvoidTitleJoin(t *testing.T) {
 	t.Parallel()
-	// Same year but different players — only players should disambiguate
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Street Fighter", SystemID: "Arcade", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1992"},
-				{Type: "players", Tag: "2"},
-			},
-		},
-		{
-			Name: "Street Fighter", SystemID: "Arcade", MediaID: 2,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1992"},
-				{Type: "players", Tag: "4"},
-			},
-		},
-	}
-	computeZapScriptTags(results)
-	// Only players should be disambiguating (years are the same)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	assert.Equal(t, "players", results[0].ZapScriptTags[0].Type)
-	assert.Equal(t, "2", results[0].ZapScriptTags[0].Tag)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, "players", results[1].ZapScriptTags[0].Type)
-	assert.Equal(t, "4", results[1].ZapScriptTags[0].Tag)
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []string{"NES", "SNES", "Genesis"}
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), `+
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE `+
+			`Media\.SystemDBID IN \(SELECT Systems\.DBID FROM Systems `+
+			`WHERE Systems\.SystemID IN \(\?,\?,\?\)\) AND Media\.IsMissing = 0`,
+	).WithArgs("NES", "SNES", "Genesis").WillReturnRows(
+		sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42),
+	)
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media `+
+			`INNER JOIN Systems ON Systems\.DBID = Media\.SystemDBID WHERE `+
+			`Media\.SystemDBID IN \(SELECT Systems\.DBID FROM Systems `+
+			`WHERE Systems\.SystemID IN \(\?,\?,\?\)\) AND Media\.IsMissing = 0 `+
+			`AND Media\.DBID = \? LIMIT 1`,
+	).WithArgs("NES", "SNES", "Genesis", int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("SNES", filepath.Join("roms", "snes", "game.sfc"), 42),
+	)
+
+	result, stats, err := sqlRandomGameWithQueryAndStats(context.Background(), db, &database.MediaQuery{
+		Systems: systems,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "SNES", result.SystemID)
+	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_DifferentNamesNotGrouped(t *testing.T) {
+func TestRandomGameWithQuery_RefreshesStaleCachedStatsOnce(t *testing.T) {
 	t.Parallel()
-	// Different names should not be grouped as siblings
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-		{
-			Name: "Dr. Mario", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1990"}},
-		},
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mediaDB := &MediaDB{inTransaction: true}
+	mediaDB.sql.Store(db)
+	mock.ExpectQuery(`SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = \?`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"Count", "MinDBID", "MaxDBID"}).AddRow(1, 999, 999))
+
+	exactQuery := `SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+		`WHERE Media\.IsMissing = 0 AND Media\.DBID = \? LIMIT 1`
+	for range randomExactProbeAttempts {
+		mock.ExpectQuery(exactQuery).WithArgs(int64(999)).
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}))
 	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "different names should not trigger disambiguation")
-	assert.Empty(t, results[1].ZapScriptTags)
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+			`WHERE Media\.IsMissing = 0 ORDER BY Media\.DBID ASC LIMIT 1 OFFSET \?`,
+	).WithArgs(0).WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}))
+
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), ` +
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.IsMissing = 0`,
+	).WillReturnRows(sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42))
+	mediaPath := filepath.Join("roms", "nes", "refreshed.nes")
+	mock.ExpectQuery(exactQuery).WithArgs(int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).AddRow("NES", mediaPath, 42),
+	)
+
+	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.MediaID)
+	assert.Equal(t, mediaPath, result.Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_NonEligibleTagTypesIgnored(t *testing.T) {
+func TestSQLSelectRandomGameWithStats_DenseGapRejectsMissingDBID(t *testing.T) {
 	t.Parallel()
-	// Genre differs across siblings but is not in ZapScriptTagTypes
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "genre", Tag: "Puzzle"}},
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	exactQuery := `SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+		`WHERE Media\.IsMissing = 0 AND Media\.DBID = \? LIMIT 1`
+	mock.ExpectQuery(exactQuery).WithArgs(int64(2)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}),
+	)
+	mock.ExpectQuery(exactQuery).WithArgs(int64(4)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("NES", filepath.Join("roms", "nes", "four.nes"), int64(4)),
+	)
+
+	offsets := []int{1, 3}
+	result, err := sqlSelectRandomGameWithStatsUsing(
+		context.Background(), db, &database.MediaQuery{},
+		MediaStats{Count: 3, MinDBID: 1, MaxDBID: 4},
+		func(maxValue int) (int, error) {
+			require.Equal(t, 4, maxValue)
+			offset := offsets[0]
+			offsets = offsets[1:]
+			return offset, nil
 		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "genre", Tag: "Action"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "non-eligible tag types should not disambiguate")
-	assert.Empty(t, results[1].ZapScriptTags)
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), result.MediaID)
+	assert.Empty(t, offsets)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_CrossSystemSameNameNotGrouped(t *testing.T) {
+func TestSQLSelectRandomGameWithStats_SparseUsesUniformOrdinal(t *testing.T) {
 	t.Parallel()
-	// Same name on different systems should NOT be grouped as siblings
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+			`WHERE Media\.IsMissing = 0 ORDER BY Media\.DBID ASC LIMIT 1 OFFSET \?`,
+	).WithArgs(1).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("SNES", filepath.Join("roms", "snes", "hundred.sfc"), int64(100)),
+	)
+
+	result, err := sqlSelectRandomGameWithStatsUsing(
+		context.Background(), db, &database.MediaQuery{},
+		MediaStats{Count: 2, MinDBID: 1, MaxDBID: 100},
+		func(maxValue int) (int, error) {
+			require.Equal(t, 2, maxValue)
+			return 1, nil
 		},
-		{
-			Name: "Tetris", SystemID: "GB", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1990"}},
-		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), result.MediaID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Disambiguation behavior is exercised end-to-end against a real database in
+// disambiguation_test.go (RecomputeSystemDisambiguation + attachZapScriptTags),
+// since the logic now lives in stored per-title types rather than in-memory
+// page grouping.
+
+func TestFetchTagsByRefs_OneQueryPerChunk(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Two full chunks and no preflight (well above tagPreflightMaxResults).
+	refs := make([]database.MediaRef, 0, 2*tagRefsPerQuery)
+	for i := range 2 * tagRefsPerQuery {
+		refs = append(refs, database.MediaRef{MediaDBID: int64(i + 1), MediaTitleDBID: int64(5000 + i)})
 	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "cross-system same name should not trigger disambiguation")
-	assert.Empty(t, results[1].ZapScriptTags)
+	tagColumns := []string{"SourceKind", "SourceDBID", "Tag", "Type", "DisplayName"}
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows(tagColumns).AddRow(0, int64(1), "Rev A", "rev", "Revision A"))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows(tagColumns).AddRow(1, int64(5000+tagRefsPerQuery), "1990", "year", "1990"))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, refs)
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{{Tag: "Rev A", Type: "rev", Label: "Revision A"}}, tags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "1990", Type: "year", Label: "1990"}}, tags[int64(tagRefsPerQuery+1)])
+	assert.Len(t, tags, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchTagsByRefs_PreflightSkipsFullQuery(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 2, MediaTitleDBID: 10},
+		{MediaDBID: 3, MediaTitleDBID: 30},
+	})
+	require.NoError(t, err)
+
+	assert.NotNil(t, tags)
+	assert.Empty(t, tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchTagsByRefs_DedupesRefsBeforeQuery(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(2), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "Type", "DisplayName"}).
+			AddRow(0, int64(1), "Rev A", "rev", "Revision A").
+			AddRow(1, int64(10), "Action", "genre", "Action").
+			AddRow(1, int64(10), "Rev A", "rev", ""))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 2, MediaTitleDBID: 10},
+		{MediaDBID: 0, MediaTitleDBID: 10},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre", Label: "Action"},
+		{Tag: "Rev A", Type: "rev", Label: "Revision A"},
+	}, tags[1], "file and title copies of the same tag collapse, keeping the label")
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre", Label: "Action"},
+		{Tag: "Rev A", Type: "rev"},
+	}, tags[2])
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -149,7 +149,7 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackSuccess(t *testin
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).Return(&media, nil)
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath).Return(&media, nil)
 	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, media.DBID).Return(row, nil)
 
 	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
@@ -173,7 +173,7 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackMiss(t *testing.T
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
 
 	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
@@ -201,7 +201,7 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackDisabled(t *testi
 	_, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "media not found")
-	mockDB.AssertNotCalled(t, "FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath)
+	mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath)
 	mockDB.AssertExpectations(t)
 }
 

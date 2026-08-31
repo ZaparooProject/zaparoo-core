@@ -20,14 +20,154 @@
 package tui
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShouldDisableZapScriptInMainTUI(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+
+	t.Run("nil config", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		assert.False(t, shouldDisableZapScriptInMainTUI(nil, pl))
+	})
+
+	t.Run("nil platform", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, nil))
+	})
+
+	t.Run("concurrent TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{})
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, pl))
+	})
+
+	t.Run("exclusive TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
+		assert.True(t, shouldDisableZapScriptInMainTUI(cfg, pl))
+	})
+}
+
+func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	buildErr := errors.New("build failed")
+	for _, shouldDisable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disable=%t", shouldDisable), func(t *testing.T) {
+			cfg := &config.Instance{}
+			pl := testingmocks.NewMockPlatform()
+			pl.On("Settings").Return(platforms.Settings{
+				DisableZapScriptInTUI: shouldDisable,
+			}).Once()
+
+			disabled := false
+			restored := false
+			disableZapScript = func(gotCfg *config.Instance) func() {
+				assert.Same(t, cfg, gotCfg)
+				disabled = true
+				return func() {
+					restored = true
+				}
+			}
+
+			err := BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+				assert.Equal(t, shouldDisable, disabled)
+				return nil, buildErr
+			})
+			require.ErrorIs(t, err, buildErr)
+			assert.Equal(t, shouldDisable, disabled)
+			assert.Equal(t, shouldDisable, restored)
+			pl.AssertExpectations(t)
+		})
+	}
+}
+
+func TestBuildAndRetry_RestoresZapScriptAfterSuccessfulRun(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	cfg := &config.Instance{}
+	pl := testingmocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true}).Once()
+
+	disabled := false
+	disableZapScript = func(gotCfg *config.Instance) func() {
+		assert.Same(t, cfg, gotCfg)
+		disabled = true
+		return func() {
+			disabled = false
+		}
+	}
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	require.NoError(t, screen.Init())
+	screen.SetSize(80, 24)
+
+	appStarted := make(chan struct{}, 1)
+	app := tview.NewApplication().
+		SetScreen(screen).
+		SetRoot(tview.NewTextView().SetText("main TUI"), true).
+		SetBeforeDrawFunc(func(_ tcell.Screen) bool {
+			assert.True(t, disabled, "ZapScript must remain disabled while main TUI runs")
+			select {
+			case appStarted <- struct{}{}:
+			default:
+			}
+			return false
+		})
+	go func() {
+		<-appStarted
+		app.Stop()
+	}()
+
+	require.NoError(t, BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+		assert.True(t, disabled, "ZapScript must be disabled before building main TUI")
+		return app, nil
+	}))
+	assert.False(t, disabled, "ZapScript must be restored after main TUI exits")
+	pl.AssertExpectations(t)
+}
+
+func TestBuildWidgetAndRetry_DoesNotDisableZapScript(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	disableZapScript = func(*config.Instance) func() {
+		t.Fatal("utility widget must not disable ZapScript")
+		return func() {}
+	}
+
+	buildErr := errors.New("build failed")
+	err := BuildWidgetAndRetry(func() (*tview.Application, error) {
+		return nil, buildErr
+	})
+	require.ErrorIs(t, err, buildErr)
+}
 
 func TestCenterWidget(t *testing.T) {
 	t.Parallel()
@@ -210,6 +350,29 @@ func TestResponsiveMaxWidget(t *testing.T) {
 	assert.Equal(t, 100, rw.maxWidth)
 	assert.Equal(t, 30, rw.maxHeight)
 	assert.Equal(t, content, rw.child)
+}
+
+func TestResponsiveWrapper_DrawLeavesOuterBackgroundUntouched(t *testing.T) {
+	t.Parallel()
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	require.NoError(t, screen.Init())
+	defer screen.Fini()
+	screen.SetSize(120, 40)
+	screen.Fill(' ', tcell.StyleDefault.Background(tcell.ColorBlack))
+
+	content := tview.NewBox().SetBackgroundColor(tcell.ColorBlue)
+	wrapper := ResponsiveMaxWidget(100, 30, content)
+	wrapper.SetRect(0, 0, 120, 40)
+	wrapper.Draw(screen)
+
+	_, outerStyle, _ := screen.Get(0, 0)
+	_, outerBG, _ := outerStyle.Decompose()
+	assert.Equal(t, tcell.ColorBlack, outerBG, "space outside centered dialog must keep terminal background")
+
+	_, innerStyle, _ := screen.Get(10, 5)
+	_, innerBG, _ := innerStyle.Decompose()
+	assert.Equal(t, tcell.ColorBlue, innerBG, "centered child must draw its own background")
 }
 
 func TestResponsiveWrapper_Focus(t *testing.T) {
@@ -412,6 +575,18 @@ func TestTagReadContext(t *testing.T) {
 	assert.True(t, deadline.After(tuiDeadline), "Tag read timeout should be longer than TUI timeout")
 }
 
+func TestBackupContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := backupContext()
+	require.NotNil(t, ctx)
+	require.NotNil(t, cancel)
+	_, hasDeadline := ctx.Deadline()
+	assert.False(t, hasDeadline)
+	cancel()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
 func TestShowInfoModal_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -431,7 +606,7 @@ func TestShowInfoModal_Integration(t *testing.T) {
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("This is information", 500*time.Millisecond), "Modal message should appear")
+	require.True(t, runner.WaitForText("This is information", uiSettleTimeout), "Modal message should appear")
 	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
 }
 
@@ -458,14 +633,14 @@ func TestShowInfoModal_OnDismissCallback(t *testing.T) {
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Test message", 500*time.Millisecond), "Modal message should appear")
+	require.True(t, runner.WaitForText("Test message", uiSettleTimeout), "Modal message should appear")
 
 	// Press Enter to dismiss
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
 	// Verify callback was invoked
-	assert.True(t, runner.WaitForSignal(dismissCalled, 500*time.Millisecond), "onDismiss callback should be invoked")
+	assert.True(t, runner.WaitForSignal(dismissCalled, uiSettleTimeout), "onDismiss callback should be invoked")
 }
 
 func TestShowErrorModal_Integration(t *testing.T) {
@@ -491,14 +666,14 @@ func TestShowErrorModal_Integration(t *testing.T) {
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Something went wrong", 100*time.Millisecond), "Error message should appear")
+	require.True(t, runner.WaitForText("Something went wrong", uiSettleTimeout), "Error message should appear")
 	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
 
 	// Dismiss the modal
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(dismissCalled, 100*time.Millisecond), "Dismiss callback should be called")
+	assert.True(t, runner.WaitForSignal(dismissCalled, uiSettleTimeout), "Dismiss callback should be called")
 }
 
 func TestShowConfirmModal_Integration(t *testing.T) {
@@ -526,7 +701,7 @@ func TestShowConfirmModal_Integration(t *testing.T) {
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Are you sure?", 100*time.Millisecond), "Confirm message should appear")
+	require.True(t, runner.WaitForText("Are you sure?", uiSettleTimeout), "Confirm message should appear")
 	assert.True(t, runner.ContainsText("Yes"), "Yes button should be visible")
 	assert.True(t, runner.ContainsText("No"), "No button should be visible")
 
@@ -534,7 +709,7 @@ func TestShowConfirmModal_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(yesCalled, 100*time.Millisecond), "Yes callback should be called")
+	assert.True(t, runner.WaitForSignal(yesCalled, uiSettleTimeout), "Yes callback should be called")
 
 	// Check that No was not called (use very short timeout since we just want to verify it wasn't triggered)
 	select {
@@ -569,7 +744,7 @@ func TestShowConfirmModal_No_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Are you sure?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Are you sure?", uiSettleTimeout))
 
 	// Navigate to No button and click
 	runner.Screen().InjectTab()
@@ -577,7 +752,7 @@ func TestShowConfirmModal_No_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(noCalled, 100*time.Millisecond), "No callback should be called")
+	assert.True(t, runner.WaitForSignal(noCalled, uiSettleTimeout), "No callback should be called")
 
 	// Check that Yes was not called
 	select {
@@ -612,7 +787,7 @@ func TestShowWaitingModal_Integration(t *testing.T) {
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Please wait...", 100*time.Millisecond), "Waiting message should appear")
+	require.True(t, runner.WaitForText("Please wait...", uiSettleTimeout), "Waiting message should appear")
 	assert.True(t, runner.ContainsText("Cancel"), "Cancel button should be visible")
 	require.NotNil(t, cleanup)
 
@@ -665,7 +840,7 @@ func TestShowOSKModal_Integration(t *testing.T) {
 	runner.Screen().InjectEscape()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(cancelCalled, 100*time.Millisecond), "Cancel callback should be called")
+	assert.True(t, runner.WaitForSignal(cancelCalled, uiSettleTimeout), "Cancel callback should be called")
 }
 
 func TestShowErrorReportingPrompt_Enable_Integration(t *testing.T) {
@@ -693,7 +868,7 @@ func TestShowErrorReportingPrompt_Enable_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Enable"))
 	assert.True(t, runner.ContainsText("Not Now"))
 
@@ -701,7 +876,7 @@ func TestShowErrorReportingPrompt_Enable_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(enableCalled, 100*time.Millisecond), "Enable callback should be called")
+	assert.True(t, runner.WaitForSignal(enableCalled, uiSettleTimeout), "Enable callback should be called")
 
 	select {
 	case <-notNowCalled:
@@ -735,7 +910,7 @@ func TestShowErrorReportingPrompt_NotNow_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", uiSettleTimeout))
 
 	// Tab to "Not Now" and press Enter
 	runner.Screen().InjectTab()
@@ -743,7 +918,7 @@ func TestShowErrorReportingPrompt_NotNow_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(notNowCalled, 100*time.Millisecond), "Not Now callback should be called")
+	assert.True(t, runner.WaitForSignal(notNowCalled, uiSettleTimeout), "Not Now callback should be called")
 }
 
 func TestShowErrorReportingPrompt_DontAsk_Integration(t *testing.T) {
@@ -769,7 +944,7 @@ func TestShowErrorReportingPrompt_DontAsk_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", uiSettleTimeout))
 
 	// Tab twice to "Don't Ask Again" and press Enter
 	runner.Screen().InjectTab()
@@ -779,7 +954,7 @@ func TestShowErrorReportingPrompt_DontAsk_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(dontAskCalled, 100*time.Millisecond),
+	assert.True(t, runner.WaitForSignal(dontAskCalled, uiSettleTimeout),
 		"Don't Ask Again callback should be called")
 }
 
@@ -807,13 +982,13 @@ func TestShowErrorReportingPrompt_Escape_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", uiSettleTimeout))
 
 	// Press Escape — should trigger Not Now, not Don't Ask Again
 	runner.Screen().InjectEscape()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(notNowCalled, 100*time.Millisecond), "Escape should trigger Not Now callback")
+	assert.True(t, runner.WaitForSignal(notNowCalled, uiSettleTimeout), "Escape should trigger Not Now callback")
 
 	select {
 	case <-dontAskCalled:
@@ -829,7 +1004,7 @@ func TestTimeoutConstants(t *testing.T) {
 	assert.Equal(t, 5*time.Second, TUIRequestTimeout)
 	assert.Equal(t, 30*time.Second, TagReadTimeout)
 
-	// Tag read should be longer than TUI request (for user interaction)
+	// Physical tag interaction needs a longer request window than ordinary UI work.
 	assert.Greater(t, TagReadTimeout, TUIRequestTimeout)
 }
 

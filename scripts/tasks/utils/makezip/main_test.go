@@ -20,16 +20,76 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
+	"github.com/spf13/afero"
 )
+
+func assertBatoceraPayloadFiles(t *testing.T) {
+	t.Helper()
+
+	want := []updatepayload.File{
+		{
+			SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
+				"game-selected", "zaparoo_game_select.sh"),
+			ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+			InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
+			ArchivePath: "scripts/configs/multimedia_keys.conf",
+			InstallPath: "configs/multimedia_keys.conf",
+			Mode:        0o644,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
+			ArchivePath: "scripts/content_downloader.png",
+			InstallPath: "content_downloader.png",
+			Mode:        0o644,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
+			ArchivePath: "scripts/ports/Zaparoo.sh",
+			InstallPath: "../roms/ports/Zaparoo.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+			ArchivePath: "scripts/services/zaparoo_service",
+			InstallPath: "services/zaparoo_service",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
+			ArchivePath: "scripts/zaparoo_wrapper.sh",
+			InstallPath: "zaparoo_wrapper.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
+			ArchivePath: "scripts/zaparoo_write_game.sh",
+			InstallPath: "zaparoo_write_game.sh",
+			Mode:        0o755,
+		},
+	}
+	if got := payloadFiles("batocera"); !slices.Equal(got, want) {
+		t.Fatalf("batocera payload files = %#v, want %#v", got, want)
+	}
+}
 
 func TestStripFrontmatter(t *testing.T) {
 	t.Parallel()
@@ -181,6 +241,12 @@ func TestExpandRelativeLinks(t *testing.T) {
 			platformID: "linux",
 			expected:   "[Home](https://zaparoo.org/docs/platforms/)",
 		},
+		{
+			name:       "filename ending in index",
+			content:    "[Platforms](platform-index.md)",
+			platformID: "linux",
+			expected:   "[Platforms](https://zaparoo.org/docs/platforms/platform-index/)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -227,6 +293,12 @@ func TestAddDocFooter(t *testing.T) {
 			content:    "Batocera docs",
 			platformID: "batocera",
 			wantURL:    "https://zaparoo.org/docs/platforms/batocera/",
+		},
+		{
+			name:       "zapos interim documentation",
+			content:    "ZapOS docs",
+			platformID: "zapos",
+			wantURL:    "https://zaparoo.org/docs/platforms/linux/",
 		},
 		{
 			name:       "unknown platform uses default",
@@ -362,7 +434,7 @@ func TestCreateZipFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
-		err := createZipFile(zipPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
+		err := createZipFile(afero.NewOsFs(), zipPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
 		if err != nil {
 			t.Fatalf("createZipFile failed: %v", err)
 		}
@@ -402,7 +474,9 @@ func TestCreateTarGzFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
-		err := createTarGzFile(tarGzPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
+		err := createTarGzFile(
+			afero.NewOsFs(), tarGzPath, appPath, licensePath, readmePath, "testplatform", tmpDir,
+		)
 		if err != nil {
 			t.Fatalf("createTarGzFile failed: %v", err)
 		}
@@ -412,6 +486,185 @@ func TestCreateTarGzFile(t *testing.T) {
 			t.Error("tar.gz file was not created")
 		}
 	})
+}
+
+func TestAddPayloadToArchives(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	source := "payload"
+	if err := fs.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	payloadPath := filepath.Join(source, "zaparoo_service")
+	payloadContent := []byte("service")
+	if err := afero.WriteFile(fs, payloadPath, payloadContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := []updatepayload.File{{
+		SourcePath: payloadPath, ArchivePath: "scripts/services/zaparoo_service",
+		InstallPath: "services/zaparoo_service", Mode: 0o755,
+	}}
+
+	var zipBuf bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuf)
+	if err := addPayloadToZip(fs, zipWriter, files); err != nil {
+		t.Fatalf("addPayloadToZip failed: %v", err)
+	}
+	if err := zipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zipReader, zipErr := zip.NewReader(bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len()))
+	if zipErr != nil {
+		t.Fatal(zipErr)
+	}
+	zipNames := make([]string, 0, len(zipReader.File))
+	for _, file := range zipReader.File {
+		zipNames = append(zipNames, file.Name)
+		if file.Name != "scripts/services/zaparoo_service" {
+			continue
+		}
+		if file.Mode().Perm() != 0o755 {
+			t.Fatalf("zip payload mode = %o, want 755", file.Mode().Perm())
+		}
+		reader, openErr := file.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		content, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(content, payloadContent) {
+			t.Fatalf("zip payload content = %q, want %q", content, payloadContent)
+		}
+	}
+
+	var tarBuf bytes.Buffer
+	tarWriter := tar.NewWriter(&tarBuf)
+	if err := addPayloadToTar(fs, tarWriter, files); err != nil {
+		t.Fatalf("addPayloadToTar failed: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var tarNames []string
+	tarReader := tar.NewReader(bytes.NewReader(tarBuf.Bytes()))
+	for {
+		header, nextErr := tarReader.Next()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		tarNames = append(tarNames, header.Name)
+		if header.Name != "scripts/services/zaparoo_service" {
+			continue
+		}
+		if header.FileInfo().Mode().Perm() != 0o755 {
+			t.Fatalf("tar payload mode = %o, want 755", header.Mode)
+		}
+		content, readErr := io.ReadAll(tarReader)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(content, payloadContent) {
+			t.Fatalf("tar payload content = %q, want %q", content, payloadContent)
+		}
+	}
+
+	want := []string{"scripts/services/zaparoo_service"}
+	if !slices.Equal(zipNames, want) {
+		t.Fatalf("zip payload names = %v, want %v", zipNames, want)
+	}
+	if !slices.Equal(tarNames, want) {
+		t.Fatalf("tar payload names = %v, want %v", tarNames, want)
+	}
+}
+
+func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	files := []updatepayload.File{{
+		SourcePath:  "missing",
+		ArchivePath: "scripts/missing",
+		InstallPath: "missing",
+		Mode:        0o644,
+	}}
+	var zipBuf bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuf)
+	if err := addPayloadToZip(fs, zipWriter, files); err == nil {
+		t.Fatal("addPayloadToZip unexpectedly accepted a missing source")
+	}
+	var tarBuf bytes.Buffer
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil {
+		t.Fatal("addPayloadToTar unexpectedly accepted a missing source")
+	}
+}
+
+func TestAddPayloadToArchives_DirectorySourceFails(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	if err := fs.MkdirAll("payload-dir", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	files := []updatepayload.File{{
+		SourcePath: "payload-dir", ArchivePath: "scripts/payload-dir",
+		InstallPath: "payload-dir", Mode: 0o755,
+	}}
+	var zipBuf bytes.Buffer
+	err := addPayloadToZip(fs, zip.NewWriter(&zipBuf), files)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("addPayloadToZip directory source error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	err = addPayloadToTar(fs, tar.NewWriter(&tarBuf), files)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("addPayloadToTar directory source error = %v", err)
+	}
+}
+
+func TestAddPayloadToArchives_DuplicateArchivePathFails(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	files := []updatepayload.File{
+		{ArchivePath: "scripts/helper.sh", InstallPath: "helper.sh", Mode: 0o755},
+		{ArchivePath: "scripts/helper.sh", InstallPath: "other-helper.sh", Mode: 0o755},
+	}
+	var zipBuf bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuf)
+	if err := addPayloadToZip(fs, zipWriter, files); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("addPayloadToZip duplicate error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("addPayloadToTar duplicate error = %v", err)
+	}
+}
+
+func TestAddPayloadToArchives_InvalidDefinitionFails(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	files := []updatepayload.File{{
+		ArchivePath: "scripts/helper.sh", InstallPath: "/outside/helper.sh", Mode: 0o755,
+	}}
+	var zipBuf bytes.Buffer
+	if err := addPayloadToZip(fs, zip.NewWriter(&zipBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("addPayloadToZip invalid definition error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("addPayloadToTar invalid definition error = %v", err)
+	}
 }
 
 func TestCopyFile(t *testing.T) {

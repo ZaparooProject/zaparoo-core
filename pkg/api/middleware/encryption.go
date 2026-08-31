@@ -124,6 +124,12 @@ func (cs *ClientSession) AuthToken() string {
 	return cs.client.AuthToken
 }
 
+// ClientRole returns the paired client's permission role (immutable after
+// construction, no lock needed).
+func (cs *ClientSession) ClientRole() string {
+	return cs.client.Role
+}
+
 // DecryptIncoming decrypts with the next expected counter. Caller should
 // close the WebSocket on error.
 func (cs *ClientSession) DecryptIncoming(ciphertext []byte) ([]byte, error) {

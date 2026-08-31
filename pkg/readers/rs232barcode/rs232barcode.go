@@ -176,8 +176,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 							if t != nil {
 								log.Debug().Msgf("barcode scanned: %s", t.UID)
 								iq <- readers.Scan{
-									Source: tokens.SourceReader,
-									Token:  t,
+									Source:   tokens.SourceReader,
+									ReaderID: r.ReaderID(),
+									Token:    t,
 								}
 							}
 						}

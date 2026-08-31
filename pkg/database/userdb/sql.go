@@ -69,6 +69,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from History;
 	delete from Mappings;
 	delete from Clients;
+	delete from RemoteCommands;
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
@@ -751,10 +752,10 @@ func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error 
 	}
 	var dbid int64
 	err := db.QueryRowContext(ctx, `
-		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO Clients (ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		RETURNING DBID;
-	`, c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).Scan(&dbid)
+	`, c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).Scan(&dbid)
 	if err != nil {
 		return fmt.Errorf("failed to insert client: %w", err)
 	}
@@ -762,15 +763,49 @@ func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error 
 	return nil
 }
 
+func sqlReplaceAllClients(ctx context.Context, db *sql.DB, clients []database.Client) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin client replace transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				err = errors.Join(err, fmt.Errorf("failed to roll back client replace: %w", rbErr))
+			}
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM Clients;`); err != nil {
+		return fmt.Errorf("failed to clear clients: %w", err)
+	}
+	for i := range clients {
+		c := &clients[i]
+		if strings.ContainsRune(c.AuthToken, ':') {
+			return ErrInvalidAuthToken
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO Clients (ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt)
+			VALUES (?, ?, ?, ?, ?, ?, ?);
+		`, c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt); err != nil {
+			return fmt.Errorf("failed to insert replacement client: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit client replace: %w", err)
+	}
+	return nil
+}
+
 func sqlGetClientByToken(ctx context.Context, db *sql.DB, authToken string) (*database.Client, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		SELECT DBID, ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt
 		FROM Clients
 		WHERE AuthToken = ?;
 	`, authToken)
 
 	c := database.Client{}
-	err := row.Scan(&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.PairingKey, &c.CreatedAt, &c.LastSeenAt)
+	err := row.Scan(&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.Role,
+		&c.PairingKey, &c.CreatedAt, &c.LastSeenAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("client not found: %w", err)
@@ -784,7 +819,7 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 	list := make([]database.Client, 0)
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		SELECT DBID, ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt
 		FROM Clients
 		ORDER BY CreatedAt DESC;
 	`)
@@ -800,7 +835,7 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 	for rows.Next() {
 		c := database.Client{}
 		if scanErr := rows.Scan(
-			&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken,
+			&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.Role,
 			&c.PairingKey, &c.CreatedAt, &c.LastSeenAt,
 		); scanErr != nil {
 			return list, fmt.Errorf("failed to scan client row: %w", scanErr)
@@ -815,7 +850,12 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 }
 
 func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
-	result, err := db.ExecContext(ctx, `DELETE FROM Clients WHERE ClientID = ?;`, clientID)
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM Clients
+		WHERE ClientID = ?
+		  AND (Role <> 'admin' OR
+		       (SELECT COUNT(*) FROM Clients WHERE Role = 'admin') > 1);
+	`, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to execute client delete: %w", err)
 	}
@@ -826,7 +866,15 @@ func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("client not found: %s", clientID)
+		var role string
+		queryErr := db.QueryRowContext(ctx, `SELECT Role FROM Clients WHERE ClientID = ?;`, clientID).Scan(&role)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fmt.Errorf("client not found: %s", clientID)
+		}
+		if queryErr != nil {
+			return fmt.Errorf("failed to inspect rejected client delete: %w", queryErr)
+		}
+		return ErrLastClientAdmin
 	}
 	return nil
 }
