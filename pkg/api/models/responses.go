@@ -185,9 +185,16 @@ type PlaytimeStatusResponse struct {
 	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
 	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
 	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
-	State                 string  `json:"state"`
-	SessionActive         bool    `json:"sessionActive"`
-	LimitsEnabled         bool    `json:"limitsEnabled"`
+	// SessionExtension is the time granted on top of the configured session
+	// limit for the current session. Omitted when nothing was granted.
+	SessionExtension *string `json:"sessionExtension,omitempty"`
+	// SessionExtendedUntil is when a session-limit waiver lapses, RFC3339.
+	// While it is set the session limit is not enforced and
+	// sessionRemaining is omitted; the daily limit still applies.
+	SessionExtendedUntil *string `json:"sessionExtendedUntil,omitempty"`
+	State                string  `json:"state"`
+	SessionActive        bool    `json:"sessionActive"`
+	LimitsEnabled        bool    `json:"limitsEnabled"`
 }
 
 type System struct {
@@ -254,6 +261,35 @@ type PlaytimeLimitWarningParams struct {
 	Remaining string `json:"remaining"`
 }
 
+// PlaytimeExtendedParams is the payload of the playtime.extended
+// notification. Profiles are identified by ID only: the switch ID that
+// authorized a card grant is a bearer credential and is never published.
+type PlaytimeExtendedParams struct {
+	Mode string `json:"mode"`
+	// Duration is what this grant added. Omitted for a day waiver.
+	Duration string `json:"duration,omitempty"`
+	// Expires is when a day waiver lapses, RFC3339. Omitted otherwise.
+	Expires string `json:"expires,omitempty"`
+	// SessionExtension is the session's accumulated duration grant.
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	// ProfileID is the recipient. Empty is the shared profile.
+	ProfileID string `json:"profileId,omitempty"`
+	// GrantedBy is the profile that authorized the grant.
+	GrantedBy string `json:"grantedBy,omitempty"`
+}
+
+// ExtendPlaytimeResponse reports what a playtime.extend request granted.
+type ExtendPlaytimeResponse struct {
+	Mode             string `json:"mode"`
+	Duration         string `json:"duration,omitempty"`
+	Expires          string `json:"expires,omitempty"`
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	ProfileID        string `json:"profileId,omitempty"`
+	// Replayed is true when a repeated requestId matched an earlier grant
+	// and no additional time was added.
+	Replayed bool `json:"replayed"`
+}
+
 type IndexingStatusResponse struct {
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
 	CurrentStep        *int    `json:"currentStep,omitempty"`
@@ -291,9 +327,14 @@ type MediaHistoryResponseEntry struct {
 	MediaPath  string  `json:"mediaPath"`
 	LauncherID string  `json:"launcherId"`
 	StartedAt  string  `json:"startedAt"`
-	PlayTime   int     `json:"playTime"`
-	MediaID    int64   `json:"mediaId,omitempty"`
-	HasCover   bool    `json:"hasCover"`
+	// Tags is nil when the media is unresolved or tag enrichment failed
+	// (key omitted) and an empty slice when the media is indexed but
+	// untagged (serialised as []). omitzero keeps that distinction;
+	// omitempty would drop the empty array.
+	Tags     []database.TagInfo `json:"tags,omitzero"`
+	PlayTime int                `json:"playTime"`
+	MediaID  int64              `json:"mediaId,omitempty"`
+	HasCover bool               `json:"hasCover"`
 }
 
 type MediaHistoryResponse struct {
@@ -315,15 +356,18 @@ type MediaHistoryLatestResponse struct {
 }
 
 type MediaHistoryTopEntry struct {
-	RelPath       *string `json:"relativePath,omitempty"`
-	SystemID      string  `json:"systemId"`
-	SystemName    string  `json:"systemName"`
-	MediaName     string  `json:"mediaName"`
-	MediaPath     string  `json:"mediaPath"`
-	LastPlayedAt  string  `json:"lastPlayedAt"`
-	TotalPlayTime int     `json:"totalPlayTime"`
-	SessionCount  int     `json:"sessionCount"`
-	MediaID       int64   `json:"mediaId,omitempty"`
+	RelPath      *string `json:"relativePath,omitempty"`
+	SystemID     string  `json:"systemId"`
+	SystemName   string  `json:"systemName"`
+	MediaName    string  `json:"mediaName"`
+	MediaPath    string  `json:"mediaPath"`
+	LastPlayedAt string  `json:"lastPlayedAt"`
+	// Tags follows the same nil-omitted / empty-array rule as
+	// MediaHistoryResponseEntry.Tags.
+	Tags          []database.TagInfo `json:"tags,omitzero"`
+	TotalPlayTime int                `json:"totalPlayTime"`
+	SessionCount  int                `json:"sessionCount"`
+	MediaID       int64              `json:"mediaId,omitempty"`
 }
 
 type MediaHistoryTopResponse struct {

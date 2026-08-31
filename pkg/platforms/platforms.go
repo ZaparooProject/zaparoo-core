@@ -201,6 +201,19 @@ type ProfileSwitchRequest struct {
 	Clear    bool
 }
 
+// PlaytimeExtensionRequest asks the script runner to grant extra time to
+// the session currently being limited. AuthorizerSwitchID is the bearer
+// credential from the card; the service layer resolves it and checks the
+// profile's role, so the command layer never sees a verified identity.
+type PlaytimeExtensionRequest struct {
+	// Mode is models.PlaytimeExtendModeDuration or ...ModeToday.
+	Mode string
+	// AuthorizerSwitchID is the switch ID of the authorizing profile.
+	AuthorizerSwitchID string
+	// Duration is the time to add, for duration mode only.
+	Duration time.Duration
+}
+
 // CmdResult returns a summary of what global side effects may or may not have
 // happened as a result of a single ZapScript command running.
 type CmdResult struct {
@@ -211,6 +224,10 @@ type CmdResult struct {
 	// Playlist). The scan path activates without a PIN check — possession
 	// of the card is the authorization.
 	ProfileSwitch *ProfileSwitchRequest
+	// PlaytimeExtension requests extra time for the current playtime
+	// session. Like ProfileSwitch this is intent only: the service layer
+	// verifies the authorizing credential and applies the grant.
+	PlaytimeExtension *PlaytimeExtensionRequest
 	// Strategy indicates which matching strategy was used for title-based launches.
 	// Empty for non-title commands. Used for testing and debugging title resolution.
 	Strategy string
@@ -355,6 +372,11 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// ScanSkipInternalSymlinks skips symlinks whose target resolves inside this
+	// launcher's Folders during media scanning. The target is indexed under its
+	// own path, so the alias would only duplicate it. Applies to symlinked files
+	// and directories. Direct path launches remain unaffected.
+	ScanSkipInternalSymlinks bool
 	// Available is populated by LauncherCache.
 	Available bool
 }
@@ -366,8 +388,11 @@ type BackupPattern struct {
 }
 
 type BackupDefinition struct {
-	SourceRoot         string
-	RestoreRoot        string
+	SourceRoot  string
+	RestoreRoot string
+	// RestoreTargetRoot optionally maps RestoreRoot to a platform-discovered
+	// physical category root. It must never be derived from backup contents.
+	RestoreTargetRoot  string
 	Category           string
 	Include            []BackupPattern
 	Exclude            []BackupPattern

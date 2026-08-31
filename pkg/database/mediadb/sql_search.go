@@ -42,6 +42,9 @@ const (
 	largeCandidateScanFloor = 10_000
 	maxScopedStreamSystems  = 4
 	tagPreflightMaxResults  = 25
+	// tagRefsPerQuery bounds one tag batch so its media and title ID lists
+	// together stay under the SQLite parameter limit.
+	tagRefsPerQuery = sqliteMaxParams / 2
 )
 
 var errSearchCandidateSetTooSparse = errors.New("large media search candidate set is too sparse to stream")
@@ -184,6 +187,37 @@ func fetchAndAttachTagsByResultIDs(
 		}
 	}
 
+	tagQueryStarted := time.Now()
+	fetched, err := fetchTagsBySourceIDs(ctx, db, tagIDs)
+	if err != nil {
+		return err
+	}
+
+	finishAttachTags(results, fetched.tagsMap)
+	attachZapScriptTagsFromFetchedTags(results, fetched.mediaTagKeys)
+	log.Debug().
+		Int("rows", len(results)).
+		Int("tagPairs", len(fetched.tagsMap)).
+		Dur("preflightDuration", preflightDuration).
+		Dur("tagQueryDuration", time.Since(tagQueryStarted)).
+		Dur("duration", time.Since(unionStarted)).
+		Msg("fetch and attach tags by result IDs timing")
+	logFetchAndAttachTagsTiming(results, len(fetched.tagsMap), unionStarted)
+	return nil
+}
+
+// sourceTags is the result of one tag batch: tagsMap holds the merged
+// file-level and title-level tags per media DBID (unsorted, deduplicated by
+// type and tag), and mediaTagKeys records which of those pairs came from the
+// file-level MediaTags table.
+type sourceTags struct {
+	tagsMap      map[int64][]database.TagInfo
+	mediaTagKeys map[int64]map[tagKey]struct{}
+}
+
+// fetchTagsBySourceIDs runs the media-ID plus title-ID tag query for one
+// batch and fans title-level tags out to every media row sharing the title.
+func fetchTagsBySourceIDs(ctx context.Context, db sqlQueryable, tagIDs resultTagIDs) (sourceTags, error) {
 	mediaPlaceholders := prepareVariadic("?", ",", len(tagIDs.mediaIDs))
 	titlePlaceholders := prepareVariadic("?", ",", len(tagIDs.titleIDs))
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
@@ -220,10 +254,9 @@ func fetchAndAttachTagsByResultIDs(
 		tagsArgs = append(tagsArgs, id)
 	}
 
-	tagQueryStarted := time.Now()
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
 	if err != nil {
-		return fmt.Errorf("failed to prepare tags query: %w", err)
+		return sourceTags{}, fmt.Errorf("failed to prepare tags query: %w", err)
 	}
 	defer func() {
 		if closeErr := tagsStmt.Close(); closeErr != nil {
@@ -233,7 +266,7 @@ func fetchAndAttachTagsByResultIDs(
 
 	tagsRows, err := tagsStmt.QueryContext(ctx, tagsArgs...)
 	if err != nil {
-		return fmt.Errorf("failed to execute tags query: %w", err)
+		return sourceTags{}, fmt.Errorf("failed to execute tags query: %w", err)
 	}
 	defer func() {
 		if closeErr := tagsRows.Close(); closeErr != nil {
@@ -241,51 +274,116 @@ func fetchAndAttachTagsByResultIDs(
 		}
 	}()
 
-	tagsMap := make(map[int64][]database.TagInfo)
+	fetched := sourceTags{
+		tagsMap:      make(map[int64][]database.TagInfo),
+		mediaTagKeys: make(map[int64]map[tagKey]struct{}),
+	}
 	seen := make(map[int64]map[tagKey]int)
-	mediaTagKeys := make(map[int64]map[tagKey]struct{})
 	for tagsRows.Next() {
 		tagRow, scanErr := scanSourceTagRow(tagsRows)
 		if scanErr != nil {
-			return fmt.Errorf("failed to scan tags result: %w", scanErr)
+			return sourceTags{}, fmt.Errorf("failed to scan tags result: %w", scanErr)
 		}
 
 		mediaIDsForTag := []int64{tagRow.sourceID}
 		if tagRow.sourceKind == 1 {
 			mediaIDsForTag = tagIDs.titleToMediaIDs[tagRow.sourceID]
 		} else {
-			keys := mediaTagKeys[tagRow.sourceID]
+			keys := fetched.mediaTagKeys[tagRow.sourceID]
 			if keys == nil {
 				keys = make(map[tagKey]struct{})
-				mediaTagKeys[tagRow.sourceID] = keys
+				fetched.mediaTagKeys[tagRow.sourceID] = keys
 			}
 			keys[tagKey{typ: tagRow.tagType, tag: dbtags.UnpadTagValue(tagRow.tag)}] = struct{}{}
 		}
 		for _, mediaID := range mediaIDsForTag {
-			appendTagInfo(tagsMap, seen, mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
+			appendTagInfo(fetched.tagsMap, seen, mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
 		}
 	}
 	if err = tagsRows.Err(); err != nil {
-		return fmt.Errorf("tags rows iteration error: %w", err)
+		return sourceTags{}, fmt.Errorf("tags rows iteration error: %w", err)
+	}
+	return fetched, nil
+}
+
+// fetchTagsByRefs returns the merged file-level and title-level tags for each
+// referenced media row, keyed by MediaDBID, through the same query path search
+// results use. Refs are deduplicated by MediaDBID and queried in chunks that
+// stay under the SQLite parameter limit. Untagged media have no map entry.
+func fetchTagsByRefs(
+	ctx context.Context, db sqlQueryable, refs []database.MediaRef,
+) (map[int64][]database.TagInfo, error) {
+	unique := make([]database.MediaRef, 0, len(refs))
+	seen := make(map[int64]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.MediaDBID <= 0 {
+			continue
+		}
+		if _, dup := seen[ref.MediaDBID]; dup {
+			continue
+		}
+		seen[ref.MediaDBID] = struct{}{}
+		unique = append(unique, ref)
 	}
 
-	finishAttachTags(results, tagsMap)
-	attachZapScriptTagsFromFetchedTags(results, mediaTagKeys)
-	log.Debug().
-		Int("rows", len(results)).
-		Int("tagPairs", len(tagsMap)).
-		Dur("preflightDuration", preflightDuration).
-		Dur("tagQueryDuration", time.Since(tagQueryStarted)).
-		Dur("duration", time.Since(unionStarted)).
-		Msg("fetch and attach tags by result IDs timing")
-	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
-	return nil
+	tagsMap := make(map[int64][]database.TagInfo, len(unique))
+	if len(unique) == 0 {
+		return tagsMap, nil
+	}
+	if len(unique) <= tagPreflightMaxResults {
+		tagIDs := collectRefTagIDs(unique)
+		hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
+		if err != nil {
+			return nil, err
+		}
+		if !hasTags {
+			return tagsMap, nil
+		}
+	}
+
+	for start := 0; start < len(unique); start += tagRefsPerQuery {
+		chunk := unique[start:min(start+tagRefsPerQuery, len(unique))]
+		fetched, err := fetchTagsBySourceIDs(ctx, db, collectRefTagIDs(chunk))
+		if err != nil {
+			return nil, err
+		}
+		// Each media DBID lives in exactly one chunk, so assignment is a merge.
+		for mediaID, tags := range fetched.tagsMap {
+			sortTagInfos(tags)
+			tagsMap[mediaID] = tags
+		}
+	}
+	return tagsMap, nil
 }
 
 type resultTagIDs struct {
 	titleToMediaIDs map[int64][]int64
 	mediaIDs        []int64
 	titleIDs        []int64
+}
+
+// collectRefTagIDs builds the source ID sets for a batch of media refs that
+// are already unique by MediaDBID. Title IDs are deduplicated and refs
+// without a title only contribute their media ID.
+func collectRefTagIDs(refs []database.MediaRef) resultTagIDs {
+	tagIDs := resultTagIDs{
+		mediaIDs:        make([]int64, 0, len(refs)),
+		titleToMediaIDs: make(map[int64][]int64, len(refs)),
+		titleIDs:        make([]int64, 0, len(refs)),
+	}
+	for _, ref := range refs {
+		tagIDs.mediaIDs = append(tagIDs.mediaIDs, ref.MediaDBID)
+		if ref.MediaTitleDBID <= 0 {
+			continue
+		}
+		if _, ok := tagIDs.titleToMediaIDs[ref.MediaTitleDBID]; !ok {
+			tagIDs.titleIDs = append(tagIDs.titleIDs, ref.MediaTitleDBID)
+		}
+		tagIDs.titleToMediaIDs[ref.MediaTitleDBID] = append(
+			tagIDs.titleToMediaIDs[ref.MediaTitleDBID], ref.MediaDBID,
+		)
+	}
+	return tagIDs
 }
 
 func collectResultTagIDs(results []database.SearchResultWithCursor) resultTagIDs {
@@ -428,15 +526,20 @@ func appendTagInfo(
 	tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
 }
 
+// sortTagInfos orders tags by type then tag, the order every tag list in an
+// API response uses.
+func sortTagInfos(tags []database.TagInfo) {
+	sort.Slice(tags, func(i, j int) bool {
+		if tags[i].Type != tags[j].Type {
+			return tags[i].Type < tags[j].Type
+		}
+		return tags[i].Tag < tags[j].Tag
+	})
+}
+
 func finishAttachTags(results []database.SearchResultWithCursor, tagsMap map[int64][]database.TagInfo) {
 	for mediaID := range tagsMap {
-		tags := tagsMap[mediaID]
-		sort.Slice(tags, func(i, j int) bool {
-			if tags[i].Type != tags[j].Type {
-				return tags[i].Type < tags[j].Type
-			}
-			return tags[i].Tag < tags[j].Tag
-		})
+		sortTagInfos(tagsMap[mediaID])
 	}
 
 	for i := range results {

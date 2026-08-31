@@ -121,7 +121,10 @@ func TestGrant_Capabilities(t *testing.T) {
 		{
 			name:  "paired admin is sorted",
 			grant: Grant{Role: RoleAdmin},
-			want:  []Capability{CapInput, CapProfilesManage, CapScreenshot, CapSettingsWrite, CapUpdateApply},
+			want: []Capability{
+				CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapScreenshot, CapSettingsWrite, CapUpdateApply,
+			},
 		},
 		{
 			name:  "paired member has day-to-day capabilities",
@@ -141,7 +144,10 @@ func TestGrant_Capabilities(t *testing.T) {
 		{
 			name:  "local member gets local capabilities",
 			grant: Grant{Role: RoleMember, IsLocal: true},
-			want:  []Capability{CapInput, CapProfilesManage, CapScreenshot, CapSettingsWrite, CapUpdateApply},
+			want: []Capability{
+				CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapScreenshot, CapSettingsWrite, CapUpdateApply,
+			},
 		},
 		{
 			name:  "unknown role degrades to member",

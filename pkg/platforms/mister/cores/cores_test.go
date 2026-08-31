@@ -22,6 +22,7 @@
 package cores
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,11 +140,12 @@ func TestPathToMGLDef(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		wantMgl  *MGLParams
-		name     string
-		systemID string
-		path     string
-		wantErr  bool
+		wantMgl    *MGLParams
+		name       string
+		systemID   string
+		path       string
+		wantErr    bool
+		wantDirect bool
 	}{
 		{
 			name:     "Exact extension match",
@@ -187,10 +189,12 @@ func TestPathToMGLDef(t *testing.T) {
 			},
 		},
 		{
-			name:     "Nil MGL allowed (Arcade .mra)",
-			systemID: "Arcade",
-			path:     "maze_game.mra",
-			wantMgl:  nil,
+			// MiSTer opens .mra files itself, so the slot declares no MGL. That
+			// has to stay distinct from an extension no slot claims.
+			name:       "Arcade .mra launches directly",
+			systemID:   "Arcade",
+			path:       "maze_game.mra",
+			wantDirect: true,
 		},
 		{
 			name:     "Multiple extensions - first match wins",
@@ -253,6 +257,24 @@ func TestPathToMGLDef(t *testing.T) {
 			wantMgl:  Systems["MegaVGMDrive"].Slots[0].Mgl,
 		},
 		{
+			name:     "NeoGeo .neo ROM set",
+			systemID: "NeoGeo",
+			path:     "mslug.neo",
+			wantMgl:  Systems["NeoGeo"].Slots[0].Mgl,
+		},
+		{
+			name:     "NeoGeo uppercase .NEO ROM set",
+			systemID: "NeoGeo",
+			path:     "MSLUG.NEO",
+			wantMgl:  Systems["NeoGeo"].Slots[0].Mgl,
+		},
+		{
+			name:     "NeoGeo .zip has no slot (system hook supplies the file tag)",
+			systemID: "NeoGeo",
+			path:     "mslug.zip",
+			wantErr:  true,
+		},
+		{
 			name:     "No matching extension returns error",
 			systemID: "NES",
 			path:     "unknown.zip",
@@ -273,9 +295,19 @@ func TestPathToMGLDef(t *testing.T) {
 			sys := Systems[tc.systemID] // Safe copy; map holds value not pointer.
 			got, err := PathToMGLDef(&sys, tc.path)
 
+			if tc.wantDirect {
+				if !errors.Is(err, ErrLaunchesDirectly) {
+					t.Fatalf("expected the direct-launch sentinel, got: %v", err)
+				}
+				return
+			}
+
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
+				}
+				if errors.Is(err, ErrLaunchesDirectly) {
+					t.Fatal("an unclaimed extension is not a direct launch")
 				}
 				return
 			}
@@ -478,6 +510,56 @@ func TestLookupCore(t *testing.T) {
 					t.Fatalf("expected a system core, got %+v", got)
 				}
 			}
+		})
+	}
+}
+
+func TestHookNeoGeo(t *testing.T) {
+	t.Parallel()
+
+	fileTag := func(path string) string {
+		return "\t<file delay=\"1\" type=\"f\" index=\"1\" path=\"../../../../.." + path + "\"/>\n"
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "zip romset gets file tag",
+			path: "/media/fat/games/NEOGEO/mslug.zip",
+			want: fileTag("/media/fat/games/NEOGEO/mslug.zip"),
+		},
+		{
+			name: "uppercase zip romset gets file tag",
+			path: "/media/fat/games/NEOGEO/MSLUG.ZIP",
+			want: fileTag("/media/fat/games/NEOGEO/MSLUG.ZIP"),
+		},
+		{
+			name: "extracted romset folder gets file tag",
+			path: "/media/fat/games/NEOGEO/mslug",
+			want: fileTag("/media/fat/games/NEOGEO/mslug"),
+		},
+		{
+			name: "neo file falls through to the core slot",
+			path: "/media/fat/games/NEOGEO/mslug.neo",
+			want: "",
+		},
+		{
+			name: "uppercase neo file falls through to the core slot",
+			path: "/media/fat/games/NEOGEO/MSLUG.NEO",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := hookNeoGeo(nil, nil, tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

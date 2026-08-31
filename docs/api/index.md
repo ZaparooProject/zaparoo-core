@@ -197,6 +197,7 @@ If a method fails, it will populate the `error` key in the response object with 
 | :------ | :----- | :------- | :---------------------------------------------------------------------------------------- |
 | code    | number | Yes      | An integer specifying the general error category. **Error codes are not yet formalised.** |
 | message | string | Yes      | Short human readable message explaining the error cause, if possible.                     |
+| data    | object | No       | Optional structured detail. Methods that emit it document its shape; [`run`](methods.md#run) emits `{ "category": string }`. |
 
 #### Protocol Errors
 
@@ -257,6 +258,8 @@ This runs `_Arcade/Youjyuden (JP).mra`.
 
 Requests from the local device are allowed without restriction. Remote requests must be explicitly allowed using the `allow_run` config setting.
 
+These endpoints respond as soon as the token is accepted and do not report execution failures. Use the JSON-RPC [`run`](methods.md#run) method to wait for execution and receive its result.
+
 ## Methods
 
 Methods execute actions and return data from Core. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or authenticated admin, including paired and valid static API-key admins; **Tiered** means fields or availability vary by client and are detailed in method reference.
@@ -312,6 +315,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | settings.playtime.limits        | Return playtime limit configuration.                                                  | All clients |
 | settings.playtime.limits.update | Update playtime limits.                                                               | `settings.write` |
 | playtime                        | Return playtime session status and usage.                                             | All clients |
+| playtime.extend                 | Grant extra time to the session currently being limited.                              | `playtime.extend` |
 | systems                         | List indexed or supported systems.                                                    | All clients |
 | launchers                       | List launchers known to running service.                                              | All clients |
 | launchers.refresh               | Refresh launcher cache.                                                               | All clients |
@@ -372,5 +376,6 @@ Notifications let a server or client know an event has occurred. See the [API No
 | media.scraping         | Progress updates emitted during media scraping (includes progress/status details). |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
+| playtime.extended      | Extra playtime was granted to the session currently being limited.                |
 | inbox.added            | A new inbox message was added to the server.                                      |
 | update.state           | Progress of an update being applied.                                              |

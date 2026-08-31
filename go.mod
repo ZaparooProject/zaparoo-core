@@ -10,7 +10,8 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.23.0
-	github.com/ZaparooProject/go-zapscript v0.16.0
+	github.com/ZaparooProject/go-zapscript v0.18.0
+	github.com/ZaparooProject/zaparoo-core/mister v0.0.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -144,3 +145,13 @@ require (
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
+
+// The mister/ module lives in this repository. Resolving it from the proxy
+// would let Core compile an older catalog than the one checked out beside it,
+// with both test suites still passing, so build it from the tree instead.
+//
+// The require above is a placeholder: the replace means it is never fetched,
+// and it exists only so the module is named. Point it at a real mister/vX.Y.Z
+// once one is tagged, for the benefit of anyone importing Core as a library
+// who also compiles pkg/platforms/mister.
+replace github.com/ZaparooProject/zaparoo-core/mister => ./mister

@@ -42,7 +42,7 @@ func retroDECKLaunchers(_ *config.Instance, options *Options) []platforms.Launch
 		if !ok {
 			continue
 		}
-		result = append(result, createRetroDECKLauncher(options, folder, info, paths))
+		result = append(result, createRetroDECKLauncher(options, folder, info, &paths))
 	}
 	return result
 }
@@ -51,7 +51,7 @@ func createRetroDECKLauncher(
 	options *Options,
 	folder string,
 	info esde.SystemInfo,
-	paths RetroDECKPaths,
+	paths *RetroDECKPaths,
 ) platforms.Launcher {
 	launcher := platforms.Launcher{
 		ID: "RetroDECK" + info.GetLauncherID(), SystemID: info.SystemID,

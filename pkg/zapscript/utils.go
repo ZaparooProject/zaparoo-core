@@ -145,9 +145,9 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	execStr := env.Cmd.Args[0]
 
 	if env.Unsafe {
-		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
+		return platforms.CmdResult{}, ErrRemoteSource
 	} else if !env.Cfg.IsExecuteAllowed(execStr) {
-		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrExecuteNotAllowed, execStr)
 	}
 
 	tokenArgs, splitErr := helpers.SplitCommand(execStr)

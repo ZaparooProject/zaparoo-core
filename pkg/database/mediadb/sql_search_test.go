@@ -1049,3 +1049,89 @@ func TestSQLSelectRandomGameWithStats_SparseUsesUniformOrdinal(t *testing.T) {
 // disambiguation_test.go (RecomputeSystemDisambiguation + attachZapScriptTags),
 // since the logic now lives in stored per-title types rather than in-memory
 // page grouping.
+
+func TestFetchTagsByRefs_OneQueryPerChunk(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Two full chunks and no preflight (well above tagPreflightMaxResults).
+	refs := make([]database.MediaRef, 0, 2*tagRefsPerQuery)
+	for i := range 2 * tagRefsPerQuery {
+		refs = append(refs, database.MediaRef{MediaDBID: int64(i + 1), MediaTitleDBID: int64(5000 + i)})
+	}
+	tagColumns := []string{"SourceKind", "SourceDBID", "Tag", "Type", "DisplayName"}
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows(tagColumns).AddRow(0, int64(1), "Rev A", "rev", "Revision A"))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows(tagColumns).AddRow(1, int64(5000+tagRefsPerQuery), "1990", "year", "1990"))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, refs)
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{{Tag: "Rev A", Type: "rev", Label: "Revision A"}}, tags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "1990", Type: "year", Label: "1990"}}, tags[int64(tagRefsPerQuery+1)])
+	assert.Len(t, tags, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchTagsByRefs_PreflightSkipsFullQuery(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 2, MediaTitleDBID: 10},
+		{MediaDBID: 3, MediaTitleDBID: 30},
+	})
+	require.NoError(t, err)
+
+	assert.NotNil(t, tags)
+	assert.Empty(t, tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchTagsByRefs_DedupesRefsBeforeQuery(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(2), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "Type", "DisplayName"}).
+			AddRow(0, int64(1), "Rev A", "rev", "Revision A").
+			AddRow(1, int64(10), "Action", "genre", "Action").
+			AddRow(1, int64(10), "Rev A", "rev", ""))
+
+	tags, err := fetchTagsByRefs(context.Background(), db, []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 1, MediaTitleDBID: 10},
+		{MediaDBID: 2, MediaTitleDBID: 10},
+		{MediaDBID: 0, MediaTitleDBID: 10},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre", Label: "Action"},
+		{Tag: "Rev A", Type: "rev", Label: "Revision A"},
+	}, tags[1], "file and title copies of the same tag collapse, keeping the label")
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre", Label: "Action"},
+		{Tag: "Rev A", Type: "rev"},
+	}, tags[2])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

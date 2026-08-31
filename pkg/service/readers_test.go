@@ -445,10 +445,10 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		token          tokens.Token
 		name           string
 		readerID       string
 		expectedReason string
-		token          tokens.Token
 		readerInState  bool
 		hasRemovable   bool
 		expectTimer    bool

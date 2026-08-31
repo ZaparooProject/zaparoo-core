@@ -385,6 +385,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodPlaytimeLimits:              methods.HandlePlaytimeLimits,
 		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
 		models.MethodPlaytime:                    methods.HandlePlaytime,
+		models.MethodPlaytimeExtend:              methods.HandlePlaytimeExtend,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -562,6 +563,18 @@ func handleRequest(
 
 	resp, err := definition.handler(env)
 	if err != nil {
+		var catErr *models.CategorizedError
+		if errors.As(err, &catErr) {
+			// The producer already logged the cause at the right level; the
+			// wire only gets the safe message and the category.
+			log.Warn().Err(catErr.Err).Str("method", req.Method).
+				Str("category", catErr.Category).Msg("method reported failure")
+			return nil, &models.ErrorObject{
+				Code:    1,
+				Message: catErr.Message,
+				Data:    models.ErrorData{Category: catErr.Category},
+			}
+		}
 		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
 		if errors.As(err, &quietErr) {
@@ -884,6 +897,58 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 				fmt.Sprintf("https://%s:%d", origin, port),
 			)
 		}
+	}
+	return result
+}
+
+// localHostNames returns the names a browser on the LAN can reach this device
+// by. That is the OS hostname plus the ".local" forms an mDNS responder
+// publishes for it: responders derive the host record from the OS hostname, so
+// a device called "mister" answers to "mister.local" regardless of what
+// instance name Core advertises over DNS-SD. Hostnames that are already fully
+// qualified contribute their short label too, because avahi publishes the short
+// name under ".local" while the bundled responder appends the suffix to the
+// whole name. Results are deduplicated case-insensitively.
+func localHostNames(hostname string) []string {
+	hostname = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
+	if hostname == "" {
+		return nil
+	}
+
+	candidates := []string{hostname}
+	if !strings.HasSuffix(strings.ToLower(hostname), ".local") {
+		candidates = append(candidates, hostname+".local")
+	}
+	if label, _, found := strings.Cut(hostname, "."); found && label != "" {
+		candidates = append(candidates, label+".local")
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, candidate)
+	}
+
+	return result
+}
+
+// expandHostNameOrigins allows each host name over HTTP and HTTPS, with and
+// without the API port. The port-less forms cover reverse proxies serving Core
+// on a default port.
+func expandHostNameOrigins(names []string, port int) []string {
+	result := make([]string, 0, len(names)*4)
+	for _, name := range names {
+		result = append(result,
+			"http://"+name,
+			"https://"+name,
+			fmt.Sprintf("http://%s:%d", name, port),
+			fmt.Sprintf("https://%s:%d", name, port),
+		)
 	}
 	return result
 }
@@ -1712,7 +1777,6 @@ func Start(
 	limitsManager *playtime.LimitsManager,
 	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
-	mdnsHostname string,
 	player audio.Player,
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
@@ -1722,7 +1786,7 @@ func Start(
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
-		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
+		notifBroker, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
 	)
 }
 
@@ -1739,7 +1803,6 @@ func StartWithReady(
 	limitsManager *playtime.LimitsManager,
 	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
-	mdnsHostname string,
 	player audio.Player,
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
@@ -1765,6 +1828,31 @@ func StartWithReady(
 		}
 	}
 
+	log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
+	log.Debug().Msg("HTTP server attempting to bind")
+
+	// Bind before reporting startup success so callers can fail fast when the
+	// configured API port is already in use, and before the origin lists are
+	// built so a port-zero bind resolves to the port they advertise.
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+	if err != nil {
+		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+		log.Error().Err(bindErr).Msg("failed to bind to port")
+		notifyReady(bindErr)
+		st.StopService()
+		return bindErr
+	}
+
+	// If port 0 was requested, adopt the port actually bound so callers can
+	// discover it and every allowed origin carries the real port.
+	if port == 0 {
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			port = addr.Port
+			_ = cfg.SetAPIPort(port)
+		}
+	}
+
 	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
 	baseOrigins = append(baseOrigins, allowedOrigins...)
 	baseOrigins = append(baseOrigins,
@@ -1780,29 +1868,18 @@ func StartWithReady(
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	// Build static origins (base + mDNS + OS hostname). Local IP origins are
+	// Build static origins (base + host names). Local IP origins are
 	// checked dynamically because network interfaces may appear after startup.
 	staticOrigins := buildStaticAllowedOrigins(baseOrigins, nil, port)
 
-	if mdnsHostname != "" {
-		mdnsLocal := mdnsHostname + ".local"
-		staticOrigins = append(staticOrigins,
-			"http://"+mdnsLocal,
-			"https://"+mdnsLocal,
-			fmt.Sprintf("http://%s:%d", mdnsLocal, port),
-			fmt.Sprintf("https://%s:%d", mdnsLocal, port),
-		)
-		log.Debug().Str("hostname", mdnsLocal).Msg("added mDNS hostname to allowed origins")
+	hostname, hostErr := os.Hostname()
+	if hostErr != nil {
+		log.Warn().Err(hostErr).Msg("could not read OS hostname for allowed origins")
 	}
-
-	if hostname, err := os.Hostname(); err == nil && hostname != "" {
-		staticOrigins = append(staticOrigins,
-			"http://"+hostname,
-			"https://"+hostname,
-			fmt.Sprintf("http://%s:%d", hostname, port),
-			fmt.Sprintf("https://%s:%d", hostname, port),
-		)
-		log.Debug().Str("hostname", hostname).Msg("added OS hostname to allowed origins")
+	hostNames := localHostNames(hostname)
+	if len(hostNames) > 0 {
+		staticOrigins = append(staticOrigins, expandHostNameOrigins(hostNames, port)...)
+		log.Debug().Strs("hostnames", hostNames).Msg("added host names to allowed origins")
 	}
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
@@ -2104,29 +2181,6 @@ func StartWithReady(
 	}
 
 	serverDone := make(chan error, 1)
-
-	log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
-	log.Debug().Msg("HTTP server attempting to bind")
-
-	// Create the listener before reporting startup success so callers can fail
-	// fast when the configured API port is already in use.
-	lc := &net.ListenConfig{}
-	listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
-	if err != nil {
-		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
-		log.Error().Err(bindErr).Msg("failed to bind to port")
-		notifyReady(bindErr)
-		st.StopService()
-		return bindErr
-	}
-
-	// If port 0 was requested, update config with the actual bound port
-	// so callers can discover which port the server is listening on.
-	if port == 0 {
-		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-			_ = cfg.SetAPIPort(addr.Port)
-		}
-	}
 
 	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
 	notifyReady(nil)

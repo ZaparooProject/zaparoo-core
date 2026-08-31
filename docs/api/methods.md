@@ -46,11 +46,36 @@ These parameters allow emulating a token exactly as it would be read directly fr
 
 #### Result
 
-Returns `null` on success.
+Returns `null` once the ZapScript has finished executing without error. The method waits for execution to complete: mapping, parsing, launch policy (profiles, playtime limits, blocked commands, hooks), media lookup and every command in the script. Success means the script ran to completion; it does not prove the launched software is still running afterwards.
 
-Currently, it is not reported if the launched ZapScript encountered an error during launching, and the method will return before execution of ZapScript is complete.
+If execution fails, the response carries an [error](index.md#response-errors) whose `data.category` is one of:
+
+| Category           | Meaning                                                                                       |
+| :----------------- | :-------------------------------------------------------------------------------------------- |
+| `busy`             | Another launch is already in progress.                                                        |
+| `media_not_found`  | The requested media could not be found or matched.                                            |
+| `disabled`         | ZapScript execution is disabled in settings.                                                  |
+| `invalid_script`   | The script could not be parsed, or names an unknown command or system.                        |
+| `blocked`          | Execution was refused by configuration, a profile requirement or a hook.                      |
+| `playtime_limit`   | A playtime limit prevented the launch.                                                        |
+| `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
+| `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
+| `unavailable`      | The service is shutting down.                                                                 |
+| `execution_failed` | Any other execution failure.                                                                  |
+
+Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back. During shutdown the connection often closes before the `unavailable` response can be written, so treat a dropped connection with a request in flight the same way.
+
+Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 
 For ZapScript `launch.random`, Core selects uniformly from matching non-missing media rows after applying systems, tags, and path scope. Filesystem and virtual path targets recursively include subfolders. Tagged requests never use filesystem fallback because unindexed files have no tag metadata.
+
+##### Compatibility
+
+Earlier Core versions returned `null` as soon as the token was accepted, before execution started, and never reported execution failures. Clients that treated an immediate `null` as "launched" should now expect the response to arrive when execution finishes and treat an error response as authoritative.
+
+##### Aliases
+
+`launch` is a deprecated alias for `run` with identical parameters and result. `run.script` is reserved and currently returns a method-not-found error.
 
 #### Example
 
@@ -74,6 +99,22 @@ For ZapScript `launch.random`, Core selects uniformly from matching non-missing 
   "jsonrpc": "2.0",
   "id": "52f6242e-7a5a-11ef-bf93-020304050607",
   "result": null
+}
+```
+
+##### Error response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "52f6242e-7a5a-11ef-bf93-020304050607",
+  "error": {
+    "code": 1,
+    "message": "media not found",
+    "data": {
+      "category": "media_not_found"
+    }
+  }
 }
 ```
 
@@ -1530,6 +1571,7 @@ Optionally, an object:
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
 | playTime   | number | Yes      | Duration of the play session in seconds.               |
+| tags       | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1566,7 +1608,11 @@ Optionally, an object:
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
-        "playTime": 2730
+        "playTime": 2730,
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ],
     "pagination": {
@@ -1613,6 +1659,7 @@ Optionally, an object:
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+| tags          | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1647,7 +1694,11 @@ Optionally, an object:
         "relativePath": "snes/Super Mario World (USA).sfc",
         "totalPlayTime": 7200,
         "sessionCount": 12,
-        "lastPlayedAt": "2026-02-14T20:30:00Z"
+        "lastPlayedAt": "2026-02-14T20:30:00Z",
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ]
   }
@@ -3610,8 +3661,12 @@ None.
 | cooldownRemaining     | string  | No       | Time until session auto-resets. Only present during `"cooldown"` state.                               |
 | dailyUsageToday       | string  | No       | Total playtime accumulated today. Available in all states when data is available.                     |
 | dailyRemaining        | string  | No       | Time remaining before daily limit reached. Available in all states if daily limit is configured.      |
+| sessionExtension      | string  | No       | Extra time granted to the current session on top of the configured session limit. Omitted when nothing was granted. |
+| sessionExtendedUntil  | string  | No       | RFC 3339 timestamp when a session-limit waiver lapses. While set, the session limit is not enforced and `sessionRemaining` is omitted; the daily limit still applies. |
 
 **Note:** All duration fields use Go's duration format (e.g., `"1h30m45s"`, `"45m"`, `"2h"`).
+
+`sessionRemaining` already accounts for any granted extension, so a client showing time left needs no extra arithmetic. `sessionExtension` is reported separately so a client can show that time was granted rather than silently displaying a larger allowance. See [`playtime.extend`](#playtimeextend).
 
 #### Examples
 
@@ -3677,6 +3732,94 @@ None.
     "cooldownRemaining": "12m30s",
     "dailyUsageToday": "2h15m30s",
     "dailyRemaining": "1h44m30s"
+  }
+}
+```
+
+### playtime.extend
+
+**Access:** `playtime.extend` capability (localhost, or an authenticated admin client).
+
+Grant extra time to the playtime session currently being limited, without stopping what is playing and without changing any configured limit.
+
+The recipient is never named by the caller: a grant always applies to the profile playtime is being enforced against at that moment, so it cannot be aimed at someone else's session. A `duration` grant is held against the current session only and is cleared when that session resets — when a different profile becomes active, when the cooldown window expires, or when limits are disabled. A `today` waiver survives all three because it is day-scoped: it lapses at the next local midnight and nowhere else.
+
+**The daily limit is never affected.** It remains the hard ceiling in both modes; raising it is a settings change, not a grant.
+
+**Modes:**
+
+- `duration` adds time to the current session's allowance. It requires a session to extend, so it is accepted during `active` and `cooldown` states but rejected during `reset`. Cooldown is the common case: the limit stopped the game and the player is about to relaunch.
+- `today` waives the session limit for the recipient profile until the next local midnight. It is day-scoped rather than session-scoped, so it is accepted in any state, and it is rejected when the system clock is unreliable.
+
+A single duration grant must be between 1 minute and 24 hours, and the total accumulated across one session is capped at 24 hours. A grant that would exceed the cap is rejected rather than reduced, so a caller is never told less time was added than it asked for.
+
+The same grant can also be made by scanning a physical card holding `**playtime.extend`, authorized by an administrator profile's switch ID rather than by a paired client.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                                                                      |
+| :-------- | :----- | :------- | :---------------------------------------------------------------------------------------------------------------- |
+| mode      | string | Yes      | `"duration"` or `"today"`.                                                                                       |
+| duration  | string | No       | Time to add, in Go duration format (e.g. `"15m"`, `"1h30m"`). Required for `"duration"` mode, ignored for `"today"`. |
+| requestId | string | No       | Idempotency key. Repeating a request ID reports the original grant instead of adding more time.                  |
+
+#### Result
+
+| Key              | Type    | Required | Description                                                                        |
+| :--------------- | :------ | :------- | :----------------------------------------------------------------------------------- |
+| mode             | string  | Yes      | The mode that was applied.                                                         |
+| replayed         | boolean | Yes      | True when a repeated `requestId` matched an earlier grant and no time was added.    |
+| duration         | string  | No       | Time this grant added. Omitted for `"today"`.                                       |
+| expires          | string  | No       | RFC 3339 timestamp when a `"today"` waiver lapses. Omitted for `"duration"`.         |
+| sessionExtension | string  | No       | The session's accumulated extension after this grant.                              |
+| profileId        | string  | No       | Recipient profile. Omitted for the shared profile.                                 |
+
+A successful grant emits [`playtime.extended`](./notifications.md#playtimeextended). A replayed request granted nothing, so it emits no notification.
+
+#### Examples
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "method": "playtime.extend",
+  "params": {
+    "mode": "duration",
+    "duration": "15m",
+    "requestId": "5f2c9a10-1d44-4f8e-9f0b-6d1c2a3b4c5d"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "mode": "duration",
+    "duration": "15m0s",
+    "sessionExtension": "15m0s",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "replayed": false
+  }
+}
+```
+
+##### Response (waiving the session limit for the rest of the day)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "mode": "today",
+    "expires": "2025-01-23T00:00:00-05:00",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "replayed": false
   }
 }
 ```

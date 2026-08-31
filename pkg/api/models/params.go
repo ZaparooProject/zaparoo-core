@@ -214,6 +214,21 @@ type UpdatePlaytimeLimitsParams struct {
 	Retention    *int      `json:"retention" validate:"omitempty,gte=0"`
 }
 
+// ExtendPlaytimeParams asks for extra time on the session currently being
+// limited. The recipient is never named by the caller: a grant always
+// applies to the profile governing playtime right now, so it cannot be
+// aimed at somebody else's session.
+type ExtendPlaytimeParams struct {
+	// Duration is the time to add, in Go duration format. Required for
+	// mode "duration" and ignored for "today".
+	Duration *string `json:"duration" validate:"omitempty,duration"`
+	// RequestID makes a grant idempotent across retries. Repeating a
+	// request ID reports the original grant instead of adding more time.
+	RequestID string `json:"requestId" validate:"omitempty,max=128"`
+	// Mode is "duration" or "today".
+	Mode string `json:"mode" validate:"required,oneof=duration today"`
+}
+
 type NewClientParams struct {
 	Name string `json:"name" validate:"required,min=1,max=255"`
 }

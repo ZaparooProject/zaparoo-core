@@ -35,6 +35,7 @@ type apiRequestPriority int
 const (
 	apiPriorityHigh apiRequestPriority = iota
 	apiPriorityInput
+	apiPriorityRun
 	apiPriorityNormal
 	apiPriorityLow
 )
@@ -45,6 +46,8 @@ func (p apiRequestPriority) String() string {
 		return "high"
 	case apiPriorityInput:
 		return "input"
+	case apiPriorityRun:
+		return "run"
 	case apiPriorityLow:
 		return "low"
 	default:
@@ -77,14 +80,17 @@ func classifyAPIMethod(method string) apiRequestPriority {
 	switch method {
 	case models.MethodInputKeyboard, models.MethodInputGamepad:
 		return apiPriorityInput
+	case models.MethodRun, models.MethodLaunch, models.MethodRunScript:
+		// run waits for ZapScript execution, which takes as long as the
+		// script does (delays, hooks, slow launchers). It gets its own lane
+		// so a long script never holds up stop, confirm or media.control.
+		return apiPriorityRun
 	case models.MethodMediaHistoryLatest,
-		models.MethodRun,
-		models.MethodRunScript,
-		models.MethodLaunch,
 		models.MethodStop,
 		models.MethodConfirm,
 		models.MethodSettingsUpdate,
 		models.MethodPlaytimeLimitsUpdate,
+		models.MethodPlaytimeExtend,
 		models.MethodClientsDelete,
 		models.MethodInboxDelete,
 		models.MethodInboxClear,
@@ -141,12 +147,15 @@ func isMediaDBTransactionAPIMethod(method string) bool {
 		strings.EqualFold(method, models.MethodMediaMetaUpdate)
 }
 
-// isMediaDBFreeInstantMethod reports whether method is an instant control
-// method that never touches MediaDB, so it must never wait on wsMediaDBMu
-// behind a slow tag/meta write or a long-running indexing commit. run/launch
-// only enqueue a token, stop only signals the platform launcher, and
-// media.control only drives launcher controls (its script path is validated
-// to disallow media-launching commands, so it never queries MediaDB either).
+// isMediaDBFreeInstantMethod reports whether method is a control method that
+// never touches MediaDB from the API goroutine, so it must never wait on
+// wsMediaDBMu behind a slow tag/meta write or a long-running indexing commit.
+// run/launch hand the token to the service worker and wait for its result;
+// any MediaDB lookups happen on the worker's own connection with bounded
+// timeouts, and a run during indexing must not be held behind this lock.
+// stop only signals the platform launcher, and media.control only drives
+// launcher controls (its script path is validated to disallow
+// media-launching commands, so it never queries MediaDB either).
 // TestIsControlAllowed_BlocksMediaDBReadingCommands in pkg/zapscript guards
 // this invariant — it fails if a future MediaDB-reading command is ever added
 // without being rejected by isControlAllowed.

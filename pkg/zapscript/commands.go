@@ -57,12 +57,21 @@ type RunCommandOptions struct {
 }
 
 var (
-	ErrArgCount      = errors.New("invalid number of arguments")
-	ErrRequiredArgs  = errors.New("arguments are required")
-	ErrRemoteSource  = errors.New("cannot run from remote source")
-	ErrFileNotFound  = errors.New("file not found")
-	ErrNoHistory     = errors.New("no play history available")
-	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
+	ErrArgCount     = errors.New("invalid number of arguments")
+	ErrRequiredArgs = errors.New("arguments are required")
+	ErrRemoteSource = errors.New("cannot run from remote source")
+	ErrFileNotFound = errors.New("file not found")
+	ErrNoHistory    = errors.New("no play history available")
+	// ErrInvalidScript wraps a ZapScript parse failure.
+	ErrInvalidScript = errors.New("invalid ZapScript")
+	// ErrUnknownCommand is returned for a command name with no handler.
+	ErrUnknownCommand = errors.New("unknown command")
+	// ErrCommandBlocked is returned for a command denied by configuration.
+	ErrCommandBlocked = errors.New("command blocked")
+	// ErrExecuteNotAllowed is returned when a command line is denied by the
+	// allow_execute config.
+	ErrExecuteNotAllowed = errors.New("execute not allowed")
+	errAmbiguousPath     = errors.New("ambiguous case-insensitive path")
 )
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -122,6 +131,8 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdProfile:      cmdProfile,
 			zapscript.ZapScriptCmdProfileClear: cmdProfileClear,
 
+			zapscript.ZapScriptCmdPlaytimeExtend: cmdPlaytimeExtend,
+
 			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
 			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
 			zapscript.ZapScriptCmdMisterScript:    forwardCmd,
@@ -160,7 +171,9 @@ func lookupCmd(name string) (cmdFunc, bool) {
 // should not be included in log output.
 func isSensitiveCommand(cmdName string) bool {
 	switch cmdName {
-	case zapscript.ZapScriptCmdHTTPGet,
+	case zapscript.ZapScriptCmdProfile,
+		zapscript.ZapScriptCmdPlaytimeExtend,
+		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
 		zapscript.ZapScriptCmdInputKeyboard,
 		zapscript.ZapScriptCmdInputGamepad,
@@ -525,11 +538,14 @@ func RunCommand(
 		Playlist:           plsc,
 		Source:             token.Source,
 		PathRoot:           token.PathRoot,
-		TotalCommands:      totalCmds,
-		CurrentIndex:       currentIndex,
-		Unsafe:             unsafe,
-		Database:           db,
-		ExprEnv:            exprEnv,
+		// A ZapLink resolves one card command into a whole script, so the
+		// count on the card understates what this token runs. Commands that
+		// insist on running alone have to see the expanded total.
+		TotalCommands: totalCmds + len(newCmds),
+		CurrentIndex:  currentIndex,
+		Unsafe:        unsafe,
+		Database:      db,
+		ExprEnv:       exprEnv,
 	}
 
 	if opts.LauncherManager != nil {
@@ -538,11 +554,11 @@ func RunCommand(
 
 	cmdFn, ok := lookupCmd(cmd.Name)
 	if !ok {
-		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd.Name)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrUnknownCommand, cmd.Name)
 	}
 
 	if cfg.IsCommandBlocked(cmd.Name) {
-		return platforms.CmdResult{}, fmt.Errorf("command blocked: %s", cmd.Name)
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandBlocked, cmd.Name)
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
@@ -571,7 +587,11 @@ func RunCommand(
 		case errors.Is(err, ErrFileNotFound),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),
-			errors.Is(err, ErrNoHistory):
+			errors.Is(err, ErrNoHistory),
+			// Refusals by configuration are the setting working, not a bug.
+			errors.Is(err, ErrExecuteNotAllowed),
+			errors.Is(err, ErrHTTPNotAllowed),
+			errors.Is(err, ErrRemoteSource):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", logCmd)

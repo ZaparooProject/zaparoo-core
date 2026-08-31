@@ -125,7 +125,7 @@ block_commands = ["write"]
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
-	require.Equal(t, nextActionInvalid, result)
+	require.Equal(t, nextActionBlocked, result)
 	assert.Nil(t, svc.State.GetPendingWrite())
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -90,11 +91,19 @@ func playlistForLog(pls *playlists.Playlist) any {
 // user/operational condition that should be logged at Warn rather than Error
 // (keeping it out of Sentry). These are not bugs: a missing file, a playlist
 // control command with nothing playing, a double-tap during an active launch,
-// or a user-supplied system that doesn't exist.
+// a user-supplied system or command that doesn't exist, a script that doesn't
+// parse, or a launch refused by configuration or a hook.
 func isExpectedLaunchError(err error) bool {
 	return errors.Is(err, zapscript.ErrFileNotFound) ||
 		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
+		errors.Is(err, zapscript.ErrInvalidScript) ||
+		errors.Is(err, zapscript.ErrUnknownCommand) ||
+		errors.Is(err, zapscript.ErrCommandBlocked) ||
+		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
+		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
+		errors.Is(err, zapscript.ErrRemoteSource) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
+		errors.Is(err, state.ErrLaunchBlockedByHook) ||
 		errors.Is(err, systemdefs.ErrUnknownSystem) ||
 		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
@@ -141,7 +150,7 @@ func runTokenZapScriptWithContext(
 		reader := gozapscript.NewParser(token.Text)
 		script, err := reader.ParseScript()
 		if err != nil {
-			return fmt.Errorf("failed to parse script: %w", err)
+			return fmt.Errorf("failed to parse script: %w: %w", zapscript.ErrInvalidScript, err)
 		}
 		cmds = script.Cmds
 	}
@@ -185,7 +194,7 @@ func runTokenZapScriptWithContext(
 			hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, launching)
 			hookErr := runTokenZapScriptWithContext(runCtx, svc, hookToken, hookPlsc, &hookEnv, true)
 			if hookErrorBlocks(hookErr) {
-				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
+				return fmt.Errorf("%w: %w", state.ErrLaunchBlockedByHook, hookErr)
 			}
 		}
 
@@ -304,6 +313,12 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
+		if result.PlaytimeExtension != nil {
+			if extendErr := applyPlaytimeExtension(svc, result.PlaytimeExtension, &originToken); extendErr != nil {
+				return extendErr
+			}
+		}
+
 		if result.Unsafe {
 			log.Warn().Msg("token has been flagged as unsafe")
 			token.Unsafe = true
@@ -336,6 +351,104 @@ func applyProfileSwitch(svc *ServiceContext, req *platforms.ProfileSwitchRequest
 	if _, err := svc.Profiles.ActivateBySwitchID(req.SwitchID); err != nil {
 		return fmt.Errorf("failed to switch profile: %w", err)
 	}
+	return nil
+}
+
+// tokenForLog returns a copy of a token with any bearer credential removed,
+// for log lines that print the whole token.
+func tokenForLog(t *tokens.Token) tokens.Token {
+	safe := *t
+	safe.Text, safe.Data = zapscript.RedactToken(t.Text, t.Data)
+	// The completion is a channel handle, not token content: printing it
+	// only puts a heap address in the log.
+	safe.Completion = nil
+	return safe
+}
+
+// cardGrantIdempotencyWindow is how long one scanned extension card counts
+// as the same grant. It absorbs reader bounce without turning a deliberate
+// second tap minutes later into a no-op.
+const cardGrantIdempotencyWindow = 10 * time.Second
+
+// applyPlaytimeExtension grants extra playtime from a scanned card. The
+// switch ID on the card is a bearer credential, exactly like a profile
+// card: resolving it is the authorization. The difference is that a grant
+// weakens somebody's limits, so it additionally requires the credential to
+// belong to an administrator profile — a member card grants nothing.
+//
+// The recipient is never named on the card. It is whichever profile is
+// governing playtime when the card is scanned, so a card cannot be aimed at
+// a different person's session.
+func applyPlaytimeExtension(
+	svc *ServiceContext,
+	req *platforms.PlaytimeExtensionRequest,
+	token *tokens.Token,
+) error {
+	if svc.Profiles == nil {
+		return errors.New("profiles service not available")
+	}
+	if svc.LimitsManager == nil {
+		return errors.New("playtime limits not available")
+	}
+
+	profile, err := svc.Profiles.VerifyBySwitchID(req.AuthorizerSwitchID)
+	if err != nil {
+		return fmt.Errorf("unknown profile switch ID: %w", err)
+	}
+	if profile.Role != profiles.ProfileRoleAdmin {
+		return fmt.Errorf("profile %s is not an administrator", profile.ProfileID)
+	}
+
+	grant := &playtime.GrantRequest{
+		Source:              "reader",
+		AuthorizerProfileID: profile.ProfileID,
+		Duration:            req.Duration,
+	}
+	// A tap is one grant. Reader bounce and a token briefly re-seating both
+	// re-fire within a second or two, so a short window collapses them,
+	// while a deliberate second tap later still grants again (up to the
+	// cumulative session cap). The key is built from the card's identity and
+	// what it asked for, never from the credential it carries. Without a UID
+	// there is nothing to tell two cards apart, so dedup is skipped rather
+	// than risk collapsing distinct cards into one grant.
+	if token != nil && token.UID != "" {
+		grant.IdempotencyKey = fmt.Sprintf("%s|%s|%s", token.UID, req.Mode, req.Duration)
+		grant.IdempotencyWindow = cardGrantIdempotencyWindow
+	}
+	switch req.Mode {
+	case models.PlaytimeExtendModeDuration:
+		grant.Mode = playtime.GrantModeDuration
+	case models.PlaytimeExtendModeToday:
+		grant.Mode = playtime.GrantModeToday
+	default:
+		return fmt.Errorf("%w: %q", playtime.ErrGrantModeInvalid, req.Mode)
+	}
+
+	result, err := svc.LimitsManager.Grant(grant)
+	if err != nil {
+		return fmt.Errorf("failed to extend playtime: %w", err)
+	}
+
+	if result.Replayed {
+		return nil
+	}
+
+	payload := &models.PlaytimeExtendedParams{
+		Mode:      string(result.Mode),
+		ProfileID: result.RecipientProfileID,
+		GrantedBy: result.AuthorizerProfileID,
+	}
+	if result.Duration > 0 {
+		payload.Duration = result.Duration.String()
+	}
+	if result.SessionExtension > 0 {
+		payload.SessionExtension = result.SessionExtension.String()
+	}
+	if !result.ExpiresAt.IsZero() {
+		payload.Expires = result.ExpiresAt.Format(time.RFC3339)
+	}
+	notifications.PlaytimeExtended(svc.State.Notifications, payload)
+
 	return nil
 }
 
@@ -465,13 +578,16 @@ func launchPlaylistMedia(
 	}
 	monotonicStart := int64(systemUptime.Seconds())
 
+	// Never store a bearer credential: history is readable by every client.
+	historyText, historyData := zapscript.RedactToken(t.Text, t.Data)
+
 	he := database.HistoryEntry{
 		ID:             uuid.New().String(),
 		Time:           t.ScanTime,
 		Type:           t.Type,
 		TokenID:        t.UID,
-		TokenValue:     t.Text,
-		TokenData:      t.Data,
+		TokenValue:     historyText,
+		TokenData:      historyData,
 		ClockReliable:  helpers.IsClockReliable(now),
 		BootUUID:       svc.State.BootUUID(),
 		MonotonicStart: monotonicStart,
@@ -601,6 +717,11 @@ func handlePlaylist(
 	}
 }
 
+var (
+	errEmptyToken     = errors.New("empty token")
+	errLaunchPanicked = errors.New("token launch panicked")
+)
+
 func processTokenQueue(
 	svc *ServiceContext,
 	itq <-chan tokens.Token,
@@ -611,177 +732,241 @@ func processTokenQueue(
 		select {
 		case pls := <-svc.PlaylistQueue:
 			handlePlaylist(svc, pls, player)
-			continue
 		case t := <-itq:
 			// TODO: change this channel to send a token pointer or something
-			if t.ScanTime.IsZero() {
-				// ignore empty tokens
-				continue
-			}
-
-			log.Info().Msgf("processing token: %v", t)
-
-			err := svc.Platform.ScanHook(&t)
-			if err != nil {
-				log.Error().Err(err).Msgf("error writing tmp scan result")
-			}
-
-			now := time.Now()
-			systemUptime, uptimeErr := uptime.Get()
-			if uptimeErr != nil {
-				log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
-				systemUptime = 0
-			}
-			monotonicStart := int64(systemUptime.Seconds())
-
-			he := database.HistoryEntry{
-				ID:             uuid.New().String(),
-				Time:           t.ScanTime,
-				Type:           t.Type,
-				TokenID:        t.UID,
-				TokenValue:     t.Text,
-				TokenData:      t.Data,
-				ClockReliable:  helpers.IsClockReliable(now),
-				BootUUID:       svc.State.BootUUID(),
-				MonotonicStart: monotonicStart,
-				CreatedAt:      now,
-			}
-
-			mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
-			scriptText := t.Text
-			if hasMapping {
-				scriptText = mappedValue
-			}
-
-			reader := gozapscript.NewParser(scriptText)
-			script, parseErr := reader.ParseScript()
-			if parseErr != nil {
-				log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
-				// Continue anyway - the error will be caught in runTokenZapScript
-			}
-
-			if parseErr != nil || shouldPlayScanSuccessSound(&script) {
-				path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
-				helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
-			}
-
-			if parseErr == nil {
-				switch handleNextActionPreflight(svc, &t, &script) {
-				case nextActionArmed:
-					he.Success = true
-					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
-						log.Error().Err(histErr).Msgf("error adding history")
-					}
-					continue
-				case nextActionInvalid:
-					he.Success = false
-					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
-						log.Error().Err(histErr).Msgf("error adding history")
-					}
-					path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
-					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
-					continue
-				case nextActionNone:
-				}
-			}
-
-			// Check if any command in the script launches media
-			hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
-
-			// When require_for_launch is enabled, media launches are blocked
-			// until a profile is active (profile switch commands still run —
-			// scanning a profile card is how the device gets unparked). A
-			// combo card that switches profile before launching passes: the
-			// switch activates a profile before the launch command runs, or
-			// fails and aborts the whole script.
-			if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() &&
-				svc.State.ActiveProfile() == nil && !scriptActivatesProfileBeforeLaunch(&script) {
-				log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
-
-				path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
-				helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
-
-				he.Success = false
-				if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
-					log.Error().Err(histErr).Msgf("error adding history")
-				}
-
-				// Skip launch
-				continue
-			}
-
-			// Only check playtime limits if the script contains media-launching commands
-			if hasMediaLaunchCmd {
-				if limitReason, limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
-					log.Warn().Err(limitErr).Msg("playtime: launch blocked by limit")
-
-					if limitReason != "" {
-						notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
-							Reason: limitReason,
-						})
-
-						path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
-						helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
-					}
-
-					he.Success = false
-					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
-						log.Error().Err(histErr).Msgf("error adding history")
-					}
-
-					// Skip launch
-					continue
-				}
-			} else {
-				log.Debug().Msg("script contains no media-launching commands, bypassing playtime limit check")
-			}
-
-			// launch tokens in a separate thread
-			if svc.BackgroundWG != nil {
-				svc.BackgroundWG.Add(1)
-			}
-			go func() {
-				if svc.BackgroundWG != nil {
-					defer svc.BackgroundWG.Done()
-				}
-				defer func() {
-					if r := recover(); r != nil {
-						log.Error().Any("panic", r).Msg("recovered panic in token launch")
-					}
-				}()
-
-				plsc := playlists.PlaylistController{
-					Active:     svc.State.GetActivePlaylist(),
-					Background: svc.State.GetBackgroundPlaylist(),
-					Queue:      svc.PlaylistQueue,
-				}
-
-				err = runTokenZapScript(svc, t, plsc, nil, false)
-				// ErrRunZapScriptDisabled already logged its own Warn inside
-				// runTokenZapScriptWithContext; treat it as the prior
-				// silent-no-op success, not a launch failure, so a disabled
-				// setting doesn't play a fail sound or record a failed
-				// history entry.
-				disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
-				if err != nil && !disabled {
-					if isExpectedLaunchError(err) {
-						log.Warn().Err(err).Msgf("error launching token")
-					} else {
-						log.Error().Err(err).Msgf("error launching token")
-					}
-					path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
-					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
-				}
-
-				he.Success = err == nil || disabled
-				err = svc.DB.UserDB.AddHistory(&he)
-				if err != nil {
-					log.Error().Err(err).Msgf("error adding history")
-				}
-			}()
+			handleQueuedToken(svc, t, limitsManager, player)
 		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("exiting service worker via context cancellation")
 			return
 		}
 	}
+}
+
+// handleQueuedToken runs preflight for one queued token and either rejects it
+// or hands it to a launch goroutine. Every path completes t.Completion exactly
+// once: preflight rejections complete here, everything else completes in
+// launchQueuedToken. The worker itself never waits on execution.
+func handleQueuedToken(
+	svc *ServiceContext,
+	t tokens.Token, //nolint:gocritic // single-use parameter in service function
+	limitsManager *playtime.LimitsManager,
+	player audio.Player,
+) {
+	if t.ScanTime.IsZero() {
+		// ignore empty tokens
+		t.Completion.Complete(errEmptyToken)
+		return
+	}
+
+	log.Info().Msgf("processing token: %v", tokenForLog(&t))
+
+	if err := svc.Platform.ScanHook(&t); err != nil {
+		log.Error().Err(err).Msgf("error writing tmp scan result")
+	}
+
+	now := time.Now()
+	systemUptime, uptimeErr := uptime.Get()
+	if uptimeErr != nil {
+		log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
+		systemUptime = 0
+	}
+	monotonicStart := int64(systemUptime.Seconds())
+
+	// Never store a bearer credential: history is readable by every client.
+	historyText, historyData := zapscript.RedactToken(t.Text, t.Data)
+
+	he := database.HistoryEntry{
+		ID:             uuid.New().String(),
+		Time:           t.ScanTime,
+		Type:           t.Type,
+		TokenID:        t.UID,
+		TokenValue:     historyText,
+		TokenData:      historyData,
+		ClockReliable:  helpers.IsClockReliable(now),
+		BootUUID:       svc.State.BootUUID(),
+		MonotonicStart: monotonicStart,
+		CreatedAt:      now,
+	}
+
+	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
+	scriptText := t.Text
+	if hasMapping {
+		scriptText = mappedValue
+	}
+
+	reader := gozapscript.NewParser(scriptText)
+	script, parseErr := reader.ParseScript()
+	if parseErr != nil {
+		log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
+		// Continue anyway - the error will be caught in runTokenZapScript
+	}
+
+	if parseErr != nil || shouldPlayScanSuccessSound(&script) {
+		path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
+	}
+
+	if parseErr == nil {
+		switch preflight := handleNextActionPreflight(svc, &t, &script); preflight {
+		case nextActionArmed:
+			he.Success = true
+			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+				log.Error().Err(histErr).Msgf("error adding history")
+			}
+			// Arming the next action is this token's whole job.
+			t.Completion.Complete(nil)
+			return
+		case nextActionInvalid, nextActionBlocked:
+			he.Success = false
+			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+				log.Error().Err(histErr).Msgf("error adding history")
+			}
+			path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+			if preflight == nextActionBlocked {
+				t.Completion.Complete(fmt.Errorf("%w: %s", zapscript.ErrCommandBlocked, script.Cmds[0].Name))
+			} else {
+				t.Completion.Complete(state.ErrInvalidNextAction)
+			}
+			return
+		case nextActionNone:
+		}
+	}
+
+	// Check if any command in the script launches media
+	hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
+
+	// When require_for_launch is enabled, media launches are blocked
+	// until a profile is active (profile switch commands still run —
+	// scanning a profile card is how the device gets unparked). A
+	// combo card that switches profile before launching passes: the
+	// switch activates a profile before the launch command runs, or
+	// fails and aborts the whole script.
+	if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() &&
+		svc.State.ActiveProfile() == nil && !scriptActivatesProfileBeforeLaunch(&script) {
+		log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
+
+		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+
+		he.Success = false
+		if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+			log.Error().Err(histErr).Msgf("error adding history")
+		}
+
+		t.Completion.Complete(state.ErrLaunchRequiresProfile)
+		return
+	}
+
+	// Only check playtime limits if the script contains media-launching commands
+	if hasMediaLaunchCmd {
+		if limitReason, limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
+			log.Warn().Err(limitErr).Msg("playtime: launch blocked by limit")
+
+			if limitReason != "" {
+				notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
+					Reason: limitReason,
+				})
+
+				path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+			}
+
+			he.Success = false
+			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+				log.Error().Err(histErr).Msgf("error adding history")
+			}
+
+			t.Completion.Complete(limitErr)
+			return
+		}
+	} else {
+		log.Debug().Msg("script contains no media-launching commands, bypassing playtime limit check")
+	}
+
+	// launch tokens in a separate thread
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Add(1)
+	}
+	go launchQueuedToken(svc, t, &he, player)
+}
+
+// launchQueuedToken executes a token's ZapScript and records the outcome. The
+// completion is delivered as soon as execution finishes so a waiting caller
+// is not held behind sound playback or the history write.
+func launchQueuedToken(
+	svc *ServiceContext,
+	t tokens.Token, //nolint:gocritic // single-use parameter in service function
+	he *database.HistoryEntry,
+	player audio.Player,
+) {
+	if svc.BackgroundWG != nil {
+		defer svc.BackgroundWG.Done()
+	}
+	defer func() {
+		// Execution panics are already turned into errors; this only guards
+		// the bookkeeping that follows so it cannot take the process down.
+		if r := recover(); r != nil {
+			log.Error().Any("panic", r).Msg("recovered panic in token launch")
+		}
+	}()
+
+	plsc := playlists.PlaylistController{
+		Active:     svc.State.GetActivePlaylist(),
+		Background: svc.State.GetBackgroundPlaylist(),
+		Queue:      svc.PlaylistQueue,
+	}
+
+	err := runTokenZapScriptRecovering(svc, t, plsc)
+
+	// ErrRunZapScriptDisabled already logged its own Warn inside
+	// runTokenZapScriptWithContext; treat it as the prior
+	// silent-no-op success, not a launch failure, so a disabled
+	// setting doesn't play a fail sound or record a failed
+	// history entry.
+	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
+	failed := err != nil && !disabled
+	if failed {
+		if isExpectedLaunchError(err) {
+			log.Warn().Err(err).Msgf("error launching token")
+		} else {
+			log.Error().Err(err).Msgf("error launching token")
+		}
+	}
+
+	he.Success = err == nil || disabled
+	if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
+		log.Error().Err(histErr).Msgf("error adding history")
+	}
+
+	// Complete once history is durable: a caller that waited for this
+	// result can immediately read the run back from tokens.history. The
+	// fail sound follows, so the caller never waits on audio.
+	t.Completion.Complete(err)
+
+	if failed {
+		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+	}
+}
+
+// runTokenZapScriptRecovering runs the token's ZapScript and converts a panic
+// into an error, so the token is still completed and recorded in history and
+// the worker keeps serving the queue.
+func runTokenZapScriptRecovering(
+	svc *ServiceContext,
+	t tokens.Token, //nolint:gocritic // single-use parameter in service function
+	plsc playlists.PlaylistController,
+) error {
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Any("panic", r).Msg("recovered panic in token launch")
+				err = fmt.Errorf("%w: %v", errLaunchPanicked, r)
+			}
+		}()
+		err = runTokenZapScript(svc, t, plsc, nil, false)
+	}()
+	return err
 }

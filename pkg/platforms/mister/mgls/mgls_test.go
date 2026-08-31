@@ -666,3 +666,30 @@ func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no matching mgl args")
 }
+
+// A romset-mapped .neo file is launched by its unchanged path, so it must
+// produce the same MGL file tag as the equivalent .zip romset: .neo via the
+// core's ROM set slot, .zip via the NeoGeo system hook.
+func TestGenerateMgl_NeoGeoNeoMatchesZip(t *testing.T) {
+	t.Parallel()
+
+	core := cores.Systems["NeoGeo"]
+	paths := []string{
+		"/media/fat/games/NEOGEO/mslug.neo",
+		"/media/fat/games/NEOGEO/MSLUG.NEO",
+		"/media/fat/games/NEOGEO/mslug.zip",
+	}
+
+	for _, path := range paths {
+		override, err := cores.RunSystemHook(nil, &core, path)
+		require.NoError(t, err, path)
+
+		mgl, err := GenerateMgl(&core, core.RBF, path, override)
+		require.NoError(t, err, path)
+
+		want := "<mistergamedescription>\n\t<rbf>_Console/NeoGeo</rbf>\n" +
+			"\t<file delay=\"1\" type=\"f\" index=\"1\" path=\"../../../../.." + path + "\"/>\n" +
+			"</mistergamedescription>"
+		assert.Equal(t, want, mgl, path)
+	}
+}

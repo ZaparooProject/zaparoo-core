@@ -11,6 +11,52 @@ vars:
   ARM_CFLAGS: "-mcpu=cortex-a9 -mfloat-abi=hard -mtune=cortex-a9 -mfpu=neon"
 
 tasks:
+  tag-module:
+    desc: Tag the standalone mister/ Go module (task mister:tag-module -- v0.1.0)
+    cmds:
+      - |
+        set -eu
+        version="{{.CLI_ARGS}}"
+        if [ -z "$version" ]; then
+          echo "usage: task mister:tag-module -- v0.1.0" >&2
+          exit 1
+        fi
+        case "$version" in
+          v[0-9]*.[0-9]*.[0-9]*) ;;
+          *) echo "version must look like v0.1.0, got: $version" >&2; exit 1 ;;
+        esac
+        # Nested modules are versioned by directory-prefixed tags; a bare vX.Y.Z
+        # would only ever name the root module.
+        tag="mister/$version"
+        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+          echo "$tag already exists" >&2
+          exit 1
+        fi
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "working tree is dirty; tag a clean commit" >&2
+          exit 1
+        fi
+        (cd mister && go test ./...)
+        git tag -a "$tag" -m "mister module $version"
+        echo "created $tag; push it with: git push origin $tag"
+
+  module-tag-status:
+    desc: Report whether mister/ has changed since its last published tag
+    cmds:
+      - |
+        set -eu
+        last=$(git tag -l 'mister/v*' | sort -V | tail -n 1)
+        if [ -z "$last" ]; then
+          echo "mister/ has never been tagged; third parties can only pin a pseudo-version"
+          exit 0
+        fi
+        if git diff --quiet "$last" HEAD -- mister; then
+          echo "mister/ matches $last"
+        else
+          echo "mister/ has changed since $last:"
+          git diff --stat "$last" HEAD -- mister
+        fi
+
   download-arcadedb:
     desc: Download ArcadeDatabase.csv for embedding
     cmds:
