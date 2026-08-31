@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -115,15 +116,24 @@ mode = "unrestricted"`))
 	}).Return(nil).Maybe()
 	launched := 0
 	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything).Run(func(_ mock.Arguments) {
+		mock.Anything).Run(func(args mock.Arguments) {
 		rec.record("launch")
 		if !env.publishOnLaunch || env.svc == nil {
 			return
 		}
 		launched++
-		env.svc.State.SetActiveMedia(models.NewActiveMedia(
+		media := models.NewActiveMedia(
 			"NES", "NES", fmt.Sprintf("hook-%d.nes", launched),
-			fmt.Sprintf("Hook %d", launched), "test-launcher"))
+			fmt.Sprintf("Hook %d", launched), "test-launcher")
+		// Publish through the launch's own publisher, as a real launcher does.
+		// State.SetActiveMedia would take restore access a second time on this
+		// goroutine, which already holds it via AcquireMediaLaunch.
+		if opts, ok := args.Get(4).(*platforms.LaunchOptions); ok && opts != nil &&
+			opts.ActiveMediaPublisher != nil {
+			opts.ActiveMediaPublisher(media)
+			return
+		}
+		env.svc.State.SetActiveMedia(media)
 	}).Return(nil).Maybe()
 
 	mockUserDB := testhelpers.NewMockUserDBI()
