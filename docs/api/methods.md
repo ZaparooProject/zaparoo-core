@@ -71,7 +71,7 @@ For ZapScript `launch.random`, Core selects uniformly from matching non-missing 
 
 ##### Compatibility
 
-Earlier Core versions returned `null` as soon as the token was accepted, before execution started, and never reported execution failures. Clients that treated an immediate `null` as "launched" should now expect the response to arrive when execution finishes and treat an error response as authoritative.
+Earlier Core versions returned `null` as soon as the token was accepted, before execution started, and never reported execution failures. Clients that treated an immediate `null` as "launched" should now expect the response to arrive when execution finishes, or when Core stops waiting for it. A `timeout` or `cancelled` error means Core stopped waiting, not that execution ended: work already started continues, so poll for the effect rather than treating either as proof of failure. Any other error response is authoritative.
 
 ##### Aliases
 
@@ -2697,7 +2697,7 @@ None.
 | :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
 | launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
-| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
+| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. |
 
 #### Example
 

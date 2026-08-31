@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,6 +115,103 @@ func TestHandleStopCanceledWhileLaunchInFlight(t *testing.T) {
 	assert.Nil(t, value)
 	require.ErrorIs(t, err, context.Canceled)
 	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForMenu)
+}
+
+// A before_exit script may launch media, which takes the read side of the same
+// gate AcquireMediaStop holds exclusively. If the hook is ever moved after that
+// acquisition, this test hangs until the request context expires.
+func TestHandleStopRunsBeforeExitBeforeAcquiringStopGate(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Once()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+
+	hookRan := false
+	st.SetBeforeExitHook(func() {
+		hookRan = true
+		access, err := st.AcquireMediaLaunch()
+		require.NoError(t, err)
+		access.Release()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	value, err := HandleStop(requests.RequestEnv{
+		Context:  ctx,
+		Platform: mockPlatform,
+		State:    st,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, value)
+	assert.True(t, hookRan, "before_exit must run on the stop path")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestHandleStopRunsBeforeExitBeforeStoppingLauncher(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		events = append(events, "stop")
+	}).Return(nil).Once()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+
+	st.SetBeforeExitHook(func() { events = append(events, "before_exit") })
+
+	_, err := HandleStop(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		State:    st,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"before_exit", "stop"}, events)
+}
+
+// markReady stands in for the media-ready probe, which does not run here.
+func markReady(t *testing.T, st *state.State) {
+	t.Helper()
+	gen, active := st.ActiveMediaReadyGeneration()
+	require.True(t, active)
+	st.MarkActiveMediaReady(gen)
+}
+
+// A before_exit script may launch media of its own. Stopping after that would
+// kill what the hook just started rather than the media the caller asked to
+// stop, so the stop is skipped once the active media has been replaced.
+func TestHandleStopLeavesMediaLaunchedByBeforeExitRunning(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Maybe()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+	markReady(t, st)
+	st.SetBeforeExitHook(func() {
+		st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "farewell.nes", "Farewell", "test-launcher"))
+		// Nothing probes readiness in a unit test, and HandleStop waits for it.
+		markReady(t, st)
+	})
+
+	value, err := HandleStop(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		State:    st,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, value)
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForMenu)
+	require.NotNil(t, st.ActiveMedia())
+	assert.Equal(t, "farewell.nes", st.ActiveMedia().Path)
 }
 
 func TestHandleStopWithoutActiveMedia(t *testing.T) {

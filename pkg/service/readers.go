@@ -32,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -274,40 +273,6 @@ func connectReaders(
 	return nil
 }
 
-func runBeforeExitHook(
-	svc *ServiceContext,
-	activeMedia models.ActiveMedia, //nolint:gocritic // single-use parameter in service function
-) {
-	var systemIDs []string
-	launchers := svc.Platform.Launchers(svc.Config)
-	for i := range launchers {
-		l := &launchers[i]
-		if l.ID == activeMedia.SystemID {
-			systemIDs = append(systemIDs, l.SystemID)
-			system, err := systemdefs.LookupSystem(l.SystemID)
-			if err == nil {
-				systemIDs = append(systemIDs, system.Aliases...)
-			}
-			break
-		}
-	}
-
-	if len(systemIDs) > 0 {
-		for _, systemID := range systemIDs {
-			defaults, ok := svc.Config.LookupSystemDefaults(systemID)
-			if !ok || defaults.BeforeExit == "" {
-				continue
-			}
-
-			if err := runHook(svc, "before_exit", defaults.BeforeExit, nil, nil); err != nil {
-				logHookError(err, "before_exit")
-			}
-
-			break
-		}
-	}
-}
-
 func cancelTimedExit(exitTimer clockwork.Timer, exitGeneration *atomic.Uint64) bool {
 	exitGeneration.Add(1)
 	return exitTimer != nil && exitTimer.Stop()
@@ -395,11 +360,18 @@ func timedExit(
 		if exitGeneration.Load() != generation {
 			return
 		}
-		runBeforeExitHook(svc, *activeMedia)
+		outgoingGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+		svc.State.RunBeforeExitHook()
 
 		softwareToken = svc.State.GetSoftwareToken()
 		if exitGeneration.Load() != generation || !helpers.TokensEqual(&ownerCopy, softwareToken) {
 			log.Debug().Msg("hold owner changed during before_exit, cancelling exit")
+			return
+		}
+		// Hook-launched media carries no reader ID, so it never moves the hold
+		// owner checked above. Without this the exit would stop it.
+		if svc.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+			log.Info().Msg("before_exit replaced the outgoing media, cancelling exit")
 			return
 		}
 

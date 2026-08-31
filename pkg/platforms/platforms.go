@@ -178,13 +178,19 @@ type CmdEnv struct {
 	ServiceCtx         context.Context
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (MediaLaunchAccess, error)
-	PlaybackManager    audio.PlaybackManager
-	UI                 *uievents.Service
-	Playlist           playlists.PlaylistController
-	Cfg                *config.Instance
-	Database           *database.Database
-	ExprEnv            *zapscript.ArgExprEnv
-	Source             string
+	// BeforeExit runs the outgoing media's before_exit script. The launch path
+	// calls it once the replacement has been resolved but before it takes the
+	// media launch gate, so a launch that never happens cannot fire it and the
+	// script is still free to run its own ZapScript. Nil when the hook must not
+	// run, such as inside a hook script.
+	BeforeExit      func()
+	PlaybackManager audio.PlaybackManager
+	UI              *uievents.Service
+	Playlist        playlists.PlaylistController
+	Cfg             *config.Instance
+	Database        *database.Database
+	ExprEnv         *zapscript.ArgExprEnv
+	Source          string
 	// PathRoot is an optional per-token root for resolving relative filesystem paths.
 	PathRoot      string
 	Cmd           zapscript.Command

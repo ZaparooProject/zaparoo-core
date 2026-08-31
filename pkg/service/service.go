@@ -458,6 +458,7 @@ func startService(
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
+	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
@@ -512,6 +513,10 @@ func startService(
 				logHookError(hookErr, "on_media_start")
 			}
 		}
+	})
+
+	st.SetBeforeExitHook(func() {
+		runBeforeExitHook(svc)
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.

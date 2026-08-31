@@ -23,6 +23,7 @@ When `readers.scan.mode='tap'` (default setting) and a game is launched using a 
 When `readers.scan.mode='hold'` with `readers.scan.exit_delay=0.0` and a game is launched using a card:
 
 - [ ] Removing the card from the reader will close the game immediately after `on_remove` completes, including when removal happens before launch initialization finishes. If `on_remove` contains a delay, that hook delay completes before the zero-delay hold exit starts.
+- [ ] The system's `before_exit` script, if configured, runs after `on_remove` and immediately before the game closes.
 - [ ] Scanning and removing a command card will execute the command without closing the game; only the launch card owns Hold mode exit.
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
@@ -34,6 +35,7 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=0.0` and a game is
 When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is launched using a card:
 
 - [ ] Removing the card from the reader runs `on_remove` first, then starts the **N-second** hold-exit countdown after the hook completes. Any hook delay therefore precedes `exit_delay` rather than overlapping it.
+- [ ] The full order on a hold-mode exit is `on_remove`, then `exit_delay`, then the system's `before_exit` script, then the game closes.
 - [ ] Removing the card and reinserting it before the N-second countdown ends will not interrupt the ongoing game.
 - [ ] When `on_remove` contains a `delay` command, reinserting the removed card during that delay cancels the remaining hook commands without relaunching the game.
 - [ ] Removing the card and tapping a different game card will immediately launch the other game.
@@ -41,6 +43,37 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is l
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
 - [ ] Exiting the game manually during the N-second countdown cancels the countdown and returns to the menu.
+
+---
+
+## Behavior: the system `before_exit` hook
+
+A `[[systems.default]]` entry can carry a `before_exit` script that runs just
+before media for that system stops or is replaced:
+
+```toml
+[[systems.default]]
+system = "SNES"
+before_exit = "**input.keyboard:{f2}"
+```
+
+The script is looked up against the outgoing media's system, so it applies
+regardless of which launcher started it.
+
+- [ ] Tapping a second card runs `before_exit` before the new game starts.
+- [ ] `**stop`, `**playlist.stop` and the `stop` API method each run it
+      before returning to the menu.
+- [ ] `**mister.mgl` runs it before the MGL replaces the running core.
+- [ ] A playtime limit runs it before it stops the game.
+- [ ] Removing the card in hold mode runs it after `on_remove` and `exit_delay`.
+- [ ] Quitting the game from the emulator or frontend does **not** run it; by
+      then the media is already gone.
+- [ ] Background-slot audio does not run it, and a primary launch does not run
+      the hook for background media.
+- [ ] A script that fails still lets the game exit, and the failure is logged.
+- [ ] A script that stalls stops the exit for at most 30 seconds.
+- [ ] Only one `before_exit` script runs at a time, so a script that itself
+      stops or launches media does not trigger another.
 
 ---
 

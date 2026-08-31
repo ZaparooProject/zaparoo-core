@@ -843,6 +843,14 @@ func getLaunchClosure(
 			return errors.New("file not allowed: " + target.path)
 		}
 
+		// The outgoing media's before_exit hook. Everything that can reject this
+		// launch without disturbing what is running has now run, so the hook
+		// cannot fire for a launch that never happens. It is still outside the
+		// media launch gate below, which the hook's own ZapScript needs to take.
+		if env.BeforeExit != nil && normalizedSlot == mediaslot.Primary {
+			env.BeforeExit()
+		}
+
 		launchAccess := platforms.MediaLaunchAccess{Release: func() {}}
 		if env.AcquireMediaLaunch != nil {
 			launchAccess, err = env.AcquireMediaLaunch()
