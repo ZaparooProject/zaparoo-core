@@ -24,9 +24,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
@@ -46,13 +46,7 @@ type parentDirRepairRow struct {
 
 // ParentDirForMediaPath returns the immediate browse parent for an indexed media path.
 func ParentDirForMediaPath(path string) string {
-	if idx := strings.Index(path, "://"); idx >= 0 {
-		return path[:idx+3]
-	}
-	if lastSlash := strings.LastIndex(path, "/"); lastSlash >= 0 {
-		return path[:lastSlash+1]
-	}
-	return ""
+	return container.ParentDir(path)
 }
 
 func sqlTemporaryParentDirRepairVersionCurrent(ctx context.Context, db sqlQueryable) (bool, error) {

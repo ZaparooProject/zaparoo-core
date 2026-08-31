@@ -126,6 +126,76 @@ func ArtworkFallbackNames(gamePath, systemRootPath string) []string {
 	return fallbackNames
 }
 
+// ContainerArtworkFallbackNames returns candidate artwork filenames named after
+// the directory holding gamePath rather than the file itself. EmulationStation
+// stores art for a folder shown as one game under the folder's own name, so a
+// disc folder whose inner file is named differently is only found this way.
+//
+// The folder's own name is always offered first. A folder named with a disc
+// extension, which is how ES-DE makes a multi-disc folder read as one game,
+// also answers to the extensionless stem. Any other dot belongs to the name:
+// "Sonic 3.0" is a folder called that, not "Sonic 3" with an extension, and
+// stripping it hands the folder a neighbouring game's artwork.
+func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
+	resolved := ResolvePath(gamePath, systemRootPath)
+	if resolved == "" {
+		return nil
+	}
+
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	dir := filepath.Dir(rel)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	base := filepath.Base(dir)
+	if base == "." || base == "" {
+		return nil
+	}
+
+	stems := []string{base}
+	if ext := filepath.Ext(base); isDiscFolderExt(ext) {
+		if trimmed := strings.TrimSuffix(base, ext); trimmed != "" {
+			stems = append(stems, trimmed)
+		}
+	}
+
+	parent := filepath.Dir(dir)
+	names := make([]string, 0, len(stems)*len(ArtworkExtensions)*2)
+	for _, stem := range stems {
+		flatNames := FallbackArtworkNames(stem)
+		if parent == "." || parent == "" {
+			names = append(names, flatNames...)
+			continue
+		}
+		for _, flat := range flatNames {
+			if nested := filepath.Join(parent, flat); nested != flat {
+				names = append(names, nested)
+			}
+		}
+		names = append(names, flatNames...)
+	}
+	return names
+}
+
+// isDiscFolderExt reports whether ext is one EmulationStation uses to name a
+// folder after the disc image or playlist it stands in for.
+func isDiscFolderExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".cue", ".m3u", ".chd", ".iso", ".bin":
+		return true
+	default:
+		return false
+	}
+}
+
 // FallbackArtworkNames returns <stem> plus each supported artwork extension.
 func FallbackArtworkNames(stem string) []string {
 	if stem == "" || stem == "." {
