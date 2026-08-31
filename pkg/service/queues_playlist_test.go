@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -202,6 +203,78 @@ func TestRunTokenZapScript_ReturnsWhenPlaylistClearBlockedByShutdown(t *testing.
 	select {
 	case pls := <-plq:
 		t.Fatalf("playlist queue should remain blocked during shutdown, got: %v", pls)
+	default:
+	}
+}
+
+func TestRunTokenZapScript_ReturnsWhenPlaylistClearBlockedByExecutionContext(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	path := filepath.Join(t.TempDir(), "game.rom")
+	launchStarted := make(chan struct{})
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Run(func(mock.Arguments) { close(launchStarted) }).Return(nil).Once()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	playlistQueue := make(chan *playlists.Playlist)
+	result := make(chan error, 1)
+	go func() {
+		result <- runTokenZapScriptWithContext(runCtx, svc, tokens.Token{
+			Text: "**launch:" + path, ScanTime: time.Now(),
+		}, playlists.PlaylistController{Queue: playlistQueue}, nil, false)
+	}()
+	<-launchStarted
+	cancel()
+
+	err := <-result
+
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case playlist := <-playlistQueue:
+		t.Fatalf("playlist update escaped expired execution context: %v", playlist)
+	default:
+	}
+}
+
+func TestRunTokenZapScript_ReturnsWhenSoftwareTokenBlockedByExecutionContext(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	const readerID = "mock-removable-reader"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	mockReader.On("ReaderID").Return(readerID).Maybe()
+	svc.State.SetReader(mockReader)
+	svc.LaunchSoftwareQueue = make(chan *tokens.Token)
+
+	path := filepath.Join(t.TempDir(), "game.rom")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Once()
+	runCtx, cancel := context.WithCancel(context.Background())
+	playlistQueue := make(chan *playlists.Playlist)
+	playlistCleared := make(chan struct{})
+	go func() {
+		<-playlistQueue
+		cancel()
+		close(playlistCleared)
+	}()
+
+	err := runTokenZapScriptWithContext(runCtx, svc, tokens.Token{
+		Text: "**launch:" + path, ScanTime: time.Now(), ReaderID: readerID,
+	}, playlists.PlaylistController{Queue: playlistQueue}, nil, false)
+
+	require.ErrorIs(t, err, context.Canceled)
+	<-playlistCleared
+	select {
+	case token := <-svc.LaunchSoftwareQueue:
+		t.Fatalf("software token update escaped expired execution context: %v", token)
 	default:
 	}
 }

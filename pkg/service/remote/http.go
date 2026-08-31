@@ -59,6 +59,35 @@ func (e *httpError) Error() string {
 	return fmt.Sprintf("remote operations HTTP %d", e.status)
 }
 
+// unauthorizedError is a 401 tagged with the bearer that was rejected, so a
+// late response to a credential that has since been replaced by a re-link
+// can be told apart from a live rejection of the current one.
+type unauthorizedError struct {
+	httpErr *httpError
+	bearer  string
+}
+
+func (*unauthorizedError) Error() string { return errUnauthorized.Error() }
+
+func (*unauthorizedError) Is(target error) bool { return target == errUnauthorized }
+
+func (e *unauthorizedError) Unwrap() error {
+	if e.httpErr == nil {
+		return nil
+	}
+	return e.httpErr
+}
+
+// rejectedBearer returns the bearer a 401 response rejected, or "" when the
+// error carries none (no credential was sent, or it isn't a 401).
+func rejectedBearer(err error) string {
+	var unauthorized *unauthorizedError
+	if errors.As(err, &unauthorized) {
+		return unauthorized.bearer
+	}
+	return ""
+}
+
 func (m *manager) doJSON(
 	ctx context.Context, method, requestPath string, body, out any,
 ) error {
@@ -94,6 +123,9 @@ func (m *manager) doJSON(
 			log.Debug().Err(closeErr).Msg("failed to close remote operation response")
 		}
 	}()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return &unauthorizedError{httpErr: decodeHTTPError(resp), bearer: bearer}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return decodeHTTPError(resp)
 	}
@@ -117,7 +149,7 @@ func (m *manager) setRequestHeaders(req *http.Request, bearer string, hasBody bo
 	}
 }
 
-func decodeHTTPError(resp *http.Response) error {
+func decodeHTTPError(resp *http.Response) *httpError {
 	var payload errorResponse
 	_ = decodeBoundedJSON(resp.Body, 4<<10, &payload)
 	return &httpError{

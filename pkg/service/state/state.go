@@ -89,12 +89,14 @@ type State struct {
 	backupCoordinator     *backupcoordinator.Coordinator
 	launcherManager       *LauncherManager
 	uiEvents              *uievents.Service
+	remoteStatus          RemoteStatus
 	bootUUID              string
 	activeMediaReadyGen   uint64
+	activeMediaPublishMu  syncutil.RWMutex
+	remoteStatusMu        syncutil.RWMutex
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
-	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
 	restartRequested      bool
 	restorePendingRestart bool

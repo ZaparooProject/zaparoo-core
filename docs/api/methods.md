@@ -2677,6 +2677,9 @@ None.
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
 | backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| playtimeBaseUrl           | string                                    | No       | Configured play history sync server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
+| remoteControlBaseUrl      | string                                    | No       | Configured remote control server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2768,6 +2771,7 @@ An object containing any of the following optional keys:
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
+| remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
 #### Result
 
@@ -5078,6 +5082,97 @@ Returns an empty object `{}` on success.
   "jsonrpc": "2.0",
   "id": "clients-pair-cancel-1",
   "result": {}
+}
+```
+
+## Remote control
+
+Remote control lets the Zaparoo Online account a device is linked to send a fixed set of commands to it (search and browse the media library, list systems and launchers, launch, stop, run a MiSTer script) through the Zaparoo Online API. It is off until the device owner turns on `remoteControlEnabled` in [settings.update](#settingsupdate), and is turned off again automatically whenever the account is linked or unlinked. Every command that reaches the device is recorded in a local ledger.
+
+### remote.activity
+
+**Access:** Localhost and authenticated admin clients only.
+
+Return the current remote control status and the most recent entries from the remote command ledger, as an owner-facing record of what the linked account's remote commands have done on this device.
+
+#### Parameters
+
+| Key   | Type   | Required | Description                                                     |
+| :---- | :----- | :------- | :-------------------------------------------------------------- |
+| limit | number | No       | Number of entries to return, between 1 and 100. Defaults to 20. |
+
+#### Result
+
+| Key     | Type                                                   | Required | Description                                       |
+| :------ | :----------------------------------------------------- | :------- | :------------------------------------------------ |
+| status  | [RemoteStatus](#remote-status-object)                  | Yes      | Why the device is or isn't reachable right now.   |
+| entries | [RemoteActivityEntry](#remote-activity-entry-object)[] | Yes      | Ledger entries, newest first.                     |
+
+##### Remote status object
+
+| Key           | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| :------------ | :----- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| state         | string | Yes      | `unknown` (nothing reported yet), `disabled` (remote control is off), `unlinked` (no linked account), `connecting`, `waiting` (polling for commands normally), `not_remote_device` (the server refused the poll because this device is not the account's designated remote device; choose it on Zaparoo Online), `unavailable` (the server reports the feature as off), `credential_rejected` (the server rejected the device credential; link the account again), or `error` (the last capability heartbeat or poll failed for another reason). |
+| lastContactAt | string | No       | RFC 3339 time the remote service last answered normally, whether that was a capability heartbeat or a poll. Omitted until the first successful contact.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| lastErrorCode | string | No       | The server's error code for the last failure (for example `remote_slot_required`), or a short local code such as `unreachable`. Omitted while the state carries no error.                                                                                                                                                                                                                                                                                                                                              |
+
+##### Remote activity entry object
+
+| Key           | Type   | Required | Description                                                                                                                                        |
+| :------------ | :----- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| createdAt     | string | Yes      | RFC 3339 time the command was first received.                                                                                                      |
+| operationType | string | Yes      | The command type, for example `launch` or `media.search`.                                                                                          |
+| originKind    | string | Yes      | `first_party` when the account issued the command directly, or `api_key` when a User API key did.                                                  |
+| originKeyName | string | No       | Name of the User API key that issued the command. Only present for `api_key` origins.                                                              |
+| state         | string | Yes      | Ledger state: `recorded`, `accepted`, `executing`, `terminal` (a result was produced), `void` (the server no longer knew the command), or `expired`. |
+| status        | string | No       | Outcome reported for a terminal entry: `succeeded`, `failed`, or `busy`.                                                                           |
+| errorCode     | string | No       | Failure code for a failed entry, for example `bad_params`, `media_not_found`, or `unsupported`.                                                    |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "method": "remote.activity",
+  "params": {
+    "limit": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "result": {
+    "status": {
+      "state": "waiting",
+      "lastContactAt": "2026-08-30T01:02:03Z"
+    },
+    "entries": [
+      {
+        "createdAt": "2026-08-30T01:01:40Z",
+        "operationType": "launch",
+        "originKind": "api_key",
+        "originKeyName": "misterzine",
+        "state": "terminal",
+        "status": "succeeded"
+      },
+      {
+        "createdAt": "2026-08-30T01:00:12Z",
+        "operationType": "media.search",
+        "originKind": "first_party",
+        "state": "terminal",
+        "status": "failed",
+        "errorCode": "bad_params"
+      }
+    ]
+  }
 }
 ```
 

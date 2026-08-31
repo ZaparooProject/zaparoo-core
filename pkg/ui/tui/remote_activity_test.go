@@ -45,6 +45,28 @@ func TestFormatRemoteActivityOrigin(t *testing.T) {
 	}))
 }
 
+func TestFormatRemoteActivityEscapesUntrustedText(t *testing.T) {
+	t.Parallel()
+
+	entry := &models.RemoteActivityEntry{
+		OperationType: "[red]launch\n", OriginKind: "api_key",
+		OriginKeyName: "[blue]owner\x1b\u202e", Status: "failed\r", ErrorCode: "bad\tparams",
+	}
+	origin := formatRemoteActivityOrigin(entry)
+	secondary := formatRemoteActivitySecondary(entry)
+	detail := formatRemoteActivityDetail(entry)
+
+	for _, rendered := range []string{origin, secondary, detail} {
+		assert.NotContains(t, rendered, "\n[blue]")
+		assert.NotContains(t, rendered, "\x1b")
+		assert.NotContains(t, rendered, "\r")
+		assert.NotContains(t, rendered, "\t")
+		assert.NotContains(t, rendered, "\u202e")
+	}
+	assert.Equal(t, "api_key ([blue]owner��)", tview.Unescape(origin))
+	assert.Contains(t, tview.Unescape(detail), "Operation: [red]launch�")
+}
+
 func TestFormatRemoteActivitySecondary(t *testing.T) {
 	t.Parallel()
 
@@ -137,7 +159,9 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	})
 	require.True(t, runner.WaitForText("Remote control activity", uiSettleTimeout))
 
-	// Account, Warp, Unlink account, Remote control, then Remote control activity.
+	// Account, Warp, Unlink account, Remote control, Remote status, then
+	// Remote control activity.
+	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
