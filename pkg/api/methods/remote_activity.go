@@ -22,7 +22,9 @@ package methods
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -34,7 +36,10 @@ import (
 // defaultRemoteActivityLimit is used when no limit is requested. The upper
 // bound (100) is enforced by RemoteActivityParams' validate tag, which
 // rejects an out-of-range request rather than silently clamping it.
-const defaultRemoteActivityLimit = 20
+const (
+	defaultRemoteActivityLimit  = 20
+	remoteActivityFieldMaxRunes = 128
+)
 
 // remoteActivityOrigin mirrors the shape remote.operationOrigin writes into
 // RemoteCommand.Origin (pkg/service/remote/operations.go). Duplicated here
@@ -89,23 +94,41 @@ func HandleRemoteActivity(env requests.RequestEnv) (any, error) {
 	for _, command := range commands {
 		var origin remoteActivityOrigin
 		if len(command.Origin) > 0 {
-			// Best-effort: origin is device-written wire data, not
-			// attacker-controlled input, so a decode failure just means an
-			// older/unrecognised shape rather than something to reject.
+			// Best-effort for older rows. New envelopes are validated before
+			// persistence, but historical data still crosses an untrusted
+			// server boundary and must remain safe to return and render.
 			_ = json.Unmarshal(command.Origin, &origin)
 		}
 		entries = append(entries, models.RemoteActivityEntry{
 			CreatedAt:     command.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
-			OperationType: command.OperationType,
-			OriginKind:    origin.Kind,
-			OriginKeyName: origin.KeyName,
-			State:         command.State,
-			Status:        command.ResultStatus,
-			ErrorCode:     command.ErrorCode,
+			OperationType: sanitizeRemoteActivityField(command.OperationType),
+			OriginKind:    sanitizeRemoteActivityField(origin.Kind),
+			OriginKeyName: sanitizeRemoteActivityField(origin.KeyName),
+			State:         sanitizeRemoteActivityField(command.State),
+			Status:        sanitizeRemoteActivityField(command.ResultStatus),
+			ErrorCode:     sanitizeRemoteActivityField(command.ErrorCode),
 		})
 	}
 
 	return models.RemoteActivityResponse{Status: status, Entries: entries}, nil
+}
+
+func sanitizeRemoteActivityField(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	var clean strings.Builder
+	count := 0
+	for _, r := range value {
+		if count >= remoteActivityFieldMaxRunes {
+			break
+		}
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			_, _ = clean.WriteRune('\uFFFD')
+		} else {
+			_, _ = clean.WriteRune(r)
+		}
+		count++
+	}
+	return clean.String()
 }
 
 // remoteStatusInfo renders the poller's last observation for the response;

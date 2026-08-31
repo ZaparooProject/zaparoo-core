@@ -21,8 +21,11 @@ package methods
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -87,6 +90,39 @@ func TestHandleRemoteActivity_ReturnsRecentEntriesNewestFirst(t *testing.T) {
 // carries the remote poller's last observation (state, last contact, last
 // error code) alongside the ledger, and reports unknown when no service
 // state is available at all.
+func TestHandleRemoteActivity_SanitizesLegacyUntrustedFields(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB.On("ListRecentRemoteCommands", defaultRemoteActivityLimit).Return([]database.RemoteCommand{{
+		CommandID: "cmd_hostile", OperationType: "launch\n[red]\u202e", State: "terminal\x1b[31m",
+		ResultStatus: "succeeded\r", ErrorCode: "none\t", CreatedAt: time.Now(),
+		Origin: json.RawMessage(`{"kind":"api_key","key_name":"owner\n\u001b[31m` +
+			strings.Repeat("x", remoteActivityFieldMaxRunes+20) + `"}`),
+	}}, nil)
+
+	result, err := HandleRemoteActivity(requests.RequestEnv{
+		IsLocal: true, Database: &database.Database{UserDB: mockUserDB},
+	})
+	require.NoError(t, err)
+	resp, ok := result.(models.RemoteActivityResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	entry := resp.Entries[0]
+	for _, field := range []string{
+		entry.OperationType, entry.OriginKind, entry.OriginKeyName,
+		entry.State, entry.Status, entry.ErrorCode,
+	} {
+		assert.True(t, utf8.ValidString(field))
+		assert.False(t, strings.ContainsFunc(field, func(r rune) bool {
+			return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+		}), "%q", field)
+		assert.LessOrEqual(t, utf8.RuneCountInString(field), remoteActivityFieldMaxRunes)
+	}
+	assert.Contains(t, entry.OriginKeyName, "owner��[31m")
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestHandleRemoteActivity_ReportsPollerStatus(t *testing.T) {
 	t.Parallel()
 

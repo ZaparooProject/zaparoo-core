@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -41,6 +42,24 @@ func newTestScript(t *testing.T, name string) string {
 
 func newTestScriptPlatform() *Platform {
 	return &Platform{activeMedia: func() *models.ActiveMedia { return nil }}
+}
+
+func TestRunScriptContext_CancelsHiddenScriptAtDeadline(t *testing.T) {
+	dir := t.TempDir()
+	release := filepath.Join(dir, "release")
+	marker := filepath.Join(dir, "marker")
+	script := filepath.Join(dir, "slow.sh")
+	contents := "#!/bin/sh\n(while [ ! -e '" + release + "' ]; do :; done; " +
+		"printf done > '" + marker + "') &\nwait\n"
+	require.NoError(t, os.WriteFile(script, []byte(contents), 0o700)) //nolint:gosec // Test executable.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := runScriptContext(ctx, nil, script, "", true)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, os.WriteFile(release, nil, 0o600))
+	assert.NoFileExists(t, marker)
 }
 
 func TestRunScript_WidgetUsesFrontendTTYAndCleansUpSetupFailure(t *testing.T) {

@@ -133,6 +133,9 @@ func runTokenZapScriptWithContext(
 	exprEnv *gozapscript.ArgExprEnv,
 	inHookContext bool,
 ) error {
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
 	if !svc.State.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
 		return state.ErrRunZapScriptDisabled
@@ -174,6 +177,9 @@ func runTokenZapScriptWithContext(
 	}
 
 	for i := 0; i < len(cmds); i++ {
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
 		cmd := cmds[i]
 
 		// Run before_media_start hook; errors block the launch.

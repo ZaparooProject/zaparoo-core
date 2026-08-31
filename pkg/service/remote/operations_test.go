@@ -27,6 +27,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -330,6 +331,63 @@ func TestFinishOperationGivesUpAfterPersistRetriesExhausted(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
+func TestOperationRejectsRedeliveryWithChangedDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("changed-deadline redelivery made unexpected request to %s", r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+	params := json.RawMessage(`{"message":"same"}`)
+	digest := sha256.Sum256(params)
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_deadline_conflict", OperationID: "op_deadline_conflict", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Minute), State: "terminal", ResultStatus: "succeeded",
+		Result: json.RawMessage(`{"message":"same"}`),
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, false, nil).Once()
+
+	m.handleOperation(context.Background(), &operationEnvelope{
+		CommandID: "cmd_deadline_conflict", OperationID: "op_deadline_conflict", OperationType: "echo",
+		ProtocolVersion: 1, Params: params, DeadlineAt: stored.DeadlineAt.Add(time.Minute),
+		Origin: operationOrigin{Kind: "first_party"},
+	}, false)
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "MarkRemoteCommandResultReported", mock.Anything)
+}
+
+func TestOperationCannotExtendRecordedDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("extended recorded deadline made unexpected request to %s", r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+	params := json.RawMessage(`{"message":"late"}`)
+	digest := sha256.Sum256(params)
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_recorded_deadline", OperationID: "op_recorded_deadline", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(-time.Minute), State: "recorded",
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, false, nil).Once()
+
+	m.handleOperation(context.Background(), &operationEnvelope{
+		CommandID: "cmd_recorded_deadline", OperationID: "op_recorded_deadline", OperationType: "echo",
+		ProtocolVersion: 1, Params: params, DeadlineAt: time.Now().UTC().Add(time.Minute),
+		Origin: operationOrigin{Kind: "first_party"},
+	}, false)
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "TransitionRemoteCommand", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestOperationReplaysStoredResultWithoutAcceptance(t *testing.T) {
 	var resultCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -498,6 +556,23 @@ func TestValidateEnvelope(t *testing.T) {
 			wantErr: "invalid remote command identifier",
 		},
 		{
+			name:    "command id contains control character",
+			mutate:  func(e *operationEnvelope) { e.CommandID = "cmd\n1" },
+			wantErr: "invalid remote command identifier",
+		},
+		{
+			name:    "operation id contains invalid UTF-8",
+			mutate:  func(e *operationEnvelope) { e.OperationID = string([]byte{0xff}) },
+			wantErr: "invalid remote operation identifier",
+		},
+		{
+			name: "operation type is oversized",
+			mutate: func(e *operationEnvelope) {
+				e.OperationType = strings.Repeat("x", remoteOperationTypeMaxLength+1)
+			},
+			wantErr: "invalid remote operation type",
+		},
+		{
 			name:    "unsupported protocol version",
 			mutate:  func(e *operationEnvelope) { e.ProtocolVersion = protocolVersion + 1 },
 			wantErr: "unsupported protocol version",
@@ -516,6 +591,29 @@ func TestValidateEnvelope(t *testing.T) {
 			name:    "api_key origin missing key name",
 			mutate:  func(e *operationEnvelope) { e.Origin = operationOrigin{Kind: "api_key"} },
 			wantErr: "API-key origin missing key name",
+		},
+		{
+			name: "api_key origin contains terminal controls",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{Kind: "api_key", KeyName: "owner\n\x1b[31m"}
+			},
+			wantErr: "invalid remote operation origin key name",
+		},
+		{
+			name: "api_key origin contains bidi override",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{Kind: "api_key", KeyName: "owner\u202eexe"}
+			},
+			wantErr: "invalid remote operation origin key name",
+		},
+		{
+			name: "api_key origin name is oversized",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{
+					Kind: "api_key", KeyName: strings.Repeat("k", remoteOriginKeyNameMaxLength+1),
+				}
+			},
+			wantErr: "invalid remote operation origin key name",
 		},
 	}
 

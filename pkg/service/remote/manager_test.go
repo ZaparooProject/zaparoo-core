@@ -535,6 +535,7 @@ func TestWaitCancelsWhenConsentDisabled(t *testing.T) {
 // is the steady-state shape of the loop for as long as the device stays linked.
 func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
 	acceptedExpiry := time.Now().UTC().Add(time.Minute)
+	operationDeadline := time.Now().UTC().Add(time.Minute)
 	var acceptedCalls, resultCalls, waitCalls int32
 	params := json.RawMessage(`{"message":"hi"}`)
 	digest := sha256.Sum256(params)
@@ -551,7 +552,7 @@ func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
 					Operation: &operationEnvelope{
 						CommandID: "cmd_run", OperationID: "op_run", OperationType: "echo",
 						ProtocolVersion: 1, Params: params,
-						DeadlineAt: time.Now().UTC().Add(time.Minute),
+						DeadlineAt: operationDeadline,
 						Origin:     operationOrigin{Kind: "first_party"},
 					},
 				}
@@ -598,7 +599,7 @@ func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
 		CommandID: "cmd_run", OperationID: "op_run", OperationType: "echo",
 		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
 		Origin:     json.RawMessage(`{"kind":"first_party"}`),
-		DeadlineAt: time.Now().UTC().Add(time.Minute), State: "recorded",
+		DeadlineAt: operationDeadline, State: "recorded",
 	}
 	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, true, nil).Once()
 	userDB.On("TransitionRemoteCommand", "cmd_run", "recorded", "accepted", mock.Anything).

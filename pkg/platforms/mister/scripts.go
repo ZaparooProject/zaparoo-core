@@ -36,8 +36,8 @@ var (
 	startScriptCommand  = func(cmd *exec.Cmd) error { return cmd.Start() }
 )
 
-func scriptIsActive() bool {
-	cmd := exec.CommandContext(context.Background(), "bash", "-c", misterScriptGrepCommand)
+func scriptIsActive(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "bash", "-c", misterScriptGrepCommand)
 	output, err := cmd.Output()
 	if err != nil {
 		// grep returns an error code if there was no result
@@ -58,24 +58,51 @@ func scriptRunMode(bin, args string) (runScript string, widget bool) {
 }
 
 func runScript(pl *Platform, bin, args string, hidden bool) error {
+	return runScriptContext(context.Background(), pl, bin, args, hidden)
+}
+
+func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidden bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("failed to stat script file: %w", err)
 	}
 
-	active := scriptIsActive()
+	active := scriptIsActive(ctx)
 	if active {
 		return errors.New("a script is already running")
 	}
 
 	if hidden {
-		// run the script directly
-		cmd := exec.CommandContext(context.Background(), bin, args) //nolint:gosec // G204: script runner's purpose
+		// Hidden scripts run synchronously, so the caller's execution lease
+		// bounds both process lifetime and any side effects after expiry.
+		cmd := exec.CommandContext(ctx, bin, args) //nolint:gosec // G204: script runner's purpose
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return os.ErrProcessDone
+			}
+			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+				if errors.Is(err, syscall.ESRCH) {
+					return os.ErrProcessDone
+				}
+				return fmt.Errorf("kill hidden script process group: %w", err)
+			}
+			return nil
+		}
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
 			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag)
 		cmd.Dir = filepath.Dir(bin)
 		err := cmd.Run()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("failed to run script: %w", ctxErr)
+			}
 			return fmt.Errorf("failed to run script: %w", err)
 		}
 		return nil
@@ -91,7 +118,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		}
 
 		// Wait for menu core to become active to ensure console state is reset
-		menuWaitCtx, menuWaitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		menuWaitCtx, menuWaitCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer menuWaitCancel()
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -122,9 +149,9 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		vt = frontendConsoleVT
 	}
 
-	// Run it on-screen like a regular script. Use a background context with
-	// timeout since scripts are not launcher operations.
-	scriptCtx, scriptCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Run it on-screen like a regular script. Bound console setup by both
+	// its normal timeout and the caller's execution lease.
+	scriptCtx, scriptCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer scriptCancel()
 	cm := getScriptConsoleManager(pl)
 	err := cm.Open(scriptCtx, vt)
@@ -142,8 +169,8 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 
 	// this is just to follow mister's convention, which reserves
 	// tty2 for scripts
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err = runScriptChvt(ctx, vt)
+	chvtCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	err = runScriptChvt(chvtCtx, vt)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
@@ -187,7 +214,11 @@ cd $(dirname "%s")
 		}
 	}
 
-	// Start script non-blocking
+	// Start script non-blocking, but never start after the caller's lease has
+	// expired. Once started, MiSTer's script process owns its normal lifecycle.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := startScriptCommand(cmd); err != nil {
 		return fmt.Errorf("failed to start script: %w", err)
 	}

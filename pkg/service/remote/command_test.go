@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -123,6 +124,46 @@ func TestCommandClassifiesRunZapScriptErrors(t *testing.T) {
 			assert.Equal(t, tt.wantErrorCode, result.ErrorCode)
 		})
 	}
+}
+
+func TestCommandDoesNotStartAfterExecutionLeaseExpires(t *testing.T) {
+	called := false
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			called = true
+			return nil
+		},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := m.executeCommand(ctx, "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+
+	assert.False(t, called)
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "execution_timeout", result.ErrorCode)
+}
+
+func TestCommandCancelsRunningZapScriptAtExecutionDeadline(t *testing.T) {
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			ctx context.Context, _ tokens.Token, _ playlists.PlaylistController,
+			_ *gozapscript.ArgExprEnv, _ bool,
+		) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	result := m.executeCommand(ctx, "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "execution_timeout", result.ErrorCode)
 }
 
 func TestCommandExecuteRejectsMalformedParams(t *testing.T) {

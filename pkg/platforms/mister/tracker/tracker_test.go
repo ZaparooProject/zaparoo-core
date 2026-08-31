@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/fsnotify/fsnotify"
@@ -422,6 +423,63 @@ func TestRecentGamePath_EmptyRecentFile(t *testing.T) {
 	path, err := recentGamePath(recentFile, nil)
 	require.NoError(t, err)
 	assert.Empty(t, path)
+}
+
+func TestCoreMatchesSystem(t *testing.T) {
+	t.Parallel()
+
+	mappings := []NameMapping{
+		{CoreName: "SNES", System: "SNES"},
+		{CoreName: "RA_SNES", System: "SNES"},
+		{CoreName: "Minimig", System: "Amiga"},
+		{CoreName: "Minimig", System: "AmigaCD32"},
+		{CoreName: "SonicBoom", System: ArcadeSystem, ArcadeName: "Sonic Boom"},
+	}
+	tests := []struct {
+		name    string
+		core    string
+		system  string
+		matches bool
+	}{
+		{name: "same console", core: "snes", system: "SNES", matches: true},
+		{name: "alternate core", core: "RA_SNES", system: "SNES", matches: true},
+		{name: "shared core second mapping", core: "Minimig", system: "AmigaCD32", matches: true},
+		{name: "arcade set maps to Arcade", core: "SonicBoom", system: ArcadeSystem, matches: true},
+		{name: "old arcade game on console core", core: "SNES", system: ArcadeSystem},
+		{name: "menu has no game", core: misterconfig.MenuCore, system: ArcadeSystem},
+		{name: "unknown core", core: "Utility", system: "SNES"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.matches, coreMatchesSystem(tt.core, tt.system, mappings))
+		})
+	}
+}
+
+func TestClearActiveGameRetiresStateEvenWhenSignalWriteFails(t *testing.T) {
+	t.Parallel()
+
+	published := models.NewActiveMedia(ArcadeSystem, ArcadeSystem, "game.mra", "Game", "Arcade")
+	tr := &Tracker{
+		ActiveGameID: "Arcade/game.mra", ActiveGamePath: "game.mra", ActiveGameName: "Game",
+		ActiveSystem: ArcadeSystem, ActiveSystemName: ArcadeSystem,
+		writeActiveGame: func(path string) error {
+			assert.Empty(t, path)
+			return assert.AnError
+		},
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+	}
+
+	err := tr.ClearActiveGame()
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Empty(t, tr.ActiveGameID)
+	assert.Empty(t, tr.ActiveGamePath)
+	assert.Empty(t, tr.ActiveGameName)
+	assert.Empty(t, tr.ActiveSystem)
+	assert.Empty(t, tr.ActiveSystemName)
+	assert.Nil(t, published)
 }
 
 func TestTrackerFileChanged(t *testing.T) {

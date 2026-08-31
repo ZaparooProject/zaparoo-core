@@ -40,6 +40,10 @@ import (
 func (m *manager) executeCommand(
 	ctx context.Context, operationType string, raw json.RawMessage,
 ) operationResult {
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
+	}
+
 	var params struct {
 		Value string `json:"value"`
 	}
@@ -72,10 +76,15 @@ func (m *manager) executeCommand(
 	token := tokens.Token{
 		ScanTime: time.Now(), Source: tokens.SourceRemote, Commands: []gozapscript.Command{command},
 	}
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
+	}
 	err = m.deps.RunZapScript(
 		ctx, token, playlists.PlaylistController{Queue: m.deps.PlaylistQueue}, nil, false)
 	if err != nil {
 		switch {
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			return failResult("execution_timeout")
 		case errors.Is(err, state.ErrLaunchInProgress):
 			return operationResult{Status: "busy"}
 		case errors.Is(err, zapscript.ErrFileNotFound):
@@ -85,6 +94,9 @@ func (m *manager) executeCommand(
 		default:
 			return failResult("execution_failed")
 		}
+	}
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
 	}
 	return succeedResult(map[string]any{}, resultLimit)
 }
