@@ -27,7 +27,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -160,6 +162,51 @@ func TestCheckBeforeLaunch_UsesPinnedLimitsAfterProfileDeactivates(t *testing.T)
 	reason, err := tm.CheckBeforeLaunch()
 	require.Error(t, err, "the pinned profile's limit still governs this session")
 	assert.Equal(t, models.PlaytimeLimitReasonDaily, reason)
+}
+
+// The periodic enforcement is the half that actually ends a session, and the
+// pin only ever exists while a game is running. Reading the live provider
+// there let a **profile.clear card mid-game switch the limit off and leave
+// the game running forever.
+func TestCheckLimits_EnforcesPinnedLimitsAfterProfileDeactivates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	const profileID = "kid-a"
+
+	mockDB := testhelpers.NewMockUserDBI()
+	// Two hours already played today against a one hour pinned daily limit.
+	mockDB.On("SumMediaPlayTimeForDayByProfile", mock.AnythingOfType("time.Time"), profileID).
+		Return(int64(7200), nil).Maybe()
+	mockDB.On("SumMediaPlayTimeForDay", mock.AnythingOfType("time.Time")).
+		Return(int64(7200), nil).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Maybe()
+	platform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+
+	clock := clockwork.NewFakeClockAt(now)
+	tm := NewLimitsManager(
+		&database.Database{UserDB: mockDB}, platform, cfg, clock, newNoOpMockPlayer(),
+	)
+	t.Cleanup(tm.Stop)
+
+	// The shared profile is active and enforces nothing.
+	tm.SetLimitsProvider(stubProvider{enabled: false, daily: 0, profileID: ""})
+	// The running game was launched by kid-a under a one hour daily limit.
+	tm.sessionLimits = &pinnedLimits{
+		profileID: profileID, enabled: true, daily: time.Hour, session: time.Hour,
+	}
+	tm.sessionStart = clock.Now().Add(-90 * time.Minute)
+	tm.sessionStartReliable = true
+	tm.state = StateActive
+
+	tm.checkLimits()
+
+	platform.AssertCalled(t, "StopActiveLauncher", platforms.StopForMenu)
 }
 
 func TestCheckBeforeLaunch_ProviderDisabledSkipsChecks(t *testing.T) {

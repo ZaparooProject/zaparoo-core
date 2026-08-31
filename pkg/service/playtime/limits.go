@@ -711,8 +711,10 @@ func (tm *LimitsManager) checkLimits() {
 	tm.pruneExpiredWaivers()
 
 	// Enforcement is decided by the effective limits: the live provider,
-	// or the launch-pinned context after a mid-game deactivation.
-	if !tm.limits.PlaytimeLimitsEnabled() {
+	// or the launch-pinned context after a mid-game deactivation. Reading
+	// the live provider here would let a profile switch mid-game turn its
+	// own limit off, which is the bypass the launch-time pin exists to stop.
+	if !tm.effectiveEnabled() {
 		return
 	}
 
