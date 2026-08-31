@@ -570,7 +570,7 @@ func startService(
 	go func() {
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
-			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
+			notifBroker, player, playbackManager, indexPauser, scrapePauser,
 			backupPauser, idleSched, apiReady,
 		)
 	}()

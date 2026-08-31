@@ -67,4 +67,7 @@ type Token struct {
 	// resolving their own.
 	Traits Traits
 	Unsafe bool
+	// Completion, when non-nil, receives the terminal result of processing
+	// this token exactly once. Only callers that wait on execution set it.
+	Completion *Completion
 }

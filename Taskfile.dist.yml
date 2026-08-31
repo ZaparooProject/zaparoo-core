@@ -118,6 +118,10 @@ tasks:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
       - go test -race {{.TEST_ARGS}}
+      - |
+        if [ '{{.TEST_ARGS}}' = './...' ]; then
+          (cd mister && go test -race ./...)
+        fi
 
   fuzz:
     desc: Run fuzz tests (default 30s per test, use FUZZ_TIME to override)
@@ -186,11 +190,13 @@ tasks:
     desc: Run golangci-lint
     cmds:
       - golangci-lint run ./...
+      - cd mister && golangci-lint run ./...
 
   lint-fix:
     desc: Run golangci-lint with auto-fixes
     cmds:
       - golangci-lint run --fix ./...
+      - cd mister && golangci-lint run --fix ./...
 
   vulncheck:
     desc: Run govulncheck for security vulnerabilities

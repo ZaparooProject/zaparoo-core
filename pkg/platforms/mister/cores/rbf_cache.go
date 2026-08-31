@@ -334,7 +334,8 @@ func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 		})
 	}
 
-	for _, system := range Systems {
+	for systemID := range Systems {
+		system := Systems[systemID]
 		if system.RBF == "" {
 			continue
 		}

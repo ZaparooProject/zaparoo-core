@@ -36,6 +36,7 @@ Taskfile.yml
 /out
 /scripts/mister/build/_build
 /mister
+!/mister/
 /linux
 
 .DS_Store
