@@ -20,6 +20,7 @@
 package playtime
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -745,6 +746,7 @@ func TestCheckBeforeLaunch(t *testing.T) {
 
 		reason, err := tm.CheckBeforeLaunch()
 		require.Error(t, err)
+		require.ErrorIs(t, err, ErrLimitReached)
 		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
 		mockDB.AssertExpectations(t)
 	})
@@ -774,6 +776,7 @@ func TestCheckBeforeLaunch(t *testing.T) {
 
 		reason, err := tm.CheckBeforeLaunch()
 		require.Error(t, err)
+		require.ErrorIs(t, err, ErrLimitReached)
 		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
 		mockDB.AssertExpectations(t)
 	})
@@ -804,6 +807,7 @@ func TestCheckBeforeLaunch(t *testing.T) {
 
 		reason, err := tm.CheckBeforeLaunch()
 		require.Error(t, err)
+		require.ErrorIs(t, err, ErrLimitReached)
 		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
 	})
 
@@ -833,7 +837,37 @@ func TestCheckBeforeLaunch(t *testing.T) {
 
 		reason, err := tm.CheckBeforeLaunch()
 		require.Error(t, err)
+		require.ErrorIs(t, err, ErrLimitReached)
 		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
+	})
+
+	t.Run("daily usage lookup failure - error is not a limit", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(0), errors.New("disk I/O error"))
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		require.NotErrorIs(t, err, ErrLimitReached)
+		assert.Empty(t, reason)
+		mockDB.AssertExpectations(t)
 	})
 
 	t.Run("both limits have time remaining - allowed", func(t *testing.T) {

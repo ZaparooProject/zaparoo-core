@@ -62,4 +62,7 @@ type Token struct {
 	// originating from source-backed tokens such as external drives.
 	PathRoot string
 	Unsafe   bool
+	// Completion, when non-nil, receives the terminal result of processing
+	// this token exactly once. Only callers that wait on execution set it.
+	Completion *Completion
 }

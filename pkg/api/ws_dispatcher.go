@@ -39,6 +39,7 @@ type mediaDBLockMode uint8
 
 const (
 	wsHighConcurrency         = 1
+	wsRunConcurrency          = 1
 	wsNormalConcurrency       = 4
 	wsLowConcurrency          = 2
 	wsQueueSize               = 256
@@ -114,6 +115,7 @@ type wsSessionDispatcher struct {
 	session      *melody.Session
 	inputSession platforms.InputSession
 	high         chan *wsRequestJob
+	run          chan *wsRequestJob
 	normal       chan *wsRequestJob
 	input        chan *wsRequestJob
 	low          chan *wsRequestJob
@@ -144,6 +146,7 @@ func getOrCreateWSDispatcher(
 		session:      session,
 		inputSession: inputSession,
 		high:         make(chan *wsRequestJob, wsQueueSize),
+		run:          make(chan *wsRequestJob, wsQueueSize),
 		normal:       make(chan *wsRequestJob, wsQueueSize),
 		input:        make(chan *wsRequestJob, wsQueueSize),
 		low:          make(chan *wsRequestJob, wsLowQueueSize),
@@ -172,6 +175,7 @@ func (d *wsSessionDispatcher) close() {
 		d.cancel()
 		d.releaseInputSession()
 		d.drainQueuedJobs(d.high)
+		d.drainQueuedJobs(d.run)
 		d.drainQueuedJobs(d.normal)
 		d.drainQueuedJobs(d.input)
 		d.drainQueuedJobs(d.low)
@@ -246,6 +250,9 @@ func (d *wsSessionDispatcher) start() {
 	for range wsHighConcurrency {
 		go d.worker(d.high)
 	}
+	for range wsRunConcurrency {
+		go d.worker(d.run)
+	}
 	for range wsNormalConcurrency {
 		go d.worker(d.normal)
 	}
@@ -263,6 +270,8 @@ func (d *wsSessionDispatcher) queue(priority apiRequestPriority) chan *wsRequest
 	switch priority {
 	case apiPriorityHigh:
 		return d.high
+	case apiPriorityRun:
+		return d.run
 	case apiPriorityInput:
 		return d.input
 	case apiPriorityLow:
@@ -353,9 +362,11 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 }
 
 func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
-	// Instant control methods (run/launch, stop, media.control) never touch
-	// MediaDB, so they must not wait behind a slow tag/meta write or an
-	// in-flight indexing commit holding this lock.
+	// Control methods (run/launch, stop, media.control) never touch MediaDB
+	// from the API goroutine, so they must not wait behind a slow tag/meta
+	// write or an in-flight indexing commit holding this lock. run/launch
+	// wait on the service worker instead, which reads MediaDB on its own
+	// connection with bounded timeouts.
 	if isMediaDBFreeInstantMethod(method) {
 		return mediaDBLockNone
 	}

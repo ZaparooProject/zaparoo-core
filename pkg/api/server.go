@@ -563,6 +563,18 @@ func handleRequest(
 
 	resp, err := definition.handler(env)
 	if err != nil {
+		var catErr *models.CategorizedError
+		if errors.As(err, &catErr) {
+			// The producer already logged the cause at the right level; the
+			// wire only gets the safe message and the category.
+			log.Warn().Err(catErr.Err).Str("method", req.Method).
+				Str("category", catErr.Category).Msg("method reported failure")
+			return nil, &models.ErrorObject{
+				Code:    1,
+				Message: catErr.Message,
+				Data:    models.ErrorData{Category: catErr.Category},
+			}
+		}
 		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
 		if errors.As(err, &quietErr) {

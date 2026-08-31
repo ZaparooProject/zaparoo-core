@@ -22,6 +22,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,12 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 
 	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
 		return nil, models.ClientErrf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
+	}, true)
+	require.NoError(t, err)
+
+	err = methodMap.AddMethod("test.categorized", func(_ requests.RequestEnv) (any, error) {
+		cause := fmt.Errorf("%w: /media/fat/games/secret.sfc", zapscript.ErrFileNotFound)
+		return nil, models.CategorizedErr(models.ErrorCategoryMediaNotFound, "media not found", cause)
 	}, true)
 	require.NoError(t, err)
 
@@ -424,6 +431,34 @@ func TestHandlePostRequest_ExpectedError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
 	assert.Contains(t, resp.Error.Message, "no control capabilities")
+}
+
+// TestHandlePostRequest_CategorizedError tests that a CategorizedError puts
+// its category in error.data and only the safe message on the wire.
+func TestHandlePostRequest_CategorizedError(t *testing.T) {
+	t.Parallel()
+
+	handler, _, _ := createTestPostHandler(t)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.categorized"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "/media/fat", "cause must not reach the wire")
+
+	var resp models.ResponseErrorObject
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, 1, resp.Error.Code)
+	assert.Equal(t, "media not found", resp.Error.Message)
+	data, ok := resp.Error.Data.(map[string]any)
+	require.True(t, ok, "error.data should be an object, got %T", resp.Error.Data)
+	assert.Equal(t, models.ErrorCategoryMediaNotFound, data["category"])
 }
 
 // TestHandlePostRequest_OversizedBody tests that oversized request bodies are rejected.
