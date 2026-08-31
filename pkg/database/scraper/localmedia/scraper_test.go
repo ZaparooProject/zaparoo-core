@@ -454,10 +454,12 @@ func TestMediaPropsForPath_PrefersOwnArtworkOverFolderArtwork(t *testing.T) {
 func TestIsContainerLaunchTarget(t *testing.T) {
 	t.Parallel()
 
-	root := "/roms/PSX"
-	cue := database.MediaWithFullPath{DBID: 1, Path: root + "/Cool Game/Disc 1.cue"}
-	bin := database.MediaWithFullPath{DBID: 2, Path: root + "/Cool Game/Disc 1.bin"}
-	loose := database.MediaWithFullPath{DBID: 3, Path: root + "/Other.chd"}
+	// Host separators, so the empty-ParentDir fallback is exercised the way a
+	// row written by filepath.Join reaches it on Windows.
+	root := filepath.Join(string(filepath.Separator), "roms", "PSX")
+	cue := database.MediaWithFullPath{DBID: 1, Path: filepath.Join(root, "Cool Game", "Disc 1.cue")}
+	bin := database.MediaWithFullPath{DBID: 2, Path: filepath.Join(root, "Cool Game", "Disc 1.bin")}
+	loose := database.MediaWithFullPath{DBID: 3, Path: filepath.Join(root, "Other.chd")}
 	containers := containerIndexForMedia([]database.MediaWithFullPath{cue, bin, loose})
 
 	assert.True(t, isContainerLaunchTarget(containers, &cue))
