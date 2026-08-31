@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -39,6 +40,10 @@ import (
 func (m *manager) executeCommand(
 	ctx context.Context, operationType string, raw json.RawMessage,
 ) operationResult {
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
+	}
+
 	var params struct {
 		Value string `json:"value"`
 	}
@@ -46,11 +51,13 @@ func (m *manager) executeCommand(
 		return failResult("bad_params")
 	}
 	// None of the three structural verbs ever legitimately take a URL as
-	// their value (a system ID, media path, or script name never is one).
-	// Rejecting it here, in addition to RunCommand skipping ZapLink
-	// resolution for remote-sourced tokens, gives a clean bad_params error
-	// instead of a downstream failure.
-	if isURLLaunch(params.Value) {
+	// their value (a system ID, media path, or script name never is one),
+	// and the launch command would install-fetch an http(s) or smb URL onto
+	// the device. The Online API rejects any scheme before an operation is
+	// created; this repeats that check locally so a bypassed or compromised
+	// API still can't reach the fetch path, and gives a clean bad_params
+	// error instead of a downstream failure.
+	if containsURLScheme(params.Value) {
 		return failResult("bad_params")
 	}
 	command, err := buildStructuralCommand(operationType, params.Value)
@@ -69,10 +76,15 @@ func (m *manager) executeCommand(
 	token := tokens.Token{
 		ScanTime: time.Now(), Source: tokens.SourceRemote, Commands: []gozapscript.Command{command},
 	}
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
+	}
 	err = m.deps.RunZapScript(
 		ctx, token, playlists.PlaylistController{Queue: m.deps.PlaylistQueue}, nil, false)
 	if err != nil {
 		switch {
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			return failResult("execution_timeout")
 		case errors.Is(err, state.ErrLaunchInProgress):
 			return operationResult{Status: "busy"}
 		case errors.Is(err, zapscript.ErrFileNotFound):
@@ -82,6 +94,9 @@ func (m *manager) executeCommand(
 		default:
 			return failResult("execution_failed")
 		}
+	}
+	if ctx.Err() != nil {
+		return failResult("execution_timeout")
 	}
 	return succeedResult(map[string]any{}, resultLimit)
 }
@@ -122,11 +137,22 @@ func validCommandValue(value string) bool {
 	return true
 }
 
-func isURLLaunch(value string) bool {
-	base := value
-	if index := strings.IndexByte(base, '?'); index >= 0 {
-		base = base[:index]
+// urlSchemePattern matches a valid URI scheme followed by a colon at a
+// token boundary anywhere in a command value. Single-letter drive prefixes
+// are filtered separately so Windows media paths remain valid.
+//
+//nolint:gochecknoglobals // compiled once
+var urlSchemePattern = regexp.MustCompile(`(?i)(^|[^a-z0-9+.-])([a-z][a-z0-9+.-]*):`)
+
+func containsURLScheme(value string) bool {
+	for _, match := range urlSchemePattern.FindAllStringSubmatchIndex(value, -1) {
+		schemeStart, schemeEnd := match[4], match[5]
+		isDrivePath := schemeEnd-schemeStart == 1 && schemeEnd+1 < len(value) &&
+			(value[schemeEnd+1] == '/' || value[schemeEnd+1] == '\\') &&
+			(schemeStart == 0 || value[schemeStart-1] == '/' || value[schemeStart-1] == '\\')
+		if !isDrivePath {
+			return true
+		}
 	}
-	parsed, err := url.Parse(strings.TrimSpace(base))
-	return err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https"))
+	return false
 }

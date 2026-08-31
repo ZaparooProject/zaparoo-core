@@ -105,15 +105,29 @@ func TestTraitsAreStable(t *testing.T) {
 }
 
 // Trait keys are case-insensitive, so "tap" and "TAP" normalize to the same
-// key. Writing both into the map let its iteration order decide the scan mode,
-// so the same card could resolve differently between runs.
+// key. The parser never emits both — its shorthand form folds them to one key
+// holding the last value — but a caller that builds the map some other way gets
+// the rule a #tap/#hold contradiction gets: disagreeing spellings mean the
+// token declared nothing, so it inherits its reader's mode rather than forcing
+// one, and the answer never turns on Go's map iteration order.
 func TestResolveTraits_MixedCaseDuplicateKeysInherit(t *testing.T) {
 	t.Parallel()
 
-	for range 32 {
+	for range 64 {
 		traits := tokens.ResolveTraits(map[string]any{"tap": true, "TAP": false})
 		assert.Empty(t, traits.ScanMode(),
 			"a trait declared twice with different values must inherit, not pick one")
+	}
+}
+
+// Three spellings, two of which agree, is still a contradiction: it must not
+// resolve to whichever value happened to be seen twice.
+func TestResolveTraits_MixedCaseTripleDuplicateKeysInherit(t *testing.T) {
+	t.Parallel()
+
+	for range 64 {
+		traits := tokens.ResolveTraits(map[string]any{"hold": true, "HOLD": false, "Hold": true})
+		assert.Empty(t, traits.ScanMode())
 	}
 }
 

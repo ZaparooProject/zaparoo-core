@@ -720,7 +720,18 @@ type RemoteActivityEntry struct {
 	ErrorCode     string `json:"errorCode,omitempty"`
 }
 
+// RemoteStatusInfo is the remote operations poller's last observation:
+// why the device is or isn't currently reachable for remote commands.
+// State is one of unknown, disabled, unlinked, connecting, waiting,
+// not_remote_device, unavailable, credential_rejected, or error.
+type RemoteStatusInfo struct {
+	State         string `json:"state"`
+	LastContactAt string `json:"lastContactAt,omitempty"`
+	LastErrorCode string `json:"lastErrorCode,omitempty"`
+}
+
 type RemoteActivityResponse struct {
+	Status  RemoteStatusInfo      `json:"status"`
 	Entries []RemoteActivityEntry `json:"entries"`
 }
 

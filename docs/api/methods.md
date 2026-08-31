@@ -762,6 +762,8 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
+A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it holds one media file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and holds no media in subdirectories. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
 Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
 #### Parameters
@@ -794,7 +796,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -802,9 +804,9 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries. |
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
 | hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
 
@@ -2675,6 +2677,9 @@ None.
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
 | backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| playtimeBaseUrl           | string                                    | No       | Configured play history sync server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
+| remoteControlBaseUrl      | string                                    | No       | Configured remote control server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2684,7 +2689,7 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
-| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. |
+| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
 
 ##### System default object
 
@@ -2766,6 +2771,7 @@ An object containing any of the following optional keys:
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
+| remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
 #### Result
 
@@ -4370,7 +4376,7 @@ None.
 | :---------------- | :------------------------- | :------- | :---------------------------------- |
 | readers           | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
 | holdOwnerReaderId | string                     | No       | ID of the reader whose token is currently tracked as the owner of the running media. Omitted when no token is tracked. |
-| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. Falls back to the global mode when the owning reader has since disconnected. |
+| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. This is resolved exactly as the removal will resolve it, so an owner whose reader has since disconnected reports `hold` — the decision made while that reader was present still stands. |
 
 ##### Reader info object
 
@@ -5076,6 +5082,97 @@ Returns an empty object `{}` on success.
   "jsonrpc": "2.0",
   "id": "clients-pair-cancel-1",
   "result": {}
+}
+```
+
+## Remote control
+
+Remote control lets the Zaparoo Online account a device is linked to send a fixed set of commands to it (search and browse the media library, list systems and launchers, launch, stop, run a MiSTer script) through the Zaparoo Online API. It is off until the device owner turns on `remoteControlEnabled` in [settings.update](#settingsupdate), and is turned off again automatically whenever the account is linked or unlinked. Every command that reaches the device is recorded in a local ledger.
+
+### remote.activity
+
+**Access:** Localhost and authenticated admin clients only.
+
+Return the current remote control status and the most recent entries from the remote command ledger, as an owner-facing record of what the linked account's remote commands have done on this device.
+
+#### Parameters
+
+| Key   | Type   | Required | Description                                                     |
+| :---- | :----- | :------- | :-------------------------------------------------------------- |
+| limit | number | No       | Number of entries to return, between 1 and 100. Defaults to 20. |
+
+#### Result
+
+| Key     | Type                                                   | Required | Description                                       |
+| :------ | :----------------------------------------------------- | :------- | :------------------------------------------------ |
+| status  | [RemoteStatus](#remote-status-object)                  | Yes      | Why the device is or isn't reachable right now.   |
+| entries | [RemoteActivityEntry](#remote-activity-entry-object)[] | Yes      | Ledger entries, newest first.                     |
+
+##### Remote status object
+
+| Key           | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| :------------ | :----- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| state         | string | Yes      | `unknown` (nothing reported yet), `disabled` (remote control is off), `unlinked` (no linked account), `connecting`, `waiting` (polling for commands normally), `not_remote_device` (the server refused the poll because this device is not the account's designated remote device; choose it on Zaparoo Online), `unavailable` (the server reports the feature as off), `credential_rejected` (the server rejected the device credential; link the account again), or `error` (the last capability heartbeat or poll failed for another reason). |
+| lastContactAt | string | No       | RFC 3339 time the remote service last answered normally, whether that was a capability heartbeat or a poll. Omitted until the first successful contact.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| lastErrorCode | string | No       | The server's error code for the last failure (for example `remote_slot_required`), or a short local code such as `unreachable`. Omitted while the state carries no error.                                                                                                                                                                                                                                                                                                                                              |
+
+##### Remote activity entry object
+
+| Key           | Type   | Required | Description                                                                                                                                        |
+| :------------ | :----- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| createdAt     | string | Yes      | RFC 3339 time the command was first received.                                                                                                      |
+| operationType | string | Yes      | The command type, for example `launch` or `media.search`.                                                                                          |
+| originKind    | string | Yes      | `first_party` when the account issued the command directly, or `api_key` when a User API key did.                                                  |
+| originKeyName | string | No       | Name of the User API key that issued the command. Only present for `api_key` origins.                                                              |
+| state         | string | Yes      | Ledger state: `recorded`, `accepted`, `executing`, `terminal` (a result was produced), `void` (the server no longer knew the command), or `expired`. |
+| status        | string | No       | Outcome reported for a terminal entry: `succeeded`, `failed`, or `busy`.                                                                           |
+| errorCode     | string | No       | Failure code for a failed entry, for example `bad_params`, `media_not_found`, or `unsupported`.                                                    |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "method": "remote.activity",
+  "params": {
+    "limit": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "result": {
+    "status": {
+      "state": "waiting",
+      "lastContactAt": "2026-08-30T01:02:03Z"
+    },
+    "entries": [
+      {
+        "createdAt": "2026-08-30T01:01:40Z",
+        "operationType": "launch",
+        "originKind": "api_key",
+        "originKeyName": "misterzine",
+        "state": "terminal",
+        "status": "succeeded"
+      },
+      {
+        "createdAt": "2026-08-30T01:00:12Z",
+        "operationType": "media.search",
+        "originKind": "first_party",
+        "state": "terminal",
+        "status": "failed",
+        "errorCode": "bad_params"
+      }
+    ]
+  }
 }
 ```
 

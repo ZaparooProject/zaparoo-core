@@ -83,6 +83,12 @@ whose NFC antenna taps. `scan_mode` on a `[[readers.connect]]` entry applies to
 that one device; on `[readers.drivers.<id>]` it applies to every reader using
 that driver. An empty or unrecognised value falls through to the next level.
 
+Driver IDs are matched with neither case nor underscores significant, so
+`pn532`, `PN532` and `pn_532` all name the same driver, wherever one appears —
+a `[readers.drivers.<id>]` section, a `[[readers.connect]]` entry's `driver`,
+or an `enabled` or `auto_detect` override. Scan mode values are read the same
+way, so `hold`, `HOLD` and `" hold "` are one value.
+
 ```toml
 [readers.scan]
 mode = "tap"
@@ -104,6 +110,23 @@ scan_mode = "hold"
 - [ ] Setting `scan_mode` never changes `readers.scan.mode`, and the app's Scan
       mode setting still reads and writes only the global value.
 - [ ] The `readers` API method reports each reader's effective mode.
+- [ ] A driver named in a different case, or with underscores, still resolves:
+      `[readers.drivers.PN532]` configures the `pn532` driver, and a connect
+      entry with `driver = "PN532"` opens.
+- [ ] `settings.update` rejects a `scanMode` that is neither `tap` nor `hold`,
+      and stores any accepted spelling canonically.
+
+### Two readers at once
+
+Each reader's presence is tracked separately, so what one reader reports never
+decides what another reader's report means.
+
+- [ ] With a card on each of two readers, removing one exits (or not) according
+      to that card and that reader, and leaves the other alone.
+- [ ] Scanning a command card on a second reader, with or without removing it
+      again, does not stop the first reader's removal from exiting its media.
+- [ ] The same card presented to both readers is two presences: removing it
+      from one does not clear the other.
 
 ---
 
@@ -118,7 +141,8 @@ setting. Both traits are boolean, so the shorthand form is the normal one:
 ```
 
 The value form works as well, since `#hold=false` means the same as `#tap`.
-Trait keys are case-insensitive.
+Trait keys are case-insensitive, so `#hold` and `#HOLD` are one trait; writing
+it twice is the same as writing its last value once.
 
 - [ ] With `readers.scan.mode='hold'`, removing a `#tap` token leaves the game
       running, and its `on_remove` hook does not run.

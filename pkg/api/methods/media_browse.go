@@ -1374,7 +1374,7 @@ func resolveDirSingletonAliases(
 			FileCount: dir.FileCount,
 		})
 	}
-	if len(candidates) == 0 || !singletonMediaAliasesEnabled(env) {
+	if len(candidates) == 0 {
 		return nil
 	}
 

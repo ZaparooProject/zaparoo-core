@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scanmode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -153,20 +154,12 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 
 	// The token that owns hold-mode exit, reported by reader and effective
 	// policy only so diagnostics never expose what is written on the token.
+	// The mode comes from the same resolver the exit path uses, including its
+	// rule for an owner whose reader has since disconnected, so this never
+	// reports a policy other than the one removal will apply.
 	if owner := st.GetSoftwareToken(); owner != nil {
 		response.HoldOwnerReaderID = owner.ReaderID
-		response.HoldScanMode = owner.Traits.ScanMode()
-		if response.HoldScanMode == "" {
-			// A reader can disconnect while it still owns the running media.
-			// Reporting an owner with no mode at all reads as a missing field
-			// rather than a resolvable policy, so fall back to the global mode
-			// the owner would answer to now.
-			if r, ok := st.GetReader(owner.ReaderID); ok && r != nil {
-				response.HoldScanMode = cfg.ScanModeForReader(r.Metadata().ID, r.Path())
-			} else {
-				response.HoldScanMode = cfg.GlobalScanMode()
-			}
-		}
+		response.HoldScanMode = scanmode.ForTokenAfterRemoval(cfg, st, owner)
 	}
 
 	return response, nil

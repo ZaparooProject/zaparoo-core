@@ -28,17 +28,25 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
-func singletonMediaAliasesEnabled(env *requests.RequestEnv) bool {
+// zipContainerAliasesEnabled reports whether a zip file is also browseable as a
+// directory on this platform. Only the zip-specific alias walk in
+// equivalentMediaIDs depends on this; directory container resolution applies
+// everywhere.
+func zipContainerAliasesEnabled(env *requests.RequestEnv) bool {
 	return env != nil && env.Platform != nil && env.Platform.Settings().ZipsAsDirs
 }
 
+// resolveSingletonMediaPath resolves a directory path to the single logical
+// launch target it collapses to, so a disc folder such as "Game/Game.cue" can be
+// addressed by the folder path. Directories that hold nested media or an
+// ambiguous file set do not resolve and stay browseable.
 func resolveSingletonMediaPath(
 	env *requests.RequestEnv,
 	system database.System,
 	mediaPath string,
 ) (*database.Media, error) {
-	if !singletonMediaAliasesEnabled(env) {
-		return nil, nil //nolint:nilnil // disabled aliasing has no singleton fallback
+	if env == nil || env.Database == nil || env.Database.MediaDB == nil {
+		return nil, nil //nolint:nilnil // no database has no singleton fallback
 	}
 
 	media, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, system.DBID, mediaPath)
@@ -54,7 +62,7 @@ func equivalentMediaIDs(env *requests.RequestEnv, row *database.MediaFullRow) ([
 	}
 
 	ids := []int64{row.DBID}
-	if env == nil || env.Database == nil || env.Database.MediaDB == nil || !singletonMediaAliasesEnabled(env) {
+	if env == nil || env.Database == nil || env.Database.MediaDB == nil || !zipContainerAliasesEnabled(env) {
 		return ids, nil
 	}
 	seen := map[int64]bool{row.DBID: true}

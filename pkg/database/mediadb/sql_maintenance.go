@@ -49,6 +49,10 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 
 	// Delete in reverse dependency order (children first, parents last)
 	// to avoid any cascading overhead and minimize index updates
+	//
+	// The canonical tag vocabulary stamp goes with Tags and TagTypes: it records
+	// that the vocabulary rows exist, and leaving it behind would make the next
+	// index run skip seeding them into the now-empty tables.
 	sqlStmt := `
 	delete from MediaProperties;
 	delete from MediaTitleProperties;
@@ -63,6 +67,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from SlugResolutionCache;
 	delete from BrowseDirCounts;
 	delete from BrowseDirs;
+	delete from DBConfig where Name = '` + DBConfigCanonicalTagVocabHash + `';
 	`
 	_, err = db.ExecContext(ctx, sqlStmt)
 	if err != nil {

@@ -111,11 +111,16 @@ func TestScanPreprocessor_Process(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			proc := &scanPreprocessor{prevToken: tt.initialPrev}
-			action := proc.Process(tt.scan, tt.readerError)
+			const readerID = "reader-a"
+			proc := &scanPreprocessor{}
+			if tt.initialPrev != nil {
+				proc.prevTokens = map[string]*tokens.Token{readerID: tt.initialPrev}
+			}
+			action := proc.Process(readerID, tt.scan, tt.readerError)
 
 			assert.Equal(t, tt.wantAction, action, "unexpected action")
-			assert.Equal(t, tt.wantPrevPost, proc.PrevToken(), "unexpected prevToken after Process")
+			assert.Equal(t, tt.wantPrevPost, proc.PrevToken(readerID),
+				"unexpected tracked token after Process")
 		})
 	}
 }
@@ -131,20 +136,21 @@ func TestScanPreprocessor_ReaderErrorSequence(t *testing.T) {
 		Text: "**launch.system:snes",
 	}
 
+	const readerID = "reader-a"
 	proc := &scanPreprocessor{}
 
 	// 1. Initial card scan
-	action := proc.Process(card, false)
+	action := proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action, "first scan should be new token")
-	assert.Equal(t, card, proc.PrevToken())
+	assert.Equal(t, card, proc.PrevToken(readerID))
 
-	// 2. Reader error (USB hotplug) — prevToken preserved
-	action = proc.Process(nil, true)
+	// 2. Reader error (USB hotplug) — tracked token preserved
+	action = proc.Process(readerID, nil, true)
 	assert.Equal(t, scanReaderErrorRemoval, action, "reader error should be error removal")
-	assert.Equal(t, card, proc.PrevToken(), "prevToken must survive reader error")
+	assert.Equal(t, card, proc.PrevToken(readerID), "tracked token must survive reader error")
 
 	// 3. Reader reconnects, same card — duplicate
-	action = proc.Process(card, false)
+	action = proc.Process(readerID, card, false)
 	assert.Equal(t, scanSkipDuplicate, action, "re-scan after error must be duplicate")
 }
 
@@ -158,18 +164,19 @@ func TestScanPreprocessor_NormalRemovalSequence(t *testing.T) {
 		Text: "**launch.system:nes",
 	}
 
+	const readerID = "reader-a"
 	proc := &scanPreprocessor{}
 
 	// 1. Scan card
-	action := proc.Process(card, false)
+	action := proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action)
 
 	// 2. Normal removal
-	action = proc.Process(nil, false)
+	action = proc.Process(readerID, nil, false)
 	assert.Equal(t, scanNormalRemoval, action)
-	assert.Nil(t, proc.PrevToken(), "prevToken should be cleared")
+	assert.Nil(t, proc.PrevToken(readerID), "tracked token should be cleared")
 
 	// 3. Same card again — should be new token (not duplicate)
-	action = proc.Process(card, false)
+	action = proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action)
 }

@@ -92,14 +92,18 @@ func (r ReadersConnect) IsEnabled() bool {
 }
 
 func (r ReadersConnect) ConnectionString() string {
-	// Normalize driver ID by removing underscores
-	normalizedDriver := strings.ReplaceAll(r.Driver, "_", "")
-	return fmt.Sprintf("%s:%s", normalizedDriver, r.Path)
+	return fmt.Sprintf("%s:%s", normalizeDriverID(r.Driver), r.Path)
 }
 
-// normalizeDriverID removes underscores from driver IDs for backwards compatibility.
+// normalizeDriverID returns a driver ID in the form driver IDs are compared in.
+// Underscores are dropped for backwards compatibility with the legacy format
+// (e.g. "simple_serial"), and case is folded because a driver ID is something a
+// user types into a config file: "PN532" and "pn532" name the same driver.
+//
+// This must stay in step with readers.NormalizeDriverID, which pkg/config
+// cannot import.
 func normalizeDriverID(id string) string {
-	return strings.ReplaceAll(id, "_", "")
+	return strings.ToLower(strings.ReplaceAll(id, "_", ""))
 }
 
 func (c *Instance) ReadersScan() ReadersScan {
@@ -135,7 +139,7 @@ func (c *Instance) TapModeEnabled() bool {
 	// Normalized like GlobalScanMode and ScanModeForReader read the same
 	// value: "TAP" is tap, and an unset or unrecognised mode falls through to
 	// the tap default rather than reporting neither mode.
-	return normalizeScanMode(c.vals.Readers.Scan.Mode) != ScanModeHold
+	return NormalizeScanMode(c.vals.Readers.Scan.Mode) != ScanModeHold
 }
 
 func (c *Instance) HoldModeEnabled() bool {
@@ -144,13 +148,15 @@ func (c *Instance) HoldModeEnabled() bool {
 	// Normalized, like ScanModeForReader does with the same value: otherwise a
 	// global mode of "HOLD" or " hold " holds for a token that came from a
 	// reader and taps for one that did not.
-	return normalizeScanMode(c.vals.Readers.Scan.Mode) == ScanModeHold
+	return NormalizeScanMode(c.vals.Readers.Scan.Mode) == ScanModeHold
 }
 
-// normalizeScanMode returns mode as a recognised scan mode, or "" when it is
-// unset or unrecognised. An unrecognised value falls through to the next level
-// of the override chain rather than failing the whole config.
-func normalizeScanMode(mode string) string {
+// NormalizeScanMode returns mode as a recognised scan mode, or "" when it is
+// unset or unrecognised. Callers reading configuration treat "" as "not set
+// here" and fall through to the next level of the override chain rather than
+// failing the whole config; callers accepting a value from an API caller
+// reject it instead, so a typo is reported rather than silently ignored.
+func NormalizeScanMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case ScanModeTap:
 		return ScanModeTap
@@ -171,7 +177,7 @@ func (c *Instance) scanModeForReaderLocked(driverID, path string) string {
 		if normalizeDriverID(conn.Driver) != normalizedID || conn.Path != path {
 			continue
 		}
-		if mode := normalizeScanMode(conn.ScanMode); mode != "" {
+		if mode := NormalizeScanMode(conn.ScanMode); mode != "" {
 			return mode
 		}
 	}
@@ -180,7 +186,7 @@ func (c *Instance) scanModeForReaderLocked(driverID, path string) string {
 		if normalizeDriverID(key) != normalizedID {
 			continue
 		}
-		if mode := normalizeScanMode(driver.ScanMode); mode != "" {
+		if mode := NormalizeScanMode(driver.ScanMode); mode != "" {
 			return mode
 		}
 	}
@@ -199,7 +205,7 @@ func (c *Instance) ScanModeForReader(driverID, path string) string {
 	if mode := c.scanModeForReaderLocked(driverID, path); mode != "" {
 		return mode
 	}
-	if mode := normalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
+	if mode := NormalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
 		return mode
 	}
 	return ScanModeTap
@@ -210,7 +216,7 @@ func (c *Instance) ScanModeForReader(driverID, path string) string {
 func (c *Instance) GlobalScanMode() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if mode := normalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
+	if mode := NormalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
 		return mode
 	}
 	return ScanModeTap

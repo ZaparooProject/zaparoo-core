@@ -37,6 +37,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -172,6 +173,11 @@ type loadRecordIndexes struct {
 	MediaByPathFold  map[string]database.Media
 	MediaByTitleDBID map[int64][]database.Media
 	MediaByFilename  map[string][]database.Media
+	// Containers resolves directory paths to the single media row they collapse
+	// to, matching what browse shows for the same folder. It is built over every
+	// indexed row, including already-scraped ones, because a directory holding
+	// nested media is not a container regardless of scrape state.
+	Containers *container.Index
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -313,6 +319,7 @@ type parsedGamelistFile struct {
 	AssetRootPath        string
 	GamelistPath         string
 	Games                []esapi.Game
+	Folders              []esapi.Folder
 	RequireExistingImage bool
 }
 
@@ -347,11 +354,13 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 		log.Info().
 			Str("path", gamelistPath).
 			Int("entries", len(gl.Games)).
+			Int("folder_entries", len(gl.Folders)).
 			Msg("gamelistxml: loaded gamelist.xml")
 		parsed.Files = append(parsed.Files, parsedGamelistFile{
 			RootPath:     rootPath,
 			GamelistPath: gamelistPath,
 			Games:        gl.Games,
+			Folders:      gl.Folders,
 		})
 	}
 
@@ -397,12 +406,14 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem)
 	log.Info().
 		Str("path", gamelistPath).
 		Int("entries", len(gl.Games)).
+		Int("folder_entries", len(gl.Folders)).
 		Msg("gamelistxml: loaded custom gamelist.xml")
 	return parsedGamelistFile{
 		RootPath:             rootPath,
 		AssetRootPath:        customSystemDir,
 		GamelistPath:         gamelistPath,
 		Games:                gl.Games,
+		Folders:              gl.Folders,
 		RequireExistingImage: true,
 	}, true
 }
@@ -435,6 +446,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	candidateTitles := len(indexes.TitlesBySlug)
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
 	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
+	var containerPathResolutions, folderEntries, folderMatches, folderUnmatched int
 
 outer:
 	for _, file := range parsed.Files {
@@ -452,6 +464,7 @@ outer:
 		}
 		gamelistFiles++
 		gamelistEntries += len(file.Games)
+		folderEntries += len(file.Folders)
 
 		for i := range file.Games {
 			game := &file.Games[i]
@@ -475,6 +488,17 @@ outer:
 			})
 
 			pathMedia, matchedPathKey, pathOK := g.canonicalMediaForResolvedPath(indexes, resolved)
+			if !pathOK {
+				// ES-DE writes <game> entries whose path is a directory when the
+				// folder name carries a ROM extension, so a disc folder reads as
+				// one game. Resolve those through the same container rule browse
+				// uses, otherwise the entry falls back to a slug-only match and
+				// its artwork is dropped as unsafe for media scope.
+				pathMedia, matchedPathKey, pathOK = containerMediaForDir(indexes, resolved)
+				if pathOK {
+					containerPathResolutions++
+				}
+			}
 
 			title, titleOK := indexes.TitlesBySlug[pf.Slug]
 			switch {
@@ -571,6 +595,36 @@ outer:
 				break outer
 			}
 		}
+
+		// Folder entries run after this file's games so a real <game> pointing at
+		// the folder's launch target always wins the row.
+		for i := range file.Folders {
+			folder := &file.Folders[i]
+			resolved := esmedia.ResolvePath(folder.Path, file.RootPath)
+			if resolved == "" {
+				invalidPaths++
+				continue
+			}
+			folderMedia, matchedPathKey, ok := containerMediaForDir(indexes, resolved)
+			if !ok {
+				// Ordinary collections have no row to carry their metadata.
+				folderUnmatched++
+				continue
+			}
+			folderMatches++
+			records = append(records, &GamelistRecord{
+				SystemRootPath:       file.RootPath,
+				AssetRootPath:        file.AssetRootPath,
+				MediaDirsByRoot:      fileMediaDirsByRoot,
+				Game:                 folderAsGame(folder),
+				MatchKind:            gamelistMatchPathOnly,
+				MatchedTitleDBID:     folderMedia.MediaTitleDBID,
+				MatchedMediaDBID:     folderMedia.DBID,
+				MediaLevelWriteSafe:  true,
+				RequireExistingImage: file.RequireExistingImage,
+			})
+			delete(indexes.MediaByPathFold, matchedPathKey)
+		}
 	}
 
 	log.Info().
@@ -585,6 +639,10 @@ outer:
 		Int("slug_path_selections", slugPathSelections).
 		Int("slug_first_media_fallbacks", slugFirstMediaFallbacks).
 		Int("path_only_fallbacks", pathOnlyFallbacks).
+		Int("container_path_resolutions", containerPathResolutions).
+		Int("folder_entries", folderEntries).
+		Int("folder_matches", folderMatches).
+		Int("folder_unmatched", folderUnmatched).
 		Int("unmatched_records", unmatchedRecords).
 		Int("matched_records", len(records)).
 		Int("remaining_unmatched_titles", len(indexes.TitlesBySlug)).
@@ -779,13 +837,17 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
 			MediaByFilename:  make(map[string][]database.Media, len(allMedia)),
 		}
+		containerRows := make([]database.Media, 0, len(allMedia))
 		for i := range allMedia {
 			m := &allMedia[i]
 			media := database.Media{
 				DBID:           m.DBID,
 				MediaTitleDBID: m.MediaTitleDBID,
 				Path:           m.Path,
+				ParentDir:      m.ParentDir,
+				IsMissing:      m.IsMissing,
 			}
+			containerRows = append(containerRows, media)
 			if _, scraped := scrapedIDs[m.DBID]; !scraped {
 				indexes.MediaByPathFold[pathFoldKey(m.Path)] = media
 				indexes.MediaByTitleDBID[m.MediaTitleDBID] = append(indexes.MediaByTitleDBID[m.MediaTitleDBID], media)
@@ -795,6 +857,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				}
 			}
 		}
+		indexes.Containers = container.NewIndex(containerRows)
 
 		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
@@ -1499,7 +1562,7 @@ func selectMediaForSlugMatch(
 	mediaTitleDBID int64,
 	resolved string,
 ) slugMediaSelection {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
 		return slugMediaSelection{media: media, matchKind: gamelistMatchSlugPath, key: matchedKey}
 	}
@@ -1527,11 +1590,44 @@ func selectMediaForSlugMatch(
 	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
 }
 
+// containerMediaForDir resolves a directory path to the unscraped media row it
+// collapses to, using the same rule browse applies to folder entries. Missing
+// from MediaByPathFold means the row was already scraped this run, so the entry
+// is left alone.
+func containerMediaForDir(indexes loadRecordIndexes, resolved string) (database.Media, string, bool) {
+	target := indexes.Containers.Resolve(filepath.ToSlash(resolved))
+	if target == nil {
+		return database.Media{}, "", false
+	}
+	key := pathFoldKey(target.Path)
+	media, ok := indexes.MediaByPathFold[key]
+	if !ok {
+		return database.Media{}, "", false
+	}
+	return media, key, true
+}
+
+// folderAsGame projects the smaller <folder> metadata set onto the <game> shape
+// so folder entries reuse the existing field mapping and artwork fallbacks. The
+// folder path is kept so ES folder artwork such as media/boxart/<folder>.png is
+// found by the same stem-based search games use.
+func folderAsGame(folder *esapi.Folder) esapi.Game {
+	return esapi.Game{
+		Path:      folder.Path,
+		Name:      folder.Name,
+		Desc:      folder.Desc,
+		Image:     folder.Image,
+		Thumbnail: folder.Thumbnail,
+		Video:     folder.Video,
+		Marquee:   folder.Marquee,
+	}
+}
+
 func (g *GamelistXMLScraper) canonicalMediaForResolvedPath(
 	indexes loadRecordIndexes,
 	resolved string,
 ) (database.Media, string, bool) {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok {
 		return media, matchedKey, true
 	}
@@ -1704,19 +1800,27 @@ func samePath(a, b string) bool {
 }
 
 func matchMediaByResolvedPath(
-	mediaByPathFold map[string]database.Media,
+	indexes loadRecordIndexes,
 	resolved string,
 ) (database.Media, string, bool) {
 	key := pathFoldKey(resolved)
-	if media, ok := mediaByPathFold[key]; ok {
+	if media, ok := indexes.MediaByPathFold[key]; ok {
 		return media, key, true
+	}
+
+	// A directory the container index knows about is only ever resolved there,
+	// against every row. Prefix matching sees just the rows still unscraped
+	// this run, so a directory holding several children starts to look
+	// unambiguous once the others have been consumed.
+	if indexes.Containers.HasMedia(filepath.ToSlash(resolved)) {
+		return database.Media{}, "", false
 	}
 
 	prefix := key + "/"
 	var matchedMedia database.Media
 	var matchedKey string
 	matches := 0
-	for mediaKey, media := range mediaByPathFold {
+	for mediaKey, media := range indexes.MediaByPathFold {
 		if !strings.HasPrefix(mediaKey, prefix) {
 			continue
 		}
@@ -2332,7 +2436,7 @@ func matchCompanionChildMedia(
 		return companionMediaMatch{Media: cloneMediaRows(mediaRows)}
 	}
 
-	if media, _, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, child.ResolvedPath); ok {
+	if media, _, ok := matchMediaByResolvedPath(indexes, child.ResolvedPath); ok {
 		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
 	}
 

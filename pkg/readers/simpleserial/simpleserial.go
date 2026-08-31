@@ -123,7 +123,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 }
 
 func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
-	if !helpers.Contains(r.IDs(), device.Driver) {
+	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 

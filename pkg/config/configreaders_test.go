@@ -783,3 +783,92 @@ func TestTapModeEnabled_MatchesGlobalScanMode(t *testing.T) {
 			"HoldModeEnabled disagrees with GlobalScanMode for %q", mode)
 	}
 }
+
+// A driver ID is something a user types into a config file, so it is matched
+// the way the rest of the file's identifiers are: neither case nor underscores
+// are part of the name. Only underscores were folded before, so a
+// [readers.drivers.PN532] section, or a connect entry naming "PN532", silently
+// matched nothing at all.
+func TestDriverIDMatchingIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	newCfg := func(t *testing.T, toml string) *Instance {
+		t.Helper()
+		fs := afero.NewMemMapFs()
+		cfg, err := NewConfigWithFs(filepath.Join(t.TempDir(), "zaparoo"), BaseDefaults, fs)
+		require.NoError(t, err)
+		require.NoError(t, cfg.LoadTOML(toml))
+		return cfg
+	}
+
+	t.Run("drivers section key", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.scan]
+mode = "tap"
+
+[readers.drivers.PN532]
+scan_mode = "hold"
+`)
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+	})
+
+	t.Run("drivers section key with case and an underscore", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.scan]
+mode = "tap"
+
+[readers.drivers.Simple_Serial]
+scan_mode = "hold"
+`)
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("simpleserial", "/dev/ttyACM0"))
+	})
+
+	t.Run("connect entry driver", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.scan]
+mode = "tap"
+
+[[readers.connect]]
+driver = "PN532"
+path = "/dev/ttyUSB0"
+scan_mode = "hold"
+`)
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+	})
+
+	// The enabled/auto-detect lookups read the same key, so they have to agree
+	// with the scan-mode lookup about which section names which driver.
+	t.Run("enabled lookup", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.PN532]
+enabled = false
+`)
+		driver := DriverInfo{ID: "pn532", DefaultEnabled: true}
+		assert.False(t, cfg.IsReaderEnabled(driver, ReaderEnableContextCandidate),
+			"a mixed-case drivers key must disable the driver it names")
+	})
+
+	t.Run("auto-detect lookup", func(t *testing.T) {
+		t.Parallel()
+		cfg := newCfg(t, `
+[readers.drivers.PN532]
+auto_detect = false
+`)
+		driver := DriverInfo{ID: "pn532", DefaultEnabled: true, DefaultAutoDetect: true}
+		assert.False(t, cfg.IsReaderEnabled(driver, ReaderEnableContextAutoDetect),
+			"a mixed-case drivers key must stop the driver it names auto-detecting")
+	})
+}
+
+func TestConnectionStringFoldsCase(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "pn532:/dev/ttyUSB0",
+		ReadersConnect{Driver: "PN532", Path: "/dev/ttyUSB0"}.ConnectionString())
+	assert.Equal(t, "simpleserial:/dev/ttyACM0",
+		ReadersConnect{Driver: "Simple_Serial", Path: "/dev/ttyACM0"}.ConnectionString())
+}

@@ -745,6 +745,18 @@ func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition
 	}
 }
 
+func (p *Platform) clearTrackedActiveGame() {
+	if p.tracker != nil {
+		if err := p.tracker.ClearActiveGame(); err != nil {
+			log.Warn().Err(err).Msg("failed to clear MiSTer active-game tracker")
+		}
+		return
+	}
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.processMu.Lock()
 	p.stopIntent = intent
@@ -779,7 +791,7 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 		}
 	}
 
-	p.setActiveMedia(nil)
+	p.clearTrackedActiveGame()
 
 	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
@@ -818,6 +830,7 @@ func (p *Platform) ReturnToMenu() error {
 		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
 	}
+	p.clearTrackedActiveGame()
 
 	// Wait for menu transition to settle
 	time.Sleep(300 * time.Millisecond)
@@ -845,6 +858,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		if err := mistermain.LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
+		p.clearTrackedActiveGame()
 		return nil
 	}
 
@@ -857,6 +871,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
+	p.clearTrackedActiveGame()
 	return nil
 }
 
@@ -879,6 +894,7 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
+	p.clearTrackedActiveGame()
 	return nil
 }
 
@@ -1465,8 +1481,12 @@ func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) mo
 	}
 	runtime := models.LauncherRuntime{Backend: models.LauncherBackendMisterCore}
 	if info, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, l.ID, l.SystemID); ok {
+		coreName := info.ShortName
+		if setName, found := retroAchievementsSetName(l.ID); found {
+			coreName = setName
+		}
 		runtime.MisterCore = &models.MisterCoreInfo{
-			Name:    info.ShortName,
+			Name:    coreName,
 			File:    info.Filename,
 			MGLPath: info.MglName,
 		}

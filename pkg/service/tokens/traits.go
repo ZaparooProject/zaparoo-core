@@ -57,12 +57,16 @@ func ResolveTraits(parsed map[string]any) Traits {
 		return Traits{}
 	}
 
-	// Trait keys are case-insensitive, so "tap" and "TAP" land on the same
-	// normalized key. Writing both into the map would let its iteration order
-	// pick the winner, and a contradiction would resolve differently between
-	// runs. Contradictions are settled here, not by chance: a key declared
-	// twice with different values is dropped, so it inherits like any other
-	// unset trait.
+	// Trait keys are case-insensitive, so "tap" and "TAP" name one trait.
+	//
+	// The parser folds them before they get here: its shorthand syntax
+	// lowercases keys and merges later declarations over earlier ones, so
+	// "#hold=yes||#HOLD=no" arrives as one key holding the last value, and its
+	// **traits JSON form drops a key two members collide on. A map that still
+	// holds both spellings therefore came from somewhere else, and it gets the
+	// rule a contradiction between #tap and #hold already gets: a key whose
+	// spellings disagree is dropped and inherits like any unset trait, rather
+	// than the answer turning on which spelling the map handed over first.
 	values := make(map[string]any, len(parsed))
 	conflicted := make(map[string]struct{})
 	for key, value := range parsed {

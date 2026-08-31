@@ -65,8 +65,11 @@ type Tracker struct {
 	cfg              *config.Instance
 	serviceCtx       context.Context
 	activeMedia      func() *models.ActiveMedia
+	readActiveGame   func() (string, error)
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
+	setActiveGame    func(string) error
+	selection        selectionFiles
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -77,7 +80,7 @@ type Tracker struct {
 	mu               syncutil.Mutex
 }
 
-func generateNameMap(pl platforms.Platform) []NameMapping {
+func generateNameMap(pl platforms.Platform, cfg *config.Instance) []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
 	for key := range cores.Systems {
@@ -94,6 +97,28 @@ func generateNameMap(pl platforms.Platform) []NameMapping {
 				CoreName: system.ID,
 				System:   system.ID,
 				Name:     system.ID,
+			})
+		}
+	}
+
+	// Installed alternate cores can report a different CORENAME from their
+	// system ID (for example RA_SNES for SNES). Include launcher runtime data
+	// so tracker validation does not discard authoritative media from them.
+	if runtimeProvider, ok := pl.(platforms.LauncherRuntimeProvider); ok {
+		launchers := pl.Launchers(cfg)
+		for i := range launchers {
+			launcher := &launchers[i]
+			if launcher.SystemID == "" {
+				continue
+			}
+			runtime := runtimeProvider.LauncherRuntime(cfg, launcher)
+			if runtime.MisterCore == nil || runtime.MisterCore.Name == "" {
+				continue
+			}
+			nameMap = append(nameMap, NameMapping{
+				CoreName: runtime.MisterCore.Name,
+				System:   launcher.SystemID,
+				Name:     launcher.SystemID,
 			})
 		}
 	}
@@ -126,7 +151,7 @@ func NewTracker(
 ) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
-	nameMap := generateNameMap(pl)
+	nameMap := generateNameMap(pl, cfg)
 
 	log.Info().Int("count", len(nameMap)).Msg("loaded name mappings")
 
@@ -144,7 +169,31 @@ func NewTracker(
 		NameMap:          nameMap,
 		activeMedia:      activeMedia,
 		setActiveMedia:   setActiveMedia,
+		readActiveGame:   activegame.GetActiveGame,
+		setActiveGame:    activegame.SetActiveGame,
+		selection:        misterSelectionFiles(),
 	}, nil
+}
+
+func (tr *Tracker) activeGame() (string, error) {
+	if tr.readActiveGame != nil {
+		return tr.readActiveGame()
+	}
+	activeGame, err := activegame.GetActiveGame()
+	if err != nil {
+		return "", fmt.Errorf("read active game: %w", err)
+	}
+	return activeGame, nil
+}
+
+func (tr *Tracker) setActiveGamePath(path string) error {
+	if tr.setActiveGame != nil {
+		return tr.setActiveGame(path)
+	}
+	if err := activegame.SetActiveGame(path); err != nil {
+		return fmt.Errorf("write active game: %w", err)
+	}
+	return nil
 }
 
 func (tr *Tracker) mediaLookupContext() (context.Context, context.CancelFunc) {
@@ -160,7 +209,7 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	nameMap := generateNameMap(tr.pl)
+	nameMap := generateNameMap(tr.pl, tr.cfg)
 	log.Info().Int("count", len(nameMap)).Msg("reloaded name mappings")
 	tr.NameMap = nameMap
 	// Set-name to MRA-path resolutions may change along with the name map
@@ -257,7 +306,7 @@ func (tr *Tracker) LoadCore() {
 	coreName := strings.TrimSpace(string(data))
 
 	if coreName == misterconfig.MenuCore {
-		err := activegame.SetActiveGame("")
+		err := tr.setActiveGamePath("")
 		if err != nil {
 			log.Error().Msgf("error setting active game: %s", err)
 		}
@@ -287,7 +336,7 @@ func (tr *Tracker) LoadCore() {
 		if mraPath != "" {
 			activeGamePath = mraPath
 		}
-		err := activegame.SetActiveGame(activeGamePath)
+		err := tr.setActiveGamePath(activeGamePath)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
 		}
@@ -331,7 +380,35 @@ func (tr *Tracker) LoadCore() {
 			tr.ActiveGameName,
 			"", // LauncherID unknown when tracking MiSTer core changes
 		))
+		return
 	}
+
+	// A bare core launch has no game of its own. Retire media from the old
+	// core immediately, then only restore ACTIVEGAME if it belongs to this
+	// new core. This prevents a stale MiSTer selection signal from reviving
+	// the previous game's media and history after launch.system or stop.
+	if active := tr.activeMedia(); active != nil && !coreMatchesSystem(coreName, active.SystemID, tr.NameMap) {
+		tr.stopGame()
+	}
+	// ACTIVEGAME may arrive before CORENAME during a manual launch. Retry a
+	// non-empty value now that the core is authoritative, but never let an
+	// empty tracker file clear same-system media DoLaunch already published.
+	if activeGame, err := tr.activeGame(); err == nil && activeGame != "" {
+		tr.loadGameLocked()
+	}
+}
+
+func coreMatchesSystem(coreName, systemID string, mappings []NameMapping) bool {
+	if coreName == "" || strings.EqualFold(coreName, misterconfig.MenuCore) || systemID == "" {
+		return false
+	}
+	for i := range mappings {
+		if strings.EqualFold(mappings[i].CoreName, coreName) &&
+			strings.EqualFold(mappings[i].System, systemID) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveArcadeGame resolves an externally detected arcade core's set name to
@@ -381,6 +458,17 @@ func (tr *Tracker) lookupArcadeSetPath(setName, arcadeName string) (string, bool
 	return path, ok
 }
 
+// ClearActiveGame synchronously retires tracker state and clears the shared
+// ACTIVEGAME signal so a bare core or menu transition cannot inherit it.
+func (tr *Tracker) ClearActiveGame() error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	err := tr.setActiveGamePath("")
+	tr.stopGame()
+	return err
+}
+
 func (tr *Tracker) stopGame() {
 	tr.ActiveGameID = ""
 	tr.ActiveGamePath = ""
@@ -395,8 +483,11 @@ func (tr *Tracker) stopGame() {
 func (tr *Tracker) loadGame() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.loadGameLocked()
+}
 
-	activeGame, err := activegame.GetActiveGame()
+func (tr *Tracker) loadGameLocked() {
+	activeGame, err := tr.activeGame()
 	switch {
 	case err != nil:
 		log.Error().Msgf("error getting active game: %s", err)
@@ -454,6 +545,11 @@ func (tr *Tracker) loadGame() {
 
 	if launcher.SystemID == "" {
 		log.Warn().Str("path", path).Msg("launcher has empty system ID")
+		return
+	}
+	if !coreMatchesSystem(tr.ActiveCore, launcher.SystemID, tr.NameMap) {
+		log.Debug().Str("path", path).Str("core", tr.ActiveCore).
+			Str("system", launcher.SystemID).Msg("ignoring active game from a different core")
 		return
 	}
 
@@ -571,7 +667,7 @@ func recentGamePath(filename string, storageSelection []byte) (string, error) {
 }
 
 // loadRecent writes a recent file's newest launchable path to ACTIVEGAME.
-func loadRecent(filename string) error {
+func (tr *Tracker) loadRecent(filename string) error {
 	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
 	path, err := recentGamePath(filename, storageSelection)
 	if err != nil {
@@ -580,7 +676,7 @@ func loadRecent(filename string) error {
 	if path == "" {
 		return nil
 	}
-	if err = activegame.SetActiveGame(path); err != nil {
+	if err = tr.setActiveGamePath(path); err != nil {
 		return fmt.Errorf("error setting active game: %w", err)
 	}
 	return nil
@@ -625,6 +721,32 @@ func readFileSelectionFrom(statusFile, fullPathFile, currentPathFile string) (fi
 	sel.FullPath = trimTrackerFileContent(fullPathData)
 	sel.CurrentPath = trimTrackerFileContent(currentPathData)
 	return sel, nil
+}
+
+// selectionStaleWindow bounds how far apart MiSTer's FILESELECT status and the
+// CURRENTPATH it describes may be written and still belong to the same
+// selection. Both MiSTer and writeCurrentPathTo write the trio back to back,
+// so a real selection lands well inside this.
+const selectionStaleWindow = 2 * time.Second
+
+// selectionIsStale reports whether FILESELECT was written meaningfully later
+// than the path it claims to describe.
+//
+// MiSTer never clears FILESELECT after a launch and rewrites it again when a
+// core exits, leaving the status at "selected" while FULLPATH and CURRENTPATH
+// still name the game that just ended. Without this the exit re-notification
+// reads as a fresh launch and resurrects the game that was just closed, which
+// then accrues playtime forever because no further core change is coming.
+func selectionIsStale(statusFile, currentPathFile string, window time.Duration) (bool, error) {
+	statusInfo, err := os.Stat(statusFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat file selection status: %w", err)
+	}
+	pathInfo, err := os.Stat(currentPathFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat selected current path: %w", err)
+	}
+	return statusInfo.ModTime().Sub(pathInfo.ModTime()) > window, nil
 }
 
 // stripExt mirrors the extension stripping MiSTer's get_display_name
@@ -779,20 +901,57 @@ func hasSystemLauncher(launchers []platforms.Launcher) bool {
 	return false
 }
 
-// loadFileSelection reads a settled native MiSTer file-selection event and,
-// if it resolves to a trackable game, records it the same way a Zaparoo
-// launch does.
-func (tr *Tracker) loadFileSelection() {
-	sel, err := readFileSelectionFrom(
-		misterconfig.FileSelectFile, misterconfig.FullPathFile, misterconfig.CurrentPathFile,
-	)
+// selectionFiles names the MiSTer file-selector trio plus the storage
+// selection, so the resolution below can be driven from a temp directory.
+type selectionFiles struct {
+	status      string
+	fullPath    string
+	currentPath string
+	deviceBin   string
+}
+
+func misterSelectionFiles() selectionFiles {
+	return selectionFiles{
+		status:      misterconfig.FileSelectFile,
+		fullPath:    misterconfig.FullPathFile,
+		currentPath: misterconfig.CurrentPathFile,
+		deviceBin:   filepath.Join(misterconfig.CoreConfigFolder, "device.bin"),
+	}
+}
+
+// resolveSelectedLaunchPath reads the settled selection and reports the path
+// MiSTer launched, or ok=false when there is nothing to act on: an unreadable
+// trio, a selection that cannot be resolved confidently, or a status
+// re-notified long after the paths it describes.
+func resolveSelectedLaunchPath(files selectionFiles, window time.Duration) (string, bool) {
+	sel, err := readFileSelectionFrom(files.status, files.fullPath, files.currentPath)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read MiSTer file selection")
-		return
+		return "", false
 	}
 
-	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
-	path, ok := composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
+	if sel.Status == "selected" {
+		// Fail open: an unreadable timestamp must not drop a real launch.
+		stale, staleErr := selectionIsStale(files.status, files.currentPath, window)
+		switch {
+		case staleErr != nil:
+			log.Warn().Err(staleErr).Msg("failed to age MiSTer file selection, treating it as current")
+		case stale:
+			log.Debug().Str("path", sel.FullPath).
+				Msg("ignoring MiSTer file selection re-notified after its paths were written")
+			return "", false
+		}
+	}
+
+	storageSelection, _ := os.ReadFile(files.deviceBin) // #nosec G304 -- fixed MiSTer config path
+	return composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
+}
+
+// loadFileSelection resolves the tracker's file-selector trio and records the
+// result as the active game. Both the trio and the recorder come from the
+// tracker so a test can drive the whole decision from a temp directory.
+func (tr *Tracker) loadFileSelection() {
+	path, ok := resolveSelectedLaunchPath(tr.selection, selectionStaleWindow)
 	if !ok {
 		return
 	}
@@ -807,7 +966,7 @@ func (tr *Tracker) loadFileSelection() {
 	}
 
 	log.Info().Str("path", path).Msg("manual MiSTer file launch detected")
-	if err = activegame.SetActiveGame(path); err != nil {
+	if err := tr.setActiveGamePath(path); err != nil {
 		log.Error().Err(err).Str("path", path).Msg("failed to set selected active game")
 	}
 }
@@ -864,7 +1023,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					// blocking delivery of later watcher events.
 					filename := event.Name
 					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), func() {
-						recentErr := loadRecent(filename)
+						recentErr := tr.loadRecent(filename)
 						if recentErr != nil {
 							if errors.Is(recentErr, os.ErrNotExist) {
 								log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
@@ -969,7 +1128,7 @@ func StartTracker(
 	if activegame.ActiveGameEnabled() {
 		tr.loadGame()
 	} else {
-		setErr := activegame.SetActiveGame("")
+		setErr := tr.setActiveGamePath("")
 		if setErr != nil {
 			log.Error().Msgf("error setting active game: %s", setErr)
 		}
