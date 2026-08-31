@@ -608,16 +608,25 @@ func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
 		Return(true, nil).Once()
 	userDB.On("StoreRemoteCommandResult", "cmd_run", "executing", "succeeded", mock.Anything, "").
 		Return(true, nil).Once()
-	userDB.On("MarkRemoteCommandResultReported", "cmd_run").Return(nil).Once()
+	// The loop marks the result reported only after the POST returns, so the
+	// test has to wait for that call rather than for the server hit: cancelling
+	// in between kills the in-flight POST and the mark never happens.
+	reported := make(chan struct{})
+	userDB.On("MarkRemoteCommandResultReported", "cmd_run").
+		Run(func(_ mock.Arguments) { close(reported) }).
+		Return(nil).Once()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	Start(ctx, &Deps{Platform: platform, Config: cfg, DB: &database.Database{UserDB: userDB}}, &wg)
 
-	require.Eventually(t, func() bool {
-		return atomic.LoadInt32(&resultCalls) == 1
-	}, 2*time.Second, 10*time.Millisecond, "operation result was never reported")
-	assert.Equal(t, int32(1), acceptedCalls)
+	select {
+	case <-reported:
+	case <-time.After(2 * time.Second):
+		t.Fatal("operation result was never reported")
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&resultCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&acceptedCalls))
 
 	cancel()
 	done := make(chan struct{})

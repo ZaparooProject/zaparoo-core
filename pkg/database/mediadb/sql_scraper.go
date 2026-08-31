@@ -1593,6 +1593,13 @@ func (db *MediaDB) recordScrapeImageChanges(ctx context.Context, writeCtx *scrap
 		return
 	}
 
+	// The committed write changed image properties, so the in-memory cover
+	// availability index no longer matches the database. The systems recorded
+	// below drive thumbnail invalidation, which is a separate cache; without
+	// this, media.search and media.history keep answering hasCover=false for
+	// artwork that has just been scraped, until a restart rebuilds the index.
+	clearCoverAvailabilityCacheFor(db.sql.Load())
+
 	conditions := make([]string, 0, 2)
 	args := make([]any, 0, len(writeCtx.changedImageMediaIDs)+len(writeCtx.changedImageMediaTitleIDs))
 	if len(writeCtx.changedImageMediaIDs) > 0 {
