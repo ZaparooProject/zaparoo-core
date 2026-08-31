@@ -338,7 +338,7 @@ func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 			corrupt:      true,
 			userDataLost: true,
 			wantTitle:    "Media database was rebuilt after damage was found",
-			wantBody:     "in an older version of Zaparoo",
+			wantBody:     "before the database was rebuilt",
 		},
 	}
 	for _, tt := range tests {

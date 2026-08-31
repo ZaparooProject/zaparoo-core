@@ -313,7 +313,7 @@ func notifyMediaDBSchemaReset(st *state.State, userDataLost, corrupt bool) {
 		// corruption path nothing updated, so say when they were set instead.
 		when := "before this device last updated"
 		if corrupt {
-			when = "in an older version of Zaparoo"
+			when = "before the database was rebuilt"
 		}
 		body += " Favorites and launcher overrides set " + when + " may " +
 			"not have been carried across, and may need to be set again."
