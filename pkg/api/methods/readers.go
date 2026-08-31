@@ -26,7 +26,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scanmode"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -118,7 +121,7 @@ func HandleReaderWriteCancel(
 	return NoContent{}, nil
 }
 
-func HandleReaders(allReaders []readers.Reader) (any, error) {
+func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.Reader) (any, error) {
 	readerInfos := make([]models.ReaderInfo, 0, len(allReaders))
 
 	for _, r := range allReaders {
@@ -137,6 +140,7 @@ func HandleReaders(allReaders []readers.Reader) (any, error) {
 			ReaderID:     r.ReaderID(),
 			Driver:       r.Metadata().ID,
 			Info:         r.Info(),
+			ScanMode:     cfg.ScanModeForReader(r.Metadata().ID, r.Path()),
 			Connected:    r.Connected(),
 			Capabilities: capabilityStrings,
 		}
@@ -146,6 +150,16 @@ func HandleReaders(allReaders []readers.Reader) (any, error) {
 
 	response := models.ReadersResponse{
 		Readers: readerInfos,
+	}
+
+	// The token that owns hold-mode exit, reported by reader and effective
+	// policy only so diagnostics never expose what is written on the token.
+	// The mode comes from the same resolver the exit path uses, including its
+	// rule for an owner whose reader has since disconnected, so this never
+	// reports a policy other than the one removal will apply.
+	if owner := st.GetSoftwareToken(); owner != nil {
+		response.HoldOwnerReaderID = owner.ReaderID
+		response.HoldScanMode = scanmode.ForTokenAfterRemoval(cfg, st, owner)
 	}
 
 	return response, nil

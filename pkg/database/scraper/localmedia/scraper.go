@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -187,6 +188,7 @@ func (s *scraperImpl) scrapeLoop(
 
 		processed, matched, skipped := 0, 0, 0
 		availableDirs := s.availableDirsByRoot(system.ROMPaths)
+		containers := containerIndexForMedia(mediaRows)
 		ch <- scraper.ScrapeUpdate{
 			SystemID:    system.ID,
 			Total:       len(mediaRows),
@@ -201,11 +203,14 @@ func (s *scraperImpl) scrapeLoop(
 				return
 			}
 
-			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs)
+			isContainerTarget := isContainerLaunchTarget(containers, media)
+			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs, isContainerTarget)
 			staleDeleted := 0
 			if opts.Force {
 				var cleanupErr error
-				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(ctx, media, system.ROMPaths, props)
+				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(
+					ctx, media, system.ROMPaths, props,
+				)
 				if cleanupErr != nil {
 					skipped++
 					processed++
@@ -296,17 +301,9 @@ func (s *scraperImpl) mediaPropsForPath(
 	path string,
 	roots []string,
 	availableDirs map[string]map[string]string,
+	isContainerTarget bool,
 ) []database.MediaProperty {
-	// Artwork filenames are derived from the root that actually contains the
-	// game (its home root); the same relative names are then searched under
-	// every root's media/ dir so art can live on a different drive than the rom.
-	var fallbackNames []string
-	for _, root := range roots {
-		if names := esmedia.ArtworkFallbackNames(path, root); len(names) > 0 {
-			fallbackNames = names
-			break
-		}
-	}
+	fallbackNames := artworkFallbackNames(path, roots, isContainerTarget)
 	if len(fallbackNames) == 0 {
 		return nil
 	}
@@ -337,6 +334,56 @@ func (s *scraperImpl) mediaPropsForPath(
 	return props
 }
 
+// containerIndexForMedia builds the directory-container view of a system's media
+// so artwork named after a disc folder can be matched to the file that folder
+// launches.
+func containerIndexForMedia(rows []database.MediaWithFullPath) *container.Index {
+	media := make([]database.Media, 0, len(rows))
+	for i := range rows {
+		media = append(media, database.Media{
+			DBID:           rows[i].DBID,
+			MediaTitleDBID: rows[i].MediaTitleDBID,
+			Path:           rows[i].Path,
+			ParentDir:      rows[i].ParentDir,
+			IsMissing:      rows[i].IsMissing,
+		})
+	}
+	return container.NewIndex(media)
+}
+
+func isContainerLaunchTarget(containers *container.Index, media *database.MediaWithFullPath) bool {
+	parent := media.ParentDir
+	if parent == "" {
+		parent = container.ParentDir(media.Path)
+	}
+	target := containers.Resolve(parent)
+	return target != nil && target.DBID == media.DBID
+}
+
+// artworkFallbackNames derives the artwork filenames to look for from the root
+// that actually contains the game (its home root); the same relative names are
+// then searched under every root's media/ dir so art can live on a different
+// drive than the rom. A file that is the single launch target of its directory
+// also answers to art named after that directory, which is how EmulationStation
+// stores art for a folder it shows as one game.
+func artworkFallbackNames(path string, roots []string, isContainerTarget bool) []string {
+	for _, root := range roots {
+		names := esmedia.ArtworkFallbackNames(path, root)
+		if len(names) == 0 {
+			continue
+		}
+		if isContainerTarget {
+			names = append(names, esmedia.ContainerArtworkFallbackNames(path, root)...)
+		}
+		return names
+	}
+	return nil
+}
+
+// deleteStaleLocalMediaProps drops properties this scraper wrote that a forced
+// rescrape no longer finds. Container-style names are always considered: a
+// directory that used to collapse to one game may since have gained nested
+// media, and its folder artwork still needs clearing.
 func (s *scraperImpl) deleteStaleLocalMediaProps(
 	ctx context.Context,
 	media *database.MediaWithFullPath,
@@ -358,7 +405,7 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 		if _, found := foundTypes[prop.TypeTag]; found {
 			continue
 		}
-		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots) {
+		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots, true) {
 			continue
 		}
 		if err := s.db.DeleteMediaProperty(ctx, media.DBID, prop.TypeTagDBID); err != nil {
@@ -370,7 +417,12 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 	return deleted, nil
 }
 
-func isLocalMediaPropForPath(prop *database.MediaProperty, mediaPath string, roots []string) bool {
+func isLocalMediaPropForPath(
+	prop *database.MediaProperty,
+	mediaPath string,
+	roots []string,
+	isContainerTarget bool,
+) bool {
 	propValue, ok := imagePropertyValue(prop.TypeTag)
 	if !ok || prop.Text == "" {
 		return false
@@ -380,15 +432,9 @@ func isLocalMediaPropForPath(prop *database.MediaProperty, mediaPath string, roo
 		return false
 	}
 
-	// Derive artwork names from the game's home root, then match the prop path
-	// against the media/ convention under any root (art may live cross-drive).
-	var fallbackNames []string
-	for _, root := range roots {
-		if names := esmedia.ArtworkFallbackNames(mediaPath, root); len(names) > 0 {
-			fallbackNames = names
-			break
-		}
-	}
+	// Match the prop path against the media/ convention under any root (art may
+	// live cross-drive), using the same names a scrape would have written.
+	fallbackNames := artworkFallbackNames(mediaPath, roots, isContainerTarget)
 	if len(fallbackNames) == 0 {
 		return false
 	}

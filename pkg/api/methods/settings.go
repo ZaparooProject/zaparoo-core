@@ -45,6 +45,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 			Driver:   rc.Driver,
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
+			ScanMode: rc.ScanMode,
 		})
 	}
 
@@ -167,6 +168,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.SystemDefaults != nil {
 		var err error
 		systemDefaults, err = buildSystemDefaults(env.LauncherCache, *params.SystemDefaults)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var readerConnections []config.ReadersConnect
+	if params.ReadersConnect != nil {
+		var err error
+		readerConnections, err = buildReaderConnections(*params.ReadersConnect)
 		if err != nil {
 			return nil, err
 		}
@@ -324,16 +334,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersConnect != nil {
 		log.Debug().Int("count", len(*params.ReadersConnect)).Msg("updating readers.connect")
-		connections := make([]config.ReadersConnect, 0, len(*params.ReadersConnect))
-		for _, rc := range *params.ReadersConnect {
-			connections = append(connections, config.ReadersConnect{
-				Enabled:  rc.Enabled,
-				Driver:   rc.Driver,
-				Path:     rc.Path,
-				IDSource: rc.IDSource,
-			})
-		}
-		env.Config.SetReaderConnections(connections)
+		env.Config.SetReaderConnections(readerConnections)
 	}
 
 	if params.SystemDefaults != nil {
@@ -386,6 +387,37 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	}
 
 	return resp, nil
+}
+
+// buildReaderConnections validates the API reader-connection payload and
+// converts it to config types.
+//
+// A config file tolerates an unrecognised scan_mode, because one typo must not
+// stop the whole file loading, and the value simply falls through to the next
+// level of the override chain. An API caller is told instead: it would
+// otherwise read its own bad value back from `settings` and see no sign that
+// the reader was ignoring it. Accepted values are stored canonically, so any
+// spelling a hand-edited config file holds survives a round trip through a
+// client that echoes the field back.
+func buildReaderConnections(in []models.ReaderConnection) ([]config.ReadersConnect, error) {
+	out := make([]config.ReadersConnect, 0, len(in))
+	for _, rc := range in {
+		scanMode := config.NormalizeScanMode(rc.ScanMode)
+		if rc.ScanMode != "" && scanMode == "" {
+			return nil, models.ClientErrf(
+				"invalid params: scanMode %q for reader %q must be %q or %q",
+				rc.ScanMode, rc.ConnectionLabel(), config.ScanModeTap, config.ScanModeHold,
+			)
+		}
+		out = append(out, config.ReadersConnect{
+			Enabled:  rc.Enabled,
+			Driver:   rc.Driver,
+			Path:     rc.Path,
+			IDSource: rc.IDSource,
+			ScanMode: scanMode,
+		})
+	}
+	return out, nil
 }
 
 // buildSystemDefaults validates the API system-defaults payload and converts

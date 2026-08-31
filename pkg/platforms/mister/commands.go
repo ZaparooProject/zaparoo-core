@@ -12,7 +12,7 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
@@ -87,7 +87,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 		if err := zapscript.ParseAdvArgs(pl, env, &advArgs); err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 		}
-		hidden := helpers.IsTruthy(advArgs.Hidden)
+		hidden := boolutil.IsTruthy(advArgs.Hidden)
 
 		if len(env.Cmd.Args) == 0 {
 			return platforms.CmdResult{}, errors.New("no script specified")

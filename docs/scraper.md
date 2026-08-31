@@ -4,8 +4,8 @@ The scraper subsystem enriches existing MediaDB records with metadata from exter
 
 Current scraper implementations:
 
-- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
-- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
+- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
+- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A file that is the single launch target of its directory also matches artwork named after that directory. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 
 ## Code Layout
@@ -137,6 +137,18 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 | `manual` | `MediaProperties: property:manual` | PDF path |
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
+
+### Directory Entries
+
+Both `<folder>` entries and `<game>` entries whose `<path>` resolves to a directory are matched to the single media row that directory collapses to, using the same rule browse uses to show a disc folder as one game. A directory qualifies when its direct contents are one file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and it holds no media in subdirectories.
+
+This covers the two common EmulationStation layouts for multi-disc games: a `<folder>` entry describing a per-game folder, and the ES-DE convention of naming that folder with a ROM extension so it reads as one game and gets an ordinary `<game>` entry.
+
+`<folder>` entries carry a smaller field set than games: `name`, `desc`, `image`, `thumbnail`, `video`, and `marquee`. They are processed after that file's `<game>` entries, so a real game entry pointing at the same media row always wins. Folders that do not collapse are skipped, because there is no row to carry their metadata; ordinary collections stay plain browseable directories.
+
+A directory entry only ever resolves through the container rule, whichever kind it is, so use a `<folder>` entry only for a directory that collapses. A `<game>` entry naming a directory that holds media in subdirectories no longer matches the single row underneath it, because resolving a directory by scanning for indexed paths beneath it is only unambiguous until an earlier entry has claimed one of them, and switching it to a `<folder>` entry does not help: that is skipped for the same reason. For any directory that does not collapse, point the `<game>` entry at the media file itself.
+
+Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game. Only a disc extension (`.cue`, `.m3u`, `.chd`, `.iso`, `.bin`) is stripped from that name before the search; any other dot is treated as part of the folder name, so a folder called `Sonic 3.0` does not pick up `Sonic 3`'s artwork.
 
 By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
 
@@ -287,9 +299,9 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
-`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. On platforms that treat zips as directories, a `system`/`path` request for a folder or zip-as-directory container resolves only when its direct contents collapse to one logical launch target.
+`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. A `system`/`path` request for a directory resolves only when its direct contents collapse to one logical launch target, which also covers zip containers on platforms that treat zips as directories.
 
-`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On zip-as-directory platforms, logical container aliases are checked as media-level fallbacks, so artwork attached to a direct single-game target or its container can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
+`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On platforms that treat zips as directories, zip container aliases are checked as media-level fallbacks, so artwork attached to a direct single-game target or its zip can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
 
 ## Useful Focused Tests
 
