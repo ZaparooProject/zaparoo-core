@@ -903,12 +903,16 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			proc := &scanPreprocessor{prevToken: tt.initialPrev}
-			action := proc.Process(tt.scan, tt.readerError)
+			const readerID = "reader-a"
+			proc := &scanPreprocessor{}
+			if tt.initialPrev != nil {
+				proc.prevTokens = map[string]*tokens.Token{readerID: tt.initialPrev}
+			}
+			action := proc.Process(readerID, tt.scan, tt.readerError)
 
 			assert.Equal(t, tt.wantAction, action, "unexpected action")
-			assert.Equal(t, tt.expectedPrev, proc.PrevToken(),
-				"prevToken should match expected value after Process")
+			assert.Equal(t, tt.expectedPrev, proc.PrevToken(readerID),
+				"tracked token should match expected value after Process")
 		})
 	}
 }
@@ -987,21 +991,22 @@ func TestReaderErrorRecovery_FullSequence(t *testing.T) {
 		Text: "**launch.system:snes",
 	}
 
+	const readerID = "reader-a"
 	proc := &scanPreprocessor{}
 
 	// 1. Initial card scan — should pass through
-	action := proc.Process(card, false)
+	action := proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action, "first scan should not be duplicate")
-	assert.Equal(t, card, proc.PrevToken())
+	assert.Equal(t, card, proc.PrevToken(readerID))
 
-	// 2. Reader error (USB controller hotplug) — prevToken preserved
-	action = proc.Process(nil, true)
+	// 2. Reader error (USB controller hotplug) — tracked token preserved
+	action = proc.Process(readerID, nil, true)
 	assert.Equal(t, scanReaderErrorRemoval, action)
-	assert.Equal(t, card, proc.PrevToken(),
-		"prevToken must be preserved through reader error")
+	assert.Equal(t, card, proc.PrevToken(readerID),
+		"tracked token must be preserved through reader error")
 
 	// 3. Reader reconnects, same card detected — should be caught as duplicate
-	action = proc.Process(card, false)
+	action = proc.Process(readerID, card, false)
 	assert.Equal(t, scanSkipDuplicate, action,
 		"re-scan of same card after reader error recovery must be detected as duplicate")
 }

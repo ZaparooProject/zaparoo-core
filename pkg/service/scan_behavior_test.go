@@ -305,7 +305,8 @@ func (env *scanBehaviorEnv) gamePath(name string) string {
 
 func (env *scanBehaviorEnv) sendGameScan(uid, path string) {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
 		Token: &tokens.Token{
 			UID:      uid,
 			Text:     path,
@@ -318,7 +319,8 @@ func (env *scanBehaviorEnv) sendGameScan(uid, path string) {
 
 func (env *scanBehaviorEnv) sendCommandScan(uid, cmd string) {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
 		Token: &tokens.Token{
 			UID:      uid,
 			Text:     cmd,
@@ -335,10 +337,63 @@ func (env *scanBehaviorEnv) sendTraitScan(uid, traits, script string) {
 	env.sendCommandScan(uid, traits+"||"+script)
 }
 
+// sendRemoval reports that the reader no longer sees a token. Every real
+// driver labels its scans, removals included, so the harness does too.
 func (env *scanBehaviorEnv) sendRemoval() {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
-		Token:  nil,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
+		Token:    nil,
+	}
+}
+
+// --- Second reader ---
+//
+// A device can have more than one reader, which is the whole point of a
+// per-reader scan mode. These drive a second, independently addressed reader.
+
+const (
+	testReader2ID   = "test-reader-removable-2"
+	testReader2Path = "/dev/mock-device-2"
+)
+
+// addSecondReader registers another removable reader, on its own path so
+// per-reader configuration can tell the two apart.
+func (env *scanBehaviorEnv) addSecondReader(t *testing.T) {
+	t.Helper()
+	r := mocks.NewMockReader()
+	r.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	r.On("IDs").Return([]string{"mock:"}).Maybe()
+	r.On("Connected").Return(true).Maybe()
+	r.On("Path").Return(testReader2Path).Maybe()
+	r.On("Info").Return("Mock Removable Reader 2").Maybe()
+	r.On("Capabilities").Return([]readers.Capability{
+		readers.CapabilityRemovable,
+	}).Maybe()
+	r.On("ReaderID").Return(testReader2ID).Maybe()
+	r.On("OnMediaChange", mock.Anything).Return(nil).Maybe()
+	env.st.SetReader(r)
+}
+
+func (env *scanBehaviorEnv) sendScanOn(readerID, uid, text string) {
+	env.scanQueue <- readers.Scan{
+		Source:   testReaderSrc,
+		ReaderID: readerID,
+		Token: &tokens.Token{
+			UID:      uid,
+			Text:     text,
+			ScanTime: time.Now(),
+			Source:   tokens.SourceReader,
+			ReaderID: readerID,
+		},
+	}
+}
+
+func (env *scanBehaviorEnv) sendRemovalOn(readerID string) {
+	env.scanQueue <- readers.Scan{
+		Source:   testReaderSrc,
+		ReaderID: readerID,
+		Token:    nil,
 	}
 }
 
@@ -1128,4 +1183,165 @@ scan_mode = "hold"`))
 
 	env.sendRemoval()
 	env.expectNoStop(t)
+}
+
+// ============================================================================
+// Two readers at once
+//
+// Scans were tracked in a single slot shared by every reader, so one reader's
+// activity decided what another reader's removal meant. These pin the two ways
+// that went wrong, both of which left hold-mode media running forever.
+// ============================================================================
+
+// A removal is the removal of what was on the reader that reported it, not of
+// whatever was scanned last anywhere.
+func TestScanBehavior_TwoReaders_RemovalAttributedToItsOwnReader(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	env.addSecondReader(t)
+
+	// The game card owns hold-mode exit, scanned on reader one.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// A command card is then put on reader two and left there.
+	env.sendScanOn(testReader2ID, "cmd1", "**input.keyboard:a")
+	env.waitForKeyboard(t)
+
+	// Lifting the game card from reader one must exit: it is that card being
+	// removed, not the command card that happened to be scanned more recently.
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// One reader's removal must not make another reader's removal look like a
+// repeat of it.
+func TestScanBehavior_TwoReaders_SecondRemovalIsNotADuplicate(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	env.addSecondReader(t)
+
+	env.sendScanOn(testReaderID, "game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// A command card is tapped on reader two and taken away again.
+	env.sendScanOn(testReader2ID, "cmd1", "**input.keyboard:a")
+	env.waitForKeyboard(t)
+	env.sendRemovalOn(testReader2ID)
+
+	// Reader one's own removal still has to register.
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// A per-reader mode only applies to its own reader, and each reader's removal
+// is judged by that reader's mode.
+func TestScanBehavior_TwoReaders_HoldAndTapSideBySide(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	env.addSecondReader(t)
+	require.NoError(t, env.cfg.LoadTOML(`[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device"
+scan_mode = "hold"
+
+[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device-2"
+scan_mode = "tap"`))
+
+	// The tap reader launches and keeps running when its card is lifted.
+	env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game2")
+	env.sendRemovalOn(testReader2ID)
+	env.expectNoStop(t)
+
+	// The hold reader launches and exits when its card is lifted.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("hold.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// ============================================================================
+// A dead exit timer is not a pending exit
+//
+// The hold owner stays recorded long after its countdown is over, so treating
+// "a timer object exists" as "an exit is pending" swallowed later scans of
+// that card with nothing logged.
+// ============================================================================
+
+// The timer fired but decided against exiting, because the media had already
+// stopped. Scanning the same card again must launch it.
+func TestScanBehavior_Hold_RescanAfterTimerFoundNoMedia(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// The game exits by itself, then the card is lifted: the countdown runs,
+	// finds nothing to close, and leaves the card recorded as the hold owner.
+	env.simulateManualExit()
+	env.sendRemoval()
+	env.waitForActiveCard(t, "")
+
+	// Putting the same card back must start the game again.
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+}
+
+// Reinsertion during a real countdown still cancels the exit rather than
+// relaunching, which is what the dead-timer check must not break.
+func TestScanBehavior_HoldDelayed_ReinsertionStillCancelsExit(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 5)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.waitForActiveCard(t, "")
+
+	// Back on the reader before the countdown ends: no exit, no relaunch.
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+	env.expectNoLaunch(t)
+
+	env.clock.Advance(10 * time.Second)
+	env.expectNoStop(t)
+}
+
+// A reader in tap mode never arms a timer, so a repeat tap of the same card
+// reloads the game every time even after another reader has run an exit.
+func TestScanBehavior_Tap_RepeatTapsAfterAHoldReaderArmedATimer(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	env.addSecondReader(t)
+	require.NoError(t, env.cfg.LoadTOML(`[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device"
+scan_mode = "hold"`))
+
+	// The hold reader launches and its removal arms and runs an exit.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("hold.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+
+	// From then on the tap reader must keep reloading on every tap.
+	for range 2 {
+		env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))
+		env.waitForLaunch(t)
+		env.waitForSoftwareTokenUID(t, "game2")
+		env.sendRemovalOn(testReader2ID)
+		env.expectNoStop(t)
+	}
 }

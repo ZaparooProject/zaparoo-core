@@ -137,6 +137,18 @@ func startDelayedRemovalHook(
 	}
 }
 
+// connectedReaderIDs lists the IDs of the readers currently in state.
+func connectedReaderIDs(st *state.State) []string {
+	rs := st.ListReaders()
+	ids := make([]string, 0, len(rs))
+	for _, r := range rs {
+		if r != nil {
+			ids = append(ids, r.ReaderID())
+		}
+	}
+	return ids
+}
+
 // isPathConnected checks if any connected reader is using the given path.
 func isPathConnected(rs []readers.Reader, path string) bool {
 	for _, r := range rs {
@@ -308,29 +320,32 @@ func timedExit(
 	exitGeneration *atomic.Uint64,
 	owner *tokens.Token,
 ) clockwork.Timer {
+	// Every path that does not arm a timer returns nil rather than the timer
+	// it was handed: that one was just cancelled, and a caller keeping it
+	// would go on believing an exit was pending for the rest of the session.
 	if cancelTimedExit(exitTimer, exitGeneration) {
 		log.Debug().Msg("cancelling previous exit timer")
 	}
 
 	if !holdModeForToken(svc, owner) {
 		log.Debug().Msg("hold mode not enabled, skipping exit timer")
-		return exitTimer
+		return nil
 	}
 
 	if owner.Source != tokens.SourceReader {
 		log.Debug().Str("source", owner.Source).Msg("skipping exit timer for non-reader source")
-		return exitTimer
+		return nil
 	}
 
 	// Only hardware readers that report removal can own hold-mode media.
 	r, ok := svc.State.GetReader(owner.ReaderID)
 	if !ok {
 		log.Debug().Str("readerID", owner.ReaderID).Msg("reader not found in state, skipping exit timer")
-		return exitTimer
+		return nil
 	}
 	if !readers.HasCapability(r, readers.CapabilityRemovable) {
 		log.Debug().Str("readerID", owner.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
-		return exitTimer
+		return nil
 	}
 
 	ownerCopy := *owner
@@ -434,7 +449,7 @@ func readerManager(
 
 	var lastError time.Time
 
-	proc := &scanPreprocessor{}
+	proc := &scanPreprocessor{prevTokens: make(map[string]*tokens.Token)}
 	connectScanSeen := make(map[string]bool)
 	pendingRemovals := make(map[holdTokenKey]tokens.Token)
 	removalHookResults := make(chan removalHookResult, 1)
@@ -626,6 +641,9 @@ preprocessing:
 			if scan != nil && scan.ReaderID != "" {
 				scanReaderID = scan.ReaderID
 			}
+			// Scans are tracked per reader, so an unlabelled one has to be
+			// attributed before anything reads or updates that state.
+			scanReaderID = proc.ResolveReaderID(scanReaderID)
 			scanProperties = t.Properties
 			writtenTagRemoved = t.WrittenTagRemoved
 		case hookResult := <-removalHookResults:
@@ -792,18 +810,18 @@ preprocessing:
 					if delay > 0 {
 						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
 					}
-					proc.Process(scan, readerError)
+					proc.Process(scanReaderID, scan, readerError)
 					continue preprocessing
 				}
 				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
 				confirmed := *stagedToken
 				if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
 					log.Info().Err(err).Msg("launch guard: re-tap lost resolution race")
-					proc.Process(scan, readerError)
+					proc.Process(scanReaderID, scan, readerError)
 					continue preprocessing
 				}
 				// Let the preprocessor know what's on the reader now.
-				proc.Process(scan, readerError)
+				proc.Process(scanReaderID, scan, readerError)
 				svc.State.SetActiveCard(confirmed)
 				select {
 				case itq <- confirmed:
@@ -814,18 +832,28 @@ preprocessing:
 			}
 		}
 
+		// The removal is the removal of whatever was on the reader that
+		// reported it, not of whatever was scanned last anywhere.
 		var removedToken *tokens.Token
 		if scan == nil && !readerError {
-			if previous := proc.PrevToken(); previous != nil {
+			if previous := proc.PrevToken(scanReaderID); previous != nil {
 				previousCopy := *previous
 				removedToken = &previousCopy
 			}
 		}
 
-		switch proc.Process(scan, readerError) {
+		if proc.Tracked() > scanPreprocessorPruneThreshold {
+			// The reporting reader is kept whatever state says, so a scan that
+			// races its reader being pruned is still judged against what that
+			// reader last reported rather than looking like a duplicate.
+			proc.Retain(append(connectedReaderIDs(svc.State), scanReaderID))
+		}
+
+		switch proc.Process(scanReaderID, scan, readerError) {
 		case scanSkipDuplicate:
 			log.Debug().
 				Str("source", scanSource).
+				Str("readerID", scanReaderID).
 				Bool("readerError", readerError).
 				Msg("ignoring duplicate scan")
 			continue preprocessing
@@ -866,11 +894,21 @@ preprocessing:
 				continue preprocessing
 			}
 
+			// Putting the hold owner's token back during its countdown cancels
+			// the exit and must not relaunch. Only an exit that is still
+			// pending counts: Stop reports false once the timer has fired or
+			// been cancelled, and the token stays recorded as the hold owner
+			// long after that — through an exit the timer decided against, or
+			// media stopped some other way — so treating a dead timer as a
+			// reinsertion swallowed an ordinary scan with nothing logged.
 			if exitTimer != nil && helpers.TokensEqual(scan, svc.State.GetSoftwareToken()) {
-				if cancelTimedExit(exitTimer, &exitGeneration) {
+				pending := cancelTimedExit(exitTimer, &exitGeneration)
+				exitTimer = nil
+				if pending {
 					log.Info().Msg("hold owner reinserted, cancelling exit")
+					continue preprocessing
 				}
-				continue preprocessing
+				log.Debug().Msg("scan matches the hold owner but no exit is pending, launching")
 			}
 
 			// avoid launching a token that was just written by a reader
@@ -964,10 +1002,11 @@ preprocessing:
 		case scanReaderErrorRemoval:
 			log.Warn().
 				Str("source", scanSource).
-				Bool("prevTokenSet", proc.PrevToken() != nil).
+				Str("readerID", scanReaderID).
+				Bool("prevTokenSet", proc.PrevToken(scanReaderID) != nil).
 				Msg("token removal due to reader error, keeping media running")
 			// Clear acknowledged state so reconnection triggers a fresh suppression
-			if pt := proc.PrevToken(); pt != nil && pt.ReaderID != "" {
+			if pt := proc.PrevToken(scanReaderID); pt != nil && pt.ReaderID != "" {
 				delete(connectScanSeen, pt.ReaderID)
 			}
 			if activeRemovalHook != nil {

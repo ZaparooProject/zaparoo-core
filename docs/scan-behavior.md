@@ -84,6 +84,18 @@ scan_mode = "hold"
 - [ ] `settings.update` rejects a `scanMode` that is neither `tap` nor `hold`,
       and stores any accepted spelling canonically.
 
+### Two readers at once
+
+Each reader's presence is tracked separately, so what one reader reports never
+decides what another reader's report means.
+
+- [ ] With a card on each of two readers, removing one exits (or not) according
+      to that card and that reader, and leaves the other alone.
+- [ ] Scanning a command card on a second reader, with or without removing it
+      again, does not stop the first reader's removal from exiting its media.
+- [ ] The same card presented to both readers is two presences: removing it
+      from one does not clear the other.
+
 ---
 
 ## Per-token override: the `#tap` and `#hold` traits
