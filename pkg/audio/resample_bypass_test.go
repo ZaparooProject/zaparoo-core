@@ -96,8 +96,8 @@ func assertResampledFrom(t *testing.T, srcRate int) {
 	// One input chunk of slack either way. The distance to a passthrough
 	// (produced) or to the inverted ratio is far larger than that, so both
 	// still fail.
-	want := produced * srcRate / targetSampleRate
+	want := float64(produced) * float64(srcRate) / float64(targetSampleRate)
 	const slack = 2048
-	assert.InDelta(t, want, src.pulled, slack,
+	assert.InDelta(t, want, float64(src.pulled), slack,
 		"resampling %dHz to %dHz must draw input in proportion to the rate", srcRate, targetSampleRate)
 }
