@@ -64,7 +64,11 @@ func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T
 	// connection leaves, and a read-only connection can do neither. That is
 	// the on-disk state a crashed or corrupt process leaves behind, which is
 	// what the forensic set exists to capture.
-	holder, err := sql.Open("sqlite3", "file:"+path+"?mode=ro")
+	// The media driver, not the bare one: this file carries an index collated
+	// with ZAPAROO_TITLE_V1, and a connection without that collation cannot
+	// even run integrity_check against it. The count below happens not to need
+	// it, which is not a property worth depending on.
+	holder, err := sql.Open(sqliteMediaDriver, "file:"+path+"?mode=ro")
 	require.NoError(t, err)
 	holderConn, err := holder.Conn(ctx)
 	require.NoError(t, err)
