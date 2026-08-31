@@ -63,6 +63,7 @@ regardless of which launcher started it.
 - [ ] Tapping a second card runs `before_exit` before the new game starts.
 - [ ] `**stop`, `**playlist.stop` and the `stop` API method each run it
       before returning to the menu.
+- [ ] `**mister.mgl` runs it before the MGL replaces the running core.
 - [ ] A playtime limit runs it before it stops the game.
 - [ ] Removing the card in hold mode runs it after `on_remove` and `exit_delay`.
 - [ ] Quitting the game from the emulator or frontend does **not** run it; by

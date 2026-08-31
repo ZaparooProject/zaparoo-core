@@ -352,6 +352,8 @@ func TestRunTokenZapScript_PlaylistStopSkippedWhenBeforeExitLaunchedMedia(t *tes
 
 	_ = env.run(t, "**playlist.stop")
 
+	assert.Equal(t, 1, env.rec.count("launch"),
+		"the hook's own launch should happen, or the stop assertion below proves nothing")
 	assert.Zero(t, env.rec.count("stop"),
 		"the playlist stop must be skipped once before_exit replaced the outgoing media")
 }
