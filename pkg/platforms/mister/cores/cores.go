@@ -34,6 +34,10 @@ type (
 	Core      = catalog.Core
 )
 
+// ErrLaunchesDirectly is retained here for the same compatibility reason as the
+// type aliases above.
+var ErrLaunchesDirectly = catalog.ErrLaunchesDirectly
+
 // Systems is retained for compatibility. Canonical definitions live in the
 // dependency-light catalog package.
 var Systems = func() map[string]Core {

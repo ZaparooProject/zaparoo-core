@@ -29,6 +29,11 @@ type (
 	Core      = standalone.Core
 )
 
+// ErrLaunchesDirectly is re-exported so callers can tell "this file needs no
+// MGL" apart from "no slot claims this extension" without importing the
+// standalone module directly.
+var ErrLaunchesDirectly = standalone.ErrLaunchesDirectly
+
 func All() []Core {
 	return standalone.All()
 }

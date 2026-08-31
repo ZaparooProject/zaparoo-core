@@ -65,16 +65,11 @@ func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, 
 		return result, nil
 	}
 
+	// Media that launches directly comes back as catalog.ErrLaunchesDirectly,
+	// so reaching Generate with it means a caller picked the wrong launch path.
 	params, err := catalog.PathToMGLDef(core, mediaPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to get MGL definition: %w", err)
-	}
-	if params == nil {
-		// The slot matched but declares no parameters, which means the file is
-		// launched directly rather than wrapped in an MGL. Reaching here means
-		// a caller picked the wrong launch path, so say so instead of
-		// dereferencing nil.
-		return "", fmt.Errorf("media needs no MGL and cannot be wrapped in one: %s", mediaPath)
 	}
 
 	result += fmt.Sprintf(

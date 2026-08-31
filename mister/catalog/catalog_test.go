@@ -20,6 +20,7 @@
 package catalog_test
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -118,9 +119,9 @@ func TestPathToMGLDef(t *testing.T) {
 }
 
 // A slot with no mgl block is how the catalog says "this extension launches
-// directly". Arcade's .mra slot is the real one; reporting it as unmatched
-// would fail every arcade launch, so the nil result must survive.
-func TestPathToMGLDefReturnsNilForSlotsWithoutParams(t *testing.T) {
+// directly", and that has to stay distinguishable from an extension no slot
+// claims: reporting Arcade's .mra as unmatched would fail every arcade launch.
+func TestPathToMGLDefReportsSlotsWithoutParams(t *testing.T) {
 	t.Parallel()
 
 	core := &catalog.Core{
@@ -132,11 +133,16 @@ func TestPathToMGLDefReturnsNilForSlotsWithoutParams(t *testing.T) {
 	}
 
 	direct, err := catalog.PathToMGLDef(core, "game.bin")
-	if err != nil {
-		t.Fatalf("a matched slot without params is not an error: %v", err)
+	if !errors.Is(err, catalog.ErrLaunchesDirectly) {
+		t.Fatalf("a matched slot without params must say so: %v", err)
 	}
 	if direct != nil {
-		t.Fatalf("expected nil params for a slot that declares none, got %#v", direct)
+		t.Fatalf("expected no params alongside the sentinel, got %#v", direct)
+	}
+
+	_, err = catalog.PathToMGLDef(core, "game.iso")
+	if err == nil || errors.Is(err, catalog.ErrLaunchesDirectly) {
+		t.Fatalf("an unclaimed extension is not a direct launch: %v", err)
 	}
 
 	params, err := catalog.PathToMGLDef(core, "game.rom")
@@ -156,12 +162,8 @@ func TestPathToMGLDefArcadeMRANeedsNoMGL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params, err := catalog.PathToMGLDef(core, "maze_game.mra")
-	if err != nil {
-		t.Fatalf("arcade .mra must resolve: %v", err)
-	}
-	if params != nil {
-		t.Fatalf("arcade .mra launches directly, so it must carry no MGL params: %#v", params)
+	if _, err := catalog.PathToMGLDef(core, "maze_game.mra"); !errors.Is(err, catalog.ErrLaunchesDirectly) {
+		t.Fatalf("arcade .mra launches directly: %v", err)
 	}
 }
 

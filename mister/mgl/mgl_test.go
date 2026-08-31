@@ -20,6 +20,7 @@
 package mgl_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -120,7 +121,8 @@ func TestGenerateRejectsMediaThatNeedsNoMGL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgl.Generate(core, "_Arcade/core.rbf", "maze_game.mra", ""); err == nil {
-		t.Fatal("expected an error rather than a nil dereference")
+	_, err = mgl.Generate(core, "_Arcade/core.rbf", "maze_game.mra", "")
+	if !errors.Is(err, catalog.ErrLaunchesDirectly) {
+		t.Fatalf("expected the direct-launch sentinel, got: %v", err)
 	}
 }

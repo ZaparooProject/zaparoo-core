@@ -23,10 +23,20 @@ package catalog
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// ErrLaunchesDirectly reports that a path matched a slot which declares no MGL
+// parameters, meaning MiSTer opens the file itself. Arcade's .mra slot is the
+// only one in the shipped catalog.
+//
+// This is an error rather than a nil MGLParams with a nil error so that a
+// caller written the ordinary way is right by default: returning early on a
+// non-nil error is correct here, where dereferencing a nil result was not.
+var ErrLaunchesDirectly = errors.New("media launches directly and needs no MGL")
 
 type MGLParams struct {
 	Method     string `json:"method"`
@@ -183,6 +193,8 @@ func Lookup(id string) (*Core, error) {
 }
 
 // PathToMGLDef resolves a media path to the matching MGL slot parameters.
+// It returns ErrLaunchesDirectly when the matching slot declares none, and a
+// plain error when no slot claims the extension at all.
 func PathToMGLDef(core *Core, path string) (*MGLParams, error) {
 	if core == nil {
 		return nil, fmt.Errorf("system has no matching mgl args: <nil>, %s", path)
@@ -191,10 +203,9 @@ func PathToMGLDef(core *Core, path string) (*MGLParams, error) {
 	for _, slot := range core.Slots {
 		for _, ext := range slot.Exts {
 			if strings.HasSuffix(lowerPath, ext) {
-				// A matched slot with no mgl block resolves to (nil, nil) on
-				// purpose: Arcade's .mra slot carries no parameters because
-				// MiSTer opens .mra files directly rather than through an MGL.
-				// Treating that as unmatched would fail every arcade launch.
+				if slot.Mgl == nil {
+					return nil, ErrLaunchesDirectly
+				}
 				return cloneMGLParams(slot.Mgl), nil
 			}
 		}
