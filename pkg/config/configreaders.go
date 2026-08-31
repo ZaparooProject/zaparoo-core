@@ -132,18 +132,19 @@ func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 func (c *Instance) TapModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	switch c.vals.Readers.Scan.Mode {
-	case ScanModeTap, "":
-		return true
-	default:
-		return false
-	}
+	// Normalized like GlobalScanMode and ScanModeForReader read the same
+	// value: "TAP" is tap, and an unset or unrecognised mode falls through to
+	// the tap default rather than reporting neither mode.
+	return normalizeScanMode(c.vals.Readers.Scan.Mode) != ScanModeHold
 }
 
 func (c *Instance) HoldModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Readers.Scan.Mode == ScanModeHold
+	// Normalized, like ScanModeForReader does with the same value: otherwise a
+	// global mode of "HOLD" or " hold " holds for a token that came from a
+	// reader and taps for one that did not.
+	return normalizeScanMode(c.vals.Readers.Scan.Mode) == ScanModeHold
 }
 
 // normalizeScanMode returns mode as a recognised scan mode, or "" when it is
@@ -198,6 +199,17 @@ func (c *Instance) ScanModeForReader(driverID, path string) string {
 	if mode := c.scanModeForReaderLocked(driverID, path); mode != "" {
 		return mode
 	}
+	if mode := normalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
+		return mode
+	}
+	return ScanModeTap
+}
+
+// GlobalScanMode returns the effective readers.scan.mode, normalized, for
+// callers that have no reader to resolve against. Never empty.
+func (c *Instance) GlobalScanMode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if mode := normalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
 		return mode
 	}

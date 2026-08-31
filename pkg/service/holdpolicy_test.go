@@ -369,6 +369,34 @@ scan_mode = "tap"
 // must not re-derive them from the script it is about to run. Without that,
 // a hook or an injected command could change the traits of the token running
 // it half way through.
+// A token with no reader falls through to the global mode, which has to be
+// read the same way ScanModeForReader reads it. Before this, a global mode of
+// "HOLD" held for a token that came from a reader and tapped for one that did
+// not, from the same config.
+func TestHoldModeForToken_NoReaderNormalizesGlobalMode(t *testing.T) {
+	t.Parallel()
+
+	for _, globalMode := range []string{"HOLD", " hold ", "Hold"} {
+		t.Run(globalMode, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+			require.NoError(t, err)
+			cfg.SetScanMode(globalMode)
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.SetupBasicMock()
+			st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+			svc := &ServiceContext{Platform: mockPlatform, Config: cfg, State: st}
+
+			assert.True(t, holdModeForToken(svc, &tokens.Token{UID: "no-reader"}),
+				"a token with no reader must resolve the global mode the same way a reader does")
+			assert.True(t, holdModeForToken(svc, nil),
+				"and so must a nil token")
+		})
+	}
+}
+
 func TestRunTokenZapScriptDoesNotResolveTraits(t *testing.T) {
 	t.Parallel()
 

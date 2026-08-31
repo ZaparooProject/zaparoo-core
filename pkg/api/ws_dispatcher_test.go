@@ -331,11 +331,11 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
-	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
+	require.NoError(t, methodMap.AddMethod(models.MethodConfirm, func(env requests.RequestEnv) (any, error) {
 		select {
 		case <-time.After(150 * time.Millisecond):
 			close(firstDone)
-			return map[string]string{"kind": "run"}, nil
+			return map[string]string{"kind": "confirm"}, nil
 		case <-env.Context.Done():
 			return nil, env.Context.Err()
 		}
@@ -345,8 +345,52 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 		case <-firstDone:
 			return map[string]string{"kind": "stop"}, nil
 		default:
-			return map[string]string{"kind": "stop-before-run"}, nil
+			return map[string]string{"kind": "stop-before-confirm"}, nil
 		}
+	}))
+
+	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"confirm","id":1}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"stop","id":2}`)))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
+
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(2), resp.ID)
+}
+
+// A run that is still waiting on ZapScript execution must not hold up the
+// instant control methods that share a session with it.
+func TestWebSocketRunLaneDoesNotBlockHighLane(t *testing.T) {
+	t.Parallel()
+
+	releaseRun := make(chan struct{})
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
+		select {
+		case <-releaseRun:
+			return map[string]string{"kind": "run"}, nil
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
+	}))
+	require.NoError(t, methodMap.AddMethod(models.MethodStop, func(requests.RequestEnv) (any, error) {
+		return map[string]string{"kind": "stop"}, nil
 	}))
 
 	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
@@ -366,12 +410,13 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(msg, &resp))
-	assert.Equal(t, models.NewNumberID(1), resp.ID)
+	assert.Equal(t, models.NewNumberID(2), resp.ID, "stop must answer while run is still waiting")
 
+	close(releaseRun)
 	_, msg, err = conn.ReadMessage()
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(msg, &resp))
-	assert.Equal(t, models.NewNumberID(2), resp.ID)
+	assert.Equal(t, models.NewNumberID(1), resp.ID)
 }
 
 func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.T) {
@@ -630,6 +675,7 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 		ctx:       ctx,
 		cancel:    cancel,
 		high:      make(chan *wsRequestJob, wsQueueSize),
+		run:       make(chan *wsRequestJob, wsQueueSize),
 		normal:    make(chan *wsRequestJob, wsQueueSize),
 		low:       make(chan *wsRequestJob, wsLowQueueSize),
 		responses: make(chan *wsResponseJob, wsResponseQueueSize),
@@ -645,9 +691,19 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 		cancel:  jobCancel,
 	}, apiPriorityHigh))
 
+	tracker.RequestStarted()
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	require.NoError(t, d.enqueue(&wsRequestJob{
+		env:     &requests.RequestEnv{Context: runCtx},
+		tracker: tracker,
+		cancel:  runCancel,
+	}, apiPriorityRun))
+
 	d.close()
 	assert.Equal(t, 0, tracker.inFlight())
-	assert.Error(t, jobCtx.Err())
+	require.Error(t, jobCtx.Err())
+	require.Error(t, runCtx.Err())
 }
 
 func TestCloseWSDispatcherBoundsInputWorkerDrain(t *testing.T) {

@@ -157,8 +157,14 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 		response.HoldOwnerReaderID = owner.ReaderID
 		response.HoldScanMode = owner.Traits.ScanMode()
 		if response.HoldScanMode == "" {
+			// A reader can disconnect while it still owns the running media.
+			// Reporting an owner with no mode at all reads as a missing field
+			// rather than a resolvable policy, so fall back to the global mode
+			// the owner would answer to now.
 			if r, ok := st.GetReader(owner.ReaderID); ok && r != nil {
 				response.HoldScanMode = cfg.ScanModeForReader(r.Metadata().ID, r.Path())
+			} else {
+				response.HoldScanMode = cfg.GlobalScanMode()
 			}
 		}
 	}

@@ -694,6 +694,28 @@ scan_mode = "hold"
 		assert.NotContains(t, string(encoded), "secret.rom")
 	})
 
+	// A reader can disconnect while it still owns the running media. Reporting
+	// the owner with an empty mode reads as a missing field rather than a
+	// policy that can still be resolved.
+	t.Run("owner whose reader has disconnected still reports a mode", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, "pn532-gone", resp.HoldOwnerReaderID)
+		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode,
+			"a missing reader falls back to the global mode, not to empty")
+	})
+
 	t.Run("hold owner reports its token override", func(t *testing.T) {
 		t.Parallel()
 

@@ -316,7 +316,7 @@ func timedExit(
 			log.Debug().Msg("stale exit timer expired, cancelling exit")
 			return
 		}
-		if !holdModeForToken(svc, &ownerCopy) {
+		if !holdModeForTokenAfterRemoval(svc, &ownerCopy) {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
 			return
 		}

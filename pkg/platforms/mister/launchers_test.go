@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -563,6 +564,32 @@ func TestCreateLaunchersAppliesDefaultScanExcludes(t *testing.T) {
 	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.rom")
 	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.vhd")
 	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.zip/boot.vhd")
+}
+
+func TestCreateLaunchersUsesCatalogScanMetadata(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	byID := make(map[string]platforms.Launcher, len(launchers))
+	for _, launcher := range launchers {
+		byID[launcher.ID] = launcher
+	}
+
+	customScannerSystems := map[string]struct{}{
+		"Amiga":  {},
+		"NeoGeo": {},
+		"ao486":  {},
+	}
+	for _, definition := range catalog.All() {
+		launcher, ok := byID[definition.ID]
+		if !ok {
+			_, customScanner := customScannerSystems[definition.ID]
+			require.True(t, customScanner, "catalog-backed launcher %s missing", definition.ID)
+			continue
+		}
+		assert.Equal(t, definition.Folders, launcher.Folders, definition.ID)
+		assert.Equal(t, definition.Extensions, launcher.Extensions, definition.ID)
+	}
 }
 
 func TestArcadeLauncherExtensions(t *testing.T) {

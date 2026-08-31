@@ -48,15 +48,15 @@ import (
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
 type PendingLaunchOverride struct {
+	Source     tokens.Token
 	CreatedAt  time.Time
 	LauncherID string
-	Source     tokens.Token
 }
 
 type PendingWrite struct {
+	Source    tokens.Token
 	CreatedAt time.Time
 	Payload   string
-	Source    tokens.Token
 }
 
 type readerWriteState struct {
@@ -66,12 +66,12 @@ type readerWriteState struct {
 }
 
 type State struct {
+	activeToken           tokens.Token
+	lastScanned           tokens.Token
 	platform              platforms.Platform
 	ctx                   context.Context
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
+	softwareToken         *tokens.Token
+	ctxCancelFunc         context.CancelFunc
 	readers               map[string]readers.Reader
 	readerWrites          map[string]*readerWriteState
 	Notifications         chan<- models.Notification
@@ -85,12 +85,12 @@ type State struct {
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
 	beforeExitHook        func()
-	softwareToken         *tokens.Token
-	ctxCancelFunc         context.CancelFunc
+	pendingLaunchOverride *PendingLaunchOverride
+	pendingWrite          *PendingWrite
 	backupCoordinator     *backupcoordinator.Coordinator
+	launcherManager       *LauncherManager
+	uiEvents              *uievents.Service
 	bootUUID              string
-	lastScanned           tokens.Token
-	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
