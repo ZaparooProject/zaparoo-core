@@ -81,6 +81,24 @@ func TestCommandExecuteSucceeds(t *testing.T) {
 	assert.Equal(t, "succeeded", result.Status)
 }
 
+func TestCommandAcceptsWindowsDrivePath(t *testing.T) {
+	called := false
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			called = true
+			return nil
+		},
+	}}
+
+	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"C:/Games/Sonic.md"}`))
+
+	assert.Equal(t, "succeeded", result.Status)
+	assert.True(t, called)
+}
+
 // TestCommandClassifiesRunZapScriptErrors pins how executeCommand maps every
 // RunZapScript error it recognizes to a stable remote result code; anything
 // unrecognized falls back to a generic execution_failed rather than leaking
@@ -218,12 +236,23 @@ func TestCommandRejectsURLValueForAllStructuralVerbs(t *testing.T) {
 			"https://example.com/game.zip",
 			"smb://nas/share/game.sfc?system=SNES",
 			"FTP://example.com/game.zip",
+			"file:/media/game.sfc",
+			"mailto:user@example.com",
+			"https:opaque",
 			"Genesis/Sonic.md?launcher=x&url=http://example.com",
 		} {
-			m := &manager{}
+			called := false
+			m := &manager{deps: Deps{RunZapScript: func(
+				context.Context, tokens.Token, playlists.PlaylistController,
+				*gozapscript.ArgExprEnv, bool,
+			) error {
+				called = true
+				return nil
+			}}}
 			result := m.executeCommand(
 				context.Background(), operationType, json.RawMessage(`{"value":"`+value+`"}`))
 			assert.Equal(t, "bad_params", result.ErrorCode, "%s: %s", operationType, value)
+			assert.False(t, called, "%s reached RunZapScript: %s", operationType, value)
 		}
 	}
 }
@@ -254,8 +283,12 @@ func TestValidCommandValueRejectsZapScriptInjection(t *testing.T) {
 	assert.True(t, validCommandValue("Genesis/Sonic.md?launcher=default"))
 	assert.True(t, containsURLScheme("https://example.com/game.zip?launcher=x"))
 	assert.True(t, containsURLScheme("smb://nas/share/game.sfc"))
+	assert.True(t, containsURLScheme("file:/media/game.sfc"))
+	assert.True(t, containsURLScheme("mailto:user@example.com"))
+	assert.True(t, containsURLScheme("https:opaque"))
 	assert.False(t, containsURLScheme("Genesis/Sonic.md?launcher=x"))
 	assert.False(t, containsURLScheme("C:/Games/Sonic.md"), "a drive letter is not a URL scheme")
+	assert.False(t, containsURLScheme(`C:\\Games\\Sonic.md`), "a backslash drive path is not a URL scheme")
 }
 
 func FuzzBuildStructuralCommand(f *testing.F) {

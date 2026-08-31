@@ -275,6 +275,13 @@ func runTokenZapScriptWithContext(
 			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
 			select {
 			case plsc.Queue <- nil:
+			case <-runCtx.Done():
+				select {
+				case <-svc.State.GetContext().Done():
+					return errors.New("service shutting down")
+				default:
+					return runCtx.Err()
+				}
 			case <-svc.State.GetContext().Done():
 				return errors.New("service shutting down")
 			}
@@ -292,6 +299,13 @@ func runTokenZapScriptWithContext(
 					log.Debug().Msg("media changed, updating hold owner")
 					select {
 					case svc.LaunchSoftwareQueue <- &softwareToken:
+					case <-runCtx.Done():
+						select {
+						case <-svc.State.GetContext().Done():
+							return errors.New("service shutting down")
+						default:
+							return runCtx.Err()
+						}
 					case <-svc.State.GetContext().Done():
 						return errors.New("service shutting down")
 					}

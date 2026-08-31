@@ -137,12 +137,22 @@ func validCommandValue(value string) bool {
 	return true
 }
 
-// urlSchemePattern matches a URL scheme anywhere in a command value, the
-// same pattern the Online API applies to a launch value at creation.
+// urlSchemePattern matches a valid URI scheme followed by a colon at a
+// token boundary anywhere in a command value. Single-letter drive prefixes
+// are filtered separately so Windows media paths remain valid.
 //
 //nolint:gochecknoglobals // compiled once
-var urlSchemePattern = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://`)
+var urlSchemePattern = regexp.MustCompile(`(?i)(^|[^a-z0-9+.-])([a-z][a-z0-9+.-]*):`)
 
 func containsURLScheme(value string) bool {
-	return urlSchemePattern.MatchString(value)
+	for _, match := range urlSchemePattern.FindAllStringSubmatchIndex(value, -1) {
+		schemeStart, schemeEnd := match[4], match[5]
+		isDrivePath := schemeEnd-schemeStart == 1 && schemeEnd+1 < len(value) &&
+			(value[schemeEnd+1] == '/' || value[schemeEnd+1] == '\\') &&
+			(schemeStart == 0 || value[schemeStart-1] == '/' || value[schemeStart-1] == '\\')
+		if !isDrivePath {
+			return true
+		}
+	}
+	return false
 }

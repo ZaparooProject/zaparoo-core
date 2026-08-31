@@ -41,6 +41,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func newNoRequestTestManager(t *testing.T) *manager {
+	t.Helper()
+	m := newHTTPTestManager(t, "https://online.example")
+	m.httpClient = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected remote operation request to %s", request.URL.Path)
+		return nil, errors.New("unexpected remote operation request")
+	})}
+	return m
+}
+
 func TestOperationAcceptExecuteReportLifecycle(t *testing.T) {
 	var acceptedCalls, resultCalls int
 	acceptedExpiry := time.Now().UTC().Add(time.Minute)
@@ -332,11 +348,7 @@ func TestFinishOperationGivesUpAfterPersistRetriesExhausted(t *testing.T) {
 }
 
 func TestOperationRejectsRedeliveryWithChangedDeadline(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		t.Errorf("changed-deadline redelivery made unexpected request to %s", r.URL.Path)
-	}))
-	defer server.Close()
-	m := newHTTPTestManager(t, server.URL)
+	m := newNoRequestTestManager(t)
 	userDB := testinghelpers.NewMockUserDBI()
 	m.deps.DB = &database.Database{UserDB: userDB}
 	params := json.RawMessage(`{"message":"same"}`)
@@ -361,11 +373,7 @@ func TestOperationRejectsRedeliveryWithChangedDeadline(t *testing.T) {
 }
 
 func TestOperationCannotExtendRecordedDeadline(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		t.Errorf("extended recorded deadline made unexpected request to %s", r.URL.Path)
-	}))
-	defer server.Close()
-	m := newHTTPTestManager(t, server.URL)
+	m := newNoRequestTestManager(t)
 	userDB := testinghelpers.NewMockUserDBI()
 	m.deps.DB = &database.Database{UserDB: userDB}
 	params := json.RawMessage(`{"message":"late"}`)

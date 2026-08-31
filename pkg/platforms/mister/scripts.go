@@ -32,8 +32,10 @@ var (
 	runScriptChvt           = func(ctx context.Context, vt string) error {
 		return exec.CommandContext(ctx, "chvt", vt).Run() //nolint:gosec // Fixed executable; VT is internal.
 	}
-	writeScriptLauncher = os.WriteFile
-	startScriptCommand  = func(cmd *exec.Cmd) error { return cmd.Start() }
+	writeScriptLauncher          = os.WriteFile
+	startScriptCommand           = func(cmd *exec.Cmd) error { return cmd.Start() }
+	runHiddenScriptCommand       = func(cmd *exec.Cmd) error { return cmd.Run() }
+	killHiddenScriptProcessGroup = func(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }
 )
 
 func scriptIsActive(ctx context.Context) bool {
@@ -86,7 +88,7 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 			if cmd.Process == nil {
 				return os.ErrProcessDone
 			}
-			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			if err := killHiddenScriptProcessGroup(cmd.Process.Pid); err != nil {
 				if errors.Is(err, syscall.ESRCH) {
 					return os.ErrProcessDone
 				}
@@ -98,7 +100,7 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
 			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag)
 		cmd.Dir = filepath.Dir(bin)
-		err := cmd.Run()
+		err := runHiddenScriptCommand(cmd)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return fmt.Errorf("failed to run script: %w", ctxErr)
