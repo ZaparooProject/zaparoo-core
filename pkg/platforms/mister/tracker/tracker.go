@@ -67,6 +67,8 @@ type Tracker struct {
 	activeMedia      func() *models.ActiveMedia
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
+	setActiveGame    func(string) error
+	selection        selectionFiles
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -144,6 +146,8 @@ func NewTracker(
 		NameMap:          nameMap,
 		activeMedia:      activeMedia,
 		setActiveMedia:   setActiveMedia,
+		setActiveGame:    activegame.SetActiveGame,
+		selection:        misterSelectionFiles(),
 	}, nil
 }
 
@@ -627,6 +631,32 @@ func readFileSelectionFrom(statusFile, fullPathFile, currentPathFile string) (fi
 	return sel, nil
 }
 
+// selectionStaleWindow bounds how far apart MiSTer's FILESELECT status and the
+// CURRENTPATH it describes may be written and still belong to the same
+// selection. Both MiSTer and writeCurrentPathTo write the trio back to back,
+// so a real selection lands well inside this.
+const selectionStaleWindow = 2 * time.Second
+
+// selectionIsStale reports whether FILESELECT was written meaningfully later
+// than the path it claims to describe.
+//
+// MiSTer never clears FILESELECT after a launch and rewrites it again when a
+// core exits, leaving the status at "selected" while FULLPATH and CURRENTPATH
+// still name the game that just ended. Without this the exit re-notification
+// reads as a fresh launch and resurrects the game that was just closed, which
+// then accrues playtime forever because no further core change is coming.
+func selectionIsStale(statusFile, currentPathFile string, window time.Duration) (bool, error) {
+	statusInfo, err := os.Stat(statusFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat file selection status: %w", err)
+	}
+	pathInfo, err := os.Stat(currentPathFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat selected current path: %w", err)
+	}
+	return statusInfo.ModTime().Sub(pathInfo.ModTime()) > window, nil
+}
+
 // stripExt mirrors the extension stripping MiSTer's get_display_name
 // (file_io.cpp) applies to CURRENTPATH for .mra/.mgl/.rbf files and cores
 // with a single declared extension.
@@ -779,20 +809,57 @@ func hasSystemLauncher(launchers []platforms.Launcher) bool {
 	return false
 }
 
-// loadFileSelection reads a settled native MiSTer file-selection event and,
-// if it resolves to a trackable game, records it the same way a Zaparoo
-// launch does.
-func (tr *Tracker) loadFileSelection() {
-	sel, err := readFileSelectionFrom(
-		misterconfig.FileSelectFile, misterconfig.FullPathFile, misterconfig.CurrentPathFile,
-	)
+// selectionFiles names the MiSTer file-selector trio plus the storage
+// selection, so the resolution below can be driven from a temp directory.
+type selectionFiles struct {
+	status      string
+	fullPath    string
+	currentPath string
+	deviceBin   string
+}
+
+func misterSelectionFiles() selectionFiles {
+	return selectionFiles{
+		status:      misterconfig.FileSelectFile,
+		fullPath:    misterconfig.FullPathFile,
+		currentPath: misterconfig.CurrentPathFile,
+		deviceBin:   filepath.Join(misterconfig.CoreConfigFolder, "device.bin"),
+	}
+}
+
+// resolveSelectedLaunchPath reads the settled selection and reports the path
+// MiSTer launched, or ok=false when there is nothing to act on: an unreadable
+// trio, a selection that cannot be resolved confidently, or a status
+// re-notified long after the paths it describes.
+func resolveSelectedLaunchPath(files selectionFiles, window time.Duration) (string, bool) {
+	sel, err := readFileSelectionFrom(files.status, files.fullPath, files.currentPath)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read MiSTer file selection")
-		return
+		return "", false
 	}
 
-	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
-	path, ok := composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
+	if sel.Status == "selected" {
+		// Fail open: an unreadable timestamp must not drop a real launch.
+		stale, staleErr := selectionIsStale(files.status, files.currentPath, window)
+		switch {
+		case staleErr != nil:
+			log.Warn().Err(staleErr).Msg("failed to age MiSTer file selection, treating it as current")
+		case stale:
+			log.Debug().Str("path", sel.FullPath).
+				Msg("ignoring MiSTer file selection re-notified after its paths were written")
+			return "", false
+		}
+	}
+
+	storageSelection, _ := os.ReadFile(files.deviceBin) // #nosec G304 -- fixed MiSTer config path
+	return composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
+}
+
+// loadFileSelection resolves the tracker's file-selector trio and records the
+// result as the active game. Both the trio and the recorder come from the
+// tracker so a test can drive the whole decision from a temp directory.
+func (tr *Tracker) loadFileSelection() {
+	path, ok := resolveSelectedLaunchPath(tr.selection, selectionStaleWindow)
 	if !ok {
 		return
 	}
@@ -807,7 +874,7 @@ func (tr *Tracker) loadFileSelection() {
 	}
 
 	log.Info().Str("path", path).Msg("manual MiSTer file launch detected")
-	if err = activegame.SetActiveGame(path); err != nil {
+	if err := tr.setActiveGame(path); err != nil {
 		log.Error().Err(err).Str("path", path).Msg("failed to set selected active game")
 	}
 }
