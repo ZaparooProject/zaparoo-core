@@ -21,6 +21,7 @@ package esmedia
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -338,8 +339,31 @@ func TestContainerArtworkFallbackNames_StripsFolderExtension(t *testing.T) {
 	names := ContainerArtworkFallbackNames(filepath.Join(root, "Cool Game.cue", "Disc 1.cue"), root)
 
 	assert.Contains(t, names, "Cool Game.png")
-	assert.Contains(t, names, "Cool Game.cue.png",
+	require.Contains(t, names, "Cool Game.cue.png",
 		"a folder name may legitimately contain a dot, so the raw name is offered too")
+	assert.Less(t, slices.Index(names, "Cool Game.cue.png"), slices.Index(names, "Cool Game.png"),
+		"the folder's own name must be tried before the stripped stem")
+}
+
+// A dot in a folder name is usually part of the name, not an extension. Only a
+// disc extension is stripped, or "Sonic 3.0" collects "Sonic 3"'s artwork.
+func TestContainerArtworkFallbackNames_KeepsNonDiscFolderSuffixes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	names := ContainerArtworkFallbackNames(filepath.Join(root, "Sonic 3.0", "Disc 1.cue"), root)
+	assert.Contains(t, names, "Sonic 3.0.png")
+	assert.NotContains(t, names, "Sonic 3.png",
+		"a version number is not an extension and must not match another game's art")
+
+	names = ContainerArtworkFallbackNames(filepath.Join(root, "Mr. Do!", "Game.chd"), root)
+	assert.Contains(t, names, "Mr. Do!.png")
+	assert.NotContains(t, names, "Mr.png")
+
+	names = ContainerArtworkFallbackNames(filepath.Join(root, "W.I.P", "Game.chd"), root)
+	assert.Contains(t, names, "W.I.P.png")
+	assert.NotContains(t, names, "W.I.png")
 }
 
 func TestContainerArtworkFallbackNames_MirrorsNestedPathFirst(t *testing.T) {

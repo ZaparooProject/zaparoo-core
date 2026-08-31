@@ -146,7 +146,9 @@ This covers the two common EmulationStation layouts for multi-disc games: a `<fo
 
 `<folder>` entries carry a smaller field set than games: `name`, `desc`, `image`, `thumbnail`, `video`, and `marquee`. They are processed after that file's `<game>` entries, so a real game entry pointing at the same media row always wins. Folders that do not collapse are skipped, because there is no row to carry their metadata; ordinary collections stay plain browseable directories.
 
-Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game.
+A directory entry only ever resolves through the container rule. In particular, a `<game>` entry naming a directory whose media lives in subdirectories no longer matches the single row underneath it, because resolving a directory by scanning for indexed paths beneath it is only unambiguous until an earlier entry has claimed one of them. Describe such a folder with a `<folder>` entry, or point the `<game>` entry at the file itself.
+
+Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game. Only a disc extension (`.cue`, `.m3u`, `.chd`, `.iso`, `.bin`) is stripped from that name before the search; any other dot is treated as part of the folder name, so a folder called `Sonic 3.0` does not pick up `Sonic 3`'s artwork.
 
 By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
 

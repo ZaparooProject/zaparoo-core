@@ -130,9 +130,12 @@ func ArtworkFallbackNames(gamePath, systemRootPath string) []string {
 // the directory holding gamePath rather than the file itself. EmulationStation
 // stores art for a folder shown as one game under the folder's own name, so a
 // disc folder whose inner file is named differently is only found this way.
-// Both the folder name with any extension stripped (the ES-DE convention of
-// naming a folder "Game.cue") and the raw folder name are offered, because a
-// folder name may legitimately contain a dot.
+//
+// The folder's own name is always offered first. A folder named with a disc
+// extension, which is how ES-DE makes a multi-disc folder read as one game,
+// also answers to the extensionless stem. Any other dot belongs to the name:
+// "Sonic 3.0" is a folder called that, not "Sonic 3" with an extension, and
+// stripping it hands the folder a neighbouring game's artwork.
 func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
 	resolved := ResolvePath(gamePath, systemRootPath)
 	if resolved == "" {
@@ -157,9 +160,11 @@ func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
 		return nil
 	}
 
-	stems := []string{strings.TrimSuffix(base, filepath.Ext(base))}
-	if stems[0] != base {
-		stems = append(stems, base)
+	stems := []string{base}
+	if ext := filepath.Ext(base); isDiscFolderExt(ext) {
+		if trimmed := strings.TrimSuffix(base, ext); trimmed != "" {
+			stems = append(stems, trimmed)
+		}
 	}
 
 	parent := filepath.Dir(dir)
@@ -178,6 +183,17 @@ func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
 		names = append(names, flatNames...)
 	}
 	return names
+}
+
+// isDiscFolderExt reports whether ext is one EmulationStation uses to name a
+// folder after the disc image or playlist it stands in for.
+func isDiscFolderExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".cue", ".m3u", ".chd", ".iso", ".bin":
+		return true
+	default:
+		return false
+	}
 }
 
 // FallbackArtworkNames returns <stem> plus each supported artwork extension.
