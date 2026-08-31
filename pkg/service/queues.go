@@ -153,6 +153,11 @@ func runTokenZapScriptWithContext(
 			return fmt.Errorf("failed to parse script: %w: %w", zapscript.ErrInvalidScript, err)
 		}
 		cmds = script.Cmds
+		// script.Traits is deliberately dropped here. Traits are resolved once,
+		// where the token entered the system, so running a script cannot change
+		// the traits of the token running it. Tokens that reach here without
+		// going through that step, such as playlist tracks and hook scripts,
+		// inherit from the token they came from instead.
 	}
 
 	log.Info().Msgf("running script (%d cmds)", len(cmds))
@@ -799,6 +804,17 @@ func handleQueuedToken(
 	if parseErr != nil {
 		log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 		// Continue anyway - the error will be caught in runTokenZapScript
+	}
+
+	// The one place a token's traits are settled. Every token carrying script
+	// text passes through here, and everything downstream reads this set
+	// rather than deriving its own, so a token's traits cannot change once it
+	// starts running.
+	if parseErr == nil {
+		t.Traits = tokens.ResolveTraits(script.Traits)
+		if !t.Traits.IsEmpty() {
+			log.Info().Strs("traits", t.Traits.Names()).Msg("token declares traits")
+		}
 	}
 
 	if parseErr != nil || shouldPlayScanSuccessSound(&script) {

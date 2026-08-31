@@ -28,12 +28,33 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// readersEnv builds the config and state HandleReaders needs to resolve each
+// reader's effective scan mode and the current hold owner.
+func readersEnv(t *testing.T, tomlCfg string) (*config.Instance, *state.State) {
+	t.Helper()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	if tomlCfg != "" {
+		require.NoError(t, cfg.LoadTOML(tomlCfg))
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	return cfg, st
+}
 
 func createWriteCapableReader(readerID string) *mocks.MockReader {
 	m := mocks.NewMockReader()
@@ -452,7 +473,8 @@ func TestHandleReaders(t *testing.T) {
 	t.Run("empty readers list", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := methods.HandleReaders([]readers.Reader{})
+		cfg, st := readersEnv(t, "")
+		result, err := methods.HandleReaders(cfg, st, []readers.Reader{})
 
 		require.NoError(t, err)
 		resp, ok := result.(models.ReadersResponse)
@@ -475,7 +497,8 @@ func TestHandleReaders(t *testing.T) {
 		})
 		rs := []readers.Reader{m}
 
-		result, err := methods.HandleReaders(rs)
+		cfg, st := readersEnv(t, "")
+		result, err := methods.HandleReaders(cfg, st, rs)
 
 		require.NoError(t, err)
 		resp, ok := result.(models.ReadersResponse)
@@ -512,7 +535,8 @@ func TestHandleReaders(t *testing.T) {
 
 		rs := []readers.Reader{m1, m2}
 
-		result, err := methods.HandleReaders(rs)
+		cfg, st := readersEnv(t, "")
+		result, err := methods.HandleReaders(cfg, st, rs)
 
 		require.NoError(t, err)
 		resp, ok := result.(models.ReadersResponse)
@@ -536,7 +560,8 @@ func TestHandleReaders(t *testing.T) {
 
 		rs := []readers.Reader{nil, m, nil}
 
-		result, err := methods.HandleReaders(rs)
+		cfg, st := readersEnv(t, "")
+		result, err := methods.HandleReaders(cfg, st, rs)
 
 		require.NoError(t, err)
 		resp, ok := result.(models.ReadersResponse)
@@ -558,12 +583,197 @@ func TestHandleReaders(t *testing.T) {
 
 		rs := []readers.Reader{m}
 
-		result, err := methods.HandleReaders(rs)
+		cfg, st := readersEnv(t, "")
+		result, err := methods.HandleReaders(cfg, st, rs)
 
 		require.NoError(t, err)
 		resp, ok := result.(models.ReadersResponse)
 		require.True(t, ok)
 		require.Len(t, resp.Readers, 1)
 		assert.Empty(t, resp.Readers[0].Capabilities)
+	})
+}
+
+func TestHandleReadersScanMode(t *testing.T) {
+	t.Parallel()
+
+	newReader := func(driver, path, readerID string) *mocks.MockReader {
+		m := mocks.NewMockReader()
+		m.On("Path").Return(path).Maybe()
+		m.On("ReaderID").Return(readerID).Maybe()
+		m.On("Metadata").Return(readers.DriverMetadata{ID: driver}).Maybe()
+		m.On("Info").Return(driver + " on " + path).Maybe()
+		m.On("Connected").Return(true).Maybe()
+		m.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+		return m
+	}
+
+	t.Run("reports the global mode when nothing overrides it", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		rs := []readers.Reader{newReader("pn532", "/dev/ttyUSB0", "pn532-aaaaaaaa")}
+
+		result, err := methods.HandleReaders(cfg, st, rs)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Readers, 1)
+		assert.Equal(t, config.ScanModeHold, resp.Readers[0].ScanMode)
+	})
+
+	t.Run("reports per-driver and per-connection overrides", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, `
+[readers.scan]
+mode = "tap"
+
+[readers.drivers.opticaldrive]
+scan_mode = "hold"
+
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB1"
+scan_mode = "hold"
+`)
+		rs := []readers.Reader{
+			newReader("pn532", "/dev/ttyUSB0", "pn532-aaaaaaaa"),
+			newReader("pn532", "/dev/ttyUSB1", "pn532-bbbbbbbb"),
+			newReader("opticaldrive", "/dev/sr0", "opticaldrive-cccccccc"),
+		}
+
+		result, err := methods.HandleReaders(cfg, st, rs)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Readers, 3)
+
+		assert.Equal(t, config.ScanModeTap, resp.Readers[0].ScanMode)
+		assert.Equal(t, config.ScanModeHold, resp.Readers[1].ScanMode)
+		assert.Equal(t, config.ScanModeHold, resp.Readers[2].ScanMode)
+	})
+
+	t.Run("no hold owner", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "")
+		rs := []readers.Reader{newReader("pn532", "/dev/ttyUSB0", "pn532-aaaaaaaa")}
+
+		result, err := methods.HandleReaders(cfg, st, rs)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Empty(t, resp.HoldOwnerReaderID)
+		assert.Empty(t, resp.HoldScanMode)
+	})
+
+	t.Run("hold owner reports its reader and effective policy", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		r := newReader("pn532", "/dev/ttyUSB0", "pn532-aaaaaaaa")
+		st.SetReader(r)
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "secret-card-uid",
+			Text:     "**launch:/games/secret.rom",
+			ReaderID: "pn532-aaaaaaaa",
+		})
+
+		result, err := methods.HandleReaders(cfg, st, []readers.Reader{r})
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, "pn532-aaaaaaaa", resp.HoldOwnerReaderID)
+		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode)
+
+		// Diagnostics must never carry what is written on the token.
+		encoded, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "secret-card-uid")
+		assert.NotContains(t, string(encoded), "secret.rom")
+	})
+
+	// A reader can disconnect while it still owns the running media. Reporting
+	// the owner with an empty mode reads as a missing field rather than a
+	// policy that can still be resolved.
+	t.Run("owner whose reader has disconnected still reports a mode", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, "pn532-gone", resp.HoldOwnerReaderID)
+		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode)
+	})
+
+	// The exit path keeps the decision a disconnected reader was making, so a
+	// hold reader on a globally-tap device still exits. Reporting the global
+	// mode here told a client the opposite of what removal would do.
+	t.Run("disconnected owner reports the mode its removal will use", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"tap\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode,
+			"a disconnected owner keeps hold, so the report must say hold")
+	})
+
+	// A #tap owner whose reader disconnected declared its own mode, and that
+	// still wins: the disconnect rule only covers an owner with no trait.
+	t.Run("disconnected owner keeps its own tap override", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "#tap||**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+			Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, config.ScanModeTap, resp.HoldScanMode)
+	})
+
+	t.Run("hold owner reports its token override", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		r := newReader("pn532", "/dev/ttyUSB0", "pn532-aaaaaaaa")
+		st.SetReader(r)
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "#tap||**launch:/games/game.rom",
+			ReaderID: "pn532-aaaaaaaa",
+			Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+		})
+
+		result, err := methods.HandleReaders(cfg, st, []readers.Reader{r})
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, config.ScanModeTap, resp.HoldScanMode,
+			"the owner's own override outranks its reader's configured mode")
 	})
 }

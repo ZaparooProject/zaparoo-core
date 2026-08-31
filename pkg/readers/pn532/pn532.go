@@ -337,7 +337,7 @@ func (*Reader) IDs() []string {
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
-	if !helpers.Contains(r.IDs(), device.Driver) {
+	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -348,14 +348,14 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	var transport pn532.Transport
 	var err error
 
-	// Manual device specification
-	// Extract transport type from driver (e.g., "pn532_uart" or "pn532uart" -> "uart")
-	transportType := strings.TrimPrefix(device.Driver, "pn532_")
-	if transportType == device.Driver {
-		// No underscore variant, try stripping just "pn532" prefix
-		transportType = strings.TrimPrefix(device.Driver, "pn532")
-	}
-	if transportType == "" || transportType == device.Driver {
+	// Manual device specification. The transport is the part of the driver ID
+	// after the "pn532" prefix, read from the normalized form so every spelling
+	// the driver accepts names the same transport: "pn532_i2c", "pn532i2c" and
+	// "PN532_I2C" are all i2c. Reading the raw string would silently fall back
+	// to uart for any spelling it did not expect.
+	normalizedDriver := readers.NormalizeDriverID(device.Driver)
+	transportType := strings.TrimPrefix(normalizedDriver, "pn532")
+	if transportType == "" || transportType == normalizedDriver {
 		transportType = "uart"
 	}
 

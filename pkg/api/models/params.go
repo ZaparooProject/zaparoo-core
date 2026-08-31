@@ -163,6 +163,10 @@ type ReaderConnection struct {
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
+	// ScanMode is validated by the handler rather than by a tag, so it accepts
+	// the same spellings a config file does ("HOLD", " hold ") and stores the
+	// canonical one. See config.NormalizeScanMode.
+	ScanMode string `json:"scanMode,omitempty"`
 }
 
 type SystemDefault struct {
@@ -177,22 +181,30 @@ func (r ReaderConnection) IsEnabled() bool {
 	return r.Enabled == nil || *r.Enabled
 }
 
+// ConnectionLabel names this connection for an error message, in the same
+// driver:path form the config file and logs use.
+func (r ReaderConnection) ConnectionLabel() string {
+	return r.Driver + ":" + r.Path
+}
+
 type UpdateSettingsParams struct {
-	RunZapScript              *bool               `json:"runZapScript"`
-	DebugLogging              *bool               `json:"debugLogging"`
-	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
-	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
-	ErrorReporting            *bool               `json:"errorReporting"`
-	Encryption                *bool               `json:"encryption"`
-	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
-	PlaytimeSyncEnabled       *bool               `json:"playtimeSyncEnabled"`
-	RemoteControlEnabled      *bool               `json:"remoteControlEnabled"`
-	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
-	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
-	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
-	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
-	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
-	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	RunZapScript            *bool     `json:"runZapScript"`
+	DebugLogging            *bool     `json:"debugLogging"`
+	AudioScanFeedback       *bool     `json:"audioScanFeedback"`
+	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
+	ErrorReporting          *bool     `json:"errorReporting"`
+	Encryption              *bool     `json:"encryption"`
+	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
+	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
+	RemoteControlEnabled    *bool     `json:"remoteControlEnabled"`
+	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
+	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
+	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
+	// dive is what makes the tags on ReaderConnection run at all: without it
+	// the validator stops at the slice and every element goes unchecked.
+	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty" validate:"omitempty,dive"`
 	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`

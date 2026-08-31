@@ -2686,6 +2686,7 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
+| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
 
 ##### System default object
 
@@ -4367,9 +4368,11 @@ None.
 
 #### Result
 
-| Key     | Type                       | Required | Description                         |
-| :------ | :------------------------- | :------- | :---------------------------------- |
-| readers | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+| Key               | Type                       | Required | Description                         |
+| :---------------- | :------------------------- | :------- | :---------------------------------- |
+| readers           | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+| holdOwnerReaderId | string                     | No       | ID of the reader whose token is currently tracked as the owner of the running media. Omitted when no token is tracked. |
+| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. This is resolved exactly as the removal will resolve it, so an owner whose reader has since disconnected reports `hold` — the decision made while that reader was present still stands. |
 
 ##### Reader info object
 
@@ -4379,6 +4382,7 @@ None.
 | readerId     | string   | Yes      | Stable reader ID, deterministic across restarts. Format: `{driver}-{hash}`. |
 | driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"acr122pcsc"`, `"file"`). |
 | info         | string   | Yes      | Human-readable information about the reader.  |
+| scanMode     | string   | Yes      | Effective scan mode for this reader (`"tap"` or `"hold"`), resolving its `[[readers.connect]]` entry, then its `[readers.drivers.<id>]` entry, then the global `readers.scan.mode`. |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
 | capabilities | string[] | Yes      | List of capabilities supported by the reader. |
 
@@ -4407,10 +4411,13 @@ None.
         "readerId": "pn532-ujqixjv6",
         "driver": "pn532",
         "info": "PN532 (1-2.3.1)",
+        "scanMode": "tap",
         "capabilities": ["read", "write"],
         "connected": true
       }
-    ]
+    ],
+    "holdOwnerReaderId": "pn532-ujqixjv6",
+    "holdScanMode": "tap"
   }
 }
 ```

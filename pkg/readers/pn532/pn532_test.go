@@ -236,6 +236,15 @@ func TestOpen_TransportTypeParsing(t *testing.T) {
 		{"pn532_i2c", "i2c"},
 		{"pn532spi", "spi"},
 		{"pn532_spi", "spi"},
+		// A driver ID is user-supplied config, so every spelling the driver
+		// answers to has to name the same transport. Reading the raw string
+		// left an unexpected spelling falling back to uart, which is much
+		// worse than refusing to open: the reader comes up on the wrong bus.
+		{"PN532", "uart"},
+		{"PN532_UART", "uart"},
+		{"PN532_I2C", "i2c"},
+		{"Pn532I2C", "i2c"},
+		{"PN532SPI", "spi"},
 	}
 
 	for _, tt := range tests {

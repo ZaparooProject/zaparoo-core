@@ -35,7 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -394,6 +394,19 @@ func findFile(
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
 }
 
+// effectiveScanMode returns the scan mode that applies to the token currently
+// on a reader, so [[scan_mode]] reflects a per-reader override rather than the
+// global setting alone. Falls back to the global mode when nothing is on a
+// reader or the reader has since disconnected.
+func effectiveScanMode(cfg *config.Instance, st *state.State) string {
+	if active := st.GetActiveCard(); active.ReaderID != "" {
+		if r, ok := st.GetReader(active.ReaderID); ok && r != nil {
+			return strings.ToLower(cfg.ScanModeForReader(r.Metadata().ID, r.Path()))
+		}
+	}
+	return strings.ToLower(cfg.ReadersScan().Mode)
+}
+
 func GetExprEnv(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -412,7 +425,7 @@ func GetExprEnv(
 	env := zapscript.ArgExprEnv{
 		Platform: pl.ID(),
 		Version:  config.AppVersion,
-		ScanMode: strings.ToLower(cfg.ReadersScan().Mode),
+		ScanMode: effectiveScanMode(cfg, st),
 		Device: zapscript.ExprEnvDevice{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
@@ -519,7 +532,7 @@ func RunCommand(
 		return platforms.CmdResult{}, advArgEvalErr
 	}
 
-	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs.GetWhen(); ok && !boolutil.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd.Name)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,
