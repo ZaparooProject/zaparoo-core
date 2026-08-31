@@ -20,6 +20,7 @@
 package tokens
 
 import (
+	"reflect"
 	"sort"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -56,21 +57,33 @@ func ResolveTraits(parsed map[string]any) Traits {
 		return Traits{}
 	}
 
-	// Trait keys are case-insensitive, so "tap" and "TAP" name one trait. The
-	// parser has already folded them — its shorthand syntax lowercases keys and
-	// merges later declarations over earlier ones, and its **traits JSON form
-	// drops a key two members collide on — so this normalization only has to
-	// hold if a caller hands over a map the parser did not build. Raw keys are
-	// visited in sorted order so that, if one ever did, the winner is the same
-	// on every run rather than whatever the map's iteration order landed on.
+	// Trait keys are case-insensitive, so "tap" and "TAP" name one trait.
+	//
+	// The parser folds them before they get here: its shorthand syntax
+	// lowercases keys and merges later declarations over earlier ones, so
+	// "#hold=yes||#HOLD=no" arrives as one key holding the last value, and its
+	// **traits JSON form drops a key two members collide on. A map that still
+	// holds both spellings therefore came from somewhere else, and it gets the
+	// rule a contradiction between #tap and #hold already gets: a key whose
+	// spellings disagree is dropped and inherits like any unset trait, rather
+	// than the answer turning on which spelling the map handed over first.
 	values := make(map[string]any, len(parsed))
-	rawKeys := make([]string, 0, len(parsed))
-	for key := range parsed {
-		rawKeys = append(rawKeys, key)
+	conflicted := make(map[string]struct{})
+	for key, value := range parsed {
+		normalized := gozapscript.NormalizeTraitKey(key)
+		if existing, seen := values[normalized]; seen && !reflect.DeepEqual(existing, value) {
+			conflicted[normalized] = struct{}{}
+			continue
+		}
+		values[normalized] = value
 	}
-	sort.Strings(rawKeys)
-	for _, key := range rawKeys {
-		values[gozapscript.NormalizeTraitKey(key)] = parsed[key]
+	for normalized := range conflicted {
+		log.Warn().Str("trait", normalized).
+			Msg("token declares the same trait twice with different values, inheriting it")
+		delete(values, normalized)
+	}
+	if len(values) == 0 {
+		return Traits{}
 	}
 
 	return Traits{
