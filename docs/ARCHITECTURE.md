@@ -96,4 +96,4 @@ Device profiles are named buckets of preferences and limits, with no passwords o
 
 ## Reader Auto-Detection
 
-12 reader types: ccid, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, simpleserialble (Nordic UART Service over Bluetooth LE, manual configuration only), tty2oled
+13 reader types: ccid, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, simpleserialble (Nordic UART Service over Bluetooth LE, manual configuration only), tty2oled, zapdisplay

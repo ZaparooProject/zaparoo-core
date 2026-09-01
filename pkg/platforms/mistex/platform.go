@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserialble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/zapdisplay"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -83,6 +84,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
+		zapdisplay.NewReaderWithDefaults(cfg, true),
 	}
 
 	var enabled []readers.Reader
