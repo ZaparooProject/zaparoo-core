@@ -770,6 +770,12 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockUserDB := &helpers.MockUserDBI{}
 			mockMediaDB := helpers.NewMockMediaDBI()
 
+			// Indexing re-applies the UserDB projection near the end of a run. It
+			// normally loses the race with the cancellation below, but when it
+			// wins, an unexpected call panics the whole test binary rather than
+			// failing this test (#1379).
+			mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+
 			// Persisted optimization state is restart intent, not process ownership.
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
@@ -812,6 +818,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
+			mockMediaDB.On("RunBackgroundOptimizationWithLease",
+				mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
 
