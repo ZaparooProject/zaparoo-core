@@ -94,9 +94,13 @@ func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
 	return r
 }
 
+// driverID is this driver's identifier, used for its metadata and to look up
+// its section in the reader config.
+const driverID = "tty2oled"
+
 func (*Reader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{
-		ID:                "tty2oled",
+		ID:                driverID,
 		DefaultEnabled:    false,
 		DefaultAutoDetect: true,
 		Description:       "TTY2OLED serial display device",
@@ -104,7 +108,7 @@ func (*Reader) Metadata() readers.DriverMetadata {
 }
 
 func (*Reader) IDs() []string {
-	return []string{"tty2oled"}
+	return []string{driverID}
 }
 
 // getState returns the current connection state
@@ -568,6 +572,28 @@ func (r *Reader) handshakeWithContextOnPort(_ context.Context, port serial.Port)
 	return nil
 }
 
+// rotationEnabled reports whether the panel should be driven upside down.
+//
+// The SSD1322 has a hardware 180 degree flip and nothing else, so a quarter
+// turn is reported and ignored rather than approximated: a display the wrong
+// way up still works, and refusing to connect would be a worse answer to a
+// config mistake. The device keeps no settings of its own, so this is re-sent
+// on every connect.
+func (r *Reader) rotationEnabled() bool {
+	degrees := r.cfg.DriverRotation(driverID)
+	switch degrees {
+	case config.RotationNone:
+		return false
+	case config.RotationHalf:
+		return true
+	default:
+		log.Warn().
+			Int("rotation", degrees).
+			Msg("tty2oled: display supports 0 and 180 only, leaving it unrotated")
+		return false
+	}
+}
+
 // initializeDeviceOnPort sends the initialization commands on a specific port
 func (r *Reader) initializeDeviceOnPort(port serial.Port) error {
 	// Bash script sequence after QWERTZ: sendcontrast, sendrotation, sendtime, sendscreensaver
@@ -586,7 +612,7 @@ func (r *Reader) initializeDeviceOnPort(port serial.Port) error {
 	}
 
 	// sendrotation: if rotation is enabled, send CMDROT,1 then CMDSORG
-	if DefaultRotation {
+	if r.rotationEnabled() {
 		if err := r.sendCommandOnPort(port, CmdRotate+",1"); err != nil {
 			return fmt.Errorf("failed to send rotation command: %w", err)
 		}

@@ -491,6 +491,68 @@ func TestRenderPanicDoesNotKillTheProcess(t *testing.T) {
 	}, 5*time.Second, time.Millisecond, "a panicking render should drop the link")
 }
 
+// configWithRotation builds a reader config carrying a display rotation. It
+// round-trips through TOML, so it also proves the field is persisted.
+func configWithRotation(t *testing.T, degrees int) *config.Instance {
+	t.Helper()
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Readers: config.Readers{
+			Drivers: map[string]config.DriverConfig{
+				driverID: {Rotation: degrees},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return cfg
+}
+
+func TestRotationIsSentBeforeTheFirstFrame(t *testing.T) {
+	dev := newFakeDevice()
+	r, _ := newTestReader(t, dev)
+	r.cfg = configWithRotation(t, config.RotationHalf)
+	openTestReader(t, r)
+
+	cmds := dev.commandLog()
+	rotateAt, showAt := -1, -1
+	for i, cmd := range cmds {
+		if cmd == "SET rotation 180" && rotateAt < 0 {
+			rotateAt = i
+		}
+		if cmd == "SHOW" && showAt < 0 {
+			showAt = i
+		}
+	}
+
+	require.GreaterOrEqual(t, rotateAt, 0, "rotation should be sent on connect")
+	require.GreaterOrEqual(t, showAt, 0, "the idle scene should be rendered")
+	assert.Less(t, rotateAt, showAt, "a rotated panel must not show a frame the wrong way up first")
+	assert.Equal(t, "180", dev.settingRotation())
+}
+
+func TestRotationIsClearedWhenNotConfigured(t *testing.T) {
+	dev := newFakeDevice()
+	r, _ := newTestReader(t, dev)
+	openTestReader(t, r)
+
+	// Sent rather than skipped: the device keeps its rotation across power
+	// cycles, so it may still be holding one the user has since turned off.
+	assert.Contains(t, dev.commandLog(), "SET rotation 0")
+	assert.Equal(t, "0", dev.settingRotation())
+}
+
+func TestUnsupportedRotationLeavesThePanelUnrotated(t *testing.T) {
+	dev := newFakeDevice()
+	r, _ := newTestReader(t, dev)
+	r.cfg = configWithRotation(t, config.RotationQuarter)
+	openTestReader(t, r)
+
+	// The panel has one landscape layout, so a quarter turn would need a UI it
+	// does not have. Connecting anyway beats refusing over a config mistake.
+	assert.NotContains(t, dev.commandLog(), "SET rotation 90")
+	assert.Equal(t, "0", dev.settingRotation())
+	assert.True(t, r.Connected())
+}
+
 func TestLinkFailureMarksReaderDisconnected(t *testing.T) {
 	t.Parallel()
 

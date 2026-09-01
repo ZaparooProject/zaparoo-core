@@ -398,6 +398,24 @@ func (s *session) useCover(ctx context.Context, assetID string, width, height in
 	return err
 }
 
+// setRotation turns the panel for a display mounted the other way up.
+//
+// The device owns this setting and keeps it in NVS, so it also comes up the
+// right way round with no host attached. Core sends it anyway on every connect,
+// because Core is where the user configured it and the device's copy is only a
+// cache.
+//
+// The firmware takes 0 and 180 and answers ERR bad-value for anything else: the
+// panel has one landscape layout, so a quarter turn would need a UI it does not
+// have rather than a transform.
+func (s *session) setRotation(ctx context.Context, degrees int) error {
+	if !s.features["settings"] {
+		return fmt.Errorf("display firmware has no settings support, cannot rotate to %d", degrees)
+	}
+	_, err := s.command(ctx, fmt.Sprintf("SET rotation %d", degrees), commandTimeout, "OK")
+	return err
+}
+
 // pushClock gives the device a wall clock for its idle screens. Failure is not
 // worth propagating: the device simply skips the clock screen when it has never
 // been told the time.

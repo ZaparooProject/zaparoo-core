@@ -59,11 +59,13 @@ type fakeDevice struct {
 	pending          fakeScene
 	committedID      string
 	failNextAssetUse string
-	stagingID        string
-	stagingMime      string
-	chunkBuf         []byte
-	stagingData      []byte
-	partial          []byte
+	// rotation is the device-owned setting, which the firmware keeps in NVS.
+	rotation    string
+	stagingID   string
+	stagingMime string
+	chunkBuf    []byte
+	stagingData []byte
+	partial     []byte
 	// commands records every complete command line received, in order.
 	commands []string
 	scenes   []fakeScene
@@ -201,7 +203,7 @@ func (f *fakeDevice) handleLineLocked(line string) {
 		f.replyLocked("OK " + protocolVersion)
 	case line == "INFO":
 		f.replyLocked("INFO %s fw=0.1.0 display=hd458002c40 visible=320x960 transport=cdc "+
-			"features=scenes,assets-b64,quiet", protocolVersion)
+			"features=scenes,assets-b64,quiet,settings", protocolVersion)
 	case line == "PING":
 		f.replyLocked("PONG")
 	case line == "QUIET", line == "VERBOSE":
@@ -228,6 +230,8 @@ func (f *fakeDevice) handleLineLocked(line string) {
 		f.replyLocked("OK")
 	case strings.HasPrefix(line, "ACCENT "):
 		f.handleAccentLocked(strings.TrimPrefix(line, "ACCENT "))
+	case strings.HasPrefix(line, "SET "):
+		f.handleSetLocked(strings.TrimPrefix(line, "SET "))
 	case strings.HasPrefix(line, "ELAPSED"), strings.HasPrefix(line, "TIME "):
 		f.replyLocked("OK")
 	case strings.HasPrefix(line, "ASSET_CHUNK_RAW "):
@@ -243,6 +247,26 @@ func (f *fakeDevice) handleLineLocked(line string) {
 	default:
 		f.replyLocked("ERR unknown-command")
 	}
+}
+
+// handleSetLocked mirrors the firmware's settings store, which owns its values
+// and answers ERR bad-value for an angle the panel has no layout for.
+func (f *fakeDevice) handleSetLocked(args string) {
+	key, value, ok := strings.Cut(args, " ")
+	if !ok {
+		f.replyLocked("ERR bad-value")
+		return
+	}
+	if key != "rotation" {
+		f.replyLocked("ERR bad-setting")
+		return
+	}
+	if value != "0" && value != "180" {
+		f.replyLocked("ERR bad-value")
+		return
+	}
+	f.rotation = value
+	f.replyLocked("OK")
 }
 
 func (f *fakeDevice) handleSceneLocked(name string) {
@@ -494,4 +518,12 @@ func (f *fakeDevice) committedSize() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.committedBytes
+}
+
+// settingRotation returns the rotation the device is holding, as the firmware
+// would keep it in NVS.
+func (f *fakeDevice) settingRotation() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rotation
 }

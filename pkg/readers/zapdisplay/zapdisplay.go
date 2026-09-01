@@ -355,6 +355,10 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, opts 
 
 	r.connected.Store(true)
 
+	// Before the first frame, so a rotated panel never shows one upside down
+	// and then flips.
+	r.applyRotation(r.workerCtx, sess)
+
 	if err := r.renderIdle(r.workerCtx, sess); err != nil {
 		log.Warn().Err(err).Msg("zapdisplay: failed to render idle scene")
 	}
@@ -364,6 +368,28 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, opts 
 
 	log.Info().Str("port", device.Path).Str("info", sess.info).Msg("zapdisplay display connected")
 	return nil
+}
+
+// applyRotation turns the panel to match the configured rotation.
+//
+// A rotation this panel cannot do is reported and ignored rather than failing
+// the connect: a display that is the wrong way up is still a working display,
+// and refusing to come up at all would be a worse answer to a config typo.
+func (r *Reader) applyRotation(ctx context.Context, sess *session) {
+	degrees := r.cfg.DriverRotation(driverID)
+	if degrees != config.RotationNone && degrees != config.RotationHalf {
+		log.Warn().
+			Int("rotation", degrees).
+			Msg("zapdisplay: display supports 0 and 180 only, leaving it unrotated")
+		degrees = config.RotationNone
+	}
+
+	// Zero is sent rather than skipped: the device keeps its rotation across
+	// power cycles, so a panel may still be holding one the user has since
+	// turned off.
+	if err := sess.setRotation(ctx, degrees); err != nil {
+		log.Warn().Err(err).Int("rotation", degrees).Msg("zapdisplay: could not set display rotation")
+	}
 }
 
 // Close stops the worker and releases the port. It is safe to call on a reader

@@ -1003,3 +1003,34 @@ func TestNewReader_DoesNotLeakGoroutine(t *testing.T) {
 	// Discard without closing — any goroutine started here would be a leak.
 	_ = NewReader(cfg, mockPlatform)
 }
+
+func rotationConfig(t *testing.T, degrees int) *config.Instance {
+	t.Helper()
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Readers: config.Readers{
+			Drivers: map[string]config.DriverConfig{
+				driverID: {Rotation: degrees},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return cfg
+}
+
+func TestRotationFollowsDriverConfig(t *testing.T) {
+	t.Parallel()
+
+	// The panel keeps no settings of its own, so Core decides on every connect.
+	assert.True(t, (&Reader{cfg: rotationConfig(t, config.RotationHalf)}).rotationEnabled())
+	assert.False(t, (&Reader{cfg: rotationConfig(t, config.RotationNone)}).rotationEnabled())
+}
+
+func TestRotationIgnoresAnglesThePanelCannotDo(t *testing.T) {
+	t.Parallel()
+
+	// The SSD1322 has a hardware 180 degree flip and nothing else, so a quarter
+	// turn is reported and ignored rather than approximated.
+	assert.False(t, (&Reader{cfg: rotationConfig(t, config.RotationQuarter)}).rotationEnabled())
+	assert.False(t, (&Reader{cfg: rotationConfig(t, config.RotationThreeQtr)}).rotationEnabled())
+	assert.False(t, (&Reader{cfg: rotationConfig(t, 45)}).rotationEnabled())
+}
