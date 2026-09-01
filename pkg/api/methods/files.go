@@ -155,7 +155,7 @@ func HandleFilesImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
-	localPath := params.Delivery == mediaImageDeliveryPath
+	localPath := params.Delivery == MediaImageDeliveryLocalPath
 	if localPath && (params.MaxSize == nil || *params.MaxSize <= 0) {
 		return nil, models.ClientErrf("files.image: localPath delivery requires a positive maxSize")
 	}

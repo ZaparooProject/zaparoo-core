@@ -781,7 +781,7 @@ func TestHandleMediaImage_SmallSourceThatFitsIsCachedInItsOwnFormat(t *testing.T
 	require.NoError(t, err)
 	cold, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, mediaImageDeliveryPath, cold.Delivery)
+	assert.Equal(t, MediaImageDeliveryLocalPath, cold.Delivery)
 	assert.Equal(t, "image/jpeg", cold.ContentType)
 	assert.Equal(t, ".jpg", filepath.Ext(cold.LocalPath))
 	assert.True(t, cache.isSafeLocalPath(cold.LocalPath))
@@ -989,7 +989,7 @@ func TestHandleMediaImage_TimingLog(t *testing.T) {
 		})
 
 		assert.Equal(t, true, event["ok"])
-		assert.Equal(t, mediaImageDeliveryInline, event["delivery"])
+		assert.Equal(t, MediaImageDeliveryInline, event["delivery"])
 		assert.Equal(t, true, event["mediaId"])
 		assert.Equal(t, json.Number("512"), event["maxSize"])
 		assert.Contains(t, event, "duration")
@@ -1005,7 +1005,7 @@ func TestHandleMediaImage_TimingLog(t *testing.T) {
 		})
 
 		assert.Equal(t, false, event["ok"])
-		assert.Equal(t, mediaImageDeliveryPath, event["delivery"])
+		assert.Equal(t, MediaImageDeliveryLocalPath, event["delivery"])
 		assert.Equal(t, true, event["mediaId"])
 		assert.Contains(t, event, "duration")
 	})
@@ -1611,7 +1611,7 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, mediaImageDeliveryPath, resp.Delivery)
+	assert.Equal(t, MediaImageDeliveryLocalPath, resp.Delivery)
 	assert.Empty(t, resp.Data)
 	assert.True(t, filepath.IsAbs(resp.LocalPath))
 	assert.True(t, cache.isSafeLocalPath(resp.LocalPath))
@@ -1628,7 +1628,7 @@ func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
 	warmResp, ok := warmResult.(models.MediaImageResponse)
 	require.True(t, ok)
 	assert.Equal(t, resp.LocalPath, warmResp.LocalPath)
-	assert.Equal(t, mediaImageDeliveryPath, warmResp.Delivery)
+	assert.Equal(t, MediaImageDeliveryLocalPath, warmResp.Delivery)
 	strictDB.AssertExpectations(t)
 }
 
@@ -1653,7 +1653,7 @@ func TestHandleMediaImage_LocalPathCacheWriteFailureFallsBackInline(t *testing.T
 	require.NoError(t, err)
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, mediaImageDeliveryInline, resp.Delivery)
+	assert.Equal(t, MediaImageDeliveryInline, resp.Delivery)
 	assert.Empty(t, resp.LocalPath)
 	decoded, err := base64.StdEncoding.DecodeString(resp.Data)
 	require.NoError(t, err)
