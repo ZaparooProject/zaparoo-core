@@ -1322,9 +1322,11 @@ func buildBrowseResponse(
 }
 
 // resolveDirSingletonAliases batch-resolves singleton container aliases for the
-// page's candidate directories when browsing a single system. Only small dirs
-// (recursive FileCount <= maxSingletonAliasCandidateFiles) are considered, so
-// large trees like MiSTer's _Arcade/_alternatives are never scanned.
+// page's candidate directories when browsing a single system. Every directory
+// holding media for that system is offered to the resolver, which reads only
+// each candidate's direct rows, so the container rule alone decides what
+// collapses and browse agrees with media.meta and the scrapers on a disc folder
+// of any size.
 func resolveDirSingletonAliases(
 	env *requests.RequestEnv,
 	path string,
@@ -1359,7 +1361,9 @@ func resolveDirSingletonAliases(
 
 	var candidates []database.SingletonAliasCandidate
 	for _, dir := range dirs {
-		if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
+		// A directory with no media for this system has nothing to collapse to,
+		// and the resolver keys its nested-media test on a non-zero count.
+		if dir.FileCount <= 0 {
 			continue
 		}
 		if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
@@ -1446,14 +1450,6 @@ func buildMediaEntry(
 	entry.RelPath = mediaResponseRelativePath(env, result.SystemID, result.Path)
 
 	return entry
-}
-
-// isSingletonDirectoryAliasCandidate bounds the dirs considered for singleton
-// alias resolution: real disc-folder containers hold a handful of files, and
-// the cap keeps the batch query from fetching rows for large directory trees.
-func isSingletonDirectoryAliasCandidate(fileCount int) bool {
-	const maxSingletonAliasCandidateFiles = 64
-	return fileCount > 0 && fileCount <= maxSingletonAliasCandidateFiles
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.
