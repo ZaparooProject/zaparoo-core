@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -2751,4 +2752,221 @@ func TestGetMediaTagsByMediaRefs_ChunksBeyondSQLiteParamLimit(t *testing.T) {
 		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
 	}, got[3])
 	assert.Len(t, got, 2)
+}
+
+// seedSingleFileContainerDirs inserts count directories under parent, each
+// holding one media file, and returns their candidate list in insertion order.
+func seedSingleFileContainerDirs(
+	t *testing.T, mediaDB *MediaDB, parent string, count int,
+) []database.SingletonAliasCandidate {
+	t.Helper()
+	ctx := context.Background()
+	candidates := make([]database.SingletonAliasCandidate, 0, count)
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	for i := range count {
+		id := int64(i + 1)
+		name := fmt.Sprintf("Game%04d", i)
+		dir := aliasTestDir(parent, name)
+		path := filepath.ToSlash(filepath.Join(parent, name, name+".chd"))
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, 2, ?, ?);
+		`, id, fmt.Sprintf("game%04d", i), name)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (?, ?, 2, ?, ?);
+		`, id, id, path, dir)
+		require.NoError(t, err)
+		candidates = append(candidates, database.SingletonAliasCandidate{ChildDir: dir, FileCount: 1})
+	}
+	require.NoError(t, tx.Commit())
+	return candidates
+}
+
+// TestResolveSingletonContainerAliases_ChunkBoundaries walks the candidate count
+// across the chunk size so an off-by-one in the chunk loop cannot pass: a
+// browse page size is client-supplied and routinely lands either side of it.
+func TestResolveSingletonContainerAliases_ChunkBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, count := range []int{
+		aliasCandidatesPerQuery - 1,
+		aliasCandidatesPerQuery,
+		aliasCandidatesPerQuery + 1,
+		aliasCandidatesPerQuery*2 + 1,
+	} {
+		t.Run(fmt.Sprintf("%d candidates", count), func(t *testing.T) {
+			t.Parallel()
+			mediaDB, cleanup := setupAliasTestDB(t)
+			defer cleanup()
+
+			parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+			candidates := seedSingleFileContainerDirs(t, mediaDB, parent, count)
+
+			aliases, err := mediaDB.ResolveSingletonContainerAliases(context.Background(), 2, candidates)
+			require.NoError(t, err)
+			require.Len(t, aliases, count)
+
+			byDir := make(map[string]database.SingletonContainerAlias, count)
+			for _, a := range aliases {
+				byDir[a.ChildDir] = a
+			}
+			for _, c := range candidates {
+				alias, ok := byDir[c.ChildDir]
+				require.True(t, ok, "missing alias for %s", c.ChildDir)
+				assert.Equal(t, c.ChildDir, alias.Row.ParentDir)
+			}
+		})
+	}
+}
+
+// TestResolveSingletonContainerAliases_DuplicateCandidatesResolveOnce guards the
+// chunked scan. The repeat is placed far enough down the list to land in a
+// later chunk than the original: within one chunk the IN list returns the rows
+// once regardless, but two chunks would each read them and append, making a
+// one-file container look like a two-file one and stop it collapsing.
+func TestResolveSingletonContainerAliases_DuplicateCandidatesResolveOnce(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	candidates := seedSingleFileContainerDirs(t, mediaDB, parent, aliasCandidatesPerQuery+1)
+	first := candidates[0]
+	candidates = append(candidates, first)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(context.Background(), 2, candidates)
+	require.NoError(t, err)
+	require.Len(t, aliases, aliasCandidatesPerQuery+1)
+
+	byDir := make(map[string]database.SingletonContainerAlias, len(aliases))
+	for _, a := range aliases {
+		byDir[a.ChildDir] = a
+	}
+	alias, ok := byDir[first.ChildDir]
+	require.True(t, ok, "the repeated dir must still resolve")
+	assert.Equal(t, first.ChildDir, alias.Row.ParentDir)
+}
+
+func TestResolveSingletonContainerAliases_CancelledContextFails(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	candidates := seedSingleFileContainerDirs(t, mediaDB, parent, aliasCandidatesPerQuery+1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, candidates)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, aliases)
+}
+
+// TestGetMediaWithTitleAndSystemByIDs_ChunksLargeIDLists covers the query that
+// exceeded the browse request budget on a page of container directories: every
+// requested ID must come back however many chunks it takes.
+func TestGetMediaWithTitleAndSystemByIDs_ChunksLargeIDLists(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	count := batchLookupIDsPerQuery*2 + 1
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	seedSingleFileContainerDirs(t, mediaDB, parent, count)
+
+	ids := make([]int64, 0, count)
+	for i := range count {
+		ids = append(ids, int64(i+1))
+	}
+
+	rows, err := mediaDB.GetMediaWithTitleAndSystemByIDs(ctx, ids)
+	require.NoError(t, err)
+	require.Len(t, rows, count)
+	for _, id := range ids {
+		row, ok := rows[id]
+		require.True(t, ok, "missing row for media %d", id)
+		assert.Equal(t, "PSX", row.System.SystemID)
+	}
+}
+
+// TestGetMediaTagsByMediaDBIDs_ChunksAndDeduplicates proves the chunked lookup
+// returns every media's tags exactly once, including when the caller repeats an
+// ID in a later chunk. The media.meta callers build their ID lists from request
+// input, so a repeat is reachable from the wire.
+func TestGetMediaTagsByMediaDBIDs_ChunksAndDeduplicates(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	count := batchLookupIDsPerQuery*2 + 1
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	seedSingleFileContainerDirs(t, mediaDB, parent, count)
+
+	ids := make([]int64, 0, count+1)
+	for i := range count {
+		id := int64(i + 1)
+		ids = append(ids, id)
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			`INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (?, 10)`, id)
+		require.NoError(t, err)
+	}
+	// The first ID again, landing in a different chunk from its own.
+	ids = append(ids, 1)
+
+	tagsByID, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, ids)
+	require.NoError(t, err)
+	require.Len(t, tagsByID, count)
+	assert.Len(t, tagsByID[1], 1, "a repeated ID must not double its tags")
+	assert.Len(t, tagsByID[int64(count)], 1)
+}
+
+// TestManyTrackDiscFolderResolvesTheSameBothWays is #1378: a disc folder of one
+// cue sheet and 70 bin tracks. media.meta resolved it through
+// FindSingleContainerLaunchMedia and the scrapers through container.Index, while
+// browse's batch resolver was never asked because of a file-count cap. Both
+// paths must now name the same launch media.
+func TestManyTrackDiscFolderResolvesTheSameBothWays(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const trackCount = 70
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "Y_ManyBins")
+	cuePath := filepath.ToSlash(filepath.Join(parent, "Y_ManyBins", "Yankee.cue"))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'yankee', 'Yankee');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
+	`, cuePath, gameDir)
+	require.NoError(t, err)
+
+	for i := range trackCount {
+		id := int64(i + 2)
+		name := fmt.Sprintf("Yankee (Track %02d).bin", i+1)
+		_, err = mediaDB.sql.Load().ExecContext(ctx, `
+			INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, 2, ?, ?);
+			INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (?, ?, 2, ?, ?);
+		`, id, fmt.Sprintf("yankee-track-%02d", i+1), name,
+			id, id, filepath.ToSlash(filepath.Join(parent, "Y_ManyBins", name)), gameDir)
+		require.NoError(t, err)
+	}
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: trackCount + 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, cuePath, aliases[0].Row.Path)
+
+	launch, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 2, strings.TrimSuffix(gameDir, "/"))
+	require.NoError(t, err)
+	require.NotNil(t, launch)
+	assert.Equal(t, cuePath, launch.Path, "browse and media.meta must name the same launch media")
+	assert.Equal(t, aliases[0].Row.DBID, launch.DBID)
 }
