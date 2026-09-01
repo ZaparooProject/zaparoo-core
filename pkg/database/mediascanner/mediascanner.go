@@ -737,6 +737,27 @@ func entryIsSymlink(
 	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
+// skipEntry returns the sentinel that actually skips this entry, and nothing
+// more. fastwalk only honours filepath.SkipDir for an entry it typed as a
+// directory (enqueued, so the callback runs from walker.walk, which swallows
+// the sentinel) or as a symlink (walker.onDirEnt has an explicit escape
+// hatch). Returned for anything else, the sentinel escapes readDir and aborts
+// iteration of the whole containing directory, dropping every entry after this
+// one.
+//
+// That is not hypothetical on exFAT and FAT: the dirent carries no symlink
+// bit there, so direntTypesReportSymlinks is false and entryIsSymlink finds
+// links by lstat while fastwalk still sees a regular file. A MiSTer log
+// carried 1450 truncated directories under _Arcade/_alternatives from exactly
+// this. Returning nil is the correct skip in that case, because fastwalk never
+// descends into an entry it typed as a regular file.
+func skipEntry(d fs.DirEntry) error {
+	if d.IsDir() || d.Type()&os.ModeSymlink != 0 {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
 // shouldSkipSymlinkAlias reports whether a symlink must be kept out of the
 // walk because it aliases media already scanned under its target path. A
 // timeout while reading the link leaves its target unknown, but letting
@@ -842,7 +863,7 @@ func GetFiles(
 					Str("system", systemID).
 					Str("path", p).
 					Msg("skipping launcher-excluded scan directory")
-				return filepath.SkipDir
+				return skipEntry(d)
 			}
 		}
 
@@ -861,7 +882,7 @@ func GetFiles(
 					Str("system", systemID).
 					Str("path", p).
 					Msg("skipping symlink alias of scanned media")
-				return filepath.SkipDir
+				return skipEntry(d)
 			}
 		}
 
