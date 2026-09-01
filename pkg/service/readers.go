@@ -547,12 +547,16 @@ func readerManager(
 						log.Info().Msgf("reader count changed: %d connected", len(rs))
 					}
 					lastReaderCount = len(rs)
-				} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
-					// Only log if no readers for 2 minutes
+				} else if readerConnectAttempts%120 == 1 && countScanCapableReaders(rs) == 0 {
+					// Only log if no readers for 2 minutes. Counted by what can
+					// produce a scan, not by list length: a display-only reader
+					// is connected hardware but leaves the user with no way to
+					// scan a token, which is what this is here to point at.
 					log.Debug().
 						Int("attempts", readerConnectAttempts).
+						Int("connected", len(rs)).
 						Bool("autoDetect", svc.Config.AutoDetect()).
-						Msg("no readers connected")
+						Msg("no scan-capable readers connected")
 				}
 
 				for _, r := range rs {
@@ -1046,4 +1050,20 @@ preprocessing:
 			}
 		}
 	}
+}
+
+// countScanCapableReaders counts readers that can actually produce a scan.
+//
+// Display accessories are readers in every structural sense but never emit a
+// token, so counting them would silence the "nothing to scan with" diagnostic
+// for a user who has a panel connected and no reader.
+func countScanCapableReaders(rs []readers.Reader) int {
+	n := 0
+	for _, r := range rs {
+		if r == nil || readers.HasCapability(r, readers.CapabilityDisplay) {
+			continue
+		}
+		n++
+	}
+	return n
 }

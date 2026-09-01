@@ -25,6 +25,7 @@ package linuxbase
 import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -35,7 +36,18 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/zapdisplay"
 )
+
+// zapdisplayDefaultEnabled reports whether the display accessory should be
+// detected without the user opting in.
+//
+// It is on where the display is a first-party accessory for that device, and
+// off elsewhere: detection has to open a serial port and write to it, which is
+// only a reasonable default when the hardware is expected.
+func zapdisplayDefaultEnabled(p platforms.Platform) bool {
+	return p != nil && p.ID() == ids.ReplayOS
+}
 
 // SupportedReaders returns the list of enabled readers for Linux platforms.
 // The platform parameter is needed for tty2oled reader initialization.
@@ -52,6 +64,7 @@ func SupportedReaders(cfg *config.Instance, p platforms.Platform) []readers.Read
 		opticaldrive.NewReaderWithDefaults(cfg, false, false),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
+		zapdisplay.NewReaderWithDefaults(cfg, zapdisplayDefaultEnabled(p)),
 	}
 
 	var enabled []readers.Reader

@@ -69,15 +69,36 @@ func ignoreSerialDevice(path string) bool {
 		return true
 	}
 
-	if _, err := os.Stat("/usr/bin/udevadm"); err != nil {
-		log.Debug().Msgf("udevadm not found, skipping ignore list check")
+	vid, pid, ok := SerialDeviceVIDPID(path)
+	if !ok {
 		return false
+	}
+
+	for _, v := range ignoreDevices {
+		if vid == v.Vid && pid == v.Pid {
+			return true
+		}
+	}
+	return false
+}
+
+// SerialDeviceVIDPID returns the USB vendor and product IDs for a serial
+// device, lowercased.
+//
+// The third return is false when the IDs cannot be determined: a non-USB
+// device, or a platform without udevadm. A caller deciding whether to probe a
+// port should treat unknown as "cannot rule out" rather than as a match, so a
+// device stays reachable where this cannot answer.
+func SerialDeviceVIDPID(path string) (vid, pid string, ok bool) {
+	if _, err := os.Stat("/usr/bin/udevadm"); err != nil {
+		log.Debug().Msg("udevadm not found, cannot read USB IDs")
+		return "", "", false
 	}
 
 	// Validate device path to prevent command injection
 	if !strings.HasPrefix(path, "/dev/") {
 		log.Error().Str("path", path).Msg("invalid device path")
-		return false
+		return "", "", false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -86,78 +107,68 @@ func ignoreSerialDevice(path string) bool {
 	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {
-		log.Error().Err(err).Msg("udevadm failed")
-		return false
+		// Debug rather than error: this is now called speculatively across
+		// every candidate port, where a node with no udev record is an
+		// ordinary answer rather than a fault worth reporting.
+		log.Debug().Err(err).Str("path", path).Msg("udevadm failed")
+		return "", "", false
 	}
 
-	vid := ""
-	pid := ""
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "E: ID_VENDOR_ID=") {
-			vid = strings.TrimPrefix(line, "E: ID_VENDOR_ID=")
-		} else if strings.HasPrefix(line, "E: ID_MODEL_ID=") {
-			pid = strings.TrimPrefix(line, "E: ID_MODEL_ID=")
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if rest, found := strings.CutPrefix(line, "E: ID_VENDOR_ID="); found {
+			vid = rest
+		} else if rest, found := strings.CutPrefix(line, "E: ID_MODEL_ID="); found {
+			pid = rest
 		}
 	}
-
 	if vid == "" || pid == "" {
-		return false
+		return "", "", false
+	}
+	return strings.ToLower(vid), strings.ToLower(pid), true
+}
+
+// listLinuxSerialDevices returns /dev nodes whose name starts with one of the
+// given prefixes, minus anything on the shared ignore list.
+//
+// The prefix set is the caller's because a driver for a native-USB device wants
+// only CDC-ACM nodes, while the general reader listing also wants USB-to-UART
+// bridges.
+func listLinuxSerialDevices(prefixes ...string) ([]string, error) {
+	const dir = "/dev"
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to read /dev directory: %w", err)
 	}
 
-	vid = strings.ToLower(vid)
-	pid = strings.ToLower(pid)
+	devices := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !hasAnyPrefix(entry.Name(), prefixes) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if ignoreSerialDevice(path) {
+			continue
+		}
+		devices = append(devices, path)
+	}
+	return devices, nil
+}
 
-	for _, v := range ignoreDevices {
-		if vid == v.Vid && pid == v.Pid {
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
 			return true
 		}
 	}
-
 	return false
 }
 
 func getLinuxList() ([]string, error) {
-	path := "/dev"
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return []string{}, nil
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open /dev directory: %w", err)
-	}
-	defer func(f *os.File) {
-		closeErr := f.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close serial device folder")
-		}
-	}(f)
-
-	files, err := f.Readdir(0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read /dev directory: %w", err)
-	}
-
-	devices := make([]string, 0, len(files))
-
-	for _, v := range files {
-		if v.IsDir() {
-			continue
-		}
-
-		if !strings.HasPrefix(v.Name(), "ttyUSB") && !strings.HasPrefix(v.Name(), "ttyACM") {
-			continue
-		}
-
-		if ignoreSerialDevice(filepath.Join(path, v.Name())) {
-			continue
-		}
-
-		devices = append(devices, filepath.Join(path, v.Name()))
-	}
-
-	return devices, nil
+	return listLinuxSerialDevices("ttyUSB", "ttyACM")
 }
 
 func GetSerialDeviceList() ([]string, error) {
@@ -207,4 +218,57 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 		return ports, nil
 	}
+}
+
+// IsUSBCDCDeviceName reports whether a serial device path looks like a USB
+// CDC-ACM node for the current platform.
+//
+// Split out from the listing functions so the naming rules can be tested
+// without the host actually having such a device attached.
+func IsUSBCDCDeviceName(goos, path string) bool {
+	name := filepath.Base(path)
+	switch goos {
+	case "linux":
+		return strings.HasPrefix(name, "ttyACM")
+	case "darwin":
+		// Native-USB devices appear as tty.usbmodem; tty.usbserial is a
+		// USB-to-UART bridge and never a CDC-ACM device.
+		return strings.HasPrefix(name, "tty.usbmodem")
+	case "windows":
+		// Windows exposes every serial port as COMn with no way to tell a
+		// CDC-ACM device from a bridge, so the caller's handshake has to.
+		return strings.HasPrefix(name, "COM")
+	default:
+		return true
+	}
+}
+
+// GetUSBCDCDeviceList returns serial device nodes that are USB CDC-ACM
+// interfaces.
+//
+// Microcontrollers with a native USB peripheral, such as the ESP32-S3,
+// enumerate as CDC-ACM rather than through a USB-to-UART bridge, so on macOS
+// they appear as tty.usbmodem and are missed entirely by GetSerialDeviceList.
+// Using the narrower list also keeps a driver's probes away from bridge-attached
+// hardware it could never be.
+//
+// On Linux the shared ignore list is applied as well, so known non-reader
+// devices such as light guns are never opened.
+func GetUSBCDCDeviceList() ([]string, error) {
+	if runtime.GOOS == "linux" {
+		return listLinuxSerialDevices("ttyACM")
+	}
+
+	ports, err := serial.GetPortsList()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get serial ports list: %w", err)
+	}
+
+	devices := make([]string, 0, len(ports))
+	for _, path := range ports {
+		if IsUSBCDCDeviceName(runtime.GOOS, path) {
+			devices = append(devices, path)
+		}
+	}
+	return devices, nil
 }
