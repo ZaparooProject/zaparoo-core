@@ -87,6 +87,7 @@ type State struct {
 	beforeExitHook        func()
 	pendingLaunchOverride *PendingLaunchOverride
 	pendingWrite          *PendingWrite
+	artworkSource         readers.ArtworkSource
 	backupCoordinator     *backupcoordinator.Coordinator
 	launcherManager       *LauncherManager
 	uiEvents              *uievents.Service
@@ -396,11 +397,41 @@ func (s *State) SetReader(reader readers.Reader) {
 		Driver:    reader.Metadata().ID,
 		Path:      reader.Path(),
 	}
+	artworkSource := s.artworkSource
+	currentMedia := s.activeMedia
 
 	s.mu.Unlock()
 
+	// Everything below calls into the reader or the notification channel, so
+	// it must stay outside the lock.
+	if consumer, ok := reader.(readers.ArtworkConsumer); ok && artworkSource != nil {
+		consumer.SetArtworkSource(artworkSource)
+	}
+
 	// Send notification outside lock to prevent deadlock
 	notifications.ReadersAdded(s.Notifications, payload)
+
+	// A display connected part way through a session has no media change to
+	// react to, so hand it the current state instead of leaving it on an idle
+	// screen while a game is running.
+	if currentMedia != nil {
+		s.safeNotifyReader(reader, currentMedia)
+	}
+}
+
+// SetArtworkSource sets the source display readers use to resolve cover art.
+// Called during service startup once the database is ready.
+func (s *State) SetArtworkSource(source readers.ArtworkSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.artworkSource = source
+}
+
+// ArtworkSource returns the cover art source, or nil if one was never set.
+func (s *State) ArtworkSource() readers.ArtworkSource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.artworkSource
 }
 
 // RemoveReader removes a reader by its ReaderID and closes it.

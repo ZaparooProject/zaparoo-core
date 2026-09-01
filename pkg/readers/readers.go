@@ -88,6 +88,44 @@ type OpenOpts struct {
 	Probing bool
 }
 
+// ErrNoArtwork is returned by an ArtworkSource when a media item has no usable
+// artwork. Display drivers treat it as an ordinary outcome and render without a
+// cover rather than failing the whole update.
+var ErrNoArtwork = errors.New("no artwork available")
+
+// MediaArtwork is cover art for a media item, resolved from Core's own stored
+// metadata rather than from a driver-specific asset pack.
+type MediaArtwork struct {
+	// ContentType names the encoding of Data: whatever Core's artwork
+	// pipeline produced, which is PNG, JPEG or WebP.
+	ContentType string
+	// TypeTag records the property the image came from, for example
+	// "property:image-boxart".
+	TypeTag string
+	Data    []byte
+}
+
+// ArtworkSource resolves cover art for a media item. Display drivers that
+// render Core's stored artwork are handed one when they are registered, so they
+// do not need a database handle of their own.
+//
+// Media is addressed by system ID and path because ActiveMedia carries no media
+// ID in-process; only API handlers populate that field.
+//
+// maxSize is a hint for the longest edge in pixels. Core snaps it onto a
+// standard thumbnail tier, so the image may come back larger than requested and
+// callers should scale to their own dimensions.
+type ArtworkSource interface {
+	Artwork(ctx context.Context, systemID, path string, maxSize int) (*MediaArtwork, error)
+}
+
+// ArtworkConsumer is implemented by display drivers that render Core's stored
+// artwork. Core calls SetArtworkSource once, when the reader is registered, and
+// a driver must cope with never being called at all.
+type ArtworkConsumer interface {
+	SetArtworkSource(ArtworkSource)
+}
+
 type Reader interface {
 	// Metadata returns static configuration for this driver.
 	Metadata() DriverMetadata
