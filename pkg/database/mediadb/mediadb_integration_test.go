@@ -187,6 +187,11 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+// browseSortCollationPrevVersion is the migration immediately before
+// 20260830140000_browse_sort_collation.sql, the point a downgrade past the
+// collation must reach.
+const browseSortCollationPrevVersion int64 = 20260825120000
+
 // The browse sort collation must carry a schema version bump: without one, a
 // build that lacks ZAPAROO_TITLE_V1 opens the database happily and then fails
 // on the first prepare against Media, and the rebuild that exists for an
@@ -230,7 +235,11 @@ func TestMigrations_BrowseSortCollationBumpsVersionWithoutTableWork(t *testing.T
 	// version but cannot prepare statements against Media.
 	goose.SetBaseFS(migrationFiles)
 	require.NoError(t, goose.SetDialect("sqlite"))
-	require.NoError(t, goose.Down(sqlDB, "migrations"))
+	// DownTo the version before the collation migration, not a bare Down:
+	// Down reverts whatever migration happens to be last, so any migration
+	// added afterwards would silently stop this from testing the downgrade it
+	// is named for.
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", browseSortCollationPrevVersion))
 
 	require.NoError(t, sqlDB.QueryRowContext(ctx,
 		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
