@@ -133,17 +133,104 @@ func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
 	lc.rebuildFromSlice(launchers)
 }
 
+// applySystemIDFolders lets a folder named after the system ID be scanned even
+// when no launcher declares it.
+//
+// System IDs are the names Zaparoo already uses in its API, in the scraper's
+// custom gamelist bundles and in published metadata packs, so a library
+// organised that way is indexed without the user writing per-launcher folder
+// lists. MiSTer's launchers hand-list these names already; doing it here gives
+// every platform and every launcher set the same behaviour.
+//
+// This belongs on the launcher rather than in path discovery because the folder
+// has to be equally visible to LauncherMatcher, which decides which launcher
+// owns a scanned file. A path discovered but owned by nobody indexes nothing.
+//
+// A folder another system already scans by name stays with that system. Only
+// MSX1 and MSX2 hit that today: folders named msx1 and msx2 are declared by MSX.
+func applySystemIDFolders(launchers []platforms.Launcher) {
+	declared := make(map[string]map[string]struct{})
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		for _, folder := range launcher.Folders {
+			if folder == "" || filepath.IsAbs(folder) {
+				continue
+			}
+			key := strings.ToLower(folder)
+			if declared[key] == nil {
+				declared[key] = make(map[string]struct{})
+			}
+			declared[key][launcher.SystemID] = struct{}{}
+		}
+	}
+
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" || launcher.SkipFilesystemScan {
+			continue
+		}
+		// Only extend launchers that already scan a root-relative folder.
+		// A launcher with no folders matches by other means, such as a Test
+		// function or an absolute path, and giving it one would widen what it
+		// claims rather than just renaming where it looks.
+		if !hasRelativeFolder(launcher.Folders) {
+			continue
+		}
+		if !wantsSystemIDFolder(launcher.SystemID, launcher.Folders, declared) {
+			continue
+		}
+		// Folders can share a backing array with the caller's slice, so grow a
+		// copy rather than appending in place.
+		folders := make([]string, 0, len(launcher.Folders)+1)
+		folders = append(folders, launcher.Folders...)
+		folders = append(folders, launcher.SystemID)
+		launcher.Folders = folders
+	}
+}
+
+// hasRelativeFolder reports whether any folder is resolved against the index
+// roots, as opposed to being an absolute path.
+func hasRelativeFolder(folders []string) bool {
+	for _, folder := range folders {
+		if folder != "" && !filepath.IsAbs(folder) {
+			return true
+		}
+	}
+	return false
+}
+
+// wantsSystemIDFolder reports whether systemID should be added to folders.
+func wantsSystemIDFolder(
+	systemID string, folders []string, declared map[string]map[string]struct{},
+) bool {
+	for _, folder := range folders {
+		if strings.EqualFold(folder, systemID) {
+			return false
+		}
+	}
+	for owner := range declared[strings.ToLower(systemID)] {
+		if !strings.EqualFold(owner, systemID) {
+			return false
+		}
+	}
+	return true
+}
+
 func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
 	copy(lc.allLaunchers, launchers)
+	applySystemIDFolders(lc.allLaunchers)
 	lc.launchableSystems = nil
 
 	lc.bySystemID = make(map[string][]platforms.Launcher)
 	lc.availableBySystemID = make(map[string][]platforms.Launcher)
-	for i := range launchers {
-		launcher := launchers[i]
+	for i := range lc.allLaunchers {
+		launcher := lc.allLaunchers[i]
 		if launcher.Availability == nil {
 			launcher.Available = true
 			launcher.AvailabilityReason = ""
