@@ -426,3 +426,72 @@ func TestSettleWebSocketTransport_GraceDoesNotOverrideEncrypted(t *testing.T) {
 	settleWebSocketTransport(session, webSocketAuthPlaintext, true)
 	assert.Equal(t, webSocketAuthEncrypted, getWebSocketAuthState(session))
 }
+
+// The settle grace resolves a silent session as plaintext, so a client whose
+// encrypted first frame arrives after it expires does see the queue flushed in
+// the clear. That window is the accepted trade-off, but it has to stay a
+// window: once the late frame establishes encryption, everything after it is
+// encrypted, so the exposure cannot continue for the life of the session.
+func TestSettleWebSocketTransport_LateEncryptedUpgradeEndsPlaintext(t *testing.T) {
+	t.Parallel()
+
+	cs, clientSecrets := establishTestEncryptionSession(t)
+
+	m := newWebSocketSession()
+	var session *melody.Session
+	ready := make(chan struct{})
+	m.HandleConnect(func(s *melody.Session) {
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
+		session = s
+		close(ready)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+	<-ready
+
+	// Broadcast while the client is still silent, then let the grace expire.
+	beforeUpgrade := []byte(`{"jsonrpc":"2.0","method":"tokens.added"}`)
+	writeNotificationToSession(session, beforeUpgrade)
+	settleWebSocketTransport(session, webSocketAuthPlaintext, true)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, beforeUpgrade, msg,
+		"the grace settles a silent session as plaintext; this is the accepted window")
+
+	// The delayed encrypted first frame finally arrives.
+	setClientSession(session, cs)
+	settleWebSocketTransport(session, webSocketAuthEncrypted, false)
+	assert.Equal(t, webSocketAuthEncrypted, getWebSocketAuthState(session))
+
+	afterUpgrade := []byte(`{"jsonrpc":"2.0","method":"tokens.removed"}`)
+	writeNotificationToSession(session, afterUpgrade)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.NotEqual(t, afterUpgrade, msg, "nothing may go out in the clear after the upgrade")
+
+	var frame apimiddleware.EncryptedFrame
+	require.NoError(t, json.Unmarshal(msg, &frame))
+	ct, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
+	require.NoError(t, err)
+	decrypted, err := crypto.Decrypt(
+		clientSecrets.s2cGCM, clientSecrets.s2cNonce, 0, ct, clientSecrets.aad,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, afterUpgrade, decrypted)
+}
