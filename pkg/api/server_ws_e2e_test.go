@@ -345,16 +345,21 @@ func TestDecryptIncomingFrame_PlaintextFrameSettlesAuthState(t *testing.T) {
 
 	before := make(chan webSocketAuthState, 1)
 	after := make(chan webSocketAuthState, 1)
+	accepted := make(chan bool, 1)
 
 	m := newWebSocketSession()
 	m.HandleConnect(func(s *melody.Session) {
 		// Mirror the real upgrade handler for the optional-encryption case.
 		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
 	})
+	// This runs on melody's readPump goroutine, so it reports back rather than
+	// asserting: a failed require here would stop that goroutine before "ack"
+	// is written and leave the test blocked on ReadMessage instead of failing.
 	m.HandleMessage(func(s *melody.Session, msg []byte) {
 		before <- getWebSocketAuthState(s)
 		_, _, ok := decryptIncomingFrame(s, msg, nil, false, true, "127.0.0.1")
-		require.True(t, ok)
+		accepted <- ok
 		after <- getWebSocketAuthState(s)
 		_ = s.Write([]byte("ack"))
 	})
@@ -375,9 +380,11 @@ func TestDecryptIncomingFrame_PlaintextFrameSettlesAuthState(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(
 		websocket.TextMessage, []byte(`{"jsonrpc":"2.0","id":"1","method":"version"}`),
 	))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	_, _, err = conn.ReadMessage()
 	require.NoError(t, err)
 
+	require.True(t, <-accepted, "a plaintext frame is accepted when encryption is optional")
 	assert.Equal(t, webSocketAuthUnsettled, <-before,
 		"transport mode is unknown until the client's first frame")
 	assert.Equal(t, webSocketAuthPlaintext, <-after,

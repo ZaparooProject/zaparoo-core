@@ -1298,3 +1298,64 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	assert.Equal(t, "2.0", obj.JSONRPC)
 	assert.Equal(t, "tokens.staged", obj.Method)
 }
+
+// A notification listener connects and never sends a frame: that is exactly
+// what pkg/api/client's WaitNotification does, and the CLI's -read and -pair
+// waits and both TUI listeners are built on it. Holding such a session at
+// "transport mode unknown" forever would starve it, so the settle grace has to
+// release it as plaintext.
+func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(
+			platform, cfg, st, tokenQueue, nil, db,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		<-serverErr
+	}()
+	require.NoError(t, <-ready)
+	port := waitForServerReady(t, cfg)
+
+	conn := dialWS(t, fmt.Sprintf("ws://127.0.0.1:%d/api/v0", port))
+	defer func() { _ = conn.Close() }()
+
+	// Broadcast repeatedly: the first notifications land while the session is
+	// still unsettled and have to survive the wait, and the later ones cover
+	// the settled steady state.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		payload, _ := json.Marshal(map[string]string{"uid": "silent-listener"})
+		for {
+			select {
+			case <-stop:
+				return
+			case st.Notifications <- models.Notification{Method: "tokens.added", Params: payload}:
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+	}()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err, "a listener that never sends a frame must still get notifications")
+
+	var obj models.NotificationObject
+	require.NoError(t, json.Unmarshal(msg, &obj))
+	assert.Equal(t, "tokens.added", obj.Method)
+}

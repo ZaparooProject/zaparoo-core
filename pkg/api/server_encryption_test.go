@@ -24,12 +24,17 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/olahol/melody"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -300,4 +305,124 @@ func TestWriteNotificationFrame_UnsettledSessionIsNotWrittenPlaintext(t *testing
 			}
 		})
 	}
+}
+
+// A notification broadcast before the client's first frame must survive until
+// the transport mode is known, then be delivered in the order it was queued.
+func TestWSNotificationQueue_FlushesInOrderOnPlaintext(t *testing.T) {
+	t.Parallel()
+
+	m := newWebSocketSession()
+	var session *melody.Session
+	ready := make(chan struct{})
+	m.HandleConnect(func(s *melody.Session) {
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
+		session = s
+		close(ready)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+	<-ready
+
+	writeNotificationToSession(session, []byte(`{"n":1}`))
+	writeNotificationToSession(session, []byte(`{"n":2}`))
+
+	settleWebSocketTransport(session, webSocketAuthPlaintext, false)
+	writeNotificationToSession(session, []byte(`{"n":3}`))
+
+	got := make([]string, 0, 3)
+	for range 3 {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+		_, msg, readErr := conn.ReadMessage()
+		require.NoError(t, readErr)
+		got = append(got, string(msg))
+	}
+	assert.Equal(t, []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, got,
+		"queued notifications must be delivered before the ones that follow the settle")
+}
+
+// The point of queueing: a client that turns out to have negotiated encryption
+// must never see the plaintext that was broadcast while its mode was unknown.
+func TestWSNotificationQueue_DiscardsOnEncrypted(t *testing.T) {
+	t.Parallel()
+
+	m := newWebSocketSession()
+	var session *melody.Session
+	ready := make(chan struct{})
+	m.HandleConnect(func(s *melody.Session) {
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
+		session = s
+		close(ready)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+	<-ready
+
+	writeNotificationToSession(session, []byte(`{"secret":true}`))
+	settleWebSocketTransport(session, webSocketAuthEncrypted, false)
+	// A later broadcast has no encryption session attached in this harness, so
+	// writeNotificationFrame drops it too: nothing may reach the wire.
+	writeNotificationToSession(session, []byte(`{"secret":false}`))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err, "plaintext queued before an encrypted upgrade must be discarded")
+}
+
+// The grace timer stands down once the client has spoken, so an encrypted
+// session cannot be flipped back to plaintext by a late firing.
+func TestSettleWebSocketTransport_GraceDoesNotOverrideEncrypted(t *testing.T) {
+	t.Parallel()
+
+	m := newWebSocketSession()
+	var session *melody.Session
+	ready := make(chan struct{})
+	m.HandleConnect(func(s *melody.Session) {
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
+		session = s
+		close(ready)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+	<-ready
+
+	settleWebSocketTransport(session, webSocketAuthEncrypted, false)
+	settleWebSocketTransport(session, webSocketAuthPlaintext, true)
+	assert.Equal(t, webSocketAuthEncrypted, getWebSocketAuthState(session))
 }
