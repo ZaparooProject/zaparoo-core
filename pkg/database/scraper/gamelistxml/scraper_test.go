@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
@@ -2906,6 +2907,77 @@ func TestResolveCompanionSlugConflicts(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, nonSlug, "non-slug child untouched")
+}
+
+// A ZaparooCompanion PSX gamelist lists "crashbandicootwarped.slug" under both
+// "Crash Bandicoot" (19282) and the correct "Crash Bandicoot 3 - Warped" (19262),
+// because the US title omits the series number. The wrong parent used to win on a
+// prefix match while the correct one scored 0, so Crash 3 inherited Crash 1's box
+// art and description.
+func TestResolveCompanionSlugConflicts_SeriesNumberOmittedFromChild(t *testing.T) {
+	t.Parallel()
+	parents := []companionParent{
+		{GameID: "19282", Game: esapi.Game{Name: "Crash Bandicoot"}},
+		{GameID: "19262", Game: esapi.Game{Name: "Crash Bandicoot 3 - Warped"}},
+		{GameID: "19270", Game: esapi.Game{Name: "Crash Bandicoot 2 - Cortex Strikes Back"}},
+	}
+	child := func(stem, parent string) companionChild {
+		return companionChild{ResolvedPath: filepath.Join(t.TempDir(), stem+".slug"), ParentGameID: parent}
+	}
+	children := []companionChild{
+		child("crashbandicootwarped", "19282"),
+		child("crashbandicootwarped", "19262"),
+		// The same gamelist also lists "crashbandicoot2.slug" under both 19282 and
+		// 19270; that one already resolved correctly on a prefix match and must stay
+		// correct.
+		child("crashbandicoot2", "19282"),
+		child("crashbandicoot2", "19270"),
+	}
+
+	var stats companionStats
+	got := resolveCompanionSlugConflicts("PSX", parents, children, &stats)
+
+	parentFor := func(stem string) []string {
+		var ids []string
+		for _, c := range got {
+			if s, ok := companionSlugStem(c.ResolvedPath); ok && s == stem {
+				ids = append(ids, c.ParentGameID)
+			}
+		}
+		return ids
+	}
+	assert.Equal(t, []string{"19262"}, parentFor("crashbandicootwarped"),
+		"parent carrying the series number wins over an unrelated prefix match")
+	assert.Equal(t, []string{"19270"}, parentFor("crashbandicoot2"),
+		"a number the child carries must not be stripped away to match a shorter parent")
+}
+
+func TestCompanionParentNameScore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		childSlug  string
+		parentName string
+		want       int
+	}{
+		{"exact match", "crashbandicoot", "Crash Bandicoot", 3},
+		{"parent adds series number", "crashbandicootwarped", "Crash Bandicoot 3 - Warped", 2},
+		{"parent adds subtitle", "crashbandicoot2", "Crash Bandicoot 2 - Cortex Strikes Back", 1},
+		{"child adds subtitle", "megamanx", "Megaman", 1},
+		{"child adds series number", "crashbandicoot2", "Crash Bandicoot", 0},
+		{"unrelated", "crashbandicootwarped", "Some Unrelated Game", 0},
+		{"empty child", "", "Crash Bandicoot", 0},
+		{"empty parent", "crashbandicoot", "", 0},
+		// Digits are never stripped from the child, so distinct series entries stay
+		// distinct rather than both collapsing onto a numberless parent.
+		{"different series entries", "finalfantasy4", "Final Fantasy 6", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := companionParentNameScore(slugs.MediaTypeGame, tc.childSlug, tc.parentName)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestProcessCompanionEntries_RewritesAlreadyScraped(t *testing.T) {
