@@ -51,6 +51,9 @@ const (
 	ringBufferFrames = 4 * targetSampleRate
 	// decodeChunkFrames is the number of frames decoded per prefetch iteration (100 ms).
 	decodeChunkFrames = 100 * targetSampleRate / 1000
+	// defaultPrefetchTick is how often the prefetch goroutine wakes to look for
+	// ring space when nothing else has woken it.
+	defaultPrefetchTick = 100 * time.Millisecond
 )
 
 // PlaybackOptions configures a long-form Play call.
@@ -286,18 +289,22 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 // background goroutine. This bounds memory use to ringBufferFrames regardless of
 // file length and keeps decoding off the malgo audio thread.
 type streamingSource struct {
-	streamer       beep.Streamer
-	decoder        beep.StreamSeekCloser
-	onDrain        func(natural bool)
-	file           *os.File
-	wakeCh         chan struct{}
-	doneCh         chan struct{}
-	cancelFn       context.CancelFunc
-	path           string
-	ring           [][2]float64
-	chunk          [][2]float64
-	volume         float64
-	totalFrames    int64
+	streamer    beep.Streamer
+	decoder     beep.StreamSeekCloser
+	onDrain     func(natural bool)
+	file        *os.File
+	wakeCh      chan struct{}
+	doneCh      chan struct{}
+	cancelFn    context.CancelFunc
+	path        string
+	ring        [][2]float64
+	chunk       [][2]float64
+	volume      float64
+	totalFrames int64
+	// tickInterval is how often the prefetch goroutine wakes on its own; zero
+	// means defaultPrefetchTick. Tests lengthen it so that a full ring can only
+	// be the result of a burst fill, never of one chunk per wake-up.
+	tickInterval   time.Duration
 	sourceRate     int
 	quality        int
 	mu             syncutil.Mutex
@@ -362,17 +369,18 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 	streamer := streamerAtTargetSampleRate(decoder, format.SampleRate, quality)
 
 	return &streamingSource{
-		ring:        make([][2]float64, ringBufferFrames),
-		path:        path,
-		volume:      volume,
-		totalFrames: totalFrames,
-		sourceRate:  int(format.SampleRate),
-		quality:     quality,
-		wakeCh:      make(chan struct{}, 1),
-		decoder:     decoder,
-		file:        f,
-		streamer:    streamer,
-		chunk:       make([][2]float64, decodeChunkFrames),
+		ring:         make([][2]float64, ringBufferFrames),
+		path:         path,
+		volume:       volume,
+		totalFrames:  totalFrames,
+		tickInterval: defaultPrefetchTick,
+		sourceRate:   int(format.SampleRate),
+		quality:      quality,
+		wakeCh:       make(chan struct{}, 1),
+		decoder:      decoder,
+		file:         f,
+		streamer:     streamer,
+		chunk:        make([][2]float64, decodeChunkFrames),
 	}, nil
 }
 
@@ -401,7 +409,11 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 		}
 	}()
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	interval := s.tickInterval
+	if interval <= 0 {
+		interval = defaultPrefetchTick
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var reportedUnderruns uint64
 
