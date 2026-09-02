@@ -852,7 +852,9 @@ func (r *Reader) pollDevice(
 	if tagText == "" {
 		log.Warn().Msg("no text NDEF found")
 	} else {
-		log.Debug().Msgf("decoded text NDEF: %s", zapscript.ForLog(tagText))
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("decoded text NDEF: %s", zapscript.ForLog(tagText))
+		}
 	}
 
 	card := &tokens.Token{
@@ -870,7 +872,9 @@ func (r *Reader) pollDevice(
 
 func (r *Reader) writeTag(req *WriteRequest) {
 	log.Info().Msg("libnfc write request received")
-	log.Debug().Msgf("libnfc write text: %s", zapscript.ForLog(req.Text))
+	if e := log.Debug(); e.Enabled() {
+		e.Msgf("libnfc write text: %s", zapscript.ForLog(req.Text))
+	}
 
 	r.mu.RLock()
 	pnd := r.pnd

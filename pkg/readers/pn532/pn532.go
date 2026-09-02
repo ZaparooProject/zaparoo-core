@@ -533,7 +533,9 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
 	if token.Text != "" {
-		log.Debug().Msgf("NDEF text: %s", zapscript.ForLog(token.Text))
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("NDEF text: %s", zapscript.ForLog(token.Text))
+		}
 	}
 
 	iq <- readers.Scan{
@@ -868,7 +870,9 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			}
 
 			log.Info().Msg("successfully wrote text to PN532 tag")
-			log.Debug().Msgf("wrote NDEF text: %s", zapscript.ForLog(text))
+			if e := log.Debug(); e.Enabled() {
+				e.Msgf("wrote NDEF text: %s", zapscript.ForLog(text))
+			}
 
 			// Create result token with UID from the tag
 			tagType := tag.Type()
