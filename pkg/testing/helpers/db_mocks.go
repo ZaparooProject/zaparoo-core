@@ -3045,6 +3045,19 @@ func (m *MockMediaDBI) FindMediaIDsByPaths(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindSingleContainerLaunchMediaBySystemID(
+	ctx context.Context, systemID, containerPath string,
+) (*database.Media, error) {
+	if !m.hasExpectedCall("FindSingleContainerLaunchMediaBySystemID") {
+		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise aliasing
+	}
+	args := m.Called(ctx, systemID, containerPath)
+	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
 	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {

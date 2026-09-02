@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -82,6 +83,118 @@ func cacheSlugResolution(
 			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
 		}
 	}()
+}
+
+// promotionLosesRequestedTag reports whether swapping selected for promoted
+// would give up a tag the query asked for and the selection actually carried.
+// A playlist holds no disc tag, so "Game (Disc 2)" keeps the disc it named,
+// while a region both rows carry promotes normally and a tag neither row
+// carries was never a distinction between them. HasAllTags cannot answer this:
+// it treats an absent tag type as unevaluable rather than as a mismatch, so a
+// playlist passes every filter its own tracks were selected by.
+func promotionLosesRequestedTag(
+	selected, promoted *database.SearchResultWithCursor,
+	tagFilters []zapscript.TagFilter,
+) bool {
+	if len(tagFilters) == 0 {
+		return false
+	}
+
+	selectedTags := tagValueSets(selected)
+	promotedTags := tagValueSets(promoted)
+	carries := func(sets map[string]map[string]struct{}, filter zapscript.TagFilter) bool {
+		values, ok := sets[filter.Type]
+		if !ok {
+			return false
+		}
+		_, ok = values[filter.Value]
+		return ok
+	}
+
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
+	for _, filter := range andFilters {
+		if carries(selectedTags, filter) && !carries(promotedTags, filter) {
+			return true
+		}
+	}
+	for _, filter := range notFilters {
+		if !carries(selectedTags, filter) && carries(promotedTags, filter) {
+			return true
+		}
+	}
+
+	// An OR group is satisfied by any one of its filters, so it is only lost
+	// when the selection matched something in the group and the promotion
+	// matches nothing in it. Comparing filter by filter would refuse a
+	// promotion that simply satisfies the group a different way.
+	if len(orFilters) > 0 {
+		selectedMatches, promotedMatches := false, false
+		for _, filter := range orFilters {
+			if carries(selectedTags, filter) {
+				selectedMatches = true
+			}
+			if carries(promotedTags, filter) {
+				promotedMatches = true
+			}
+		}
+		if selectedMatches && !promotedMatches {
+			return true
+		}
+	}
+	return false
+}
+
+// promoteToContainerLaunchMedia swaps a resolved media for the launch target of
+// the directory holding it, so a title that matched one of a disc folder's
+// tracks launches the cue sheet or playlist that browse, media.meta and the
+// scrapers all name for that folder.
+//
+// The question goes to the database rather than to the candidates in hand:
+// every file in such a folder shares one title, the slug search is capped, and
+// the container's own launch target is routinely outside that cap. Selecting
+// among the rows already fetched cannot reach it.
+//
+// Anything unexpected keeps the original selection. A container lookup exists
+// to launch the better file, never to fail a launch that would otherwise work.
+func promoteToContainerLaunchMedia(
+	ctx context.Context,
+	mediadb database.MediaDBI,
+	systemID string,
+	selected *database.SearchResultWithCursor,
+	tagFilters []zapscript.TagFilter,
+) database.SearchResultWithCursor {
+	if !container.MayHaveContainerTarget(selected.Path) {
+		return *selected
+	}
+	containerPath := container.ParentDir(selected.Path)
+	if containerPath == "" {
+		return *selected
+	}
+
+	launch, err := mediadb.FindSingleContainerLaunchMediaBySystemID(ctx, systemID, containerPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", selected.Path).
+			Msg("container launch lookup failed, keeping resolved media")
+		return *selected
+	}
+	if launch == nil || launch.DBID == selected.MediaID {
+		return *selected
+	}
+
+	promoted, err := mediadb.GetMediaByDBID(ctx, launch.DBID)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaID", launch.DBID).
+			Msg("failed to read container launch media, keeping resolved media")
+		return *selected
+	}
+
+	if promotionLosesRequestedTag(selected, &promoted, tagFilters) {
+		return *selected
+	}
+
+	log.Info().Str("from", selected.Path).Str("to", promoted.Path).
+		Msg("promoted resolved title to its container launch media")
+	return promoted
 }
 
 // ResolveTitle runs the full title resolution pipeline against the media database.
@@ -155,6 +268,8 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 			results, tagFilters, params.Cfg, MatchQualityExact, params.Launchers)
 
 		if confidence >= ConfidenceHigh {
+			selectedResult = promoteToContainerLaunchMedia(
+				ctx, mediadb, systemID, &selectedResult, tagFilters)
 			cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, selectedResult.MediaID, StrategyExactMatch)
 			return &ResolveResult{
 				Result:     selectedResult,
@@ -315,8 +430,12 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		return nil, ErrLowConfidence
 	}
 
+	bestCandidate.result = promoteToContainerLaunchMedia(
+		ctx, mediadb, systemID, &bestCandidate.result, tagFilters)
+
 	// Cache the successful resolution without letting cache bookkeeping block
-	// launch-critical title resolution.
+	// launch-critical title resolution. Promotion runs first so the cached ID is
+	// the container's launch target, not the sibling the search happened to pick.
 	cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, bestCandidate.result.MediaID, bestCandidate.strategy)
 
 	return &ResolveResult{

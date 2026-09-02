@@ -1206,6 +1206,10 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// FindSingleContainerLaunchMediaBySystemID is FindSingleContainerLaunchMedia
+	// keyed by system ID, for callers that address a system by name rather than
+	// by row.
+	FindSingleContainerLaunchMediaBySystemID(ctx context.Context, systemID, containerPath string) (*Media, error)
 	// ResolveSingletonContainerAliases resolves the given candidate child
 	// directories for systemDBID in a single batch query, returning one
 	// SingletonContainerAlias per candidate that collapses to a single launch

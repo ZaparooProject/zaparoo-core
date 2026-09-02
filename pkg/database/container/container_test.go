@@ -220,3 +220,34 @@ func TestMediaExt(t *testing.T) {
 	assert.Empty(t, container.MediaExt("/roms/PSX/Game"))
 	assert.Empty(t, container.MediaExt("/roms/my.dir/Game"))
 }
+
+func TestMayHaveContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"/roms/PSX/Game/Game (Track 01).bin",
+		"/roms/PSX/Game/Game (Track 01).WAV",
+		"/roms/PSX/Game/Game.mp3",
+		"/roms/PSX/Game/Game.ogg",
+		"/roms/PSX/Game/Game.flac",
+		"/roms/PSX/Game/Game.ape",
+		"/roms/PSX/Game/Game.cue",
+		"/roms/PSX/Game/Game (Disc 1).chd",
+		"/roms/PSX/Game/Game.iso",
+	} {
+		assert.True(t, container.MayHaveContainerTarget(path), path)
+	}
+
+	for _, path := range []string{
+		"/roms/NES/Mario.nes",
+		"/roms/SNES/Mario.sfc",
+		"/roms/Genesis/Sonic.md",
+		"/roms/Arcade/game.zip",
+		"/roms/PSX/Game",
+		// A playlist is already a launch target, so promoting one could only
+		// ever return itself.
+		"/roms/PSX/Game/Game.m3u",
+	} {
+		assert.False(t, container.MayHaveContainerTarget(path), path)
+	}
+}

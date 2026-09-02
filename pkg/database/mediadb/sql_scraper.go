@@ -191,6 +191,25 @@ func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []strin
 	return results, rows.Err()
 }
 
+// FindSingleContainerLaunchMediaBySystemID implements MediaDBI. Title
+// resolution holds a system ID rather than a system row, so it cannot call
+// FindSingleContainerLaunchMedia directly. Doing the lookup here keeps that
+// caller free of system rows entirely.
+func (db *MediaDB) FindSingleContainerLaunchMediaBySystemID(
+	ctx context.Context, systemID, containerPath string,
+) (*database.Media, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+
+	system, err := db.FindSystemBySystemID(systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up system %q: %w", systemID, err)
+	}
+
+	return db.FindSingleContainerLaunchMedia(ctx, system.DBID, containerPath)
+}
+
 func (db *MediaDB) FindSingleContainerLaunchMedia(
 	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {
