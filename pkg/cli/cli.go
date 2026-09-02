@@ -254,12 +254,14 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 	case *f.Read:
 		enableRun := client.DisableZapScript(cfg)
 
-		// cleanup after ctrl-c
+		// cleanup after ctrl-c. The channel is never closed: stopping the
+		// delivery is enough, and closing it from here would wake the handler
+		// goroutine into closing it a second time, panicking the process on
+		// every successful read.
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
-			close(sigs)
 			enableRun()
 			os.Exit(0)
 		}()
@@ -271,12 +273,12 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			logClientCommandError(err, "error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
-			close(sigs)
+			signal.Stop(sigs)
 			enableRun()
 			os.Exit(1)
 		}
 
-		close(sigs)
+		signal.Stop(sigs)
 		enableRun()
 		_, _ = fmt.Println(resp)
 		os.Exit(0)
