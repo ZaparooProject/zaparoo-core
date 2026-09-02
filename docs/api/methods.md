@@ -2466,7 +2466,7 @@ An object:
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -2489,7 +2489,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -3353,7 +3353,7 @@ Delete a local backup ZIP.
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -3370,7 +3370,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "backup-delete-1",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -4039,7 +4039,7 @@ Delete a profile. Local UIs may gate this action with `profiles.verify`. The fin
 
 #### Result
 
-Null.
+Returns `null` on success.
 
 ### profiles.active
 
@@ -4195,7 +4195,7 @@ An object:
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -4223,7 +4223,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -4987,7 +4987,7 @@ Revoke a paired client. Existing encrypted sessions remain active until they dis
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -5004,7 +5004,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "clients-delete-1",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -5065,7 +5065,7 @@ None.
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -5081,7 +5081,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "clients-pair-cancel-1",
-  "result": {}
+  "result": null
 }
 ```
 

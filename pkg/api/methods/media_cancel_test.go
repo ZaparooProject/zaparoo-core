@@ -359,7 +359,7 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	// Start media generation
 	result, err := HandleGenerateMedia(generateEnv)
 	require.NoError(t, err)
-	assert.Nil(t, result) // HandleGenerateMedia returns nil on success
+	assert.Equal(t, NoContent{}, result) // HandleGenerateMedia reports void success
 
 	// Poll to see if we can catch the process running
 	timeout := time.After(1 * time.Second)
