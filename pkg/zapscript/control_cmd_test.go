@@ -26,11 +26,21 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newControlLauncherCache seeds a launcher cache the way the service does at
+// startup. cmdControl resolves through the cache rather than the platform's own
+// launcher list, so tests must not rely on Platform.Launchers.
+func newControlLauncherCache(launchers []platforms.Launcher) *helpers.LauncherCache {
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice(launchers)
+	return cache
+}
 
 func newControlExprEnv(launcherID string) *zapscript.ArgExprEnv {
 	return &zapscript.ArgExprEnv{
@@ -51,7 +61,7 @@ func TestCmdControl_Success(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -65,7 +75,8 @@ func TestCmdControl_Success(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	result, err := cmdControl(mockPlatform, env)
@@ -80,7 +91,7 @@ func TestCmdControl_SuccessWithScript(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 	mockPlatform.On("KeyboardPress", "{f2}").Return(nil)
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -94,7 +105,8 @@ func TestCmdControl_SuccessWithScript(t *testing.T) {
 			Name: "control",
 			Args: []string{"save_state"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	result, err := cmdControl(mockPlatform, env)
@@ -112,7 +124,7 @@ func TestCmdControl_ScriptUsesServiceContext(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -126,9 +138,10 @@ func TestCmdControl_ScriptUsesServiceContext(t *testing.T) {
 			Name: "control",
 			Args: []string{"save_state"},
 		},
-		ExprEnv:     newControlExprEnv("test-launcher"),
-		ServiceCtx:  serviceCtx,
-		LauncherCtx: launcherCtx,
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
+		ServiceCtx:    serviceCtx,
+		LauncherCtx:   launcherCtx,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -221,7 +234,7 @@ func TestCmdControl_LauncherNotFound(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{ID: "other-launcher"},
 	})
 
@@ -230,7 +243,8 @@ func TestCmdControl_LauncherNotFound(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("missing-launcher"),
+		ExprEnv:       newControlExprEnv("missing-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -242,7 +256,7 @@ func TestCmdControl_NoControls(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{ID: "test-launcher"},
 	})
 
@@ -251,7 +265,8 @@ func TestCmdControl_NoControls(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -264,7 +279,7 @@ func TestCmdControl_UnknownAction(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -280,7 +295,8 @@ func TestCmdControl_UnknownAction(t *testing.T) {
 			Name: "control",
 			Args: []string{"nonexistent_action"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -292,7 +308,7 @@ func TestCmdControl_NoImplementation(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -306,7 +322,8 @@ func TestCmdControl_NoImplementation(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -324,7 +341,7 @@ func TestCmdControl_AdvArgsPassThrough(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -342,7 +359,8 @@ func TestCmdControl_AdvArgsPassThrough(t *testing.T) {
 				"name": "quicksave",
 			}),
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -360,7 +378,7 @@ func TestCmdControl_WhenKeyStripped(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -378,7 +396,8 @@ func TestCmdControl_WhenKeyStripped(t *testing.T) {
 				"slot": "1",
 			}),
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -397,7 +416,7 @@ func TestCmdControl_WhenOnlyAdvArg(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -414,7 +433,8 @@ func TestCmdControl_WhenOnlyAdvArg(t *testing.T) {
 				"when": "true",
 			}),
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
@@ -432,7 +452,7 @@ func TestCmdControl_WaitsForMediaReadyBeforeControl(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -446,8 +466,9 @@ func TestCmdControl_WaitsForMediaReadyBeforeControl(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv:     newControlExprEnv("test-launcher"),
-		LauncherCtx: context.Background(),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
+		LauncherCtx:   context.Background(),
 		WaitForMediaReady: func(ctx context.Context) error {
 			require.NotNil(t, ctx)
 			waited = true
@@ -470,7 +491,7 @@ func TestCmdControl_WaitForMediaReadyErrorSkipsControl(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -484,7 +505,8 @@ func TestCmdControl_WaitForMediaReadyErrorSkipsControl(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 		WaitForMediaReady: func(context.Context) error {
 			return errors.New("not ready")
 		},
@@ -504,7 +526,7 @@ func TestCmdControl_FuncError(t *testing.T) {
 	}
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
 		{
 			ID: "test-launcher",
 			Controls: map[string]platforms.Control{
@@ -518,11 +540,104 @@ func TestCmdControl_FuncError(t *testing.T) {
 			Name: "control",
 			Args: []string{"toggle_pause"},
 		},
-		ExprEnv: newControlExprEnv("test-launcher"),
+		ExprEnv:       newControlExprEnv("test-launcher"),
+		LauncherCache: launcherCache,
 	}
 
 	_, err := cmdControl(mockPlatform, env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "kodi connection refused")
 	assert.Contains(t, err.Error(), "control action")
+}
+
+// TestCmdControl_LauncherOnlyInCache pins issue #1386: the native-audio launcher is
+// built at service startup and only ever lives in the launcher cache, never in
+// Platform.Launchers. Resolving from the platform list fails every control action
+// for it with "launcher not found".
+func TestCmdControl_LauncherOnlyInCache(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+		{ID: "some-platform-launcher"},
+	})
+
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
+		{ID: "some-platform-launcher"},
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				platforms.ControlPause: {
+					Func: func(context.Context, *config.Instance, platforms.ControlParams) error {
+						called = true
+						return nil
+					},
+				},
+			},
+		},
+	})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{platforms.ControlPause},
+		},
+		ExprEnv:       newControlExprEnv(platforms.NativeAudioLauncherID),
+		LauncherCache: launcherCache,
+	}
+
+	_, err := cmdControl(mockPlatform, env)
+	require.NoError(t, err)
+	assert.True(t, called, "control must run for a launcher only present in the cache")
+}
+
+// TestCmdControl_LauncherIDCaseInsensitive matches the cache's own lookup rules and
+// the API control path, which both compare launcher IDs case-insensitively.
+func TestCmdControl_LauncherIDCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	mockPlatform := mocks.NewMockPlatform()
+	launcherCache := newControlLauncherCache([]platforms.Launcher{
+		{
+			ID: "Generic",
+			Controls: map[string]platforms.Control{
+				platforms.ControlPause: {
+					Func: func(context.Context, *config.Instance, platforms.ControlParams) error {
+						called = true
+						return nil
+					},
+				},
+			},
+		},
+	})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{platforms.ControlPause},
+		},
+		ExprEnv:       newControlExprEnv("generic"),
+		LauncherCache: launcherCache,
+	}
+
+	_, err := cmdControl(mockPlatform, env)
+	require.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestCmdControl_NilLauncherCache(t *testing.T) {
+	t.Parallel()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{"toggle_pause"},
+		},
+		ExprEnv: newControlExprEnv("test-launcher"),
+	}
+
+	_, err := cmdControl(mocks.NewMockPlatform(), env)
+	require.ErrorIs(t, err, ErrNoLauncherCache)
 }

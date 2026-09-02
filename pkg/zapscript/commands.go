@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -549,6 +550,7 @@ func RunCommand(
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		PlaybackManager:    opts.PlaybackManager,
+		LauncherCache:      helpers.GlobalLauncherCache,
 		UI:                 opts.UI,
 		Playlist:           plsc,
 		Source:             token.Source,
