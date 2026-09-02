@@ -1968,3 +1968,51 @@ func TestCmdTitlePerformance(t *testing.T) {
 		mockPlatform.AssertExpectations(t)
 	})
 }
+
+// TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder is the reported symptom
+// end to end. Every file in a disc folder shares one MediaTitle and the slug
+// search is capped, so the only candidate here is a bin track — exactly what the
+// device returned when @PSX/B_064 booted "B_064 (Track 001).bin". The launcher
+// must still be handed the cue sheet.
+func TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := newMockPlatformWithLaunchers()
+
+	discDir := "/games/PSX/B_064/"
+	trackPath := discDir + "B_064 (Track 001).bin"
+	cuePath := discDir + "B_064.cue"
+
+	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil)).
+		Return(int64(0), "", false)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil)).
+		Return([]database.SearchResultWithCursor{{
+			SystemID: "PSX", Name: "B_064", Path: trackPath, MediaID: 7,
+		}}, nil)
+	mockMediaDB.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "PSX", discDir).
+		Return(&database.Media{DBID: 99, Path: cuePath}, nil)
+	mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(99)).
+		Return(database.SearchResultWithCursor{
+			SystemID: "PSX", Name: "B_064", Path: cuePath, MediaID: 99,
+		}, nil)
+	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil),
+		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, mock.AnythingOfType("int64")).
+		Return([]database.MediaProperty{}, nil).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, cuePath, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil)
+
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      &config.Instance{},
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Cmd:      zapscript.Command{Name: "launch.title", Args: []string{"PSX/B_064"}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+	mockPlatform.AssertNotCalled(t, "LaunchMedia",
+		mock.Anything, trackPath, mock.Anything, mock.Anything, mock.Anything)
+}

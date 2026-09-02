@@ -31,6 +31,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -67,6 +68,23 @@ func parseStepTimings(t *testing.T, steps string) map[string]int64 {
 	return out
 }
 
+// slowBoundsDB delays the per-chunk bounds lookup, the one QueryRowContext
+// sqlUpsertStagedMedia issues, so that its cost is far larger than any
+// platform's clock granularity. Windows' timer ticks at ~15.6 ms and a bounds
+// query against a warm SQLite file finishes well inside one tick, which read
+// back as exactly 0 and failed a bare positivity assertion there (#1379).
+type slowBoundsDB struct {
+	sqlQueryable
+	delay time.Duration
+	calls int
+}
+
+func (db *slowBoundsDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	db.calls++
+	time.Sleep(db.delay)
+	return db.sqlQueryable.QueryRowContext(ctx, query, args...)
+}
+
 // TestChunkedStepTiming_PacingIsNotBilledAsSQL is the core guarantee for the
 // two steps that yield inside their own loops. Both call the scanner's pauser
 // between chunks; on the MiSTer that pauser sleeps roughly as long as the work
@@ -79,11 +97,13 @@ func TestChunkedStepTiming_PacingIsNotBilledAsSQL(t *testing.T) {
 	const (
 		rows        = scanUpsertMediaBatchSize + 25 // forces a second chunk, so yield runs twice
 		pausePerRun = 40 * time.Millisecond         // the MiSTer ThrottleBackground work window
+		boundsDelay = 40 * time.Millisecond
 	)
 
 	ctx := context.Background()
 	sqlDB := newUpsertStagedMediaTestDB(t)
 	stageSyntheticMedia(t, sqlDB, 1, rows)
+	boundsDB := &slowBoundsDB{sqlQueryable: sqlDB, delay: boundsDelay}
 
 	yields := 0
 	yield := func() error {
@@ -92,9 +112,7 @@ func TestChunkedStepTiming_PacingIsNotBilledAsSQL(t *testing.T) {
 		return nil
 	}
 
-	started := time.Now()
-	affected, timing, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", 1, yield)
-	wall := time.Since(started)
+	affected, timing, err := sqlUpsertStagedMedia(ctx, boundsDB, "C64", 1, yield)
 	require.NoError(t, err)
 	require.EqualValues(t, rows, affected)
 	require.GreaterOrEqual(t, yields, 2, "test needs at least two chunks to be meaningful")
@@ -103,10 +121,14 @@ func TestChunkedStepTiming_PacingIsNotBilledAsSQL(t *testing.T) {
 		"every yield must be captured in timing.pacing; otherwise the sleep is "+
 			"billed as SQL work and double-counted against the scanner's throttle total")
 
-	sqlTime := wall - timing.bounds - timing.pacing
-	assert.Less(t, sqlTime, wall-timing.pacing+time.Millisecond,
-		"reported SQL time must exclude pacing")
-	assert.Positive(t, timing.bounds,
+	// Two claims, neither of them a race against the clock: the lookup runs once
+	// per chunk (counted, not timed), and the delay injected into it lands in
+	// timing.bounds, so the timer really does wrap the bounds statement. The
+	// requirement stays at one delay rather than one per call because a coarse
+	// clock can read each measured interval up to a tick short, and scaling it by
+	// the call count would put the granularity back in.
+	require.GreaterOrEqual(t, boundsDB.calls, 2, "each chunk must run its own bounds lookup")
+	assert.GreaterOrEqual(t, timing.bounds, boundsDelay,
 		"the per-chunk bounds lookup is a real statement and must be reported separately")
 }
 

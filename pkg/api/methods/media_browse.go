@@ -1321,10 +1321,94 @@ func buildBrowseResponse(
 	}, nil
 }
 
+// groupSingletonAliasCandidates buckets a page's directories by the system each
+// one belongs to.
+//
+// A directory holding media for more than one system is left out, and cannot
+// currently be anything else. BrowseDirectoryResult.FileCount is the sum across
+// systems, while the resolver counts direct rows one system at a time, so the
+// nested-media test it keys on compares a per-system count against a total and
+// never balances. Offering the directory anyway would cost a scan to reach the
+// same answer. Resolving one properly means carrying per-system counts out of
+// the browse query — BrowseDirCounts already stores them per system and the
+// query sums them — which is more than the case is worth while a systems filter
+// is the normal way to browse: with one, the query narrows SystemIDs to that
+// system and the same directory resolves like any other.
+func groupSingletonAliasCandidates(
+	path string,
+	dirs []database.BrowseDirectoryResult,
+	systems []systemdefs.System,
+) (order []string, bySystem map[string][]database.SingletonAliasCandidate) {
+	requested := make(map[string]struct{}, len(systems))
+	for _, system := range systems {
+		requested[system.ID] = struct{}{}
+	}
+
+	bySystem = make(map[string][]database.SingletonAliasCandidate, len(systems))
+	for _, dir := range dirs {
+		// A directory with no media has nothing to collapse to, and the
+		// resolver keys its nested-media test on a non-zero count.
+		if dir.FileCount <= 0 {
+			continue
+		}
+
+		var systemID string
+		switch {
+		case len(dir.SystemIDs) == 1:
+			systemID = dir.SystemIDs[0]
+		case len(dir.SystemIDs) == 0 && len(systems) == 1:
+			// The media fallback query reports no systems at all, so a
+			// single-system request is the only thing that can attribute it.
+			systemID = systems[0].ID
+		default:
+			// Media for several systems, or none that a single-system request
+			// could attribute. Neither can be counted per system here.
+			continue
+		}
+		if len(requested) > 0 {
+			if _, ok := requested[systemID]; !ok {
+				continue
+			}
+		}
+
+		childDir := dir.Path
+		if childDir == "" {
+			childDir = filepath.ToSlash(filepath.Join(path, dir.Name))
+		}
+		if _, seen := bySystem[systemID]; !seen {
+			order = append(order, systemID)
+		}
+		bySystem[systemID] = append(bySystem[systemID], database.SingletonAliasCandidate{
+			ChildDir:  strings.TrimSuffix(filepath.ToSlash(childDir), "/") + "/",
+			FileCount: dir.FileCount,
+		})
+	}
+	return order, bySystem
+}
+
 // resolveDirSingletonAliases batch-resolves singleton container aliases for the
-// page's candidate directories when browsing a single system. Only small dirs
-// (recursive FileCount <= maxSingletonAliasCandidateFiles) are considered, so
-// large trees like MiSTer's _Arcade/_alternatives are never scanned.
+// page's candidate directories. Every directory holding media for exactly one
+// system is offered to that system's resolver, which reads only each
+// candidate's direct rows, so the container rule alone decides what collapses
+// and browse agrees with media.meta and the scrapers on a disc folder of any
+// size.
+//
+// An unfiltered page spanning several systems resolves nothing, which is the
+// behaviour it has always had rather than a new restriction: the system this
+// used to elect for the whole page was abandoned as soon as a second one
+// appeared. What changed is that a directory which cannot be attributed no
+// longer decides the page, only itself.
+//
+// The bound stays because of one page. Browsing a media root lists a directory
+// per installed system, each with a recursive file count in the hundreds, and
+// nothing in BrowseDirectoryResult tells that page apart from a genuine mixed
+// page of two disc folders — so grouping it freely would turn the cheapest page
+// in the API into a resolver batch per installed system. A client that wants
+// aliases across systems names the systems, which bounds the work to what it
+// asked for. Lifting the restriction means recognising a system's own launcher
+// root, which env.LauncherCache and Platform.RootDirs can both answer; with
+// those excluded the media-root page has no candidates and a mixed page becomes
+// safe to resolve per system.
 func resolveDirSingletonAliases(
 	env *requests.RequestEnv,
 	path string,
@@ -1335,72 +1419,51 @@ func resolveDirSingletonAliases(
 		return nil
 	}
 
-	// Determine which system to resolve against. Use the explicit filter if
-	// exactly one system was requested; otherwise infer from the directory
-	// entries (all dirs with media must belong to the same single system).
-	var systemID string
-	if len(systems) == 1 {
-		systemID = systems[0].ID
-	} else if len(systems) == 0 {
-		for _, dir := range dirs {
-			if len(dir.SystemIDs) == 0 {
-				continue
-			}
-			if len(dir.SystemIDs) > 1 || (systemID != "" && systemID != dir.SystemIDs[0]) {
-				systemID = ""
-				break
-			}
-			systemID = dir.SystemIDs[0]
-		}
-	}
-	if systemID == "" {
+	order, bySystem := groupSingletonAliasCandidates(path, dirs, systems)
+	if len(order) == 0 {
 		return nil
 	}
-
-	var candidates []database.SingletonAliasCandidate
-	for _, dir := range dirs {
-		if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
-			continue
-		}
-		if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
-			continue
-		}
-		childDir := dir.Path
-		if childDir == "" {
-			childDir = filepath.ToSlash(filepath.Join(path, dir.Name))
-		}
-		candidates = append(candidates, database.SingletonAliasCandidate{
-			ChildDir:  strings.TrimSuffix(filepath.ToSlash(childDir), "/") + "/",
-			FileCount: dir.FileCount,
-		})
-	}
-	if len(candidates) == 0 {
+	if len(systems) == 0 && len(order) > 1 {
+		log.Debug().Str("path", path).Int("systems", len(order)).
+			Msg("browse singleton alias resolution skipped for unfiltered multi-system page")
 		return nil
 	}
 
 	started := time.Now()
-	system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
-	if sysErr != nil {
-		log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
-		return nil
-	}
-	aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
-		env.Context, system.DBID, candidates,
-	)
-	if aliasErr != nil {
-		log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
-		return nil
-	}
 	var singletonAliases map[string]database.SingletonContainerAlias
-	if len(aliases) > 0 {
-		singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
+	candidateCount := 0
+	for _, systemID := range order {
+		candidates := bySystem[systemID]
+		candidateCount += len(candidates)
+
+		system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
+		if sysErr != nil {
+			log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
+			continue
+		}
+		aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
+			env.Context, system.DBID, candidates,
+		)
+		if aliasErr != nil {
+			// One system failing leaves the rest of the page resolvable.
+			log.Debug().Err(aliasErr).Str("path", path).Str("system", systemID).
+				Msg("browse singleton alias batch resolution failed")
+			continue
+		}
+		if len(aliases) == 0 {
+			continue
+		}
+		if singletonAliases == nil {
+			singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
+		}
 		for i := range aliases {
 			singletonAliases[aliases[i].ChildDir] = aliases[i]
 		}
 	}
 	log.Debug().
 		Str("path", path).
-		Int("candidates", len(candidates)).
+		Int("systems", len(order)).
+		Int("candidates", candidateCount).
 		Int("aliases", len(singletonAliases)).
 		Dur("duration", time.Since(started)).
 		Msg("browse singleton alias resolution timing")
@@ -1446,14 +1509,6 @@ func buildMediaEntry(
 	entry.RelPath = mediaResponseRelativePath(env, result.SystemID, result.Path)
 
 	return entry
-}
-
-// isSingletonDirectoryAliasCandidate bounds the dirs considered for singleton
-// alias resolution: real disc-folder containers hold a handful of files, and
-// the cap keeps the batch query from fetching rows for large directory trees.
-func isSingletonDirectoryAliasCandidate(fileCount int) bool {
-	const maxSingletonAliasCandidateFiles = 64
-	return fileCount > 0 && fileCount <= maxSingletonAliasCandidateFiles
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.

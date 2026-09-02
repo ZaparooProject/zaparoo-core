@@ -28,7 +28,8 @@ When launching by title (e.g. `launch.title` with arg `NES/Super Mario Bros`):
 3. Slugifies the game name using the same normalization as indexing
 4. Tries matching strategies in order until finding a result (see [Matching strategies](#matching-strategies))
 5. Scores and filters results to pick the best match
-6. Caches the resolution for future queries
+6. Promotes the match to its directory's container launch target, if it has one (see [Container promotion](#container-promotion))
+7. Caches the resolution for future queries
 
 ---
 
@@ -265,3 +266,21 @@ When multiple results match, they get filtered and scored:
 5. Preferred languages from user config
 6. File type priority based on launcher extension order
 7. Quality tie-breaking: numeric suffix penalty, path depth, character density, filename length
+
+### Container promotion
+
+Every file in a disc folder shares one title: `Game.cue` and its `Game (Track 01).bin`
+tracks all slugify to the same thing, and `(Track 01)` produces no tag to tell them
+apart. Selection alone therefore cannot reliably return the cue sheet, and the slug
+search is capped at 50 rows, so in a large folder the cue may not be a candidate at all.
+
+After a match is selected, Zaparoo asks the database what the match's *directory*
+collapses to, using the same rule browse, `media.meta` and the scrapers use: a lone
+file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks. When that
+names a different file, it becomes the launch target and the cached resolution.
+
+Two things bound it. Only a path whose extension could accompany a cue or an m3u is
+checked, so an ordinary `.nes` or `.sfc` costs no extra query. And a tag the query
+asked for that the selection carried is never given up — a playlist holds no `disc`
+tag, so `PSX/Game (Disc 2)` keeps the disc it named, while a region both files carry
+promotes normally.

@@ -94,6 +94,17 @@ func MediaExt(mediaPath string) string {
 	return ""
 }
 
+// MayHaveContainerTarget reports whether a media path could sit in a directory
+// whose launch target is a different file. Only the extensions that can
+// accompany a cue sheet or an m3u playlist qualify, so a caller holding an
+// ordinary rom can skip a container lookup entirely. The m3u companion set
+// contains the cue set, so one test covers both kinds: a .bin may be standing
+// in for a cue, and a .cue or .chd for an m3u. An .m3u itself is excluded
+// because promoting one could only return itself.
+func MayHaveContainerTarget(mediaPath string) bool {
+	return isM3UCompanionExt(MediaExt(mediaPath))
+}
+
 func isCueCompanionExt(ext string) bool {
 	switch ext {
 	case ".bin", ".wav", ".mp3", ".ogg", ".flac", ".ape":

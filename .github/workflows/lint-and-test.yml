@@ -109,6 +109,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gomod-
 
+      # Only the module cache is persisted, so every Windows run compiled the
+      # module from scratch: cgo plus a -race test binary per package, at
+      # GOMAXPROCS 2. That put the first test result seven minutes in and left
+      # the job still linking when the timeout killed it. This cache is keyed by
+      # commit and restored by prefix, so a run starts from the nearest previous
+      # build rather than from nothing.
+      - name: Cache Go build cache (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: D:\go-cache
+          key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
+            ${{ runner.os }}-gobuild-
+
       - name: Download Go modules (Windows)
         if: matrix.os == 'windows'
         shell: msys2 {0}

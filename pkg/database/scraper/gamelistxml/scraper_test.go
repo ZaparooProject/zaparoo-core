@@ -3364,6 +3364,22 @@ func TestProcessCompanionEntries_ThrottlesBatchProgress(t *testing.T) {
 	})
 }
 
+const (
+	// companionPauseObservationWindow is how long the worker is watched for
+	// while paused. It only has to be long enough for the goroutine to reach
+	// Pauser.Wait, and a slow machine makes the assertion safer rather than
+	// flakier, because the thing being proven is that nothing happens.
+	companionPauseObservationWindow = 150 * time.Millisecond
+	// companionResumeBudget bounds the wait for the worker to finish once it is
+	// resumed. It is deliberately far larger than the work needs: the property
+	// under test is that Resume unblocks the loop at all, and a budget tight
+	// enough to also measure how fast two children are written turns scheduling
+	// latency into a test failure. At 2s this failed on a loaded machine with
+	// the pauser behaving correctly. The bound exists only so a worker that
+	// never resumes fails instead of hanging the suite.
+	companionResumeBudget = 60 * time.Second
+)
+
 func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -3394,7 +3410,7 @@ func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	select {
 	case <-done:
 		require.FailNow(t, "processCompanionEntries did not block on a paused pauser before processing children")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(companionPauseObservationWindow):
 	}
 	require.Empty(t, mockDB.batches, "companion writes must not run while indexing is paused")
 
@@ -3403,7 +3419,7 @@ func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	select {
 	case stats := <-done:
 		assertCompanionCounts(t, &stats, 2, 2, 0)
-	case <-time.After(2 * time.Second):
+	case <-time.After(companionResumeBudget):
 		require.FailNow(t, "processCompanionEntries did not resume after pauser.Resume()")
 	}
 	require.Len(t, mockDB.batches, 1)

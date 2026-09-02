@@ -24,6 +24,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -187,6 +189,25 @@ func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []strin
 		results = append(results, row)
 	}
 	return results, rows.Err()
+}
+
+// FindSingleContainerLaunchMediaBySystemID implements MediaDBI. Title
+// resolution holds a system ID rather than a system row, so it cannot call
+// FindSingleContainerLaunchMedia directly. Doing the lookup here keeps that
+// caller free of system rows entirely.
+func (db *MediaDB) FindSingleContainerLaunchMediaBySystemID(
+	ctx context.Context, systemID, containerPath string,
+) (*database.Media, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+
+	system, err := db.FindSystemBySystemID(systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up system %q: %w", systemID, err)
+	}
+
+	return db.FindSingleContainerLaunchMedia(ctx, system.DBID, containerPath)
 }
 
 func (db *MediaDB) FindSingleContainerLaunchMedia(
@@ -759,6 +780,13 @@ const (
 	bulkTagInsertRowsPerStmt   = 400
 	bulkPropUpsertRowsPerStmt  = 200
 	bulkDeleteEntityIDsPerStmt = sqliteMaxParams - 1
+	// batchLookupIDsPerQuery bounds the IDs in one IN list for the shared
+	// by-ID lookups, and aliasCandidatesPerQuery the candidate directories in
+	// one ParentDir scan. A browse page size is client-supplied, so without
+	// these a page of a thousand container directories builds a single query
+	// that outlives the request budget.
+	batchLookupIDsPerQuery  = 200
+	aliasCandidatesPerQuery = 200
 )
 
 type scrapeBatchSQLStats struct {
@@ -2824,6 +2852,10 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 	return &row, nil
 }
 
+// GetMediaWithTitleAndSystemByIDs implements MediaDBI. The lookup runs in
+// batchLookupIDsPerQuery-sized chunks: one IN list holding every requested ID,
+// joined against MediaTitles and Systems, is what exceeded the browse request
+// budget on a page of a thousand container directories.
 func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	ctx context.Context, mediaDBIDs []int64,
 ) (map[int64]database.MediaFullRow, error) {
@@ -2835,6 +2867,20 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 		return nil, ErrNullSQL
 	}
 
+	for chunk := range slices.Chunk(dedupeInt64s(mediaDBIDs), batchLookupIDsPerQuery) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("GetMediaWithTitleAndSystemByIDs interrupted: %w", err)
+		}
+		if err := db.appendMediaFullRowsByIDs(ctx, chunk, results); err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+func (db *MediaDB) appendMediaFullRowsByIDs(
+	ctx context.Context, mediaDBIDs []int64, results map[int64]database.MediaFullRow,
+) error {
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.Load().QueryContext(ctx, `
@@ -2849,7 +2895,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 		WHERE m.DBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)
 	`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query GetMediaWithTitleAndSystemByIDs: %w", err)
+		return fmt.Errorf("failed to query GetMediaWithTitleAndSystemByIDs: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -2867,11 +2913,14 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 			&row.Title.DisambiguationTypes,
 			&row.System.DBID, &row.System.SystemID, &row.System.Name,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)
+			return fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)
 		}
 		results[row.DBID] = row
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate GetMediaWithTitleAndSystemByIDs: %w", err)
+	}
+	return nil
 }
 
 // GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a single
@@ -2911,6 +2960,9 @@ func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64)
 	return scanTagInfos(rows)
 }
 
+// GetMediaTagsByMediaDBIDs implements MediaDBI. Like the full-row lookup it
+// queries in batchLookupIDsPerQuery-sized chunks, so a caller-sized ID list
+// cannot build one oversized IN list.
 func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 	ctx context.Context, mediaDBIDs []int64,
 ) (map[int64][]database.TagInfo, error) {
@@ -2922,6 +2974,24 @@ func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 		return nil, ErrNullSQL
 	}
 
+	// Chunks are disjoint because the IDs are deduplicated first, so each media
+	// row's tags are grouped by exactly one chunk and copying cannot double them.
+	for chunk := range slices.Chunk(dedupeInt64s(mediaDBIDs), batchLookupIDsPerQuery) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("GetMediaTagsByMediaDBIDs interrupted: %w", err)
+		}
+		chunkTags, err := db.mediaTagsForIDs(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(results, chunkTags)
+	}
+	return results, nil
+}
+
+func (db *MediaDB) mediaTagsForIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.Load().QueryContext(ctx, `
@@ -3280,14 +3350,76 @@ func int64Args(values []int64) []any {
 	return args
 }
 
+// dedupeInt64s drops repeated IDs, keeping first-seen order. A chunked IN query
+// needs this: one IN list returns a row once however many times its ID appears,
+// but the same ID landing in two chunks would return its rows twice.
+func dedupeInt64s(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+// scanContainerDirRows appends the direct media rows of childDirs into
+// childDirRows and reports how many it read.
+func (db *MediaDB) scanContainerDirRows(
+	ctx context.Context,
+	systemDBID int64,
+	childDirs []string,
+	childDirRows map[string][]database.Media,
+) (int, error) {
+	args := make([]any, 0, 1+len(childDirs))
+	args = append(args, systemDBID)
+	for _, childDir := range childDirs {
+		args = append(args, childDir)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	rows, err := db.sql.Load().QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir IN (`+
+		prepareVariadic("?", ",", len(childDirs))+`)`, args...)
+	if err != nil {
+		return 0, fmt.Errorf("resolve singleton aliases query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	scanned := 0
+	for rows.Next() {
+		var m database.Media
+		if scanErr := rows.Scan(
+			&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir, &m.IsMissing,
+		); scanErr != nil {
+			return scanned, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
+		}
+		childDirRows[m.ParentDir] = append(childDirRows[m.ParentDir], m)
+		scanned++
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return scanned, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
+	}
+	return scanned, nil
+}
+
 // ResolveSingletonContainerAliases implements MediaDBI.
-// It fetches the direct media rows of every candidate child directory in a
-// single ParentDir IN query and returns one SingletonContainerAlias per
-// candidate that collapses to a single logical launch target. Candidates whose
-// recursive FileCount exceeds their direct row count contain nested
-// subdirectories and are omitted, as are ambiguous file sets. Tags and
-// ZapScriptTags are populated via two batch queries plus in-memory
-// disambiguation — the same approach used by the search path.
+// It fetches the direct media rows of the candidate child directories in
+// aliasCandidatesPerQuery-sized ParentDir IN queries and returns one
+// SingletonContainerAlias per candidate that collapses to a single logical
+// launch target. Candidates whose recursive FileCount exceeds their direct row
+// count contain nested subdirectories and are omitted, as are ambiguous file
+// sets. Tags and ZapScriptTags are populated via two batch queries plus
+// in-memory disambiguation — the same approach used by the search path.
 func (db *MediaDB) ResolveSingletonContainerAliases(
 	ctx context.Context,
 	systemDBID int64,
@@ -3303,10 +3435,11 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	// Per-step timing, emitted once at debug level so the on-device breakdown of
 	// a slow resolution is visible without changing behaviour.
 	var inScanDur, fullRowsDur, tagsDur, zapDur, coverDur time.Duration
-	var inScanRows int
+	var inScanRows, inScanChunks int
 	defer func() {
 		log.Debug().
 			Int("candidates", len(dirCandidates)).
+			Int("inScanChunks", inScanChunks).
 			Int("inScanRows", inScanRows).
 			Dur("inScanDuration", inScanDur).
 			Dur("fullRowsDuration", fullRowsDur).
@@ -3316,49 +3449,37 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			Msg("resolve singleton aliases step timing")
 	}()
 
+	// Repeated candidates collapse to one entry so a directory's rows are never
+	// scanned by two chunks and appended twice.
 	expectedCounts := make(map[string]int, len(dirCandidates))
-	args := make([]any, 0, 1+len(dirCandidates))
-	args = append(args, systemDBID)
+	childDirs := make([]string, 0, len(dirCandidates))
 	for _, c := range dirCandidates {
 		childDir := c.ChildDir
 		if !strings.HasSuffix(childDir, "/") {
 			childDir += "/"
 		}
+		if _, seen := expectedCounts[childDir]; !seen {
+			childDirs = append(childDirs, childDir)
+		}
 		expectedCounts[childDir] = c.FileCount
-		args = append(args, childDir)
 	}
 
-	// One query for the direct media rows of all candidate dirs, served by
-	// idx_media_parentdir_system.
+	// The direct media rows of the candidate dirs, served by
+	// idx_media_parentdir_system. The scan is chunked because a browse page size
+	// is client-supplied: one IN list per page put a thousand seeks in a single
+	// query and left no budget for the lookups that follow it.
+	childDirRows := make(map[string][]database.Media, len(childDirs))
 	inScanStart := time.Now()
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-	rows, err := db.sql.Load().QueryContext(ctx, `
-		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
-		FROM Media
-		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir IN (`+
-		prepareVariadic("?", ",", len(dirCandidates))+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("resolve singleton aliases query: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
+	for chunk := range slices.Chunk(childDirs, aliasCandidatesPerQuery) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("resolve singleton aliases interrupted: %w", ctxErr)
 		}
-	}()
-
-	childDirRows := make(map[string][]database.Media, len(dirCandidates))
-	for rows.Next() {
-		var m database.Media
-		if scanErr := rows.Scan(
-			&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir, &m.IsMissing,
-		); scanErr != nil {
-			return nil, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
+		chunkRows, scanErr := db.scanContainerDirRows(ctx, systemDBID, chunk, childDirRows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		childDirRows[m.ParentDir] = append(childDirRows[m.ParentDir], m)
-		inScanRows++
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
+		inScanRows += chunkRows
+		inScanChunks++
 	}
 	inScanDur = time.Since(inScanStart)
 

@@ -187,6 +187,11 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+// browseSortCollationPrevVersion is the migration immediately before
+// 20260830140000_browse_sort_collation.sql, the point a downgrade past the
+// collation must reach.
+const browseSortCollationPrevVersion int64 = 20260825120000
+
 // The browse sort collation must carry a schema version bump: without one, a
 // build that lacks ZAPAROO_TITLE_V1 opens the database happily and then fails
 // on the first prepare against Media, and the rebuild that exists for an
@@ -230,7 +235,11 @@ func TestMigrations_BrowseSortCollationBumpsVersionWithoutTableWork(t *testing.T
 	// version but cannot prepare statements against Media.
 	goose.SetBaseFS(migrationFiles)
 	require.NoError(t, goose.SetDialect("sqlite"))
-	require.NoError(t, goose.Down(sqlDB, "migrations"))
+	// DownTo the version before the collation migration, not a bare Down:
+	// Down reverts whatever migration happens to be last, so any migration
+	// added afterwards would silently stop this from testing the downgrade it
+	// is named for.
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", browseSortCollationPrevVersion))
 
 	require.NoError(t, sqlDB.QueryRowContext(ctx,
 		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
@@ -4766,4 +4775,46 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 	require.NoError(t, err)
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "Contra", nextPage[0].Name)
+}
+
+// slugResolutionPurgeVersion is 20260902160000_purge_stale_slug_resolutions,
+// which retires cache entries written before title resolution learned to
+// promote a match to its container's launch target.
+const slugResolutionPurgeVersion = 20260902160000
+
+// TestMigrations_PurgesSlugResolutionsCachedBeforeContainerPromotion covers the
+// upgrade path a reindex would otherwise be needed for: a cache entry naming a
+// disc folder's companion file keeps launching that file, because a cache hit
+// returns without consulting the container rule.
+func TestMigrations_PurgesSlugResolutionsCachedBeforeContainerPromotion(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.MigrateUp())
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	// Roll back to just before the purge so it can be observed running.
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", slugResolutionPurgeVersion-1))
+
+	// The cache row keys a real media row, so seed the companion file a
+	// pre-promotion resolution would have landed on.
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (900, 'PSX', 'PSX');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (900, 900, 'b064', 'B_064');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir)
+		VALUES (900, 900, 900, '/roms/PSX/B_064/B_064 (Track 001).bin', '/roms/PSX/B_064/');
+		INSERT INTO SlugResolutionCache
+			(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
+		VALUES ('PSX:b064:', 'PSX', 'b064', '[]', 900, 'strategy_exact_match', 0);
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, goose.Up(sqlDB, "migrations"))
+
+	var remaining int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM SlugResolutionCache").Scan(&remaining))
+	assert.Zero(t, remaining, "entries cached before container promotion must not survive the upgrade")
 }
