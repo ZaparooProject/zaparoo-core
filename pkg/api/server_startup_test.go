@@ -29,6 +29,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1341,16 +1342,33 @@ func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
 	// Broadcast repeatedly: the first notifications land while the session is
 	// still unsettled and have to survive the wait, and the later ones cover
 	// the settled steady state.
+	//
+	// The broadcaster is joined rather than only signalled. Parking it in
+	// time.Sleep left it running after the test returned, and whether goleak
+	// saw it came down to which woke first: it passed on Linux and failed on
+	// Windows, where the coarser timer lost that race.
 	stop := make(chan struct{})
-	defer close(stop)
+	var broadcasting sync.WaitGroup
+	broadcasting.Add(1)
+	defer func() {
+		close(stop)
+		broadcasting.Wait()
+	}()
 	go func() {
+		defer broadcasting.Done()
 		payload, _ := json.Marshal(map[string]string{"uid": "silent-listener"})
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-stop:
 				return
-			case st.Notifications <- models.Notification{Method: "tokens.added", Params: payload}:
-				time.Sleep(200 * time.Millisecond)
+			case <-ticker.C:
+				select {
+				case st.Notifications <- models.Notification{Method: "tokens.added", Params: payload}:
+				case <-stop:
+					return
+				}
 			}
 		}
 	}()
