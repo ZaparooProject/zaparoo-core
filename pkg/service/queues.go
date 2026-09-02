@@ -146,7 +146,14 @@ func runTokenZapScriptWithContext(
 	if len(cmds) == 0 {
 		mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
 		if hasMapping {
-			log.Info().Msgf("found mapping: %s", mappedValue)
+			// An override replaces the text whose length was already checked,
+			// and a config or platform mapping never passed through the API's
+			// check at all, so the substituted script is bounded here too.
+			if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+				return fmt.Errorf("mapping override rejected: %w", lenErr)
+			}
+			redacted, _ := zapscript.RedactToken(mappedValue, "")
+			log.Info().Msgf("found mapping: %s", redacted)
 			token.Text = mappedValue
 		}
 
@@ -858,6 +865,14 @@ func handleQueuedToken(
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
 	scriptText := t.Text
 	if hasMapping {
+		// The token's own text was bounded above, but the override that
+		// replaces it was not: a config or platform mapping never reaches the
+		// API's check. Reject before the parse below, and before history is
+		// written, exactly as an over-long token is.
+		if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+			rejectOversizedToken(&t, lenErr)
+			return
+		}
 		scriptText = mappedValue
 	}
 

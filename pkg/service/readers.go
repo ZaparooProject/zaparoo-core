@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -908,8 +909,14 @@ preprocessing:
 				if hasMapping {
 					scriptText = mappedValue
 				}
-				parser := gozapscript.NewParser(scriptText)
-				script, parseErr := parser.ParseScript()
+				// The scan was bounded above, but a mapping override was not,
+				// and the queue rejects the token either way. Skip the parse
+				// so an over-long override cannot be expensive here.
+				parseErr := zapscript.ValidateScriptLength(scriptText)
+				var script gozapscript.Script
+				if parseErr == nil {
+					script, parseErr = gozapscript.NewParser(scriptText).ParseScript()
+				}
 
 				// Stage conservatively: if parsing fails we can't confirm the token
 				// is a safe utility command, so stage it. Only pass through tokens

@@ -370,3 +370,24 @@ func TestTokenForLog_DropsCompletion(t *testing.T) {
 	assert.Nil(t, tokenForLog(&tok).Completion)
 	assert.NotNil(t, tok.Completion, "the caller's token must be left alone")
 }
+
+// A mapping override replaces the token's text after that text was bounded,
+// and a config or platform mapping never passed through the API's check at
+// all, so the substituted script has to be bounded where it is applied.
+func TestTokenCompletion_OversizedMappingOverrideIsRejected(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	env.addConfigMapping(t, "mapme", "**echo:"+strings.Repeat("A", zapscript.MaxScriptLength))
+
+	c := env.sendAPIToken(t, "mapme")
+
+	require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrScriptTooLong)
+	env.expectNoLaunch(t)
+
+	select {
+	case he := <-env.historyCh:
+		t.Fatalf("a token with an over-long override was recorded: %d bytes", len(he.TokenValue))
+	case <-time.After(noEventWait):
+	}
+}
