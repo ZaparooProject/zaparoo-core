@@ -930,6 +930,7 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 	tr := &Tracker{}
 
 	tests := []struct {
+		tracker    *Tracker
 		name       string
 		file       string
 		wantLoad   bool
@@ -944,13 +945,30 @@ func TestTrackerFileLoadSettles(t *testing.T) {
 			wantSettle: true,
 		},
 		{name: "core name is read immediately", file: misterconfig.CoreNameFile, wantLoad: true, wantSettle: false},
+		{
+			name:       "core name override is routed, not the real path",
+			tracker:    &Tracker{coreNameFile: "/tmp/zaparoo-test-corename"},
+			file:       "/tmp/zaparoo-test-corename",
+			wantLoad:   true,
+			wantSettle: false,
+		},
+		{
+			name:     "an overridden tracker ignores the real core name file",
+			tracker:  &Tracker{coreNameFile: "/tmp/zaparoo-test-corename"},
+			file:     misterconfig.CoreNameFile,
+			wantLoad: false,
+		},
 		{name: "unknown file has no loader", file: "/tmp/not-a-tracker-file", wantLoad: false, wantSettle: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			load, settle := tr.trackerFileLoad(tt.file)
+			target := tr
+			if tt.tracker != nil {
+				target = tt.tracker
+			}
+			load, settle := target.trackerFileLoad(tt.file)
 			assert.Equal(t, tt.wantLoad, load != nil)
 			assert.Equal(t, tt.wantSettle, settle)
 		})

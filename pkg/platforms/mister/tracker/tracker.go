@@ -1030,7 +1030,7 @@ func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
 // filters the empty read itself.
 func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
 	switch {
-	case name == misterconfig.CoreNameFile:
+	case name == tr.coreNamePath():
 		return tr.LoadCore, false
 	case name == misterconfig.ActiveGameFile:
 		return tr.loadGame, true
@@ -1093,19 +1093,20 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		}
 	}()
 
-	if _, statErr := os.Stat(misterconfig.CoreNameFile); os.IsNotExist(statErr) {
+	coreNameFile := tr.coreNamePath()
+	if _, statErr := os.Stat(coreNameFile); os.IsNotExist(statErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writeErr := os.WriteFile(misterconfig.CoreNameFile, []byte(""), 0o644)
+		writeErr := os.WriteFile(coreNameFile, []byte(""), 0o644)
 		if writeErr != nil {
 			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
-		log.Info().Msgf("created core name file: %s", misterconfig.CoreNameFile)
+		log.Info().Msgf("created core name file: %s", coreNameFile)
 	}
 
-	log.Debug().Msgf("adding watcher for core name file: %s", misterconfig.CoreNameFile)
-	err = watcher.Add(misterconfig.CoreNameFile)
+	log.Debug().Msgf("adding watcher for core name file: %s", coreNameFile)
+	err = watcher.Add(coreNameFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch core name file (%s): %w", misterconfig.CoreNameFile, err)
+		return nil, fmt.Errorf("failed to watch core name file (%s): %w", coreNameFile, err)
 	}
 
 	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
