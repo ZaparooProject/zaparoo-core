@@ -28,7 +28,7 @@ import (
 
 // FuzzRedactScript checks the invariant that matters for a security
 // boundary: whatever untrusted token text arrives, no credential survives
-// redaction. Token text comes from an NFC tag, so it is entirely attacker
+// redaction. RedactToken text comes from an NFC tag, so it is entirely attacker
 // controlled and may be malformed in ways the parser has to survive.
 func FuzzRedactScript(f *testing.F) {
 	seeds := []string{
@@ -41,6 +41,9 @@ func FuzzRedactScript(f *testing.F) {
 		"**launch:/games/snes/mario.sfc",
 		"**profile:",
 		"**PROFILE:sw-secret",
+		"**playtime.extend:15m?PROFILE=sw-secret",
+		"**playtime.extend:15m?Profile=sw-secret",
+		"**playtime.extend:15m?profile=a&PROFILE=b",
 		"plain text",
 		"",
 	}

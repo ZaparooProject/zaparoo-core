@@ -45,22 +45,44 @@ const redactedScript = "[redacted script]"
 // own output.
 func scriptCredentials(script *gozapscript.Script) []string {
 	var found []string
-	for i := range script.Cmds {
-		cmd := &script.Cmds[i]
-		var value string
-		switch cmd.Name {
-		case gozapscript.ZapScriptCmdProfile:
-			if len(cmd.Args) > 0 {
-				value = cmd.Args[0]
-			}
-		case gozapscript.ZapScriptCmdPlaytimeExtend:
-			value = cmd.AdvArgs.Get(gozapscript.KeyProfile)
-		}
+	add := func(value string) {
 		if value != "" && value != RedactedPlaceholder {
 			found = append(found, value)
 		}
 	}
+	for i := range script.Cmds {
+		cmd := &script.Cmds[i]
+		switch cmd.Name {
+		case gozapscript.ZapScriptCmdProfile:
+			if len(cmd.Args) > 0 {
+				add(cmd.Args[0])
+			}
+		case gozapscript.ZapScriptCmdPlaytimeExtend:
+			for _, value := range advArgsFold(cmd.AdvArgs, gozapscript.KeyProfile) {
+				add(value)
+			}
+		}
+	}
 	return found
+}
+
+// advArgsFold returns every advanced argument value whose key matches name
+// with ASCII case folded.
+//
+// The parser stores advanced argument keys exactly as written, while the
+// command decoder matches them into struct fields case-insensitively. So
+// `?PROFILE=` authorizes an extension just as `?profile=` does, and an exact
+// map lookup would leave that credential in the clear. Every match is
+// returned because a script may carry several spellings of the key at once.
+func advArgsFold(args gozapscript.AdvArgs, name gozapscript.Key) []string {
+	var values []string
+	args.Range(func(key gozapscript.Key, value string) bool {
+		if strings.EqualFold(string(key), string(name)) {
+			values = append(values, value)
+		}
+		return true
+	})
+	return values
 }
 
 // hasCredentialCommand reports whether any command in the script is one that

@@ -295,3 +295,45 @@ func TestRedactToken_KeepsDataForOrdinaryToken(t *testing.T) {
 	assert.Equal(t, text, gotText)
 	assert.Equal(t, "deadbeef", gotData)
 }
+
+// An advanced argument key reaches the command decoder case-insensitively, so
+// `?PROFILE=` authorizes an extension exactly as `?profile=` does. Redaction
+// has to fold case the same way, or a working extension card writes its
+// credential to the log and to history in the clear.
+func TestRedactScript_RemovesCredentialFromMixedCaseAdvArg(t *testing.T) {
+	t.Parallel()
+
+	spellings := []string{"profile", "PROFILE", "Profile", "pRoFiLe"}
+
+	for _, key := range spellings {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			text := "**playtime.extend:15m?" + key + "=" + testSwitchID
+
+			got := RedactScript(text)
+			assert.NotContains(t, got, testSwitchID, "the credential must not survive")
+			assert.Contains(t, got, "15m", "non-sensitive content should stay readable")
+
+			gotText, gotData := RedactToken(text, "deadbeef")
+			assert.NotContains(t, gotText, testSwitchID)
+			assert.Empty(t, gotData, "the raw payload of a sensitive token is dropped")
+
+			assert.True(t, HasSensitiveScript(text))
+		})
+	}
+}
+
+// A script can spell the key more than one way at once, and every value is a
+// usable credential, so every one has to go.
+func TestRedactScript_RemovesEveryCaseVariantOfTheProfileArg(t *testing.T) {
+	t.Parallel()
+
+	second := "sw-0000ffff"
+	text := "**playtime.extend:15m?profile=" + testSwitchID + "&PROFILE=" + second
+
+	got := RedactScript(text)
+
+	assert.NotContains(t, got, testSwitchID)
+	assert.NotContains(t, got, second)
+}
