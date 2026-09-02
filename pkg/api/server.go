@@ -1506,6 +1506,9 @@ func decryptIncomingFrame(
 		closeMelodySession(session)
 		return nil, nil, false
 	}
+	// The client spoke plaintext, so the transport mode is now settled and
+	// notifications can be written to this session in the clear.
+	setWebSocketAuthState(session, webSocketAuthPlaintext)
 	return msg, nil, true
 }
 
@@ -2051,7 +2054,12 @@ func StartWithReady(
 				return
 			}
 		}
-		authState := webSocketAuthPlaintext
+		// The transport mode is not known until the client's first frame: an
+		// encryption setting of false means encryption is optional, not absent,
+		// so a paired client can still negotiate an encrypted session. Starting
+		// as plaintext would let notifications broadcast in that window go out
+		// in the clear to a client that has already switched to encrypted.
+		authState := webSocketAuthUnsettled
 		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
 			authState = webSocketAuthPending
 		}

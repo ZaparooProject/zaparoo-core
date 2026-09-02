@@ -264,3 +264,40 @@ func TestUnsupportedEncryptionVersionResponse_WireShape(t *testing.T) {
 	assert.InDelta(t, float64(1), supported[0], 0,
 		"only protocol version 1 is currently supported")
 }
+
+// A client connecting while encryption is optional has not yet revealed
+// whether it will negotiate an encrypted session, because that happens on its
+// first frame. Notifications broadcast in that window must not be written in
+// the clear: the client may already have committed to encrypted mode, and a
+// plaintext frame arriving afterwards desyncs it.
+func TestWriteNotificationFrame_UnsettledSessionIsNotWrittenPlaintext(t *testing.T) {
+	t.Parallel()
+
+	plaintext := []byte(`{"jsonrpc":"2.0","method":"media.scrape.update"}`)
+	tests := []struct {
+		name      string
+		authState webSocketAuthState
+		wantWrite bool
+	}{
+		{name: "unsettled suppresses", authState: webSocketAuthUnsettled, wantWrite: false},
+		{name: "pending suppresses", authState: webSocketAuthPending, wantWrite: false},
+		{name: "settled plaintext writes", authState: webSocketAuthPlaintext, wantWrite: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []byte
+			require.NoError(t, writeNotificationFrame(func(data []byte) error {
+				got = append([]byte(nil), data...)
+				return nil
+			}, nil, tt.authState, plaintext))
+
+			if tt.wantWrite {
+				assert.Equal(t, plaintext, got)
+			} else {
+				assert.Nil(t, got, "notification must not reach a session of unknown transport mode")
+			}
+		})
+	}
+}

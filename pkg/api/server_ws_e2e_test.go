@@ -335,3 +335,51 @@ func TestWSRejectsOverLimitRequests(t *testing.T) {
 		assert.Contains(t, strings.ToLower(err.Error()), "message too big")
 	}
 }
+
+// A plaintext first frame settles the session's transport mode, which is what
+// re-enables notification delivery. Until that frame arrives the mode is
+// unknown, because a paired client may negotiate encryption instead even when
+// the server only treats encryption as optional.
+func TestDecryptIncomingFrame_PlaintextFrameSettlesAuthState(t *testing.T) {
+	t.Parallel()
+
+	before := make(chan webSocketAuthState, 1)
+	after := make(chan webSocketAuthState, 1)
+
+	m := newWebSocketSession()
+	m.HandleConnect(func(s *melody.Session) {
+		// Mirror the real upgrade handler for the optional-encryption case.
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+	})
+	m.HandleMessage(func(s *melody.Session, msg []byte) {
+		before <- getWebSocketAuthState(s)
+		_, _, ok := decryptIncomingFrame(s, msg, nil, false, true, "127.0.0.1")
+		require.True(t, ok)
+		after <- getWebSocketAuthState(s)
+		_ = s.Write([]byte("ack"))
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(
+		websocket.TextMessage, []byte(`{"jsonrpc":"2.0","id":"1","method":"version"}`),
+	))
+	_, _, err = conn.ReadMessage()
+	require.NoError(t, err)
+
+	assert.Equal(t, webSocketAuthUnsettled, <-before,
+		"transport mode is unknown until the client's first frame")
+	assert.Equal(t, webSocketAuthPlaintext, <-after,
+		"a plaintext first frame settles the session as plaintext")
+}

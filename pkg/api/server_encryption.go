@@ -40,6 +40,12 @@ const (
 type webSocketAuthState string
 
 const (
+	// webSocketAuthUnsettled is the initial state when encryption is optional:
+	// the client may still negotiate an encrypted session on its first frame,
+	// so the transport mode is not known yet. Unlike webSocketAuthPending it
+	// does not arm the authentication deadline, because staying quiet is
+	// legitimate for a client that is never required to authenticate.
+	webSocketAuthUnsettled webSocketAuthState = "unsettled"
 	webSocketAuthPending   webSocketAuthState = "pending"
 	webSocketAuthPlaintext webSocketAuthState = "plaintext"
 	webSocketAuthEncrypted webSocketAuthState = "encrypted"
