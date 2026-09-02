@@ -1018,6 +1018,43 @@ func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
 	}()
 }
 
+// trackerFileLoad picks the load function for a watched tracker file, and
+// reports whether its write has to settle before the file is read.
+//
+// Settling matters for every file that is rewritten by truncating first: the
+// inotify event arrives while the file is still empty, and an empty read is
+// not a real state change. ACTIVEGAME is written that way by SetActiveGame
+// itself, and reading the truncated value retires the media the launch just
+// published, splitting one play session into a zero-second entry and the
+// tracker's later restore of it. CORENAME needs no delay because LoadCore
+// filters the empty read itself.
+func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
+	switch {
+	case name == misterconfig.CoreNameFile:
+		return tr.LoadCore, false
+	case name == misterconfig.ActiveGameFile:
+		return tr.loadGame, true
+	case name == misterconfig.FileSelectFile:
+		// MakeFile truncates before writing the new status. Wait for
+		// FILESELECT, FULLPATH, and CURRENTPATH to settle as one event.
+		return tr.loadFileSelection, true
+	case trackerRecentFileChanged(name):
+		// MiSTer truncates and rewrites binary recent files. Let the write
+		// settle before reading the first complete record.
+		return func() {
+			recentErr := tr.loadRecent(name)
+			if recentErr != nil {
+				if errors.Is(recentErr, os.ErrNotExist) {
+					log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+				} else {
+					log.Error().Msgf("error loading recent file: %s", recentErr)
+				}
+			}
+		}, true
+	}
+	return nil, false
+}
+
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -1038,31 +1075,14 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 				if !trackerFileChanged(event.Op) {
 					continue
 				}
+				load, settle := tr.trackerFileLoad(event.Name)
 				switch {
-				case event.Name == misterconfig.CoreNameFile:
-					tr.LoadCore()
-				case event.Name == misterconfig.ActiveGameFile:
-					tr.loadGame()
-				case event.Name == misterconfig.FileSelectFile:
-					// MakeFile truncates before writing the new status. Wait for
-					// FILESELECT, FULLPATH, and CURRENTPATH to settle as one event
-					// without blocking delivery of later watcher events.
-					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), tr.loadFileSelection)
-				case trackerRecentFileChanged(event.Name):
-					// MiSTer truncates and rewrites binary recent files. Let the
-					// write settle before reading the first complete record without
-					// blocking delivery of later watcher events.
-					filename := event.Name
-					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), func() {
-						recentErr := tr.loadRecent(filename)
-						if recentErr != nil {
-							if errors.Is(recentErr, os.ErrNotExist) {
-								log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-							} else {
-								log.Error().Msgf("error loading recent file: %s", recentErr)
-							}
-						}
-					})
+				case load == nil:
+					continue
+				case settle:
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), load)
+				default:
+					load()
 				}
 			case watchErr, ok := <-watcher.Errors:
 				if !ok {

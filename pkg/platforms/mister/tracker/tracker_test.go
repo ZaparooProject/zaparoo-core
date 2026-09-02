@@ -919,3 +919,40 @@ func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
 		})
 	}
 }
+
+// Every tracker file that is rewritten by truncating first has to settle
+// before it is read, or the handler acts on the empty intermediate state.
+// ACTIVEGAME is the one that bites: SetActiveGame truncates it, and reading
+// that empty value retires the media the launch just published.
+func TestTrackerFileLoadSettles(t *testing.T) {
+	t.Parallel()
+
+	tr := &Tracker{}
+
+	tests := []struct {
+		name       string
+		file       string
+		wantLoad   bool
+		wantSettle bool
+	}{
+		{name: "active game settles", file: misterconfig.ActiveGameFile, wantLoad: true, wantSettle: true},
+		{name: "file select settles", file: misterconfig.FileSelectFile, wantLoad: true, wantSettle: true},
+		{
+			name:       "recent file settles",
+			file:       filepath.Join(misterconfig.CoreConfigFolder, "GBC_recent_0.cfg"),
+			wantLoad:   true,
+			wantSettle: true,
+		},
+		{name: "core name is read immediately", file: misterconfig.CoreNameFile, wantLoad: true, wantSettle: false},
+		{name: "unknown file has no loader", file: "/tmp/not-a-tracker-file", wantLoad: false, wantSettle: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			load, settle := tr.trackerFileLoad(tt.file)
+			assert.Equal(t, tt.wantLoad, load != nil)
+			assert.Equal(t, tt.wantSettle, settle)
+		})
+	}
+}
