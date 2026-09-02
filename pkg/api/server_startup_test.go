@@ -1304,6 +1304,10 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 // waits and both TUI listeners are built on it. Holding such a session at
 // "transport mode unknown" forever would starve it, so the settle grace has to
 // release it as plaintext.
+//
+// The deadline is the shortest budget any of those listeners gives a
+// connection: the TUI's generate-database screen reconnects every 2s, so a
+// settle grace that does not clear 2s leaves that screen showing nothing.
 func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
 	t.Parallel()
 
@@ -1351,7 +1355,7 @@ func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
 		}
 	}()
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err, "a listener that never sends a frame must still get notifications")
 

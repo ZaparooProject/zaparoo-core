@@ -1107,6 +1107,10 @@ func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 		if queue := getNotificationQueue(s); queue != nil && queue.enqueue(plaintext) {
 			return
 		}
+		// The queue refused it, so the session settled between the read above
+		// and the enqueue. Re-read the encryption session or an upgrade that
+		// landed in that window would be written with a stale nil and dropped.
+		cs = getClientSession(s)
 	}
 	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
 		logWSWriteError(err, "broadcasting notification")

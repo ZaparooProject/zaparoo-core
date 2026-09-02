@@ -44,11 +44,21 @@ const (
 	// webSocketSettleGrace bounds how long an optional-encryption session's
 	// transport mode may stay unknown. A client that negotiates encryption
 	// sends its first frame straight after the upgrade, so this only has to
-	// cover a round trip. A client that never speaks is a notification
-	// listener (the CLI's -read and -pair waits, the TUI's listeners) and is
-	// settled as plaintext when the grace expires, because starving it of
-	// notifications forever is worse than the leak this window closes.
-	webSocketSettleGrace = 2 * time.Second
+	// cover building that frame and one round trip. A client that never
+	// speaks is a notification listener (the CLI's -read and -pair waits, the
+	// TUI's listeners) and is settled as plaintext when the grace expires,
+	// because starving it of notifications forever is worse than the window
+	// this leaves open.
+	//
+	// Nothing distinguishes the two at the upgrade, so the value is a
+	// trade-off in both directions: longer leaves more room for a slow
+	// encrypted client, shorter delivers a listener's first notifications
+	// sooner. Queueing removes the cost of waiting — a listener loses nothing,
+	// it only waits — so the ceiling is what the shortest listener tolerates.
+	// The TUI's generate-database screen reconnects every 2s
+	// (mediaManagePollInterval), so the grace has to clear its whole budget
+	// with room to spare or that screen never sees an update.
+	webSocketSettleGrace = 750 * time.Millisecond
 	// webSocketPendingNotifLimit caps what one unsettled session may hold, so
 	// a burst during the grace window cannot grow without bound. Overflow
 	// drops the newest notification, matching the broker's own best-effort
