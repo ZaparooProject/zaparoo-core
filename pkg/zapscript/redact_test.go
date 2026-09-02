@@ -186,3 +186,112 @@ func TestRedactScript_OutputStaysParseable(t *testing.T) {
 		})
 	}
 }
+
+// The pre-check is what keeps redaction off the parser for ordinary tokens,
+// so it has to recognise every spelling that can reach a credential.
+func TestMayCarryCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "profile card", text: "**profile:" + testSwitchID, want: true},
+		{name: "uppercase profile card", text: "**PROFILE:" + testSwitchID, want: true},
+		{name: "mixed case profile card", text: "**PrOfIlE:" + testSwitchID, want: true},
+		{name: "profile clear", text: "**profile.clear", want: true},
+		{
+			name: "extension card",
+			text: "**playtime.extend:15m?profile=" + testSwitchID,
+			want: true,
+		},
+		{
+			name: "uppercase extension card",
+			text: "**PLAYTIME.EXTEND:15m?PROFILE=" + testSwitchID,
+			want: true,
+		},
+		{
+			name: "credential in a chain",
+			text: "**launch:/games/snes/mario.sfc||**profile:" + testSwitchID,
+			want: true,
+		},
+		{name: "plain launch", text: "**launch:/games/snes/mario.sfc", want: false},
+		{name: "media title", text: "@SNES/Super Mario World", want: false},
+		{name: "plain text", text: "just some text", want: false},
+		{name: "empty", text: "", want: false},
+		{name: "already redacted script", text: redactedScript, want: false},
+		{
+			name: "playtime command that carries no credential",
+			text: "**playtime.pause",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, mayCarryCredential(tt.text))
+		})
+	}
+}
+
+// Every command scriptCredentials can pull a credential out of must be named
+// in credentialCommands, or the pre-check would skip the parse that would
+// have found it.
+func TestCredentialCommands_CoverScriptCredentials(t *testing.T) {
+	t.Parallel()
+
+	bearers := []string{
+		"**profile:" + testSwitchID,
+		"**playtime.extend:15m?profile=" + testSwitchID,
+	}
+
+	for _, text := range bearers {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			require.True(t, mayCarryCredential(text),
+				"a script this carries a credential must not skip the parse")
+			assert.NotContains(t, RedactScript(text), testSwitchID)
+		})
+	}
+}
+
+// Malformed text that cannot name a credential-bearing command is left
+// readable. The parse is skipped, so nothing about it can be shown to be
+// sensitive, and blanking it would only lose diagnostic value.
+func TestRedactScript_KeepsMalformedTextWithoutCredentialCommand(t *testing.T) {
+	t.Parallel()
+
+	malformed := `**launch:"unterminated`
+
+	assert.Equal(t, malformed, RedactScript(malformed))
+	assert.False(t, HasSensitiveScript(malformed))
+}
+
+// A long unrelated argument must not stop a credential elsewhere in the same
+// script from being removed.
+func TestRedactToken_RemovesCredentialAlongsideLongText(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("A", 4000)
+	text := "**launch:" + long + "||**profile:" + testSwitchID
+
+	gotText, gotData := RedactToken(text, "deadbeef")
+
+	assert.NotContains(t, gotText, testSwitchID)
+	assert.Contains(t, gotText, long, "unrelated content should survive")
+	assert.Empty(t, gotData, "the raw payload of a sensitive token is dropped")
+}
+
+// RedactToken keeps the payload of a token that carries no credential.
+func TestRedactToken_KeepsDataForOrdinaryToken(t *testing.T) {
+	t.Parallel()
+
+	text := "**launch:/games/snes/mario.sfc"
+
+	gotText, gotData := RedactToken(text, "deadbeef")
+
+	assert.Equal(t, text, gotText)
+	assert.Equal(t, "deadbeef", gotData)
+}
