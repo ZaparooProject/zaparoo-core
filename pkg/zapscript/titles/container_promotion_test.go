@@ -527,6 +527,11 @@ func TestResolveTitle_PromotedRowUnreadableKeepsSelection(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, discTrackPath, result.Result.Path)
 	assert.Equal(t, int64(7), result.Result.MediaID)
+	// Keeping the selection is also what happens when promotion never runs, so
+	// pin that it did run and failed at the re-read.
+	mockMediaDB.AssertCalled(t, "FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, "PSX", discDir)
+	mockMediaDB.AssertCalled(t, "GetMediaByDBID", mock.Anything, int64(99))
 }
 
 // TestResolveTitle_KeepsSelectionWhenDirectoryIsNotAContainer is the ordinary
@@ -564,6 +569,10 @@ func TestResolveTitle_KeepsSelectionWhenDirectoryIsNotAContainer(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, flatPath, result.Result.Path)
+	// The point of the case is that a .chd passes the gate and the lookup finds
+	// no container, not that the gate skipped it.
+	mockMediaDB.AssertCalled(t, "FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, "PSX", "/roms/PSX/")
 	mockMediaDB.AssertNotCalled(t, "GetMediaByDBID", mock.Anything, mock.Anything)
 }
 
@@ -600,5 +609,9 @@ func TestResolveTitle_KeepsSelectionWhenAlreadyTheContainerTarget(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, discCuePath, result.Result.Path)
+	// The lookup must run and name the row already selected; skipping it
+	// entirely would look identical from the result alone.
+	mockMediaDB.AssertCalled(t, "FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, "PSX", discDir)
 	mockMediaDB.AssertNotCalled(t, "GetMediaByDBID", mock.Anything, mock.Anything)
 }
