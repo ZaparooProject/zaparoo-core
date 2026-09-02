@@ -260,6 +260,8 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 These endpoints respond as soon as the token is accepted and do not report execution failures. Use the JSON-RPC [`run`](methods.md#run) method to wait for execution and receive its result.
 
+The decoded ZapScript may be at most 8192 bytes. A longer path returns `413 Request Entity Too Large` and nothing is run.
+
 ## Methods
 
 Methods execute actions and return data from Core. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or authenticated admin, including paired and valid static API-key admins; **Tiered** means fields or availability vary by client and are detailed in method reference.
