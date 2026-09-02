@@ -86,6 +86,14 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
+		// Bound the text before anything parses it, including the redaction
+		// below.
+		if params.Text != nil {
+			if lenErr := zapscript.ValidateScriptLength(*params.Text); lenErr != nil {
+				return nil, models.ClientErr(lenErr)
+			}
+		}
+
 		log.Debug().Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
 
 		if params.Type != nil {
@@ -127,6 +135,10 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 
 		if text == "" {
 			return nil, models.ClientErr(validation.ErrMissingParams)
+		}
+
+		if lenErr := zapscript.ValidateScriptLength(text); lenErr != nil {
+			return nil, models.ClientErr(lenErr)
 		}
 
 		t.Text = norm.NFC.String(text)
@@ -266,6 +278,13 @@ func HandleRunRest(
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
+		}
+
+		// IsRunAllowed parses the text, so bound it first.
+		if err := zapscript.ValidateScriptLength(text); err != nil {
+			log.Warn().Err(err).Msg("rejecting over-long REST run request")
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
 		}
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {

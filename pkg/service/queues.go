@@ -768,6 +768,22 @@ var (
 	errLaunchPanicked = errors.New("token launch panicked")
 )
 
+// rejectOversizedToken drops a token whose script exceeds the length bound.
+//
+// This is the one point every source converges on — readers, the API, REST and
+// the GMC proxy all reach the worker through the same channel — so bounding
+// here covers the sources that have no validation of their own. It runs before
+// the token is logged, redacted or stored, because each of those parses the
+// text. Nothing is written to history: an over-long script is rejected, not
+// recorded, matching the empty-token case above it.
+func rejectOversizedToken(t *tokens.Token, err error) {
+	log.Warn().Err(err).
+		Str("source", t.Source).
+		Int("length", len(t.Text)).
+		Msg("rejecting token, script exceeds maximum length")
+	t.Completion.Complete(err)
+}
+
 func processTokenQueue(
 	svc *ServiceContext,
 	itq <-chan tokens.Token,
@@ -801,6 +817,11 @@ func handleQueuedToken(
 	if t.ScanTime.IsZero() {
 		// ignore empty tokens
 		t.Completion.Complete(errEmptyToken)
+		return
+	}
+
+	if lenErr := zapscript.ValidateScriptLength(t.Text); lenErr != nil {
+		rejectOversizedToken(&t, lenErr)
 		return
 	}
 

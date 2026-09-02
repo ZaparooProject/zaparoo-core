@@ -20,6 +20,7 @@
 package service
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,6 +203,49 @@ func TestTokenCompletion_EmptyTokenIsRejected(t *testing.T) {
 	c := tokens.NewCompletion()
 	env.sendAPITokenWith(t, tokens.Token{Text: "ignored", Source: tokens.SourceAPI, Completion: c})
 	require.ErrorIs(t, assertCompletedOnce(t, c), errEmptyToken)
+}
+
+// An over-long script is rejected before it is parsed, logged or stored.
+// Storing it would keep costing on every later history read, and parsing it
+// on the worker stalls every other token behind it.
+func TestTokenCompletion_OversizedScriptIsRejected(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	oversized := "**launch:" + strings.Repeat("A", zapscript.MaxScriptLength)
+	c := env.sendAPIToken(t, oversized)
+
+	require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrScriptTooLong)
+	env.expectNoLaunch(t)
+
+	select {
+	case he := <-env.historyCh:
+		t.Fatalf("an over-long token was recorded in history: %d bytes", len(he.TokenValue))
+	case <-time.After(noEventWait):
+	}
+
+	// The worker must still be free for the next token.
+	nextPath := env.gamePath("game1.gba")
+	c2 := env.sendAPIToken(t, nextPath)
+	assert.Equal(t, nextPath, env.waitForLaunch(t))
+	require.NoError(t, assertCompletedOnce(t, c2))
+}
+
+// A script right on the limit is ordinary input and must still run.
+func TestTokenCompletion_ScriptAtLengthLimitIsAccepted(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	path := env.gamePath("game1.gba")
+	padding := zapscript.MaxScriptLength - len("**launch:"+path)
+	require.Positive(t, padding)
+	script := "**launch:" + path + strings.Repeat(" ", padding)
+	require.Len(t, script, zapscript.MaxScriptLength)
+
+	c := env.sendAPIToken(t, script)
+
+	assert.Equal(t, path, env.waitForLaunch(t))
+	require.NoError(t, assertCompletedOnce(t, c))
 }
 
 func TestTokenCompletion_PanicIsReportedAndWorkerContinues(t *testing.T) {

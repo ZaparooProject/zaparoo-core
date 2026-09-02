@@ -113,7 +113,7 @@ type AddMappingParams struct {
 	Type     string `json:"type" validate:"required,oneof=id value data uid text"`
 	Match    string `json:"match" validate:"required,oneof=exact partial regex"`
 	Pattern  string `json:"pattern" validate:"required"`
-	Override string `json:"override"`
+	Override string `json:"override" validate:"max=8192"`
 	Enabled  bool   `json:"enabled"`
 }
 
@@ -127,7 +127,7 @@ type UpdateMappingParams struct {
 	Type     *string `json:"type" validate:"omitempty,oneof=id value data uid text"`
 	Match    *string `json:"match" validate:"omitempty,oneof=exact partial regex"`
 	Pattern  *string `json:"pattern" validate:"omitempty,min=1"`
-	Override *string `json:"override"`
+	Override *string `json:"override" validate:"omitempty,max=8192"`
 	ID       int     `json:"id" validate:"gt=0"`
 }
 
