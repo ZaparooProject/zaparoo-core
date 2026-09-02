@@ -10,7 +10,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.23.0
-	github.com/ZaparooProject/go-zapscript v0.18.0
+	github.com/ZaparooProject/go-zapscript v0.19.0
 	github.com/ZaparooProject/zaparoo-core/mister v0.1.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
