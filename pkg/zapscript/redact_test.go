@@ -22,6 +22,7 @@ package zapscript
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -336,4 +337,54 @@ func TestRedactScript_RemovesEveryCaseVariantOfTheProfileArg(t *testing.T) {
 
 	assert.NotContains(t, got, testSwitchID)
 	assert.NotContains(t, got, second)
+}
+
+// ForLog is what a reader driver calls on text nothing has bounded yet, so it
+// has to both redact and cap. A script within the limit is untouched beyond
+// redaction; a longer one is cut, and its real size reported.
+func TestForLog(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ordinary text is unchanged", func(t *testing.T) {
+		t.Parallel()
+		text := "**launch:/games/snes/mario.sfc"
+		assert.Equal(t, text, ForLog(text))
+	})
+
+	t.Run("credential is redacted", func(t *testing.T) {
+		t.Parallel()
+		got := ForLog("**profile:" + testSwitchID)
+		assert.NotContains(t, got, testSwitchID)
+		assert.Contains(t, got, RedactedPlaceholder)
+	})
+
+	t.Run("text at the limit is not truncated", func(t *testing.T) {
+		t.Parallel()
+		text := "**echo:" + strings.Repeat("A", MaxScriptLength-len("**echo:"))
+		require.Len(t, text, MaxScriptLength)
+		assert.Equal(t, text, ForLog(text))
+	})
+
+	t.Run("longer text is cut and its size reported", func(t *testing.T) {
+		t.Parallel()
+		text := "**echo:" + strings.Repeat("A", 300000)
+		got := ForLog(text)
+		assert.Less(t, len(got), MaxScriptLength+64, "a log line must not carry the whole payload")
+		assert.Contains(t, got, "(300007 bytes)")
+	})
+
+	t.Run("a cut never splits a rune", func(t *testing.T) {
+		t.Parallel()
+		// Three-byte runes do not divide evenly into the limit, so the cut
+		// lands mid-rune unless it is moved back to a boundary.
+		text := "**echo:" + strings.Repeat("あ", 4000)
+		got := ForLog(text)
+		assert.True(t, utf8.ValidString(got), "log text must stay valid UTF-8")
+	})
+
+	t.Run("a credential inside the kept portion still goes", func(t *testing.T) {
+		t.Parallel()
+		text := "**profile:" + testSwitchID + "||**echo:" + strings.Repeat("A", 300000)
+		assert.NotContains(t, ForLog(text), testSwitchID)
+	})
 }

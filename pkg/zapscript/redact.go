@@ -20,7 +20,9 @@
 package zapscript
 
 import (
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 )
@@ -260,4 +262,25 @@ func RedactToken(text, data string) (redactedText, redactedData string) {
 		return redactedText, ""
 	}
 	return redactedText, data
+}
+
+// ForLog returns text safe to write to a log line: bearer credentials
+// replaced, and anything longer than MaxScriptLength truncated.
+//
+// The truncation is what makes this usable from a reader driver, which logs
+// whatever a tag holds before anything has bounded it. A legitimate script is
+// never affected, because a longer one is rejected rather than run, so the
+// only text this shortens is text that was never going to do anything except
+// fill a log that lives in tmpfs.
+func ForLog(text string) string {
+	if len(text) <= MaxScriptLength {
+		return RedactScript(text)
+	}
+	// Cut on a rune boundary so the log line stays valid UTF-8. Redaction
+	// runs on the kept portion, which is the only part that reaches the log.
+	cut := MaxScriptLength
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s\u2026 (%d bytes)", RedactScript(text[:cut]), len(text))
 }
