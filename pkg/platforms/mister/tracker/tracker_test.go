@@ -818,3 +818,104 @@ func TestLoadFileSelection(t *testing.T) {
 		assert.Equal(t, gamePath, seen)
 	})
 }
+
+// arcadeCachePlatform implements the optional platformWithArcadeCache interface
+// so LoadCore's card-launch suppression can be exercised.
+type arcadeCachePlatform struct {
+	*mocks.MockPlatform
+	setname string
+}
+
+func (p *arcadeCachePlatform) CheckAndClearArcadeCardLaunch(setname string) bool {
+	if p.setname != "" && p.setname == setname {
+		p.setname = ""
+		return true
+	}
+	return false
+}
+
+// MiSTer truncates CORENAME before rewriting it, so inotify delivers a write
+// event while the file is still empty. Acting on that empty read retired the
+// active media a moment before the real core name arrived.
+func TestLoadCoreIgnoresEmptyCoreNameFile(t *testing.T) {
+	t.Parallel()
+
+	coreFile := filepath.Join(t.TempDir(), "CORENAME")
+	require.NoError(t, os.WriteFile(coreFile, []byte("  \n"), 0o600))
+
+	published := models.NewActiveMedia(ArcadeSystem, ArcadeSystem, "esprade.mra", "ESP Ra.De.", "Arcade")
+	tr := &Tracker{
+		coreNameFile:   coreFile,
+		ActiveCore:     misterconfig.MenuCore,
+		activeMedia:    func() *models.ActiveMedia { return published },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+		setActiveGame: func(string) error {
+			t.Error("empty CORENAME must not touch the active game file")
+			return nil
+		},
+	}
+
+	tr.LoadCore()
+
+	assert.NotNil(t, published, "empty CORENAME must not retire active media")
+	assert.Equal(t, misterconfig.MenuCore, tr.ActiveCore, "empty read must not become the active core")
+}
+
+// The card-launch cache suppresses the duplicate notification that follows a
+// Zaparoo-initiated arcade launch. Once the media has been retired there is
+// nothing left to duplicate, so CORENAME is the only chance to restore it.
+func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		existing    *models.ActiveMedia
+		name        string
+		wantPublish bool
+	}{
+		{
+			name:        "restores media retired before the core name arrived",
+			existing:    nil,
+			wantPublish: true,
+		},
+		{
+			name: "still suppresses the duplicate while media is live",
+			existing: models.NewActiveMedia(
+				ArcadeSystem, ArcadeSystem, "esprade", "ESP Ra.De.", "Arcade",
+			),
+			wantPublish: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			coreFile := filepath.Join(t.TempDir(), "CORENAME")
+			require.NoError(t, os.WriteFile(coreFile, []byte("esprade"), 0o600))
+
+			published := tt.existing
+			var publishCalled bool
+			tr := &Tracker{
+				pl:           &arcadeCachePlatform{MockPlatform: mocks.NewMockPlatform(), setname: "esprade"},
+				coreNameFile: coreFile,
+				NameMap: []NameMapping{
+					{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
+				},
+				activeMedia: func() *models.ActiveMedia { return published },
+				setActiveMedia: func(media *models.ActiveMedia) {
+					publishCalled = true
+					published = media
+				},
+				setActiveGame: func(string) error { return nil },
+			}
+
+			tr.LoadCore()
+
+			assert.Equal(t, tt.wantPublish, publishCalled)
+			if tt.wantPublish {
+				require.NotNil(t, published)
+				assert.Equal(t, ArcadeSystem, published.SystemID)
+				assert.Equal(t, "ESP Ra.De.", published.Name)
+			}
+		})
+	}
+}

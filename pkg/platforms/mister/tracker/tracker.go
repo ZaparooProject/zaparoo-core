@@ -69,6 +69,7 @@ type Tracker struct {
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
 	setActiveGame    func(string) error
+	coreNameFile     string
 	selection        selectionFiles
 	ActiveSystemName string
 	ActiveSystem     string
@@ -171,8 +172,18 @@ func NewTracker(
 		setActiveMedia:   setActiveMedia,
 		readActiveGame:   activegame.GetActiveGame,
 		setActiveGame:    activegame.SetActiveGame,
+		coreNameFile:     misterconfig.CoreNameFile,
 		selection:        misterSelectionFiles(),
 	}, nil
+}
+
+// coreNamePath is the CORENAME file this tracker reads. Tests override it;
+// zero-value trackers fall back to MiSTer's real path.
+func (tr *Tracker) coreNamePath() string {
+	if tr.coreNameFile != "" {
+		return tr.coreNameFile
+	}
+	return misterconfig.CoreNameFile
 }
 
 func (tr *Tracker) activeGame() (string, error) {
@@ -291,7 +302,7 @@ func (tr *Tracker) LoadCore() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	data, err := os.ReadFile(misterconfig.CoreNameFile)
+	data, err := os.ReadFile(tr.coreNamePath())
 	if err != nil {
 		// CORENAME is absent until MiSTer launches a core (e.g. right after boot).
 		// That's expected; other read errors (permissions, I/O) stay at Error.
@@ -304,6 +315,15 @@ func (tr *Tracker) LoadCore() {
 	}
 
 	coreName := strings.TrimSpace(string(data))
+
+	// MiSTer truncates CORENAME before rewriting it, so inotify delivers a write
+	// event while the file is still empty. An empty read is never a real core
+	// change: acting on it retires the active media milliseconds before the new
+	// core name arrives, splitting one play session in two.
+	if coreName == "" {
+		log.Debug().Msg("core name file is empty, ignoring transient write")
+		return
+	}
 
 	if coreName == misterconfig.MenuCore {
 		err := tr.setActiveGamePath("")
@@ -352,10 +372,14 @@ func (tr *Tracker) LoadCore() {
 			tr.ActiveGamePath = "" // no way to find mra path from CORENAME
 		}
 
-		// Check if this arcade game was recently launched via card scan
-		// If so, suppress duplicate notification
+		// Check if this arcade game was recently launched via card scan. Consume
+		// the cache entry either way, but only suppress the notification while
+		// that launch's media is still published. If the media has already been
+		// retired there is nothing left to duplicate, and this is the only
+		// chance to restore it.
 		if arcadePl, ok := tr.pl.(platformWithArcadeCache); ok {
-			if arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName) {
+			cardLaunch := arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName)
+			if cardLaunch && tr.arcadeMediaPublished(activeGamePath) {
 				log.Debug().
 					Str("setname", result.CoreName).
 					Msg("skipping duplicate arcade notification (launched via card)")
@@ -366,11 +390,8 @@ func (tr *Tracker) LoadCore() {
 		// Don't overwrite a more authoritative observation of the same game:
 		// a Zaparoo launch or a resolved FILESELECT event may already have
 		// published this canonical .mra path before CORENAME caught up.
-		if mraPath != "" {
-			if active := tr.activeMedia(); active != nil &&
-				active.SystemID == ArcadeSystem && active.Path == mraPath {
-				return
-			}
+		if tr.arcadeMediaPublished(activeGamePath) {
+			return
 		}
 
 		tr.setActiveMedia(models.NewActiveMedia(
@@ -467,6 +488,16 @@ func (tr *Tracker) ClearActiveGame() error {
 	err := tr.setActiveGamePath("")
 	tr.stopGame()
 	return err
+}
+
+// arcadeMediaPublished reports whether the active media already covers this
+// arcade launch, so a redundant publish can be skipped safely.
+func (tr *Tracker) arcadeMediaPublished(path string) bool {
+	if path == "" {
+		return false
+	}
+	active := tr.activeMedia()
+	return active != nil && active.SystemID == ArcadeSystem && active.Path == path
 }
 
 func (tr *Tracker) stopGame() {
