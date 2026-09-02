@@ -2954,3 +2954,123 @@ func TestBuildBrowseResponse_SingletonAnnotation_UnattributedDirsUseRequestedSys
 	assert.Equal(t, int64(22), browseResults.Entries[0].MediaID)
 	mockMediaDB.AssertExpectations(t)
 }
+
+// TestBuildBrowseResponse_SingletonAnnotation_SystemLookupErrorKeepsOthers
+// covers the other per-system failure: the system row itself cannot be read.
+// It must cost that system's directories only, not the page.
+func TestBuildBrowseResponse_SingletonAnnotation_SystemLookupErrorKeepsOthers(t *testing.T) {
+	t.Parallel()
+
+	genesisSystem := database.System{DBID: 3, SystemID: "Genesis"}
+	path := filepath.ToSlash(filepath.Join("games", "shared"))
+	genesisPath := filepath.ToSlash(filepath.Join(path, "GenGame"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").
+		Return(database.System{}, errors.New("system row unreadable")).Once()
+	mockMediaDB.On("FindSystemBySystemID", "Genesis").Return(genesisSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, genesisSystem.DBID, mock.Anything).
+		Return(aliasFor(genesisPath, genesisSystem, 21, "GenGame"), nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{
+			{Name: "PsxGame", FileCount: 4, SystemIDs: []string{"PSX"}},
+			{Name: "GenGame", FileCount: 1, SystemIDs: []string{"Genesis"}},
+		},
+		nil, defaultMaxResults, 0, 0, nil, false,
+		[]systemdefs.System{{ID: "PSX"}, {ID: "Genesis"}})
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	byName := map[string]models.BrowseEntry{}
+	for _, entry := range browseResults.Entries {
+		byName[entry.Name] = entry
+	}
+	assert.Zero(t, byName["PsxGame"].MediaID)
+	assert.NotZero(t, byName["GenGame"].MediaID)
+	mockMediaDB.AssertExpectations(t)
+	// The system that failed lookup must never reach the resolver.
+	mockMediaDB.AssertNotCalled(t, "ResolveSingletonContainerAliases",
+		mock.Anything, int64(0), mock.Anything)
+}
+
+// TestBuildBrowseResponse_SingletonAnnotation_EmptyDirsAreNotCandidates: a
+// directory with no media has nothing to collapse to, and the resolver keys its
+// nested-media test on a non-zero count.
+func TestBuildBrowseResponse_SingletonAnnotation_EmptyDirsAreNotCandidates(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.ToSlash(filepath.Join("games", "ZapDisc"))
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Empty", FileCount: 0, SystemIDs: []string{"PSX"}}},
+		nil, defaultMaxResults, 0, 0, nil, false, []systemdefs.System{{ID: "PSX"}})
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Zero(t, browseResults.Entries[0].MediaID)
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "ResolveSingletonContainerAliases",
+		mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBuildBrowseResponse_SingletonAnnotation_UnrequestedSystemIsSkipped: a
+// filtered browse must never resolve a system the client did not ask for. The
+// directory queries already narrow SystemIDs, so this guards the grouping
+// itself rather than the query.
+func TestBuildBrowseResponse_SingletonAnnotation_UnrequestedSystemIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 2, SystemID: "PSX"}
+	path := filepath.ToSlash(filepath.Join("games", "shared"))
+	psxPath := filepath.ToSlash(filepath.Join(path, "PsxGame"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: psxPath + "/", FileCount: 4}}).
+		Return(aliasFor(psxPath, psxSystem, 20, "PsxGame"), nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{
+			{Name: "PsxGame", FileCount: 4, SystemIDs: []string{"PSX"}},
+			{Name: "SnesGame", FileCount: 1, SystemIDs: []string{"SNES"}},
+		},
+		nil, defaultMaxResults, 0, 0, nil, false, []systemdefs.System{{ID: "PSX"}})
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	byName := map[string]models.BrowseEntry{}
+	for _, entry := range browseResults.Entries {
+		byName[entry.Name] = entry
+	}
+	assert.NotZero(t, byName["PsxGame"].MediaID)
+	assert.Zero(t, byName["SnesGame"].MediaID)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", "SNES")
+}

@@ -395,3 +395,210 @@ func TestResolveTitle_CacheHitSkipsContainerLookup(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "FindSingleContainerLaunchMediaBySystemID",
 		mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestPromotionLosesRequestedTag covers the guard that decides when a container
+// promotion would throw away something the query asked for. Each operator has
+// its own notion of "satisfied", and getting any of them wrong either launches
+// the wrong file or refuses a promotion that was correct.
+func TestPromotionLosesRequestedTag(t *testing.T) {
+	t.Parallel()
+
+	tag := func(typ, value string) database.TagInfo {
+		return database.TagInfo{Type: typ, Tag: value}
+	}
+	filter := func(typ, value string, op zapscript.TagOperator) zapscript.TagFilter {
+		return zapscript.TagFilter{Type: typ, Value: value, Operator: op}
+	}
+
+	tests := []struct {
+		name     string
+		selected []database.TagInfo
+		promoted []database.TagInfo
+		filters  []zapscript.TagFilter
+		want     bool
+	}{
+		{
+			name: "no filters never blocks promotion",
+			want: false,
+		},
+		{
+			name:     "AND: playlist lacks the disc the query named",
+			selected: []database.TagInfo{tag("disc", "2")},
+			filters:  []zapscript.TagFilter{filter("disc", "2", zapscript.TagOperatorAND)},
+			want:     true,
+		},
+		{
+			name:     "AND: a tag both rows carry was never the distinction",
+			selected: []database.TagInfo{tag("region", "us")},
+			promoted: []database.TagInfo{tag("region", "us")},
+			filters:  []zapscript.TagFilter{filter("region", "us", zapscript.TagOperatorAND)},
+			want:     false,
+		},
+		{
+			name:    "AND: a tag neither row carries is not lost by promoting",
+			filters: []zapscript.TagFilter{filter("region", "us", zapscript.TagOperatorAND)},
+			want:    false,
+		},
+		{
+			name:     "NOT: promotion carries the tag the query excluded",
+			promoted: []database.TagInfo{tag("unfinished", "beta")},
+			filters:  []zapscript.TagFilter{filter("unfinished", "beta", zapscript.TagOperatorNOT)},
+			want:     true,
+		},
+		{
+			name:    "NOT: neither row carries the excluded tag",
+			filters: []zapscript.TagFilter{filter("unfinished", "beta", zapscript.TagOperatorNOT)},
+			want:    false,
+		},
+		{
+			name:     "OR: promotion satisfies none of the group",
+			selected: []database.TagInfo{tag("region", "us")},
+			filters: []zapscript.TagFilter{
+				filter("region", "us", zapscript.TagOperatorOR),
+				filter("region", "eu", zapscript.TagOperatorOR),
+			},
+			want: true,
+		},
+		{
+			// Comparing an OR group filter by filter would wrongly block this.
+			name:     "OR: promotion satisfies the group a different way",
+			selected: []database.TagInfo{tag("region", "us")},
+			promoted: []database.TagInfo{tag("region", "eu")},
+			filters: []zapscript.TagFilter{
+				filter("region", "us", zapscript.TagOperatorOR),
+				filter("region", "eu", zapscript.TagOperatorOR),
+			},
+			want: false,
+		},
+		{
+			name: "OR: the selection satisfied nothing in the group either",
+			filters: []zapscript.TagFilter{
+				filter("region", "us", zapscript.TagOperatorOR),
+				filter("region", "eu", zapscript.TagOperatorOR),
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			selected := database.SearchResultWithCursor{MediaID: 1, Tags: tt.selected}
+			promoted := database.SearchResultWithCursor{MediaID: 2, Tags: tt.promoted}
+			assert.Equal(t, tt.want, promotionLosesRequestedTag(&selected, &promoted, tt.filters))
+		})
+	}
+}
+
+// TestResolveTitle_PromotedRowUnreadableKeepsSelection: the container named a
+// different launch target but its row could not be read. A launch that would
+// otherwise work must not fail because of that.
+func TestResolveTitle_PromotedRowUnreadableKeepsSelection(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := newPromotionTestConfig(t)
+
+	setupCacheMiss(mockMediaDB)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{{
+		SystemID: "PSX",
+		Name:     "B_064",
+		Path:     discTrackPath,
+		MediaID:  7,
+	}}, nil)
+	mockMediaDB.On("FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, mock.Anything, discDir,
+	).Return(&database.Media{DBID: 99, Path: discCuePath}, nil)
+	mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(99)).
+		Return(database.SearchResultWithCursor{}, errors.New("row is gone"))
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "PSX",
+		GameName:  "B_064",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, discTrackPath, result.Result.Path)
+	assert.Equal(t, int64(7), result.Result.MediaID)
+}
+
+// TestResolveTitle_KeepsSelectionWhenDirectoryIsNotAContainer is the ordinary
+// case for a disc image: the extension passes the gate, so the lookup runs, but
+// a flat library folder holds many games and collapses to nothing.
+func TestResolveTitle_KeepsSelectionWhenDirectoryIsNotAContainer(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := newPromotionTestConfig(t)
+
+	flatPath := "/roms/PSX/B_064.chd"
+	setupCacheMiss(mockMediaDB)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{{
+		SystemID: "PSX",
+		Name:     "B_064",
+		Path:     flatPath,
+		MediaID:  7,
+	}}, nil)
+	mockMediaDB.On("FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, "PSX", "/roms/PSX/",
+	).Return((*database.Media)(nil), nil)
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "PSX",
+		GameName:  "B_064",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, flatPath, result.Result.Path)
+	mockMediaDB.AssertNotCalled(t, "GetMediaByDBID", mock.Anything, mock.Anything)
+}
+
+// TestResolveTitle_KeepsSelectionWhenAlreadyTheContainerTarget: selection landed
+// on the cue sheet itself, so there is nothing to swap and no row to re-read.
+func TestResolveTitle_KeepsSelectionWhenAlreadyTheContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := newPromotionTestConfig(t)
+
+	setupCacheMiss(mockMediaDB)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{{
+		SystemID: "PSX",
+		Name:     "B_064",
+		Path:     discCuePath,
+		MediaID:  99,
+	}}, nil)
+	mockMediaDB.On("FindSingleContainerLaunchMediaBySystemID",
+		mock.Anything, "PSX", discDir,
+	).Return(&database.Media{DBID: 99, Path: discCuePath}, nil)
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "PSX",
+		GameName:  "B_064",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, discCuePath, result.Result.Path)
+	mockMediaDB.AssertNotCalled(t, "GetMediaByDBID", mock.Anything, mock.Anything)
+}

@@ -2970,3 +2970,103 @@ func TestManyTrackDiscFolderResolvesTheSameBothWays(t *testing.T) {
 	assert.Equal(t, cuePath, launch.Path, "browse and media.meta must name the same launch media")
 	assert.Equal(t, aliases[0].Row.DBID, launch.DBID)
 }
+
+// TestFindSingleContainerLaunchMediaBySystemID covers the lookup title
+// resolution uses. It holds a system ID rather than a system row, and going
+// through the database is what lets it see a container's launch target even
+// when the slug search that produced the match never returned it.
+func TestFindSingleContainerLaunchMediaBySystemID(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "B_064")
+	cuePath := filepath.ToSlash(filepath.Join(parent, "B_064", "B_064.cue"))
+	trackPath := filepath.ToSlash(filepath.Join(parent, "B_064", "B_064 (Track 001).bin"))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'b064', 'B_064');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?);
+	`, cuePath, gameDir, trackPath, gameDir)
+	require.NoError(t, err)
+
+	launch, err := mediaDB.FindSingleContainerLaunchMediaBySystemID(ctx, "PSX", gameDir)
+	require.NoError(t, err)
+	require.NotNil(t, launch)
+	assert.Equal(t, cuePath, launch.Path, "the cue sheet stands in for its tracks")
+
+	// The same directory under another system holds none of those rows.
+	other, err := mediaDB.FindSingleContainerLaunchMediaBySystemID(ctx, "NES", gameDir)
+	require.NoError(t, err)
+	assert.Nil(t, other)
+}
+
+// TestFindSingleContainerLaunchMediaBySystemID_UnknownSystemErrors keeps an
+// unresolvable system a reported error rather than a silent "no container",
+// which the caller would treat as "nothing to promote".
+func TestFindSingleContainerLaunchMediaBySystemID_UnknownSystemErrors(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+
+	launch, err := mediaDB.FindSingleContainerLaunchMediaBySystemID(
+		context.Background(), "NotASystem", "roms/NotASystem/Game/")
+	require.Error(t, err)
+	assert.Nil(t, launch)
+}
+
+// TestResolveSingletonContainerAliases_AmbiguousDirIsNotAliased covers the
+// resolver's other exclusion. A count match only proves the directory has no
+// nested media; two cue sheets are still two games and must stay browseable.
+func TestResolveSingletonContainerAliases_AmbiguousDirIsNotAliased(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "TwoGames")
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'one', 'One');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?);
+	`,
+		filepath.ToSlash(filepath.Join(parent, "TwoGames", "One.cue")), gameDir,
+		filepath.ToSlash(filepath.Join(parent, "TwoGames", "Two.cue")), gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2,
+		[]database.SingletonAliasCandidate{{ChildDir: gameDir, FileCount: 2}})
+	require.NoError(t, err)
+	assert.Empty(t, aliases, "two cue sheets do not collapse to one launch target")
+}
+
+// TestResolveSingletonContainerAliases_CandidateWithoutTrailingSlash checks the
+// normalisation the ChildDir contract relies on: ParentDir is stored with a
+// trailing slash, so a candidate lacking one must still match its rows.
+func TestResolveSingletonContainerAliases_CandidateWithoutTrailingSlash(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "Solo")
+	mediaPath := filepath.ToSlash(filepath.Join(parent, "Solo", "Solo.chd"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'solo', 'Solo');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
+	`, mediaPath, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2,
+		[]database.SingletonAliasCandidate{{ChildDir: strings.TrimSuffix(gameDir, "/"), FileCount: 1}})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, mediaPath, aliases[0].Row.Path)
+}
