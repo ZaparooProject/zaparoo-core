@@ -94,7 +94,9 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			}
 		}
 
-		log.Debug().Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		}
 
 		if params.Type != nil {
 			t.Type = *params.Type
