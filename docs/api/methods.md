@@ -764,6 +764,8 @@ Set `rootView` to `contents` with exactly one system to replace its filesystem r
 
 A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it holds one media file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and holds no media in subdirectories. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
 
+A directory holding media for more than one system also stays plain, because its `fileCount` is the sum across those systems and the rule is applied one system at a time. A page spanning several systems is resolved per system when `systems` names them; without a `systems` filter such a page is left unresolved, since browsing a media root lists one directory per installed system and resolving all of them is disproportionate to that page's cost.
+
 Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
 #### Parameters
