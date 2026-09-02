@@ -144,6 +144,9 @@ func TestProfiles_NotFoundErrors(t *testing.T) {
 
 	_, err = db.GetProfileBySwitchID("missing-switch")
 	require.ErrorIs(t, err, ErrProfileNotFound)
+	// A switch ID is a bearer credential and this error is logged, so it
+	// must not carry the value that was looked up.
+	require.NotContains(t, err.Error(), "missing-switch")
 
 	err = db.UpdateProfile(newTestProfile("missing", "a-b-c"))
 	require.ErrorIs(t, err, ErrProfileNotFound)

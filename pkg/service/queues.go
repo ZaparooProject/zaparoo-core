@@ -146,7 +146,14 @@ func runTokenZapScriptWithContext(
 	if len(cmds) == 0 {
 		mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
 		if hasMapping {
-			log.Info().Msgf("found mapping: %s", mappedValue)
+			// An override replaces the text whose length was already checked,
+			// and a config or platform mapping never passed through the API's
+			// check at all, so the substituted script is bounded here too.
+			if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+				return fmt.Errorf("mapping override rejected: %w", lenErr)
+			}
+			redacted, _ := zapscript.RedactToken(mappedValue, "")
+			log.Info().Msgf("found mapping: %s", redacted)
 			token.Text = mappedValue
 		}
 
@@ -768,6 +775,22 @@ var (
 	errLaunchPanicked = errors.New("token launch panicked")
 )
 
+// rejectOversizedToken drops a token whose script exceeds the length bound.
+//
+// This is the one point every source converges on — readers, the API, REST and
+// the GMC proxy all reach the worker through the same channel — so bounding
+// here covers the sources that have no validation of their own. It runs before
+// the token is logged, redacted or stored, because each of those parses the
+// text. Nothing is written to history: an over-long script is rejected, not
+// recorded, matching the empty-token case above it.
+func rejectOversizedToken(t *tokens.Token, err error) {
+	log.Warn().Err(err).
+		Str("source", t.Source).
+		Int("length", len(t.Text)).
+		Msg("rejecting token, script exceeds maximum length")
+	t.Completion.Complete(err)
+}
+
 func processTokenQueue(
 	svc *ServiceContext,
 	itq <-chan tokens.Token,
@@ -804,6 +827,11 @@ func handleQueuedToken(
 		return
 	}
 
+	if lenErr := zapscript.ValidateScriptLength(t.Text); lenErr != nil {
+		rejectOversizedToken(&t, lenErr)
+		return
+	}
+
 	log.Info().Msgf("processing token: %v", tokenForLog(&t))
 
 	if err := svc.Platform.ScanHook(&t); err != nil {
@@ -837,6 +865,14 @@ func handleQueuedToken(
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
 	scriptText := t.Text
 	if hasMapping {
+		// The token's own text was bounded above, but the override that
+		// replaces it was not: a config or platform mapping never reaches the
+		// API's check. Reject before the parse below, and before history is
+		// written, exactly as an over-long token is.
+		if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+			rejectOversizedToken(&t, lenErr)
+			return
+		}
 		scriptText = mappedValue
 	}
 

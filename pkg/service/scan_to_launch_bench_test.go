@@ -90,12 +90,15 @@ func setupPipelineBench(b *testing.B, n int) *pipelineBenchEnv {
 		b.Fatal(err)
 	}
 
-	// Mock platform — only LaunchMedia, LookupMapping, ID need stubbing
+	// Mock platform. Settings is reached through DataDir when a direct path
+	// is checked against the launcher list.
 	pl := mocks.NewMockPlatform()
 	pl.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	pl.On("LookupMapping", mock.Anything).Return("", false)
 	pl.On("ID").Return("test-platform")
 	pl.On("Launchers", mock.Anything).Return(benchPipelineLaunchers)
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Launcher manager and cache
 	lm := state.NewLauncherManager()

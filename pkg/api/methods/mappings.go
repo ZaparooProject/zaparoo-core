@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -131,6 +132,12 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		if err := validation.ValidateRegexPattern(params.Pattern); err != nil {
 			return nil, models.ClientErrf("invalid pattern: %w", err)
 		}
+	}
+
+	// An override replaces the token's text after the token's own length was
+	// checked, so it is the one script the queue's bound never sees.
+	if err := zapscript.ValidateScriptLength(params.Override); err != nil {
+		return nil, models.ClientErrf("invalid override: %w", err)
 	}
 
 	m := database.Mapping{
@@ -239,6 +246,9 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	}
 
 	if params.Override != nil {
+		if lenErr := zapscript.ValidateScriptLength(*params.Override); lenErr != nil {
+			return nil, models.ClientErrf("invalid override: %w", lenErr)
+		}
 		newMapping.Override = *params.Override
 	}
 

@@ -86,7 +86,17 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
-		log.Debug().Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		// Bound the text before anything parses it, including the redaction
+		// below.
+		if params.Text != nil {
+			if lenErr := zapscript.ValidateScriptLength(*params.Text); lenErr != nil {
+				return nil, scriptTooLongErr(lenErr)
+			}
+		}
+
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		}
 
 		if params.Type != nil {
 			t.Type = *params.Type
@@ -127,6 +137,10 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 
 		if text == "" {
 			return nil, models.ClientErr(validation.ErrMissingParams)
+		}
+
+		if lenErr := zapscript.ValidateScriptLength(text); lenErr != nil {
+			return nil, scriptTooLongErr(lenErr)
 		}
 
 		t.Text = norm.NFC.String(text)
@@ -196,6 +210,14 @@ func runContextError(env *requests.RequestEnv, ctxErr error) error {
 	}
 }
 
+// scriptTooLongErr categorizes the length rejection as an invalid script.
+// Every other reason a script will not run reports that category, and reusing
+// it means a client already branching on the category handles this without a
+// change; the message says which limit was exceeded.
+func scriptTooLongErr(err error) error {
+	return models.CategorizedErr(models.ErrorCategoryInvalidScript, err.Error(), err)
+}
+
 // runError maps a terminal execution error onto a stable category with a
 // message that carries no filesystem paths or token contents. The cause is
 // kept for logging and errors.Is.
@@ -213,6 +235,10 @@ func runError(err error) error {
 	case errors.Is(err, state.ErrRunZapScriptDisabled):
 		return models.CategorizedErr(models.ErrorCategoryDisabled,
 			"ZapScript execution is disabled", err)
+	case errors.Is(err, zapscript.ErrScriptTooLong):
+		// The queue's backstop rejects a token the API bound never saw, such
+		// as one whose mapping override replaced its text.
+		return scriptTooLongErr(err)
 	case errors.Is(err, zapscript.ErrInvalidScript),
 		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, systemdefs.ErrUnknownSystem),
@@ -266,6 +292,13 @@ func HandleRunRest(
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
+		}
+
+		// IsRunAllowed parses the text, so bound it first.
+		if err := zapscript.ValidateScriptLength(text); err != nil {
+			log.Warn().Err(err).Msg("rejecting over-long REST run request")
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
 		}
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {

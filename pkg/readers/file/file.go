@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -212,7 +213,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 				ReaderID: r.ReaderID(),
 			}
 
-			log.Debug().Msgf("new token: %s", token.Text)
+			if e := log.Debug(); e.Enabled() {
+				e.Msgf("new token: %s", zapscript.ForLog(token.Text))
+			}
 			iq <- readers.Scan{
 				Source:   tokens.SourceReader,
 				ReaderID: r.ReaderID(),

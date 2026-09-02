@@ -38,7 +38,7 @@ Accepts two types of parameters:
 | :----- | :------ | :------- | :------------------------------------------------------------------------------------------------------------- |
 | type   | string  | No       | An internal category of the type of token being scanned. _Not currently in use outside of logging._            |
 | uid    | string  | No\*     | The UID of the token being scanned. For example, the UID of an NFC tag. Used for matching mappings.            |
-| text   | string  | No\*     | The main text to be processed from a scan, should contain [ZapScript](../../zapscript/index.md).               |
+| text   | string  | No\*     | The main text to be processed from a scan, should contain [ZapScript](../../zapscript/index.md). At most 8192 bytes.               |
 | data   | string  | No\*     | The raw data read from a token, converted to a hexadecimal string. Used in mappings and detection of NFC toys. |
 | unsafe | boolean | No       | Allow unsafe operations. Default is false.                                                                     |
 
@@ -55,7 +55,7 @@ If execution fails, the response carries an [error](index.md#response-errors) wh
 | `busy`             | Another launch is already in progress.                                                        |
 | `media_not_found`  | The requested media could not be found or matched.                                            |
 | `disabled`         | ZapScript execution is disabled in settings.                                                  |
-| `invalid_script`   | The script could not be parsed, or names an unknown command or system.                        |
+| `invalid_script`   | The script could not be parsed, names an unknown command or system, or exceeds 8192 bytes.    |
 | `blocked`          | Execution was refused by configuration, a profile requirement or a hook.                      |
 | `playtime_limit`   | A playtime limit prevented the launch.                                                        |
 | `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
@@ -4193,7 +4193,7 @@ An object:
 | type     | string  | Yes      | The field which will be matched against:<br/>_ `uid`: match on UID, if available. UIDs are normalized before matching to remove spaces, colons and convert to lowercase.<br/>_ `text`: match on the stored text on token.<br/>\* `data`: match on the raw token data, if available. This is converted from bytes to a hexadecimal string and should be matched as this. |
 | match    | string  | Yes      | The method used to match a mapping pattern:<br/>_ `exact`: match the entire string exactly to the field.<br/>_ `partial`: match part of the string to the field.<br/>\* `regex`: use a regular expression to match the field.                                                                                                                                           |
 | pattern  | string  | Yes      | Pattern that will be matched against the token, using the above settings.                                                                                                                                                                                                                                                                                               |
-| override | string  | Yes      | Final text that will completely replace the existing token text if a match was successful.                                                                                                                                                                                                                                                                              |
+| override | string  | Yes      | Final text that will completely replace the existing token text if a match was successful. At most 8192 bytes.                                                                                                                                                                                                                                                          |
 
 #### Result
 
@@ -4290,7 +4290,7 @@ An object:
 | type     | string  | No       | The field which will be matched against:<br/>_ `uid`: match on UID, if available. UIDs are normalized before matching to remove spaces, colons and convert to lowercase.<br/>_ `text`: match on the stored text on token.<br/>\* `data`: match on the raw token data, if available. This is converted from bytes to a hexadecimal string and should be matched as this. |
 | match    | string  | No       | The method used to match a mapping pattern:<br/>_ `exact`: match the entire string exactly to the field.<br/>_ `partial`: match part of the string to the field.<br/>\* `regex`: use a regular expression to match the field.                                                                                                                                           |
 | pattern  | string  | No       | Pattern that will be matched against the token, using the above settings.                                                                                                                                                                                                                                                                                               |
-| override | string  | No       | Final text that will completely replace the existing token text if a match was successful.                                                                                                                                                                                                                                                                              |
+| override | string  | No       | Final text that will completely replace the existing token text if a match was successful. At most 8192 bytes.                                                                                                                                                                                                                                                          |
 
 Only keys which are provided in the object will be updated in the database.
 

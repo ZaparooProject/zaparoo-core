@@ -25,6 +25,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -180,6 +182,37 @@ func TestHandleRunRestRejectsMalformedEscapedPath(t *testing.T) {
 	select {
 	case token := <-tokenQueue:
 		t.Fatalf("REST run handler queued malformed token: %q", token.Text)
+	default:
+	}
+}
+
+// The REST path hands its text to IsRunAllowed, which parses it, so the
+// length bound has to apply before that and before the token is queued.
+func TestHandleRunRestRejectsOversizedScript(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	tokenQueue := make(chan tokens.Token, 1)
+	router := chi.NewRouter()
+	router.Get("/run/*", HandleRunRest(&config.Instance{}, st, tokenQueue))
+
+	oversized := strings.Repeat("A", zapscript.MaxScriptLength+1)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/run/"+oversized, http.NoBody,
+	)
+	req.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	select {
+	case token := <-tokenQueue:
+		t.Fatalf("REST run handler queued an over-long token: %d bytes", len(token.Text))
 	default:
 	}
 }

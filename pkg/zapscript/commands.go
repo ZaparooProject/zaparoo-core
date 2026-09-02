@@ -491,6 +491,11 @@ func RunCommand(
 		}
 	}
 	if linkValue != "" {
+		// The link body is fetched from a remote server, so it is bounded on
+		// the same terms as any other untrusted script.
+		if lenErr := ValidateScriptLength(linkValue); lenErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", lenErr)
+		}
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := zapscript.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()

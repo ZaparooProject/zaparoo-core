@@ -20,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -851,7 +852,9 @@ func (r *Reader) pollDevice(
 	if tagText == "" {
 		log.Warn().Msg("no text NDEF found")
 	} else {
-		log.Debug().Msgf("decoded text NDEF: %s", tagText)
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("decoded text NDEF: %s", zapscript.ForLog(tagText))
+		}
 	}
 
 	card := &tokens.Token{
@@ -869,7 +872,9 @@ func (r *Reader) pollDevice(
 
 func (r *Reader) writeTag(req *WriteRequest) {
 	log.Info().Msg("libnfc write request received")
-	log.Debug().Msgf("libnfc write text: %s", req.Text)
+	if e := log.Debug(); e.Enabled() {
+		e.Msgf("libnfc write text: %s", zapscript.ForLog(req.Text))
+	}
 
 	r.mu.RLock()
 	pnd := r.pnd

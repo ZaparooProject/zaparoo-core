@@ -22,6 +22,7 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ import (
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -59,6 +61,7 @@ type scanBehaviorEnv struct {
 	svc         *ServiceContext
 	launchHook  *launchHook
 	historyHook *historyHook
+	fs          afero.Fs
 	scanQueue   chan readers.Scan
 	itq         chan tokens.Token
 	clock       *clockwork.FakeClock
@@ -282,6 +285,7 @@ mode = "unrestricted"`))
 		st:          st,
 		cfg:         cfg,
 		userDB:      mockUserDB,
+		fs:          fs.Fs,
 		svc:         svc,
 		launchHook:  hook,
 		historyHook: histHook,
@@ -1344,4 +1348,17 @@ scan_mode = "hold"`))
 		env.sendRemovalOn(testReader2ID)
 		env.expectNoStop(t)
 	}
+}
+
+// addConfigMapping installs a mapping through a mappings TOML file, which is
+// the source that never passes through the API's validation.
+func (env *scanBehaviorEnv) addConfigMapping(t *testing.T, pattern, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	toml := "[[mappings.entry]]\ntoken_key = \"value\"\nmatch_pattern = " +
+		strconv.Quote(pattern) + "\nzapscript = " + strconv.Quote(script) + "\n"
+	require.NoError(t, env.fs.MkdirAll(dir, 0o750))
+	require.NoError(t, afero.WriteFile(env.fs, filepath.Join(dir, "test.toml"), []byte(toml), 0o600))
+	require.NoError(t, env.cfg.LoadMappings(dir))
 }

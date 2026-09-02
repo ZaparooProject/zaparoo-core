@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -831,6 +832,20 @@ preprocessing:
 			continue preprocessing
 
 		case scanNewToken:
+			// A reader's text is bounded here rather than only at the token
+			// queue, because the scan is logged in full, and parsed by the
+			// launch guard, before it ever gets there. Deduplication has
+			// already run, so a rejected tag left sitting on the reader is
+			// reported once rather than on every poll.
+			if lenErr := zapscript.ValidateScriptLength(scan.Text); lenErr != nil {
+				log.Warn().Err(lenErr).
+					Str("readerID", scanReaderID).
+					Int("length", len(scan.Text)).
+					Msg("ignoring scan, script exceeds maximum length")
+				playFail()
+				continue preprocessing
+			}
+
 			delete(pendingRemovals, newHoldTokenKey(scan))
 
 			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
@@ -845,7 +860,10 @@ preprocessing:
 				connectScanSeen[scan.ReaderID] = true
 			}
 
-			log.Info().Msgf("new token scanned: %v", scan)
+			// A profile or extension card carries a bearer credential in its
+			// text, so it is redacted here for the same reason it is on the
+			// worker: the log is downloadable and this line is at info level.
+			log.Info().Msgf("new token scanned: %v", tokenForLog(scan))
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
 			if onScanScript := svc.Config.ReadersScan().OnScan; onScanScript != "" {
@@ -908,8 +926,14 @@ preprocessing:
 				if hasMapping {
 					scriptText = mappedValue
 				}
-				parser := gozapscript.NewParser(scriptText)
-				script, parseErr := parser.ParseScript()
+				// The scan was bounded above, but a mapping override was not,
+				// and the queue rejects the token either way. Skip the parse
+				// so an over-long override cannot be expensive here.
+				parseErr := zapscript.ValidateScriptLength(scriptText)
+				var script gozapscript.Script
+				if parseErr == nil {
+					script, parseErr = gozapscript.NewParser(scriptText).ParseScript()
+				}
 
 				// Stage conservatively: if parsing fails we can't confirm the token
 				// is a safe utility command, so stage it. Only pass through tokens
@@ -964,7 +988,7 @@ preprocessing:
 				}
 			}
 
-			log.Info().Msgf("sending token to queue: %v", scan)
+			log.Info().Msgf("sending token to queue: %v", tokenForLog(scan))
 			select {
 			case itq <- *scan:
 			case <-svc.State.GetContext().Done():
