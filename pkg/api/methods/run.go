@@ -90,7 +90,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		// below.
 		if params.Text != nil {
 			if lenErr := zapscript.ValidateScriptLength(*params.Text); lenErr != nil {
-				return nil, models.ClientErr(lenErr)
+				return nil, scriptTooLongErr(lenErr)
 			}
 		}
 
@@ -140,7 +140,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		}
 
 		if lenErr := zapscript.ValidateScriptLength(text); lenErr != nil {
-			return nil, models.ClientErr(lenErr)
+			return nil, scriptTooLongErr(lenErr)
 		}
 
 		t.Text = norm.NFC.String(text)
@@ -210,6 +210,14 @@ func runContextError(env *requests.RequestEnv, ctxErr error) error {
 	}
 }
 
+// scriptTooLongErr categorizes the length rejection as an invalid script.
+// Every other reason a script will not run reports that category, and reusing
+// it means a client already branching on the category handles this without a
+// change; the message says which limit was exceeded.
+func scriptTooLongErr(err error) error {
+	return models.CategorizedErr(models.ErrorCategoryInvalidScript, err.Error(), err)
+}
+
 // runError maps a terminal execution error onto a stable category with a
 // message that carries no filesystem paths or token contents. The cause is
 // kept for logging and errors.Is.
@@ -227,6 +235,10 @@ func runError(err error) error {
 	case errors.Is(err, state.ErrRunZapScriptDisabled):
 		return models.CategorizedErr(models.ErrorCategoryDisabled,
 			"ZapScript execution is disabled", err)
+	case errors.Is(err, zapscript.ErrScriptTooLong):
+		// The queue's backstop rejects a token the API bound never saw, such
+		// as one whose mapping override replaced its text.
+		return scriptTooLongErr(err)
 	case errors.Is(err, zapscript.ErrInvalidScript),
 		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, systemdefs.ErrUnknownSystem),
