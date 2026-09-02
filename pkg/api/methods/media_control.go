@@ -92,17 +92,12 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
-	if params.Action == platforms.ControlStop {
-		switch {
-		case slot == mediaslot.Background:
-			env.State.SetBackgroundMedia(nil)
-			env.State.SetBackgroundPlaylist(nil)
-		case media.LauncherID == platforms.NativeAudioLauncherID:
-			// Native audio has no OS process, so no platform tracker clears the
-			// primary media on an explicit stop, and the drain callback ignores
-			// non-natural drains.
-			env.State.SetActiveMedia(nil)
-		}
+	// Primary-slot media state is cleared by the launcher's own stop control, so
+	// the ZapScript control command gets the same behaviour. Background state is
+	// handled here because it also has to clear the background playlist.
+	if params.Action == platforms.ControlStop && slot == mediaslot.Background {
+		env.State.SetBackgroundMedia(nil)
+		env.State.SetBackgroundPlaylist(nil)
 	}
 
 	return NoContent{}, nil

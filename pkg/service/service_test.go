@@ -447,6 +447,55 @@ func TestWireNativeAudioDrainCallbacks_PrimaryDrainKeepsOtherLaunchersMedia(t *t
 	assert.NotNil(t, st.ActiveMedia(), "natural audio drain must not clear another launcher's media")
 }
 
+// TestClearNativeAudioPrimaryMedia covers the helper shared by the drain callback and
+// the native-audio stop control, which is what makes an explicit **control:stop clear
+// playing state the same way media.control does.
+func TestClearNativeAudioPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	newSvc := func(t *testing.T, media *models.ActiveMedia) *ServiceContext {
+		t.Helper()
+		st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+		t.Cleanup(func() {
+			st.StopService()
+			for {
+				select {
+				case <-ns:
+				default:
+					return
+				}
+			}
+		})
+		if media != nil {
+			st.SetActiveMedia(media)
+		}
+		return &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	}
+
+	t.Run("clears native audio media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia(
+			"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+		))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("keeps another launcher's media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "mister-launcher"))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("no active media is a no-op", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nil)
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+}
+
 func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {
 	t.Parallel()
 

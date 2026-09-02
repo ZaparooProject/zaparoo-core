@@ -208,19 +208,24 @@ type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
 }
 
+// clearNativeAudioPrimaryMedia clears active media once native audio has stopped
+// on the primary slot. Another launcher may have taken over active media while the
+// track was still playing (e.g. a game started outside Zaparoo); only clear it if
+// native audio still owns it.
+func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
+	media := svc.State.ActiveMedia()
+	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
+		return
+	}
+	svc.State.SetActiveMedia(nil)
+}
+
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
 	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
 		if !natural {
 			return
 		}
-		// Another launcher may have taken over active media while the track was
-		// still playing (e.g. a game started outside Zaparoo); only clear it if
-		// native audio still owns it.
-		media := svc.State.ActiveMedia()
-		if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
-			return
-		}
-		svc.State.SetActiveMedia(nil)
+		clearNativeAudioPrimaryMedia(svc)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
 		if !natural {
@@ -548,7 +553,11 @@ func startService(
 	launcherCacheStarted := time.Now()
 	helpers.GlobalLauncherCache.Initialize(
 		pl, cfg,
-		platforms.NativeAudioLauncher(playbackManager, st.SetBackgroundMedia),
+		platforms.NativeAudioLauncher(
+			playbackManager,
+			st.SetBackgroundMedia,
+			func() { clearNativeAudioPrimaryMedia(svc) },
+		),
 	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
