@@ -818,3 +818,159 @@ func TestLoadFileSelection(t *testing.T) {
 		assert.Equal(t, gamePath, seen)
 	})
 }
+
+// arcadeCachePlatform implements the optional platformWithArcadeCache interface
+// so LoadCore's card-launch suppression can be exercised.
+type arcadeCachePlatform struct {
+	*mocks.MockPlatform
+	setname string
+}
+
+func (p *arcadeCachePlatform) CheckAndClearArcadeCardLaunch(setname string) bool {
+	if p.setname != "" && p.setname == setname {
+		p.setname = ""
+		return true
+	}
+	return false
+}
+
+// MiSTer truncates CORENAME before rewriting it, so inotify delivers a write
+// event while the file is still empty. Acting on that empty read retired the
+// active media a moment before the real core name arrived.
+func TestLoadCoreIgnoresEmptyCoreNameFile(t *testing.T) {
+	t.Parallel()
+
+	coreFile := filepath.Join(t.TempDir(), "CORENAME")
+	require.NoError(t, os.WriteFile(coreFile, []byte("  \n"), 0o600))
+
+	published := models.NewActiveMedia(ArcadeSystem, ArcadeSystem, "esprade.mra", "ESP Ra.De.", "Arcade")
+	tr := &Tracker{
+		coreNameFile:   coreFile,
+		ActiveCore:     misterconfig.MenuCore,
+		activeMedia:    func() *models.ActiveMedia { return published },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+		setActiveGame: func(string) error {
+			t.Error("empty CORENAME must not touch the active game file")
+			return nil
+		},
+	}
+
+	tr.LoadCore()
+
+	assert.NotNil(t, published, "empty CORENAME must not retire active media")
+	assert.Equal(t, misterconfig.MenuCore, tr.ActiveCore, "empty read must not become the active core")
+}
+
+// The card-launch cache suppresses the duplicate notification that follows a
+// Zaparoo-initiated arcade launch. Once the media has been retired there is
+// nothing left to duplicate, so CORENAME is the only chance to restore it.
+func TestLoadCoreArcadeCardLaunchSuppression(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		existing    *models.ActiveMedia
+		name        string
+		wantPublish bool
+	}{
+		{
+			name:        "restores media retired before the core name arrived",
+			existing:    nil,
+			wantPublish: true,
+		},
+		{
+			name: "still suppresses the duplicate while media is live",
+			existing: models.NewActiveMedia(
+				ArcadeSystem, ArcadeSystem, "esprade", "ESP Ra.De.", "Arcade",
+			),
+			wantPublish: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			coreFile := filepath.Join(t.TempDir(), "CORENAME")
+			require.NoError(t, os.WriteFile(coreFile, []byte("esprade"), 0o600))
+
+			published := tt.existing
+			var publishCalled bool
+			tr := &Tracker{
+				pl:           &arcadeCachePlatform{MockPlatform: mocks.NewMockPlatform(), setname: "esprade"},
+				coreNameFile: coreFile,
+				NameMap: []NameMapping{
+					{CoreName: "esprade", System: ArcadeSystem, ArcadeName: "ESP Ra.De."},
+				},
+				activeMedia: func() *models.ActiveMedia { return published },
+				setActiveMedia: func(media *models.ActiveMedia) {
+					publishCalled = true
+					published = media
+				},
+				setActiveGame: func(string) error { return nil },
+			}
+
+			tr.LoadCore()
+
+			assert.Equal(t, tt.wantPublish, publishCalled)
+			if tt.wantPublish {
+				require.NotNil(t, published)
+				assert.Equal(t, ArcadeSystem, published.SystemID)
+				assert.Equal(t, "ESP Ra.De.", published.Name)
+			}
+		})
+	}
+}
+
+// Every tracker file that is rewritten by truncating first has to settle
+// before it is read, or the handler acts on the empty intermediate state.
+// ACTIVEGAME is the one that bites: SetActiveGame truncates it, and reading
+// that empty value retires the media the launch just published.
+func TestTrackerFileLoadSettles(t *testing.T) {
+	t.Parallel()
+
+	tr := &Tracker{}
+
+	tests := []struct {
+		tracker    *Tracker
+		name       string
+		file       string
+		wantLoad   bool
+		wantSettle bool
+	}{
+		{name: "active game settles", file: misterconfig.ActiveGameFile, wantLoad: true, wantSettle: true},
+		{name: "file select settles", file: misterconfig.FileSelectFile, wantLoad: true, wantSettle: true},
+		{
+			name:       "recent file settles",
+			file:       filepath.Join(misterconfig.CoreConfigFolder, "GBC_recent_0.cfg"),
+			wantLoad:   true,
+			wantSettle: true,
+		},
+		{name: "core name is read immediately", file: misterconfig.CoreNameFile, wantLoad: true, wantSettle: false},
+		{
+			name:       "core name override is routed, not the real path",
+			tracker:    &Tracker{coreNameFile: "/tmp/zaparoo-test-corename"},
+			file:       "/tmp/zaparoo-test-corename",
+			wantLoad:   true,
+			wantSettle: false,
+		},
+		{
+			name:     "an overridden tracker ignores the real core name file",
+			tracker:  &Tracker{coreNameFile: "/tmp/zaparoo-test-corename"},
+			file:     misterconfig.CoreNameFile,
+			wantLoad: false,
+		},
+		{name: "unknown file has no loader", file: "/tmp/not-a-tracker-file", wantLoad: false, wantSettle: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			target := tr
+			if tt.tracker != nil {
+				target = tt.tracker
+			}
+			load, settle := target.trackerFileLoad(tt.file)
+			assert.Equal(t, tt.wantLoad, load != nil)
+			assert.Equal(t, tt.wantSettle, settle)
+		})
+	}
+}

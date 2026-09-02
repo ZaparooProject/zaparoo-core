@@ -1977,18 +1977,38 @@ func companionSlugMediaType(systemID string) slugs.MediaType {
 
 func isASCIIDigit(b byte) bool { return b >= '0' && b <= '9' }
 
+// stripASCIIDigits removes every ASCII digit from a slug.
+func stripASCIIDigits(slug string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return -1
+		}
+		return r
+	}, slug)
+}
+
 // companionParentNameScore rates how consistent a parent's display name is with a child
 // slug stem. A ZaparooCompanion gamelist can erroneously list one slug under multiple
 // parents (e.g. "phantasystar4" under both "Phantasy Star 4" and "Phantasy Star 3"); the
-// score picks the parent whose name actually matches the slug. 2 = exact slug match, 1 =
-// one slug extends the other at a non-digit boundary (a subtitle or hack suffix), 0 = no
-// relation. The non-digit boundary stops "phantasystar1" from matching "phantasystar12".
+// score picks the parent whose name actually matches the slug. 3 = exact slug match, 2 =
+// the parent slug is the child slug with a series number added, 1 = one slug extends the
+// other at a non-digit boundary (a subtitle or hack suffix), 0 = no relation. The
+// non-digit boundary stops "phantasystar1" from matching "phantasystar12".
+//
+// Tier 2 exists because a ROM filename often omits the series number the canonical name
+// carries: "Crash Bandicoot - Warped" (the US title) against parent "Crash Bandicoot 3 -
+// Warped". Without it the true parent scores 0 while unrelated parent "Crash Bandicoot"
+// scores 1 on the prefix rule and wins outright. Digits are only stripped from the parent
+// side, never the child, because a number the child carries and the parent lacks means
+// they are different entries in a series ("crashbandicoot2" is not "Crash Bandicoot").
 func companionParentNameScore(mediaType slugs.MediaType, childSlug, parentName string) int {
 	parentSlug := slugs.Slugify(mediaType, parentName)
 	switch {
 	case parentSlug == "" || childSlug == "":
 		return 0
 	case parentSlug == childSlug:
+		return 3
+	case stripASCIIDigits(parentSlug) == childSlug:
 		return 2
 	case strings.HasPrefix(parentSlug, childSlug) && !isASCIIDigit(parentSlug[len(childSlug)]):
 		return 1
@@ -2005,8 +2025,8 @@ func companionParentNameScore(mediaType slugs.MediaType, childSlug, parentName s
 // child for that slug is dropped rather than risk writing the wrong parent's metadata onto a
 // title. Children matched by real path/filename, slugs claimed by a single parent, and
 // ties between exactly-named parents are left untouched (the latter preserves the prior
-// first-wins behavior, since equally-named parents carry equivalent metadata). Ties among
-// prefix-only matches are dropped, because differently-named parents do not share metadata.
+// first-wins behavior, since equally-named parents carry equivalent metadata). Ties below
+// an exact match are dropped, because differently-named parents do not share metadata.
 func resolveCompanionSlugConflicts(
 	systemID string,
 	parents []companionParent,
@@ -2064,13 +2084,14 @@ func resolveCompanionSlugConflicts(
 		switch {
 		case winnerCount == 1:
 			conflicts[stem] = resolution{winner: winner}
-		case bestScore == 1:
-			// Tie among prefix-only matches: the parents are differently named (e.g.
-			// "Mega" vs "Megaman X" both weakly matching "megaman"), so their metadata is
+		case bestScore < 3:
+			// Tie below an exact name match: the parents are differently named (e.g.
+			// "Mega" vs "Megaman X" both weakly matching "megaman", or "Final Fantasy 4"
+			// vs "Final Fantasy 6" both reducing to "finalfantasy"), so their metadata is
 			// not equivalent. Drop rather than risk writing the wrong parent's metadata.
 			conflicts[stem] = resolution{drop: true}
 		}
-		// winnerCount > 1 && bestScore == 2: tie among exact-name matches; leave unmanaged
+		// winnerCount > 1 && bestScore == 3: tie among exact-name matches; leave unmanaged
 		// (equally-named parents carry equivalent metadata, preserving first-wins behavior).
 	}
 	if len(conflicts) == 0 {

@@ -69,6 +69,7 @@ type Tracker struct {
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
 	setActiveGame    func(string) error
+	coreNameFile     string
 	selection        selectionFiles
 	ActiveSystemName string
 	ActiveSystem     string
@@ -171,8 +172,18 @@ func NewTracker(
 		setActiveMedia:   setActiveMedia,
 		readActiveGame:   activegame.GetActiveGame,
 		setActiveGame:    activegame.SetActiveGame,
+		coreNameFile:     misterconfig.CoreNameFile,
 		selection:        misterSelectionFiles(),
 	}, nil
+}
+
+// coreNamePath is the CORENAME file this tracker reads. Tests override it;
+// zero-value trackers fall back to MiSTer's real path.
+func (tr *Tracker) coreNamePath() string {
+	if tr.coreNameFile != "" {
+		return tr.coreNameFile
+	}
+	return misterconfig.CoreNameFile
 }
 
 func (tr *Tracker) activeGame() (string, error) {
@@ -291,7 +302,7 @@ func (tr *Tracker) LoadCore() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	data, err := os.ReadFile(misterconfig.CoreNameFile)
+	data, err := os.ReadFile(tr.coreNamePath())
 	if err != nil {
 		// CORENAME is absent until MiSTer launches a core (e.g. right after boot).
 		// That's expected; other read errors (permissions, I/O) stay at Error.
@@ -304,6 +315,15 @@ func (tr *Tracker) LoadCore() {
 	}
 
 	coreName := strings.TrimSpace(string(data))
+
+	// MiSTer truncates CORENAME before rewriting it, so inotify delivers a write
+	// event while the file is still empty. An empty read is never a real core
+	// change: acting on it retires the active media milliseconds before the new
+	// core name arrives, splitting one play session in two.
+	if coreName == "" {
+		log.Debug().Msg("core name file is empty, ignoring transient write")
+		return
+	}
 
 	if coreName == misterconfig.MenuCore {
 		err := tr.setActiveGamePath("")
@@ -352,10 +372,14 @@ func (tr *Tracker) LoadCore() {
 			tr.ActiveGamePath = "" // no way to find mra path from CORENAME
 		}
 
-		// Check if this arcade game was recently launched via card scan
-		// If so, suppress duplicate notification
+		// Check if this arcade game was recently launched via card scan. Consume
+		// the cache entry either way, but only suppress the notification while
+		// that launch's media is still published. If the media has already been
+		// retired there is nothing left to duplicate, and this is the only
+		// chance to restore it.
 		if arcadePl, ok := tr.pl.(platformWithArcadeCache); ok {
-			if arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName) {
+			cardLaunch := arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName)
+			if cardLaunch && tr.arcadeMediaPublished(activeGamePath) {
 				log.Debug().
 					Str("setname", result.CoreName).
 					Msg("skipping duplicate arcade notification (launched via card)")
@@ -366,11 +390,8 @@ func (tr *Tracker) LoadCore() {
 		// Don't overwrite a more authoritative observation of the same game:
 		// a Zaparoo launch or a resolved FILESELECT event may already have
 		// published this canonical .mra path before CORENAME caught up.
-		if mraPath != "" {
-			if active := tr.activeMedia(); active != nil &&
-				active.SystemID == ArcadeSystem && active.Path == mraPath {
-				return
-			}
+		if tr.arcadeMediaPublished(activeGamePath) {
+			return
 		}
 
 		tr.setActiveMedia(models.NewActiveMedia(
@@ -467,6 +488,16 @@ func (tr *Tracker) ClearActiveGame() error {
 	err := tr.setActiveGamePath("")
 	tr.stopGame()
 	return err
+}
+
+// arcadeMediaPublished reports whether the active media already covers this
+// arcade launch, so a redundant publish can be skipped safely.
+func (tr *Tracker) arcadeMediaPublished(path string) bool {
+	if path == "" {
+		return false
+	}
+	active := tr.activeMedia()
+	return active != nil && active.SystemID == ArcadeSystem && active.Path == path
 }
 
 func (tr *Tracker) stopGame() {
@@ -987,6 +1018,43 @@ func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
 	}()
 }
 
+// trackerFileLoad picks the load function for a watched tracker file, and
+// reports whether its write has to settle before the file is read.
+//
+// Settling matters for every file that is rewritten by truncating first: the
+// inotify event arrives while the file is still empty, and an empty read is
+// not a real state change. ACTIVEGAME is written that way by SetActiveGame
+// itself, and reading the truncated value retires the media the launch just
+// published, splitting one play session into a zero-second entry and the
+// tracker's later restore of it. CORENAME needs no delay because LoadCore
+// filters the empty read itself.
+func (tr *Tracker) trackerFileLoad(name string) (load func(), settle bool) {
+	switch {
+	case name == tr.coreNamePath():
+		return tr.LoadCore, false
+	case name == misterconfig.ActiveGameFile:
+		return tr.loadGame, true
+	case name == misterconfig.FileSelectFile:
+		// MakeFile truncates before writing the new status. Wait for
+		// FILESELECT, FULLPATH, and CURRENTPATH to settle as one event.
+		return tr.loadFileSelection, true
+	case trackerRecentFileChanged(name):
+		// MiSTer truncates and rewrites binary recent files. Let the write
+		// settle before reading the first complete record.
+		return func() {
+			recentErr := tr.loadRecent(name)
+			if recentErr != nil {
+				if errors.Is(recentErr, os.ErrNotExist) {
+					log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+				} else {
+					log.Error().Msgf("error loading recent file: %s", recentErr)
+				}
+			}
+		}, true
+	}
+	return nil, false
+}
+
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -1007,31 +1075,14 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 				if !trackerFileChanged(event.Op) {
 					continue
 				}
+				load, settle := tr.trackerFileLoad(event.Name)
 				switch {
-				case event.Name == misterconfig.CoreNameFile:
-					tr.LoadCore()
-				case event.Name == misterconfig.ActiveGameFile:
-					tr.loadGame()
-				case event.Name == misterconfig.FileSelectFile:
-					// MakeFile truncates before writing the new status. Wait for
-					// FILESELECT, FULLPATH, and CURRENTPATH to settle as one event
-					// without blocking delivery of later watcher events.
-					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), tr.loadFileSelection)
-				case trackerRecentFileChanged(event.Name):
-					// MiSTer truncates and rewrites binary recent files. Let the
-					// write settle before reading the first complete record without
-					// blocking delivery of later watcher events.
-					filename := event.Name
-					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), func() {
-						recentErr := tr.loadRecent(filename)
-						if recentErr != nil {
-							if errors.Is(recentErr, os.ErrNotExist) {
-								log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-							} else {
-								log.Error().Msgf("error loading recent file: %s", recentErr)
-							}
-						}
-					})
+				case load == nil:
+					continue
+				case settle:
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), load)
+				default:
+					load()
 				}
 			case watchErr, ok := <-watcher.Errors:
 				if !ok {
@@ -1042,19 +1093,20 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		}
 	}()
 
-	if _, statErr := os.Stat(misterconfig.CoreNameFile); os.IsNotExist(statErr) {
+	coreNameFile := tr.coreNamePath()
+	if _, statErr := os.Stat(coreNameFile); os.IsNotExist(statErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writeErr := os.WriteFile(misterconfig.CoreNameFile, []byte(""), 0o644)
+		writeErr := os.WriteFile(coreNameFile, []byte(""), 0o644)
 		if writeErr != nil {
 			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
-		log.Info().Msgf("created core name file: %s", misterconfig.CoreNameFile)
+		log.Info().Msgf("created core name file: %s", coreNameFile)
 	}
 
-	log.Debug().Msgf("adding watcher for core name file: %s", misterconfig.CoreNameFile)
-	err = watcher.Add(misterconfig.CoreNameFile)
+	log.Debug().Msgf("adding watcher for core name file: %s", coreNameFile)
+	err = watcher.Add(coreNameFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch core name file (%s): %w", misterconfig.CoreNameFile, err)
+		return nil, fmt.Errorf("failed to watch core name file (%s): %w", coreNameFile, err)
 	}
 
 	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {

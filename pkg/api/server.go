@@ -1077,6 +1077,9 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 // On any send-side encryption failure (counter exhaustion, AEAD setup
 // error, write failure) the session is closed: a desynced session
 // cannot recover and keeping it open hides the bug from the client.
+//
+// A session whose transport mode is not settled yet never reaches here: the
+// caller queues for it instead, so the notification survives the wait.
 func writeNotificationFrame(
 	writeFn func([]byte) error,
 	cs *apimiddleware.ClientSession,
@@ -1097,6 +1100,18 @@ func writeNotificationFrame(
 
 func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	cs := getClientSession(s)
+	if cs == nil && getWebSocketAuthState(s) == webSocketAuthUnsettled {
+		// Transport mode still unknown: hold the notification rather than
+		// guess. It is flushed or discarded once the client's first frame
+		// arrives, or flushed when the settle grace expires.
+		if queue := getNotificationQueue(s); queue != nil && queue.enqueue(plaintext) {
+			return
+		}
+		// The queue refused it, so the session settled between the read above
+		// and the enqueue. Re-read the encryption session or an upgrade that
+		// landed in that window would be written with a stale nil and dropped.
+		cs = getClientSession(s)
+	}
 	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
 		logWSWriteError(err, "broadcasting notification")
 		closeMelodySession(s)
@@ -1491,7 +1506,7 @@ func decryptIncomingFrame(
 			return nil, nil, false
 		}
 		setClientSession(session, newSession)
-		setWebSocketAuthState(session, webSocketAuthEncrypted)
+		settleWebSocketTransport(session, webSocketAuthEncrypted, false)
 		return pt, newSession, true
 	}
 
@@ -1506,6 +1521,9 @@ func decryptIncomingFrame(
 		closeMelodySession(session)
 		return nil, nil, false
 	}
+	// The client spoke plaintext, so the transport mode is now settled and
+	// anything queued while it was unknown can be released in the clear.
+	settleWebSocketTransport(session, webSocketAuthPlaintext, false)
 	return msg, nil, true
 }
 
@@ -1980,9 +1998,11 @@ func StartWithReady(
 	// run the normal session close path.
 	session.HandleConnect(func(s *melody.Session) {
 		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
+		startWebSocketSettleGrace(s, webSocketSettleGrace)
 	})
 	session.HandleDisconnect(func(s *melody.Session) {
 		stopWebSocketAuthDeadline(s)
+		stopWebSocketSettleGrace(s)
 		closeWSDispatcher(s)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {
@@ -2051,12 +2071,20 @@ func StartWithReady(
 				return
 			}
 		}
-		authState := webSocketAuthPlaintext
+		// The transport mode is not known until the client's first frame: an
+		// encryption setting of false means encryption is optional, not absent,
+		// so a paired client can still negotiate an encrypted session. Starting
+		// as plaintext would let notifications broadcast in that window go out
+		// in the clear to a client that has already switched to encrypted, so
+		// they are queued instead until the first frame settles the mode or
+		// the settle grace runs out.
+		authState := webSocketAuthUnsettled
 		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
 			authState = webSocketAuthPending
 		}
 		err := session.HandleRequestWithKeys(w, r, map[string]any{
-			melodySessionAuthStateKey: authState,
+			melodySessionAuthStateKey:  authState,
+			melodySessionNotifQueueKey: &wsNotificationQueue{},
 		})
 		if err != nil {
 			log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
