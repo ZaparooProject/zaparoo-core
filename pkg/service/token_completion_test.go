@@ -371,6 +371,41 @@ func TestTokenForLog_DropsCompletion(t *testing.T) {
 	assert.NotNil(t, tok.Completion, "the caller's token must be left alone")
 }
 
+// A reader's text is bounded in the reader loop, not only at the token queue.
+// The scan is logged in full and parsed by the launch guard before it reaches
+// the queue, so an unbounded tag would flood a tmpfs log and pay for a parse
+// on the reader goroutine whatever the queue later decided.
+func TestScanBehavior_OversizedReaderScanIsIgnored(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	env.sendCommandScan("big", "**echo:"+strings.Repeat("A", zapscript.MaxScriptLength))
+	env.expectNoLaunch(t)
+
+	select {
+	case he := <-env.historyCh:
+		t.Fatalf("an over-long scan was recorded in history: %d bytes", len(he.TokenValue))
+	case <-time.After(noEventWait):
+	}
+
+	// The reader loop must still be running for the next scan.
+	nextPath := env.gamePath("game1.gba")
+	env.sendGameScan("ok", nextPath)
+	assert.Equal(t, nextPath, env.waitForLaunch(t))
+}
+
+// A scan right on the limit is ordinary input and must still launch.
+func TestScanBehavior_ReaderScanAtLengthLimitIsAccepted(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	path := env.gamePath("game1.gba")
+	pad := strings.Repeat("A", zapscript.MaxScriptLength-len(path)-len("||**echo:"))
+	env.sendCommandScan("edge", path+"||**echo:"+pad)
+
+	assert.Equal(t, path, env.waitForLaunch(t))
+}
+
 // A mapping override replaces the token's text after that text was bounded,
 // and a config or platform mapping never passed through the API's check at
 // all, so the substituted script has to be bounded where it is applied.
