@@ -24,6 +24,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package helpers
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -137,5 +139,36 @@ func TestUSBTopologyPattern(t *testing.T) {
 				t.Errorf("usbTopologyPattern.MatchString(%q) = %v, want %v", tt.input, result, tt.matches)
 			}
 		})
+	}
+}
+
+// The sysfs lookup used to be unreachable: os.Stat's FileInfo.Sys() carries a
+// *syscall.Stat_t, so the *unix.Stat_t assertion it was guarded by never
+// succeeded and every device resolved to "". /dev/null is a character device
+// on every Linux host, so its sysfs entry pins that the lookup runs.
+func TestDeviceNodeSysfsPath(t *testing.T) {
+	t.Parallel()
+
+	resolved := deviceNodeSysfsPath("/dev/null")
+	if resolved == "" {
+		t.Fatal("deviceNodeSysfsPath(/dev/null) = \"\", want its sysfs directory")
+	}
+	if filepath.Base(resolved) != "null" {
+		t.Errorf("deviceNodeSysfsPath(/dev/null) = %q, want a path ending in null", resolved)
+	}
+}
+
+func TestDeviceNodeSysfsPathRejectsNonDevices(t *testing.T) {
+	t.Parallel()
+
+	regular := filepath.Join(t.TempDir(), "not-a-device")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"", regular, "/dev/definitely-not-here"} {
+		if got := deviceNodeSysfsPath(path); got != "" {
+			t.Errorf("deviceNodeSysfsPath(%q) = %q, want \"\"", path, got)
+		}
 	}
 }

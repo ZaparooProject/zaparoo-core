@@ -177,6 +177,7 @@ func TestAutoDetector_DetectReaders_DriverNotEnabled(t *testing.T) {
 		DefaultEnabled:    false, // Not enabled by default
 		DefaultAutoDetect: true,
 	})
+	mockReader.On("IDs").Return([]string{"test-driver"}).Maybe()
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{mockReader})
@@ -294,6 +295,7 @@ func TestAutoDetector_DetectReaders_AlreadyConnected(t *testing.T) {
 	existingReader := mocks.NewMockReader()
 	existingReader.On("Path").Return("/dev/ttyUSB0")
 	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "simpleserial"})
+	existingReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	existingReader.On("ReaderID").Return("simpleserial-existing")
 
 	// This mock reader will try to detect the same path
@@ -463,6 +465,7 @@ func TestAutoDetector_ConnectReader_Success(t *testing.T) {
 	mockReader.On("Path").Return("/dev/ttyUSB0")
 	mockReader.On("ReaderID").Return("simpleserial-abc123")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 
 	mockPlatform := mocks.NewMockPlatform()
 	st, notifCh := state.NewState(mockPlatform, "test-uuid")
@@ -650,6 +653,7 @@ func TestAutoDetector_DetectReaders_ExcludesConnectedReaderPaths(t *testing.T) {
 	existingReader := mocks.NewMockReader()
 	existingReader.On("Path").Return("/dev/ttyUSB0")
 	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "simpleserial"})
+	existingReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	existingReader.On("ReaderID").Return("simpleserial-existing")
 
 	// Create a new reader for detection
@@ -772,6 +776,7 @@ func TestAutoDetector_DetectReaders_AlreadyConnected_CloseError(t *testing.T) {
 	existingReader := mocks.NewMockReader()
 	existingReader.On("Path").Return("/dev/ttyUSB0")
 	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "simpleserial"})
+	existingReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	existingReader.On("ReaderID").Return("simpleserial-existing")
 
 	// This mock reader will try to detect the same path and fail to close
@@ -934,6 +939,7 @@ func TestAutoDetector_ExcludeListFormat_Regression(t *testing.T) {
 	existingReader := mocks.NewMockReader()
 	existingReader.On("Path").Return("/dev/ttyUSB0")
 	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532_uart"})
+	existingReader.On("IDs").Return([]string{"pn532_uart"}).Maybe()
 	existingReader.On("ReaderID").Return("pn532-abc123")
 
 	// Create a new reader for detection that captures the exclude list

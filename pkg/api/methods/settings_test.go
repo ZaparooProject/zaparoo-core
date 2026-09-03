@@ -1861,7 +1861,7 @@ func TestHandleSettings_ReaderConnectionScanModeRoundTrip(t *testing.T) {
 	require.Len(t, stored, 2)
 	assert.Equal(t, config.ScanModeHold, stored[0].ScanMode)
 	assert.Empty(t, stored[1].ScanMode)
-	assert.Equal(t, config.ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+	assert.Equal(t, config.ScanModeHold, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0"))
 }
 
 // scanMode reaches the config file verbatim, so the handler is what has to

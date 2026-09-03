@@ -141,6 +141,35 @@ func NormalizeDriverID(id string) string {
 	return strings.ToLower(strings.ReplaceAll(id, "_", ""))
 }
 
+// DriverIDs returns every driver ID a reader answers to, canonical ID first.
+//
+// A reader opens under whichever spelling the config used (Open checks
+// MatchesDriverID against IDs), so anything looking that reader's settings up
+// in config has to try the whole set or an entry written with an alias is
+// silently ignored. IDs alone is not enough: libnfc in ACR122 mode reports a
+// canonical ID of "libnfcacr122" that its IDs list does not contain.
+func DriverIDs(r Reader) []string {
+	if r == nil {
+		return nil
+	}
+
+	aliases := r.IDs()
+	ids := make([]string, 0, len(aliases)+1)
+	seen := make(map[string]struct{}, len(aliases)+1)
+	for _, id := range append([]string{r.Metadata().ID}, aliases...) {
+		if id == "" {
+			continue
+		}
+		normalized := NormalizeDriverID(id)
+		if _, dup := seen[normalized]; dup {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // MatchesDriverID reports whether driver names one of ids, comparing them the
 // way NormalizeDriverID does. Drivers use this to check the ID a config entry
 // asked for against the IDs they answer to, so a reader configured as "PN532"

@@ -346,3 +346,61 @@ func TestSelectWriterPreferred(t *testing.T) {
 		assert.Equal(t, "reader-2", result.ReaderID())
 	})
 }
+
+// A reader opens under whichever of its IDs the config named, so anything
+// resolving that reader's settings has to try all of them. libnfc in ACR122
+// mode is why the canonical ID has to be in the set too: its IDs list does not
+// contain the ID its own metadata reports.
+func TestDriverIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		metadata string
+		ids      []string
+		want     []string
+	}{
+		{
+			name:     "canonical id leads its aliases",
+			metadata: "pn532",
+			ids:      []string{"pn532", "pn532uart", "pn532_uart", "pn532i2c"},
+			want:     []string{"pn532", "pn532uart", "pn532i2c"},
+		},
+		{
+			name:     "canonical id missing from the alias list",
+			metadata: "libnfcacr122",
+			ids:      []string{"acr122usb", "acr122_usb"},
+			want:     []string{"libnfcacr122", "acr122usb"},
+		},
+		{
+			name:     "aliases that normalize alike collapse",
+			metadata: "simpleserial",
+			ids:      []string{"simple_serial", "SIMPLESERIAL"},
+			want:     []string{"simpleserial"},
+		},
+		{
+			name:     "no aliases",
+			metadata: "mqtt",
+			ids:      nil,
+			want:     []string{"mqtt"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := mocks.NewMockReader()
+			m.On("Metadata").Return(readers.DriverMetadata{ID: tt.metadata})
+			m.On("IDs").Return(tt.ids)
+
+			assert.Equal(t, tt.want, readers.DriverIDs(m))
+		})
+	}
+}
+
+func TestDriverIDsOfNilReader(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, readers.DriverIDs(nil))
+}

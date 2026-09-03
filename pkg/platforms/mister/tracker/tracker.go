@@ -408,7 +408,7 @@ func (tr *Tracker) LoadCore() {
 	// core immediately, then only restore ACTIVEGAME if it belongs to this
 	// new core. This prevents a stale MiSTer selection signal from reviving
 	// the previous game's media and history after launch.system or stop.
-	if active := tr.activeMedia(); active != nil && !coreMatchesSystem(coreName, active.SystemID, tr.NameMap) {
+	if active := tr.activeMedia(); active != nil && !tr.coreOwnsMedia(coreName, active.SystemID, active.Path) {
 		tr.stopGame()
 	}
 	// ACTIVEGAME may arrive before CORENAME during a manual launch. Retry a
@@ -430,6 +430,37 @@ func coreMatchesSystem(coreName, systemID string, mappings []NameMapping) bool {
 		}
 	}
 	return false
+}
+
+// arcadeSetNameMatches reports whether the MRA at path declares the <setname>
+// MiSTer is reporting as the running core. ArcadeDatabase.csv omits hundreds of
+// set names, nearly all of them under _Arcade/_alternatives, so the name map
+// built from it cannot recognise those cores at all. The MRA is the same file
+// MiSTer read to name the core, so it settles the pairing when the CSV cannot.
+func arcadeSetNameMatches(coreName, systemID, path string) bool {
+	if coreName == "" || path == "" || strings.EqualFold(coreName, misterconfig.MenuCore) {
+		return false
+	}
+	if !strings.EqualFold(systemID, ArcadeSystem) || !strings.EqualFold(filepath.Ext(path), ".mra") {
+		return false
+	}
+
+	mra, err := mgls.ReadMRA(path)
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("unable to confirm arcade set name from MRA")
+		return false
+	}
+	return mra.SetName != "" && strings.EqualFold(mra.SetName, coreName)
+}
+
+// coreOwnsMedia reports whether the core MiSTer is running is the one that owns
+// the media at path. The name map answers this for system cores, installed
+// alternate cores and the arcade sets ArcadeDatabase.csv lists; an arcade MRA
+// whose set name the CSV omits is confirmed from the MRA itself. The name map
+// is consulted first, so the file is only read once it has already said no.
+func (tr *Tracker) coreOwnsMedia(coreName, systemID, path string) bool {
+	return coreMatchesSystem(coreName, systemID, tr.NameMap) ||
+		arcadeSetNameMatches(coreName, systemID, path)
 }
 
 // resolveArcadeGame resolves an externally detected arcade core's set name to
@@ -578,7 +609,7 @@ func (tr *Tracker) loadGameLocked() {
 		log.Warn().Str("path", path).Msg("launcher has empty system ID")
 		return
 	}
-	if !coreMatchesSystem(tr.ActiveCore, launcher.SystemID, tr.NameMap) {
+	if !tr.coreOwnsMedia(tr.ActiveCore, launcher.SystemID, path) {
 		log.Debug().Str("path", path).Str("core", tr.ActiveCore).
 			Str("system", launcher.SystemID).Msg("ignoring active game from a different core")
 		return

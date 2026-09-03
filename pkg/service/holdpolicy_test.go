@@ -258,6 +258,7 @@ func TestHoldModeForToken(t *testing.T) {
 			r.On("Connected").Return(true).Maybe()
 			r.On("Info").Return(readerID).Maybe()
 			r.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+			r.On("IDs").Return([]string{"mock-reader"}).Maybe()
 			r.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 			r.On("OnMediaChange", mock.Anything).Return(nil).Maybe()
 			st.SetReader(r)
@@ -407,6 +408,7 @@ func TestRunTokenZapScriptDoesNotResolveTraits(t *testing.T) {
 	const readerID = "mock-removable-reader"
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()

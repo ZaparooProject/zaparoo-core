@@ -140,7 +140,7 @@ func HandleReaders(cfg *config.Instance, st *state.State, allReaders []readers.R
 			ReaderID:     r.ReaderID(),
 			Driver:       r.Metadata().ID,
 			Info:         r.Info(),
-			ScanMode:     cfg.ScanModeForReader(r.Metadata().ID, r.Path()),
+			ScanMode:     cfg.ScanModeForReader(readers.DriverIDs(r), r.Path()),
 			Connected:    r.Connected(),
 			Capabilities: capabilityStrings,
 		}

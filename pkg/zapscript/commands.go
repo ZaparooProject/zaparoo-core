@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -403,7 +404,7 @@ func findFile(
 func effectiveScanMode(cfg *config.Instance, st *state.State) string {
 	if active := st.GetActiveCard(); active.ReaderID != "" {
 		if r, ok := st.GetReader(active.ReaderID); ok && r != nil {
-			return strings.ToLower(cfg.ScanModeForReader(r.Metadata().ID, r.Path()))
+			return strings.ToLower(cfg.ScanModeForReader(readers.DriverIDs(r), r.Path()))
 		}
 	}
 	return strings.ToLower(cfg.ReadersScan().Mode)
