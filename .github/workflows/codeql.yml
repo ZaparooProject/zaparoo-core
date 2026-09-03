@@ -33,7 +33,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
+          sudo apt-get install --no-install-recommends -y libnfc-dev libpcsclite-dev
 
       - name: Build
         run: go build ./...
