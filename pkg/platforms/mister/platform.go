@@ -1608,7 +1608,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
 		Test: func(_ *config.Instance, path string) bool {
-			if filepath.Ext(path) == ".zip" {
+			if strings.EqualFold(filepath.Ext(path), ".zip") {
 				return true
 			}
 			if filepath.Ext(path) == "" {

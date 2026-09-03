@@ -20,7 +20,9 @@
 package helpers
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -56,6 +58,10 @@ func TestPathHasPrefixNormalized(t *testing.T) {
 	}
 }
 
+// Test functions receive the path with its original case. They are the only
+// matcher hook that reaches the filesystem (stat, EvalSymlinks) or compares
+// against a real directory, so a lowercased path silently fails to match on a
+// case-sensitive filesystem. Both matcher implementations must agree.
 func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	var directSeen string
@@ -70,7 +76,7 @@ func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 			} else {
 				matcherSeen = p
 			}
-			return p == `c:\roms\custom\game.rom`
+			return p == `C:\ROMS\Custom\Game.rom`
 		},
 	}
 
@@ -98,7 +104,57 @@ func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 	assert.True(t, matcher.MatchSystemFile("Custom", path))
 
 	assert.Equal(t, directSeen, matcherSeen)
-	assert.Equal(t, `c:\roms\custom\game.rom`, matcherSeen)
+	assert.Equal(t, `C:\ROMS\Custom\Game.rom`, matcherSeen)
+}
+
+// A launcher that discovers its media through a Scanner (RetroDECK, EmuDeck,
+// AmigaVision) declares no folders or extensions, so its Test function is the
+// only gate and does the containment check itself against the real filesystem.
+// A lowercased path makes every such lookup miss on a case-sensitive
+// filesystem, and the launcher is never matched.
+func TestPathIsLauncher_TestFuncCanStatTheRealPath(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	romsDir := t.TempDir()
+	systemDir := filepath.Join(romsDir, "snes")
+	require.NoError(t, os.MkdirAll(systemDir, 0o750))
+	game := filepath.Join(systemDir, "Super Mario World.sfc")
+	require.NoError(t, os.WriteFile(game, []byte("rom"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:                 "ScannerBacked",
+		SystemID:           "SNES",
+		SkipFilesystemScan: true,
+		Test: func(_ *config.Instance, path string) bool {
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return false
+			}
+			rel, err := filepath.Rel(systemDir, resolved)
+			return err == nil && !strings.HasPrefix(rel, "..")
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	assert.True(t, PathIsLauncher(cfg, mockPlatform, &launcher, game))
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFile("SNES", game))
 }
 
 func TestLauncherMatcher_SchemeUsesTestFunction(t *testing.T) {

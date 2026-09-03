@@ -169,7 +169,7 @@ func PathIsLauncher(
 		}
 		// Extension didn't match - if there's a Test function, let it decide
 		if l.Test != nil {
-			return l.Test(cfg, lp)
+			return l.Test(cfg, path)
 		}
 		log.Trace().
 			Str("launcher", l.ID).
@@ -181,7 +181,7 @@ func PathIsLauncher(
 
 	// finally, launcher's test func (if no extensions were specified)
 	if l.Test != nil {
-		return l.Test(cfg, lp)
+		return l.Test(cfg, path)
 	}
 	return false
 }
@@ -687,7 +687,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 			}
 		}
 		if l.Test != nil {
-			return l.Test(m.cfg, lp)
+			return l.Test(m.cfg, path)
 		}
 		log.Trace().
 			Str("launcher", l.ID).
@@ -702,7 +702,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 			}
 		}
 		if l.Test != nil {
-			return l.Test(m.cfg, lp)
+			return l.Test(m.cfg, path)
 		}
 		log.Trace().
 			Str("launcher", l.ID).
@@ -713,7 +713,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 	}
 
 	if l.Test != nil {
-		return l.Test(m.cfg, lp)
+		return l.Test(m.cfg, path)
 	}
 	return false
 }

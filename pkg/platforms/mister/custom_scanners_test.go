@@ -419,6 +419,20 @@ func TestAmigaLauncher_TestRequiresAmigaVisionVirtualPath(t *testing.T) {
 	assert.False(t, amigaLauncher.Test(nil, filepath.Join(nonAmigaVisionPath, "Games", "Other Game")))
 }
 
+// Test receives the path with its original case, so the extension check has to
+// fold it itself. NeoGeo declares only .neo, so every .zip reaches Test.
+func TestNeoGeoLauncher_TestAcceptsAnyExtensionCase(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(&config.Instance{}))
+
+	assert.True(t, neoGeoLauncher.Test(nil, filepath.Join("NEOGEO", "kof98.zip")))
+	assert.True(t, neoGeoLauncher.Test(nil, filepath.Join("NEOGEO", "KOF98.ZIP")))
+	assert.True(t, neoGeoLauncher.Test(nil, filepath.Join("NEOGEO", "Romset Folder")))
+	assert.False(t, neoGeoLauncher.Test(nil, filepath.Join("NEOGEO", "readme.txt")))
+}
+
 func TestAmigaScanner_RequiresBootImage(t *testing.T) {
 	t.Parallel()
 
