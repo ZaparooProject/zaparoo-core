@@ -566,6 +566,7 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 					ID:          "mock-reader",
 					Description: "Mock Reader for Testing",
 				})
+				mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 
 				if tt.hasRemovable {
 					mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
@@ -629,6 +630,7 @@ mode = "unrestricted"`))
 	mockReader.On("ReaderID").Return(readerID)
 	mockReader.On("Path").Return("test-reader")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	mockReader.On("Connected").Return(true)
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
@@ -725,6 +727,7 @@ scan_mode = "hold"
 	mockReader.On("ReaderID").Return(readerID)
 	mockReader.On("Path").Return("/dev/ttyUSB0")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
+	mockReader.On("IDs").Return([]string{"pn532"}).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	mockReader.On("Connected").Return(true)
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
@@ -793,6 +796,7 @@ mode = "unrestricted"`))
 	mockReader.On("ReaderID").Return(readerID)
 	mockReader.On("Path").Return("test-reader")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	mockReader.On("Connected").Return(true)
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
@@ -884,6 +888,7 @@ mode = "unrestricted"`))
 	mockReader.On("ReaderID").Return(readerID)
 	mockReader.On("Path").Return("test-reader")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	mockReader.On("Connected").Return(true)
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
@@ -950,6 +955,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 		ID:          "mock-reader",
 		Description: "Mock Reader for Testing",
 	})
+	mockReader.On("IDs").Return([]string{"mock-reader"})
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	st.SetReader(mockReader)
 

@@ -28,6 +28,7 @@ package scanmode
 
 import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -44,7 +45,7 @@ func ForToken(cfg *config.Instance, st *state.State, t *tokens.Token) string {
 
 	if t.ReaderID != "" {
 		if r, ok := st.GetReader(t.ReaderID); ok && r != nil {
-			return cfg.ScanModeForReader(r.Metadata().ID, r.Path())
+			return cfg.ScanModeForReader(readers.DriverIDs(r), r.Path())
 		}
 	}
 

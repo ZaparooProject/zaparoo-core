@@ -248,6 +248,7 @@ func TestRunTokenZapScript_ReturnsWhenSoftwareTokenBlockedByExecutionContext(t *
 	const readerID = "mock-removable-reader"
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()
@@ -646,6 +647,7 @@ func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 	readerPath := filepath.Join(string(filepath.Separator), "dev", "mock-device")
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(readerPath).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{
 		readers.CapabilityRemovable,
@@ -713,6 +715,7 @@ func TestRunTokenZapScript_PrimaryPlaylistLaunchPublishesPhysicalOwner(t *testin
 	const readerID = "mock-removable-reader"
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()
@@ -846,6 +849,7 @@ func TestRunTokenZapScript_PlaylistLaunchCarriesCardScanMode(t *testing.T) {
 	const readerID = "mock-removable-reader"
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()
@@ -896,6 +900,7 @@ func TestRunTokenZapScript_PlaylistItemTraitDoesNotOverrideCardScanMode(t *testi
 	const readerID = "mock-removable-reader"
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()

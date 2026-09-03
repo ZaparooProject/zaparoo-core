@@ -599,6 +599,7 @@ func TestScanModeForReader(t *testing.T) {
 						{Driver: "pn532", Path: "/dev/ttyUSB1", ScanMode: ScanModeHold},
 						{Driver: "simple_serial", Path: "/dev/ttyACM0", ScanMode: ScanModeTap},
 						{Driver: "opticaldrive", Path: "/dev/sr0", ScanMode: "sideways"},
+						{Driver: "pn532_uart", Path: "/dev/ttyUSB2", ScanMode: ScanModeHold},
 					},
 					Drivers: map[string]DriverConfig{
 						"pn532":         {ScanMode: ScanModeTap},
@@ -606,6 +607,7 @@ func TestScanModeForReader(t *testing.T) {
 						"simpleserial":  {ScanMode: ScanModeHold},
 						"acr122pcsc":    {ScanMode: ""},
 						"externaldrive": {ScanMode: "HOLD"},
+						"libnfcacr122":  {ScanMode: ScanModeHold},
 					},
 				},
 			},
@@ -615,86 +617,104 @@ func TestScanModeForReader(t *testing.T) {
 	tests := []struct {
 		name       string
 		globalMode string
-		driverID   string
 		path       string
 		want       string
+		driverIDs  []string
 	}{
 		{
 			name:       "connect entry overrides driver and global",
 			globalMode: ScanModeTap,
-			driverID:   "pn532",
+			driverIDs:  []string{"pn532"},
 			path:       "/dev/ttyUSB1",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "driver applies when connect entry sets nothing",
 			globalMode: ScanModeHold,
-			driverID:   "pn532",
+			driverIDs:  []string{"pn532"},
 			path:       "/dev/ttyUSB0",
 			want:       ScanModeTap,
 		},
 		{
 			name:       "connect entry matches underscored driver key",
 			globalMode: ScanModeHold,
-			driverID:   "simpleserial",
+			driverIDs:  []string{"simpleserial"},
 			path:       "/dev/ttyACM0",
 			want:       ScanModeTap,
 		},
 		{
 			name:       "driver key normalizes against underscored config key",
 			globalMode: ScanModeTap,
-			driverID:   "simple_serial",
+			driverIDs:  []string{"simple_serial"},
 			path:       "/dev/ttyACM9",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "unmatched path falls through to driver",
 			globalMode: ScanModeTap,
-			driverID:   "opticaldrive",
+			driverIDs:  []string{"opticaldrive"},
 			path:       "/dev/sr9",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "unrecognised connect value falls through to driver",
 			globalMode: ScanModeTap,
-			driverID:   "opticaldrive",
+			driverIDs:  []string{"opticaldrive"},
 			path:       "/dev/sr0",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "empty driver value falls through to global",
 			globalMode: ScanModeHold,
-			driverID:   "acr122pcsc",
+			driverIDs:  []string{"acr122pcsc"},
 			path:       "/dev/acr",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "driver value is case insensitive",
 			globalMode: ScanModeTap,
-			driverID:   "externaldrive",
+			driverIDs:  []string{"externaldrive"},
 			path:       "/mnt/usb",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "unknown driver falls through to global",
 			globalMode: ScanModeHold,
-			driverID:   "mqtt",
+			driverIDs:  []string{"mqtt"},
 			path:       "broker:1883",
 			want:       ScanModeHold,
 		},
 		{
 			name:       "empty global mode defaults to tap",
 			globalMode: "",
-			driverID:   "mqtt",
+			driverIDs:  []string{"mqtt"},
 			path:       "broker:1883",
 			want:       ScanModeTap,
 		},
 		{
 			name:       "unrecognised global mode defaults to tap",
 			globalMode: "sideways",
-			driverID:   "mqtt",
+			driverIDs:  []string{"mqtt"},
 			path:       "broker:1883",
 			want:       ScanModeTap,
+		},
+		{
+			// A reader opens under whichever spelling the config used, so an
+			// entry written with an alias has to reach it too.
+			name:       "connect entry written with a driver alias",
+			globalMode: ScanModeTap,
+			driverIDs:  []string{"pn532", "pn532uart", "pn532_uart", "pn532i2c"},
+			path:       "/dev/ttyUSB2",
+			want:       ScanModeHold,
+		},
+		{
+			// libnfc in ACR122 mode reports a canonical ID its own alias list
+			// does not contain, so matching on the alias list alone loses it.
+			name:       "driver entry written with the canonical ID",
+			globalMode: ScanModeTap,
+			driverIDs:  []string{"libnfcacr122", "acr122usb", "acr122_usb"},
+			path:       "/dev/acr122",
+			want:       ScanModeHold,
 		},
 	}
 
@@ -703,9 +723,9 @@ func TestScanModeForReader(t *testing.T) {
 			t.Parallel()
 
 			cfg := newCfg(tt.globalMode)
-			assert.Equal(t, tt.want, cfg.ScanModeForReader(tt.driverID, tt.path))
+			assert.Equal(t, tt.want, cfg.ScanModeForReader(tt.driverIDs, tt.path))
 			assert.Equal(t, tt.want == ScanModeHold,
-				cfg.HoldModeEnabledForReader(tt.driverID, tt.path))
+				cfg.HoldModeEnabledForReader(tt.driverIDs, tt.path))
 		})
 	}
 }
@@ -726,9 +746,9 @@ func TestScanModeForReaderLeavesGlobalUntouched(t *testing.T) {
 	}
 
 	for range 5 {
-		cfg.ScanModeForReader("pn532", "/dev/ttyUSB0")
-		cfg.ScanModeForReader("opticaldrive", "/dev/sr0")
-		cfg.HoldModeEnabledForReader("pn532", "/dev/ttyUSB0")
+		cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0")
+		cfg.ScanModeForReader([]string{"opticaldrive"}, "/dev/sr0")
+		cfg.HoldModeEnabledForReader([]string{"pn532"}, "/dev/ttyUSB0")
 	}
 
 	assert.Equal(t, ScanModeTap, cfg.ReadersScan().Mode)
@@ -761,9 +781,9 @@ scan_mode = "hold"
 	require.NoError(t, cfg.Load())
 
 	assert.Equal(t, ScanModeTap, cfg.ReadersScan().Mode)
-	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("opticaldrive", "/dev/sr0"))
-	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB1"))
-	assert.Equal(t, ScanModeTap, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader([]string{"opticaldrive"}, "/dev/sr0"))
+	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB1"))
+	assert.Equal(t, ScanModeTap, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0"))
 }
 
 // TapModeEnabled and GlobalScanMode read the same setting and must agree.
@@ -810,7 +830,7 @@ mode = "tap"
 [readers.drivers.PN532]
 scan_mode = "hold"
 `)
-		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0"))
 	})
 
 	t.Run("drivers section key with case and an underscore", func(t *testing.T) {
@@ -822,7 +842,7 @@ mode = "tap"
 [readers.drivers.Simple_Serial]
 scan_mode = "hold"
 `)
-		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("simpleserial", "/dev/ttyACM0"))
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader([]string{"simpleserial"}, "/dev/ttyACM0"))
 	})
 
 	t.Run("connect entry driver", func(t *testing.T) {
@@ -836,7 +856,7 @@ driver = "PN532"
 path = "/dev/ttyUSB0"
 scan_mode = "hold"
 `)
-		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+		assert.Equal(t, ScanModeHold, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0"))
 	})
 
 	// The enabled/auto-detect lookups read the same key, so they have to agree
