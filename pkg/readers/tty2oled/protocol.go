@@ -75,9 +75,6 @@ const (
 
 // Configuration constants from MiSTer shell script
 const (
-	// Rotation settings
-	DefaultRotation = false // false = normal, true = 180° flipped
-
 	// Enhanced transitions
 	DefaultTransition = TransitionAuto
 

@@ -60,8 +60,12 @@ const (
 	misterMediaImageMaxBytes  = int64(2 * 1024 * 1024)
 	defaultMediaImageMaxBytes = int64(8 * 1024 * 1024)
 	mediaImageNoImageMax      = 4096
-	mediaImageDeliveryInline  = "inline"
-	mediaImageDeliveryPath    = "localPath"
+	// MediaImageDeliveryInline and MediaImageDeliveryLocalPath are the two
+	// values media.image accepts for its delivery param, matching the oneof
+	// constraint on models.MediaImageParams. Exported so in-process callers
+	// build requests from the same constants the handler validates against.
+	MediaImageDeliveryInline    = "inline"
+	MediaImageDeliveryLocalPath = "localPath"
 	// mediaThumbCacheDirName is the sub-directory under the core cache dir where
 	// resized thumbnail files are persisted across restarts.
 	mediaThumbCacheDirName = "thumbs"
@@ -839,7 +843,7 @@ func inlineMediaImageResponse(data []byte, contentType, sourcePath, typeTag stri
 		Extension:   mediaContentExtension(contentType, sourcePath),
 		ContentType: contentType,
 		Data:        base64.StdEncoding.EncodeToString(data),
-		Delivery:    mediaImageDeliveryInline,
+		Delivery:    MediaImageDeliveryInline,
 		TypeTag:     typeTag,
 	}
 }
@@ -853,7 +857,7 @@ func localMediaImageResponse(
 	return models.MediaImageResponse{
 		Extension:   mediaContentExtension(contentType, ""),
 		ContentType: contentType,
-		Delivery:    mediaImageDeliveryPath,
+		Delivery:    MediaImageDeliveryLocalPath,
 		LocalPath:   path,
 		TypeTag:     typeTag,
 	}, true
@@ -886,9 +890,9 @@ func cachedMediaImageResponse(
 
 func validateMediaImageDelivery(delivery string, ref mediaRefParam) error {
 	switch delivery {
-	case "", mediaImageDeliveryInline:
+	case "", MediaImageDeliveryInline:
 		return nil
-	case mediaImageDeliveryPath:
+	case MediaImageDeliveryLocalPath:
 		if ref.MaxSize == nil || *ref.MaxSize <= 0 {
 			return models.ClientErrf("media.image: localPath delivery requires a positive maxSize")
 		}
@@ -926,7 +930,7 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	if deliveryErr := validateMediaImageDelivery(delivery, ref); deliveryErr != nil {
 		return nil, deliveryErr
 	}
-	localPath := delivery == mediaImageDeliveryPath
+	localPath := delivery == MediaImageDeliveryLocalPath
 
 	// Snap the requested size onto a standard tier so every view shares one
 	// cached image per cover and the resize dimension is bounded. All downstream

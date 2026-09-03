@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/artwork"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
@@ -469,6 +470,10 @@ func startService(
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+
+	// Display readers render cover art from Core's own media metadata, so give
+	// them a way to reach it now the database is open.
+	st.SetArtworkSource(artwork.New(pl, cfg, db))
 
 	if mediaDBReset != nil {
 		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost, mediaDBReset.corrupt)

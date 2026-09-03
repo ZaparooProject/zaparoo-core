@@ -30,6 +30,7 @@ import (
 // This interface is used by serial-based readers for dependency injection and testing.
 type SerialPort interface {
 	Read(p []byte) (n int, err error)
+	Write(p []byte) (n int, err error)
 	Close() error
 	SetReadTimeout(t time.Duration) error
 }

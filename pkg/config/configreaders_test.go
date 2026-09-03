@@ -969,3 +969,42 @@ func TestConnectionStringFoldsCase(t *testing.T) {
 	assert.Equal(t, "simpleserial:/dev/ttyACM0",
 		ReadersConnect{Driver: "Simple_Serial", Path: "/dev/ttyACM0"}.ConnectionString())
 }
+
+func TestDriverRotation(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Drivers: map[string]DriverConfig{
+					"zapdisplay":    {Rotation: RotationHalf},
+					"tty2oled":      {Enabled: boolPtr(true)},
+					"Simple_Serial": {Rotation: RotationQuarter},
+					"nonsense":      {Rotation: 45},
+				},
+			},
+		},
+	}
+
+	assert.Equal(t, RotationHalf, cfg.DriverRotation("zapdisplay"))
+	assert.Equal(t, RotationNone, cfg.DriverRotation("tty2oled"), "a driver section with no rotation means none")
+	assert.Equal(t, RotationNone, cfg.DriverRotation("absent"), "an unconfigured driver means none")
+
+	// Driver IDs are matched the same way the enable rules match them.
+	assert.Equal(t, RotationQuarter, cfg.DriverRotation("simpleserial"))
+
+	// Returned as written: only the driver knows which angles its panel can do,
+	// so it reports a typo and an impossible angle the same way.
+	assert.Equal(t, 45, cfg.DriverRotation("nonsense"))
+}
+
+func TestIsValidRotation(t *testing.T) {
+	t.Parallel()
+
+	for _, degrees := range []int{RotationNone, RotationQuarter, RotationHalf, RotationThreeQtr} {
+		assert.True(t, IsValidRotation(degrees))
+	}
+	for _, degrees := range []int{-90, 45, 1, 360} {
+		assert.False(t, IsValidRotation(degrees))
+	}
+}

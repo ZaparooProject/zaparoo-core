@@ -69,4 +69,4 @@ Device profiles are named buckets of preferences and limits, with no passwords o
 
 ## Reader Auto-Detection
 
-11 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, tty2oled
+12 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, tty2oled, zapdisplay

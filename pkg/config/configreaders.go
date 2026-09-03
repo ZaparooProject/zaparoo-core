@@ -38,6 +38,32 @@ type DriverConfig struct {
 	Enabled    *bool  `toml:"enabled,omitempty"`
 	AutoDetect *bool  `toml:"auto_detect,omitempty"`
 	ScanMode   string `toml:"scan_mode,omitempty"`
+	// Rotation turns a display accessory's output, in degrees clockwise, for a
+	// panel mounted the other way up. Degrees rather than a flip flag so
+	// quarter turns do not need a new field later. A driver whose hardware
+	// cannot do the requested angle reports that rather than guessing.
+	Rotation int `toml:"rotation,omitempty"`
+}
+
+// Display rotations a driver may be asked for. Only 0 and 180 work on current
+// hardware: a quarter turn needs a layout built for the other aspect, not a
+// transform, so it is accepted here and refused by the driver until some
+// display can honour it.
+const (
+	RotationNone     = 0
+	RotationQuarter  = 90
+	RotationHalf     = 180
+	RotationThreeQtr = 270
+)
+
+// IsValidRotation reports whether degrees is a rotation the config accepts.
+func IsValidRotation(degrees int) bool {
+	switch degrees {
+	case RotationNone, RotationQuarter, RotationHalf, RotationThreeQtr:
+		return true
+	default:
+		return false
+	}
 }
 
 type ReadersScan struct {
@@ -416,6 +442,26 @@ func (c *Instance) isDriverAutoDetectEnabledLocked(driverID string, defaultAutoD
 	}
 
 	return c.vals.Readers.AutoDetect && defaultAutoDetect
+}
+
+// DriverRotation returns the display rotation configured for a driver, in
+// degrees clockwise, or 0 when none is set.
+//
+// The value is returned as written rather than validated here. Which angles are
+// possible is a property of the panel, not of the config, so the driver is the
+// only place that can tell a typo from an angle its hardware cannot manage -
+// and it reports both the same way.
+func (c *Instance) DriverRotation(driverID string) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	normalizedID := normalizeDriverID(driverID)
+	for key, cfg := range c.vals.Readers.Drivers {
+		if normalizeDriverID(key) == normalizedID {
+			return cfg.Rotation
+		}
+	}
+	return RotationNone
 }
 
 // IsReaderEnabled centralizes reader enablement rules across platform lists,
