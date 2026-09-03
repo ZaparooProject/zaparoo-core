@@ -648,7 +648,7 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")
 	}()
 
-	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
+	return NoContent{}, nil
 }
 
 // checkpointScrapingWAL flushes the WAL after a scraper run. It returns true when the

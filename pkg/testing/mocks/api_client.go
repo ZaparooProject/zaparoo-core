@@ -67,7 +67,7 @@ func (m *MockAPIClient) SetupSettingsError(err error) {
 
 // SetupUpdateSettingsSuccess configures the mock to accept settings updates.
 func (m *MockAPIClient) SetupUpdateSettingsSuccess() {
-	m.On("Call", mock.Anything, models.MethodSettingsUpdate, mock.Anything).Return("{}", nil)
+	m.On("Call", mock.Anything, models.MethodSettingsUpdate, mock.Anything).Return("null", nil)
 }
 
 // SetupUpdateSettingsError configures the mock to return an error on update.
@@ -117,7 +117,7 @@ func (m *MockAPIClient) SetupReadersError(err error) {
 
 // SetupWriteTagSuccess configures the mock to accept write tag operations.
 func (m *MockAPIClient) SetupWriteTagSuccess() {
-	m.On("Call", mock.Anything, models.MethodReadersWrite, mock.Anything).Return("{}", nil)
+	m.On("Call", mock.Anything, models.MethodReadersWrite, mock.Anything).Return("null", nil)
 }
 
 // SetupWriteTagError configures the mock to return an error for write tag.
@@ -127,7 +127,7 @@ func (m *MockAPIClient) SetupWriteTagError(err error) {
 
 // SetupCancelWriteTagSuccess configures the mock to accept cancel write operations.
 func (m *MockAPIClient) SetupCancelWriteTagSuccess() {
-	m.On("Call", mock.Anything, models.MethodReadersWriteCancel, "").Return("{}", nil)
+	m.On("Call", mock.Anything, models.MethodReadersWriteCancel, "").Return("null", nil)
 }
 
 // SetupCancelWriteTagError configures the mock to return an error for cancel write.

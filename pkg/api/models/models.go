@@ -251,6 +251,10 @@ type ErrorObject struct {
 	Code    int    `json:"code"`
 }
 
+// ResponseObject carries a method's successful result. Result has no
+// omitempty because JSON-RPC 2.0 §5 requires the key on success, so a method
+// with nothing to return sends "result": null. Void handlers express that with
+// methods.NoContent, which marshals itself as null.
 type ResponseObject struct {
 	Result  any          `json:"result"`
 	Error   *ErrorObject `json:"error,omitempty"`

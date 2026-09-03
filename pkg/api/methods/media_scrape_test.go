@@ -247,7 +247,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	assert.Equal(t, NoContent{}, result)
 
 	// Collect notifications: expect at minimum the initial "scraping:true" and
 	// the terminal "done:true" notifications.
@@ -444,7 +444,7 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 
 			result, err := HandleMediaScrape(env)
 			require.NoError(t, err)
-			assert.Nil(t, result)
+			assert.Equal(t, NoContent{}, result)
 
 			var gotDone bool
 			timeout := time.After(2 * time.Second)
@@ -554,7 +554,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	assert.Equal(t, NoContent{}, result)
 	assert.False(t, scraperSawPaused)
 	assert.False(t, pauser.IsPaused())
 
@@ -627,7 +627,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	assert.Equal(t, NoContent{}, result)
 
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
@@ -1217,7 +1217,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	assert.Equal(t, NoContent{}, result)
 
 	var progressCounts []int
 	var doneCount int
@@ -1388,7 +1388,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	assert.Equal(t, NoContent{}, result)
 
 	var gotDone bool
 	var maxProcessed int

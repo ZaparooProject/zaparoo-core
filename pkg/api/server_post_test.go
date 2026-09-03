@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
@@ -255,6 +256,40 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 	assert.Equal(t, int64(1), tracker.started.Load(), "RequestStarted should fire once")
 	assert.Equal(t, tracker.started.Load(), tracker.ended.Load(),
 		"RequestStarted and RequestEnded must balance")
+}
+
+// TestHandlePostRequest_NoContentResultIsNull pins the wire shape of a void
+// method over HTTP POST: "result" present and null, per docs/api/methods.md
+// and JSON-RPC 2.0 §5.
+func TestHandlePostRequest_NoContentResultIsNull(t *testing.T) {
+	t.Parallel()
+
+	handler, methodMap, _ := createTestPostHandler(t)
+
+	err := methodMap.AddMethod("test.nocontent", func(_ requests.RequestEnv) (any, error) {
+		return methods.NoContent{}, nil
+	}, true)
+	require.NoError(t, err)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.nocontent"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Decode into raw messages: a decoded ResponseObject cannot tell a null
+	// result apart from a missing result key, and the key must be present.
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &fields))
+
+	result, ok := fields["result"]
+	require.True(t, ok, "void method must send a result key, not omit it")
+	assert.JSONEq(t, "null", string(result))
+	assert.NotContains(t, fields, "error")
 }
 
 func TestHandlePostRequest_RejectsUnpairedRemoteOnUnknownPlatform(t *testing.T) {

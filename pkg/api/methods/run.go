@@ -50,7 +50,18 @@ import (
 // ErrNotAllowed is returned when a run request is not allowed.
 var ErrNotAllowed = errors.New("not allowed")
 
+// NoContent is the success value for methods that return nothing. It marshals
+// as JSON null so a void method's response carries "result": null, which is
+// what the API docs publish and what these methods sent before this sentinel
+// replaced a bare nil result.
 type NoContent struct{}
+
+// MarshalJSON must keep a value receiver: handlers return NoContent{} as an
+// any, and encoding/json only finds a pointer-receiver marshaller on an
+// addressable value.
+func (NoContent) MarshalJSON() ([]byte, error) {
+	return []byte("null"), nil
+}
 
 // runParamsForLog returns a copy of run params with any bearer credential in
 // the ZapScript removed, so a profile card run through the API cannot leave

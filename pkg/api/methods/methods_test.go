@@ -897,7 +897,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Nil(t, result)
+			assert.Equal(t, NoContent{}, result)
 
 			// Cancel the background indexing goroutine and wait for it
 			// to finish so it doesn't leak into the next subtest.

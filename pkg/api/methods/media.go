@@ -955,8 +955,11 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		env.Database,
 		env.IndexPauser,
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, err
+	return NoContent{}, nil
 }
 
 func searchResultSystem(
