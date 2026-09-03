@@ -253,6 +253,34 @@ func TestRetroBatLauncherCreation(t *testing.T) {
 	}
 }
 
+// Test receives the path with its original case, so its own extension check
+// has to fold it. The matcher used to lowercase the path first, which hid an
+// uppercase .TXT from this exclusion.
+func TestRetroBatLauncher_TestExcludesTxtInAnyCase(t *testing.T) {
+	t.Parallel()
+
+	installDir := t.TempDir()
+	systemDir := filepath.Join(installDir, "roms", "snes")
+	require.NoError(t, os.MkdirAll(systemDir, 0o750))
+
+	defaults := config.BaseDefaults
+	defaults.Launchers.Default = []config.LaunchersDefault{
+		{Launcher: "RetroBat", InstallDir: installDir},
+	}
+	cfg, err := config.NewConfig(t.TempDir(), defaults)
+	require.NoError(t, err)
+
+	info, exists := esde.LookupByFolderName("snes")
+	require.True(t, exists, "snes should exist in esde.SystemMap")
+	launcher := createRetroBatLauncher("snes", info)
+
+	assert.True(t, launcher.Test(cfg, filepath.Join(systemDir, "Super Mario World.sfc")))
+	assert.False(t, launcher.Test(cfg, filepath.Join(systemDir, "readme.txt")))
+	assert.False(t, launcher.Test(cfg, filepath.Join(systemDir, "README.TXT")))
+	assert.False(t, launcher.Test(cfg, systemDir))
+	assert.False(t, launcher.Test(cfg, filepath.Join(installDir, "roms", "nes", "Other.nes")))
+}
+
 func TestKillRetroBatGame_NoRunningGameSkipsKill(t *testing.T) {
 	resetRetroBatKillHooks(t)
 
