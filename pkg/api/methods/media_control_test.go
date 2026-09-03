@@ -422,7 +422,11 @@ func TestHandleMediaControl_StopBackgroundClearsMedia(t *testing.T) {
 	assert.Nil(t, st.BackgroundMedia(), "stop on background slot must clear background media")
 }
 
-func TestHandleMediaControl_StopPrimaryNativeAudioClearsMedia(t *testing.T) {
+// TestHandleMediaControl_StopPrimaryDelegatesMediaClear checks the handler no longer
+// clears primary media itself. Native audio clears it from inside its own stop control
+// so the ZapScript control command gets the same behaviour; see
+// TestNativeAudioLauncher_StopControlClearsPrimaryMedia.
+func TestHandleMediaControl_StopPrimaryDelegatesMediaClear(t *testing.T) {
 	t.Parallel()
 
 	pl := mocks.NewMockPlatform()
@@ -434,10 +438,54 @@ func TestHandleMediaControl_StopPrimaryNativeAudioClearsMedia(t *testing.T) {
 	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID))
 	require.NotNil(t, st.ActiveMedia())
 
+	cleared := false
 	cache := &helpers.LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
 		{
 			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				platforms.ControlStop: {
+					Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+						cleared = true
+						st.SetActiveMedia(nil)
+						return nil
+					},
+				},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"stop"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.True(t, cleared, "the launcher control must be the one clearing active media")
+	assert.Nil(t, st.ActiveMedia())
+}
+
+// TestHandleMediaControl_StopPrimaryNonAudioKeepsMedia pins that the handler does not
+// clear primary media for launchers whose stop control does not, such as an emulator
+// whose process exit is what ends the session.
+func TestHandleMediaControl_StopPrimaryNonAudioKeepsMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "emulator"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID: "emulator",
 			Controls: map[string]platforms.Control{
 				platforms.ControlStop: {
 					Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
@@ -457,7 +505,7 @@ func TestHandleMediaControl_StopPrimaryNativeAudioClearsMedia(t *testing.T) {
 
 	_, err := HandleMediaControl(env)
 	require.NoError(t, err)
-	assert.Nil(t, st.ActiveMedia(), "stop on primary native audio must clear active media")
+	assert.NotNil(t, st.ActiveMedia())
 }
 
 func TestHandleMediaControl_BackgroundSlotNoMedia(t *testing.T) {

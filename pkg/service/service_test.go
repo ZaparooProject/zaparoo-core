@@ -447,6 +447,55 @@ func TestWireNativeAudioDrainCallbacks_PrimaryDrainKeepsOtherLaunchersMedia(t *t
 	assert.NotNil(t, st.ActiveMedia(), "natural audio drain must not clear another launcher's media")
 }
 
+// TestClearNativeAudioPrimaryMedia covers the helper shared by the drain callback and
+// the native-audio stop control, which is what makes an explicit **control:stop clear
+// playing state the same way media.control does.
+func TestClearNativeAudioPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	newSvc := func(t *testing.T, media *models.ActiveMedia) *ServiceContext {
+		t.Helper()
+		st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+		t.Cleanup(func() {
+			st.StopService()
+			for {
+				select {
+				case <-ns:
+				default:
+					return
+				}
+			}
+		})
+		if media != nil {
+			st.SetActiveMedia(media)
+		}
+		return &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	}
+
+	t.Run("clears native audio media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia(
+			"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+		))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("keeps another launcher's media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "mister-launcher"))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("no active media is a no-op", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nil)
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+}
+
 func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {
 	t.Parallel()
 
@@ -1953,4 +2002,195 @@ func TestConfirmPendingUpdate_ShutdownAbandonsTheWait(t *testing.T) {
 	case <-time.After(updateConfirmDelay):
 		t.Fatal("confirmPendingUpdate kept waiting after the service shut down")
 	}
+}
+
+// TestWireNativeAudioDrainCallbacks_NonNaturalPrimaryNoOp pins the split of
+// responsibilities behind an explicit stop. The drain fires with natural=false
+// for a stop or a replacement; the stop control clears the state itself and a
+// replacement's launch publishes the new track, so the callback must leave
+// active media alone.
+func TestWireNativeAudioDrainCallbacks_NonNaturalPrimaryNoOp(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.ActiveMedia())
+
+	svc := &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	registrar.callbacks[mediaslot.Primary](false)
+	assert.NotNil(t, st.ActiveMedia(), "an explicit stop or replacement drain must not clear primary media")
+}
+
+// TestStopNativeAudioPrimaryMedia covers the hook behind the native-audio stop
+// control: the stop runs under the media stop gate and the active media it owned
+// is cleared once it succeeds.
+func TestStopNativeAudioPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	nativeTrack := func(name string) *models.ActiveMedia {
+		return models.NewActiveMedia("Audio", "Audio", name+".mp3", name, platforms.NativeAudioLauncherID)
+	}
+	newSvc := func(t *testing.T, media *models.ActiveMedia) *ServiceContext {
+		t.Helper()
+		st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+		t.Cleanup(func() {
+			st.StopService()
+			for {
+				select {
+				case <-ns:
+				default:
+					return
+				}
+			}
+		})
+		if media != nil {
+			st.SetActiveMedia(media)
+		}
+		return &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	}
+
+	t.Run("stops then clears native audio media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			stopped = true
+			assert.NotNil(t, svc.State.ActiveMedia(), "media is cleared after the stop, not before")
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, stopped)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("failed stop keeps media and returns the error", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		stopErr := errors.New("device busy")
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error { return stopErr })
+		require.ErrorIs(t, err, stopErr)
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("keeps another launcher's media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "mister-launcher"))
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			stopped = true
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, stopped, "the slot is still silenced even when a game owns the media")
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("nil context is tolerated", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		//nolint:staticcheck // the nil context is the case under test
+		err := stopNativeAudioPrimaryMedia(nil, svc, func() error { return nil })
+		require.NoError(t, err)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("cancelled context skips the stop", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(ctx, svc, func() error {
+			stopped = true
+			return nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, stopped, "a stop that cannot take the gate must not run half way")
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("waits for an in-flight launch", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		access, err := svc.State.AcquireMediaLaunch()
+		require.NoError(t, err)
+
+		stopped := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			done <- stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+				close(stopped)
+				return nil
+			})
+		}()
+		select {
+		case <-stopped:
+			t.Fatal("the stop ran while a launch held the media gate")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		// The launch publishes its track and releases the gate; the stop then
+		// lands on that track, so its state is what gets cleared.
+		access.SetActiveMedia(nativeTrack("replacement"))
+		access.Release()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the stop never acquired the media gate")
+		}
+		<-stopped
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("launch queued behind the stop keeps its media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		inStop := make(chan struct{})
+		launched := make(chan struct{})
+		go func() {
+			defer close(launched)
+			<-inStop
+			access, err := svc.State.AcquireMediaLaunch()
+			if err != nil {
+				return
+			}
+			access.SetActiveMedia(nativeTrack("next"))
+			access.Release()
+		}()
+
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			close(inStop)
+			select {
+			case <-launched:
+				t.Error("a launch published while the stop held the media gate")
+			case <-time.After(100 * time.Millisecond):
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		select {
+		case <-launched:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the launch never acquired the media gate after the stop released it")
+		}
+		media := svc.State.ActiveMedia()
+		require.NotNil(t, media, "the track launched after the stop must keep its state")
+		assert.Equal(t, "next", media.Name)
+	})
 }

@@ -894,6 +894,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.publishActiveMedia(media, false)
 }
 
+// ClearActiveMediaIf clears the active media when cond holds for its current
+// value, and reports whether it did. The check and the clear happen under one
+// lock, so a publication that lands between them cannot be wiped by a stop
+// that was meant for the media it replaced.
+func (s *State) ClearActiveMediaIf(cond func(*models.ActiveMedia) bool) bool {
+	return s.updateActiveMediaState(nil, cond)
+}
+
 func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld bool) {
 	if media != nil {
 		if err := s.ctx.Err(); err != nil {
@@ -929,19 +937,27 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 		}
 	}
 
-	s.updateActiveMediaState(media)
+	s.updateActiveMediaState(media, nil)
 }
 
-func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
+// updateActiveMediaState applies media as the new active media and reports
+// whether the state changed. A non-nil cond is evaluated against the current
+// media under the lock and vetoes the update when it returns false.
+func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*models.ActiveMedia) bool) bool {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another
 	// goroutine modifies activeMedia between our read and lock acquisition
 	oldMedia := s.activeMedia
 
+	if cond != nil && !cond(oldMedia) {
+		s.mu.Unlock()
+		return false
+	}
+
 	if oldMedia == nil && media == nil {
 		s.mu.Unlock()
-		return
+		return false
 	}
 
 	// Capture hook references inside lock
@@ -972,7 +988,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if stopHook != nil {
 			stopHook()
 		}
-		return
+		return true
 	}
 
 	media.Slot = mediaslot.Primary
@@ -999,7 +1015,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if hook != nil {
 			go hook(media, gen)
 		}
-		return
+		return true
 	}
 
 	if !oldMedia.Equal(media) {
@@ -1032,11 +1048,12 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if hook != nil {
 			go hook(media, gen)
 		}
-		return
+		return true
 	}
 
 	// No changes
 	s.mu.Unlock()
+	return false
 }
 
 func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {

@@ -336,3 +336,43 @@ func TestInitialize_ExtraLauncherIsRetrievable(t *testing.T) {
 	require.NotNil(t, found)
 	assert.Equal(t, "Audio", found.SystemID)
 }
+
+// TestRefresh_PreservesExtraLaunchers covers the launchers a platform cannot build
+// itself. A refresh that dropped them would silently break every control action for
+// native audio until the service restarted.
+func TestRefresh_PreservesExtraLaunchers(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "platform-launcher", SystemID: "NES"},
+	})
+
+	extra := platforms.Launcher{ID: "native-audio", SystemID: "Audio"}
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, extra)
+	require.NotNil(t, cache.GetLauncherByID("native-audio"))
+
+	cache.Refresh(mp, nil)
+
+	found := cache.GetLauncherByID("native-audio")
+	require.NotNil(t, found, "refresh must reapply extra launchers")
+	assert.Equal(t, "Audio", found.SystemID)
+	assert.NotNil(t, cache.GetLauncherByID("platform-launcher"))
+}
+
+func TestInitialize_WithoutExtrasClearsPreviousExtras(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, platforms.Launcher{ID: "native-audio", SystemID: "Audio"})
+	require.NotNil(t, cache.GetLauncherByID("native-audio"))
+
+	// Initialize states the full set of extras; a later call with none replaces them.
+	cache.Initialize(mp, nil)
+	assert.Nil(t, cache.GetLauncherByID("native-audio"))
+}

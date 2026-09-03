@@ -185,12 +185,16 @@ type CmdEnv struct {
 	// run, such as inside a hook script.
 	BeforeExit      func()
 	PlaybackManager audio.PlaybackManager
-	UI              *uievents.Service
-	Playlist        playlists.PlaylistController
-	Cfg             *config.Instance
-	Database        *database.Database
-	ExprEnv         *zapscript.ArgExprEnv
-	Source          string
+	// LauncherCache resolves the launcher behind the active media. It holds
+	// launchers the platform cannot build itself, so it is the only complete
+	// source; never resolve a launcher ID from Platform.Launchers alone.
+	LauncherCache LauncherResolver
+	UI            *uievents.Service
+	Playlist      playlists.PlaylistController
+	Cfg           *config.Instance
+	Database      *database.Database
+	ExprEnv       *zapscript.ArgExprEnv
+	Source        string
 	// PathRoot is an optional per-token root for resolving relative filesystem paths.
 	PathRoot      string
 	Cmd           zapscript.Command
@@ -500,6 +504,13 @@ type Scraper struct {
 	ID                 string
 	Name               string
 	SupportedSystemIDs []string
+}
+
+// LauncherResolver looks up a launcher by its unique ID. Implementations cover
+// launchers a platform cannot construct on its own, such as native audio, which
+// needs the playback manager injected at service startup.
+type LauncherResolver interface {
+	GetLauncherByID(id string) *Launcher
 }
 
 // LauncherRefreshProvider is optionally implemented by platforms that cache
