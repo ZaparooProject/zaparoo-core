@@ -462,6 +462,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		if len(items) == 0 {
 			log.Warn().Msgf("playlist is empty: %s", path)
 		} else {
+			//nolint:gosec // Playlist order is not security sensitive.
 			rand.Shuffle(len(items), func(i, j int) {
 				items[i], items[j] = items[j], items[i]
 			})

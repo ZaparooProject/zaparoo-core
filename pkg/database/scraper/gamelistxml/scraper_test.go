@@ -265,6 +265,7 @@ func TestMimeFromExt_PNG(t *testing.T) { assert.Equal(t, "image/png", mimeFromEx
 func TestMimeFromExt_JPG(t *testing.T) { assert.Equal(t, "image/jpeg", mimeFromExt("art.jpg")) }
 func TestMimeFromExt_MP4(t *testing.T) { assert.Equal(t, "video/mp4", mimeFromExt("clip.mp4")) }
 func TestMimeFromExt_PDF(t *testing.T) { assert.Equal(t, "application/pdf", mimeFromExt("manual.pdf")) }
+
 func TestMimeFromExt_Unknown(t *testing.T) {
 	assert.Equal(t, "application/octet-stream", mimeFromExt("file.xyz"))
 }

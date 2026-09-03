@@ -115,12 +115,12 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}
 
 	return platforms.CmdResult{
-			MediaChanged: true,
-			Strategy:     result.Strategy,
-			Confidence:   result.Confidence,
-		}, launch(launchTarget{
-			path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
-		})
+		MediaChanged: true,
+		Strategy:     result.Strategy,
+		Confidence:   result.Confidence,
+	}, launch(launchTarget{
+		path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
+	})
 }
 
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
