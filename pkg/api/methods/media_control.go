@@ -92,9 +92,9 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
-	// Primary-slot media state is cleared by the launcher's own stop control, so
-	// the ZapScript control command gets the same behaviour. Background state is
-	// handled here because it also has to clear the background playlist.
+	// Media state is cleared by the launcher's own stop control, so the ZapScript
+	// control command gets the same behaviour. The background playlist is service
+	// state the launcher cannot reach, so a background stop clears it here.
 	if params.Action == platforms.ControlStop && slot == mediaslot.Background {
 		env.State.SetBackgroundMedia(nil)
 		env.State.SetBackgroundPlaylist(nil)

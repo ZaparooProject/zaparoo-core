@@ -64,12 +64,12 @@ func NativeAudioLauncher(
 			return launchNativeAudio(playback, setBackgroundMedia, cfg, path, opts)
 		},
 		Controls: map[string]Control{
-			ControlTogglePause: {Func: nativeAudioControl(playback, nil, ControlTogglePause)},
-			ControlPause:       {Func: nativeAudioControl(playback, nil, ControlPause)},
-			ControlResume:      {Func: nativeAudioControl(playback, nil, ControlResume)},
-			ControlStop:        {Func: nativeAudioControl(playback, stopPrimaryMedia, ControlStop)},
-			ControlFastForward: {Func: nativeAudioControl(playback, nil, ControlFastForward)},
-			ControlRewind:      {Func: nativeAudioControl(playback, nil, ControlRewind)},
+			ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
+			ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
+			ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
+			ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
+			ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
+			ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
 		},
 	}
 }
@@ -116,6 +116,7 @@ func launchNativeAudio(
 
 func nativeAudioControl(
 	playback audio.PlaybackManager,
+	setBackgroundMedia func(*models.ActiveMedia),
 	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
 	action string,
 ) ControlFunc {
@@ -146,9 +147,18 @@ func nativeAudioControl(
 				}
 				return nil
 			}
-			// The background slot is left to the caller: clearing it also has to
-			// clear the background playlist, which is service state.
-			if slot != mediaslot.Primary || stopPrimaryMedia == nil {
+			if slot == mediaslot.Background {
+				if err := stop(); err != nil {
+					return err
+				}
+				// Launching set the background media, so stopping clears it. The
+				// background playlist is service state and stays with the caller.
+				if setBackgroundMedia != nil {
+					setBackgroundMedia(nil)
+				}
+				return nil
+			}
+			if stopPrimaryMedia == nil {
 				return stop()
 			}
 			return stopPrimaryMedia(ctx, stop)
