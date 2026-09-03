@@ -164,6 +164,119 @@ func TestPathIsLauncher_TestFuncCanStatTheRealPath(t *testing.T) {
 	assert.True(t, matcher.MatchSystemFile("SNES", game))
 }
 
+// A launcher that declares extensions still falls through to its Test function
+// when the extension misses, and that fallback has to see the original path as
+// well. MiSTer's NeoGeo launcher declares only .neo and leans on Test to accept
+// the .zip romsets, which it then has to find on disk.
+func TestPathIsLauncher_ExtensionMissPassesOriginalPathToTest(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	var directSeen, matcherSeen string
+
+	launcher := platforms.Launcher{
+		ID:         "ExtensionLauncher",
+		SystemID:   "NeoGeo",
+		Extensions: []string{".neo"},
+		Test: func(_ *config.Instance, p string) bool {
+			if directSeen == "" {
+				directSeen = p
+			} else {
+				matcherSeen = p
+			}
+			return strings.EqualFold(filepath.Ext(p), ".zip")
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	path := filepath.Join("NEOGEO", "KOF98.ZIP")
+	assert.True(t, PathIsLauncher(cfg, mockPlatform, &launcher, path))
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFile("NeoGeo", path))
+
+	assert.Equal(t, path, directSeen)
+	assert.Equal(t, path, matcherSeen)
+}
+
+// A LauncherMatcher precomputes its state from the launcher cache it was built
+// against, and a media scan holds one for the whole walk. A launchers.refresh
+// part way through leaves the matcher with no precomputed entry for the new
+// launchers, so every match falls back to reading the launcher directly. That
+// fallback has to agree with the precomputed branch, original path included.
+func TestLauncherMatcher_FallbackWithoutPrecomputedLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	var seen string
+
+	staleLauncher := platforms.Launcher{
+		ID:         "StaleLauncher",
+		SystemID:   "NeoGeo",
+		Extensions: []string{".neo"},
+	}
+	refreshedLauncher := platforms.Launcher{
+		ID:         "RefreshedLauncher",
+		SystemID:   "NeoGeo",
+		Extensions: []string{".neo"},
+		Test: func(_ *config.Instance, p string) bool {
+			seen = p
+			return strings.EqualFold(filepath.Ext(p), ".zip")
+		},
+	}
+
+	cfg := &config.Instance{}
+
+	stalePlatform := mocks.NewMockPlatform()
+	stalePlatform.On("Settings").Return(platforms.Settings{})
+	stalePlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	stalePlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{staleLauncher})
+
+	refreshedPlatform := mocks.NewMockPlatform()
+	refreshedPlatform.On("Settings").Return(platforms.Settings{})
+	refreshedPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	refreshedPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{refreshedLauncher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	staleCache := &LauncherCache{}
+	staleCache.Initialize(stalePlatform, cfg)
+	GlobalLauncherCache = staleCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, stalePlatform)
+
+	refreshedCache := &LauncherCache{}
+	refreshedCache.Initialize(refreshedPlatform, cfg)
+	GlobalLauncherCache = refreshedCache
+
+	// Declared extension, matched without ever reaching Test.
+	assert.True(t, matcher.MatchSystemFile("NeoGeo", filepath.Join("NEOGEO", "MSLUG.NEO")))
+	assert.Empty(t, seen)
+
+	// Extension miss, so Test decides and must see the original path.
+	path := filepath.Join("NEOGEO", "KOF98.ZIP")
+	assert.True(t, matcher.MatchSystemFile("NeoGeo", path))
+	assert.Equal(t, path, seen)
+}
+
 func TestLauncherMatcher_SchemeUsesTestFunction(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	launcher := platforms.Launcher{
