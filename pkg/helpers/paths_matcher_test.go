@@ -125,11 +125,18 @@ func TestPathIsLauncher_TestFuncCanStatTheRealPath(t *testing.T) {
 		SystemID:           "SNES",
 		SkipFilesystemScan: true,
 		Test: func(_ *config.Instance, path string) bool {
+			// Both sides are resolved, as providerPathTest does: on macOS
+			// t.TempDir() sits under a symlinked /var, so comparing a resolved
+			// path against an unresolved root escapes the root every time.
+			root, err := filepath.EvalSymlinks(systemDir)
+			if err != nil {
+				return false
+			}
 			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil {
 				return false
 			}
-			rel, err := filepath.Rel(systemDir, resolved)
+			rel, err := filepath.Rel(root, resolved)
 			return err == nil && !strings.HasPrefix(rel, "..")
 		},
 	}
