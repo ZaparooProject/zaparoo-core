@@ -1,8 +1,8 @@
 version: "3"
 
 vars:
-  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
-  GOLANGCI_LINT_VERSION: v2.12.2
+  # Pinned so CI, cross-lint and the pre-push hook all agree on one version.
+  GOLANGCI_LINT_VERSION: v2.13.2
 
 tasks:
   setup:

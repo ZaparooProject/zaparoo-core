@@ -182,10 +182,9 @@ func run() error {
 
 	if <-restarting {
 		// The service already stopped itself on the way to being replaced.
-		if err := restart.Exec(); err != nil {
-			return fmt.Errorf("failed to re-exec for restart: %w", err)
-		}
-		return nil
+		// Exec replaces this process on success, so it only ever returns to
+		// report a failure.
+		return fmt.Errorf("failed to re-exec for restart: %w", restart.Exec())
 	}
 	if svcResult != nil {
 		if err := svcResult.Stop(); err != nil {

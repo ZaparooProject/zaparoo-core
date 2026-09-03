@@ -1116,11 +1116,8 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
-		return platforms.CmdResult{
-				MediaChanged: true,
-			}, launch(launchTarget{
-				path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
-			})
+		target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
+		return platforms.CmdResult{MediaChanged: true}, launch(target)
 	}
 
 	ps := strings.SplitN(query, "/", 2)
@@ -1166,11 +1163,8 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
 	}
 
-	return platforms.CmdResult{
-			MediaChanged: true,
-		}, launch(launchTarget{
-			path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
-		})
+	target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
+	return platforms.CmdResult{MediaChanged: true}, launch(target)
 }
 
 // getUniqueRecentMedia returns the Nth most recently played unique game from

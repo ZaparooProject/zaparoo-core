@@ -20,7 +20,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Install Go
-COPY --from=golang:1.24 /usr/local/go/ /usr/local/go/
+COPY --from=golang:1.27 /usr/local/go/ /usr/local/go/
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install Zig

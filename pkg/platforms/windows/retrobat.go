@@ -352,7 +352,7 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 			// Handles Windows slash normalization and prevents "roms" matching "roms2"
 			if helpers.PathHasPrefix(path, systemDir) {
 				// Don't match directories or .txt files
-				if filepath.Ext(path) == "" || filepath.Ext(path) == ".txt" {
+				if filepath.Ext(path) == "" || strings.EqualFold(filepath.Ext(path), ".txt") {
 					return false
 				}
 				return true
