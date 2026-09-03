@@ -211,13 +211,37 @@ type drainCallbackRegistrar interface {
 // clearNativeAudioPrimaryMedia clears active media once native audio has stopped
 // on the primary slot. Another launcher may have taken over active media while the
 // track was still playing (e.g. a game started outside Zaparoo); only clear it if
-// native audio still owns it.
+// native audio still owns it. The ownership check and the clear are one atomic
+// step, so a lifecycle tracker publishing another launcher's media in between
+// is left alone.
 func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
-	media := svc.State.ActiveMedia()
-	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
-		return
+	svc.State.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
+	})
+}
+
+// stopNativeAudioPrimaryMedia runs an explicit stop of native audio on the
+// primary slot and clears the active media it owned. Native audio has no OS
+// process, so no platform tracker notices the stop, and the drain callback only
+// fires for tracks that end on their own. The media stop gate is held across
+// both steps: launches publish active media under the read side of that gate,
+// so a track launched while this runs cannot have its state wiped by a stop
+// that was meant for its predecessor.
+func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	svc.State.SetActiveMedia(nil)
+	release, err := svc.State.AcquireMediaStop(ctx)
+	if err != nil {
+		return fmt.Errorf("wait for in-flight media launch: %w", err)
+	}
+	defer release()
+
+	if err := stop(); err != nil {
+		return err
+	}
+	clearNativeAudioPrimaryMedia(svc)
+	return nil
 }
 
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
@@ -556,7 +580,9 @@ func startService(
 		platforms.NativeAudioLauncher(
 			playbackManager,
 			st.SetBackgroundMedia,
-			func() { clearNativeAudioPrimaryMedia(svc) },
+			func(ctx context.Context, stop func() error) error {
+				return stopNativeAudioPrimaryMedia(ctx, svc, stop)
+			},
 		),
 	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")

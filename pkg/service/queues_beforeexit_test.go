@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,8 +28,11 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -381,4 +385,99 @@ func TestRunTokenZapScript_StopStillHappensWithHarmlessHook(t *testing.T) {
 
 	assert.Equal(t, []string{"before_exit", "stop"}, env.rec.snapshot(),
 		"a hook that launches nothing must not suppress the stop")
+}
+
+// stubPlayback is the PlaybackManager the native-audio launcher needs for the
+// control tests below: it records calls and never fails.
+type stubPlayback struct {
+	calls []string
+	mu    syncutil.Mutex
+}
+
+func (p *stubPlayback) record(call string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, call)
+}
+
+func (p *stubPlayback) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.calls...)
+}
+
+func (p *stubPlayback) Play(string, string, audio.PlaybackOptions) error {
+	p.record("play")
+	return nil
+}
+
+func (p *stubPlayback) Stop(string) error {
+	p.record("stop")
+	return nil
+}
+
+func (p *stubPlayback) Pause(string) error {
+	p.record("pause")
+	return nil
+}
+
+func (p *stubPlayback) Resume(string) error {
+	p.record("resume")
+	return nil
+}
+
+func (p *stubPlayback) TogglePause(string) error {
+	p.record("toggle_pause")
+	return nil
+}
+
+func (p *stubPlayback) Seek(string, time.Duration) error {
+	p.record("seek")
+	return nil
+}
+
+func (*stubPlayback) State(string) audio.PlaybackState {
+	return audio.PlaybackState{}
+}
+
+// TestRunTokenZapScript_BeforeExitControlStopOnNativeAudio drives **control:stop
+// from a before_exit script while native audio is the outgoing media. The stop
+// control takes the media stop gate exclusively; before_exit runs with no gate
+// held, so the token must complete and leave nothing playing.
+func TestRunTokenZapScript_BeforeExitControlStopOnNativeAudio(t *testing.T) {
+	// Not parallel: cmdControl resolves launchers through the global launcher
+	// cache, which this test replaces for its duration.
+	env := setupExitTestEnv(t, keypressHook)
+	env.svc.Config.SetSystemDefaults([]config.SystemsDefault{
+		{System: systemdefs.SystemAudio, BeforeExit: "**control:stop"},
+	})
+	pm := &stubPlayback{}
+	env.svc.PlaybackManager = pm
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		platforms.NativeAudioLauncher(pm, env.svc.State.SetBackgroundMedia,
+			func(ctx context.Context, stop func() error) error {
+				return stopNativeAudioPrimaryMedia(ctx, env.svc, stop)
+			}),
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+
+	env.svc.State.SetActiveMedia(models.NewActiveMedia(
+		systemdefs.SystemAudio, "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID))
+	gen, active := env.svc.State.ActiveMediaReadyGeneration()
+	require.True(t, active)
+	env.svc.State.MarkActiveMediaReady(gen)
+
+	done := make(chan error, 1)
+	go func() { done <- env.run(t, "**stop") }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("gated **control:stop from before_exit hung the stop")
+	}
+
+	assert.Equal(t, []string{"stop"}, pm.snapshot(), "before_exit must stop native audio exactly once")
+	assert.Nil(t, env.svc.State.ActiveMedia(), "the stop control clears the media it stopped")
+	assert.Zero(t, env.rec.count("stop"), "nothing is left for the outer stop to exit")
 }

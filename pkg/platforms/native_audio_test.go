@@ -270,57 +270,109 @@ func TestNativeAudioControl_Stop(t *testing.T) {
 	assert.Equal(t, "stop", fp.lastCall)
 }
 
-func TestNativeAudioControl_StopPrimaryClearsMedia(t *testing.T) {
+func TestNativeAudioControl_StopPrimaryRunsThroughHook(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	cleared := false
-	fn := nativeAudioControl(fp, func() { cleared = true }, ControlStop)
+	hookCalls := 0
+	stoppedInsideHook := false
+	fn := nativeAudioControl(fp, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		assert.Empty(t, fp.lastCall, "playback must not be stopped before the hook runs")
+		err := stop()
+		stoppedInsideHook = fp.lastCall == "stop"
+		return err
+	}, ControlStop)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.NoError(t, err)
-	assert.Equal(t, "stop", fp.lastCall)
-	assert.True(t, cleared, "stop on the primary slot must clear active media")
+	assert.Equal(t, 1, hookCalls, "a primary stop must run through the hook")
+	assert.True(t, stoppedInsideHook, "the hook owns the stop so it can gate it")
+	assert.Equal(t, mediaslot.Primary, fp.lastSlot)
 }
 
-func TestNativeAudioControl_StopBackgroundLeavesPrimaryMedia(t *testing.T) {
+func TestNativeAudioControl_StopHookReceivesControlContext(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	cleared := false
-	fn := nativeAudioControl(fp, func() { cleared = true }, ControlStop)
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "control")
+	var seen context.Context
+	fn := nativeAudioControl(fp, func(ctx context.Context, stop func() error) error {
+		seen = ctx
+		return stop()
+	}, ControlStop)
+	require.NoError(t, fn(ctx, nil, ControlParams{Args: map[string]string{}}))
+	require.NotNil(t, seen)
+	assert.Equal(t, "control", seen.Value(ctxKey{}))
+}
+
+func TestNativeAudioControl_StopBackgroundSkipsPrimaryHook(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	fn := nativeAudioControl(fp, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		return stop()
+	}, ControlStop)
 	err := fn(context.Background(), nil, ControlParams{
 		Args: map[string]string{string(gozapscript.KeySlot): mediaslot.Background},
 	})
 	require.NoError(t, err)
+	assert.Equal(t, "stop", fp.lastCall)
 	assert.Equal(t, mediaslot.Background, fp.lastSlot)
-	assert.False(t, cleared, "background stop must not touch primary media")
+	assert.Equal(t, 0, hookCalls, "a background stop must not touch primary media")
 }
 
-func TestNativeAudioControl_StopErrorLeavesMedia(t *testing.T) {
+func TestNativeAudioControl_StopErrorReachesHook(t *testing.T) {
 	t.Parallel()
-	fp := &fakePlayback{stopErr: errors.New("stop err")}
-	cleared := false
-	fn := nativeAudioControl(fp, func() { cleared = true }, ControlStop)
+	stopErr := errors.New("stop err")
+	fp := &fakePlayback{stopErr: stopErr}
+	var hookErr error
+	fn := nativeAudioControl(fp, func(_ context.Context, stop func() error) error {
+		hookErr = stop()
+		return hookErr
+	}, ControlStop)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
-	require.Error(t, err)
-	assert.False(t, cleared, "a failed stop must not clear active media")
+	require.ErrorIs(t, err, stopErr)
+	require.ErrorIs(t, hookErr, stopErr, "the hook must see the failure so it can leave media alone")
 }
 
-func TestNativeAudioControl_PauseDoesNotClearMedia(t *testing.T) {
+func TestNativeAudioControl_StopHookErrorSkipsStop(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	cleared := false
-	fn := nativeAudioControl(fp, func() { cleared = true }, ControlPause)
+	gateErr := errors.New("gate err")
+	fn := nativeAudioControl(fp, func(context.Context, func() error) error {
+		return gateErr
+	}, ControlStop)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
-	require.NoError(t, err)
-	assert.False(t, cleared)
+	require.ErrorIs(t, err, gateErr)
+	assert.Empty(t, fp.lastCall, "a hook that never runs the stop must leave playback alone")
 }
 
-func TestNativeAudioControl_StopNilClearIsSafe(t *testing.T) {
+func TestNativeAudioControl_PauseSkipsStopHook(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	fn := nativeAudioControl(fp, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		return stop()
+	}, ControlPause)
+	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, hookCalls)
+	assert.Equal(t, "pause", fp.lastCall)
+}
+
+func TestNativeAudioControl_StopNilHooksAreSafe(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
 	fn := nativeAudioControl(fp, nil, ControlStop)
-	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
-	require.NoError(t, err)
-	assert.Equal(t, "stop", fp.lastCall)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		err := fn(context.Background(), nil, ControlParams{
+			Args: map[string]string{string(gozapscript.KeySlot): slot},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "stop", fp.lastCall)
+		assert.Equal(t, slot, fp.lastSlot)
+	}
 }
 
 func TestNativeAudioControl_FastForward_Default(t *testing.T) {
@@ -477,20 +529,24 @@ func TestNativeAudioLauncher_Fields(t *testing.T) {
 	}
 }
 
-// TestNativeAudioLauncher_StopControlClearsPrimaryMedia checks the factory wires the
-// clear hook to stop and nothing else. Native audio has no OS process, so without it
+// TestNativeAudioLauncher_StopControlRunsThroughHook checks the factory wires the
+// stop hook to stop and nothing else. Native audio has no OS process, so without it
 // an explicit stop leaves the daemon reporting the track as still playing.
-func TestNativeAudioLauncher_StopControlClearsPrimaryMedia(t *testing.T) {
+func TestNativeAudioLauncher_StopControlRunsThroughHook(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	cleared := 0
-	l := NativeAudioLauncher(fp, nil, func() { cleared++ })
+	hookCalls := 0
+	l := NativeAudioLauncher(fp, nil, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		return stop()
+	})
 
 	err := l.Controls[ControlPause].Func(context.Background(), nil, ControlParams{})
 	require.NoError(t, err)
-	assert.Equal(t, 0, cleared)
+	assert.Equal(t, 0, hookCalls)
 
 	err = l.Controls[ControlStop].Func(context.Background(), nil, ControlParams{})
 	require.NoError(t, err)
-	assert.Equal(t, 1, cleared)
+	assert.Equal(t, 1, hookCalls)
+	assert.Equal(t, "stop", fp.lastCall)
 }
