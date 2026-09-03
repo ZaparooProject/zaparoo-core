@@ -586,6 +586,179 @@ func TestCoreMatchesSystem(t *testing.T) {
 	}
 }
 
+// ArcadeDatabase.csv omits hundreds of set names, nearly all of them under
+// _Arcade/_alternatives, so the MRA itself has to settle whether a core the
+// name map cannot place is the one running the active media.
+func TestArcadeSetNameMatches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mraPath := filepath.Join(dir, "Street Fighter Zero 2 Alpha Unlock.mra")
+	writeTestMRA(t, mraPath, "sfz2aljbk", "Street Fighter Zero 2 Alpha Unlock")
+	noSetNamePath := filepath.Join(dir, "Nameless.mra")
+	writeTestMRA(t, noSetNamePath, "", "Nameless")
+	mglPath := filepath.Join(dir, "Wrapper.mgl")
+	writeTestMRA(t, mglPath, "sfz2aljbk", "Wrapper")
+
+	tests := []struct {
+		name    string
+		core    string
+		system  string
+		path    string
+		matches bool
+	}{
+		{name: "unlisted set name", core: "sfz2aljbk", system: ArcadeSystem, path: mraPath, matches: true},
+		{name: "case folded", core: "SFZ2ALJBK", system: ArcadeSystem, path: mraPath, matches: true},
+		{name: "a different set name", core: "sfz2alja", system: ArcadeSystem, path: mraPath},
+		{name: "not the arcade system", core: "sfz2aljbk", system: "SNES", path: mraPath},
+		{name: "not an mra", core: "sfz2aljbk", system: ArcadeSystem, path: mglPath},
+		{name: "mra declares no set name", core: "", system: ArcadeSystem, path: noSetNamePath},
+		{name: "missing file", core: "sfz2aljbk", system: ArcadeSystem, path: filepath.Join(dir, "Gone.mra")},
+		{name: "menu core", core: misterconfig.MenuCore, system: ArcadeSystem, path: mraPath},
+		{name: "no core", core: "", system: ArcadeSystem, path: mraPath},
+		{name: "no path", core: "sfz2aljbk", system: ArcadeSystem},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.matches, arcadeSetNameMatches(tt.core, tt.system, tt.path))
+		})
+	}
+}
+
+// An arcade core whose set name ArcadeDatabase.csv omits used to read as a bare
+// core, so LoadCore retired the media the launch had just published and hold
+// mode then had nothing left to exit on removal.
+func TestLoadCoreKeepsMediaForUnlistedArcadeSetName(t *testing.T) {
+	t.Parallel()
+
+	mraPath := filepath.Join(t.TempDir(), "Street Fighter Zero 2 Alpha Unlock.mra")
+	writeTestMRA(t, mraPath, "sfz2aljbk", "Street Fighter Zero 2 Alpha Unlock")
+
+	tests := []struct {
+		name     string
+		core     string
+		mediaSys string
+		mediaPat string
+		nameMap  []NameMapping
+		keeps    bool
+	}{
+		{
+			name: "unlisted arcade set name keeps its media",
+			core: "sfz2aljbk", mediaSys: ArcadeSystem, mediaPat: mraPath,
+			keeps: true,
+		},
+		{
+			name: "a different unlisted set name still retires it",
+			core: "sfz2alja", mediaSys: ArcadeSystem, mediaPat: mraPath,
+		},
+		{
+			name: "a bare unknown core still retires it",
+			core: "Utility", mediaSys: "SNES", mediaPat: "/games/SNES/Game.sfc",
+			nameMap: []NameMapping{{CoreName: "SNES", System: "SNES"}},
+		},
+		{
+			name: "a name-mapped core still keeps its media",
+			core: "SNES", mediaSys: "SNES", mediaPat: "/games/SNES/Game.sfc",
+			nameMap: []NameMapping{{CoreName: "SNES", System: "SNES"}},
+			keeps:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			coreFile := filepath.Join(t.TempDir(), "CORENAME")
+			require.NoError(t, os.WriteFile(coreFile, []byte(tt.core), 0o600))
+
+			published := models.NewActiveMedia(tt.mediaSys, tt.mediaSys, tt.mediaPat, "Game", "Launcher")
+			tr := &Tracker{
+				coreNameFile:   coreFile,
+				NameMap:        tt.nameMap,
+				activeMedia:    func() *models.ActiveMedia { return published },
+				setActiveMedia: func(media *models.ActiveMedia) { published = media },
+				setActiveGame:  func(string) error { return nil },
+				// An empty ACTIVEGAME stops LoadCore at the retention decision,
+				// which is the only thing under test here.
+				readActiveGame: func() (string, error) { return "", nil },
+			}
+
+			tr.LoadCore()
+
+			assert.Equal(t, tt.core, tr.ActiveCore)
+			if tt.keeps {
+				assert.NotNil(t, published, "the running core owns this media")
+				return
+			}
+			assert.Nil(t, published, "a core that owns nothing must retire the media")
+		})
+	}
+}
+
+// The same set name gap stopped loadGameLocked restoring the media it had just
+// retired, and stopped a manual MiSTer menu launch of such an MRA being tracked
+// at all.
+func TestLoadGameAcceptsUnlistedArcadeSetName(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared GlobalLauncherCache, and
+	// ResolvePath changes the process working directory.
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:         ArcadeSystem,
+		SystemID:   ArcadeSystem,
+		Extensions: []string{".mra"},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	mraPath := filepath.Join(t.TempDir(), "Street Fighter Zero 2 Alpha Unlock.mra")
+	writeTestMRA(t, mraPath, "sfz2aljbk", "Street Fighter Zero 2 Alpha Unlock")
+
+	newTracker := func(core string, published **models.ActiveMedia) *Tracker {
+		return &Tracker{
+			pl:             pl,
+			cfg:            &config.Instance{},
+			ActiveCore:     core,
+			readActiveGame: func() (string, error) { return mraPath, nil },
+			setActiveMedia: func(media *models.ActiveMedia) { *published = media },
+		}
+	}
+
+	t.Run("publishes under the core the MRA names", func(t *testing.T) {
+		var published *models.ActiveMedia
+		tr := newTracker("sfz2aljbk", &published)
+
+		tr.loadGame()
+
+		require.NotNil(t, published)
+		assert.Equal(t, ArcadeSystem, published.SystemID)
+		assert.Equal(t, mraPath, published.Path)
+		assert.Equal(t, ArcadeSystem+"/"+filepath.Base(mraPath), tr.ActiveGameID)
+
+		// What DoLaunch published for the same launch. Equal is the predicate
+		// State uses to decide a republish changed nothing, so this pins that
+		// the restore raises no stopped/started pair and splits no history row.
+		launched := models.NewActiveMedia(
+			ArcadeSystem, published.SystemName, mraPath, published.Name, ArcadeSystem,
+		)
+		assert.True(t, launched.Equal(published), "the restore must not look like new media")
+	})
+
+	t.Run("still ignores a game from another core", func(t *testing.T) {
+		var published *models.ActiveMedia
+		tr := newTracker("sfz2alja", &published)
+
+		tr.loadGame()
+
+		assert.Nil(t, published)
+	})
+}
+
 func TestClearActiveGameRetiresStateEvenWhenSignalWriteFails(t *testing.T) {
 	t.Parallel()
 
