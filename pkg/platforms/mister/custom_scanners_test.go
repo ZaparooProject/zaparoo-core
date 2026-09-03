@@ -326,11 +326,15 @@ func TestAmigaScanner_LeavesNameEmptyForIndexerTitleCleaning(t *testing.T) {
 	})
 }
 
-func TestAmigaLauncher_DoesNotMatchListingBackupFiles(t *testing.T) {
+// The listing files are the AmigaVision scanner's input, not media. Matching
+// them made the launcher resolve for a path it can never launch, so a listing
+// file showed up as a launch target that always failed.
+func TestAmigaLauncher_DoesNotMatchListingFiles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
 	cfg, err := config.NewConfig(t.TempDir(), config.Values{
 		Launchers: config.Launchers{
 			IndexRoot: []string{root, filepath.Join(root, "games")},
@@ -340,10 +344,26 @@ func TestAmigaLauncher_DoesNotMatchListingBackupFiles(t *testing.T) {
 
 	p := NewPlatform()
 	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
-	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt")))
-	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt")))
 	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt.bak")))
 	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt.bak")))
+
+	// The games the listing describes are still launchable.
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "Games", "Valid Game")))
+}
+
+// The scanner still has to recognise a listing file exactly, so it can drop one
+// the walk handed it without dropping a similarly named game.
+func TestIsAmigaVisionListingFile(t *testing.T) {
+	t.Parallel()
+
+	install := filepath.Join("games", "Amiga")
+	assert.True(t, isAmigaVisionListingFile(filepath.Join(install, "listings", "games.txt")))
+	assert.True(t, isAmigaVisionListingFile(filepath.Join(install, "listings", "demos.txt")))
+	assert.False(t, isAmigaVisionListingFile(filepath.Join(install, "listings", "games.txt.bak")))
+	assert.False(t, isAmigaVisionListingFile(filepath.Join(install, "listings", "demos.txt.bak")))
+	assert.False(t, isAmigaVisionListingFile(filepath.Join(install, "Games", "games.txt")))
 }
 
 func TestAmigaScanner_AddsVirtualMGLFiles(t *testing.T) {
