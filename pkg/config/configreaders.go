@@ -187,6 +187,8 @@ func matchesAnyDriverID(driverIDs []string, entryDriver string) bool {
 // a matching [[readers.connect]] entry over its [readers.drivers.<id>] entry.
 // Returns "" when neither sets one. Caller must hold c.mu.
 func (c *Instance) scanModeForReaderLocked(driverIDs []string, path string) string {
+	// Connect entries are a slice, so more than one entry naming the same
+	// reader resolves in the order the config file lists them.
 	for _, conn := range c.vals.Readers.Connect {
 		if !matchesAnyDriverID(driverIDs, conn.Driver) || conn.Path != path {
 			continue
@@ -196,16 +198,40 @@ func (c *Instance) scanModeForReaderLocked(driverIDs []string, path string) stri
 		}
 	}
 
-	for key, driver := range c.vals.Readers.Drivers {
-		if !matchesAnyDriverID(driverIDs, key) {
-			continue
-		}
-		if mode := NormalizeScanMode(driver.ScanMode); mode != "" {
+	// The driver table is a map, and a reader answers to several IDs, so more
+	// than one entry can name it. Walk driverIDs in order instead of the map,
+	// which puts the canonical ID ahead of its aliases and keeps the answer the
+	// same on every call.
+	for _, id := range driverIDs {
+		if mode := c.driverScanModeLocked(id); mode != "" {
 			return mode
 		}
 	}
 
 	return ""
+}
+
+// driverScanModeLocked returns the scan mode set by the [readers.drivers.<id>]
+// entry for one driver ID, or "" when no entry names it or none sets a mode.
+// Distinct keys can normalize alike ("pn532" and "PN532"), so a tie is broken
+// on the key itself rather than on map iteration order. Caller must hold c.mu.
+func (c *Instance) driverScanModeLocked(driverID string) string {
+	normalizedID := normalizeDriverID(driverID)
+
+	matched, mode := "", ""
+	for key, driver := range c.vals.Readers.Drivers {
+		if normalizeDriverID(key) != normalizedID {
+			continue
+		}
+		keyMode := NormalizeScanMode(driver.ScanMode)
+		if keyMode == "" {
+			continue
+		}
+		if matched == "" || key < matched {
+			matched, mode = key, keyMode
+		}
+	}
+	return mode
 }
 
 // ScanModeForReader returns the effective scan mode for a connected reader,

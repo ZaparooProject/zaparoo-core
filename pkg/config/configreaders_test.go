@@ -730,6 +730,83 @@ func TestScanModeForReader(t *testing.T) {
 	}
 }
 
+// A reader answers to several driver IDs, so more than one [readers.drivers.<id>]
+// entry can name it. The driver table is a map, so resolving by iterating it
+// picked a winner at random: the same config answered hold on some calls and tap
+// on others. Resolution follows the reader's own ID order instead.
+func TestScanModeForReaderResolvesConflictingDriverEntriesDeterministically(t *testing.T) {
+	t.Parallel()
+
+	// Every ID a PN532 answers to, canonical first, as readers.DriverIDs orders them.
+	pn532IDs := []string{"pn532", "pn532uart", "pn532i2c", "pn532spi"}
+
+	t.Run("the canonical entry wins over an alias entry", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Readers: Readers{
+					Scan: ReadersScan{Mode: ScanModeTap},
+					Drivers: map[string]DriverConfig{
+						"pn532":      {ScanMode: ScanModeTap},
+						"pn532_uart": {ScanMode: ScanModeHold},
+						"pn532i2c":   {ScanMode: ScanModeHold},
+					},
+				},
+			},
+		}
+
+		for range 100 {
+			assert.Equal(t, ScanModeTap, cfg.ScanModeForReader(pn532IDs, "/dev/ttyUSB0"))
+			assert.False(t, cfg.HoldModeEnabledForReader(pn532IDs, "/dev/ttyUSB0"))
+		}
+	})
+
+	t.Run("an alias entry applies when the canonical entry sets nothing", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Readers: Readers{
+					Scan: ReadersScan{Mode: ScanModeTap},
+					Drivers: map[string]DriverConfig{
+						"pn532":      {ScanMode: ""},
+						"pn532_uart": {ScanMode: ScanModeHold},
+					},
+				},
+			},
+		}
+
+		for range 100 {
+			assert.Equal(t, ScanModeHold, cfg.ScanModeForReader(pn532IDs, "/dev/ttyUSB0"))
+			assert.True(t, cfg.HoldModeEnabledForReader(pn532IDs, "/dev/ttyUSB0"))
+		}
+	})
+
+	t.Run("two keys that normalize alike answer the same way every call", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Readers: Readers{
+					Scan: ReadersScan{Mode: ScanModeTap},
+					Drivers: map[string]DriverConfig{
+						"pn532":   {ScanMode: ScanModeTap},
+						"PN532":   {ScanMode: ScanModeHold},
+						"pn_5_32": {ScanMode: ScanModeHold},
+					},
+				},
+			},
+		}
+
+		first := cfg.ScanModeForReader(pn532IDs, "/dev/ttyUSB0")
+		for range 100 {
+			assert.Equal(t, first, cfg.ScanModeForReader(pn532IDs, "/dev/ttyUSB0"))
+			assert.Equal(t, first == ScanModeHold, cfg.HoldModeEnabledForReader(pn532IDs, "/dev/ttyUSB0"))
+		}
+	})
+}
+
 // Resolving a per-reader override must never write back to the global setting,
 // which stays the single value the settings API reads and writes.
 func TestScanModeForReaderLeavesGlobalUntouched(t *testing.T) {
