@@ -769,3 +769,221 @@ func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "First", launcher.ID, "on tie, first match should win")
 }
+
+// TestMatchSystemFile_DuplicateLauncherIDs covers a custom launcher configured
+// with the same ID as a built-in one. The matcher precomputes folder data into
+// a map keyed by ID, so before the fix one entry answered for both and the
+// other's directory silently matched nothing.
+func TestMatchSystemFile_DuplicateLauncherIDs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+
+	duplicateID := "PS2"
+	customLauncher := platforms.Launcher{
+		ID:         duplicateID,
+		SystemID:   "PS2",
+		Folders:    []string{tmpDir},
+		Extensions: []string{".chd"},
+	}
+	builtinLauncher := platforms.Launcher{
+		ID:         duplicateID,
+		SystemID:   "PS2",
+		Folders:    []string{"PS2"},
+		Extensions: []string{".iso"},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{customLauncher, builtinLauncher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// The scanner matches through LauncherMatcher, which is where the
+	// per-launcher folder data is cached by ID.
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFileForScan("PS2", filepath.Join(tmpDir, "game.chd")),
+		"the absolute folder must still match when another launcher shares its ID")
+	assert.True(t, matcher.MatchSystemFileForScan("PS2", "/roms/PS2/game.iso"),
+		"the relative folder must still match when another launcher shares its ID")
+	assert.False(t, matcher.MatchSystemFileForScan("PS2", filepath.Join(tmpDir, "readme.txt")),
+		"an unrelated extension must not match either launcher")
+}
+
+func TestResolveLaunchableLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+
+	launched := false
+	realLauncher := platforms.Launcher{
+		ID:         "NES",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{"NES"},
+		Extensions: []string{".nes"},
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			launched = true
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+	musicLauncher := platforms.Launcher{
+		ID:         "NESMusic",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{"NES"},
+		Extensions: []string{".nsf"},
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+	scanOnly := platforms.Launcher{
+		ID:         "Famicom",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{tmpDir},
+		Extensions: []string{".nes"},
+		ScanOnly:   true,
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{scanOnly, realLauncher, musicLauncher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	mediaPath := filepath.Join(tmpDir, "Rockman 4.nes")
+
+	t.Run("scan-only launcher resolves to the system launcher", func(t *testing.T) {
+		resolved, err := ResolveLaunchableLauncher(&scanOnly, mediaPath)
+		require.NoError(t, err)
+		assert.Equal(t, "NES", resolved.ID)
+		require.NotNil(t, resolved.Launch)
+		_, launchErr := resolved.Launch(cfg, mediaPath, nil)
+		require.NoError(t, launchErr)
+		assert.True(t, launched, "the resolved launcher is the one that runs")
+	})
+
+	t.Run("a launchable launcher is returned unchanged", func(t *testing.T) {
+		resolved, err := ResolveLaunchableLauncher(&realLauncher, mediaPath)
+		require.NoError(t, err)
+		assert.Equal(t, realLauncher.ID, resolved.ID)
+	})
+
+	t.Run("allow list restriction survives the swap", func(t *testing.T) {
+		restricted := scanOnly
+		restricted.AllowListOnly = true
+		resolved, err := ResolveLaunchableLauncher(&restricted, mediaPath)
+		require.NoError(t, err)
+		assert.Equal(t, "NES", resolved.ID)
+		assert.True(t, resolved.AllowListOnly)
+	})
+
+	t.Run("FindLauncher delegates for a path only the scan-only launcher matches", func(t *testing.T) {
+		found, err := FindLauncher(cfg, mockPlatform, mediaPath)
+		require.NoError(t, err)
+		assert.Equal(t, "NES", found.ID)
+	})
+}
+
+func TestResolveLaunchableLauncher_NoLaunchableLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+
+	scanOnly := platforms.Launcher{
+		ID:         "Famicom",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{tmpDir},
+		Extensions: []string{".nes"},
+		ScanOnly:   true,
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{scanOnly})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	_, err := ResolveLaunchableLauncher(&scanOnly, filepath.Join(tmpDir, "Rockman 4.nes"))
+	require.ErrorIs(t, err, ErrNoLauncher)
+}
+
+// TestShouldSkipScanDirectory_DuplicateLauncherIDs covers the scan-exclude
+// agreement when two launchers share an ID. The agreement is decided by what
+// every launcher sharing a root asks for, so a launcher dropped from it because
+// its cache entry was blanked would let an excluded directory be walked.
+func TestShouldSkipScanDirectory_DuplicateLauncherIDs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+
+	duplicateID := "PS2"
+	excluding := platforms.Launcher{
+		ID:                    duplicateID,
+		SystemID:              "PS2",
+		Folders:               []string{tmpDir},
+		Extensions:            []string{".iso"},
+		ScanDirectoryExcludes: []string{"updates"},
+	}
+	other := platforms.Launcher{
+		ID:                    duplicateID,
+		SystemID:              "PS2",
+		Folders:               []string{tmpDir},
+		Extensions:            []string{".chd"},
+		ScanDirectoryExcludes: []string{"updates"},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{excluding, other})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "updates")),
+		"an excluded directory must still be skipped when another launcher shares the ID")
+	assert.False(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "games")),
+		"a directory nothing excludes must still be scanned")
+}

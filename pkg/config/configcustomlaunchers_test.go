@@ -68,6 +68,35 @@ func TestValidateCustomLauncher_NormalizesOmittedKind(t *testing.T) {
 	assert.Equal(t, CustomLauncherBackendCommand, entry.Backend)
 }
 
+func TestValidateCustomLauncher_MediaDirsOnlyEntry(t *testing.T) {
+	t.Run("accepted with system and media dirs", func(t *testing.T) {
+		entry := LaunchersCustom{
+			ID:        "Famicom",
+			System:    "NES",
+			MediaDirs: []string{"/media/fat/cifs/games/famicom"},
+			FileExts:  []string{".nes"},
+		}
+
+		require.NoError(t, validateCustomLauncher(&entry))
+		assert.Equal(t, CustomLauncherKindLauncher, entry.Kind)
+		assert.Empty(t, entry.Backend)
+	})
+
+	// Without media dirs it declares no folders, so it matches every path for
+	// its system and indexes nothing. Loading it would do nothing at all.
+	t.Run("rejected without media dirs", func(t *testing.T) {
+		entry := LaunchersCustom{ID: "Famicom", System: "NES", FileExts: []string{".nes"}}
+		require.ErrorContains(t, validateCustomLauncher(&entry),
+			"a launcher without execute must set system and media_dirs")
+	})
+
+	t.Run("rejected without system", func(t *testing.T) {
+		entry := LaunchersCustom{ID: "Famicom", MediaDirs: []string{"/games/famicom"}}
+		require.ErrorContains(t, validateCustomLauncher(&entry),
+			"a launcher without execute must set system and media_dirs")
+	})
+}
+
 func TestValidateCustomLauncher_RejectsInvalidCommonFields(t *testing.T) {
 	tests := []struct {
 		name  string

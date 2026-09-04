@@ -1745,8 +1745,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 	setCoreAvailability(ls)
 
-	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
-	return append(custom, ls...)
+	return helpers.CombineLaunchers(cfg, p, ls)
 }
 
 func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {

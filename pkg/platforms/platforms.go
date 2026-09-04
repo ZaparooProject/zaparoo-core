@@ -393,6 +393,11 @@ type Launcher struct {
 	// own path, so the alias would only duplicate it. Applies to symlinked files
 	// and directories. Direct path launches remain unaffected.
 	ScanSkipInternalSymlinks bool
+	// ScanOnly marks a launcher that contributes media directories to its
+	// system but cannot launch anything itself. Launch selection resolves it
+	// to a launchable launcher for the same system, so media found only in a
+	// user-configured directory still starts on the system's real launcher.
+	ScanOnly bool
 	// Available is populated by LauncherCache.
 	Available bool
 }

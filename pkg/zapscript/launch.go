@@ -313,6 +313,9 @@ func inferLauncherForSystemPath(
 	launchers := pl.Launchers(env.Cfg)
 	match := -1
 	for i := range launchers {
+		if launchers[i].ScanOnly {
+			continue
+		}
 		if !strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
@@ -828,7 +831,15 @@ func getLaunchClosure(
 			if launcher == nil {
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
-			log.Info().Msgf("launching with launcher: %s", launcherID)
+			// Naming a scan-only launcher is asking for the media it
+			// contributes, so honour it with the launcher that can start it
+			// rather than refusing a launcher the user configured themselves.
+			resolved, resolveErr := helpers.ResolveLaunchableLauncher(launcher, target.path)
+			if resolveErr != nil {
+				return fmt.Errorf("resolving launcher %s: %w", launcherID, resolveErr)
+			}
+			launcher = &resolved
+			log.Info().Msgf("launching with launcher: %s", launcher.ID)
 		} else if target.guideLauncherBySystem {
 			inferred, found := inferLauncherForSystemPath(pl, env, target.path, target.systemID)
 			if found {
