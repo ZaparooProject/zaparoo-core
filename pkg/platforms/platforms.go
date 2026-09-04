@@ -42,6 +42,12 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// ErrStopFailed reports that a stop was attempted and did not succeed: the
+// media is still running. Callers must not treat the media as stopped, and
+// platforms returning it must leave active media in place so Core's state
+// keeps matching reality.
+var ErrStopFailed = errors.New("failed to stop active launcher")
+
 // ScreenshotResult is the result of a platform screenshot capture.
 type ScreenshotResult struct {
 	// Path is the absolute path where the screenshot was saved on disk.
@@ -592,6 +598,9 @@ type Platform interface {
 	// and clears the active media if it was successful.
 	// intent indicates whether this is a preemption (new launcher starting)
 	// or a termination (returning to menu).
+	// Returns nil when nothing was running or the stop is confirmed, and an
+	// error wrapping ErrStopFailed when the media is known to still be
+	// running. Active media is only cleared when the stop succeeded.
 	StopActiveLauncher(intent StopIntent) error
 	// ReturnToMenu returns the platform to its main UI/launcher/frontend.
 	// For platforms with a menu system (MiSTer OSD, EmulationStation, Steam Big Picture),

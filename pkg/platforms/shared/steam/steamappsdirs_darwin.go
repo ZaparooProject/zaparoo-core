@@ -1,3 +1,5 @@
+//go:build darwin
+
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,23 +19,18 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package steamtracker
+package steam
 
-import (
-	"testing"
+import "path/filepath"
 
-	"github.com/stretchr/testify/assert"
-)
-
-func TestLaunchOwnershipRejectsStaleLifecycle(t *testing.T) {
-	t.Parallel()
-
-	var ownership launchOwnership
-	ownership.set(123, 10)
-	ownership.set(123, 20)
-
-	assert.False(t, ownership.clearIfMatches(123, 10))
-	assert.False(t, ownership.clearIfMatches(456, 20))
-	assert.True(t, ownership.clearIfMatches(123, 20))
-	assert.False(t, ownership.clearIfMatches(123, 20))
+// platformSteamAppsDirs returns default steamapps locations for macOS. The
+// candidate is relative to the home directory, so an empty home yields none
+// rather than a bare relative path.
+func platformSteamAppsDirs(home string) []string {
+	if home == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, "Library", "Application Support", "Steam", "steamapps"),
+	}
 }

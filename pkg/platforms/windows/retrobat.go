@@ -26,11 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -307,23 +304,6 @@ func killWindowsProcessTree(ctx context.Context, pid uint32, emulatorsDir string
 		return fmt.Errorf("process pid %d no longer matches RetroBat emulator path", pid)
 	}
 	return retroBatRunTaskKill(ctx, pid)
-}
-
-func runTaskKillPIDTree(ctx context.Context, pid uint32) error {
-	pidArg := strconv.FormatUint(uint64(pid), 10)
-	cmd := exec.CommandContext( //nolint:gosec // PID comes from local process enumeration.
-		ctx,
-		"taskkill.exe",
-		"/PID",
-		pidArg,
-		"/T",
-		"/F",
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("taskkill pid %d: %w: %s", pid, err, strings.TrimSpace(string(output)))
-	}
-	return nil
 }
 
 const retroBatLauncherPrefix = "RetroBat"

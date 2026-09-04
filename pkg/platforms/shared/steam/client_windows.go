@@ -31,7 +31,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sys/windows/registry"
 )
 
 // FindSteamDir locates the Steam installation directory on Windows using the Registry.
@@ -45,27 +44,11 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
 	}
 
-	// Try 64-bit systems first (most common)
-	paths := []string{
-		`SOFTWARE\Wow6432Node\Valve\Steam`,
-		`SOFTWARE\Valve\Steam`,
-	}
-
-	for _, path := range paths {
-		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
-		if err != nil {
-			continue
-		}
-
-		installPath, _, err := key.GetStringValue("InstallPath")
-		if closeErr := key.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing registry key")
-		}
-		if err != nil {
-			continue
-		}
-
-		// Validate the path exists
+	// registrySteamPaths is the single place the Steam root is read from the
+	// registry, so the scanner and the game tracker cannot disagree about
+	// where Steam is. It covers the per-user HKCU install as well as the
+	// machine-wide HKLM keys.
+	for _, installPath := range registrySteamPaths() {
 		if _, statErr := os.Stat(installPath); statErr == nil {
 			log.Debug().Msgf("found Steam installation via registry: %s", installPath)
 			return installPath

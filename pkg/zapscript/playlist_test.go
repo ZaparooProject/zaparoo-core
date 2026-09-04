@@ -22,6 +22,7 @@ package zapscript
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -976,6 +977,70 @@ func TestCmdPlaylistStop_BackgroundSlot(t *testing.T) {
 	queued := <-queue
 	require.NotNil(t, queued)
 	assert.True(t, queued.Clear, "clear sentinel must be set for background stop")
+}
+
+func TestCmdPlaylistStop_PrimarySlotStopsBeforeClearing(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	pls, queue := makePlaylistEnv()
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		assert.Empty(t, queue, "the playlist must not be cleared before the game has stopped")
+	}).Return(nil).Once()
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Nil(t, result.Playlist)
+
+	queued := <-queue
+	require.NotNil(t, queued)
+	assert.True(t, queued.Clear, "clear sentinel must be set once the game has stopped")
+	mp.AssertExpectations(t)
+}
+
+// A stop the platform could not carry out leaves the game running. The
+// playlist belongs to that game and must stay attached to it; a clear queued
+// beforehand could not be taken back.
+func TestCmdPlaylistStop_PrimarySlotKeepsPlaylistWhenStopFails(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	pls, queue := makePlaylistEnv()
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Return(platforms.ErrStopFailed).Once()
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	assert.False(t, result.PlaylistChanged)
+	assert.Empty(t, queue, "the game is still running, so its playlist stays")
+	mp.AssertExpectations(t)
+}
+
+// Only ErrStopFailed means the game is still up. Any other stop error is
+// reported, but the media is treated as gone and the playlist cleared with it,
+// as it always was.
+func TestCmdPlaylistStop_PrimarySlotClearsOnOtherStopErrors(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	pls, queue := makePlaylistEnv()
+	stopErr := errors.New("launcher exited with status 1")
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Return(stopErr).Once()
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.ErrorIs(t, err, stopErr)
+	assert.True(t, result.PlaylistChanged)
+	assert.Nil(t, result.Playlist)
+
+	queued := <-queue
+	require.NotNil(t, queued)
+	assert.True(t, queued.Clear)
 }
 
 func TestCmdPlaylistPause_BackgroundSlot(t *testing.T) {
