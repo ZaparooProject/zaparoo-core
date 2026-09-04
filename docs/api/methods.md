@@ -5200,6 +5200,8 @@ On Windows, Core runs unelevated in the user's desktop session, so two limits ap
 
 The virtual gamepad needs a driver on Windows. `input.gamepad` emulates an Xbox 360 controller through ViGEmBus, a kernel-mode driver the Zaparoo installer offers as an optional task; Core never installs it on its own, and installing it is the only step that needs administrator rights. Gamepad support is also off by default on Windows, because an unexpected virtual pad changes controller numbering in games: set `gamepad_enabled = true` under `[input]` to turn it on. With the setting on and the driver absent, `input.gamepad` reports that the driver is missing instead of reporting success. Uninstalling Zaparoo leaves the driver in place, because other software may be using it; remove it separately through Apps & Features, where it is listed as "ViGEm Bus Driver".
 
+The driver is published for x86 and x64 only, so the ARM64 build of Zaparoo does not offer the task and has no virtual gamepad: `gamepad_enabled` there reports the driver as missing whatever the setting says. Keyboard input is unaffected on every architecture.
+
 ### input.keyboard
 
 **Access:** Requires `input`.
