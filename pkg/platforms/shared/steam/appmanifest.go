@@ -205,24 +205,21 @@ func FindInstallDirByAppIDInSteamDir(steamDir string, appID int) (string, bool) 
 	return lookupInstallDirInLibraries(FindSteamAppsDir(steamDir), appID)
 }
 
-// DefaultSteamAppsDirs returns default locations for Steam's steamapps directory.
-// These are platform-specific paths where Steam is commonly installed.
+// DefaultSteamAppsDirs returns default locations for Steam's steamapps
+// directory. The candidates are supplied by the per-OS platformSteamAppsDirs,
+// so a Windows host is never handed Linux paths to stat.
 func DefaultSteamAppsDirs() []string {
-	// Get home directory
+	// A missing home directory is only fatal for the platforms that build
+	// their candidates from it; Windows resolves everything from the registry.
+	// platformSteamAppsDirs drops home-relative candidates when it is empty,
+	// so no bare relative path is ever handed back to be stat'd against the
+	// working directory.
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		log.Debug().Err(err).Msg("failed to get user home directory for Steam lookup")
+		home = ""
 	}
-
-	return []string{
-		// Standard Linux locations
-		filepath.Join(home, ".steam", "steam", "steamapps"),
-		filepath.Join(home, ".local", "share", "Steam", "steamapps"),
-		// Steam Deck
-		filepath.Join(home, ".steam", "steamapps"),
-		// Flatpak
-		filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam", "steamapps"),
-	}
+	return platformSteamAppsDirs(home)
 }
 
 // FindAppNameByAppID searches common Steam locations for an app's name.
