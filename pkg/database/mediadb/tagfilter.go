@@ -21,7 +21,6 @@ package mediadb
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -100,35 +99,63 @@ func isRequiredFavoriteFilter(filter zapscript.TagFilter) bool {
 	return tagType == string(tags.TagTypeUser) && tagValue == string(tags.TagUserFavorite)
 }
 
-func hasRequiredFavoriteFilter(filters []zapscript.TagFilter) bool {
-	return slices.ContainsFunc(filters, isRequiredFavoriteFilter)
+// browseTagPlan names the required tag filter, if any, that a browse should
+// resolve from the tag side rather than probe once per candidate row.
+//
+// Neither shape wins outright, so the choice is which side is smaller.
+// Correlated probes cost one lookup per row the browse reads; a forward set
+// costs one pass over the rows carrying the tag. Measured on the #1398 device
+// database: a tag matching nothing over a 20,000-file route is 9.4 ms probed
+// and 0.18 ms as a set, while a tag on 20,020 rows over a 120-file directory is
+// 0.5 ms probed and 3.9 ms as a set.
+//
+// The zero value means "no measurement available", and then a required
+// user:favorite is still assumed sparse, which is the rule this used before
+// there was anything to measure.
+type browseTagPlan struct {
+	driveFromTag *zapscript.TagFilter
+}
+
+// driver returns the filter to resolve from the tag side.
+func (p browseTagPlan) driver(filters []zapscript.TagFilter) (driver zapscript.TagFilter, ok bool) {
+	if p.driveFromTag != nil {
+		return *p.driveFromTag, true
+	}
+	for _, filter := range filters {
+		if isRequiredFavoriteFilter(filter) {
+			return filter, true
+		}
+	}
+	return zapscript.TagFilter{}, false
 }
 
 func buildBrowseTagFilterSQL(
 	filters []zapscript.TagFilter,
 	mediaRef string,
+	plan browseTagPlan,
 ) (clauses []string, args []any) {
-	if !hasRequiredFavoriteFilter(filters) {
+	driver, ok := plan.driver(filters)
+	if !ok {
 		return buildCandidateTagFilterSQLForRef(filters, mediaRef)
 	}
 
-	var favoriteFilter zapscript.TagFilter
-	remaining := make([]zapscript.TagFilter, 0, len(filters)-1)
+	taken := false
+	remaining := make([]zapscript.TagFilter, 0, len(filters))
 	for _, filter := range filters {
-		if favoriteFilter.Type == "" && isRequiredFavoriteFilter(filter) {
-			favoriteFilter = filter
+		if !taken && filter == driver {
+			taken = true
 			continue
 		}
 		remaining = append(remaining, filter)
 	}
 
-	favoriteClauses, favoriteArgs := buildTagFilterSQLForRef([]zapscript.TagFilter{favoriteFilter}, mediaRef)
+	driverClauses, driverArgs := buildTagFilterSQLForRef([]zapscript.TagFilter{driver}, mediaRef)
 	remainingClauses, remainingArgs := buildCandidateTagFilterSQLForRef(remaining, mediaRef)
-	clauses = make([]string, 0, len(favoriteClauses)+len(remainingClauses))
-	clauses = append(clauses, favoriteClauses...)
+	clauses = make([]string, 0, len(driverClauses)+len(remainingClauses))
+	clauses = append(clauses, driverClauses...)
 	clauses = append(clauses, remainingClauses...)
-	args = make([]any, 0, len(favoriteArgs)+len(remainingArgs))
-	args = append(args, favoriteArgs...)
+	args = make([]any, 0, len(driverArgs)+len(remainingArgs))
+	args = append(args, driverArgs...)
 	args = append(args, remainingArgs...)
 	return clauses, args
 }

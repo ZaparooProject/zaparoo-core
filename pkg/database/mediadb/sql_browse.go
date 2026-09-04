@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -553,6 +554,28 @@ func browseOverlaySources(overlay *database.BrowseOverlay) []database.BrowseSour
 	return overlay.Sources
 }
 
+// browseOverlaySoleSource returns the only route of a one-route overlay.
+//
+// A one-route overlay has nothing to merge, so every part of the merge costs
+// without changing the answer. Priorities are the slice index, so the only route
+// is priority 0 and no route can outrank it: the higher-priority checks
+// (overlayHigherPriorityDirectoryCondition and the direct_files shadow) are
+// constant-false. Media.Path is unique and ParentDir is fixed by the join, so
+// the filename the merge partitions by is unique per row and every row is its
+// own winner. What is left is a plain browse of that one prefix, which is the
+// shape the browse cache can answer.
+//
+// This is what #1398 hit: a system with one route spent 30 s counting the files
+// in its root through the merge query while the cache held the same number, and
+// media.browse died on the 30 s API timeout.
+func browseOverlaySoleSource(overlay *database.BrowseOverlay) (source database.BrowseSource, ok bool) {
+	sources := browseOverlaySources(overlay)
+	if len(sources) != 1 {
+		return database.BrowseSource{}, false
+	}
+	return sources[0], true
+}
+
 func sqlBrowseDirectories(
 	ctx context.Context,
 	db sqlQueryable,
@@ -624,6 +647,16 @@ const browseOverlayDirectoryTail = `ranked AS (
 		SELECT name, file_count, system_ids, parent_dir || name
 		FROM ranked
 		WHERE source_rank = 1`
+
+// browseOverlaySingleRouteDirectoryTail replaces browseOverlayDirectoryTail for
+// a one-route overlay. Both merge steps are inert there: nothing outranks
+// priority 0, so no candidate can be shadowed, and one route cannot list the
+// same name twice, so every candidate is its own winner. Dropping them also
+// drops the direct_files CTE, which reads every file sitting directly in the
+// route just to compare names. See browseOverlaySoleSource.
+const browseOverlaySingleRouteDirectoryTail = ` SELECT name, file_count, system_ids, parent_dir || name
+		FROM directory_candidates
+		WHERE TRUE`
 
 // sqlBrowseOverlayDirectories lists the merged immediate subdirectories of an
 // overlay's routes, preferring the browse cache and falling back to Media.
@@ -741,7 +774,11 @@ func browseOverlayDirectoriesCacheQuery(
 	}
 	query += `
 			GROUP BY sources.parent_dir, sources.priority, child.DBID, child.Name
-		), ` + browseOverlayDirectFilesCTE(systemClause)
+		)`
+	if len(sources) == 1 {
+		return query + browseOverlaySingleRouteDirectoryTail, args
+	}
+	query += `, ` + browseOverlayDirectFilesCTE(systemClause)
 	if systemClause != "" {
 		args = append(args, systemArgs...)
 	}
@@ -799,7 +836,11 @@ func browseOverlayDirectoriesMediaQuery(
 			FROM matched_dirs
 			WHERE instr(rest, '/') > 0
 			GROUP BY parent_dir, priority, name
-		), ` + browseOverlayDirectFilesCTE(systemClause)
+		)`
+	if len(sources) == 1 {
+		return query + browseOverlaySingleRouteDirectoryTail, args
+	}
+	query += `, ` + browseOverlayDirectFilesCTE(systemClause)
 	if systemClause != "" {
 		args = append(args, systemArgs...)
 	}
@@ -1092,15 +1133,177 @@ func browsePathPrefixCondition(column, pathPrefix string) (condition string, arg
 	return column + ` LIKE ? || '%'`, []any{pathPrefix}
 }
 
+// sqlBrowseScopeRows reports how many files a browse can read at most, summed
+// over its routes from the cache, so a tag filter has something to be compared
+// against. Reports ok=false when the cache cannot answer for every route.
+func sqlBrowseScopeRows(
+	ctx context.Context,
+	db sqlQueryable,
+	prefixes []string,
+	systems []systemdefs.System,
+) (rows int, ok bool, err error) {
+	if len(prefixes) == 0 {
+		return 0, false, nil
+	}
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil || !ready {
+		return 0, false, err
+	}
+	for _, prefix := range prefixes {
+		count, usable, countErr := sqlBrowseDirectFileCountFromCache(ctx, db, database.BrowseFileCountOptions{
+			PathPrefix: prefix,
+			Systems:    systems,
+		})
+		if countErr != nil || !usable {
+			return 0, false, countErr
+		}
+		rows += count
+	}
+	return rows, true, nil
+}
+
+// browseTagDriverCandidates returns the filters that could be resolved from the
+// tag side. Only required filters qualify: NOT filters already resolve to a
+// forward anti-set, OR filters are one grouped clause, and credit filters match
+// across three tag types, which the bounded count below does not model.
+func browseTagDriverCandidates(filters []zapscript.TagFilter) []zapscript.TagFilter {
+	candidates := make([]zapscript.TagFilter, 0, len(filters))
+	for _, filter := range filters {
+		if filter.Operator == zapscript.TagOperatorNOT || filter.Operator == zapscript.TagOperatorOR {
+			continue
+		}
+		if filter.Type == string(tags.TagTypeCredit) {
+			continue
+		}
+		candidates = append(candidates, filter)
+	}
+	return candidates
+}
+
+// sqlBrowseTagPlan picks the side a tag-filtered browse drives from, by finding
+// the required filter carrying fewer rows than the browse will read.
+//
+// The count stops at the scope, so the worst case reads scopeRows entries of
+// mediatags_tag_media_idx — one sequential pass over a covering index, to decide
+// whether to avoid that many random probes into two tag tables. Title tags are
+// counted as rows too, which overstates the media a tag covers and so errs
+// toward the probing the browse would have done anyway.
+func sqlBrowseTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	filters []zapscript.TagFilter,
+	scopeRows int,
+	scopeKnown bool,
+) browseTagPlan {
+	if !scopeKnown || scopeRows <= 0 || len(filters) == 0 {
+		return browseTagPlan{}
+	}
+
+	var (
+		best      zapscript.TagFilter
+		bestRows  int
+		bestFound bool
+	)
+	for _, filter := range browseTagDriverCandidates(filters) {
+		tagType, tagValue := resolveFilter(filter.Type, filter.Value)
+		var rows int
+		err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (
+			SELECT 1 FROM MediaTags
+				INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+				INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			UNION ALL
+			SELECT 1 FROM MediaTitleTags
+				INNER JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+				INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			LIMIT ?
+		)`, tagType, tagValue, tagType, tagValue, scopeRows).Scan(&rows)
+		if err != nil {
+			// A browse that still works is worth more than the faster shape.
+			log.Debug().Err(err).Str("tag", tagType+":"+tagValue).
+				Msg("browse tag cardinality probe failed; probing candidates instead")
+			return browseTagPlan{}
+		}
+		if rows >= scopeRows {
+			continue
+		}
+		if !bestFound || rows < bestRows {
+			best, bestRows, bestFound = filter, rows, true
+		}
+	}
+	if !bestFound {
+		return browseTagPlan{}
+	}
+	return browseTagPlan{driveFromTag: &best}
+}
+
+// browsePrefixTagPlan plans a tag filter over one directory.
+func browsePrefixTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	prefix string,
+	systems []systemdefs.System,
+	filters []zapscript.TagFilter,
+) browseTagPlan {
+	if len(filters) == 0 {
+		return browseTagPlan{}
+	}
+	scope, known, err := sqlBrowseScopeRows(ctx, db, []string{prefix}, systems)
+	if err != nil {
+		log.Debug().Err(err).Str("pathPrefix", prefix).Msg("browse tag scope lookup failed")
+		return browseTagPlan{}
+	}
+	return sqlBrowseTagPlan(ctx, db, filters, scope, known)
+}
+
+// browseOverlayTagPlan plans a tag filter over a merged root's routes.
+func browseOverlayTagPlan(
+	ctx context.Context, db sqlQueryable, opts *database.BrowseFilesOptions,
+) browseTagPlan {
+	return browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags)
+}
+
+func browseOverlayCountTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+) browseTagPlan {
+	return browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags)
+}
+
+func browseOverlayRoutesTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	overlay *database.BrowseOverlay,
+	systems []systemdefs.System,
+	filters []zapscript.TagFilter,
+) browseTagPlan {
+	if len(filters) == 0 {
+		return browseTagPlan{}
+	}
+	sources := browseOverlaySources(overlay)
+	prefixes := make([]string, len(sources))
+	for i := range sources {
+		prefixes[i] = sources[i].PathPrefix
+	}
+	scope, known, err := sqlBrowseScopeRows(ctx, db, prefixes, systems)
+	if err != nil {
+		log.Debug().Err(err).Msg("browse overlay tag scope lookup failed")
+		return browseTagPlan{}
+	}
+	return sqlBrowseTagPlan(ctx, db, filters, scope, known)
+}
+
 func browseFilesFilterCondition(
 	opts *database.BrowseFilesOptions,
 	includeParent bool,
+	tagPlan browseTagPlan,
 ) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "m.SortName")
-	// Most browse scopes are bounded enough for correlated candidate probes.
-	// Required favorites are exceptionally sparse in production, so drive from
-	// that reverse-index set and probe any remaining filters per candidate.
-	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m")
+	// Which side a tag filter drives from depends on which is smaller; see
+	// browseTagPlan.
+	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m", tagPlan)
 	conditions := make([]string, 0, 3+len(letterClauses)+len(tagClauses))
 	if includeParent {
 		conditions = append(conditions, `m.ParentDir = ?`)
@@ -1120,8 +1323,10 @@ func browseFilesFilterCondition(
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
-	return browseFilesFilterCondition(opts, true)
+func browseFilesBaseCondition(
+	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
+) (where string, args []any) {
+	return browseFilesFilterCondition(opts, true, tagPlan)
 }
 
 func browseFilenameExpr() string {
@@ -1337,67 +1542,279 @@ const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
 		AND descendant.ParentDir < higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
 )`
 
+// browseOverlayPreferredRouteCondition drops a candidate whose filename a
+// higher-priority route already supplies as a file.
+//
+// This is exactly what ROW_NUMBER() OVER (PARTITION BY <filename> ORDER BY
+// priority) used to decide. A row ranked first precisely when no higher-priority
+// route held its name: one route cannot hold a name twice, because Path is
+// unique under a fixed ParentDir, and no two routes share a priority, because
+// priority is the slice index. So the rank test and this predicate select the
+// same rows.
+//
+// Ranking cost a temp B-tree sort of every direct file in every route before a
+// single row could be emitted. Measured on the #1398 MiSTer corpus, two routes
+// over 20,000 files: 8.7 s to count and 11.0 s to list. As a predicate the
+// highest-priority route short-circuits on priority = 0 without probing at all,
+// and every other route pays one equality lookup on media_path_idx per row.
+//
+// The rival must pass the same system filter as the candidate, because ranking
+// partitioned only over rows that had already passed it.
+func browseOverlayPreferredRouteCondition(systems []systemdefs.System) (condition string, args []any) {
+	condition = `(sources.priority = 0 OR NOT EXISTS (
+		SELECT 1
+		FROM sources preferred
+		INNER JOIN Media rival
+			ON rival.Path = preferred.parent_dir || substr(m.Path, length(m.ParentDir) + 1)
+		WHERE preferred.priority < sources.priority
+			AND rival.IsMissing = 0`
+	if clause, systemArgs := browseSystemFilterClause("rs.SystemID", systems); clause != "" {
+		condition += `
+			AND rival.SystemDBID IN (SELECT rs.DBID FROM Systems rs WHERE ` + clause + `)`
+		args = systemArgs
+	}
+	return condition + `
+	))`, args
+}
+
+// browseOverlayShadowedByDirectoryCondition is the directory shadow rule under
+// the same short-circuit: nothing outranks priority 0, so the first route never
+// runs the correlated probe.
+func browseOverlayShadowedByDirectoryCondition() string {
+	return `(sources.priority = 0 OR ` + overlayHigherPriorityDirectoryCondition + `)`
+}
+
+// browseOverlayMergeSource is the FROM clause both merge statements read
+// candidates through, and browseOverlaySourcesCTE the routes it joins against.
+const (
+	browseOverlaySourcesCTE  = `WITH sources(parent_dir, priority, include_dirs) AS (VALUES `
+	browseOverlayMergeSource = `FROM sources
+		INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID`
+)
+
+// browseOverlaySourceValues renders the routes as the sources CTE's VALUES rows.
+func browseOverlaySourceValues(sources []database.BrowseSource) (values string, args []any) {
+	rows := make([]string, len(sources))
+	args = make([]any, 0, len(sources)*3+16)
+	for i := range sources {
+		rows[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+	return strings.Join(rows, ","), args
+}
+
+// browseOverlayRouteDedupeCondition drops a candidate whose filename one
+// specific higher-priority route already supplies as a file. Takes the route's
+// prefix as an argument so it can sit inside a per-route branch, where the
+// candidate's own route is fixed and there is no sources CTE to join against.
+const browseOverlayRouteDedupeCondition = `NOT EXISTS (
+			SELECT 1 FROM Media rival
+			WHERE rival.Path = ? || substr(m.Path, length(m.ParentDir) + 1)
+				AND rival.IsMissing = 0`
+
+// browseOverlayRouteShadowCondition is overlayHigherPriorityDirectoryCondition
+// for one specific higher-priority route. Same reasoning, same load-bearing
+// INDEXED BY: the ParentDir bounds are built by concatenation from the outer
+// row, so without the hint the planner takes media_missing_idx and each
+// candidate scans the whole of Media (#1279).
+const browseOverlayRouteShadowCondition = `NOT EXISTS (
+			SELECT 1 FROM Media descendant INDEXED BY idx_media_browse_sort
+			WHERE descendant.IsMissing = 0
+				AND descendant.ParentDir >= ? || substr(m.Path, length(m.ParentDir) + 1) || '/'
+				AND descendant.ParentDir < ? || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
+		)`
+
+// browseOverlayRouteMergeConditions returns the merge predicates route i must
+// pass, one pair per route the merge prefers, along with their arguments.
+func browseOverlayRouteMergeConditions(
+	sources []database.BrowseSource, index int, systems []systemdefs.System,
+) (conditions []string, args []any) {
+	systemClause, systemArgs := browseSystemFilterClause("rs.SystemID", systems)
+	for j := range index {
+		dedupe := browseOverlayRouteDedupeCondition
+		args = append(args, sources[j].PathPrefix)
+		if systemClause != "" {
+			dedupe += `
+				AND rival.SystemDBID IN (SELECT rs.DBID FROM Systems rs WHERE ` + systemClause + `)`
+			args = append(args, systemArgs...)
+		}
+		conditions = append(conditions, dedupe+`
+		)`)
+		if !sources[j].IncludeDirs {
+			continue
+		}
+		conditions = append(conditions, browseOverlayRouteShadowCondition)
+		args = append(args, sources[j].PathPrefix, sources[j].PathPrefix)
+	}
+	return conditions, args
+}
+
+// browseOverlayRouteSort returns how one route's rows should be ordered and
+// seeked, given the sort the caller asked for and the route's prefix.
+//
+// A filename sort orders by substr(m.Path, length(m.ParentDir) + 1), which no
+// index can serve, so a route sorted that way has to be read in full. Within one
+// route the prefix is constant, so that suffix and m.Path put the rows in the
+// same order, and ordering by m.Path rides media_path_idx instead. The redundant
+// range is what lets the planner see it: m.ParentDir = ? already implies it, but
+// only as a fact about the data, not as bounds on the ordered column.
+//
+// The emitted SortValue stays the suffix either way, so cursors issued before
+// this and the merge across routes both keep working on the same values.
+func browseOverlayRouteSort(
+	sortExpr, prefix string, cursor *database.BrowseCursor,
+) browseRouteSort {
+	route := browseRouteSort{orderExpr: sortExpr}
+	if cursor != nil {
+		route.cursorValue = cursor.SortValue
+	}
+	if sortExpr != browseFilenameExpr() {
+		return route
+	}
+	route.orderExpr = "m.Path"
+	route.rangeClause = ` AND m.Path >= ? AND m.Path < ? || char(1114111)`
+	route.rangeArgs = []any{prefix, prefix}
+	if cursor != nil {
+		route.cursorValue = prefix + cursor.SortValue
+	}
+	return route
+}
+
+// browseRouteSort is how one route is ordered and seeked within the merge.
+type browseRouteSort struct {
+	cursorValue any
+	orderExpr   string
+	rangeClause string
+	rangeArgs   []any
+}
+
+// browseOverlayMergedFilesQuery reads each route's own best rows and merges
+// those, rather than reading every route in full and sorting the result.
+//
+// A merged root cannot ride one index the way a single directory can, so the
+// flat statement had to read every direct file in every route and sort them for
+// one page. On the #1398 device corpus, two routes over 20,000 files, that was
+// 11.0 s a page. Each route on its own is an ordered range of
+// idx_media_browse_sort, so a per-route branch stops as soon as it has Limit
+// rows, and the outer query merges at most one page per route.
+//
+// Taking each route's top rows is safe because the merge predicates are applied
+// inside the branch, before its LIMIT: a branch yields that route's best
+// surviving rows, and the best surviving rows overall are among them, which is
+// the ordinary k-way merge argument. Filtering after the LIMIT instead would
+// not be safe, because a route whose leading rows are all dropped would hide
+// the surviving rows behind them.
+func browseOverlayMergedFilesQuery(
+	opts *database.BrowseFilesOptions, sortExpr, direction, cursorOp string, tagPlan browseTagPlan,
+) (query string, args []any) {
+	sources := browseOverlaySources(opts.Overlay)
+	branches := make([]string, len(sources))
+	for i := range sources {
+		routeOpts := *opts
+		routeOpts.PathPrefix = sources[i].PathPrefix
+		where, whereArgs := browseFilesFilterCondition(&routeOpts, true, tagPlan)
+		args = append(args, whereArgs...)
+
+		route := browseOverlayRouteSort(sortExpr, sources[i].PathPrefix, opts.Cursor)
+		where += route.rangeClause
+		args = append(args, route.rangeArgs...)
+
+		mergeConditions, mergeArgs := browseOverlayRouteMergeConditions(sources, i, opts.Systems)
+		if len(mergeConditions) > 0 {
+			where += `
+			AND ` + strings.Join(mergeConditions, `
+			AND `)
+		}
+		args = append(args, mergeArgs...)
+
+		if opts.Cursor != nil {
+			where += `
+			AND (` + route.orderExpr + `, m.DBID) ` + cursorOp + ` (?, ?)`
+			args = append(args, route.cursorValue, opts.Cursor.LastID)
+		}
+		branches[i] = `SELECT * FROM (
+			SELECT m.DBID AS dbid, ` + sortExpr + ` AS sortval
+			FROM Media m
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + where + `
+			ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + `
+			LIMIT ?
+		)`
+		args = append(args, opts.Limit)
+	}
+
+	// A subquery column carries no explicit collation, so the merge has to name
+	// the same one again or it would order the branches by BINARY.
+	mergeOrder := "candidates.sortval"
+	if sortExpr == browseTitleSortExpr() {
+		mergeOrder += " COLLATE " + browseTitleCollationName
+	}
+	return `WITH candidates AS (
+		` + strings.Join(branches, `
+		UNION ALL
+		`) + `
+	)
+	SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+		mt.DisambiguationTypes, candidates.sortval AS SortValue
+	FROM candidates
+	INNER JOIN Media m ON m.DBID = candidates.dbid
+	INNER JOIN Systems s ON m.SystemDBID = s.DBID
+	INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+	ORDER BY ` + mergeOrder + ` ` + direction + `, m.DBID ` + direction + `
+	LIMIT ?`, append(args, opts.Limit)
+}
+
+// browseOverlayFilesQuery builds the overlay file-listing statement and its
+// arguments. Separate from the exec so the query-plan regression test can
+// measure the statement production actually runs, matching
+// browseOverlayFileCountQuery.
+func browseOverlayFilesQuery(
+	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
+) (query string, args []any) {
+	sortExpr := browseTitleSortExpr()
+	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
+		sortExpr = browseFilenameExpr()
+	}
+	direction, cursorOp := "ASC", ">"
+	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
+		direction, cursorOp = "DESC", "<"
+	}
+
+	sole, single := browseOverlaySoleSource(opts.Overlay)
+	if !single {
+		return browseOverlayMergedFilesQuery(opts, sortExpr, direction, cursorOp, tagPlan)
+	}
+
+	// One route has nothing to merge, so it reads Media directly and the route
+	// prefix is just the parent filter. See browseOverlaySoleSource.
+	routeOpts := *opts
+	routeOpts.PathPrefix = sole.PathPrefix
+	where, args := browseFilesFilterCondition(&routeOpts, true, tagPlan)
+	route := browseOverlayRouteSort(sortExpr, sole.PathPrefix, opts.Cursor)
+	where += route.rangeClause
+	args = append(args, route.rangeArgs...)
+	query = ` SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+		mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
+		FROM Media m
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+		WHERE ` + where
+	if opts.Cursor != nil {
+		query += ` AND (` + route.orderExpr + `, m.DBID) ` + cursorOp + ` (?, ?)`
+		args = append(args, route.cursorValue, opts.Cursor.LastID)
+	}
+	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
+	return query, append(args, opts.Limit)
+}
+
 func sqlBrowseOverlayFilesFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	sources := browseOverlaySources(opts.Overlay)
-	values := make([]string, len(sources))
-	args := make([]any, 0, len(sources)+16)
-	for i := range sources {
-		values[i] = "(?, ?, ?)"
-		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
-	}
-
-	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		winnerConditions = append(winnerConditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
-		 ranked AS (
-			SELECT m.DBID,
-				ROW_NUMBER() OVER (
-					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
-					ORDER BY sources.priority ASC, m.DBID ASC
-				) AS source_rank
-			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
-			INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			WHERE ` + strings.Join(winnerConditions, " AND ") + `
-		)`
-
-	filterOpts := *opts
-	filterOpts.Systems = nil
-	where, filterArgs := browseFilesFilterCondition(&filterOpts, false)
-	args = append(args, filterArgs...)
+	query, args := browseOverlayFilesQuery(opts, browseOverlayTagPlan(ctx, db, opts))
 	sortMode := opts.Sort
-	sortExpr := browseTitleSortExpr()
-	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
-		sortExpr = browseFilenameExpr()
-	}
-	query += ` SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
-		mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
-		FROM ranked
-		INNER JOIN Media m ON m.DBID = ranked.DBID
-		INNER JOIN Systems s ON m.SystemDBID = s.DBID
-		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
-		WHERE ranked.source_rank = 1 AND ` + where
-	if opts.Cursor != nil {
-		op := ">"
-		if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
-			op = "<"
-		}
-		query += ` AND (` + sortExpr + `, m.DBID) ` + op + ` (?, ?)`
-		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
-	}
-	direction := "ASC"
-	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
-		direction = "DESC"
-	}
-	query += ` ORDER BY ` + sortExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
-	args = append(args, opts.Limit)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1443,7 +1860,8 @@ func sqlBrowseFilesFromMedia(
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	where, args := browseFilesBaseCondition(opts)
+	tagPlan := browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags)
+	where, args := browseFilesBaseCondition(opts, tagPlan)
 	sortModeStarted := time.Now()
 	sortMode := resolveBrowseSortMode(ctx, db, opts)
 	sortModeElapsed := time.Since(sortModeStarted)
@@ -1971,7 +2389,14 @@ func sqlBrowseFileCount(
 	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
-		return sqlBrowseOverlayFileCount(ctx, db, opts)
+		sole, single := browseOverlaySoleSource(opts.Overlay)
+		if !single {
+			return sqlBrowseOverlayFileCount(ctx, db, opts)
+		}
+		// One route merges with nothing, so counting its direct files is a plain
+		// count under that prefix. See browseOverlaySoleSource.
+		opts.Overlay = nil
+		opts.PathPrefix = sole.PathPrefix
 	}
 
 	// Letter and tag scopes need row-level predicates absent from compact cache.
@@ -1996,41 +2421,28 @@ func sqlBrowseFileCount(
 // measure the statement production actually runs rather than a copy of it.
 func browseOverlayFileCountQuery(
 	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+	tagPlan browseTagPlan,
 ) (query string, args []any) {
-	sources := browseOverlaySources(opts.Overlay)
-	values := make([]string, len(sources))
-	args = make([]any, 0, len(sources)+16)
-	for i := range sources {
-		values[i] = "(?, ?, ?)"
-		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
-	}
-	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		winnerConditions = append(winnerConditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	filterOpts := &database.BrowseFilesOptions{
-		Letter: opts.Letter,
-		Tags:   opts.Tags,
-	}
-	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	values, args := browseOverlaySourceValues(browseOverlaySources(opts.Overlay))
+
+	// One flat statement: the merge is two predicates now, so there is no ranked
+	// CTE to materialise and no second pass over Media to re-read the winners.
+	where, filterArgs := browseFilesFilterCondition(&database.BrowseFilesOptions{
+		Letter:  opts.Letter,
+		Systems: opts.Systems,
+		Tags:    opts.Tags,
+	}, false, tagPlan)
 	args = append(args, filterArgs...)
-	return `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
-		ranked AS (
-			SELECT m.DBID,
-				ROW_NUMBER() OVER (
-					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
-					ORDER BY sources.priority ASC, m.DBID ASC
-				) AS source_rank
-			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
-			INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			WHERE ` + strings.Join(winnerConditions, " AND ") + `
-		)
+
+	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
+	args = append(args, preferredArgs...)
+
+	return browseOverlaySourcesCTE + values + `)
 		SELECT COUNT(*)
-		FROM ranked
-		INNER JOIN Media m ON m.DBID = ranked.DBID
-		WHERE ranked.source_rank = 1 AND ` + where, args
+		` + browseOverlayMergeSource + `
+		WHERE ` + where + `
+			AND ` + preferred + `
+			AND ` + browseOverlayShadowedByDirectoryCondition(), args
 }
 
 func sqlBrowseOverlayFileCount(
@@ -2038,12 +2450,187 @@ func sqlBrowseOverlayFileCount(
 	db sqlQueryable,
 	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
-	query, args := browseOverlayFileCountQuery(opts)
-	var count int
+	count, served, err := sqlBrowseTwoRouteFileCountFromCache(ctx, db, opts)
+	if err != nil || served {
+		return count, err
+	}
+	query, args := browseOverlayFileCountQuery(opts, browseOverlayCountTagPlan(ctx, db, opts))
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("browse overlay file count: %w", err)
 	}
 	return count, nil
+}
+
+// sqlBrowseTwoRouteFileCountFromCache totals a two-route merged root without
+// reading either route's files.
+//
+// The statement below has to touch every direct file in every route, because
+// each one has to be checked against the routes the merge prefers. On the #1398
+// device corpus that was 7.8 s for two routes over 20,000 files, and the count
+// runs on the merged root's first page, so it lands in every request.
+//
+// The cache already holds each route's direct-file total. What it cannot hold is
+// which names the routes share, but that correction is bounded by the smaller
+// route rather than by the larger:
+//
+//	total = |route 0| + |route 1| - |names in both| - |route 1 names shadowed by a route 0 directory|
+//
+// Both corrections are driven from the small side — the smaller route's files
+// for the first, route 0's child directories for the second — so a big route
+// paired with a small one costs a handful of lookups rather than 20,000.
+//
+// Only two routes: three or more needs inclusion-exclusion over every subset,
+// and a system resolving to three roots is rare enough not to be worth that.
+// Anything this cannot answer falls back to the statement.
+func sqlBrowseTwoRouteFileCountFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
+) (count int, served bool, err error) {
+	sources := browseOverlaySources(opts.Overlay)
+	// A letter or tag filter is a row-level predicate the cached totals know
+	// nothing about.
+	if len(sources) != 2 || opts.Letter != nil || len(opts.Tags) > 0 {
+		return 0, false, nil
+	}
+	covered, err := sqlBrowseCacheCoversSystems(ctx, db, opts.Systems)
+	if err != nil || !covered {
+		return 0, false, err
+	}
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil || !ready {
+		return 0, false, err
+	}
+
+	totals := make([]int, len(sources))
+	for i := range sources {
+		routeOpts := opts
+		routeOpts.Overlay = nil
+		routeOpts.PathPrefix = sources[i].PathPrefix
+		routeTotal, usable, cacheErr := sqlBrowseDirectFileCountFromCache(ctx, db, routeOpts)
+		if cacheErr != nil || !usable {
+			return 0, false, cacheErr
+		}
+		totals[i] = routeTotal
+	}
+
+	// Shared names are symmetric, so drive the scan from whichever route holds
+	// fewer files and probe the other by path.
+	driver, probed := 0, 1
+	if totals[1] < totals[0] {
+		driver, probed = 1, 0
+	}
+	shared, err := sqlBrowseRouteSharedNameCount(
+		ctx, db, sources[driver].PathPrefix, sources[probed].PathPrefix, opts.Systems)
+	if err != nil {
+		return 0, false, err
+	}
+
+	shadowed := 0
+	if sources[0].IncludeDirs {
+		shadowed, served, err = sqlBrowseRouteShadowedNameCount(
+			ctx, db, sources[0].PathPrefix, sources[1].PathPrefix, opts.Systems)
+		if err != nil || !served {
+			return 0, false, err
+		}
+	}
+	return totals[0] + totals[1] - shared - shadowed, true, nil
+}
+
+// sqlBrowseRouteSharedNameCount counts the filenames both routes hold, scanning
+// driverPrefix and probing probedPrefix by path.
+func sqlBrowseRouteSharedNameCount(
+	ctx context.Context,
+	db sqlQueryable,
+	driverPrefix, probedPrefix string,
+	systems []systemdefs.System,
+) (int, error) {
+	args := []any{driverPrefix}
+	query := `SELECT COUNT(*)
+		FROM Media a
+		INNER JOIN Systems sa ON a.SystemDBID = sa.DBID
+		WHERE a.ParentDir = ? AND a.IsMissing = 0`
+	systemClause, systemArgs := browseSystemFilterClause("sa.SystemID", systems)
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+		AND EXISTS (
+			SELECT 1 FROM Media b
+			INNER JOIN Systems sb ON b.SystemDBID = sb.DBID
+			WHERE b.Path = ? || substr(a.Path, length(a.ParentDir) + 1)
+				AND b.IsMissing = 0`
+	args = append(args, probedPrefix)
+	if clause, clauseArgs := browseSystemFilterClause("sb.SystemID", systems); clause != "" {
+		query += ` AND ` + clause
+		args = append(args, clauseArgs...)
+	}
+	query += `
+		)`
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse route shared name count: %w", err)
+	}
+	return count, nil
+}
+
+// sqlBrowseRouteShadowedNameCount counts the files in lowerPrefix whose name the
+// higher-priority route supplies as a directory, which the merge drops.
+//
+// The names come from the cache's child directories, which is why this is cheap:
+// a route has a handful of directories and tens of thousands of files. They are
+// deliberately not filtered by system, matching the statement's shadow rule,
+// where any media beneath the directory makes it shadow. Names the higher route
+// also holds as a file are excluded so they are not subtracted twice, once here
+// and once as a shared name.
+func sqlBrowseRouteShadowedNameCount(
+	ctx context.Context,
+	db sqlQueryable,
+	higherPrefix, lowerPrefix string,
+	systems []systemdefs.System,
+) (count int, served bool, err error) {
+	higherID, ok, err := sqlBrowseDirID(ctx, db, browseRouteCacheKey(higherPrefix))
+	if err != nil || !ok {
+		return 0, false, err
+	}
+
+	args := []any{higherID, lowerPrefix}
+	query := `SELECT COUNT(*)
+		FROM (
+			SELECT DISTINCT d.Name AS name
+			FROM BrowseDirCounts c
+			INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
+			WHERE c.ParentDirDBID = ? AND c.ChildDirDBID != c.ParentDirDBID AND d.IsVirtual = 0
+		) dirs
+		WHERE EXISTS (
+			SELECT 1 FROM Media m
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE m.Path = ? || dirs.name AND m.IsMissing = 0`
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems)
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM Media hm
+			INNER JOIN Systems hs ON hm.SystemDBID = hs.DBID
+			WHERE hm.Path = ? || dirs.name AND hm.IsMissing = 0`
+	args = append(args, higherPrefix)
+	if systemClause != "" {
+		query += ` AND ` + strings.ReplaceAll(systemClause, "s.SystemID", "hs.SystemID")
+		args = append(args, systemArgs...)
+	}
+	query += `
+		)`
+
+	if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&count); scanErr != nil {
+		return 0, false, fmt.Errorf("browse route shadowed name count: %w", scanErr)
+	}
+	return count, true, nil
 }
 
 func sqlBrowseDirectFileCountFromCache(
@@ -2123,7 +2710,7 @@ func sqlBrowseFileCountFromMedia(
 		Letter:     opts.Letter,
 		Systems:    opts.Systems,
 		Tags:       opts.Tags,
-	})
+	}, browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags))
 	query := `SELECT COUNT(*)
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
@@ -2145,11 +2732,24 @@ func sqlBrowseDirCount(
 	opts database.BrowseDirCountOptions,
 ) (int, error) {
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
-		dirs, overlayErr := sqlBrowseOverlayDirectories(ctx, db, database.BrowseDirectoriesOptions{
-			Overlay: opts.Overlay,
-			Systems: opts.Systems,
-		})
-		return len(dirs), overlayErr
+		sole, single := browseOverlaySoleSource(opts.Overlay)
+		if !single {
+			dirs, overlayErr := sqlBrowseOverlayDirectories(ctx, db, database.BrowseDirectoriesOptions{
+				Overlay: opts.Overlay,
+				Systems: opts.Systems,
+			})
+			return len(dirs), overlayErr
+		}
+		// A route excluded from the directory listing contributes no directories
+		// to count, matching the include_dirs = 1 filter the merge applies.
+		if !sole.IncludeDirs {
+			return 0, nil
+		}
+		// One route merges with nothing, so this is a plain child-directory count
+		// under that prefix, and the cache can answer it without listing every
+		// directory first. See browseOverlaySoleSource.
+		opts.Overlay = nil
+		opts.PathPrefix = sole.PathPrefix
 	}
 
 	ready, err := sqlBrowseCacheReady(ctx, db)
@@ -2296,7 +2896,8 @@ func sqlBrowseIndex(
 		}, nil
 	}
 
-	where, args := browseFilesBaseCondition(filesOpts)
+	where, args := browseFilesBaseCondition(filesOpts,
+		browsePrefixTagPlan(ctx, db, filesOpts.PathPrefix, filesOpts.Systems, filesOpts.Tags))
 	// Only join Systems when a system filter is active; browseFilesBaseCondition
 	// references s.SystemID solely for that filter, so an unfiltered facet would
 	// otherwise pay one PK lookup per row for nothing.
@@ -2374,7 +2975,10 @@ func sqlBrowseOverlayIndex(
 	opts *database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {
 	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
-		total, err := sqlBrowseOverlayFileCount(ctx, db, database.BrowseFileCountOptions{
+		// Through sqlBrowseFileCount, not the overlay statement directly, so the
+		// total takes the same routing every other browse total does: collapsed
+		// for one route, cached for two.
+		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
 			Overlay: opts.Overlay,
 			Systems: opts.Systems,
 			Tags:    opts.Tags,
@@ -2389,47 +2993,36 @@ func sqlBrowseOverlayIndex(
 		}, nil
 	}
 
-	sources := browseOverlaySources(opts.Overlay)
-	values := make([]string, len(sources))
-	args := make([]any, 0, len(sources)+16)
-	for i := range sources {
-		values[i] = "(?, ?, ?)"
-		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
-	}
-	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		winnerConditions = append(winnerConditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	filterOpts := &database.BrowseFilesOptions{Tags: opts.Tags}
-	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	values, args := browseOverlaySourceValues(browseOverlaySources(opts.Overlay))
+	// The merge is the same two predicates the other overlay statements use, so
+	// a one-route overlay pays nothing for it and no route's files are sorted
+	// just to rank them. The system filter has to sit in this WHERE: it used to
+	// ride in the ranked CTE, which no longer exists.
+	where, filterArgs := browseFilesFilterCondition(&database.BrowseFilesOptions{
+		Systems: opts.Systems,
+		Tags:    opts.Tags,
+	}, false, browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags))
 	args = append(args, filterArgs...)
+	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
+	args = append(args, preferredArgs...)
+
 	desc := opts.Sort == "name-desc"
 	direction := "ASC"
 	if desc {
 		direction = "DESC"
 	}
 	bucketExpr := browseBucketKeyExpr("m.SortName")
-	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
-		ranked AS (
-			SELECT m.DBID,
-				ROW_NUMBER() OVER (
-					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
-					ORDER BY sources.priority ASC, m.DBID ASC
-				) AS source_rank
-			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
-			INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			WHERE ` + strings.Join(winnerConditions, " AND ") + `
-		), ordered AS (
+	query := browseOverlaySourcesCTE + values + `),
+		ordered AS (
 			SELECT ` + bucketExpr + ` AS bucket,
 				m.SortName AS sortValue,
 				m.DBID AS dbid,
 				ROW_NUMBER() OVER (ORDER BY ` + browseTitleSortExpr() + ` ` + direction +
 		`, m.DBID ` + direction + `) AS rn
-			FROM ranked
-			INNER JOIN Media m ON m.DBID = ranked.DBID
-			WHERE ranked.source_rank = 1 AND ` + where + `
+			` + browseOverlayMergeSource + `
+			WHERE ` + where + `
+				AND ` + preferred + `
+				AND ` + browseOverlayShadowedByDirectoryCondition() + `
 		), counts AS (
 			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
 		)
