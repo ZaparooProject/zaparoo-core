@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
-	"github.com/bendahl/uinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,28 +24,26 @@ func pngBytes() []byte {
 	return append(sig, iend...)
 }
 
-// trackingKeyboard is a minimal uinput.Keyboard that records KeyDown calls.
+// trackingKeyboard is a minimal KeyboardDevice that records KeyDown calls.
 type trackingKeyboard struct {
 	keyDownErr  error
 	keyDownKeys []int
 }
 
-func (*trackingKeyboard) KeyPress(_ int) error { return nil }
 func (m *trackingKeyboard) KeyDown(key int) error {
 	m.keyDownKeys = append(m.keyDownKeys, key)
 	return m.keyDownErr
 }
-func (*trackingKeyboard) KeyUp(_ int) error             { return nil }
-func (*trackingKeyboard) FetchSyspath() (string, error) { return "", nil }
-func (*trackingKeyboard) Close() error                  { return nil }
+func (*trackingKeyboard) KeyUp(_ int) error { return nil }
+func (*trackingKeyboard) Close() error      { return nil }
 
-// initMockKbd wires a trackingKeyboard into the platform's LinuxInput by
+// initMockKbd wires a trackingKeyboard into the platform's InputManager by
 // calling InitDevices with a mock factory. Returns the keyboard for assertions.
 func initMockKbd(t *testing.T, p *Platform, keyDownErr error) *trackingKeyboard {
 	t.Helper()
 	kbd := &trackingKeyboard{keyDownErr: keyDownErr}
-	p.NewKeyboard = func(_ time.Duration) (linuxinput.Keyboard, error) {
-		return linuxinput.Keyboard{Device: kbd}, nil
+	p.NewKeyboard = func() (shared.KeyboardDevice, error) {
+		return kbd, nil
 	}
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
@@ -192,8 +189,8 @@ func TestTriggerScreenshot_RealModeOn_FailedSKey_RestoresRealMode(t *testing.T) 
 		}
 		return nil
 	}}
-	p.NewKeyboard = func(_ time.Duration) (linuxinput.Keyboard, error) {
-		return linuxinput.Keyboard{Device: kbdDev}, nil
+	p.NewKeyboard = func() (shared.KeyboardDevice, error) {
+		return kbdDev, nil
 	}
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
@@ -217,16 +214,14 @@ type callCountKeyboard struct {
 	onKeyDown func(int) error
 }
 
-func (*callCountKeyboard) KeyPress(_ int) error          { return nil }
-func (m *callCountKeyboard) KeyDown(key int) error       { return m.onKeyDown(key) }
-func (*callCountKeyboard) KeyUp(_ int) error             { return nil }
-func (*callCountKeyboard) FetchSyspath() (string, error) { return "", nil }
-func (*callCountKeyboard) Close() error                  { return nil }
+func (m *callCountKeyboard) KeyDown(key int) error { return m.onKeyDown(key) }
+func (*callCountKeyboard) KeyUp(_ int) error       { return nil }
+func (*callCountKeyboard) Close() error            { return nil }
 
 // Compile-time interface checks.
 var (
-	_ uinput.Keyboard = (*trackingKeyboard)(nil)
-	_ uinput.Keyboard = (*callCountKeyboard)(nil)
+	_ shared.KeyboardDevice = (*trackingKeyboard)(nil)
+	_ shared.KeyboardDevice = (*callCountKeyboard)(nil)
 )
 
 func TestNewestPNG(t *testing.T) {

@@ -49,14 +49,14 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.LinuxInput // Embedded for keyboard/gamepad support
-	tr                *tracker.Tracker
-	stopTr            func() error
-	activeMedia       func() *models.ActiveMedia
-	setActiveMedia    func(*models.ActiveMedia)
-	trackedProcess    *os.Process
-	arcadeCardLaunch  arcadeCardLaunchCache
-	processMu         syncutil.RWMutex
+	shared.InputManager // Embedded for keyboard/gamepad support
+	tr                  *tracker.Tracker
+	stopTr              func() error
+	activeMedia         func() *models.ActiveMedia
+	setActiveMedia      func(*models.ActiveMedia)
+	trackedProcess      *os.Process
+	arcadeCardLaunch    arcadeCardLaunchCache
+	processMu           syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

@@ -1,5 +1,3 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -28,8 +26,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
-	"github.com/bendahl/uinput"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,8 +35,8 @@ import (
 func TestGamepadPress_DisabledReturnsError(t *testing.T) {
 	t.Parallel()
 
-	// Create LinuxInput with zero-value gamepad (Device will be nil)
-	input := &LinuxInput{}
+	// Create InputManager with zero-value gamepad (Device will be nil)
+	input := &InputManager{}
 
 	// Attempt to press a button
 	err := input.GamepadPress("a")
@@ -54,7 +50,7 @@ func TestGamepadPress_DisabledReturnsError(t *testing.T) {
 func TestGamepadPress_AllButtonsWhenDisabled(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{}
+	input := &InputManager{}
 
 	buttons := []string{"a", "b", "x", "y", "start", "select", "up", "down", "left", "right"}
 	for _, button := range buttons {
@@ -78,14 +74,14 @@ func TestInitDevices_WithMockFactories(t *testing.T) {
 	keyboardCreated := false
 	gamepadCreated := false
 
-	input := &LinuxInput{
-		NewKeyboard: func(_ time.Duration) (linuxinput.Keyboard, error) {
+	input := &InputManager{
+		NewKeyboard: func() (KeyboardDevice, error) {
 			keyboardCreated = true
-			return linuxinput.Keyboard{}, nil
+			return &mockKeyboard{}, nil
 		},
-		NewGamepad: func(_ time.Duration) (linuxinput.Gamepad, error) {
+		NewGamepad: func() (GamepadDevice, error) {
 			gamepadCreated = true
-			return linuxinput.Gamepad{}, nil
+			return &mockGamepad{}, nil
 		},
 	}
 
@@ -106,13 +102,13 @@ func TestInitDevices_GamepadDisabledByDefault(t *testing.T) {
 
 	gamepadCreated := false
 
-	input := &LinuxInput{
-		NewKeyboard: func(_ time.Duration) (linuxinput.Keyboard, error) {
-			return linuxinput.Keyboard{}, nil
+	input := &InputManager{
+		NewKeyboard: func() (KeyboardDevice, error) {
+			return &mockKeyboard{}, nil
 		},
-		NewGamepad: func(_ time.Duration) (linuxinput.Gamepad, error) {
+		NewGamepad: func() (GamepadDevice, error) {
 			gamepadCreated = true
-			return linuxinput.Gamepad{}, nil
+			return &mockGamepad{}, nil
 		},
 	}
 
@@ -132,9 +128,9 @@ func TestInitDevices_KeyboardError(t *testing.T) {
 
 	expectedErr := errors.New("keyboard creation failed")
 
-	input := &LinuxInput{
-		NewKeyboard: func(_ time.Duration) (linuxinput.Keyboard, error) {
-			return linuxinput.Keyboard{}, expectedErr
+	input := &InputManager{
+		NewKeyboard: func() (KeyboardDevice, error) {
+			return nil, expectedErr
 		},
 	}
 
@@ -152,12 +148,12 @@ func TestInitDevices_GamepadError(t *testing.T) {
 
 	expectedErr := errors.New("gamepad creation failed")
 
-	input := &LinuxInput{
-		NewKeyboard: func(_ time.Duration) (linuxinput.Keyboard, error) {
-			return linuxinput.Keyboard{}, nil
+	input := &InputManager{
+		NewKeyboard: func() (KeyboardDevice, error) {
+			return &mockKeyboard{}, nil
 		},
-		NewGamepad: func(_ time.Duration) (linuxinput.Gamepad, error) {
-			return linuxinput.Gamepad{}, expectedErr
+		NewGamepad: func() (GamepadDevice, error) {
+			return nil, expectedErr
 		},
 	}
 
@@ -170,8 +166,8 @@ func TestInitDevices_GamepadError(t *testing.T) {
 func TestCloseDevices_NilGamepad(t *testing.T) {
 	t.Parallel()
 
-	// Create LinuxInput with zero-value devices
-	input := &LinuxInput{}
+	// Create InputManager with zero-value devices
+	input := &InputManager{}
 
 	// Should not panic - gracefully handles nil devices
 	// Note: This will log warnings but not panic
@@ -180,33 +176,22 @@ func TestCloseDevices_NilGamepad(t *testing.T) {
 	})
 }
 
-// mockGamepad implements uinput.Gamepad for testing
+// mockGamepad is a GamepadDevice whose ButtonDown can be made to fail.
 type mockGamepad struct {
 	buttonDownErr error
 }
 
-func (*mockGamepad) ButtonPress(_ int) error                { return nil }
-func (m *mockGamepad) ButtonDown(_ int) error               { return m.buttonDownErr }
-func (*mockGamepad) ButtonUp(_ int) error                   { return nil }
-func (*mockGamepad) LeftStickMoveX(_ float32) error         { return nil }
-func (*mockGamepad) LeftStickMoveY(_ float32) error         { return nil }
-func (*mockGamepad) RightStickMoveX(_ float32) error        { return nil }
-func (*mockGamepad) RightStickMoveY(_ float32) error        { return nil }
-func (*mockGamepad) LeftStickMove(_, _ float32) error       { return nil }
-func (*mockGamepad) RightStickMove(_, _ float32) error      { return nil }
-func (*mockGamepad) HatPress(_ uinput.HatDirection) error   { return nil }
-func (*mockGamepad) HatRelease(_ uinput.HatDirection) error { return nil }
-func (*mockGamepad) Close() error                           { return nil }
+func (m *mockGamepad) ButtonDown(_ int) error { return m.buttonDownErr }
+func (*mockGamepad) ButtonUp(_ int) error     { return nil }
+func (*mockGamepad) Close() error             { return nil }
 
 // TestGamepadPress_UnknownButton tests that GamepadPress returns error for unknown button names
 func TestGamepadPress_UnknownButton(t *testing.T) {
 	t.Parallel()
 
-	// Create LinuxInput with a mock gamepad that has a non-nil Device
-	input := &LinuxInput{
-		gpd: linuxinput.Gamepad{
-			Device: &mockGamepad{},
-		},
+	// Create InputManager with a mock gamepad that has a non-nil Device
+	input := &InputManager{
+		gpd: &mockGamepad{},
 	}
 
 	// Test with an invalid button name - should get unknown button error
@@ -219,7 +204,7 @@ func TestGamepadPress_UnknownButton(t *testing.T) {
 func TestKeyboardPress_UnknownKey(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{}
+	input := &InputManager{}
 
 	// Test with an invalid key name
 	err := input.KeyboardPress("invalidkey123")
@@ -232,7 +217,7 @@ func TestKeyboardPress_UnknownKey(t *testing.T) {
 func TestKeyboardPress_UnknownKeyInCombo(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{}
+	input := &InputManager{}
 
 	// Test with an invalid key in a combo
 	err := input.KeyboardPress("{ctrl+invalidkey}")
@@ -245,10 +230,8 @@ func TestKeyboardPress_UnknownKeyInCombo(t *testing.T) {
 func TestGamepadPress_Success(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{
-		gpd: linuxinput.Gamepad{
-			Device: &mockGamepad{},
-		},
+	input := &InputManager{
+		gpd: &mockGamepad{},
 	}
 
 	// Test with a valid button name
@@ -261,10 +244,8 @@ func TestGamepadPress_DeviceError(t *testing.T) {
 	t.Parallel()
 
 	expectedErr := errors.New("device error")
-	input := &LinuxInput{
-		gpd: linuxinput.Gamepad{
-			Device: &mockGamepad{buttonDownErr: expectedErr},
-		},
+	input := &InputManager{
+		gpd: &mockGamepad{buttonDownErr: expectedErr},
 	}
 
 	err := input.GamepadPress("a")
@@ -272,16 +253,14 @@ func TestGamepadPress_DeviceError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to press gamepad button")
 }
 
-// mockKeyboard implements uinput.Keyboard for testing
+// mockKeyboard is a KeyboardDevice whose KeyDown can be made to fail.
 type mockKeyboard struct {
 	keyDownErr error
 }
 
-func (*mockKeyboard) KeyPress(_ int) error          { return nil }
-func (m *mockKeyboard) KeyDown(_ int) error         { return m.keyDownErr }
-func (*mockKeyboard) KeyUp(_ int) error             { return nil }
-func (*mockKeyboard) FetchSyspath() (string, error) { return "", nil }
-func (*mockKeyboard) Close() error                  { return nil }
+func (m *mockKeyboard) KeyDown(_ int) error { return m.keyDownErr }
+func (*mockKeyboard) KeyUp(_ int) error     { return nil }
+func (*mockKeyboard) Close() error          { return nil }
 
 // keyEvent records a single key event for sequence assertion in tests.
 type keyEvent struct {
@@ -301,11 +280,6 @@ type recordingKeyboard struct {
 	failed        bool
 	failUpOnce    bool
 	failedUp      bool
-}
-
-func (r *recordingKeyboard) KeyPress(code int) error {
-	r.events = append(r.events, keyEvent{"down", code}, keyEvent{"up", code})
-	return nil
 }
 
 func (r *recordingKeyboard) KeyDown(code int) error {
@@ -332,7 +306,6 @@ func (r *recordingKeyboard) KeyUp(code int) error {
 	return nil
 }
 
-func (*recordingKeyboard) FetchSyspath() (string, error) { return "", nil }
 func (r *recordingKeyboard) Close() error {
 	r.closed = true
 	return nil
@@ -342,10 +315,8 @@ func (r *recordingKeyboard) Close() error {
 func TestKeyboardPress_SingleKey(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{
-		kbd: linuxinput.Keyboard{
-			Device: &mockKeyboard{},
-		},
+	input := &InputManager{
+		kbd: &mockKeyboard{},
 	}
 
 	err := input.KeyboardPress("a")
@@ -357,10 +328,8 @@ func TestKeyboardPress_SingleKeyError(t *testing.T) {
 	t.Parallel()
 
 	expectedErr := errors.New("key down error")
-	input := &LinuxInput{
-		kbd: linuxinput.Keyboard{
-			Device: &mockKeyboard{keyDownErr: expectedErr},
-		},
+	input := &InputManager{
+		kbd: &mockKeyboard{keyDownErr: expectedErr},
 	}
 
 	err := input.KeyboardPress("a")
@@ -372,10 +341,8 @@ func TestKeyboardPress_SingleKeyError(t *testing.T) {
 func TestKeyboardPress_Combo(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{
-		kbd: linuxinput.Keyboard{
-			Device: &mockKeyboard{},
-		},
+	input := &InputManager{
+		kbd: &mockKeyboard{},
 	}
 
 	err := input.KeyboardPress("{ctrl+a}")
@@ -387,10 +354,8 @@ func TestKeyboardPress_ComboError(t *testing.T) {
 	t.Parallel()
 
 	expectedErr := errors.New("key down error")
-	input := &LinuxInput{
-		kbd: linuxinput.Keyboard{
-			Device: &mockKeyboard{keyDownErr: expectedErr},
-		},
+	input := &InputManager{
+		kbd: &mockKeyboard{keyDownErr: expectedErr},
 	}
 
 	err := input.KeyboardPress("{ctrl+a}")
@@ -398,13 +363,10 @@ func TestKeyboardPress_ComboError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to press keyboard combo")
 }
 
-// newRecordingLinuxInput returns a LinuxInput with a recording keyboard and zero delays.
-func newRecordingLinuxInput(rec *recordingKeyboard) *LinuxInput {
-	return &LinuxInput{
-		kbd: linuxinput.Keyboard{
-			Device: rec,
-			Delay:  0,
-		},
+// newRecordingInputManager returns a InputManager with a recording keyboard and zero delays.
+func newRecordingInputManager(rec *recordingKeyboard) *InputManager {
+	return &InputManager{
+		kbd: rec,
 	}
 }
 
@@ -414,7 +376,7 @@ func TestKeyboardPressSequence_ShiftBatching_AsteriskMENU(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// *MENU: *, M, E, N, U are all shifted chars. Space before is intentional.
 	args := []string{" ", "*", "M", "E", "N", "U"}
@@ -461,7 +423,7 @@ func TestKeyboardPressSequence_MixedShiftRuns(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// "aBC d" — a (unshifted), BC (shifted run), space (unshifted), d (unshifted)
 	args := []string{"a", "B", "C", " ", "d"}
@@ -506,7 +468,7 @@ func TestKeyboardPressSequence_NonShifted(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"h", "e", "l", "l", "o"}, 0))
 
@@ -519,7 +481,7 @@ func TestKeyboardPressSequence_NonShifted(t *testing.T) {
 func TestKeyboardPressSequence_DisabledKeyboard(t *testing.T) {
 	t.Parallel()
 
-	input := &LinuxInput{}
+	input := &InputManager{}
 	err := input.KeyboardPressSequence([]string{"a"}, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "virtual keyboard is disabled")
@@ -532,7 +494,7 @@ func TestKeyboardPressSequence_ReleaseAllOnError(t *testing.T) {
 
 	// Fail when the second shifted base key (M=50) goes down.
 	rec := &recordingKeyboard{failOnCode: 50, failOnce: true}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	err := input.KeyboardPressSequence([]string{"*", "M", "E"}, 0)
 	require.Error(t, err)
@@ -559,7 +521,7 @@ func TestKeyboardPressSequence_BracedSpecial(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"{enter}"}, 0))
 
@@ -576,7 +538,7 @@ func TestKeyboardPressSequence_EmptyArgs(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{}, 0))
 	assert.Empty(t, rec.events)
@@ -588,7 +550,7 @@ func TestKeyboardPressSequence_DelayToken(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// "a", delay 0ms, "b" — zero delay so the test is instant.
 	require.NoError(t, input.KeyboardPressSequence([]string{"a", "{delay:0}", "b"}, 0))
@@ -607,7 +569,7 @@ func TestKeyboardPressSequence_PressReleaseSigils(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// Press 'a' down, type 'b', release 'a'.
 	require.NoError(t, input.KeyboardPressSequence([]string{"{_a}", "b", "{^a}"}, 0))
@@ -637,7 +599,7 @@ func TestKeyboardPressSequence_HoldToken(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// Hold 'a' for 0ms.
 	require.NoError(t, input.KeyboardPressSequence([]string{"{hold:a:0}"}, 0))
@@ -651,7 +613,7 @@ func TestKeyboardPressSequence_HoldSigil(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"{~a:0}"}, 0))
 
@@ -665,7 +627,7 @@ func TestKeyboardPressSequence_DelayToken_GoDuration(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"{delay:0ms}", "a"}, 0))
 	assert.Contains(t, rec.events, keyEvent{"down", 30})
@@ -677,7 +639,7 @@ func TestKeyboardPressSequence_InterKeyDelay(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	// 1ms inter-key delay — fast enough for tests; proves the param is wired.
 	require.NoError(t, input.KeyboardPressSequence([]string{"a", "b"}, 1*time.Millisecond))
@@ -691,7 +653,7 @@ func TestKeyboardPressSequence_LongFormPressReleaseHoldSpecial(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{
 		"{press:enter}",
@@ -713,7 +675,7 @@ func TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"{press:M}", "{release:M}"}, 0))
 
@@ -729,7 +691,7 @@ func TestKeyboardPressSequence_RejectsComboHoldToken(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	err := input.KeyboardPressSequence([]string{"{hold:ctrl+a:0}"}, 0)
 
@@ -744,7 +706,7 @@ func TestKeyboardPressSequence_InvalidDelayToken(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	err := input.KeyboardPressSequence([]string{"{delay:nope}", "a"}, 0)
 
@@ -759,7 +721,7 @@ func TestKeyboardPressSequence_ComboToken(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
-	input := newRecordingLinuxInput(rec)
+	input := newRecordingInputManager(rec)
 
 	require.NoError(t, input.KeyboardPressSequence([]string{"{ctrl+a}"}, 0))
 

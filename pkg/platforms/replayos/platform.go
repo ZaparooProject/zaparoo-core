@@ -86,7 +86,7 @@ type Platform struct {
 	lastKnownCore  string
 	procPath       string
 	storagePaths   []string
-	shared.LinuxInput
+	shared.InputManager
 	trackerMu        syncutil.RWMutex
 	keyboardRealMode bool
 }

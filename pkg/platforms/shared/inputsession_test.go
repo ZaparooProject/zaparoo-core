@@ -1,8 +1,21 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package shared
 
@@ -11,8 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
-	"github.com/bendahl/uinput"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +33,6 @@ type recordingGamepad struct {
 	closed bool
 }
 
-func (*recordingGamepad) ButtonPress(_ int) error { return nil }
 func (r *recordingGamepad) ButtonDown(code int) error {
 	r.events = append(r.events, keyEvent{kind: "down", code: code})
 	return nil
@@ -32,25 +42,18 @@ func (r *recordingGamepad) ButtonUp(code int) error {
 	r.events = append(r.events, keyEvent{kind: "up", code: code})
 	return nil
 }
-func (*recordingGamepad) LeftStickMoveX(_ float32) error         { return nil }
-func (*recordingGamepad) LeftStickMoveY(_ float32) error         { return nil }
-func (*recordingGamepad) RightStickMoveX(_ float32) error        { return nil }
-func (*recordingGamepad) RightStickMoveY(_ float32) error        { return nil }
-func (*recordingGamepad) LeftStickMove(_, _ float32) error       { return nil }
-func (*recordingGamepad) RightStickMove(_, _ float32) error      { return nil }
-func (*recordingGamepad) HatPress(_ uinput.HatDirection) error   { return nil }
-func (*recordingGamepad) HatRelease(_ uinput.HatDirection) error { return nil }
+
 func (r *recordingGamepad) Close() error {
 	r.closed = true
 	return nil
 }
 
-func newRecordingInputDevices() (*LinuxInput, *recordingKeyboard, *recordingGamepad) {
+func newRecordingInputDevices() (*InputManager, *recordingKeyboard, *recordingGamepad) {
 	keyboard := &recordingKeyboard{}
 	gamepad := &recordingGamepad{}
-	input := &LinuxInput{
-		kbd: linuxinput.Keyboard{Device: keyboard},
-		gpd: linuxinput.Gamepad{Device: gamepad},
+	input := &InputManager{
+		kbd: keyboard,
+		gpd: gamepad,
 	}
 	return input, keyboard, gamepad
 }

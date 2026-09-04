@@ -1,8 +1,21 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package shared
 
@@ -10,11 +23,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/gamepadmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -42,17 +54,17 @@ type heldInputState struct {
 	gamepad  map[int]struct{}
 }
 
-type linuxInputSession struct {
-	input  *LinuxInput
+type inputSession struct {
+	input  *InputManager
 	closed bool
 }
 
 // NewInputSession creates an isolated owner for input held across API requests.
-func (l *LinuxInput) NewInputSession() platforms.InputSession {
-	return &linuxInputSession{input: l}
+func (l *InputManager) NewInputSession() platforms.InputSession {
+	return &inputSession{input: l}
 }
 
-func (s *linuxInputSession) KeyboardPressSequence(
+func (s *inputSession) KeyboardPressSequence(
 	ctx context.Context,
 	args []string,
 	interKeyDelay time.Duration,
@@ -71,7 +83,7 @@ func (s *linuxInputSession) KeyboardPressSequence(
 	return errors.Join(err, s.input.releaseInputSession(s))
 }
 
-func (s *linuxInputSession) GamepadPressSequence(
+func (s *inputSession) GamepadPressSequence(
 	ctx context.Context,
 	args []string,
 	interKeyDelay time.Duration,
@@ -90,13 +102,13 @@ func (s *linuxInputSession) GamepadPressSequence(
 	return errors.Join(err, s.input.releaseInputSession(s))
 }
 
-func (s *linuxInputSession) inputSessionClosed() bool {
+func (s *inputSession) inputSessionClosed() bool {
 	s.input.inputMu.Lock()
 	defer s.input.inputMu.Unlock()
 	return s.closed
 }
 
-func (s *linuxInputSession) ReleaseAll() error {
+func (s *inputSession) ReleaseAll() error {
 	s.input.inputMu.Lock()
 	defer s.input.inputMu.Unlock()
 
@@ -114,18 +126,11 @@ func parseInputMacroToken(token string) (parsedInputMacro, bool) {
 	case inputMacroPress, inputMacroRelease:
 		return parsedInputMacro{action: control.Action, name: control.Value}, true
 	case inputMacroHold:
-		name, duration := splitInputHold(control.Value)
+		name, duration := inputmacro.SplitHold(control.Value)
 		return parsedInputMacro{action: control.Action, name: name, duration: duration}, true
 	default:
 		return parsedInputMacro{}, false
 	}
-}
-
-func splitInputHold(value string) (name, duration string) {
-	if idx := strings.LastIndex(value, ":"); idx != -1 {
-		return value[:idx], value[idx+1:]
-	}
-	return value, ""
 }
 
 func parseBoundedInputMacroDuration(value string) (time.Duration, error) {
@@ -159,9 +164,9 @@ func sleepInputContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func (l *LinuxInput) ensureInputStateLocked() {
+func (l *InputManager) ensureInputStateLocked() {
 	if l.inputSessions == nil {
-		l.inputSessions = make(map[*linuxInputSession]*heldInputState)
+		l.inputSessions = make(map[*inputSession]*heldInputState)
 	}
 	if l.keyboardRefs == nil {
 		l.keyboardRefs = make(map[int]int)
@@ -171,7 +176,7 @@ func (l *LinuxInput) ensureInputStateLocked() {
 	}
 }
 
-func (l *LinuxInput) sessionStateLocked(session *linuxInputSession) *heldInputState {
+func (l *InputManager) sessionStateLocked(session *inputSession) *heldInputState {
 	l.ensureInputStateLocked()
 	state, ok := l.inputSessions[session]
 	if !ok {
@@ -184,23 +189,23 @@ func (l *LinuxInput) sessionStateLocked(session *linuxInputSession) *heldInputSt
 	return state
 }
 
-func (l *LinuxInput) keyboardDownLocked(code int) error {
+func (l *InputManager) keyboardDownLocked(code int) error {
 	l.ensureInputStateLocked()
 	if l.keyboardRefs[code] > 0 {
 		l.keyboardRefs[code]++
 		return nil
 	}
-	if l.kbd.Device == nil {
+	if l.kbd == nil {
 		return errors.New("virtual keyboard is disabled")
 	}
-	if err := l.kbd.Device.KeyDown(code); err != nil {
+	if err := l.kbd.KeyDown(code); err != nil {
 		return fmt.Errorf("key down %d: %w", code, err)
 	}
 	l.keyboardRefs[code] = 1
 	return nil
 }
 
-func (l *LinuxInput) keyboardUpLocked(code int) error {
+func (l *InputManager) keyboardUpLocked(code int) error {
 	count := l.keyboardRefs[code]
 	if count == 0 {
 		return nil
@@ -209,33 +214,33 @@ func (l *LinuxInput) keyboardUpLocked(code int) error {
 		l.keyboardRefs[code] = count - 1
 		return nil
 	}
-	if l.kbd.Device == nil {
+	if l.kbd == nil {
 		return errors.New("virtual keyboard is disabled")
 	}
-	if err := l.kbd.Device.KeyUp(code); err != nil {
+	if err := l.kbd.KeyUp(code); err != nil {
 		return fmt.Errorf("key up %d: %w", code, err)
 	}
 	delete(l.keyboardRefs, code)
 	return nil
 }
 
-func (l *LinuxInput) gamepadDownLocked(code int) error {
+func (l *InputManager) gamepadDownLocked(code int) error {
 	l.ensureInputStateLocked()
 	if l.gamepadRefs[code] > 0 {
 		l.gamepadRefs[code]++
 		return nil
 	}
-	if l.gpd.Device == nil {
+	if l.gpd == nil {
 		return errors.New("virtual gamepad is disabled")
 	}
-	if err := l.gpd.Device.ButtonDown(code); err != nil {
+	if err := l.gpd.ButtonDown(code); err != nil {
 		return fmt.Errorf("button down %d: %w", code, err)
 	}
 	l.gamepadRefs[code] = 1
 	return nil
 }
 
-func (l *LinuxInput) gamepadUpLocked(code int) error {
+func (l *InputManager) gamepadUpLocked(code int) error {
 	count := l.gamepadRefs[code]
 	if count == 0 {
 		return nil
@@ -244,17 +249,17 @@ func (l *LinuxInput) gamepadUpLocked(code int) error {
 		l.gamepadRefs[code] = count - 1
 		return nil
 	}
-	if l.gpd.Device == nil {
+	if l.gpd == nil {
 		return errors.New("virtual gamepad is disabled")
 	}
-	if err := l.gpd.Device.ButtonUp(code); err != nil {
+	if err := l.gpd.ButtonUp(code); err != nil {
 		return fmt.Errorf("button up %d: %w", code, err)
 	}
 	delete(l.gamepadRefs, code)
 	return nil
 }
 
-func (l *LinuxInput) sessionKeyboardDownLocked(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionKeyboardDownLocked(session *inputSession, code int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
@@ -269,7 +274,7 @@ func (l *LinuxInput) sessionKeyboardDownLocked(session *linuxInputSession, code 
 	return nil
 }
 
-func (l *LinuxInput) sessionKeyboardUpLocked(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionKeyboardUpLocked(session *inputSession, code int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
@@ -288,7 +293,7 @@ func (l *LinuxInput) sessionKeyboardUpLocked(session *linuxInputSession, code in
 	return nil
 }
 
-func (l *LinuxInput) sessionGamepadDownLocked(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionGamepadDownLocked(session *inputSession, code int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
@@ -303,7 +308,7 @@ func (l *LinuxInput) sessionGamepadDownLocked(session *linuxInputSession, code i
 	return nil
 }
 
-func (l *LinuxInput) sessionGamepadUpLocked(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionGamepadUpLocked(session *inputSession, code int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
@@ -322,13 +327,13 @@ func (l *LinuxInput) sessionGamepadUpLocked(session *linuxInputSession, code int
 	return nil
 }
 
-func (l *LinuxInput) removeEmptySessionStateLocked(session *linuxInputSession, state *heldInputState) {
+func (l *InputManager) removeEmptySessionStateLocked(session *inputSession, state *heldInputState) {
 	if len(state.keyboard) == 0 && len(state.gamepad) == 0 {
 		delete(l.inputSessions, session)
 	}
 }
 
-func (l *LinuxInput) releaseInputSessionLocked(session *linuxInputSession) error {
+func (l *InputManager) releaseInputSessionLocked(session *inputSession) error {
 	state, ok := l.inputSessions[session]
 	if !ok {
 		return nil
@@ -353,85 +358,85 @@ func (l *LinuxInput) releaseInputSessionLocked(session *linuxInputSession) error
 	return cleanupErr
 }
 
-func (l *LinuxInput) releaseInputSession(session *linuxInputSession) error {
+func (l *InputManager) releaseInputSession(session *inputSession) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.releaseInputSessionLocked(session)
 }
 
-func (l *LinuxInput) keyboardLocalDown(held map[int]int, code int) error {
+func (l *InputManager) keyboardLocalDown(held map[int]int, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.keyboardLocalDownLocked(held, code)
 }
 
-func (l *LinuxInput) keyboardLocalUp(held map[int]int, code int) error {
+func (l *InputManager) keyboardLocalUp(held map[int]int, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.keyboardLocalUpLocked(held, code)
 }
 
-func (l *LinuxInput) gamepadLocalDown(held map[int]int, code int) error {
+func (l *InputManager) gamepadLocalDown(held map[int]int, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.gamepadLocalDownLocked(held, code)
 }
 
-func (l *LinuxInput) gamepadLocalUp(held map[int]int, code int) error {
+func (l *InputManager) gamepadLocalUp(held map[int]int, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.gamepadLocalUpLocked(held, code)
 }
 
-func (l *LinuxInput) releaseKeyboardLocals(held map[int]int) error {
+func (l *InputManager) releaseKeyboardLocals(held map[int]int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.releaseKeyboardLocalsLocked(held)
 }
 
-func (l *LinuxInput) releaseGamepadLocals(held map[int]int) error {
+func (l *InputManager) releaseGamepadLocals(held map[int]int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.releaseGamepadLocalsLocked(held)
 }
 
-func (l *LinuxInput) sessionKeyboardDown(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionKeyboardDown(session *inputSession, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.sessionKeyboardDownLocked(session, code)
 }
 
-func (l *LinuxInput) sessionKeyboardUp(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionKeyboardUp(session *inputSession, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.sessionKeyboardUpLocked(session, code)
 }
 
-func (l *LinuxInput) sessionGamepadDown(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionGamepadDown(session *inputSession, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.sessionGamepadDownLocked(session, code)
 }
 
-func (l *LinuxInput) sessionGamepadUp(session *linuxInputSession, code int) error {
+func (l *InputManager) sessionGamepadUp(session *inputSession, code int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 	return l.sessionGamepadUpLocked(session, code)
 }
 
-func (l *LinuxInput) keyboardDeviceEnabled() bool {
+func (l *InputManager) keyboardDeviceEnabled() bool {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
-	return l.kbd.Device != nil
+	return l.kbd != nil
 }
 
-func (l *LinuxInput) gamepadDeviceEnabled() bool {
+func (l *InputManager) gamepadDeviceEnabled() bool {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
-	return l.gpd.Device != nil
+	return l.gpd != nil
 }
 
-func (l *LinuxInput) keyboardLocalDownLocked(held map[int]int, code int) error {
+func (l *InputManager) keyboardLocalDownLocked(held map[int]int, code int) error {
 	if err := l.keyboardDownLocked(code); err != nil {
 		return err
 	}
@@ -439,7 +444,7 @@ func (l *LinuxInput) keyboardLocalDownLocked(held map[int]int, code int) error {
 	return nil
 }
 
-func (l *LinuxInput) keyboardLocalUpLocked(held map[int]int, code int) error {
+func (l *InputManager) keyboardLocalUpLocked(held map[int]int, code int) error {
 	if held[code] == 0 {
 		return nil
 	}
@@ -454,7 +459,7 @@ func (l *LinuxInput) keyboardLocalUpLocked(held map[int]int, code int) error {
 	return nil
 }
 
-func (l *LinuxInput) gamepadLocalDownLocked(held map[int]int, code int) error {
+func (l *InputManager) gamepadLocalDownLocked(held map[int]int, code int) error {
 	if err := l.gamepadDownLocked(code); err != nil {
 		return err
 	}
@@ -462,7 +467,7 @@ func (l *LinuxInput) gamepadLocalDownLocked(held map[int]int, code int) error {
 	return nil
 }
 
-func (l *LinuxInput) gamepadLocalUpLocked(held map[int]int, code int) error {
+func (l *InputManager) gamepadLocalUpLocked(held map[int]int, code int) error {
 	if held[code] == 0 {
 		return nil
 	}
@@ -477,7 +482,7 @@ func (l *LinuxInput) gamepadLocalUpLocked(held map[int]int, code int) error {
 	return nil
 }
 
-func (l *LinuxInput) releaseKeyboardLocalsLocked(held map[int]int) error {
+func (l *InputManager) releaseKeyboardLocalsLocked(held map[int]int) error {
 	var cleanupErr error
 	for code, count := range held {
 		for range count {
@@ -490,7 +495,7 @@ func (l *LinuxInput) releaseKeyboardLocalsLocked(held map[int]int) error {
 	return cleanupErr
 }
 
-func (l *LinuxInput) releaseGamepadLocalsLocked(held map[int]int) error {
+func (l *InputManager) releaseGamepadLocalsLocked(held map[int]int) error {
 	var cleanupErr error
 	for code, count := range held {
 		for range count {
@@ -503,8 +508,8 @@ func (l *LinuxInput) releaseGamepadLocalsLocked(held map[int]int) error {
 	return cleanupErr
 }
 
-func (l *LinuxInput) pressKeyboardToken(arg string) (retErr error) {
-	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
+func (l *InputManager) pressKeyboardToken(arg string) (retErr error) {
+	codes, isCombo, err := keyboardmap.ParseKeyCombo(arg)
 	if err != nil {
 		return fmt.Errorf("failed to parse key combo: %w", err)
 	}
@@ -531,7 +536,7 @@ func (l *LinuxInput) pressKeyboardToken(arg string) (retErr error) {
 		}
 	}
 	if pressErr == nil {
-		pressErr = sleepInputContext(context.Background(), l.kbd.Delay)
+		pressErr = sleepInputContext(context.Background(), l.keyboardDelay)
 	}
 	if pressErr == nil {
 		for i := len(codes) - 1; i >= 0; i-- {
@@ -550,13 +555,13 @@ func (l *LinuxInput) pressKeyboardToken(arg string) (retErr error) {
 	return nil
 }
 
-func (l *LinuxInput) pressGamepadToken(name string) (retErr error) {
+func (l *InputManager) pressGamepadToken(name string) (retErr error) {
 	l.sequenceMu.Lock()
 	defer l.sequenceMu.Unlock()
 	if !l.gamepadDeviceEnabled() {
 		return errors.New("virtual gamepad is disabled")
 	}
-	code, ok := linuxinput.ToGamepadCode(name)
+	code, ok := gamepadmap.ToGamepadCode(name)
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
@@ -568,7 +573,7 @@ func (l *LinuxInput) pressGamepadToken(name string) (retErr error) {
 	if err := l.gamepadLocalDown(held, code); err != nil {
 		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
 	}
-	if err := sleepInputContext(context.Background(), l.gpd.Delay); err != nil {
+	if err := sleepInputContext(context.Background(), l.gamepadDelay); err != nil {
 		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
 	}
 	if err := l.gamepadLocalUp(held, code); err != nil {
@@ -577,23 +582,23 @@ func (l *LinuxInput) pressGamepadToken(name string) (retErr error) {
 	return nil
 }
 
-func (l *LinuxInput) pressKeyboardSequence(args []string, interKeyDelay time.Duration) error {
+func (l *InputManager) pressKeyboardSequence(args []string, interKeyDelay time.Duration) error {
 	l.sequenceMu.Lock()
 	defer l.sequenceMu.Unlock()
 	return l.keyboardPressSequenceLocked(context.Background(), args, interKeyDelay, nil)
 }
 
-func (l *LinuxInput) pressGamepadSequence(args []string, interKeyDelay time.Duration) error {
+func (l *InputManager) pressGamepadSequence(args []string, interKeyDelay time.Duration) error {
 	l.sequenceMu.Lock()
 	defer l.sequenceMu.Unlock()
 	return l.gamepadPressSequenceLocked(context.Background(), args, interKeyDelay, nil)
 }
 
-func (l *LinuxInput) keyboardPressSequenceLocked(
+func (l *InputManager) keyboardPressSequenceLocked(
 	ctx context.Context,
 	args []string,
 	interKeyDelay time.Duration,
-	session *linuxInputSession,
+	session *inputSession,
 ) (retErr error) {
 	if !l.keyboardDeviceEnabled() {
 		return errors.New("virtual keyboard is disabled")
@@ -661,7 +666,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 						return fmt.Errorf("token %q: %w", token, upErr)
 					}
 				case inputMacroHold:
-					holdDuration := l.kbd.Delay
+					holdDuration := l.keyboardDelay
 					if macro.duration != "" {
 						holdDuration, err = parseBoundedInputMacroDuration(macro.duration)
 						if err != nil {
@@ -704,7 +709,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 				if err := localDown(baseCode); err != nil {
 					return fmt.Errorf("failed to press shifted key %q down: %w", args[j], err)
 				}
-				if err := sleepInputContext(ctx, l.kbd.Delay); err != nil {
+				if err := sleepInputContext(ctx, l.keyboardDelay); err != nil {
 					return fmt.Errorf("press shifted key %q: %w", args[j], err)
 				}
 				if err := localUp(baseCode); err != nil {
@@ -721,7 +726,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 			continue
 		}
 
-		codes, _, err := linuxinput.ParseKeyCombo(token)
+		codes, _, err := keyboardmap.ParseKeyCombo(token)
 		if err != nil {
 			return fmt.Errorf("failed to parse key %q: %w", token, err)
 		}
@@ -730,7 +735,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 				return fmt.Errorf("failed to press key %q down: %w", token, err)
 			}
 		}
-		if err := sleepInputContext(ctx, l.kbd.Delay); err != nil {
+		if err := sleepInputContext(ctx, l.keyboardDelay); err != nil {
 			return fmt.Errorf("press key %q: %w", token, err)
 		}
 		for j := len(codes) - 1; j >= 0; j-- {
@@ -746,23 +751,11 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 	return nil
 }
 
-func resolveGamepadHoldCode(name string) (int, error) {
-	arg := name
-	if len([]rune(name)) > 1 {
-		arg = "{" + name + "}"
-	}
-	code, ok := linuxinput.ToGamepadCode(arg)
-	if !ok {
-		return 0, fmt.Errorf("unknown button: %s", name)
-	}
-	return code, nil
-}
-
-func (l *LinuxInput) gamepadPressSequenceLocked(
+func (l *InputManager) gamepadPressSequenceLocked(
 	ctx context.Context,
 	args []string,
 	interKeyDelay time.Duration,
-	session *linuxInputSession,
+	session *inputSession,
 ) (retErr error) {
 	if !l.gamepadDeviceEnabled() {
 		return errors.New("virtual gamepad is disabled")
@@ -827,7 +820,7 @@ func (l *LinuxInput) gamepadPressSequenceLocked(
 						return fmt.Errorf("token %q: %w", token, upErr)
 					}
 				case inputMacroHold:
-					holdDuration := l.gpd.Delay
+					holdDuration := l.gamepadDelay
 					if macro.duration != "" {
 						holdDuration, err = parseBoundedInputMacroDuration(macro.duration)
 						if err != nil {
@@ -851,14 +844,14 @@ func (l *LinuxInput) gamepadPressSequenceLocked(
 			continue
 		}
 
-		code, ok := linuxinput.ToGamepadCode(token)
+		code, ok := gamepadmap.ToGamepadCode(token)
 		if !ok {
 			return fmt.Errorf("unknown button: %s", token)
 		}
 		if err := localDown(code); err != nil {
 			return fmt.Errorf("failed to press gamepad button %s: %w", token, err)
 		}
-		if err := sleepInputContext(ctx, l.gpd.Delay); err != nil {
+		if err := sleepInputContext(ctx, l.gamepadDelay); err != nil {
 			return fmt.Errorf("press gamepad button %s: %w", token, err)
 		}
 		if err := localUp(code); err != nil {
@@ -871,7 +864,7 @@ func (l *LinuxInput) gamepadPressSequenceLocked(
 	return nil
 }
 
-func (l *LinuxInput) closeInputDevices() {
+func (l *InputManager) closeInputDevices() {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
 
@@ -882,16 +875,16 @@ func (l *LinuxInput) closeInputDevices() {
 		}
 	}
 	for code := range l.keyboardRefs {
-		if l.kbd.Device != nil {
-			if err := l.kbd.Device.KeyUp(code); err != nil {
+		if l.kbd != nil {
+			if err := l.kbd.KeyUp(code); err != nil {
 				log.Warn().Err(err).Int("key_code", code).Msg("error releasing keyboard key during device shutdown")
 			}
 		}
 		delete(l.keyboardRefs, code)
 	}
 	for code := range l.gamepadRefs {
-		if l.gpd.Device != nil {
-			if err := l.gpd.Device.ButtonUp(code); err != nil {
+		if l.gpd != nil {
+			if err := l.gpd.ButtonUp(code); err != nil {
 				log.Warn().Err(err).Int("button_code", code).
 					Msg("error releasing gamepad button during device shutdown")
 			}
@@ -900,16 +893,16 @@ func (l *LinuxInput) closeInputDevices() {
 	}
 	clear(l.inputSessions)
 
-	if l.kbd.Device != nil {
+	if l.kbd != nil {
 		if err := l.kbd.Close(); err != nil {
 			log.Warn().Err(err).Msg("error closing keyboard")
 		}
-		l.kbd.Device = nil
+		l.kbd = nil
 	}
-	if l.gpd.Device != nil {
+	if l.gpd != nil {
 		if err := l.gpd.Close(); err != nil {
 			log.Warn().Err(err).Msg("error closing gamepad")
 		}
-		l.gpd.Device = nil
+		l.gpd = nil
 	}
 }

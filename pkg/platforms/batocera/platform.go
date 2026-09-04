@@ -61,7 +61,7 @@ type Platform struct {
 	stopTracker    func() error
 	cfg            *config.Instance
 	esConfigCache  *ESSystemConfig
-	shared.LinuxInput
+	shared.InputManager
 	maxStartupRetries int
 	processMu         syncutil.RWMutex
 	trackerMu         syncutil.RWMutex

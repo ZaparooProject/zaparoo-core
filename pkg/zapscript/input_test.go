@@ -185,6 +185,60 @@ mode = "unrestricted"
 	assert.NoError(t, checkInputKey(cfg, platformids.Mister, "{super}"))
 }
 
+func TestCheckInputKey_ControlTokensCannotBypassBlockList(t *testing.T) {
+	t.Parallel()
+
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+`)
+
+	// A blocked key stays blocked when wrapped in a press, release or hold
+	// macro, in either the long or the sigil form.
+	for _, token := range []string{
+		"{super}",
+		"{press:super}",
+		"{release:super}",
+		"{hold:super}",
+		"{hold:super:500}",
+		"{_super}",
+		"{^super}",
+		"{~super}",
+		"{~super:500}",
+		"{press:ctrl+alt+delete}",
+	} {
+		err := checkInputKey(cfg, platformids.Linux, token)
+		require.Error(t, err, "token %q should be blocked", token)
+		require.ErrorIs(t, err, ErrInputBlocked)
+	}
+
+	// Unblocked keys still pass through their wrappers.
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{press:esc}"))
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{~a:250}"))
+}
+
+func TestCheckInputKey_CombosModeAppliesToControlTokens(t *testing.T) {
+	t.Parallel()
+
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "combos"
+`)
+
+	// Delay tokens name no key, so the mode check does not apply to them.
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{delay:500}"))
+
+	// Braced multi-character keys are allowed in combos mode.
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{press:enter}"))
+
+	// A plain character is not, however it is wrapped.
+	for _, token := range []string{"a", "{press:a}", "{_a}", "{hold:a:250}"} {
+		err := checkInputKey(cfg, platformids.Linux, token)
+		require.Error(t, err, "token %q should not be allowed", token)
+		require.ErrorIs(t, err, ErrInputNotAllowed)
+	}
+}
+
 func TestCheckInputKey_CustomBlockList(t *testing.T) {
 	t.Parallel()
 
