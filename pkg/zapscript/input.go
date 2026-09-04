@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -92,7 +93,17 @@ func isKeyInList(key string, list []string) bool {
 
 // checkInputKey returns an error if the key is not permitted under the current
 // input config. Precedence: allow list → block list → mode check.
+//
+// Control tokens are unwrapped to the key they act on before any check, so
+// wrapping a key in a press, release, or hold macro cannot slip it past the
+// lists or the mode.
 func checkInputKey(cfg *config.Instance, platformID, key string) error {
+	key, named := inputmacro.KeyForToken(key)
+	if !named {
+		// Delay tokens carry a duration rather than a key.
+		return nil
+	}
+
 	// 1. Strict allow mode — overrides everything
 	allowList := cfg.InputAllowList()
 	if len(allowList) > 0 {

@@ -53,6 +53,39 @@ func TestClassifyControl(t *testing.T) {
 	}
 }
 
+func TestKeyForToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{raw: "a", want: "a", ok: true},
+		{raw: "{enter}", want: "{enter}", ok: true},
+		{raw: "{ctrl+q}", want: "{ctrl+q}", ok: true},
+		{raw: "{press:super}", want: "{super}", ok: true},
+		{raw: "{release:super}", want: "{super}", ok: true},
+		{raw: "{hold:super}", want: "{super}", ok: true},
+		{raw: "{hold:super:500}", want: "{super}", ok: true},
+		{raw: "{_super}", want: "{super}", ok: true},
+		{raw: "{^super}", want: "{super}", ok: true},
+		{raw: "{~super:1s}", want: "{super}", ok: true},
+		{raw: "{press:a}", want: "a", ok: true},
+		{raw: "{press:ctrl+alt+delete}", want: "{ctrl+alt+delete}", ok: true},
+		{raw: "{delay:500}", want: "", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			t.Parallel()
+			got, ok := KeyForToken(tt.raw)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSplitHold(t *testing.T) {
 	t.Parallel()
 
