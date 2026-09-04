@@ -71,6 +71,7 @@ type processWindowFocuser interface {
 }
 
 type Platform struct {
+	shared.InputManager
 	activeMedia             func() *models.ActiveMedia
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
@@ -144,7 +145,13 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return enabled
 }
 
-func (*Platform) StartPre(_ *config.Instance) error {
+func (p *Platform) StartPre(cfg *config.Instance) error {
+	// Virtual gamepad emulation needs the ViGEmBus driver, which Core does not
+	// require, so it stays off unless the user asks for it.
+	if err := p.InitDevices(cfg, false); err != nil {
+		return fmt.Errorf("failed to initialize input devices: %w", err)
+	}
+
 	return nil
 }
 
@@ -186,6 +193,8 @@ func (p *Platform) StartPost(
 }
 
 func (p *Platform) Stop() error {
+	p.CloseDevices()
+
 	if p.launcherManager != nil {
 		p.launcherManager.NewContext()
 	}
@@ -591,14 +600,6 @@ func (p *Platform) LaunchMedia(
 
 	p.setLastLauncher(launcher)
 
-	return nil
-}
-
-func (*Platform) KeyboardPress(_ string) error {
-	return nil
-}
-
-func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 

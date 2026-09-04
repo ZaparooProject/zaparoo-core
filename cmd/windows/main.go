@@ -143,6 +143,17 @@ func restartAfterReleasing(instance *singleInstance, restartFn func() error) err
 	return restartFn()
 }
 
+// windowsDefaults turns on connection encryption for new installs and, because
+// Service.Encryption is a pointer, for existing configs that never wrote the
+// key. Remote clients cannot hold a role over a plaintext connection, so this
+// is what gates keyboard and gamepad input for anyone off the machine.
+func windowsDefaults() config.Values {
+	defaults := config.BaseDefaults
+	enabled := true
+	defaults.Service.Encryption = &enabled
+	return defaults
+}
+
 func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
@@ -180,13 +191,16 @@ func run() error {
 
 	logWriters := []io.Writer{os.Stderr}
 
-	defaults := config.BaseDefaults
+	defaults := windowsDefaults()
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, migrateErr := migrate.IniToToml(iniPath)
 		if migrateErr != nil {
 			return fmt.Errorf("error migrating config: %w", migrateErr)
 		}
+		// A tapto.ini predates encryption entirely, so migrating one must not
+		// silently hand back the old plaintext default.
+		migrated.Service.Encryption = defaults.Service.Encryption
 		defaults = migrated
 	}
 
