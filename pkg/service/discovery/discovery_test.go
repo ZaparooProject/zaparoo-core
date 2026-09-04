@@ -25,6 +25,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery/mdns"
+	"github.com/jonboulle/clockwork"
+	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,14 +38,50 @@ func TestServiceType(t *testing.T) {
 	assert.Equal(t, "_zaparoo._tcp", ServiceType)
 }
 
-// TestDefaultTXTRecordsAreEmpty pins the security-driven design that mDNS
-// service announcements carry NO TXT records. See defaultTXTRecords doc
-// comment for the rationale.
-func TestDefaultTXTRecordsAreEmpty(t *testing.T) {
+// TestDefaultTXTRecordsCarryNoData pins the security-driven design that mDNS
+// service announcements carry no TXT data, and the DNS-level requirement that
+// "no data" is spelled as one zero-length string. See the defaultTXTRecords
+// doc comment for the rationale.
+func TestDefaultTXTRecordsCarryNoData(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, defaultTXTRecords,
-		"mDNS TXT records must remain empty to avoid leaking version/platform/id on the LAN")
+	require.Len(t, defaultTXTRecords, 1,
+		"a TXT record needs exactly one character-string to encode 'no data'")
+	assert.Empty(t, defaultTXTRecords[0],
+		"mDNS TXT records must stay empty to avoid leaking version/platform/id on the LAN")
+}
+
+// TestDefaultTXTRecordsPackToOneEmptyString checks the wire encoding rather
+// than the Go value: an empty slice and a slice holding one empty string look
+// equally harmless in Go, but only the latter packs to a valid TXT record.
+// An empty slice yields rdlength 0, which resolvers are entitled to reject.
+func TestDefaultTXTRecordsPackToOneEmptyString(t *testing.T) {
+	t.Parallel()
+
+	txt := &dns.TXT{
+		Hdr: dns.RR_Header{
+			Name:   "zaparoo." + ServiceType + ".local.",
+			Rrtype: dns.TypeTXT,
+			Class:  dns.ClassINET,
+			Ttl:    120,
+		},
+		Txt: defaultTXTRecords,
+	}
+
+	msg := new(dns.Msg)
+	msg.Answer = []dns.RR{txt}
+	wire, err := msg.Pack()
+	require.NoError(t, err)
+
+	unpacked := new(dns.Msg)
+	require.NoError(t, unpacked.Unpack(wire), "packed TXT record must round-trip")
+	require.Len(t, unpacked.Answer, 1)
+
+	got, ok := unpacked.Answer[0].(*dns.TXT)
+	require.True(t, ok, "expected a TXT record, got %T", unpacked.Answer[0])
+	assert.Equal(t, uint16(1), got.Hdr.Rdlength,
+		"TXT rdata must be the single length byte of one zero-length string")
+	assert.Equal(t, []string{""}, got.Txt)
 }
 
 func TestStopIdempotent(t *testing.T) {
@@ -56,7 +95,7 @@ func TestStopIdempotent(t *testing.T) {
 	svc.Stop()
 
 	// No panic means success
-	assert.Nil(t, svc.server)
+	assert.Nil(t, svc.responder)
 }
 
 func TestInstanceNameBeforeStart(t *testing.T) {
@@ -99,11 +138,9 @@ func TestInstanceNameUsesHostname(t *testing.T) {
 	expectedHostname, err := os.Hostname()
 	require.NoError(t, err)
 
-	svc := New(cfg)
-
-	// Start will fail at zeroconf.Register, but instanceName is set
-	// before Register is called, so we can still verify the resolution
-	_ = svc.Start() // Ignore error - Register may fail without network
+	svc := newTestService(t, cfg)
+	t.Cleanup(svc.Stop)
+	require.NoError(t, svc.Start())
 
 	// instanceName should be set to the hostname (since no config override)
 	assert.Equal(t, expectedHostname, svc.InstanceName())
@@ -119,8 +156,9 @@ func TestInstanceNameUsesConfigOverride(t *testing.T) {
 	// Set a custom instance name in config
 	cfg.SetDiscoveryInstanceName("my-custom-name")
 
-	svc := New(cfg)
-	_ = svc.Start() // Ignore error - Register may fail without network
+	svc := newTestService(t, cfg)
+	t.Cleanup(svc.Stop)
+	require.NoError(t, svc.Start())
 
 	// instanceName should use the config override, not hostname
 	assert.Equal(t, "my-custom-name", svc.InstanceName())
@@ -149,6 +187,10 @@ func TestIsVirtualInterface(t *testing.T) {
 		{"tunnel interface", "tunl0", true},
 		{"wireguard", "wg0", true},
 		{"wireguard numbered", "wg1", true},
+		{"hyper-v switch", "vEthernet (Default Switch)", true},
+		{"wsl switch", "vEthernet (WSL (Hyper-V firewall))", true},
+		{"vmware host-only", "VMware Network Adapter VMnet1", true},
+		{"virtualbox host-only", "VirtualBox Host-Only Network", true},
 
 		// Real interfaces that should NOT be filtered
 		{"ethernet", "eth0", false},
@@ -180,6 +222,7 @@ func TestVirtualInterfacePrefixes(t *testing.T) {
 	expectedPrefixes := []string{
 		"docker", "br-", "veth", "virbr", "lxc", "lxd",
 		"cni", "flannel", "cali", "tunl", "wg",
+		"vmware", "virtualbox",
 	}
 
 	assert.Equal(t, expectedPrefixes, virtualInterfacePrefixes,
@@ -314,4 +357,55 @@ func TestGetPreferredInterfaces(t *testing.T) {
 		assert.False(t, isVirtualInterface(iface.Name),
 			"interface %s should not be a virtual interface", iface.Name)
 	}
+}
+
+// newTestService builds a discovery service that resolves names and runs its
+// watch loop without opening a socket or putting mDNS traffic on the tester's
+// network.
+func newTestService(t *testing.T, cfg *config.Instance) *Service {
+	t.Helper()
+
+	svc := New(cfg)
+	svc.clock = clockwork.NewFakeClock()
+	svc.listInterfaces = func() ([]net.Interface, error) { return nil, nil }
+	svc.newResponder = func(*mdns.Service, func(string, ...any)) responder {
+		return newFakeResponder()
+	}
+	return svc
+}
+
+func TestFirstLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hostname string
+		expected string
+	}{
+		{"plain hostname", "MiSTer", "MiSTer"},
+		// A responder appends ".local", so a qualified name has to be cut
+		// back or it would be published as "mister.lan.local".
+		{"qualified hostname", "mister.lan", "mister"},
+		{"deeply qualified", "pc.office.example.com", "pc"},
+		{"already local", "batocera.local", "batocera"},
+		{"leading dot keeps the label", ".mister", ".mister"},
+		{"empty falls back", "", "zaparoo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, firstLabel(tt.hostname))
+		})
+	}
+}
+
+func TestFallbackInstanceName(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "zaparoo-46ebdfcb",
+		fallbackInstanceName("46ebdfcb-51b7-4600-9c28-7970787b686b"),
+		"the name stays distinct when two devices cannot report a hostname")
+	assert.Equal(t, "zaparoo", fallbackInstanceName("short"))
+	assert.Equal(t, "zaparoo", fallbackInstanceName(""))
 }
