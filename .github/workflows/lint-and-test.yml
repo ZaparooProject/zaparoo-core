@@ -134,12 +134,17 @@ jobs:
         if: matrix.os != 'windows'
         run: go mod download
 
-      - name: Cache APT packages (Ubuntu)
+      # These two are the only native libraries a Linux build needs: libnfc for
+      # the clausecker/nfc binding and libpcsclite for the scard binding. They
+      # pull six packages between them, so installing them outright is as quick
+      # as restoring a cache and cannot go stale.
+      - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu'
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
-          version: 1.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libnfc-dev \
+            libpcsclite-dev
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -255,7 +260,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libasound2-dev \
             libnfc-dev \
             libpcsclite-dev
 

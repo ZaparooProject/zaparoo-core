@@ -30,7 +30,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
-	"github.com/nixinwang/dialog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -87,14 +86,13 @@ type menuEntry interface {
 // apiCaller is how these entries reach Core, and showDialog is how they get a
 // message in front of someone. Both are injected so the menu's decisions can be
 // tested without a running service or a native window.
+//
+// nativeDialog is the real implementation of showDialog and is defined per
+// platform in dialog_desktop.go and dialog_headless.go.
 type (
 	apiCaller  func(ctx context.Context, cfg *config.Instance, method, params string) (string, error)
 	showDialog func(title, message string)
 )
-
-func nativeDialog(title, message string) {
-	dialog.Message("%s", message).Title(title).Info()
-}
 
 func watchUpdateStatus(cfg *config.Instance, item *systray.MenuItem) {
 	for {
