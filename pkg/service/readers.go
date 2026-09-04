@@ -380,6 +380,11 @@ func timedExit(
 		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
 		if err != nil {
 			log.Warn().Msgf("error killing launcher: %s", err)
+			if errors.Is(err, platforms.ErrStopFailed) {
+				// The media is still running, so do not tell the rest of the
+				// service it ended; active media stays as it is.
+				return
+			}
 		}
 
 		if svc.PlaylistQueue != nil {

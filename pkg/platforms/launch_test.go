@@ -974,3 +974,71 @@ func TestKeyboardControls_PropagatesKeyboardPressError(t *testing.T) {
 	require.ErrorIs(t, err, keyErr)
 	pl.AssertExpectations(t)
 }
+
+func TestDoLaunch_AbortsWhenPreemptedMediaStillRunning(t *testing.T) {
+	t.Parallel()
+
+	// The previous media could not be stopped, so starting a replacement would
+	// leave two games running with Core tracking only the second.
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).
+		Return(platforms.ErrStopFailed).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "Steam",
+		SystemID: "PC",
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           "steam://1942280/Brotato",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "Brotato" })
+
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	assert.False(t, launchCalled, "replacement must not launch over running media")
+	assert.Nil(t, activeMedia)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_ProceedsWhenNothingWasRunning(t *testing.T) {
+	t.Parallel()
+
+	// A generic stop error means "nothing to stop", not a confirmed failure,
+	// so the launch must still go ahead.
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).
+		Return(errors.New("no active launcher")).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "Steam",
+		SystemID: "PC",
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           "steam://1942280/Brotato",
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "Brotato" }))
+	assert.True(t, launchCalled)
+	mockPlatform.AssertExpectations(t)
+}

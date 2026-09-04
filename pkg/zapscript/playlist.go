@@ -770,6 +770,11 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		}, nil
 	}
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
+		if errors.Is(err, platforms.ErrStopFailed) {
+			// The media is still playing, so the playlist that belongs to it
+			// stays put rather than being cleared as though it had ended.
+			return platforms.CmdResult{}, fmt.Errorf("failed to stop active launcher: %w", err)
+		}
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        nil,

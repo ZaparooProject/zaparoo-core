@@ -132,9 +132,17 @@ None.
 
 #### Result
 
-Returns `null` on success.
+Returns `null` on success, meaning nothing was running or the media was
+confirmed stopped. Active media is only cleared when the stop succeeded.
 
-Currently, it is not reported if a process was killed or not.
+Returns an error when the media is known to still be running, such as a
+launcher process that ignored both a close request and a forced kill.
+Launchers that never expose a process at all, like an opened browser tab,
+still report success because there is nothing to stop.
+
+Whether a failure can be detected at all is platform-dependent. Windows
+reports one when it can confirm the media is still running; platforms that
+cannot confirm it continue to report success.
 
 #### Example
 

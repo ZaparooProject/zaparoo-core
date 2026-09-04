@@ -168,6 +168,12 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// Stop any currently running launcher only after validating the replacement.
 	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
+			// A confirmed stop failure means the previous media is still
+			// running. Launching anyway would leave two games going at once
+			// and Core tracking only the second, so abort instead.
+			if errors.Is(stopErr, ErrStopFailed) {
+				return fmt.Errorf("cannot launch over media that is still running: %w", stopErr)
+			}
 			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
 	}
