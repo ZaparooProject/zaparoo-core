@@ -86,7 +86,7 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	}
 
 	// Find and track the actual game process for killing.
-	go pi.findAndTrackGameProcess(appID)
+	go pi.findAndTrackGameProcess(appID, pid)
 
 	if alreadyTracked {
 		return
@@ -117,14 +117,26 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	pi.setActiveMedia(activeMedia)
 }
 
-// findAndTrackGameProcess attempts to find the game process with retries.
-func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID int) {
+// findAndTrackGameProcess attempts to find the game process with retries. The
+// ownership check before each attempt stops a late result being applied to a
+// game that has since been replaced, which would otherwise track -- and on the
+// next stop kill -- the wrong game.
+func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID int) {
 	const maxRetries = 10
 	const retryDelay = 500 * time.Millisecond
 
 	for i := range maxRetries {
-		proc, pid, err := FindGameProcess(appID)
+		if !pi.activeLaunch.matches(appID, lifecycleID) {
+			log.Debug().Int("appID", appID).Msg("abandoning process search for replaced game")
+			return
+		}
+		proc, pid, err := FindGameProcess("", appID)
 		if err == nil && proc != nil {
+			if !pi.activeLaunch.matches(appID, lifecycleID) {
+				log.Debug().Int("appID", appID).Int("pid", pid).
+					Msg("discarding stale game process match")
+				return
+			}
 			log.Debug().Int("pid", pid).Int("attempt", i+1).Msg("found game process")
 			pi.setTrackedProc(proc)
 			return

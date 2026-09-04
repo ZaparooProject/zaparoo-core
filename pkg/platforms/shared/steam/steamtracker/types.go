@@ -53,6 +53,13 @@ func (o *launchOwnership) set(appID, pid int) {
 	o.mu.Unlock()
 }
 
+// matches reports whether the given launch is still the active one.
+func (o *launchOwnership) matches(appID, pid int) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.appID == appID && o.pid == pid
+}
+
 func (o *launchOwnership) clearIfMatches(appID, pid int) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()

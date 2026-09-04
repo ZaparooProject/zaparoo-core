@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLaunchOwnershipRejectsStaleLifecycle(t *testing.T) {
@@ -36,4 +37,27 @@ func TestLaunchOwnershipRejectsStaleLifecycle(t *testing.T) {
 	assert.False(t, ownership.clearIfMatches(456, 20))
 	assert.True(t, ownership.clearIfMatches(123, 20))
 	assert.False(t, ownership.clearIfMatches(123, 20))
+}
+
+func TestLaunchOwnershipMatches(t *testing.T) {
+	t.Parallel()
+
+	var ownership launchOwnership
+	// Real launches never use zero: AppIDs are non-zero and lifecycle IDs
+	// start at 1, so the zero value cannot collide with a live launch.
+	assert.False(t, ownership.matches(123, 10), "an unset ownership owns no real launch")
+
+	ownership.set(123, 10)
+	assert.True(t, ownership.matches(123, 10))
+	assert.False(t, ownership.matches(123, 9), "an earlier lifecycle no longer owns the launch")
+	assert.False(t, ownership.matches(456, 10), "a different game does not own the launch")
+
+	// Replacing the launch means the previous one stops matching, which is
+	// what stops a slow process lookup acting on the game it replaced.
+	ownership.set(123, 11)
+	assert.False(t, ownership.matches(123, 10))
+	assert.True(t, ownership.matches(123, 11))
+
+	require.True(t, ownership.clearIfMatches(123, 11))
+	assert.False(t, ownership.matches(123, 11), "a cleared ownership owns nothing")
 }
