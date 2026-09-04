@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery/mdns"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -117,22 +118,40 @@ func isVirtualInterface(name string) bool {
 	return false
 }
 
+// responder is the part of mdns.Responder the discovery service drives. The
+// watch loop is the fix for an interface that appears after startup, so it is
+// worth being able to test it without opening a socket.
+type responder interface {
+	Start(ifaces []net.Interface) error
+	SetInterfaces(ifaces []net.Interface) (bool, error)
+	Interfaces() []string
+	Stop()
+}
+
 // Service manages mDNS service advertising for network discovery.
 // It allows mobile apps to discover Zaparoo Core instances without
 // manual IP configuration.
 type Service struct {
-	responder    *mdns.Responder
-	cfg          *config.Instance
-	cancelFunc   context.CancelFunc
-	instanceName string
-	mu           syncutil.Mutex
-	stopped      bool
+	clock          clockwork.Clock
+	listInterfaces func() ([]net.Interface, error)
+	newResponder   func(svc *mdns.Service, logf func(string, ...any)) responder
+	responder      responder
+	cfg            *config.Instance
+	cancelFunc     context.CancelFunc
+	instanceName   string
+	mu             syncutil.Mutex
+	stopped        bool
 }
 
 // New creates a new discovery service.
 func New(cfg *config.Instance) *Service {
 	return &Service{
-		cfg: cfg,
+		cfg:            cfg,
+		clock:          clockwork.NewRealClock(),
+		listInterfaces: getPreferredInterfaces,
+		newResponder: func(svc *mdns.Service, logf func(string, ...any)) responder {
+			return mdns.New(svc, logf)
+		},
 	}
 }
 
@@ -152,7 +171,7 @@ func (s *Service) Start() error {
 	}
 	s.instanceName = instanceName
 
-	responder := mdns.New(&mdns.Service{
+	newResponder := s.newResponder(&mdns.Service{
 		Instance: instanceName,
 		Type:     ServiceType,
 		Host:     hostLabel(instanceName),
@@ -167,14 +186,14 @@ func (s *Service) Start() error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.responder = responder
+	s.responder = newResponder
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelFunc = cancel
 	s.mu.Unlock()
 
-	started := s.tryStart(responder, false)
+	started := s.tryStart(newResponder, false)
 
-	go s.watchInterfaces(ctx, responder, started)
+	go s.watchInterfaces(ctx, newResponder, started)
 
 	return nil
 }
@@ -182,8 +201,8 @@ func (s *Service) Start() error {
 // tryStart attempts registration once, reporting whether it succeeded. quiet
 // suppresses the failure log, so a machine that stays offline does not repeat
 // the same line every tick for as long as it runs.
-func (s *Service) tryStart(responder *mdns.Responder, quiet bool) bool {
-	ifaces, err := getPreferredInterfaces()
+func (s *Service) tryStart(mdnsResponder responder, quiet bool) bool {
+	ifaces, err := s.listInterfaces()
 	if err != nil {
 		if !quiet {
 			log.Debug().Err(err).Msg("failed to get network interfaces")
@@ -197,7 +216,7 @@ func (s *Service) tryStart(responder *mdns.Responder, quiet bool) bool {
 		return false
 	}
 
-	if err := responder.Start(ifaces); err != nil {
+	if err := mdnsResponder.Start(ifaces); err != nil {
 		if !quiet {
 			log.Debug().Err(err).Msg("mDNS registration attempt failed, will keep watching")
 		}
@@ -208,15 +227,15 @@ func (s *Service) tryStart(responder *mdns.Responder, quiet bool) bool {
 		Str("instance", s.instanceName).
 		Int("port", s.cfg.APIPort()).
 		Str("type", ServiceType).
-		Strs("interfaces", responder.Interfaces()).
+		Strs("interfaces", mdnsResponder.Interfaces()).
 		Msg("mDNS service advertising started")
 
 	return true
 }
 
 // watchInterfaces keeps the advertised interface set in step with the machine.
-func (s *Service) watchInterfaces(ctx context.Context, responder *mdns.Responder, started bool) {
-	ticker := time.NewTicker(watchInterval)
+func (s *Service) watchInterfaces(ctx context.Context, mdnsResponder responder, started bool) {
+	ticker := s.clock.NewTicker(watchInterval)
 	defer ticker.Stop()
 
 	reportedFailure := !started
@@ -225,29 +244,29 @@ func (s *Service) watchInterfaces(ctx context.Context, responder *mdns.Responder
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.Chan():
 		}
 
 		if !started {
-			started = s.tryStart(responder, reportedFailure)
+			started = s.tryStart(mdnsResponder, reportedFailure)
 			reportedFailure = !started
 			continue
 		}
 
-		ifaces, err := getPreferredInterfaces()
+		ifaces, err := s.listInterfaces()
 		if err != nil {
 			log.Debug().Err(err).Msg("failed to get network interfaces")
 			continue
 		}
 
-		changed, err := responder.SetInterfaces(ifaces)
+		changed, err := mdnsResponder.SetInterfaces(ifaces)
 		if err != nil {
 			log.Debug().Err(err).Msg("mDNS interface update failed")
 			continue
 		}
 		if changed {
 			log.Info().
-				Strs("interfaces", responder.Interfaces()).
+				Strs("interfaces", mdnsResponder.Interfaces()).
 				Msg("mDNS interfaces changed, advertising updated")
 		}
 	}
@@ -258,7 +277,7 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	s.stopped = true
 	cancel := s.cancelFunc
-	responder := s.responder
+	mdnsResponder := s.responder
 	s.cancelFunc = nil
 	s.responder = nil
 	s.mu.Unlock()
@@ -267,9 +286,9 @@ func (s *Service) Stop() {
 		cancel()
 	}
 
-	if responder != nil {
+	if mdnsResponder != nil {
 		log.Debug().Msg("stopping mDNS service advertising")
-		responder.Stop()
+		mdnsResponder.Stop()
 	}
 }
 
@@ -289,14 +308,20 @@ func (s *Service) resolveInstanceName() (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get hostname, using fallback")
-		deviceID := s.cfg.DeviceID()
-		if len(deviceID) >= 8 {
-			return "zaparoo-" + deviceID[:8], nil
-		}
-		return "zaparoo", nil
+		return fallbackInstanceName(s.cfg.DeviceID()), nil
 	}
 
 	return hostname, nil
+}
+
+// fallbackInstanceName names the service when the machine will not say what it
+// is called. A slice of the device ID keeps two Zaparoo devices on one network
+// from colliding under the same name.
+func fallbackInstanceName(deviceID string) string {
+	if len(deviceID) >= 8 {
+		return "zaparoo-" + deviceID[:8]
+	}
+	return "zaparoo"
 }
 
 // hostLabel picks the single DNS label the SRV record targets. The machine's
@@ -309,6 +334,14 @@ func hostLabel(fallback string) string {
 	if err != nil || name == "" {
 		name = fallback
 	}
+	return firstLabel(name)
+}
+
+// firstLabel reduces a host name to the single DNS label the ".local" suffix
+// is appended to, so a machine named "mister.lan" is published as
+// "mister.local" the way avahi and Windows both publish it, rather than
+// "mister.lan.local".
+func firstLabel(name string) string {
 	if idx := strings.Index(name, "."); idx > 0 {
 		name = name[:idx]
 	}

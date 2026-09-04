@@ -25,6 +25,8 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery/mdns"
+	"github.com/jonboulle/clockwork"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,12 +138,9 @@ func TestInstanceNameUsesHostname(t *testing.T) {
 	expectedHostname, err := os.Hostname()
 	require.NoError(t, err)
 
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 	t.Cleanup(svc.Stop)
-
-	// Start may fail to open a socket, but instanceName is resolved before
-	// that happens, so the resolution is still observable.
-	_ = svc.Start() // Ignore error - registration may fail without network
+	require.NoError(t, svc.Start())
 
 	// instanceName should be set to the hostname (since no config override)
 	assert.Equal(t, expectedHostname, svc.InstanceName())
@@ -157,9 +156,9 @@ func TestInstanceNameUsesConfigOverride(t *testing.T) {
 	// Set a custom instance name in config
 	cfg.SetDiscoveryInstanceName("my-custom-name")
 
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 	t.Cleanup(svc.Stop)
-	_ = svc.Start() // Ignore error - registration may fail without network
+	require.NoError(t, svc.Start())
 
 	// instanceName should use the config override, not hostname
 	assert.Equal(t, "my-custom-name", svc.InstanceName())
@@ -358,4 +357,55 @@ func TestGetPreferredInterfaces(t *testing.T) {
 		assert.False(t, isVirtualInterface(iface.Name),
 			"interface %s should not be a virtual interface", iface.Name)
 	}
+}
+
+// newTestService builds a discovery service that resolves names and runs its
+// watch loop without opening a socket or putting mDNS traffic on the tester's
+// network.
+func newTestService(t *testing.T, cfg *config.Instance) *Service {
+	t.Helper()
+
+	svc := New(cfg)
+	svc.clock = clockwork.NewFakeClock()
+	svc.listInterfaces = func() ([]net.Interface, error) { return nil, nil }
+	svc.newResponder = func(*mdns.Service, func(string, ...any)) responder {
+		return newFakeResponder()
+	}
+	return svc
+}
+
+func TestFirstLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hostname string
+		expected string
+	}{
+		{"plain hostname", "MiSTer", "MiSTer"},
+		// A responder appends ".local", so a qualified name has to be cut
+		// back or it would be published as "mister.lan.local".
+		{"qualified hostname", "mister.lan", "mister"},
+		{"deeply qualified", "pc.office.example.com", "pc"},
+		{"already local", "batocera.local", "batocera"},
+		{"leading dot keeps the label", ".mister", ".mister"},
+		{"empty falls back", "", "zaparoo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, firstLabel(tt.hostname))
+		})
+	}
+}
+
+func TestFallbackInstanceName(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "zaparoo-46ebdfcb",
+		fallbackInstanceName("46ebdfcb-51b7-4600-9c28-7970787b686b"),
+		"the name stays distinct when two devices cannot report a hostname")
+	assert.Equal(t, "zaparoo", fallbackInstanceName("short"))
+	assert.Equal(t, "zaparoo", fallbackInstanceName(""))
 }
