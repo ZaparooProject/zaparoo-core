@@ -555,13 +555,6 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 	ctx context.Context,
 	platform string,
 ) ([]LaunchBoxGameInfo, error) {
-	s.connMu.Lock()
-	if s.writer == nil {
-		s.connMu.Unlock()
-		return nil, errors.New("LaunchBox plugin not connected")
-	}
-	s.connMu.Unlock()
-
 	respChan := make(chan launchBoxGamesResponse, 1)
 
 	s.pendingGamesReqMu.Lock()
@@ -580,23 +573,14 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 		s.pendingGamesReqMu.Unlock()
 	}()
 
-	// Send request
-	cmd := pluginCommand{Command: "GetGamesForPlatform", Platform: platform}
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal GetGamesForPlatform command: %w", err)
+	// The pending request is registered before the send so a fast reply
+	// cannot arrive with nobody waiting for it. The connection check and the
+	// write happen under one hold of the lock inside sendCommand; a plugin
+	// that disconnects in between would otherwise leave a nil writer to
+	// dereference.
+	if err := s.sendCommand(pluginCommand{Command: "GetGamesForPlatform", Platform: platform}); err != nil {
+		return nil, err
 	}
-
-	s.connMu.Lock()
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		s.connMu.Unlock()
-		return nil, fmt.Errorf("failed to write GetGamesForPlatform command: %w", err)
-	}
-	if err := s.writer.Flush(); err != nil {
-		s.connMu.Unlock()
-		return nil, fmt.Errorf("failed to flush GetGamesForPlatform command: %w", err)
-	}
-	s.connMu.Unlock()
 
 	log.Debug().Msgf("sent GetGamesForPlatform command for: %s", platform)
 
