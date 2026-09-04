@@ -759,26 +759,34 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
-	if err := queuePlaylistUpdate(&env, &playlists.Playlist{Slot: slot, Clear: true}); err != nil {
-		return platforms.CmdResult{}, err
-	}
-
+	clearUpdate := &playlists.Playlist{Slot: slot, Clear: true}
 	if slot == mediaslot.Background {
+		if err := queuePlaylistUpdate(&env, clearUpdate); err != nil {
+			return platforms.CmdResult{}, err
+		}
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        nil,
 		}, nil
 	}
-	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
-		if errors.Is(err, platforms.ErrStopFailed) {
-			// The media is still playing, so the playlist that belongs to it
-			// stays put rather than being cleared as though it had ended.
-			return platforms.CmdResult{}, fmt.Errorf("failed to stop active launcher: %w", err)
-		}
+
+	// The launcher is stopped before the playlist is cleared. A clear that
+	// was queued first could not be taken back if the stop then reported the
+	// media still running, leaving the game up with no playlist attached.
+	stopErr := pl.StopActiveLauncher(platforms.StopForMenu)
+	if errors.Is(stopErr, platforms.ErrStopFailed) {
+		// The media is still playing, so the playlist that belongs to it
+		// stays put rather than being cleared as though it had ended.
+		return platforms.CmdResult{}, fmt.Errorf("failed to stop active launcher: %w", stopErr)
+	}
+	if err := queuePlaylistUpdate(&env, clearUpdate); err != nil {
+		return platforms.CmdResult{}, err
+	}
+	if stopErr != nil {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        nil,
-		}, fmt.Errorf("failed to stop active launcher: %w", err)
+		}, fmt.Errorf("failed to stop active launcher: %w", stopErr)
 	}
 	return platforms.CmdResult{
 		PlaylistChanged: true,
