@@ -43,7 +43,13 @@ jobs:
 
   ci:
     name: CI
-    timeout-minutes: 15
+    # Windows takes 12 to 13 minutes here even with its Go build cache warm, so
+    # a 15 minute cap left almost no headroom: once that cache was evicted the
+    # job compiled from scratch, hit the limit while still linking, and died
+    # before the post step that saves a new one. That made the timeout
+    # self-sustaining, because every following run also started cold. 30 gives a
+    # cold run room to finish and repopulate the cache.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
