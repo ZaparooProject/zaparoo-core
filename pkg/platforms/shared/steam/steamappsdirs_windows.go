@@ -74,7 +74,7 @@ func platformSteamAppsDirs(_ string) []string {
 	seen := make(map[string]struct{}, len(roots))
 	dirs := make([]string, 0, len(roots))
 	for _, root := range roots {
-		if root == "" || root == "." {
+		if root == "" || root == "." || !filepath.IsAbs(root) {
 			continue
 		}
 		dir := filepath.Join(root, "steamapps")
