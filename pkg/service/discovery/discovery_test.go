@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,14 +36,50 @@ func TestServiceType(t *testing.T) {
 	assert.Equal(t, "_zaparoo._tcp", ServiceType)
 }
 
-// TestDefaultTXTRecordsAreEmpty pins the security-driven design that mDNS
-// service announcements carry NO TXT records. See defaultTXTRecords doc
-// comment for the rationale.
-func TestDefaultTXTRecordsAreEmpty(t *testing.T) {
+// TestDefaultTXTRecordsCarryNoData pins the security-driven design that mDNS
+// service announcements carry no TXT data, and the DNS-level requirement that
+// "no data" is spelled as one zero-length string. See the defaultTXTRecords
+// doc comment for the rationale.
+func TestDefaultTXTRecordsCarryNoData(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, defaultTXTRecords,
-		"mDNS TXT records must remain empty to avoid leaking version/platform/id on the LAN")
+	require.Len(t, defaultTXTRecords, 1,
+		"a TXT record needs exactly one character-string to encode 'no data'")
+	assert.Empty(t, defaultTXTRecords[0],
+		"mDNS TXT records must stay empty to avoid leaking version/platform/id on the LAN")
+}
+
+// TestDefaultTXTRecordsPackToOneEmptyString checks the wire encoding rather
+// than the Go value: an empty slice and a slice holding one empty string look
+// equally harmless in Go, but only the latter packs to a valid TXT record.
+// An empty slice yields rdlength 0, which resolvers are entitled to reject.
+func TestDefaultTXTRecordsPackToOneEmptyString(t *testing.T) {
+	t.Parallel()
+
+	txt := &dns.TXT{
+		Hdr: dns.RR_Header{
+			Name:   "zaparoo." + ServiceType + ".local.",
+			Rrtype: dns.TypeTXT,
+			Class:  dns.ClassINET,
+			Ttl:    120,
+		},
+		Txt: defaultTXTRecords,
+	}
+
+	msg := new(dns.Msg)
+	msg.Answer = []dns.RR{txt}
+	wire, err := msg.Pack()
+	require.NoError(t, err)
+
+	unpacked := new(dns.Msg)
+	require.NoError(t, unpacked.Unpack(wire), "packed TXT record must round-trip")
+	require.Len(t, unpacked.Answer, 1)
+
+	got, ok := unpacked.Answer[0].(*dns.TXT)
+	require.True(t, ok, "expected a TXT record, got %T", unpacked.Answer[0])
+	assert.Equal(t, uint16(1), got.Hdr.Rdlength,
+		"TXT rdata must be the single length byte of one zero-length string")
+	assert.Equal(t, []string{""}, got.Txt)
 }
 
 func TestStopIdempotent(t *testing.T) {
@@ -56,7 +93,7 @@ func TestStopIdempotent(t *testing.T) {
 	svc.Stop()
 
 	// No panic means success
-	assert.Nil(t, svc.server)
+	assert.Nil(t, svc.responder)
 }
 
 func TestInstanceNameBeforeStart(t *testing.T) {
@@ -100,10 +137,11 @@ func TestInstanceNameUsesHostname(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := New(cfg)
+	t.Cleanup(svc.Stop)
 
-	// Start will fail at zeroconf.Register, but instanceName is set
-	// before Register is called, so we can still verify the resolution
-	_ = svc.Start() // Ignore error - Register may fail without network
+	// Start may fail to open a socket, but instanceName is resolved before
+	// that happens, so the resolution is still observable.
+	_ = svc.Start() // Ignore error - registration may fail without network
 
 	// instanceName should be set to the hostname (since no config override)
 	assert.Equal(t, expectedHostname, svc.InstanceName())
@@ -120,7 +158,8 @@ func TestInstanceNameUsesConfigOverride(t *testing.T) {
 	cfg.SetDiscoveryInstanceName("my-custom-name")
 
 	svc := New(cfg)
-	_ = svc.Start() // Ignore error - Register may fail without network
+	t.Cleanup(svc.Stop)
+	_ = svc.Start() // Ignore error - registration may fail without network
 
 	// instanceName should use the config override, not hostname
 	assert.Equal(t, "my-custom-name", svc.InstanceName())
@@ -149,6 +188,10 @@ func TestIsVirtualInterface(t *testing.T) {
 		{"tunnel interface", "tunl0", true},
 		{"wireguard", "wg0", true},
 		{"wireguard numbered", "wg1", true},
+		{"hyper-v switch", "vEthernet (Default Switch)", true},
+		{"wsl switch", "vEthernet (WSL (Hyper-V firewall))", true},
+		{"vmware host-only", "VMware Network Adapter VMnet1", true},
+		{"virtualbox host-only", "VirtualBox Host-Only Network", true},
 
 		// Real interfaces that should NOT be filtered
 		{"ethernet", "eth0", false},
@@ -180,6 +223,7 @@ func TestVirtualInterfacePrefixes(t *testing.T) {
 	expectedPrefixes := []string{
 		"docker", "br-", "veth", "virbr", "lxc", "lxd",
 		"cni", "flannel", "cali", "tunl", "wg",
+		"vmware", "virtualbox",
 	}
 
 	assert.Equal(t, expectedPrefixes, virtualInterfacePrefixes,
