@@ -56,7 +56,21 @@ const (
 	// XInput only ever surfaces four pads, so a machine that needs more
 	// attempts than this has a different problem.
 	serialAttempts = 32
+
+	// waitTimeout is WAIT_TIMEOUT, which x/sys/windows does not declare.
+	waitTimeout = 0x102
+
+	// ioctlTimeoutMillis bounds a request the bus keeps pending, in the
+	// milliseconds WaitForSingleObject wants. Plugging a pad in takes
+	// milliseconds; ten seconds is long enough that a slow machine is never
+	// cut off, and short enough that a driver which has stopped answering does
+	// not hold up startup indefinitely.
+	ioctlTimeoutMillis = 10_000
 )
+
+// ErrDriverUnresponsive reports that the driver accepted a request and never
+// completed it.
+var ErrDriverUnresponsive = errors.New("the ViGEmBus driver stopped responding")
 
 // maxDeviceDetailSize bounds the SetupAPI detail buffer. A device interface
 // path is a few hundred bytes at most.
@@ -264,7 +278,35 @@ func ioctl[T vigemRequest](g *Gamepad, code uint32, req *T, size uint32) error {
 	if !errors.Is(err, windows.ERROR_IO_PENDING) {
 		return fmt.Errorf("vigem ioctl 0x%X: %w", code, err)
 	}
-	if err := windows.GetOverlappedResult(g.handle, &overlapped, &returned, true); err != nil {
+	return g.awaitPending(code, &overlapped, &returned)
+}
+
+// awaitPending waits out a request the bus kept pending, giving up rather than
+// blocking for good. WAIT_DEVICE_READY stays pending until the child device
+// powers up, and this runs from StartPre, so a driver that never answers would
+// otherwise hang the whole service at startup.
+//
+// A request that is abandoned has to be cancelled and reaped first: the
+// overlapped structure is Go memory, and the driver would still be writing
+// into it after this call returned.
+func (g *Gamepad) awaitPending(code uint32, overlapped *windows.Overlapped, returned *uint32) error {
+	event, err := windows.WaitForSingleObject(g.event, ioctlTimeoutMillis)
+	if err != nil {
+		return fmt.Errorf("vigem ioctl 0x%X: waiting failed: %w", code, err)
+	}
+
+	if event == waitTimeout {
+		if err := windows.CancelIoEx(g.handle, overlapped); err != nil &&
+			!errors.Is(err, windows.ERROR_NOT_FOUND) {
+			return fmt.Errorf("vigem ioctl 0x%X timed out and could not be cancelled: %w", code, err)
+		}
+		// The result is the cancellation, not an answer, so only the reaping
+		// matters here.
+		_ = windows.GetOverlappedResult(g.handle, overlapped, returned, true)
+		return fmt.Errorf("vigem ioctl 0x%X: %w", code, ErrDriverUnresponsive)
+	}
+
+	if err := windows.GetOverlappedResult(g.handle, overlapped, returned, true); err != nil {
 		return fmt.Errorf("vigem ioctl 0x%X: %w", code, err)
 	}
 	return nil
