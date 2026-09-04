@@ -21,7 +21,6 @@ package mediadb
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +28,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// forensicSetSuffixes names the three files Recreate preserves as one set: the
+// database, its WAL and the WAL index over it.
+var forensicSetSuffixes = []string{"", "-wal", "-shm"}
 
 // TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet pins what a
 // corruption post-mortem needs from Recreate: the database, its WAL and its
@@ -43,10 +46,21 @@ func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T
 	path := mediaDB.GetDBPath()
 	require.FileExists(t, path+"-wal", "the row must still be in the WAL for the set to matter")
 
+	// Hold the three files aside exactly as they stand now, while the row is
+	// still WAL-only. Closing the database checkpoints the row into the main
+	// file and deletes the sidecars, so a copy taken here is the only way to
+	// have the set back afterwards. Keeping a second connection open would
+	// leave them on disk instead, but a file SQLite still has open cannot be
+	// renamed or deleted on Windows, and renaming all three is exactly what
+	// Recreate is about to do.
+	held := filepath.Join(t.TempDir(), filepath.Base(path))
+	for _, suffix := range forensicSetSuffixes {
+		copyFileIfExists(t, path+suffix, held+suffix)
+	}
+
 	// The set only matters if the row is genuinely WAL-only, so prove the main
-	// database alone cannot answer for it. This has to happen before Recreate:
-	// Recreate closes the database first, and that close can checkpoint the row
-	// into the main file.
+	// database alone cannot answer for it. Its own copy, not the held one: this
+	// one is opened read-write, which would write sidecars next to it.
 	mainOnly := filepath.Join(t.TempDir(), "main-only.db")
 	copyFileIfExists(t, path, mainOnly)
 	var mainOnlyMedia int
@@ -59,52 +73,32 @@ func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T
 		require.ErrorContains(t, mainOnlyErr, "no such table")
 	}
 
-	// A second, read-only connection keeps the WAL and SHM on disk through
-	// Close(): SQLite checkpoints and deletes them only when the last
-	// connection leaves, and a read-only connection can do neither. That is
-	// the on-disk state a crashed or corrupt process leaves behind, which is
-	// what the forensic set exists to capture.
-	// The media driver, not the bare one: this file carries an index collated
-	// with ZAPAROO_TITLE_V1, and a connection without that collation cannot
-	// even run integrity_check against it. The count below happens not to need
-	// it, which is not a property worth depending on.
-	holder, err := sql.Open(sqliteMediaDriver, "file:"+path+"?mode=ro")
-	require.NoError(t, err)
-	holderConn, err := holder.Conn(ctx)
-	require.NoError(t, err)
-	var seen int
-	require.NoError(t, holderConn.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&seen))
-	require.Equal(t, 1, seen)
-	holderReleased := false
-	releaseHolder := func() {
-		if holderReleased {
-			return
-		}
-		holderReleased = true
-		require.NoError(t, holderConn.Close())
-		require.NoError(t, holder.Close())
+	// Put the pre-checkpoint set back over the closed database. That is the
+	// on-disk state a process that died before its WAL was checkpointed leaves
+	// behind, and the state the forensic set exists to capture: a main file
+	// without the row, the WAL that holds it, and the index over that WAL.
+	require.NoError(t, mediaDB.Close())
+	for _, suffix := range forensicSetSuffixes {
+		copyFileIfExists(t, held+suffix, path+suffix)
 	}
-	t.Cleanup(releaseHolder)
+	require.FileExists(t, path+"-wal", "the restored set must still carry the WAL")
 
 	mediaDB.MarkCorrupt("test")
 	require.NoError(t, mediaDB.Recreate(true))
 
-	preserved := make(map[string]string, 3)
-	for _, file := range []string{path, path + "-wal", path + "-shm"} {
-		backup := database.CorruptBackupPath(file)
-		require.FileExists(t, backup, "forensic set must include %s", filepath.Base(file))
-		preserved[file] = backup
+	preserved := make(map[string]string, len(forensicSetSuffixes))
+	for _, suffix := range forensicSetSuffixes {
+		backup := database.CorruptBackupPath(path + suffix)
+		require.FileExists(t, backup, "forensic set must include %s", filepath.Base(path+suffix))
+		preserved[path+suffix] = backup
 	}
-	// The renamed files are no longer in use by anything: release the holder
-	// before reading them back so the check below sees closed, quiescent files.
-	releaseHolder()
 
 	// One consistent set: put back under a single name it opens cleanly and
 	// holds the committed row, which was only ever in the WAL.
 	target := filepath.Join(t.TempDir(), "forensic.db")
-	copyFileIfExists(t, preserved[path], target)
-	copyFileIfExists(t, preserved[path+"-wal"], target+"-wal")
-	copyFileIfExists(t, preserved[path+"-shm"], target+"-shm")
+	for _, suffix := range forensicSetSuffixes {
+		copyFileIfExists(t, preserved[path+suffix], target+suffix)
+	}
 	forensic := openSnapshot(t, target)
 	requireIntegrityOK(t, forensic)
 	assert.Equal(t, 1, countRowsWhere(t, forensic, "Media", ""))
