@@ -141,6 +141,12 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 			return fmt.Errorf("backend %q currently requires kind %q",
 				CustomLauncherBackendMisterCore, CustomLauncherKindVirtualSystem)
 		}
+		// Without execute there is nothing to run, so the entry is only useful
+		// as a way to add media directories to an existing system. Anything
+		// else would load without complaint and then do nothing at all.
+		if backend == "" && (entry.System == "" || len(entry.MediaDirs) == 0) {
+			return errors.New("a launcher without execute must set system and media_dirs")
+		}
 	case CustomLauncherKindVirtualSystem:
 		if backend != CustomLauncherBackendCommand && backend != CustomLauncherBackendMisterCore {
 			return errors.New("virtual_system requires a supported backend")

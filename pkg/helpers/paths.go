@@ -336,6 +336,16 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		}
 		lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks
 
+		// Two launchers sharing an ID cannot share one cache entry: whichever
+		// was precomputed last would answer for both and silently match the
+		// wrong folders. Blank the entry instead so every lookup for that ID
+		// falls back to computing from the launcher in hand.
+		if _, duplicate := precomp[l.ID]; duplicate {
+			log.Error().Str("launcherID", l.ID).
+				Msg("duplicate launcher ID, matching without precomputed paths")
+			precomp[l.ID] = nil
+			continue
+		}
 		precomp[l.ID] = lp
 	}
 
@@ -777,6 +787,11 @@ func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) 
 		Int("candidates", len(launchers)).
 		Msg("selected launcher by specificity")
 
+	launcher, err := ResolveLaunchableLauncher(&launcher, path)
+	if err != nil {
+		return platforms.Launcher{}, err
+	}
+
 	if launcher.AllowListOnly && !m.cfg.IsLauncherFileAllowed(path) {
 		return platforms.Launcher{}, errors.New("file not allowed: " + path)
 	}
@@ -1040,6 +1055,58 @@ func GuessLauncherForPath(path string) (platforms.Launcher, bool) {
 	return launcher, ok
 }
 
+// LauncherCanLaunch reports whether a launcher is able to start media itself.
+func LauncherCanLaunch(l *platforms.Launcher) bool {
+	return l.Launch != nil || l.BuildLaunchCommand != nil
+}
+
+// ResolveLaunchableLauncher returns a launcher able to start path. A scan-only
+// launcher only widens the media its system indexes, so the system's real
+// launcher takes over, keeping any allow list the scan-only entry asked for.
+// Every other launcher is returned unchanged.
+func ResolveLaunchableLauncher(
+	launcher *platforms.Launcher,
+	path string,
+) (platforms.Launcher, error) {
+	if !launcher.ScanOnly {
+		return *launcher, nil
+	}
+
+	ext := filepath.Ext(path)
+	candidates := GlobalLauncherCache.GetAvailableLaunchersBySystem(launcher.SystemID)
+	best := -1
+	bestScore := -1
+	for i := range candidates {
+		candidate := &candidates[i]
+		if candidate.ScanOnly || !LauncherCanLaunch(candidate) {
+			continue
+		}
+		// An extension match beats every structural signal: it is the only
+		// evidence that this launcher handles this kind of file, rather than
+		// merely belonging to the same system.
+		score := launcherSpecificity(candidate)
+		if ext != "" && launcherHasExtension(candidate, ext) {
+			score += 10000
+		}
+		if score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+
+	if best == -1 {
+		log.Debug().Str("launcher", launcher.ID).Str("system", launcher.SystemID).
+			Str("path", path).Msg("no launchable launcher for scan-only launcher's system")
+		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
+	}
+
+	resolved := candidates[best]
+	resolved.AllowListOnly = resolved.AllowListOnly || launcher.AllowListOnly
+	log.Debug().Str("scanOnlyLauncher", launcher.ID).Str("launcher", resolved.ID).
+		Str("path", path).Msg("resolved scan-only launcher to system launcher")
+	return resolved, nil
+}
+
 // FindLauncher takes a path and tries to find the best possible match for a
 // launcher, taking into account specificity and allowlist restrictions.
 func FindLauncher(
@@ -1075,6 +1142,11 @@ func FindLauncher(
 			Int("specificity", bestScore).
 			Int("candidates", len(launchers)).
 			Msg("selected launcher by specificity")
+	}
+
+	launcher, resolveErr := ResolveLaunchableLauncher(&launcher, path)
+	if resolveErr != nil {
+		return platforms.Launcher{}, resolveErr
 	}
 
 	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {

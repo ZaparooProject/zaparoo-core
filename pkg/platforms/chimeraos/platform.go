@@ -177,9 +177,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	emuOpts := p.emulationOptions()
 	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
 	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
-	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
-	allLaunchers = append(allLaunchers, custom...)
-	allLaunchers = append(allLaunchers, ls...)
+	allLaunchers := helpers.CombineParsedLaunchers(custom, ls)
 	p.gameMode.WrapLaunchers(allLaunchers)
 	return allLaunchers
 }

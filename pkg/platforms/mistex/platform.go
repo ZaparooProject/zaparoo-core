@@ -382,7 +382,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := mister.CreateLaunchers(p)
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	return helpers.CombineLaunchers(cfg, p, ls)
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
