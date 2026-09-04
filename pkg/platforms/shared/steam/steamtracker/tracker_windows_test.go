@@ -188,3 +188,120 @@ func TestIsSteamInstalled(_ *testing.T) {
 	// The actual result depends on whether Steam is installed
 	_ = IsSteamInstalled()
 }
+
+func TestTracker_OnAppIDChange_SwitchingGamesStopsPrevious(t *testing.T) {
+	t.Parallel()
+
+	stopped := make(chan int, 2)
+	started := make(chan int, 2)
+
+	tracker := New(
+		func(appID, _ int, _ string) { started <- appID },
+		func(appID, _ int) { stopped <- appID },
+	)
+
+	tracker.onAppIDChange(111)
+	requireChanValue(t, started, 111)
+
+	// Steam moves straight from one game to another without publishing zero
+	// in between. The first game must still be reported as stopped, or it is
+	// left tracked forever and the switch back is swallowed as "already
+	// tracked".
+	tracker.onAppIDChange(222)
+	requireChanValue(t, stopped, 111)
+	requireChanValue(t, started, 222)
+
+	games := tracker.TrackedGames()
+	require.Len(t, games, 1)
+	assert.Equal(t, 222, games[0].AppID)
+}
+
+func TestTracker_OnAppIDChange_SwitchingBackReportsBothTransitions(t *testing.T) {
+	t.Parallel()
+
+	stopped := make(chan int, 2)
+	started := make(chan int, 2)
+
+	tracker := New(
+		func(appID, _ int, _ string) { started <- appID },
+		func(appID, _ int) { stopped <- appID },
+	)
+
+	tracker.onAppIDChange(111)
+	requireChanValue(t, started, 111)
+	tracker.onAppIDChange(222)
+	requireChanValue(t, stopped, 111)
+	requireChanValue(t, started, 222)
+
+	// Steam reverts to the first game once the second exits.
+	tracker.onAppIDChange(111)
+	requireChanValue(t, stopped, 222)
+	requireChanValue(t, started, 111)
+
+	games := tracker.TrackedGames()
+	require.Len(t, games, 1)
+	assert.Equal(t, 111, games[0].AppID)
+}
+
+func TestTracker_OnAppIDChange_RepeatedSameAppIDIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan int, 4)
+	// Stop callbacks run on their own goroutine, so record rather than fail
+	// from inside one: a t.Error after the test returns panics instead of
+	// reporting a readable failure.
+	stopped := make(chan int, 4)
+	tracker := New(
+		func(appID, _ int, _ string) { started <- appID },
+		func(appID, _ int) { stopped <- appID },
+	)
+
+	tracker.onAppIDChange(999)
+	requireChanValue(t, started, 999)
+	tracker.onAppIDChange(999)
+
+	select {
+	case appID := <-started:
+		t.Fatalf("unexpected second start callback for appID %d", appID)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	assert.Empty(t, stopped, "a repeated AppID must not report a stop")
+	assert.Len(t, tracker.TrackedGames(), 1)
+}
+
+func TestTracker_StopIsCleanWhileWaitingForSteam(t *testing.T) {
+	// Not parallel: shortens a package-level interval.
+	original := steamInstallPollInterval
+	steamInstallPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { steamInstallPollInterval = original })
+
+	tracker := New(nil, nil)
+	// Start either attaches a watcher or begins waiting for Steam to appear;
+	// either way Stop must return promptly rather than waiting out a poll.
+	// The package's goleak TestMain covers the "no goroutine left behind" half.
+	require.NoError(t, tracker.Start())
+
+	done := make(chan struct{})
+	go func() {
+		tracker.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for tracker to stop")
+	}
+}
+
+// requireChanValue asserts the next value on ch equals want.
+func requireChanValue(t *testing.T, ch <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		require.Equal(t, want, got)
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timeout waiting for value %d", want)
+	}
+}
