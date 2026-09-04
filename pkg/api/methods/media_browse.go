@@ -317,10 +317,7 @@ func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 func browseRoots(env *requests.RequestEnv) (any, error) {
 	ctx := env.Context
 
-	var rootDirs []string
-	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
+	rootDirs := browseRootDirs(env)
 
 	// Get filesystem root counts
 	rootCounts, err := env.Database.MediaDB.BrowseRootCounts(ctx, rootDirs)
@@ -467,10 +464,7 @@ func systemRootContentsSources(
 		physical = append(physical, entries[i])
 	}
 
-	var rootDirs []string
-	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
+	rootDirs := browseRootDirs(env)
 	rootPriority := func(path string) int {
 		for i, root := range rootDirs {
 			if helpers.PathHasPrefix(path, root) {
@@ -787,9 +781,12 @@ func isStrictFilesystemDescendant(childPath, parentPath string) bool {
 }
 
 func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []systemdefs.System) ([]string, error) {
-	var rootDirs []string
+	rootDirs := browseRootDirs(env)
+	// A launcher's own absolute folder is a destination, not a place to look
+	// for other launchers' relative folders, so those joins use scan roots only.
+	var scanRoots []string
 	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
+		scanRoots = env.Platform.RootDirs(env.Config)
 	}
 
 	routes := make([]string, 0)
@@ -826,7 +823,7 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 						addFilesystemRoute(folder)
 						continue
 					}
-					for _, root := range rootDirs {
+					for _, root := range scanRoots {
 						addFilesystemRoute(filepath.Join(root, folder))
 					}
 				}
@@ -963,11 +960,7 @@ func browseFilesystem(
 	}
 
 	// Security: verify path is within an allowed root
-	var rootDirs []string
-	if env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
-	if !isPathUnderRoots(cleaned, rootDirs) {
+	if !isPathUnderRoots(cleaned, browseRootDirs(env)) {
 		return nil, models.ClientErrf("path is not within an allowed root directory")
 	}
 
@@ -1519,6 +1512,32 @@ func isPathUnderRoots(path string, rootDirs []string) bool {
 		}
 	}
 	return false
+}
+
+// browseRootDirs returns the directories a client may browse: the platform's
+// scan roots plus the absolute folders launchers declare for themselves. A
+// custom launcher's media_dirs need not sit under a scan root, and without this
+// its media indexes and launches while the directory holding it cannot be
+// listed or opened.
+func browseRootDirs(env *requests.RequestEnv) []string {
+	var roots []string
+	if env.Platform != nil {
+		roots = env.Platform.RootDirs(env.Config)
+	}
+	if env.LauncherCache == nil {
+		return roots
+	}
+
+	launchers := env.LauncherCache.GetAllLaunchers()
+	for i := range launchers {
+		for _, folder := range launchers[i].Folders {
+			if !filepath.IsAbs(folder) || isPathUnderRoots(folder, roots) {
+				continue
+			}
+			roots = append(roots, folder)
+		}
+	}
+	return roots
 }
 
 // isKnownVirtualScheme checks if the given scheme path matches a launcher's scheme.

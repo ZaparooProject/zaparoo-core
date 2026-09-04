@@ -235,7 +235,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return helpers.CombineLaunchers(cfg, p, launchers)
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

@@ -1173,6 +1173,92 @@ func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+// TestInferLauncherForSystemPath_SkipsScanOnly covers a custom launcher that
+// only widens a system's media directories. It shares the stock launcher's
+// extension, so counting it as a candidate would make every launch for that
+// system ambiguous.
+func TestInferLauncherForSystemPath_SkipsScanOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{
+			ID: "Famicom", SystemID: systemdefs.SystemNES,
+			Folders:    []string{filepath.Join("games", "famicom")},
+			Extensions: []string{".nes"}, ScanOnly: true,
+		},
+		{
+			ID: systemdefs.SystemNES, SystemID: systemdefs.SystemNES,
+			Folders: []string{"NES"}, Extensions: []string{".nes"},
+		},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "famicom", "Rockman 4.nes"),
+		systemdefs.SystemNES,
+	)
+
+	assert.True(t, found)
+	assert.Equal(t, systemdefs.SystemNES, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestCmdLaunch_ExplicitScanOnlyLauncherDelegates covers naming a scan-only
+// launcher in the launcher argument. It cannot start anything itself, so the
+// launch has to go to the system's real launcher rather than being refused.
+func TestCmdLaunch_ExplicitScanOnlyLauncherDelegates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+	mediaPath := filepath.Join(tmpDir, "Rockman 4.nes")
+	require.NoError(t, os.WriteFile(mediaPath, []byte("test"), 0o600))
+
+	cfg := &config.Instance{}
+	scanOnly := platforms.Launcher{
+		ID: "Famicom", SystemID: systemdefs.SystemNES,
+		Folders: []string{tmpDir}, Extensions: []string{".nes"}, ScanOnly: true,
+	}
+	systemLauncher := platforms.Launcher{
+		ID: systemdefs.SystemNES, SystemID: systemdefs.SystemNES,
+		Folders: []string{"NES"}, Extensions: []string{".nes"},
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{scanOnly, systemLauncher})
+	mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+	mockPlatform.On(
+		"LaunchMedia", cfg, mediaPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == systemdefs.SystemNES
+		}),
+		(*database.Database)(nil), (*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	originalCache := pathhelpers.GlobalLauncherCache
+	testCache := &pathhelpers.LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	pathhelpers.GlobalLauncherCache = testCache
+	defer func() { pathhelpers.GlobalLauncherCache = originalCache }()
+
+	reader := zapscript.NewParser(mediaPath + "?launcher=Famicom")
+	script, err := reader.ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 1)
+
+	env := platforms.CmdEnv{Cmd: script.Cmds[0], Cfg: cfg}
+	result, err := cmdLaunchWithFS(afero.NewMemMapFs(), mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_SystemDefaultDoesNotBypassLauncherAllowlist(t *testing.T) {
 	t.Parallel()
 

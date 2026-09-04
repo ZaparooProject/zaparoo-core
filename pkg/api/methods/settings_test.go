@@ -1217,6 +1217,67 @@ func TestHandleSettingsUpdate_SystemDefaults(t *testing.T) {
 	assert.Equal(t, "snes9x", got[1].Launcher)
 }
 
+// TestHandleSettingsUpdate_SystemDefaultsKeepPauseOnLaunch covers a field the
+// API does not model. An update replaces the whole list, so a client editing a
+// launcher used to silently delete pause_on_launch from the user's config file.
+func TestHandleSettingsUpdate_SystemDefaultsKeepPauseOnLaunch(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	pauseOnLaunch := false
+	cfg.SetSystemDefaults([]config.SystemsDefault{
+		{System: "Audio", PauseOnLaunch: &pauseOnLaunch},
+		{System: "SNES", Launcher: "snes9x"},
+	})
+	require.NoError(t, cfg.Save())
+	require.False(t, cfg.AudioPauseOnLaunch())
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes9x", SystemID: "SNES"},
+		{ID: "audioplayer", SystemID: "Audio"},
+	})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "Audio", Launcher: "audioplayer"},
+			{System: "SNES", Launcher: "snes9x"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+		IsLocal:       true,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 2)
+	assert.Equal(t, "Audio", got[0].System)
+	assert.Equal(t, "audioplayer", got[0].Launcher, "the field the client did send is applied")
+	require.NotNil(t, got[0].PauseOnLaunch, "the field the client cannot send survives")
+	assert.False(t, *got[0].PauseOnLaunch)
+	assert.False(t, cfg.AudioPauseOnLaunch())
+}
+
 // TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup verifies a launcher
 // group name is accepted as a launcher reference, mirroring config lookup.
 func TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup(t *testing.T) {

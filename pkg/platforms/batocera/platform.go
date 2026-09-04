@@ -816,11 +816,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 				return nil, nil //nolint:nilnil // API launches don't return a process handle
 			}
+			// It can launch now, so it is no longer a scan-only entry that
+			// has to defer to another launcher for its system.
+			cl.ScanOnly = false
 			log.Debug().Str("launcherID", cl.ID).Msg("custom launcher using ES API launch")
 		}
 	}
 
-	return append(customLaunchers, launchers...)
+	return helpers.CombineParsedLaunchers(customLaunchers, launchers)
 }
 
 func (*Platform) PresentUI(

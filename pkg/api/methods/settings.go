@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
@@ -339,7 +340,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.SystemDefaults != nil {
 		log.Debug().Int("count", len(*params.SystemDefaults)).Msg("updating systems.default")
-		env.Config.SetSystemDefaults(systemDefaults)
+		// Merged after the reload above so the entries carry the values on
+		// disk for the fields no client can send.
+		env.Config.SetSystemDefaults(
+			carryUnmodelledSystemDefaults(env.Config.SystemDefaults(), systemDefaults),
+		)
 	}
 
 	err := env.Config.Save()
@@ -442,6 +447,40 @@ func buildSystemDefaults(cache *helpers.LauncherCache, in []models.SystemDefault
 		})
 	}
 	return out, nil
+}
+
+// carryUnmodelledSystemDefaults copies forward the system default fields that
+// models.SystemDefault does not carry. settings.update replaces the whole list,
+// so a client editing a launcher would otherwise delete pause_on_launch from
+// the user's config file without ever having been able to see it.
+func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []config.SystemsDefault {
+	if len(existing) == 0 {
+		return updated
+	}
+
+	// Entries are matched on the resolved system, because config and client
+	// may name the same system differently, the way LookupSystemDefaults does.
+	previous := make(map[string]*config.SystemsDefault, len(existing))
+	for i := range existing {
+		system, err := systemdefs.LookupSystem(existing[i].System)
+		if err != nil {
+			continue
+		}
+		if _, seen := previous[system.ID]; !seen {
+			previous[system.ID] = &existing[i]
+		}
+	}
+
+	for i := range updated {
+		system, err := systemdefs.LookupSystem(updated[i].System)
+		if err != nil {
+			continue
+		}
+		if entry, ok := previous[system.ID]; ok {
+			updated[i].PauseOnLaunch = entry.PauseOnLaunch
+		}
+	}
+	return updated
 }
 
 // launcherRefExists reports whether ref matches a launcher ID or any of a

@@ -1411,6 +1411,58 @@ func TestGetFiles_CustomLauncherMatchesFiles(t *testing.T) {
 	assert.False(t, foundFiles["readme.txt"], "Non-matching extension should be excluded")
 }
 
+// TestGetFiles_DuplicateLauncherIDMatchesBothFolders is the #1399 regression.
+// A custom launcher configured with a built-in launcher's ID used to lose its
+// media directory entirely: the scanner cached folder data by launcher ID, so
+// one entry answered for both, the walk found the files and matched none of
+// them, and the log said only that nothing matched.
+func TestGetFiles_DuplicateLauncherIDMatchesBothFolders(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	extraDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(extraDir, "Rockman 4.nes"), []byte("test"), 0o600))
+
+	duplicateID := systemdefs.SystemNES
+	custom := platforms.Launcher{
+		ID:         duplicateID,
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{extraDir},
+		Extensions: []string{".nes"},
+	}
+	builtIn := platforms.Launcher{
+		ID:         duplicateID,
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{"NES"},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{custom, builtIn})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, extraDir, nil)
+	require.NoError(t, err)
+	require.Len(t, files, 1, "the extra media directory must still be indexed")
+	assert.Equal(t, "Rockman 4.nes", filepath.Base(files[0]))
+}
+
 // TestGetFiles_CustomLauncherNestedDirectories verifies that GetFiles walks
 // subdirectories within a custom launcher's absolute path.
 func TestGetFiles_CustomLauncherNestedDirectories(t *testing.T) {
