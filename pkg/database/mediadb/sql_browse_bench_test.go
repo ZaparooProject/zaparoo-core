@@ -219,6 +219,122 @@ func seedBenchCoverFlagsDB(b *testing.B, mediaDB *MediaDB, rows int) []int64 {
 	return mediaIDs
 }
 
+// BenchmarkBrowseOverlayFileCount_LargeRoute measures what #1398 paid to count
+// the files in a system's root.
+//
+// "merge" is the statement a one-route overlay used to run: rank every direct
+// file in the route by filename, probe higher-priority routes per candidate, and
+// re-join Media to re-check IsMissing. "collapsed" is what a one-route overlay
+// runs now, a summed BrowseDirCounts self row. Both are measured against the
+// same seeded route so the difference is the statement and not the data.
+func BenchmarkBrowseOverlayFileCount_LargeRoute(b *testing.B) {
+	const rows = 20_000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+	opts := database.BrowseFileCountOptions{Overlay: overlay}
+
+	b.Run("merge", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseOverlayFileCount(ctx, sqlDB, opts)
+			require.NoError(b, err)
+			require.Equal(b, rows, count)
+		}
+	})
+
+	b.Run("collapsed", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseFileCount(ctx, sqlDB, opts)
+			require.NoError(b, err)
+			require.Equal(b, rows, count)
+		}
+	})
+}
+
+// BenchmarkBrowseOverlayMerge_TwoRoutes measures the merged root a one-route
+// collapse cannot help: a system whose media sits under two roots still has to
+// resolve one row per filename across them.
+//
+// The large route is second, which is the order MiSTer produces when the library
+// is on the SD card and a few games are on USB, and the order that makes the
+// merge pay a probe for every row it reads.
+func BenchmarkBrowseOverlayMerge_TwoRoutes(b *testing.B) {
+	const rows = 20_000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+
+	b.Run("count", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseFileCount(ctx, sqlDB,
+				database.BrowseFileCountOptions{Overlay: overlay})
+			require.NoError(b, err)
+			require.Equal(b, rows+3, count)
+		}
+	})
+
+	b.Run("files", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			files, err := sqlBrowseFiles(ctx, sqlDB,
+				&database.BrowseFilesOptions{Overlay: overlay, Limit: 26})
+			require.NoError(b, err)
+			require.Len(b, files, 26)
+		}
+	})
+}
+
+// seedBenchSecondRoute adds a small second route for the same system, so the
+// merge has something to resolve names against.
+func seedBenchSecondRoute(b *testing.B, mediaDB *MediaDB, rows int) string {
+	b.Helper()
+	ctx := context.Background()
+	parentDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "bench2")) + "/"
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName)
+		VALUES (1, 1, ?, ?, ?)
+	`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, stmt.Close()) }()
+
+	for i := range rows {
+		name := fmt.Sprintf("second-%04d", i)
+		_, err = stmt.ExecContext(ctx, parentDir+name+".rom", parentDir, name)
+		require.NoError(b, err)
+	}
+	require.NoError(b, tx.Commit())
+	return parentDir
+}
+
 func setupBrowseBenchMediaDB(b *testing.B) (mediaDB *MediaDB, cleanup func()) {
 	b.Helper()
 	tempDir, err := os.MkdirTemp("", "zaparoo-browse-bench-mediadb-*")
