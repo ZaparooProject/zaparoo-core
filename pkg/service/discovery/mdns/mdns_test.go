@@ -20,6 +20,7 @@
 package mdns
 
 import (
+	"math"
 	"net"
 	"testing"
 
@@ -27,6 +28,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// phantomIfaceIndex is an interface index no host can have, so net.Interface
+// Addrs() finds nothing for it and the interface has no address to advertise.
+// Index 0 does not work: BSD, and so macOS, reads a zero index as "no filter"
+// and hands back every address on the machine, which made a phantom built with
+// it come back fully addressed there while returning nothing on Linux and
+// Windows.
+const phantomIfaceIndex = math.MaxInt32
 
 func testService() Service {
 	return Service{
@@ -381,9 +390,8 @@ func TestLinkForUsesIPv6Zone(t *testing.T) {
 func TestBuildLinksDropsInterfacesWithoutUsableAddresses(t *testing.T) {
 	t.Parallel()
 
-	// Index 0 never matches a real interface, so Addrs() returns nothing and
-	// the interface is dropped rather than advertised with no address.
-	links := buildLinks([]net.Interface{{Index: 0, Name: "phantom0"}})
+	// An interface with no address is dropped rather than advertised with none.
+	links := buildLinks([]net.Interface{{Index: phantomIfaceIndex, Name: "phantom0"}})
 	assert.Empty(t, links)
 }
 
@@ -626,8 +634,8 @@ func TestStartWithoutUsableInterfaces(t *testing.T) {
 	t.Cleanup(r.Stop)
 
 	require.ErrorIs(t, r.Start(nil), ErrNoInterfaces)
-	// Index 0 matches no real interface, so it contributes no address.
-	require.ErrorIs(t, r.Start([]net.Interface{{Index: 0, Name: "phantom0"}}), ErrNoInterfaces)
+	// An interface that contributes no address leaves nothing to advertise on.
+	require.ErrorIs(t, r.Start([]net.Interface{{Index: phantomIfaceIndex, Name: "phantom0"}}), ErrNoInterfaces)
 	assert.Empty(t, r.Interfaces())
 }
 

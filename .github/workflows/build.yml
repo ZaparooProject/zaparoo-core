@@ -49,8 +49,26 @@ jobs:
       contents: read
       packages: write
 
-  create-release:
+  # A tag builds, signs and publishes on its own; nothing here used to look at
+  # whether the commit passed its tests, and v2.17.1 shipped on a commit whose
+  # Windows job was failing. Run them here so a release cannot outrun them.
+  # Skipped for test_build, which publishes nothing: build-check.yml only asks
+  # whether every target still compiles, and main has already tested the code.
+  # Declared per job because the workflow-level block above grants contents:
+  # write, which this needs none of.
+  lint-and-test:
     if: ${{ !inputs.test_build }}
+    uses: ./.github/workflows/lint-and-test.yml
+    with:
+      release_gate: true
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: read
+
+  create-release:
+    needs: lint-and-test
+    if: ${{ !cancelled() && !inputs.test_build && needs.lint-and-test.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -84,8 +102,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [create-release, ensure-zigcc]
-    if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
+    needs: [create-release, ensure-zigcc, lint-and-test]
+    # 'skipped' is the test_build case, where the gate does not run at all.
+    if: >-
+      ${{ !cancelled() && needs.ensure-zigcc.result == 'success'
+      && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') }}
     permissions:
       contents: write # Needed for uploading release assets
       packages: read # Needed for pulling Docker images from ghcr.io

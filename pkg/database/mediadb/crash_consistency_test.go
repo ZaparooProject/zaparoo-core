@@ -41,11 +41,11 @@ import (
 // already spilled to the WAL, a torn write at the WAL tail, and a checkpoint
 // interrupted part-way through copying frames into the main file. Each one
 // drives the production indexing write path — staging, the tag-link reconcile,
-// commit — against a real file-backed database, then copies the on-disk files
-// to a fresh directory to stand in for what storage would have preserved, and
-// damages the copy where the failure would have. Reopening the copy is the
-// recovery SQLite performs at the next boot; what these pin down is that the
-// data it recovers is exactly the committed set and the file passes an
+// commit — against a real file-backed database, then copies the database and
+// its WAL to a fresh directory to stand in for what storage would have
+// preserved, and damages the copy where the failure would have. Reopening the
+// copy is the recovery SQLite performs at the next boot; what these pin down is
+// that the data it recovers is exactly the committed set and the file passes an
 // integrity check. The one storage failure they cannot model is a drive that
 // acknowledges an fsync it did not perform, which is the case the corruption
 // marker and rebuild exist for (see TestMediaDB_ZeroedPages_DetectedAndRecovered).
@@ -108,15 +108,22 @@ func copyFileIfExists(t *testing.T, src, dst string) {
 	require.NoError(t, os.WriteFile(dst, data, 0o600)) //nolint:gosec // test-controlled temp path
 }
 
-// snapshotDatabase copies the database and whichever sidecars exist to a fresh
-// directory: the on-disk state a power loss at that instant would have left
-// for the next boot to recover from.
+// snapshotDatabase copies the database and its WAL to a fresh directory: the
+// on-disk state a power loss at that instant would have left for the next boot
+// to recover from.
+//
+// The -shm is deliberately not copied. It is the WAL index and holds nothing
+// durable: the next connection takes the exclusive dead-man-switch lock and
+// rebuilds it from the WAL, so recovery reaches the same state with or without
+// it. Copying it is also impossible while a writer is live — SQLite keeps the
+// WAL-index locks inside that file, and on Windows an os.ReadFile over an
+// exclusively locked byte range fails outright, which is what made the
+// mid-transaction snapshot below the only one of these tests to fail there.
 func snapshotDatabase(t *testing.T, dbPath string) string {
 	t.Helper()
 	target := filepath.Join(t.TempDir(), "crash.db")
 	copyFileIfExists(t, dbPath, target)
 	copyFileIfExists(t, dbPath+"-wal", target+"-wal")
-	copyFileIfExists(t, dbPath+"-shm", target+"-shm")
 	return target
 }
 
