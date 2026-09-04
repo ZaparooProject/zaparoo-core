@@ -2975,7 +2975,10 @@ func sqlBrowseOverlayIndex(
 	opts *database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {
 	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
-		total, err := sqlBrowseOverlayFileCount(ctx, db, database.BrowseFileCountOptions{
+		// Through sqlBrowseFileCount, not the overlay statement directly, so the
+		// total takes the same routing every other browse total does: collapsed
+		// for one route, cached for two.
+		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
 			Overlay: opts.Overlay,
 			Systems: opts.Systems,
 			Tags:    opts.Tags,
@@ -2990,48 +2993,36 @@ func sqlBrowseOverlayIndex(
 		}, nil
 	}
 
-	sources := browseOverlaySources(opts.Overlay)
-	values := make([]string, len(sources))
-	args := make([]any, 0, len(sources)+16)
-	for i := range sources {
-		values[i] = "(?, ?, ?)"
-		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
-	}
-	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		winnerConditions = append(winnerConditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	filterOpts := &database.BrowseFilesOptions{Tags: opts.Tags}
-	where, filterArgs := browseFilesFilterCondition(filterOpts, false,
-		browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags))
+	values, args := browseOverlaySourceValues(browseOverlaySources(opts.Overlay))
+	// The merge is the same two predicates the other overlay statements use, so
+	// a one-route overlay pays nothing for it and no route's files are sorted
+	// just to rank them. The system filter has to sit in this WHERE: it used to
+	// ride in the ranked CTE, which no longer exists.
+	where, filterArgs := browseFilesFilterCondition(&database.BrowseFilesOptions{
+		Systems: opts.Systems,
+		Tags:    opts.Tags,
+	}, false, browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags))
 	args = append(args, filterArgs...)
+	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
+	args = append(args, preferredArgs...)
+
 	desc := opts.Sort == "name-desc"
 	direction := "ASC"
 	if desc {
 		direction = "DESC"
 	}
 	bucketExpr := browseBucketKeyExpr("m.SortName")
-	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
-		ranked AS (
-			SELECT m.DBID,
-				ROW_NUMBER() OVER (
-					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
-					ORDER BY sources.priority ASC, m.DBID ASC
-				) AS source_rank
-			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
-			INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			WHERE ` + strings.Join(winnerConditions, " AND ") + `
-		), ordered AS (
+	query := browseOverlaySourcesCTE + values + `),
+		ordered AS (
 			SELECT ` + bucketExpr + ` AS bucket,
 				m.SortName AS sortValue,
 				m.DBID AS dbid,
 				ROW_NUMBER() OVER (ORDER BY ` + browseTitleSortExpr() + ` ` + direction +
 		`, m.DBID ` + direction + `) AS rn
-			FROM ranked
-			INNER JOIN Media m ON m.DBID = ranked.DBID
-			WHERE ranked.source_rank = 1 AND ` + where + `
+			` + browseOverlayMergeSource + `
+			WHERE ` + where + `
+				AND ` + preferred + `
+				AND ` + browseOverlayShadowedByDirectoryCondition() + `
 		), counts AS (
 			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
 		)

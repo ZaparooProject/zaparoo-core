@@ -322,6 +322,74 @@ func TestBrowseOverlayMerge_TwoRouteCountMatchesStatement(t *testing.T) {
 	assert.Len(t, paths, total)
 }
 
+// TestBrowseOverlayMerge_IndexMatchesTheListing covers media.browse.index, which
+// resolves the same merged root through a statement of its own. Its buckets have
+// to describe the rows media.browse returns, so it has to apply the merge and
+// the system filter exactly as the listing does.
+func TestBrowseOverlayMerge_IndexMatchesTheListing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 2)
+	defer cleanup()
+
+	f.insert("Alpha", f.roots[0]+"Alpha.nes")
+	f.insert("Beta first", f.roots[0]+"Beta.nes")
+	f.insert("Beta second", f.roots[1]+"Beta.nes")
+	f.insert("Gamma", f.roots[1]+"Gamma.nes")
+	f.insert("Inside", f.roots[0]+"Delta.nes/inside.nes")
+	f.insert("Delta shadowed", f.roots[1]+"Delta.nes")
+	f.commit(t, true)
+
+	// A same-named file under another system must not reach the buckets. The
+	// merge used to carry the system filter in a CTE the index no longer has.
+	other, err := f.mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+	require.NoError(t, err)
+	require.NoError(t, f.mediaDB.BeginTransaction(false))
+	title, err := f.mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: other.DBID, Slug: "other-zulu", Name: "Zulu Other System",
+	})
+	require.NoError(t, err)
+	_, err = f.mediaDB.InsertMedia(database.Media{
+		SystemDBID:     other.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           f.roots[0] + "Zulu.nes",
+		ParentDir:      f.roots[0],
+		SortName:       "Zulu Other System",
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.mediaDB.CommitTransaction())
+
+	paths, total := f.mergeResult(t)
+	require.Equal(t, 3, total, "Alpha, one Beta and Gamma survive; Delta is shadowed by a directory")
+	assert.NotContains(t, paths, f.roots[0]+"Zulu.nes")
+
+	index, err := f.mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: f.overlay(),
+		Systems: []systemdefs.System{f.system},
+	})
+	require.NoError(t, err)
+
+	bucketed := 0
+	keys := make([]string, 0, len(index.Buckets))
+	for _, bucket := range index.Buckets {
+		bucketed += bucket.Count
+		keys = append(keys, bucket.Key)
+	}
+	assert.Equal(t, total, bucketed, "the buckets must account for every row the listing returns")
+	assert.NotContains(t, keys, "Z", "another system's file must not open a bucket")
+
+	// The filename sort reports a total only, and takes the same routing as any
+	// other merged total.
+	filenameIndex, err := f.mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: f.overlay(),
+		Systems: []systemdefs.System{f.system},
+		Sort:    "filename-asc",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, total, filenameIndex.TotalFiles)
+}
+
 // TestBrowseOverlayMerge_FilenameSortPaging covers the sort whose branches seek
 // by m.Path rather than by the filename they order on, so a cursor issued in
 // filename terms has to be translated per route. Paging is where that would go
