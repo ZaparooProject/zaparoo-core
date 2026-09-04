@@ -24,6 +24,7 @@ package windows
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -154,27 +155,36 @@ func TestStopActiveLauncher_StopsProcessTree(t *testing.T) {
 
 	p, currentMedia := stopTestPlatform(testActiveMedia())
 
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
-	p.SetTrackedProcess(cmd.Process)
+	proc := startLongLivedProcess(t)
+	p.SetTrackedProcess(proc)
 
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
-	assert.False(t, helpers.IsProcessRunning(cmd.Process), "tracked process should be gone")
+	assert.False(t, helpers.IsProcessRunning(proc), "tracked process should be gone")
 	assert.Nil(t, currentMedia(), "media cleared once the stop is confirmed")
 
 	p.processMu.RLock()
 	tracked := p.trackedProcess
 	p.processMu.RUnlock()
 	assert.Nil(t, tracked)
+}
+
+// startLongLivedProcess starts a child that stays up for about thirty seconds
+// so a stop has something real to act on, and reaps it when the test ends.
+// It runs ping rather than timeout: timeout.exe exits at once when stdin is
+// not a console, which it is not under an IDE or an SSH session, and a child
+// that dies on its own makes every stop look like it worked.
+func startLongLivedProcess(t *testing.T) *os.Process {
+	t.Helper()
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "ping", "-n", "31", "127.0.0.1")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		// Wait releases the goroutine CommandContext starts to watch the
+		// context; without it that goroutine outlives the test.
+		_ = cmd.Wait()
+	})
+	return cmd.Process
 }
 
 // recordTaskKills replaces the tree-kill hooks and returns the ordered list of
@@ -207,18 +217,8 @@ func TestStopActiveLauncher_EscalatesGracefulThenForced(t *testing.T) {
 	stubMediaRunning(t, false)
 
 	p, _ := stopTestPlatform(testActiveMedia())
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
-	p.SetTrackedProcess(cmd.Process)
+	proc := startLongLivedProcess(t)
+	p.SetTrackedProcess(proc)
 
 	_ = p.StopActiveLauncher(platforms.StopForMenu)
 	assert.Equal(t, []string{"graceful", "forced"}, *calls)
@@ -227,26 +227,16 @@ func TestStopActiveLauncher_EscalatesGracefulThenForced(t *testing.T) {
 func TestStopActiveLauncher_SkipsForcedKillWhenCloseWorks(t *testing.T) {
 	// Not parallel: replaces package-level kill hooks.
 	shortenStopTimeouts(t)
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
+	proc := startLongLivedProcess(t)
 
 	// The polite close ends the process, so escalating would be gratuitous.
 	calls := recordTaskKills(t,
-		func(uint32) error { return cmd.Process.Kill() },
+		func(uint32) error { return proc.Kill() },
 		func(uint32) error { return nil },
 	)
 
 	p, currentMedia := stopTestPlatform(testActiveMedia())
-	p.SetTrackedProcess(cmd.Process)
+	p.SetTrackedProcess(proc)
 
 	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
 	assert.Equal(t, []string{"graceful"}, *calls, "forced kill must not run after a clean close")
@@ -265,18 +255,8 @@ func TestStopActiveLauncher_KeepsStateWhenKillFails(t *testing.T) {
 	media := testActiveMedia()
 	p, currentMedia := stopTestPlatform(media)
 
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
-	p.SetTrackedProcess(cmd.Process)
+	proc := startLongLivedProcess(t)
+	p.SetTrackedProcess(proc)
 
 	err := p.StopActiveLauncher(platforms.StopForMenu)
 
@@ -287,7 +267,7 @@ func TestStopActiveLauncher_KeepsStateWhenKillFails(t *testing.T) {
 	p.processMu.RLock()
 	tracked := p.trackedProcess
 	p.processMu.RUnlock()
-	assert.Equal(t, cmd.Process, tracked)
+	assert.Equal(t, proc, tracked)
 }
 
 func TestClearTrackedProcessPID(t *testing.T) {
@@ -296,35 +276,25 @@ func TestClearTrackedProcessPID(t *testing.T) {
 	p := &Platform{}
 	p.setActiveMedia = func(_ *models.ActiveMedia) {}
 
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
-	p.SetTrackedProcess(cmd.Process)
+	proc := startLongLivedProcess(t)
+	p.SetTrackedProcess(proc)
 
-	assert.False(t, p.ClearTrackedProcessPID(cmd.Process.Pid+100000),
+	assert.False(t, p.ClearTrackedProcessPID(proc.Pid+100000),
 		"a stale PID must not clear the tracked process")
 
 	p.processMu.RLock()
 	stillTracked := p.trackedProcess
 	p.processMu.RUnlock()
-	assert.Equal(t, cmd.Process, stillTracked)
+	assert.Equal(t, proc, stillTracked)
 
-	assert.True(t, p.ClearTrackedProcessPID(cmd.Process.Pid))
+	assert.True(t, p.ClearTrackedProcessPID(proc.Pid))
 	p.processMu.RLock()
 	cleared := p.trackedProcess
 	p.processMu.RUnlock()
 	assert.Nil(t, cleared)
 
 	// Clearing must not signal the process; it is only forgotten.
-	assert.True(t, helpers.IsProcessRunning(cmd.Process))
+	assert.True(t, helpers.IsProcessRunning(proc))
 }
 
 func TestStopActiveLauncher_CustomKillFailureWithNoActiveMediaSucceeds(t *testing.T) {
@@ -354,23 +324,13 @@ func TestStopActiveLauncher_DoesNotClearProcessTrackedDuringStop(t *testing.T) {
 	// only handle to a game that is genuinely running.
 	p, _ := stopTestPlatform(testActiveMedia())
 
-	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/C", "timeout", "/T", "30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			// Wait releases the goroutine CommandContext starts to watch the
-			// context; without it that goroutine outlives the test.
-			_ = cmd.Wait()
-		}
-	})
+	proc := startLongLivedProcess(t)
 
 	p.setLastLauncher(&platforms.Launcher{
 		ID:        "LaunchBox",
 		Lifecycle: platforms.LifecycleExternal,
 		Kill: func(*config.Instance) error {
-			p.SetTrackedProcess(cmd.Process)
+			p.SetTrackedProcess(proc)
 			return nil
 		},
 	})
@@ -380,7 +340,7 @@ func TestStopActiveLauncher_DoesNotClearProcessTrackedDuringStop(t *testing.T) {
 	p.processMu.RLock()
 	tracked := p.trackedProcess
 	p.processMu.RUnlock()
-	assert.Equal(t, cmd.Process, tracked, "handle published during the stop must survive")
+	assert.Equal(t, proc, tracked, "handle published during the stop must survive")
 }
 
 func TestStopActiveLauncher_FailedStopKeepsLauncherForRetry(t *testing.T) {
