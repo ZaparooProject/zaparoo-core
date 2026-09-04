@@ -1,3 +1,5 @@
+//go:build darwin || windows
+
 /*
 Zaparoo Core
 Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -21,27 +23,13 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package steamtracker
 
-import (
-	"time"
-)
-
-// DefaultPollInterval is the default interval for game state scanning.
-const DefaultPollInterval = 2 * time.Second
-
-// GameStartCallback is called when a Steam game starts.
-// appID is the Steam App ID. pid is the process ID where available, or a
-// platform lifecycle identifier when the OS does not expose one.
-// gamePath is the game executable path.
-type GameStartCallback func(appID int, pid int, gamePath string)
-
-// GameStopCallback is called when a Steam game exits.
-// pid identifies the stopped process or platform lifecycle instance.
-type GameStopCallback func(appID, pid int)
-
-// TrackedGame represents a currently tracked Steam game.
-type TrackedGame struct {
-	StartTime time.Time
-	GamePath  string
-	AppID     int
-	PID       int
+// launchKey identifies one run of a game: the AppID plus the lifecycle ID the
+// tracker assigned when it saw the game start. A relaunch of the same game
+// gets a fresh lifecycle ID, which is what lets a delayed stop for the earlier
+// run be told apart from the run that replaced it. Real launches never use
+// zero -- AppIDs are non-zero and lifecycle IDs start at 1 -- so the zero
+// value never collides with a live run.
+type launchKey struct {
+	appID       int
+	lifecycleID int
 }

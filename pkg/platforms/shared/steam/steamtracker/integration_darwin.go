@@ -1,24 +1,23 @@
 //go:build darwin
 
-/*
-Zaparoo Core
-Copyright (C) 2024, 2025 Callan Barrett
-
-This file is part of Zaparoo Core.
-
-Zaparoo Core is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-Zaparoo Core is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package steamtracker
 
@@ -30,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/rs/zerolog/log"
 )
@@ -40,7 +40,12 @@ type DarwinPlatformIntegration struct {
 	setTrackedProc func(*os.Process)
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
-	activeLaunch   launchOwnership
+	// active is the run that owns ActiveMedia and the tracked process. mu is
+	// held across every ownership check and the state change it authorises,
+	// so a callback for a run that has since been replaced can neither
+	// publish its media nor install its process.
+	active launchKey
+	mu     syncutil.Mutex
 }
 
 // NewDarwinPlatformIntegration creates a new platform integration for macOS.
@@ -64,16 +69,33 @@ func (pi *DarwinPlatformIntegration) Start() error {
 	return pi.tracker.Start()
 }
 
-// Stop stops the game tracker.
+// Stop stops the game tracker and forgets the run it was following.
 func (pi *DarwinPlatformIntegration) Stop() {
 	if pi.tracker != nil {
 		pi.tracker.Stop()
 	}
+	pi.mu.Lock()
+	pi.active = launchKey{}
+	pi.mu.Unlock()
+}
+
+// claimLaunch records this run as the one that owns ActiveMedia from now on.
+func (pi *DarwinPlatformIntegration) claimLaunch(appID, lifecycleID int) {
+	pi.mu.Lock()
+	pi.active = launchKey{appID: appID, lifecycleID: lifecycleID}
+	pi.mu.Unlock()
+}
+
+// ownsLaunch reports whether the run is still the active one.
+func (pi *DarwinPlatformIntegration) ownsLaunch(appID, lifecycleID int) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	return pi.active == launchKey{appID: appID, lifecycleID: lifecycleID}
 }
 
 // onGameStart is called when a Steam game starts (detected via process scanning).
 func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
-	pi.activeLaunch.set(appID, pid)
+	pi.claimLaunch(appID, pid)
 	alreadyTracked := false
 	current := pi.activeMedia()
 	if current != nil {
@@ -114,7 +136,26 @@ func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
 		gameName,
 		"Steam",
 	)
+	if !pi.publishActiveMediaIfActive(appID, pid, activeMedia) {
+		log.Debug().Int("appID", appID).Int("pid", pid).Msg("discarding stale Steam game start")
+	}
+}
+
+// publishActiveMediaIfActive publishes only while this run is still the
+// active one. The check and the publish happen under one hold of the lock so
+// a slow name lookup cannot land its media after a game that started in the
+// meantime has already published its own.
+func (pi *DarwinPlatformIntegration) publishActiveMediaIfActive(
+	appID, lifecycleID int,
+	activeMedia *models.ActiveMedia,
+) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	if pi.active != (launchKey{appID: appID, lifecycleID: lifecycleID}) {
+		return false
+	}
 	pi.setActiveMedia(activeMedia)
+	return true
 }
 
 // findAndTrackGameProcess attempts to find the game process with retries. The
@@ -126,19 +167,19 @@ func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID 
 	const retryDelay = 500 * time.Millisecond
 
 	for i := range maxRetries {
-		if !pi.activeLaunch.matches(appID, lifecycleID) {
+		if !pi.ownsLaunch(appID, lifecycleID) {
 			log.Debug().Int("appID", appID).Msg("abandoning process search for replaced game")
 			return
 		}
 		proc, pid, err := FindGameProcess("", appID)
 		if err == nil && proc != nil {
-			if !pi.activeLaunch.matches(appID, lifecycleID) {
+			if pi.trackProcessIfActive(appID, lifecycleID, proc) {
+				log.Debug().Int("pid", pid).Int("attempt", i+1).Msg("found game process")
+			} else {
 				log.Debug().Int("appID", appID).Int("pid", pid).
 					Msg("discarding stale game process match")
-				return
+				_ = proc.Release()
 			}
-			log.Debug().Int("pid", pid).Int("attempt", i+1).Msg("found game process")
-			pi.setTrackedProc(proc)
 			return
 		}
 		time.Sleep(retryDelay)
@@ -146,12 +187,33 @@ func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID 
 	log.Warn().Int("appID", appID).Msg("could not find game process after retries")
 }
 
+// trackProcessIfActive publishes the process, but only while the run is still
+// active, under the same hold of the lock as the check.
+func (pi *DarwinPlatformIntegration) trackProcessIfActive(
+	appID, lifecycleID int, proc *os.Process,
+) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	if pi.active != (launchKey{appID: appID, lifecycleID: lifecycleID}) {
+		return false
+	}
+	pi.setTrackedProc(proc)
+	return true
+}
+
 // onGameStop is called when a Steam game exits (process no longer found).
 func (pi *DarwinPlatformIntegration) onGameStop(appID, pid int) {
-	if !pi.activeLaunch.clearIfMatches(appID, pid) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+
+	if pi.active != (launchKey{appID: appID, lifecycleID: pid}) {
 		log.Debug().Int("appID", appID).Int("pid", pid).Msg("ignoring stale Steam game exit")
 		return
 	}
+	pi.active = launchKey{}
+
+	// Still under the lock: a relaunch of the same game that claims ownership
+	// after this point publishes after this clear, not before it.
 	current := pi.activeMedia()
 	if current == nil {
 		return

@@ -42,6 +42,12 @@ const (
 	processSearchDelay    = 500 * time.Millisecond
 )
 
+// trackedLaunch is the process recorded for one run of a game.
+type trackedLaunch struct {
+	pid         int
+	lifecycleID int
+}
+
 // WindowsPlatformIntegration provides game tracking integration for Windows.
 type WindowsPlatformIntegration struct {
 	tracker         *Tracker
@@ -50,12 +56,18 @@ type WindowsPlatformIntegration struct {
 	activeMedia     func() *models.ActiveMedia
 	setActiveMedia  func(*models.ActiveMedia)
 	steamRoot       func() string
-	trackedPIDs     map[int]int
+	tracked         map[int]trackedLaunch
 	done            chan struct{}
-	activeLaunch    launchOwnership
-	mu              syncutil.Mutex
-	wg              sync.WaitGroup
-	stopOnce        sync.Once
+	// active is the run that owns ActiveMedia and the tracked process. mu is
+	// held across every ownership check and the state change it authorises.
+	// The tracker dispatches the start and stop callbacks concurrently, so a
+	// check that released the lock before acting on it would let a stale
+	// callback publish media, or install or discard a process, for a run that
+	// had already been replaced.
+	active   launchKey
+	mu       syncutil.Mutex
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // NewWindowsPlatformIntegration creates a new platform integration for Windows.
@@ -77,7 +89,7 @@ func NewWindowsPlatformIntegration(
 		activeMedia:     activeMedia,
 		setActiveMedia:  setActiveMedia,
 		steamRoot:       steamRoot,
-		trackedPIDs:     make(map[int]int),
+		tracked:         make(map[int]trackedLaunch),
 		done:            make(chan struct{}),
 	}
 
@@ -99,9 +111,12 @@ func (pi *WindowsPlatformIntegration) Start() error {
 	return pi.tracker.Start()
 }
 
-// Stop stops the game tracker and waits for any in-flight process search.
-// A search left running past shutdown would go on to publish a process, and
-// publishing kills whatever was tracked before it.
+// Stop stops the game tracker, waits for any in-flight process search and
+// releases every process the integration handed to the platform. A search
+// left running past shutdown would go on to publish a process, and publishing
+// kills whatever was tracked before it. The tracker reports no exits when it
+// stops, so without the release the platform would keep a handle for a game
+// nothing is watching any more.
 func (pi *WindowsPlatformIntegration) Stop() {
 	pi.stopOnce.Do(func() {
 		close(pi.done)
@@ -112,13 +127,33 @@ func (pi *WindowsPlatformIntegration) Stop() {
 	pi.wg.Wait()
 
 	pi.mu.Lock()
-	clear(pi.trackedPIDs)
+	defer pi.mu.Unlock()
+	for appID, launch := range pi.tracked {
+		if pi.clearTrackedPID != nil {
+			pi.clearTrackedPID(launch.pid)
+		}
+		delete(pi.tracked, appID)
+	}
+	pi.active = launchKey{}
+}
+
+// claimLaunch records this run as the one that owns ActiveMedia from now on.
+func (pi *WindowsPlatformIntegration) claimLaunch(appID, lifecycleID int) {
+	pi.mu.Lock()
+	pi.active = launchKey{appID: appID, lifecycleID: lifecycleID}
 	pi.mu.Unlock()
 }
 
+// ownsLaunch reports whether the run is still the active one.
+func (pi *WindowsPlatformIntegration) ownsLaunch(appID, lifecycleID int) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	return pi.active == launchKey{appID: appID, lifecycleID: lifecycleID}
+}
+
 // onGameStart is called when a Steam game starts (detected via registry).
-func (pi *WindowsPlatformIntegration) onGameStart(appID, pid int, _ string) {
-	pi.activeLaunch.set(appID, pid)
+func (pi *WindowsPlatformIntegration) onGameStart(appID, lifecycleID int, _ string) {
+	pi.claimLaunch(appID, lifecycleID)
 
 	alreadyTracked := false
 	current := pi.activeMedia()
@@ -132,7 +167,7 @@ func (pi *WindowsPlatformIntegration) onGameStart(appID, pid int, _ string) {
 	}
 
 	// Find and track the actual game process so it can be stopped later.
-	pi.startProcessSearch(appID, pid)
+	pi.startProcessSearch(appID, lifecycleID)
 
 	if alreadyTracked {
 		return
@@ -163,8 +198,8 @@ func (pi *WindowsPlatformIntegration) onGameStart(appID, pid int, _ string) {
 		gameName,
 		"Steam",
 	)
-	if !pi.publishActiveMediaIfActive(appID, pid, activeMedia) {
-		log.Debug().Int("appID", appID).Int("pid", pid).
+	if !pi.publishActiveMediaIfActive(appID, lifecycleID, activeMedia) {
+		log.Debug().Int("appID", appID).Int("lifecycleID", lifecycleID).
 			Msg("discarding stale Steam game start")
 	}
 }
@@ -185,14 +220,17 @@ func (pi *WindowsPlatformIntegration) startProcessSearch(appID, lifecycleID int)
 	}()
 }
 
-// publishActiveMediaIfActive publishes only while this launch is still the
-// active one, so a slow name lookup cannot overwrite media belonging to a
-// game that started in the meantime.
+// publishActiveMediaIfActive publishes only while this run is still the
+// active one. The check and the publish happen under one hold of the lock so
+// a slow name lookup cannot land its media after a game that started in the
+// meantime has already published its own.
 func (pi *WindowsPlatformIntegration) publishActiveMediaIfActive(
-	appID, pid int,
+	appID, lifecycleID int,
 	activeMedia *models.ActiveMedia,
 ) bool {
-	if !pi.activeLaunch.matches(appID, pid) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	if pi.active != (launchKey{appID: appID, lifecycleID: lifecycleID}) {
 		return false
 	}
 	pi.setActiveMedia(activeMedia)
@@ -210,7 +248,7 @@ func (pi *WindowsPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID
 	paths := resolveGamePaths(pi.resolveSteamRoot(), appID)
 
 	for i := range processSearchAttempts {
-		if !pi.activeLaunch.matches(appID, lifecycleID) {
+		if !pi.ownsLaunch(appID, lifecycleID) {
 			log.Debug().Int("appID", appID).Msg("abandoning process search for replaced game")
 			return
 		}
@@ -247,16 +285,16 @@ func (pi *WindowsPlatformIntegration) findAndTrackGameProcess(appID, lifecycleID
 }
 
 // trackProcessIfActive records and publishes the process, but only while the
-// launch is still active. Recording and publishing happen under one lock so a
-// concurrent exit cannot slip between them and leave a handle behind for a
-// game that has already gone.
+// run is still active. Recording and publishing happen under one hold of the
+// lock so a concurrent exit cannot slip between them and leave a handle
+// behind for a game that has already gone.
 func (pi *WindowsPlatformIntegration) trackProcessIfActive(
 	appID, lifecycleID, pid int, proc *os.Process,
 ) bool {
 	pi.mu.Lock()
 	defer pi.mu.Unlock()
 
-	if !pi.activeLaunch.matches(appID, lifecycleID) {
+	if pi.active != (launchKey{appID: appID, lifecycleID: lifecycleID}) {
 		return false
 	}
 	select {
@@ -265,33 +303,39 @@ func (pi *WindowsPlatformIntegration) trackProcessIfActive(
 	default:
 	}
 
-	pi.trackedPIDs[appID] = pid
+	pi.tracked[appID] = trackedLaunch{pid: pid, lifecycleID: lifecycleID}
 	pi.setTrackedProc(proc)
 	return true
 }
 
 // onGameStop is called when a Steam game exits (registry cleared or replaced).
-func (pi *WindowsPlatformIntegration) onGameStop(appID, pid int) {
-	// Drop the recorded PID first. Start and stop callbacks are dispatched
-	// concurrently, so a stop that loses the race to a replacement start would
-	// otherwise leave this entry behind forever.
+func (pi *WindowsPlatformIntegration) onGameStop(appID, lifecycleID int) {
 	pi.mu.Lock()
-	trackedPID, hadPID := pi.trackedPIDs[appID]
-	delete(pi.trackedPIDs, appID)
-	// Forget the exited process without signalling it, so a later stop does
-	// not act on a handle whose game is already gone.
-	if hadPID && pi.clearTrackedPID != nil {
-		pi.clearTrackedPID(trackedPID)
-	}
-	pi.mu.Unlock()
+	defer pi.mu.Unlock()
 
-	if !pi.activeLaunch.clearIfMatches(appID, pid) {
-		log.Debug().Int("appID", appID).Int("pid", pid).Msg("ignoring stale Steam game exit")
+	// Forget the exited process without signalling it, so a later stop does
+	// not act on a handle whose game is already gone. Only the run that
+	// recorded the process may discard it: a delayed stop for an earlier run
+	// of the same game must not throw away the process the current run has
+	// since found, or the current run could no longer be stopped.
+	if launch, ok := pi.tracked[appID]; ok && launch.lifecycleID == lifecycleID {
+		delete(pi.tracked, appID)
+		if pi.clearTrackedPID != nil {
+			pi.clearTrackedPID(launch.pid)
+		}
+	}
+
+	if pi.active != (launchKey{appID: appID, lifecycleID: lifecycleID}) {
+		log.Debug().Int("appID", appID).Int("lifecycleID", lifecycleID).
+			Msg("ignoring stale Steam game exit")
 		return
 	}
+	pi.active = launchKey{}
 
-	log.Info().Int("appID", appID).Int("pid", pid).Msg("detected Steam game exit")
+	log.Info().Int("appID", appID).Int("lifecycleID", lifecycleID).Msg("detected Steam game exit")
 
+	// Still under the lock: a relaunch of the same game that claims ownership
+	// after this point publishes after this clear, not before it.
 	current := pi.activeMedia()
 	if current == nil {
 		return
