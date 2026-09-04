@@ -98,7 +98,7 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.LinuxInput
+	shared.InputManager
 	ctx                 context.Context
 	fs                  afero.Fs
 	dbLoadTime          time.Time

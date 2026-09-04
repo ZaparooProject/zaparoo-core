@@ -52,3 +52,15 @@ func TestClassifyControl(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitHold(t *testing.T) {
+	t.Parallel()
+
+	name, duration := SplitHold("esc:500")
+	assert.Equal(t, "esc", name)
+	assert.Equal(t, "500", duration)
+
+	name, duration = SplitHold("esc")
+	assert.Equal(t, "esc", name)
+	assert.Empty(t, duration)
+}

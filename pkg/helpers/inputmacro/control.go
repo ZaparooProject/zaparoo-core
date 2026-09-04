@@ -66,3 +66,12 @@ func ClassifyControl(token string) Control {
 		return Control{}
 	}
 }
+
+// SplitHold separates a hold token's value into the key name and its optional
+// duration ("esc:500" -> "esc", "500").
+func SplitHold(value string) (name, duration string) {
+	if idx := strings.LastIndex(value, ":"); idx != -1 {
+		return value[:idx], value[idx+1:]
+	}
+	return value, ""
+}
