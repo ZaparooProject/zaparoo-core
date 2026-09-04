@@ -35,11 +35,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "runonstartup"; Description: "Run Zaparoo Core on startup"; GroupDescription: "Startup options:"
+Name: "firewall"; Description: "Allow Zaparoo Core through Windows Firewall"; GroupDescription: "Network:"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "ZaparooCore"; ValueData: """{app}\Zaparoo.exe"""; \
   Tasks: runonstartup; Flags: uninsdeletevalue
+; Registers the cleanup of the firewall marker. The marker itself is written
+; by MarkFirewallRuleAdded, so that it records a rule that was really created
+; rather than a task that was merely ticked. HKA follows the install mode: a
+; firewall rule is machine-wide, so an administrative install must record it
+; somewhere any administrator can find it again at uninstall time, not in the
+; installing user's hive.
+Root: HKA; Subkey: "Software\Zaparoo\Core"; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempty
 
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -52,11 +61,47 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Without a rule of our own, Windows falls back to the "allow access" popup the
+; first time Core binds a socket. That popup scopes the rule to whichever of
+; Private/Public happens to be ticked, so Core ends up reachable on one network
+; profile and silently firewalled on another - the usual cause of a device that
+; the app finds over Wi-Fi but not over Ethernet. profile=any covers all three.
+; The rule is deleted first so repeat installs do not stack duplicates.
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName}"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=any"; \
+  StatusMsg: "Adding Windows Firewall rule..."; Flags: runhidden waituntilterminated; \
+  Tasks: firewall; Check: IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
+; A per-user install is not elevated, but netsh is. Ask for it once, and carry
+; on with the install if the prompt is declined.
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName}"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=any"; \
+  StatusMsg: "Adding Windows Firewall rule..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
+  Tasks: firewall; Check: not IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent unchecked
 
 [UninstallRun]
 Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillService"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; \
+  Flags: runhidden waituntilterminated; RunOnceId: "DelFirewallRule"; \
+  Check: FirewallRuleWasAdded and IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; \
+  Flags: shellexec waituntilterminated runhidden; Verb: runas; RunOnceId: "DelFirewallRuleElevated"; \
+  Check: FirewallRuleWasAdded and not IsAdminInstallMode
 
 [CustomMessages]
 LaunchAfterInstall=&Launch Zaparoo Core after installation
+
+[Code]
+// MarkFirewallRuleAdded records that the netsh step actually ran. A silent
+// per-user install skips it, because netsh needs an elevation prompt that a
+// silent install must not show.
+procedure MarkFirewallRuleAdded;
+begin
+  RegWriteDWordValue(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule', 1);
+end;
+
+// FirewallRuleWasAdded gates the uninstaller's netsh step, so an uninstall
+// only raises an elevation prompt when there is a rule to remove.
+function FirewallRuleWasAdded: Boolean;
+begin
+  Result := RegValueExists(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule');
+end;

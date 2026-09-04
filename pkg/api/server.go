@@ -906,9 +906,9 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 // publishes for it: responders derive the host record from the OS hostname, so
 // a device called "mister" answers to "mister.local" regardless of what
 // instance name Core advertises over DNS-SD. Hostnames that are already fully
-// qualified contribute their short label too, because avahi publishes the short
-// name under ".local" while the bundled responder appends the suffix to the
-// whole name. Results are deduplicated case-insensitively.
+// qualified contribute their short label too, because both avahi and the
+// bundled responder publish the short name under ".local". Results are
+// deduplicated case-insensitively.
 func localHostNames(hostname string) []string {
 	hostname = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
 	if hostname == "" {
