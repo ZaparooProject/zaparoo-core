@@ -51,7 +51,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.2.0
-	github.com/shirou/gopsutil/v4 v4.26.7
+	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.12.1
 	go.bug.st/serial v1.8.0
