@@ -36,6 +36,25 @@ type InnoSetupData struct {
 	ArchitecturesAllowed   string
 	ArchitecturesInstall64 string
 	Year                   string
+	// ViGEmMsi is the MSI the ViGEmBus bootstrapper unpacks for this
+	// architecture, or empty when the driver is not offered. The vendor ships
+	// only x86 and x64 packages, so an ARM64 installer leaves the task out
+	// entirely rather than offering one that cannot work.
+	ViGEmMsi string
+}
+
+// vigemMsiForArch names the ViGEmBus MSI to install on a given build
+// architecture. The bootstrapper unpacks both, so the installer picks rather
+// than relying on the bootstrapper's own detection.
+func vigemMsiForArch(arch string) string {
+	switch arch {
+	case "amd64":
+		return "ViGEmBus.x64.msi"
+	case "386":
+		return "ViGEmBus.msi"
+	default:
+		return ""
+	}
 }
 
 func main() {
@@ -78,6 +97,7 @@ func main() {
 		ArchitecturesAllowed:   archAllowed,
 		ArchitecturesInstall64: archInstall,
 		Year:                   strconv.Itoa(time.Now().Year()),
+		ViGEmMsi:               vigemMsiForArch(*arch),
 	}
 
 	tmpl, err := template.ParseFiles("cmd/windows/setup.iss.tmpl")

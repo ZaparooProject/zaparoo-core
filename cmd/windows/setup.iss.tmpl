@@ -36,7 +36,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "runonstartup"; Description: "Run Zaparoo Core on startup"; GroupDescription: "Startup options:"
 Name: "firewall"; Description: "Allow Zaparoo Core through Windows Firewall"; GroupDescription: "Network:"
-
+{{if .ViGEmMsi}}; ViGEmBus is a third-party kernel-mode driver by Nefarius Software
+; Solutions. Zaparoo only needs it to emulate a gamepad, so it is offered
+; rather than installed, and the caption says plainly what gets installed.
+Name: "vigembus"; Description: "Install the ViGEmBus virtual gamepad driver (a kernel-mode driver by Nefarius Software Solutions)"; GroupDescription: "Optional drivers:"; Flags: unchecked
+{{end}}
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "ZaparooCore"; ValueData: """{app}\Zaparoo.exe"""; \
@@ -54,8 +58,15 @@ Root: HKA; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempt
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
+{{if .ViGEmMsi}}Source: "ViGEmBusSetup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: vigembus
+{{end}}
+{{if .ViGEmMsi}}[Dirs]
+; The ViGEmBus bootstrapper exits successfully and does nothing at all when
+; its extraction target does not already exist, so the directory is created
+; here rather than left to the /extract switch.
+Name: "{tmp}\vigembus"; Tasks: vigembus; Flags: deleteafterinstall
 
-[Icons]
+{{end}}[Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
@@ -75,7 +86,26 @@ Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name="
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName}"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=any"; \
   StatusMsg: "Adding Windows Firewall rule..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
   Tasks: firewall; Check: not IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+{{if .ViGEmMsi}}; The vendor bootstrapper never returns when asked to install silently, but
+; it does unpack reliably, so the driver goes in through its own MSI instead.
+; Unpacking needs no elevation; only the MSI does.
+Filename: "{tmp}\ViGEmBusSetup.exe"; Parameters: "/extract:""{tmp}\vigembus"""; \
+  StatusMsg: "Unpacking the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
+  Tasks: vigembus
+; The gate is elevation, not install scope: PrivilegesRequired=lowest keeps
+; Zaparoo a per-user install even when Setup was started elevated, so
+; IsAdminInstallMode is False there and would skip a driver this process is
+; perfectly able to install.
+Filename: "msiexec.exe"; Parameters: "/i ""{code:ViGEmMsiPath}"" /qn /norestart"; \
+  StatusMsg: "Installing the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
+  Tasks: vigembus; Check: IsAdminLoggedOn and ViGEmMsiFound
+; Otherwise the driver needs an elevation prompt. Ask once, and carry on with
+; the install if it is declined. A silent install must never raise that prompt,
+; so an unelevated silent install cannot install the driver.
+Filename: "msiexec.exe"; Parameters: "/i ""{code:ViGEmMsiPath}"" /qn /norestart"; \
+  StatusMsg: "Installing the ViGEmBus driver..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
+  Tasks: vigembus; Check: (not IsAdminLoggedOn) and ViGEmMsiFound
+{{end}}Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent unchecked
 
 [UninstallRun]
@@ -105,3 +135,63 @@ function FirewallRuleWasAdded: Boolean;
 begin
   Result := RegValueExists(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule');
 end;
+{{if .ViGEmMsi}}
+var
+  VigemMsiCached: String;
+  VigemMsiSearched: Boolean;
+
+// FindViGEmMsi locates the unpacked driver package. The bootstrapper unpacks
+// into a folder named after its own product code, so the MSI sits one level
+// below a name this script cannot predict and has to be searched for.
+function FindViGEmMsi: String;
+var
+  Root, Candidate: String;
+  Rec: TFindRec;
+begin
+  if VigemMsiSearched then
+  begin
+    Result := VigemMsiCached;
+    Exit;
+  end;
+  VigemMsiSearched := True;
+  VigemMsiCached := '';
+
+  Root := ExpandConstant('{tmp}\vigembus');
+  Candidate := Root + '\{{.ViGEmMsi}}';
+  if FileExists(Candidate) then
+    VigemMsiCached := Candidate
+  else if FindFirst(Root + '\*', Rec) then
+  begin
+    try
+      repeat
+        if ((Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
+           (Rec.Name <> '.') and (Rec.Name <> '..') then
+        begin
+          Candidate := Root + '\' + Rec.Name + '\{{.ViGEmMsi}}';
+          if FileExists(Candidate) then
+          begin
+            VigemMsiCached := Candidate;
+            Break;
+          end;
+        end;
+      until not FindNext(Rec);
+    finally
+      FindClose(Rec);
+    end;
+  end;
+
+  Result := VigemMsiCached;
+end;
+
+// ViGEmMsiFound keeps the installer from calling msiexec with an empty path,
+// and so from raising an elevation prompt that could not achieve anything.
+function ViGEmMsiFound: Boolean;
+begin
+  Result := FindViGEmMsi <> '';
+end;
+
+function ViGEmMsiPath(Param: String): String;
+begin
+  Result := FindViGEmMsi;
+end;
+{{end}}
