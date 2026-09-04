@@ -220,7 +220,7 @@ func TestBrowseOverlayPlan_MergeRanksWithoutSorting(t *testing.T) {
 	filesQuery, filesArgs := browseOverlayFilesQuery(&database.BrowseFilesOptions{
 		Overlay: overlay,
 		Limit:   26,
-	})
+	}, browseTagPlan{})
 	filesPlan := browseQueryPlan(ctx, t, mediaDB, filesQuery, filesArgs)
 	t.Logf("files EXPLAIN QUERY PLAN:\n%s", filesPlan)
 	assert.Equal(t, 1, strings.Count(filesPlan, "TEMP B-TREE"),
@@ -241,7 +241,7 @@ func browseOverlayCountPlan(
 ) string {
 	t.Helper()
 
-	query, args := browseOverlayFileCountQuery(database.BrowseFileCountOptions{Overlay: overlay})
+	query, args := browseOverlayFileCountQuery(database.BrowseFileCountOptions{Overlay: overlay}, browseTagPlan{})
 	rows, err := mediaDB.sql.Load().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rows.Close()) }()

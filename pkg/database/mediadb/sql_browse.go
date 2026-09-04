@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -1132,15 +1133,177 @@ func browsePathPrefixCondition(column, pathPrefix string) (condition string, arg
 	return column + ` LIKE ? || '%'`, []any{pathPrefix}
 }
 
+// sqlBrowseScopeRows reports how many files a browse can read at most, summed
+// over its routes from the cache, so a tag filter has something to be compared
+// against. Reports ok=false when the cache cannot answer for every route.
+func sqlBrowseScopeRows(
+	ctx context.Context,
+	db sqlQueryable,
+	prefixes []string,
+	systems []systemdefs.System,
+) (rows int, ok bool, err error) {
+	if len(prefixes) == 0 {
+		return 0, false, nil
+	}
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil || !ready {
+		return 0, false, err
+	}
+	for _, prefix := range prefixes {
+		count, usable, countErr := sqlBrowseDirectFileCountFromCache(ctx, db, database.BrowseFileCountOptions{
+			PathPrefix: prefix,
+			Systems:    systems,
+		})
+		if countErr != nil || !usable {
+			return 0, false, countErr
+		}
+		rows += count
+	}
+	return rows, true, nil
+}
+
+// browseTagDriverCandidates returns the filters that could be resolved from the
+// tag side. Only required filters qualify: NOT filters already resolve to a
+// forward anti-set, OR filters are one grouped clause, and credit filters match
+// across three tag types, which the bounded count below does not model.
+func browseTagDriverCandidates(filters []zapscript.TagFilter) []zapscript.TagFilter {
+	candidates := make([]zapscript.TagFilter, 0, len(filters))
+	for _, filter := range filters {
+		if filter.Operator == zapscript.TagOperatorNOT || filter.Operator == zapscript.TagOperatorOR {
+			continue
+		}
+		if filter.Type == string(tags.TagTypeCredit) {
+			continue
+		}
+		candidates = append(candidates, filter)
+	}
+	return candidates
+}
+
+// sqlBrowseTagPlan picks the side a tag-filtered browse drives from, by finding
+// the required filter carrying fewer rows than the browse will read.
+//
+// The count stops at the scope, so the worst case reads scopeRows entries of
+// mediatags_tag_media_idx — one sequential pass over a covering index, to decide
+// whether to avoid that many random probes into two tag tables. Title tags are
+// counted as rows too, which overstates the media a tag covers and so errs
+// toward the probing the browse would have done anyway.
+func sqlBrowseTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	filters []zapscript.TagFilter,
+	scopeRows int,
+	scopeKnown bool,
+) browseTagPlan {
+	if !scopeKnown || scopeRows <= 0 || len(filters) == 0 {
+		return browseTagPlan{}
+	}
+
+	var (
+		best      zapscript.TagFilter
+		bestRows  int
+		bestFound bool
+	)
+	for _, filter := range browseTagDriverCandidates(filters) {
+		tagType, tagValue := resolveFilter(filter.Type, filter.Value)
+		var rows int
+		err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (
+			SELECT 1 FROM MediaTags
+				INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+				INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			UNION ALL
+			SELECT 1 FROM MediaTitleTags
+				INNER JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+				INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			LIMIT ?
+		)`, tagType, tagValue, tagType, tagValue, scopeRows).Scan(&rows)
+		if err != nil {
+			// A browse that still works is worth more than the faster shape.
+			log.Debug().Err(err).Str("tag", tagType+":"+tagValue).
+				Msg("browse tag cardinality probe failed; probing candidates instead")
+			return browseTagPlan{}
+		}
+		if rows >= scopeRows {
+			continue
+		}
+		if !bestFound || rows < bestRows {
+			best, bestRows, bestFound = filter, rows, true
+		}
+	}
+	if !bestFound {
+		return browseTagPlan{}
+	}
+	return browseTagPlan{driveFromTag: &best}
+}
+
+// browsePrefixTagPlan plans a tag filter over one directory.
+func browsePrefixTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	prefix string,
+	systems []systemdefs.System,
+	filters []zapscript.TagFilter,
+) browseTagPlan {
+	if len(filters) == 0 {
+		return browseTagPlan{}
+	}
+	scope, known, err := sqlBrowseScopeRows(ctx, db, []string{prefix}, systems)
+	if err != nil {
+		log.Debug().Err(err).Str("pathPrefix", prefix).Msg("browse tag scope lookup failed")
+		return browseTagPlan{}
+	}
+	return sqlBrowseTagPlan(ctx, db, filters, scope, known)
+}
+
+// browseOverlayTagPlan plans a tag filter over a merged root's routes.
+func browseOverlayTagPlan(
+	ctx context.Context, db sqlQueryable, opts *database.BrowseFilesOptions,
+) browseTagPlan {
+	return browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags)
+}
+
+func browseOverlayCountTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+) browseTagPlan {
+	return browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags)
+}
+
+func browseOverlayRoutesTagPlan(
+	ctx context.Context,
+	db sqlQueryable,
+	overlay *database.BrowseOverlay,
+	systems []systemdefs.System,
+	filters []zapscript.TagFilter,
+) browseTagPlan {
+	if len(filters) == 0 {
+		return browseTagPlan{}
+	}
+	sources := browseOverlaySources(overlay)
+	prefixes := make([]string, len(sources))
+	for i := range sources {
+		prefixes[i] = sources[i].PathPrefix
+	}
+	scope, known, err := sqlBrowseScopeRows(ctx, db, prefixes, systems)
+	if err != nil {
+		log.Debug().Err(err).Msg("browse overlay tag scope lookup failed")
+		return browseTagPlan{}
+	}
+	return sqlBrowseTagPlan(ctx, db, filters, scope, known)
+}
+
 func browseFilesFilterCondition(
 	opts *database.BrowseFilesOptions,
 	includeParent bool,
+	tagPlan browseTagPlan,
 ) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "m.SortName")
-	// Most browse scopes are bounded enough for correlated candidate probes.
-	// Required favorites are exceptionally sparse in production, so drive from
-	// that reverse-index set and probe any remaining filters per candidate.
-	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m")
+	// Which side a tag filter drives from depends on which is smaller; see
+	// browseTagPlan.
+	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m", tagPlan)
 	conditions := make([]string, 0, 3+len(letterClauses)+len(tagClauses))
 	if includeParent {
 		conditions = append(conditions, `m.ParentDir = ?`)
@@ -1160,8 +1323,10 @@ func browseFilesFilterCondition(
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
-	return browseFilesFilterCondition(opts, true)
+func browseFilesBaseCondition(
+	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
+) (where string, args []any) {
+	return browseFilesFilterCondition(opts, true, tagPlan)
 }
 
 func browseFilenameExpr() string {
@@ -1541,14 +1706,14 @@ type browseRouteSort struct {
 // not be safe, because a route whose leading rows are all dropped would hide
 // the surviving rows behind them.
 func browseOverlayMergedFilesQuery(
-	opts *database.BrowseFilesOptions, sortExpr, direction, cursorOp string,
+	opts *database.BrowseFilesOptions, sortExpr, direction, cursorOp string, tagPlan browseTagPlan,
 ) (query string, args []any) {
 	sources := browseOverlaySources(opts.Overlay)
 	branches := make([]string, len(sources))
 	for i := range sources {
 		routeOpts := *opts
 		routeOpts.PathPrefix = sources[i].PathPrefix
-		where, whereArgs := browseFilesFilterCondition(&routeOpts, true)
+		where, whereArgs := browseFilesFilterCondition(&routeOpts, true, tagPlan)
 		args = append(args, whereArgs...)
 
 		route := browseOverlayRouteSort(sortExpr, sources[i].PathPrefix, opts.Cursor)
@@ -1604,7 +1769,9 @@ func browseOverlayMergedFilesQuery(
 // arguments. Separate from the exec so the query-plan regression test can
 // measure the statement production actually runs, matching
 // browseOverlayFileCountQuery.
-func browseOverlayFilesQuery(opts *database.BrowseFilesOptions) (query string, args []any) {
+func browseOverlayFilesQuery(
+	opts *database.BrowseFilesOptions, tagPlan browseTagPlan,
+) (query string, args []any) {
 	sortExpr := browseTitleSortExpr()
 	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
 		sortExpr = browseFilenameExpr()
@@ -1616,14 +1783,14 @@ func browseOverlayFilesQuery(opts *database.BrowseFilesOptions) (query string, a
 
 	sole, single := browseOverlaySoleSource(opts.Overlay)
 	if !single {
-		return browseOverlayMergedFilesQuery(opts, sortExpr, direction, cursorOp)
+		return browseOverlayMergedFilesQuery(opts, sortExpr, direction, cursorOp, tagPlan)
 	}
 
 	// One route has nothing to merge, so it reads Media directly and the route
 	// prefix is just the parent filter. See browseOverlaySoleSource.
 	routeOpts := *opts
 	routeOpts.PathPrefix = sole.PathPrefix
-	where, args := browseFilesFilterCondition(&routeOpts, true)
+	where, args := browseFilesFilterCondition(&routeOpts, true, tagPlan)
 	route := browseOverlayRouteSort(sortExpr, sole.PathPrefix, opts.Cursor)
 	where += route.rangeClause
 	args = append(args, route.rangeArgs...)
@@ -1646,7 +1813,7 @@ func sqlBrowseOverlayFilesFromMedia(
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	query, args := browseOverlayFilesQuery(opts)
+	query, args := browseOverlayFilesQuery(opts, browseOverlayTagPlan(ctx, db, opts))
 	sortMode := opts.Sort
 
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -1693,7 +1860,8 @@ func sqlBrowseFilesFromMedia(
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	where, args := browseFilesBaseCondition(opts)
+	tagPlan := browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags)
+	where, args := browseFilesBaseCondition(opts, tagPlan)
 	sortModeStarted := time.Now()
 	sortMode := resolveBrowseSortMode(ctx, db, opts)
 	sortModeElapsed := time.Since(sortModeStarted)
@@ -2253,6 +2421,7 @@ func sqlBrowseFileCount(
 // measure the statement production actually runs rather than a copy of it.
 func browseOverlayFileCountQuery(
 	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+	tagPlan browseTagPlan,
 ) (query string, args []any) {
 	values, args := browseOverlaySourceValues(browseOverlaySources(opts.Overlay))
 
@@ -2262,7 +2431,7 @@ func browseOverlayFileCountQuery(
 		Letter:  opts.Letter,
 		Systems: opts.Systems,
 		Tags:    opts.Tags,
-	}, false)
+	}, false, tagPlan)
 	args = append(args, filterArgs...)
 
 	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
@@ -2285,7 +2454,7 @@ func sqlBrowseOverlayFileCount(
 	if err != nil || served {
 		return count, err
 	}
-	query, args := browseOverlayFileCountQuery(opts)
+	query, args := browseOverlayFileCountQuery(opts, browseOverlayCountTagPlan(ctx, db, opts))
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("browse overlay file count: %w", err)
 	}
@@ -2541,7 +2710,7 @@ func sqlBrowseFileCountFromMedia(
 		Letter:     opts.Letter,
 		Systems:    opts.Systems,
 		Tags:       opts.Tags,
-	})
+	}, browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags))
 	query := `SELECT COUNT(*)
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
@@ -2727,7 +2896,8 @@ func sqlBrowseIndex(
 		}, nil
 	}
 
-	where, args := browseFilesBaseCondition(filesOpts)
+	where, args := browseFilesBaseCondition(filesOpts,
+		browsePrefixTagPlan(ctx, db, filesOpts.PathPrefix, filesOpts.Systems, filesOpts.Tags))
 	// Only join Systems when a system filter is active; browseFilesBaseCondition
 	// references s.SystemID solely for that filter, so an unfiltered facet would
 	// otherwise pay one PK lookup per row for nothing.
@@ -2833,7 +3003,8 @@ func sqlBrowseOverlayIndex(
 		args = append(args, systemArgs...)
 	}
 	filterOpts := &database.BrowseFilesOptions{Tags: opts.Tags}
-	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	where, filterArgs := browseFilesFilterCondition(filterOpts, false,
+		browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags))
 	args = append(args, filterArgs...)
 	desc := opts.Sort == "name-desc"
 	direction := "ASC"

@@ -307,7 +307,7 @@ func TestBrowseOverlayMerge_TwoRouteCountMatchesStatement(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, served, "the fixture must leave the cache able to answer the total")
 
-	query, args := browseOverlayFileCountQuery(opts)
+	query, args := browseOverlayFileCountQuery(opts, browseTagPlan{})
 	var fromStatement int
 	require.NoError(t, f.mediaDB.sql.Load().QueryRowContext(ctx, query, args...).Scan(&fromStatement))
 

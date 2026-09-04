@@ -132,7 +132,8 @@ func TestHasRequiredFavoriteFilter(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, testCase.want, hasRequiredFavoriteFilter([]zapscript.TagFilter{testCase.filter}))
+			_, ok := browseTagPlan{}.driver([]zapscript.TagFilter{testCase.filter})
+			assert.Equal(t, testCase.want, ok)
 		})
 	}
 }
@@ -143,7 +144,7 @@ func TestBuildBrowseTagFilterSQL(t *testing.T) {
 	clauses, args := buildBrowseTagFilterSQL([]zapscript.TagFilter{
 		{Type: "user", Value: "favorite"},
 		{Type: "genre", Value: "action"},
-	}, "m")
+	}, "m", browseTagPlan{})
 	require.Len(t, clauses, 2)
 	assert.Contains(t, clauses[0], "m.DBID IN")
 	assert.Contains(t, clauses[1], "EXISTS")
@@ -151,10 +152,18 @@ func TestBuildBrowseTagFilterSQL(t *testing.T) {
 
 	candidateClauses, _ := buildBrowseTagFilterSQL([]zapscript.TagFilter{{
 		Type: "genre", Value: "action",
-	}}, "m")
+	}}, "m", browseTagPlan{})
 	require.Len(t, candidateClauses, 1)
 	assert.Contains(t, candidateClauses[0], "EXISTS")
 	assert.NotContains(t, candidateClauses[0], "m.DBID IN")
+
+	// A measured plan drives from whichever tag it names, favorite or not.
+	genre := zapscript.TagFilter{Type: "genre", Value: "action"}
+	plannedClauses, _ := buildBrowseTagFilterSQL([]zapscript.TagFilter{genre}, "m",
+		browseTagPlan{driveFromTag: &genre})
+	require.Len(t, plannedClauses, 1)
+	assert.Contains(t, plannedClauses[0], "m.DBID IN")
+	assert.NotContains(t, plannedClauses[0], "EXISTS")
 }
 
 func TestBuildTagFilterSQL_MediaAlias(t *testing.T) {
