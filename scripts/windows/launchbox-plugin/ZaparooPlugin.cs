@@ -17,6 +17,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
+using System.ComponentModel;
 using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
@@ -43,6 +44,21 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private const uint WinEventOutOfContext = 0;
     private const uint EventSystemForeground = 3;
 
+    // ProtocolVersion is announced to Core in the Hello event. Bump it when
+    // adding commands so Core can tell what this plugin understands.
+    // 2 added the Stop command and the Pid field on MediaStarted.
+    private const int ProtocolVersion = 2;
+
+    // Read from the assembly so the csproj stays the single source of truth.
+    private static string PluginVersion =>
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
+
+    // How long to keep looking for the process LaunchBox started. Emulators
+    // behind a launcher stub can take a moment to appear.
+    private const int ProcessResolveAttempts = 20;
+    private const int ProcessResolveDelayMs = 100;
+    private const int StopWaitMs = 10000;
+
     // Static connection state - shared across all plugin instances
     private static NamedPipeClientStream? _pipeClient;
     private static StreamWriter? _pipeWriter;
@@ -57,6 +73,8 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private static string _launchBoxRoot = string.Empty;
     private static IGame? _currentGame;
     private static IAdditionalApplication? _currentAdditionalApp;
+    private static int _currentGamePid;
+    private static int _launchGeneration;
     private static string? _pendingLaunchGameId;
     private static string? _pendingLaunchAdditionalAppId;
     private static bool _pendingLaunchShouldNavigate;
@@ -181,29 +199,295 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     public void OnAfterGameLaunched(IGame game, IAdditionalApplication? app, IEmulator? emulator)
     {
-        // Send game started event to Zaparoo
+        // Read everything off the LaunchBox objects on this thread; the
+        // resolution below runs on a worker and must not touch them.
+        string id = app?.Id ?? game.Id;
+        string? target = emulator?.ApplicationPath;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            target = app?.ApplicationPath ?? game.ApplicationPath;
+        }
+
+        int generation = BeginLaunch();
+
+        // Announce the launch straight away. Core publishes active media from
+        // this event, so gating it on process discovery would leave the user
+        // staring at nothing for as long as the search takes.
         SendEvent(new GameStartedEvent
         {
             Event = "MediaStarted",
-            Id = app?.Id ?? game.Id,
+            Id = id,
             Title = app?.Name ?? game.Title,
             Platform = game.Platform,
             ApplicationPath = app?.ApplicationPath ?? game.ApplicationPath
+        });
+
+        // The process can take a couple of seconds to appear, so it is
+        // resolved on a worker and reported separately. The generation check
+        // discards a slow search whose game has already been replaced, which
+        // would otherwise report game A's PID as if it were game B's.
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            int pid = ResolveGameProcessId(target);
+            if (pid == 0)
+            {
+                return;
+            }
+
+            lock (_stateLock)
+            {
+                if (_launchGeneration != generation)
+                {
+                    Log($"Discarding stale process {pid} for replaced launch {id}");
+                    return;
+                }
+                _currentGamePid = pid;
+            }
+
+            SendEvent(new GameProcessEvent { Id = id, Pid = pid });
+        });
+    }
+
+    /// <summary>
+    /// Opens a new launch generation and forgets the previous game's process.
+    /// Returns the generation so the process resolver can tell whether it is
+    /// still reporting for the launch it was started for.
+    /// </summary>
+    private static int BeginLaunch()
+    {
+        lock (_stateLock)
+        {
+            _currentGamePid = 0;
+            return ++_launchGeneration;
+        }
+    }
+
+    /// <summary>
+    /// Drops the tracked process once it has gone, so a later stop does not
+    /// act on a process ID the OS may have reused.
+    /// </summary>
+    private static void ForgetGameProcess()
+    {
+        lock (_stateLock)
+        {
+            _currentGamePid = 0;
+        }
+    }
+
+    /// <summary>
+    /// Clears the running-game state and returns what was running, for the
+    /// exit event.
+    /// </summary>
+    private static (IGame? Game, IAdditionalApplication? App) TakeRunningGame()
+    {
+        lock (_stateLock)
+        {
+            var game = _currentGame;
+            var app = _currentAdditionalApp;
+            _currentGame = null;
+            _currentAdditionalApp = null;
+            _currentGamePid = 0;
+            _shouldShowGameAfterFocusLoss = false;
+            return (game, app);
+        }
+    }
+
+    /// <summary>
+    /// Finds the process LaunchBox started for a game, so Core can stop the
+    /// whole tree if asked. Returns 0 when it cannot be determined, which is
+    /// normal for entries that launch a URL such as steam://.
+    /// </summary>
+    private static int ResolveGameProcessId(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target) || target.Contains("://", StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        string name;
+        string full;
+        try
+        {
+            name = Path.GetFileNameWithoutExtension(target);
+            full = Path.GetFullPath(target);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            Log($"Could not parse launch target '{target}': {ex.Message}");
+            return 0;
+        }
+
+        if (string.IsNullOrEmpty(name))
+        {
+            return 0;
+        }
+
+        for (int attempt = 0; attempt < ProcessResolveAttempts; attempt++)
+        {
+            int pid = FindNewestProcess(name, full);
+            if (pid != 0)
+            {
+                Log($"Resolved game process {pid} for {name}");
+                return pid;
+            }
+            System.Threading.Thread.Sleep(ProcessResolveDelayMs);
+        }
+
+        Log($"Could not resolve a process for {name}");
+        return 0;
+    }
+
+    private static int FindNewestProcess(string name, string fullPath)
+    {
+        System.Diagnostics.Process? best = null;
+        var candidates = System.Diagnostics.Process.GetProcessesByName(name);
+
+        foreach (var proc in candidates)
+        {
+            try
+            {
+                if (proc.HasExited)
+                {
+                    continue;
+                }
+
+                // MainModule throws for processes at a higher integrity level;
+                // treat those as a name-only match rather than discarding them.
+                string? path = null;
+                try
+                {
+                    path = proc.MainModule?.FileName;
+                }
+                catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+                {
+                    path = null;
+                }
+
+                if (path != null && !string.Equals(path, fullPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (best == null || proc.StartTime > best.StartTime)
+                {
+                    best = proc;
+                }
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException
+                                       or NotSupportedException or IOException)
+            {
+                // Process exited between enumeration and inspection, or its
+                // start time is off limits to this user.
+            }
+        }
+
+        int pid = best?.Id ?? 0;
+
+        // Every enumerated process holds a handle until disposed, and this
+        // runs up to ProcessResolveAttempts times per launch.
+        foreach (var proc in candidates)
+        {
+            proc.Dispose();
+        }
+
+        return pid;
+    }
+
+    /// <summary>
+    /// Ends the running game and reports the outcome back to Core. LaunchBox
+    /// exposes no stop API to plugins, so the tracked process tree is ended
+    /// directly; LaunchBox notices and raises its own GameExited afterwards.
+    /// </summary>
+    private void StopRunningGame(string? requestedId)
+    {
+        IGame? game;
+        IAdditionalApplication? app;
+        int pid;
+        lock (_stateLock)
+        {
+            game = _currentGame;
+            app = _currentAdditionalApp;
+            pid = _currentGamePid;
+        }
+
+        string runningId = app?.Id ?? game?.Id ?? string.Empty;
+        string replyId = string.IsNullOrEmpty(requestedId) ? runningId : requestedId!;
+
+        if (game == null)
+        {
+            SendStopResult(replyId, "failed", "no game is running");
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(requestedId) &&
+            !string.Equals(requestedId, runningId, StringComparison.OrdinalIgnoreCase))
+        {
+            SendStopResult(replyId, "failed", $"game {requestedId} is not the running game");
+            return;
+        }
+
+        if (pid <= 0)
+        {
+            SendStopResult(replyId, "failed", "no tracked process for the running game");
+            return;
+        }
+
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            proc.Kill(entireProcessTree: true);
+            proc.WaitForExit(StopWaitMs);
+            if (proc.HasExited)
+            {
+                ForgetGameProcess();
+                SendStopResult(replyId, "completed", string.Empty);
+            }
+            else
+            {
+                SendStopResult(replyId, "failed", "process did not exit");
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // The process exited on its own between lookup and kill, which is
+            // the outcome the caller wanted.
+            ForgetGameProcess();
+            SendStopResult(replyId, "completed", string.Empty);
+        }
+        catch (Exception ex) when (ex is Win32Exception or NotSupportedException or AggregateException)
+        {
+            // Kill reports a tree it could only partly end as an
+            // AggregateException; the others are the OS refusing the request.
+            SendStopResult(replyId, "failed", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Reports a stop that failed for a reason StopRunningGame did not expect,
+    /// so Core hears an outcome instead of waiting out its timeout on a fault
+    /// nobody observed.
+    /// </summary>
+    private void ReportStopFault(string? requestedId, AggregateException? fault)
+    {
+        string message = fault?.GetBaseException().Message ?? "unknown error";
+        Log($"Stop failed unexpectedly: {message}");
+        SendStopResult(requestedId ?? string.Empty, "failed", message);
+    }
+
+    private void SendStopResult(string id, string status, string error)
+    {
+        Log($"Stop result for {id}: {status} {error}");
+        SendEvent(new StopResultEvent
+        {
+            Id = id,
+            Status = status,
+            Error = error
         });
     }
 
     public void OnGameExited()
     {
-        IGame? game;
-        IAdditionalApplication? app;
-        lock (_stateLock)
-        {
-            game = _currentGame;
-            app = _currentAdditionalApp;
-            _currentGame = null;
-            _currentAdditionalApp = null;
-            _shouldShowGameAfterFocusLoss = false;
-        }
+        var (game, app) = TakeRunningGame();
 
         if (game != null)
         {
@@ -305,6 +589,8 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         }
     }
 
+    private static readonly object _logLock = new();
+
     private static void Log(string message)
     {
         try
@@ -325,7 +611,12 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             string logDir = Path.Combine(root, "Logs");
             Directory.CreateDirectory(logDir);
             string logPath = Path.Combine(logDir, "ZaparooLaunchBoxPlugin.txt");
-            File.AppendAllText(logPath, $"[{DateTime.Now}] {message}{Environment.NewLine}");
+            // Called from the pipe loop, the resolver worker and the UI
+            // thread; concurrent appends would throw and silently drop lines.
+            lock (_logLock)
+            {
+                File.AppendAllText(logPath, $"[{DateTime.Now}] {message}{Environment.NewLine}");
+            }
         }
         catch (Exception ex)
         {
@@ -409,6 +700,15 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
                 // Reset backoff after successful connection
                 attempt = 0;
+
+                // Announce what this plugin supports before anything else, so
+                // Core knows whether it can ask for a stop.
+                Log($"Connected to Zaparoo (plugin {PluginVersion}, protocol {ProtocolVersion})");
+                SendEvent(new HelloEvent
+                {
+                    PluginVersion = PluginVersion,
+                    ProtocolVersion = ProtocolVersion
+                });
 
                 // Read commands until pipe breaks or cancelled
                 await ReadCommandsAsync(cancellationToken);
@@ -638,6 +938,17 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     {
                         SendCommandError("GetGamesForPlatform", "Missing required field 'Platform' for getgamesforplatform");
                     }
+                    break;
+
+                case "stop":
+                    // Stopping waits for the process to exit, so it must not
+                    // run on the pipe read loop or no other command from Core
+                    // would be served meanwhile.
+                    var stopId = command.Id;
+                    System.Threading.Tasks.Task.Run(() => StopRunningGame(stopId))
+                        .ContinueWith(
+                            t => ReportStopFault(stopId, t.Exception),
+                            System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted);
                     break;
 
                 case "ping":
@@ -1334,6 +1645,29 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         public string Title { get; set; } = string.Empty;
         public string Platform { get; set; } = string.Empty;
         public string ApplicationPath { get; set; } = string.Empty;
+        public int Pid { get; set; }
+    }
+
+    private class GameProcessEvent
+    {
+        public string Event { get; set; } = "MediaProcess";
+        public string Id { get; set; } = string.Empty;
+        public int Pid { get; set; }
+    }
+
+    private class HelloEvent
+    {
+        public string Event { get; set; } = "Hello";
+        public string PluginVersion { get; set; } = string.Empty;
+        public int ProtocolVersion { get; set; }
+    }
+
+    private class StopResultEvent
+    {
+        public string Event { get; set; } = "MediaStopResult";
+        public string Id { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
     }
 
     private class GameExitedEvent

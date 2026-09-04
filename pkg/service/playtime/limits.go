@@ -784,6 +784,11 @@ func (tm *LimitsManager) checkLimits() {
 		// play continued past the limit.
 		if err := tm.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 			log.Error().Err(err).Msg("playtime: failed to stop active launcher")
+			if errors.Is(err, platforms.ErrStopFailed) {
+				// The media is still running, so it must not be recorded as
+				// stopped. This loop runs every 30s and will try again.
+				return
+			}
 		}
 
 		tm.OnMediaStopped()

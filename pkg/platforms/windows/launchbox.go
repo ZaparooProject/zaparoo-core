@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 const (
@@ -55,7 +56,23 @@ const (
 	// Must be large enough to handle JSON responses for platforms with thousands of games
 	// (e.g., NES with 8888 games can produce ~3MB responses).
 	launchBoxScannerMaxBuffer = 16 * 1024 * 1024 // 16MB
+
+	// launchBoxStopTimeout bounds how long Core waits for the plugin to report
+	// the result of a stop. LaunchBox runs shutdown screens and per-emulator
+	// exit scripts, so this allows for more than a bare process kill, while
+	// still leaving room inside the platform's overall stop budget for the
+	// process-tree fallback.
+	launchBoxStopTimeout = 12 * time.Second
+
+	// launchBoxStopProtocolVersion is the first plugin protocol version that
+	// understands the Stop command. Plugins that report nothing predate the
+	// handshake and are treated as unable to stop.
+	launchBoxStopProtocolVersion = 2
 )
+
+// errLaunchBoxStopUnsupported reports that the connected plugin is too old to
+// stop a game. Core falls back to killing the reported process tree.
+var errLaunchBoxStopUnsupported = errors.New("LaunchBox plugin does not support stopping games")
 
 // Plugin message types (matches C# plugin JSON structure)
 //
@@ -66,6 +83,53 @@ type pluginEvent struct {
 	Title           string `json:"Title,omitempty"`
 	Platform        string `json:"Platform,omitempty"`
 	ApplicationPath string `json:"ApplicationPath,omitempty"`
+	// Pid is the process LaunchBox started for this game, when the plugin
+	// could resolve it. Zero means unknown.
+	Pid int `json:"Pid,omitempty"`
+}
+
+// The Event field on the structs below is not read during dispatch, which
+// happens on the raw event name before unmarshalling. It is kept so each type
+// documents the wire message it maps to and round-trips correctly.
+
+// launchBoxHelloEvent is the plugin's handshake, announcing what it can do.
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxHelloEvent struct {
+	Event           string `json:"Event"`
+	PluginVersion   string `json:"PluginVersion,omitempty"`
+	ProtocolVersion int    `json:"ProtocolVersion,omitempty"`
+}
+
+// launchBoxProcessEvent reports the process LaunchBox started for a game,
+// sent separately from MediaStarted because resolving it takes a moment and
+// media publication must not wait on it.
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxProcessEvent struct {
+	Event string `json:"Event"`
+	ID    string `json:"Id,omitempty"`
+	Pid   int    `json:"Pid,omitempty"`
+}
+
+// launchBoxStopResultEvent reports the outcome of a Stop command.
+// Status is one of "completed", "failed" or "unsupported".
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxStopResultEvent struct {
+	Event  string `json:"Event"`
+	ID     string `json:"Id,omitempty"`
+	Status string `json:"Status,omitempty"`
+	Error  string `json:"Error,omitempty"`
+}
+
+// launchBoxErrorEvent is the plugin reporting that a command failed.
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxErrorEvent struct {
+	Event   string `json:"Event"`
+	Command string `json:"Command,omitempty"`
+	Error   string `json:"Error,omitempty"`
 }
 
 //nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
@@ -358,21 +422,33 @@ type pendingGamesRequest struct {
 	platform string
 }
 
+type pendingStopRequest struct {
+	response chan launchBoxStopResultEvent
+	gameID   string
+}
+
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
 	ctx                 context.Context
 	listener            net.Listener
 	conn                net.Conn
-	onGameStarted       func(id, title, platform, path string)
+	onGameStarted       func(id, title, platform, path string, pid int)
 	onGameExited        func(id, title string)
 	onWriteRequest      func(id, title, platform string)
 	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
 	cancel              context.CancelFunc
 	writer              *bufio.Writer
+	onCommandError      func(command, message string)
+	onGameProcess       func(id string, pid int)
 	// For synchronous game requests during scanning
 	pendingGamesReq   pendingGamesRequest
+	pendingStopReq    pendingStopRequest
+	pluginVersion     string
+	protocolVersion   int
 	connMu            syncutil.Mutex
 	pendingGamesReqMu syncutil.Mutex
+	pendingStopReqMu  syncutil.Mutex
+	handshakeMu       syncutil.RWMutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -424,7 +500,7 @@ func (s *LaunchBoxPipeServer) Stop() {
 }
 
 // SetGameStartedHandler sets the callback for game started events
-func (s *LaunchBoxPipeServer) SetGameStartedHandler(handler func(id, title, platform, path string)) {
+func (s *LaunchBoxPipeServer) SetGameStartedHandler(handler func(id, title, platform, path string, pid int)) {
 	s.onGameStarted = handler
 }
 
@@ -479,13 +555,6 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 	ctx context.Context,
 	platform string,
 ) ([]LaunchBoxGameInfo, error) {
-	s.connMu.Lock()
-	if s.writer == nil {
-		s.connMu.Unlock()
-		return nil, errors.New("LaunchBox plugin not connected")
-	}
-	s.connMu.Unlock()
-
 	respChan := make(chan launchBoxGamesResponse, 1)
 
 	s.pendingGamesReqMu.Lock()
@@ -504,23 +573,14 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 		s.pendingGamesReqMu.Unlock()
 	}()
 
-	// Send request
-	cmd := pluginCommand{Command: "GetGamesForPlatform", Platform: platform}
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal GetGamesForPlatform command: %w", err)
+	// The pending request is registered before the send so a fast reply
+	// cannot arrive with nobody waiting for it. The connection check and the
+	// write happen under one hold of the lock inside sendCommand; a plugin
+	// that disconnects in between would otherwise leave a nil writer to
+	// dereference.
+	if err := s.sendCommand(pluginCommand{Command: "GetGamesForPlatform", Platform: platform}); err != nil {
+		return nil, err
 	}
-
-	s.connMu.Lock()
-	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		s.connMu.Unlock()
-		return nil, fmt.Errorf("failed to write GetGamesForPlatform command: %w", err)
-	}
-	if err := s.writer.Flush(); err != nil {
-		s.connMu.Unlock()
-		return nil, fmt.Errorf("failed to flush GetGamesForPlatform command: %w", err)
-	}
-	s.connMu.Unlock()
 
 	log.Debug().Msgf("sent GetGamesForPlatform command for: %s", platform)
 
@@ -566,6 +626,134 @@ func (s *LaunchBoxPipeServer) LaunchGame(gameID string) error {
 	}
 
 	log.Debug().Msgf("sent launch command for game ID: %s", gameID)
+	return nil
+}
+
+// SetGameProcessHandler sets the callback for a resolved game process.
+func (s *LaunchBoxPipeServer) SetGameProcessHandler(handler func(id string, pid int)) {
+	s.onGameProcess = handler
+}
+
+// SetCommandErrorHandler sets the callback for plugin command failures.
+func (s *LaunchBoxPipeServer) SetCommandErrorHandler(handler func(command, message string)) {
+	s.onCommandError = handler
+}
+
+// setHandshake records what the connected plugin reported about itself.
+func (s *LaunchBoxPipeServer) setHandshake(pluginVersion string, protocolVersion int) {
+	s.handshakeMu.Lock()
+	s.pluginVersion = pluginVersion
+	s.protocolVersion = protocolVersion
+	s.handshakeMu.Unlock()
+}
+
+// resetHandshake forgets the previous plugin's capabilities so a reconnecting
+// older plugin is not credited with the newer one's features.
+func (s *LaunchBoxPipeServer) resetHandshake() {
+	s.setHandshake("", 0)
+}
+
+// SupportsStop reports whether the connected plugin can stop a running game.
+func (s *LaunchBoxPipeServer) SupportsStop() bool {
+	s.handshakeMu.RLock()
+	defer s.handshakeMu.RUnlock()
+	return s.protocolVersion >= launchBoxStopProtocolVersion
+}
+
+// StopGame asks the plugin to stop a running game and waits for the result.
+// Going through the plugin rather than killing the process directly lets
+// LaunchBox run its own shutdown path, including the emulator's configured
+// exit script.
+func (s *LaunchBoxPipeServer) StopGame(ctx context.Context, gameID string) error {
+	if !s.SupportsStop() {
+		return errLaunchBoxStopUnsupported
+	}
+
+	respChan := make(chan launchBoxStopResultEvent, 1)
+	s.pendingStopReqMu.Lock()
+	if s.pendingStopReq.response != nil {
+		s.pendingStopReqMu.Unlock()
+		return errors.New("stop request already in flight")
+	}
+	s.pendingStopReq = pendingStopRequest{gameID: gameID, response: respChan}
+	s.pendingStopReqMu.Unlock()
+
+	defer func() {
+		s.pendingStopReqMu.Lock()
+		s.pendingStopReq = pendingStopRequest{}
+		s.pendingStopReqMu.Unlock()
+	}()
+
+	if err := s.sendCommand(pluginCommand{Command: "Stop", ID: gameID}); err != nil {
+		return err
+	}
+	log.Debug().Msgf("sent stop command for game ID: %s", gameID)
+
+	select {
+	case resp := <-respChan:
+		switch resp.Status {
+		case "completed":
+			return nil
+		case "unsupported":
+			return errLaunchBoxStopUnsupported
+		default:
+			if resp.Error != "" {
+				return fmt.Errorf("LaunchBox stop failed: %s", resp.Error)
+			}
+			return fmt.Errorf("LaunchBox stop reported status %q", resp.Status)
+		}
+	case <-time.After(launchBoxStopTimeout):
+		return errors.New("timeout waiting for LaunchBox to stop game")
+	case <-ctx.Done():
+		return fmt.Errorf("stop cancelled: %w", ctx.Err())
+	}
+}
+
+// deliverStopResult hands a stop outcome to a waiting StopGame, if any.
+//
+// The send must never block: this runs on the pipe reader goroutine, and the
+// response channel holds a single result. A plugin that reports an outcome
+// twice would otherwise fill the buffer and then wedge the reader forever
+// while holding pendingStopReqMu, stopping every later event from being
+// processed. Only the first result matters, so extras are dropped.
+func (s *LaunchBoxPipeServer) deliverStopResult(result launchBoxStopResultEvent) {
+	s.pendingStopReqMu.Lock()
+	defer s.pendingStopReqMu.Unlock()
+
+	if s.pendingStopReq.response == nil {
+		return
+	}
+	// An empty ID means the plugin did not say which game it acted on; the
+	// only outstanding request owns it.
+	if result.ID != "" && s.pendingStopReq.gameID != result.ID {
+		return
+	}
+
+	select {
+	case s.pendingStopReq.response <- result:
+	default:
+		log.Debug().Str("id", result.ID).Msg("discarding duplicate LaunchBox stop result")
+	}
+}
+
+// sendCommand writes a command to the plugin.
+func (s *LaunchBoxPipeServer) sendCommand(cmd pluginCommand) error {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s command: %w", cmd.Command, err)
+	}
+
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.writer == nil {
+		return errors.New("LaunchBox plugin not connected")
+	}
+	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
+		return fmt.Errorf("failed to write %s command: %w", cmd.Command, err)
+	}
+	if err := s.writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush %s command: %w", cmd.Command, err)
+	}
 	return nil
 }
 
@@ -637,17 +825,22 @@ func (s *LaunchBoxPipeServer) acceptConnections() {
 		s.writer = bufio.NewWriter(conn)
 		s.connMu.Unlock()
 
+		// Start reading before writing anything. The plugin announces itself
+		// as soon as it connects, so a write issued while nothing is draining
+		// the pipe blocks both sides until the connection dies.
+		go s.handleConnection(conn)
+
 		// Request platform mappings from the plugin
 		if err := s.RequestPlatforms(); err != nil {
 			log.Warn().Err(err).Msg("failed to request platforms from LaunchBox plugin")
 		}
-
-		// Handle this connection
-		go s.handleConnection(conn)
 	}
 }
 
 func (s *LaunchBoxPipeServer) handleConnection(conn net.Conn) {
+	// A reconnecting plugin may be an older build; do not carry the previous
+	// connection's advertised capabilities over to it.
+	s.resetHandshake()
 	defer func() {
 		s.connMu.Lock()
 		if s.conn == conn {
@@ -725,7 +918,7 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 		log.Info().Msgf("LaunchBox game started: %s (ID: %s)", event.Title, event.ID)
 
 		if s.onGameStarted != nil {
-			s.onGameStarted(event.ID, event.Title, event.Platform, event.ApplicationPath)
+			s.onGameStarted(event.ID, event.Title, event.Platform, event.ApplicationPath, event.Pid)
 		}
 
 	case "MediaStopped":
@@ -740,6 +933,61 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 
 		if s.onWriteRequest != nil {
 			s.onWriteRequest(event.ID, event.Title, event.Platform)
+		}
+
+	case "Hello":
+		var hello launchBoxHelloEvent
+		if err := json.Unmarshal([]byte(data), &hello); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox Hello event")
+			return
+		}
+		s.setHandshake(hello.PluginVersion, hello.ProtocolVersion)
+		log.Info().
+			Str("pluginVersion", hello.PluginVersion).
+			Int("protocolVersion", hello.ProtocolVersion).
+			Bool("supportsStop", s.SupportsStop()).
+			Msg("LaunchBox plugin handshake received")
+
+	case "MediaProcess":
+		var procEvent launchBoxProcessEvent
+		if err := json.Unmarshal([]byte(data), &procEvent); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox MediaProcess event")
+			return
+		}
+		log.Debug().Str("id", procEvent.ID).Int("pid", procEvent.Pid).
+			Msg("LaunchBox reported game process")
+		if s.onGameProcess != nil {
+			s.onGameProcess(procEvent.ID, procEvent.Pid)
+		}
+
+	case "MediaStopResult":
+		var result launchBoxStopResultEvent
+		if err := json.Unmarshal([]byte(data), &result); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox MediaStopResult event")
+			return
+		}
+		log.Info().Str("id", result.ID).Str("status", result.Status).
+			Msg("LaunchBox reported stop result")
+		s.deliverStopResult(result)
+
+	case "Error":
+		var errEvent launchBoxErrorEvent
+		if err := json.Unmarshal([]byte(data), &errEvent); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox Error event")
+			return
+		}
+		log.Warn().Str("command", errEvent.Command).Str("error", errEvent.Error).
+			Msg("LaunchBox plugin reported a command failure")
+		// A failed Stop must not leave StopGame blocked until its timeout.
+		if strings.EqualFold(errEvent.Command, "Stop") {
+			s.deliverStopResult(launchBoxStopResultEvent{
+				Event:  "MediaStopResult",
+				Status: "failed",
+				Error:  errEvent.Error,
+			})
+		}
+		if s.onCommandError != nil {
+			s.onCommandError(errEvent.Command, errEvent.Error)
 		}
 
 	case "Platforms":
@@ -805,7 +1053,13 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 	pipe := NewLaunchBoxPipeServer()
 
 	// Set event handlers
-	pipe.SetGameStartedHandler(func(id, title, platform, _ string) {
+	pipe.SetGameStartedHandler(func(id, title, platform, appPath string, pid int) {
+		p.setLaunchBoxActiveGame(id, appPath)
+
+		// Older plugins report the process inline; newer ones follow up with a
+		// MediaProcess event once they have resolved it.
+		p.trackLaunchBoxProcess(id, pid)
+
 		// Try custom platform mapping first (from plugin's ScrapeAs data)
 		p.platformMappingsMu.RLock()
 		systemID, ok := p.customPlatformToSystem[platform]
@@ -847,9 +1101,27 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		p.setActiveMedia(activeMedia)
 	})
 
-	pipe.SetGameExitedHandler(func(_, title string) {
+	pipe.SetGameExitedHandler(func(id, title string) {
 		log.Info().Msgf("LaunchBox game stopped: %s", title)
+		// Only the game Core believes is running may clear active media; a
+		// late exit for a previous game must not wipe a newer launch.
+		if !p.clearLaunchBoxActiveID(id) {
+			log.Debug().Msgf("ignoring stale LaunchBox exit for: %s", id)
+			return
+		}
 		p.setActiveMedia(nil)
+	})
+
+	pipe.SetGameProcessHandler(func(id string, pid int) {
+		// The plugin resolves the process LaunchBox started so Core can stop
+		// the whole tree if the plugin's own stop path fails or is missing.
+		p.trackLaunchBoxProcess(id, pid)
+	})
+
+	pipe.SetCommandErrorHandler(func(command, message string) {
+		// A rejected launch previously looked like success because the plugin's
+		// error event was dropped. Surface it so the failure is visible.
+		log.Warn().Msgf("LaunchBox plugin rejected %s: %s", command, message)
 	})
 
 	pipe.SetWriteRequestHandler(func(id, title, _ string) {
@@ -919,11 +1191,127 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 	log.Info().Msg("LaunchBox named pipe server initialized")
 }
 
+// trackLaunchBoxProcess adopts the process the plugin reported for a launch.
+//
+// The PID arrives over the pipe after the plugin has polled for it, so by the
+// time Core opens it the original process may have exited and Windows may have
+// reused the number. Adopting the wrong PID would mean force-killing an
+// unrelated process tree on the next stop, so the image path is checked
+// against the application LaunchBox was asked to run before it is trusted.
+func (p *Platform) trackLaunchBoxProcess(gameID string, pid int) {
+	if pid <= 0 {
+		return
+	}
+
+	appPath, current := p.launchBoxActiveGame()
+	if gameID != "" && current != "" && gameID != current {
+		log.Debug().Str("id", gameID).Msg("ignoring process for a replaced LaunchBox game")
+		return
+	}
+
+	if !launchBoxProcessMatches(pid, appPath) {
+		log.Debug().Int("pid", pid).Str("appPath", appPath).
+			Msg("ignoring LaunchBox process that no longer matches the launched application")
+		return
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		log.Debug().Err(err).Int("pid", pid).Msg("could not open LaunchBox game process")
+		return
+	}
+	p.SetTrackedProcess(proc)
+}
+
+// launchBoxProcessMatches reports whether pid is still running the expected
+// application. An application path Core cannot check -- a steam:// URL, or a
+// process whose image path is unreadable -- is accepted, because the plugin
+// only reports a PID it resolved itself.
+func launchBoxProcessMatches(pid int, appPath string) bool {
+	if appPath == "" || strings.Contains(appPath, "://") {
+		return true
+	}
+	proc, err := process.NewProcess(int32(pid)) //nolint:gosec // Windows PIDs fit in int32.
+	if err != nil {
+		return false
+	}
+	exe, err := proc.Exe()
+	if err != nil || exe == "" {
+		return true
+	}
+	return strings.EqualFold(filepath.Clean(exe), filepath.Clean(appPath))
+}
+
+// setLaunchBoxActiveGame records the game Core considers currently running and
+// the application LaunchBox was asked to run for it.
+func (p *Platform) setLaunchBoxActiveGame(id, appPath string) {
+	p.launchBoxActiveMu.Lock()
+	p.launchBoxActiveID = id
+	p.launchBoxActiveAppPath = appPath
+	p.launchBoxActiveMu.Unlock()
+}
+
+// launchBoxActiveGame returns the running game's application path and id.
+func (p *Platform) launchBoxActiveGame() (appPath, id string) {
+	p.launchBoxActiveMu.Lock()
+	defer p.launchBoxActiveMu.Unlock()
+	return p.launchBoxActiveAppPath, p.launchBoxActiveID
+}
+
+// clearLaunchBoxActiveID clears the active game only when id still owns it.
+func (p *Platform) clearLaunchBoxActiveID(id string) bool {
+	p.launchBoxActiveMu.Lock()
+	defer p.launchBoxActiveMu.Unlock()
+	if p.launchBoxActiveID != id {
+		return false
+	}
+	p.launchBoxActiveID = ""
+	p.launchBoxActiveAppPath = ""
+	return true
+}
+
+func (p *Platform) launchBoxActiveGameID() string {
+	p.launchBoxActiveMu.Lock()
+	defer p.launchBoxActiveMu.Unlock()
+	return p.launchBoxActiveID
+}
+
+// stopLaunchBoxGame asks the plugin to end the running game. Returning an
+// error lets StopActiveLauncher fall back to killing the tracked process tree.
+func (p *Platform) stopLaunchBoxGame(_ *config.Instance) error {
+	gameID := p.launchBoxActiveGameID()
+	if gameID == "" {
+		return errors.New("no active LaunchBox game")
+	}
+
+	p.launchBoxPipeLock.Lock()
+	pipe := p.launchBoxPipe
+	p.launchBoxPipeLock.Unlock()
+
+	if pipe == nil || !pipe.IsConnected() {
+		return errors.New("LaunchBox plugin not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), launchBoxStopTimeout)
+	defer cancel()
+	if err := pipe.StopGame(ctx, gameID); err != nil {
+		return err
+	}
+
+	p.clearLaunchBoxActiveID(gameID)
+	return nil
+}
+
 // NewLaunchBoxLauncher creates the LaunchBox launcher
 func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:      "LaunchBox",
 		Schemes: []string{shared.SchemeLaunchBox},
+		// LaunchBox owns the game process and reports its lifecycle over the
+		// pipe, so ActiveMedia comes from MediaStarted rather than from the
+		// launch command being accepted.
+		Lifecycle: platforms.LifecycleExternal,
+		Kill:      p.stopLaunchBoxGame,
 		Scanner: func(
 			ctx context.Context,
 			cfg *config.Instance,

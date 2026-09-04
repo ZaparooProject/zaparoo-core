@@ -765,6 +765,118 @@ scan_mode = "hold"
 	}
 }
 
+// timedExitStopFixture is a hold-mode reader holding a running game, wired so
+// the exit timer reaches StopActiveLauncher and reports what it did next.
+type timedExitStopFixture struct {
+	svc        *ServiceContext
+	st         *state.State
+	stopCalled chan struct{}
+	owner      tokens.Token
+}
+
+func newTimedExitStopFixture(t *testing.T, stopErr error) *timedExitStopFixture {
+	t.Helper()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "test-launcher", SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(stopErr).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID: "game-card", Text: "game.nes",
+		Source: tokens.SourceReader, ReaderID: readerID, ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform: mockPlatform, Config: cfg, State: st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	return &timedExitStopFixture{svc: svc, st: st, stopCalled: stopCalled, owner: owner}
+}
+
+// A stop that succeeded tells the rest of the service the media ended: the
+// playlist and the launch queue are both cleared.
+func TestTimedExit_ClearsQueuesAfterStop(t *testing.T) {
+	t.Parallel()
+
+	fx := newTimedExitStopFixture(t, nil)
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case pls := <-fx.svc.PlaylistQueue:
+		assert.Nil(t, pls, "a nil update clears the active playlist")
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit did not clear the playlist")
+	}
+	select {
+	case tok := <-fx.svc.LaunchSoftwareQueue:
+		assert.Nil(t, tok, "a nil token ends the software launch")
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit did not clear the launch queue")
+	}
+}
+
+// A stop the platform could not carry out leaves the game running, so the
+// exit must not tell the rest of the service otherwise: no queue clears, and
+// the active media stays as it is.
+func TestTimedExit_KeepsMediaWhenStopFails(t *testing.T) {
+	t.Parallel()
+
+	fx := newTimedExitStopFixture(t, platforms.ErrStopFailed)
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-fx.stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit timer did not try to stop the launcher")
+	}
+
+	select {
+	case <-fx.svc.PlaylistQueue:
+		t.Fatal("a stop that left the game running must not clear the playlist")
+	case <-fx.svc.LaunchSoftwareQueue:
+		t.Fatal("a stop that left the game running must not clear the launch queue")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.NotNil(t, fx.st.ActiveMedia(), "the game is still running, so its media stays")
+}
+
 // A before_exit script may launch media of its own. Hook-launched media carries
 // no reader ID, so it never moves the hold owner the exit revalidates; without
 // an active-media check the exit stops the media the hook just started.
