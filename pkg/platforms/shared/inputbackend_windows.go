@@ -17,14 +17,26 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-//go:build !linux && !windows
+//go:build windows
 
 package shared
 
+import (
+	"fmt"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/windowsinput"
+)
+
 func newPlatformKeyboard() (KeyboardDevice, error) {
-	return nil, ErrInputUnsupported
+	kbd, err := windowsinput.NewKeyboard()
+	if err != nil {
+		return nil, fmt.Errorf("create windows keyboard: %w", err)
+	}
+	return kbd, nil
 }
 
+// Virtual gamepad support on Windows needs the ViGEmBus driver and is not
+// implemented yet.
 func newPlatformGamepad() (GamepadDevice, error) {
 	return nil, ErrInputUnsupported
 }

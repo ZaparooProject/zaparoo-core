@@ -5194,6 +5194,8 @@ The input macro format is identical to what goes after the `:` in a ZapScript `i
 
 Persistent `{press:key}` and `{release:key}` input is available only over supported WebSocket input sessions. A press remains held across requests from that WebSocket until its matching release. Each WebSocket owns its held keys and buttons; one connection cannot release another connection's input. Core releases all owned input when the WebSocket disconnects, input execution fails, or Core shuts down. HTTP JSON-RPC requests reject persistent press and release tokens because HTTP has no durable session lifecycle.
 
+On Windows, Core runs unelevated in the user's desktop session, so two limits apply that Core cannot detect or work around: keys sent to a window belonging to an elevated program are silently discarded by Windows, and nothing reaches the secure desktop, meaning UAC prompts, the lock screen and Ctrl+Alt+Del. Keys are injected as scancodes, so which character a key produces still depends on the active keyboard layout.
+
 ### input.keyboard
 
 **Access:** Requires `input`.
