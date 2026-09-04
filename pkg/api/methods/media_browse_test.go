@@ -474,6 +474,8 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	sharedPath := filepath.Join(romsRoot, "shared")
 	snesAPIPath := filepath.ToSlash(snesPath)
 	sharedAPIPath := filepath.ToSlash(sharedPath)
+	outsidePath := browseTestAbsPath("tmp", "outside")
+	outsideAPIPath := filepath.ToSlash(outsidePath)
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
 		Return([]string{romsRoot})
@@ -481,26 +483,32 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 		Return([]platforms.Launcher{
 			{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
 			{ID: "SharedSNES", SystemID: "SNES", Folders: []string{"shared"}},
-			{ID: "OutsideSNES", SystemID: "SNES", Folders: []string{browseTestAbsPath("tmp", "outside")}},
+			{ID: "OutsideSNES", SystemID: "SNES", Folders: []string{outsidePath}},
 			{ID: "Steam", SystemID: "pc", Schemes: []string{"steam"}},
 		})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockSystemRootCandidatesNotReady(mockMediaDB)
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	outsidePrefix := outsideAPIPath + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
 		Return(0, nil)
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(outsidePrefix, "SNES")).
+		Return(3, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(outsidePrefix, "SNES")).
 		Return([]database.BrowseDirectoryResult{}, nil)
 	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
 		Return([]database.BrowseVirtualScheme{}, nil)
 	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
 		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
 			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
-				assert.ElementsMatch(t, []string{snesAPIPath, sharedAPIPath}, opts.Routes)
+				assert.ElementsMatch(t, []string{snesAPIPath, sharedAPIPath, outsideAPIPath}, opts.Routes)
 		}),
 	).Return(map[string]database.BrowseRouteCount{
-		snesAPIPath: {Path: snesAPIPath, FileCount: 12, SystemIDs: []string{"SNES"}},
+		snesAPIPath:    {Path: snesAPIPath, FileCount: 12, SystemIDs: []string{"SNES"}},
+		outsideAPIPath: {Path: outsideAPIPath, FileCount: 3, SystemIDs: []string{"SNES"}},
 	}, nil)
 
 	systems := []string{"SNES"}
@@ -510,16 +518,30 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
-	require.Len(t, browseResults.Entries, 1)
-	entry := browseResults.Entries[0]
+	require.Len(t, browseResults.Entries, 2)
+
+	byPath := make(map[string]models.BrowseEntry, len(browseResults.Entries))
+	for _, e := range browseResults.Entries {
+		byPath[e.Path] = e
+	}
+
+	entry, ok := byPath[snesAPIPath]
+	require.True(t, ok)
 	assert.Equal(t, "root", entry.Type)
 	assert.Equal(t, "SNES", entry.Name)
-	assert.Equal(t, snesAPIPath, entry.Path)
 	assert.Equal(t, []string{"SNES"}, entry.SystemIDs)
 	require.NotNil(t, entry.SystemID)
 	assert.Equal(t, "SNES", *entry.SystemID)
 	require.NotNil(t, entry.FileCount)
 	assert.Equal(t, 12, *entry.FileCount)
+
+	// A launcher's own media dir is browsable even though it sits outside
+	// every platform root: the user authorised the path by configuring it.
+	outside, ok := byPath[outsideAPIPath]
+	require.True(t, ok)
+	assert.Equal(t, "root", outside.Type)
+	require.NotNil(t, outside.FileCount)
+	assert.Equal(t, 3, *outside.FileCount)
 
 	mockMediaDB.AssertExpectations(t)
 }
@@ -1650,6 +1672,49 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 	assert.Equal(t, 100, *browseResults.Entries[0].FileCount)
 
 	assert.Equal(t, "SNES", browseResults.Entries[1].Name)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestHandleMediaBrowse_LauncherMediaDirOutsideRoots covers a custom launcher
+// pointed at a directory that is not under any scan root. Its media indexes and
+// launches, so refusing to open the directory that holds it left the library
+// half visible.
+func TestHandleMediaBrowse_LauncherMediaDirOutsideRoots(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	mediaDir := browseTestAbsPath("tmp", "famicom")
+	mediaAPIPath := filepath.ToSlash(mediaDir)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "Famicom", SystemID: "NES", Folders: []string{mediaDir}, Extensions: []string{".nes"}},
+		})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(mediaAPIPath+"/")).
+		Return([]database.BrowseDirectoryResult{{Name: "Japan", FileCount: 4}}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(mediaAPIPath+"/")).
+		Return(1, nil)
+	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(mediaAPIPath+"/", nil)).
+		Return(0, nil)
+
+	path := mediaAPIPath
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &path})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, mediaAPIPath, browseResults.Path)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, "Japan", browseResults.Entries[0].Name)
 	mockMediaDB.AssertExpectations(t)
 }
 
