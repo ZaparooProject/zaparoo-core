@@ -80,15 +80,6 @@ func selectAddrs(addrs []net.Addr) (v4, v6 []net.IP) {
 	return v4, v6
 }
 
-// HasUsableAddr reports whether iface has any address worth advertising.
-func HasUsableAddr(iface *net.Interface) bool {
-	v4, v6, err := InterfaceAddrs(iface)
-	if err != nil {
-		return false
-	}
-	return len(v4) > 0 || len(v6) > 0
-}
-
 func appendUniqueIP(list []net.IP, ip net.IP) []net.IP {
 	for _, existing := range list {
 		if existing.Equal(ip) {

@@ -58,6 +58,10 @@ const (
 	// announceInterval is the gap between those announcements.
 	announceInterval = time.Second
 
+	// legacyTTL caps the TTLs sent to a legacy unicast querier.
+	// RFC 6762 section 6.7.
+	legacyTTL = 10
+
 	// maxPacketSize bounds a single read. RFC 6762 section 17 caps an mDNS
 	// message at the interface MTU, but jumbo frames and IP fragmentation
 	// make a generous buffer cheaper than a truncated parse.
@@ -125,6 +129,13 @@ func (r *Responder) Start(ifaces []net.Interface) error {
 	links := buildLinks(ifaces)
 	if len(links) == 0 {
 		return ErrNoInterfaces
+	}
+
+	r.mu.Lock()
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
+		return ErrNoSockets
 	}
 
 	conn4, err4 := listenIPv4(links)
@@ -298,6 +309,8 @@ func (r *Responder) announce(links []link) {
 func (r *Responder) sendRecords(links []link, build func(link) []dns.RR) {
 	for i := range links {
 		msg := new(dns.Msg)
+		// RFC 6762 section 18.1: a multicast response carries a zero query id.
+		msg.Id = 0
 		msg.Response = true
 		msg.Authoritative = true
 		msg.Compress = true
@@ -310,9 +323,6 @@ func (r *Responder) sendRecords(links []link, build func(link) []dns.RR) {
 // makes this work on Windows, where the per-packet interface control message
 // x/net would otherwise use is unimplemented.
 func (r *Responder) writeMulticast(msg *dns.Msg, l *link) {
-	// RFC 6762 section 18.1: a multicast response carries a zero query id.
-	msg.Id = 0
-
 	buf, err := msg.Pack()
 	if err != nil {
 		r.logf("pack mDNS response for %s: %v", l.name, err)
@@ -412,52 +422,117 @@ func (r *Responder) handlePacket(packet []byte, from net.Addr) {
 	if err := msg.Unpack(packet); err != nil {
 		return
 	}
-	if msg.Response || len(msg.Question) == 0 {
-		return
-	}
-	// A query carrying an authority section is a probe for conflict
-	// detection. This responder does not participate in probing.
-	if len(msg.Ns) > 0 {
-		return
-	}
 
 	r.mu.Lock()
 	links := r.links
 	stopped := r.stopped
 	r.mu.Unlock()
-	if stopped || len(links) == 0 {
+	if stopped {
 		return
 	}
 
-	for _, question := range msg.Question {
-		r.answerQuestion(question, msg, links, from)
+	for _, planned := range r.svc.planReplies(msg, links, from) {
+		if planned.unicast != nil {
+			r.writeUnicast(planned.msg, planned.unicast)
+			continue
+		}
+		r.writeMulticast(planned.msg, planned.link)
 	}
 }
 
-func (r *Responder) answerQuestion(q dns.Question, query *dns.Msg, links []link, from net.Addr) {
-	if q.Qclass&^cacheFlush != dns.ClassINET && q.Qclass&^cacheFlush != dns.ClassANY {
-		return
+// plannedReply is one response the responder decided to send: either multicast
+// out a single interface, or unicast back to whoever asked.
+type plannedReply struct {
+	msg     *dns.Msg
+	link    *link
+	unicast net.Addr
+}
+
+// planReplies decides what to answer for one received message. Keeping the
+// decisions separate from the sending means the parts worth getting right -
+// which questions are ours, which interface answers with which addresses, and
+// which of the reply shapes in RFC 6762 applies - can be exercised without
+// opening a socket.
+func (s *Service) planReplies(query *dns.Msg, links []link, from net.Addr) []plannedReply {
+	if query.Response || len(query.Question) == 0 || len(links) == 0 {
+		return nil
+	}
+	// A query carrying an authority section is a probe for conflict
+	// detection. This responder does not participate in probing.
+	if len(query.Ns) > 0 {
+		return nil
 	}
 
-	if wantsUnicast(q) {
-		l := linkFor(links, from)
-		answer, extra := r.svc.answersFor(q, query, l.addrs)
-		if len(answer) == 0 {
-			return
-		}
-		reply := newReply(query.Id, answer, extra)
-		r.writeUnicast(reply, from)
-		return
-	}
+	legacy := isLegacyQuery(from)
 
-	for i := range links {
-		answer, extra := r.svc.answersFor(q, query, links[i].addrs)
-		if len(answer) == 0 {
+	var replies []plannedReply
+	for _, q := range query.Question {
+		if !supportedClass(q.Qclass) {
 			continue
 		}
-		reply := newReply(0, answer, extra)
-		r.writeMulticast(reply, &links[i])
+
+		if legacy || wantsUnicast(q) {
+			l := linkFor(links, from)
+			answer, extra := s.answersFor(q, query, l.addrs)
+			if len(answer) == 0 {
+				continue
+			}
+			msg := newReply(query.Id, answer, extra)
+			if legacy {
+				makeLegacy(msg, q)
+			}
+			replies = append(replies, plannedReply{msg: msg, unicast: from})
+			continue
+		}
+
+		for i := range links {
+			answer, extra := s.answersFor(q, query, links[i].addrs)
+			if len(answer) == 0 {
+				continue
+			}
+			// RFC 6762 section 18.1: a multicast response carries a zero
+			// query id.
+			replies = append(replies, plannedReply{msg: newReply(0, answer, extra), link: &links[i]})
+		}
 	}
+
+	return replies
+}
+
+// isLegacyQuery reports whether the query came from a resolver that is not
+// itself listening on the mDNS port. RFC 6762 section 6.7 calls these legacy
+// unicast queries: the sender is an ordinary DNS client that happened to ask
+// the multicast group, and it will only recognise an ordinary DNS answer.
+func isLegacyQuery(from net.Addr) bool {
+	udpAddr, ok := from.(*net.UDPAddr)
+	return ok && udpAddr.Port != Port
+}
+
+// makeLegacy reshapes a response for a legacy unicast querier. It repeats the
+// question so the client can match the answer to its query, and caps every TTL
+// at ten seconds, because a legacy client caches the records without watching
+// for the goodbye that would otherwise retire them. RFC 6762 section 6.7.
+func makeLegacy(msg *dns.Msg, q dns.Question) {
+	msg.Question = []dns.Question{q}
+	capLegacyTTLs(msg.Answer)
+	capLegacyTTLs(msg.Extra)
+}
+
+func capLegacyTTLs(records []dns.RR) {
+	for _, record := range records {
+		header := record.Header()
+		// A legacy client keeps no mDNS cache, so there is nothing for the
+		// cache-flush bit to flush and its rrclass must be a plain class.
+		header.Class &^= cacheFlush
+		if header.Ttl > legacyTTL {
+			header.Ttl = legacyTTL
+		}
+	}
+}
+
+func supportedClass(qclass uint16) bool {
+	class := qclass &^ cacheFlush
+	return class == dns.ClassINET || class == dns.ClassANY
 }
 
 // answersFor returns the answer and additional sections for one question, or
