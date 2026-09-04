@@ -3033,13 +3033,23 @@ func (db *MediaDB) BrowseFileCount(
 }
 
 // BrowseDirCount returns the total number of immediate child directories under a path prefix.
+//
+// Goes through beginBrowse like every other browse entry point. It used to read
+// the pool directly, which left the one browse statement that can list a whole
+// route's directories with no timing line of its own: in #1398 its cost showed
+// only as an unexplained gap between two logged calls.
 func (db *MediaDB) BrowseDirCount(
 	ctx context.Context, opts database.BrowseDirCountOptions,
 ) (int, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	count, err := sqlBrowseDirCount(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse dir count", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return 0, err
+	}
+	defer call.finish(db)
+	count, err := sqlBrowseDirCount(ctx, call.conn, opts)
 	db.NoteCorruption(err)
 	return count, err
 }
