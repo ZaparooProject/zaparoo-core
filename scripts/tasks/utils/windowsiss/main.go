@@ -20,6 +20,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +29,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode/utf16"
 )
 
 type InnoSetupData struct {
@@ -41,6 +44,68 @@ type InnoSetupData struct {
 	// only x86 and x64 packages, so an ARM64 installer leaves the task out
 	// entirely rather than offering one that cannot work.
 	ViGEmMsi string
+	// ViGEmInstallScript is the base64 of the PowerShell that installs the
+	// driver, ready for powershell.exe -EncodedCommand.
+	ViGEmInstallScript string
+}
+
+// vigemInstallScript installs the unpacked driver, and runs elevated.
+//
+// It exists because the staging directory is writable by an unprivileged
+// process, so handing its contents straight to an elevated msiexec would let
+// anything running as the user swap the package and have Windows install it
+// with administrator rights. A directory only administrators can write is
+// therefore created and locked first, the unpacked package copied into it,
+// and only then is the package checked and installed: the order matters,
+// because a signature checked before the files are out of reach could be
+// checked on one package and acted on for another.
+//
+// The whole unpacked directory is copied, not just the MSI, because the
+// package installs files that sit beside it and fails with 1603 without them.
+//
+// It is passed to powershell.exe with -EncodedCommand rather than written to
+// disk, so that the script itself cannot be swapped the same way.
+const vigemInstallScript = `
+$ErrorActionPreference = 'Stop'
+$stage = Join-Path $env:ProgramData 'Zaparoo\vigembus-stage'
+$found = Get-ChildItem -LiteralPath $stage -Recurse -Filter '%MSI%' -File -ErrorAction SilentlyContinue |
+  Select-Object -First 1
+if (-not $found) { exit 3 }
+$safeDir = Join-Path $env:SystemRoot ('Temp\zaparoo-vigembus-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $safeDir -Force | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetSecurityDescriptorSddlForm('D:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)')
+Set-Acl -LiteralPath $safeDir -AclObject $acl
+Copy-Item -Path (Join-Path $found.Directory.FullName '*') -Destination $safeDir -Recurse -Force
+$safe = Join-Path $safeDir '%MSI%'
+$sig = Get-AuthenticodeSignature -LiteralPath $safe
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*Nefarius Software Solutions*') {
+  Remove-Item -LiteralPath $safeDir -Recurse -Force
+  exit 4
+}
+$p = Start-Process msiexec.exe -ArgumentList '/i', ('"' + $safe + '"'), '/qn', '/norestart' -Wait -PassThru
+Remove-Item -LiteralPath $safeDir -Recurse -Force
+exit $p.ExitCode
+`
+
+// vigemInstallCommand renders the elevated install script for an
+// architecture, encoded the way powershell.exe -EncodedCommand expects.
+func vigemInstallCommand(msi string) string {
+	if msi == "" {
+		return ""
+	}
+	script := strings.ReplaceAll(vigemInstallScript, "%MSI%", msi)
+	return base64.StdEncoding.EncodeToString(utf16LE(script))
+}
+
+// utf16LE encodes a string the way -EncodedCommand reads it.
+func utf16LE(s string) []byte {
+	units := utf16.Encode([]rune(s))
+	out := make([]byte, len(units)*2)
+	for i, u := range units {
+		binary.LittleEndian.PutUint16(out[i*2:], u)
+	}
+	return out
 }
 
 // vigemMsiForArch names the ViGEmBus MSI to install on a given build
@@ -98,6 +163,7 @@ func main() {
 		ArchitecturesInstall64: archInstall,
 		Year:                   strconv.Itoa(time.Now().Year()),
 		ViGEmMsi:               vigemMsiForArch(*arch),
+		ViGEmInstallScript:     vigemInstallCommand(vigemMsiForArch(*arch)),
 	}
 
 	tmpl, err := template.ParseFiles("cmd/windows/setup.iss.tmpl")

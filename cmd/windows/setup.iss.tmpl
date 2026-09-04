@@ -64,7 +64,12 @@ Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
 ; The ViGEmBus bootstrapper exits successfully and does nothing at all when
 ; its extraction target does not already exist, so the directory is created
 ; here rather than left to the /extract switch.
-Name: "{tmp}\vigembus"; Tasks: vigembus; Flags: deleteafterinstall
+;
+; It is machine-wide rather than under {tmp} because the install step may run
+; as a different administrator, whose own temp directory this is not. Nothing
+; here is trusted: the elevated step checks the package before installing it.
+Name: "{commonappdata}\Zaparoo\vigembus-stage"; Tasks: vigembus; Flags: deleteafterinstall
+Name: "{commonappdata}\Zaparoo"; Tasks: vigembus; Flags: deleteafterinstall
 
 {{end}}[Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -88,23 +93,36 @@ Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name="
   Tasks: firewall; Check: not IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
 {{if .ViGEmMsi}}; The vendor bootstrapper never returns when asked to install silently, but
 ; it does unpack reliably, so the driver goes in through its own MSI instead.
-; Unpacking needs no elevation; only the MSI does.
-Filename: "{tmp}\ViGEmBusSetup.exe"; Parameters: "/extract:""{tmp}\vigembus"""; \
+; Unpacking needs no elevation and is not trusted; installing needs both.
+Filename: "{tmp}\ViGEmBusSetup.exe"; Parameters: "/extract:""{commonappdata}\Zaparoo\vigembus-stage"""; \
   StatusMsg: "Unpacking the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
   Tasks: vigembus
+; The install runs from a script passed on the command line, not from a file,
+; because a file it read could be replaced by anything running as the user and
+; would then be run with administrator rights. The script checks the package
+; is signed by its publisher, from a copy only administrators can write.
+;
 ; The gate is elevation, not install scope: PrivilegesRequired=lowest keeps
 ; Zaparoo a per-user install even when Setup was started elevated, so
 ; IsAdminInstallMode is False there and would skip a driver this process is
 ; perfectly able to install.
-Filename: "msiexec.exe"; Parameters: "/i ""{code:ViGEmMsiPath}"" /qn /norestart"; \
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -NonInteractive -EncodedCommand {{.ViGEmInstallScript}}"; \
   StatusMsg: "Installing the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
-  Tasks: vigembus; Check: IsAdminLoggedOn and ViGEmMsiFound
+  Tasks: vigembus; Check: IsAdminLoggedOn and ViGEmMsiStaged
 ; Otherwise the driver needs an elevation prompt. Ask once, and carry on with
 ; the install if it is declined. A silent install must never raise that prompt,
 ; so an unelevated silent install cannot install the driver.
-Filename: "msiexec.exe"; Parameters: "/i ""{code:ViGEmMsiPath}"" /qn /norestart"; \
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -NonInteractive -EncodedCommand {{.ViGEmInstallScript}}"; \
   StatusMsg: "Installing the ViGEmBus driver..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
-  Tasks: vigembus; Check: (not IsAdminLoggedOn) and ViGEmMsiFound
+  Tasks: vigembus; Check: (not IsAdminLoggedOn) and ViGEmMsiStaged
+; [Dirs] deleteafterinstall will not remove a directory that still has files
+; in it, and the unpacked driver is several megabytes, so the staging tree is
+; cleared explicitly. This runs whether or not the install itself went ahead,
+; so a declined elevation prompt does not leave it behind either.
+Filename: "{cmd}"; Parameters: "/c rmdir /s /q ""{commonappdata}\Zaparoo\vigembus-stage"""; \
+  Flags: runhidden waituntilterminated; Tasks: vigembus
 {{end}}Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent unchecked
 
@@ -136,31 +154,27 @@ begin
   Result := RegValueExists(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule');
 end;
 {{if .ViGEmMsi}}
-var
-  VigemMsiCached: String;
-  VigemMsiSearched: Boolean;
-
-// FindViGEmMsi locates the unpacked driver package. The bootstrapper unpacks
-// into a folder named after its own product code, so the MSI sits one level
-// below a name this script cannot predict and has to be searched for.
-function FindViGEmMsi: String;
+// ViGEmMsiStaged reports whether the driver package was actually unpacked, so
+// that a failed unpack does not raise an elevation prompt that could not
+// achieve anything. It says nothing about whether the package can be trusted;
+// the elevated script decides that, where the answer cannot be tampered with.
+function ViGEmMsiStaged: Boolean;
 var
   Root, Candidate: String;
   Rec: TFindRec;
 begin
-  if VigemMsiSearched then
+  Result := False;
+  Root := ExpandConstant('{commonappdata}\Zaparoo\vigembus-stage');
+
+  // The bootstrapper unpacks into a folder named after its own product code,
+  // so the package sits one level below a name this script cannot predict.
+  if FileExists(Root + '\{{.ViGEmMsi}}') then
   begin
-    Result := VigemMsiCached;
+    Result := True;
     Exit;
   end;
-  VigemMsiSearched := True;
-  VigemMsiCached := '';
 
-  Root := ExpandConstant('{tmp}\vigembus');
-  Candidate := Root + '\{{.ViGEmMsi}}';
-  if FileExists(Candidate) then
-    VigemMsiCached := Candidate
-  else if FindFirst(Root + '\*', Rec) then
+  if FindFirst(Root + '\*', Rec) then
   begin
     try
       repeat
@@ -170,7 +184,7 @@ begin
           Candidate := Root + '\' + Rec.Name + '\{{.ViGEmMsi}}';
           if FileExists(Candidate) then
           begin
-            VigemMsiCached := Candidate;
+            Result := True;
             Break;
           end;
         end;
@@ -179,19 +193,5 @@ begin
       FindClose(Rec);
     end;
   end;
-
-  Result := VigemMsiCached;
-end;
-
-// ViGEmMsiFound keeps the installer from calling msiexec with an empty path,
-// and so from raising an elevation prompt that could not achieve anything.
-function ViGEmMsiFound: Boolean;
-begin
-  Result := FindViGEmMsi <> '';
-end;
-
-function ViGEmMsiPath(Param: String): String;
-begin
-  Result := FindViGEmMsi;
 end;
 {{end}}

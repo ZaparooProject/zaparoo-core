@@ -20,9 +20,13 @@
 package main
 
 import (
+	"encoding/base64"
+	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The build copies the bundled driver in only when the generated script asks
@@ -45,4 +49,53 @@ func TestViGEmMsiForArch(t *testing.T) {
 			assert.Equal(t, tc.want, vigemMsiForArch(tc.arch))
 		})
 	}
+}
+
+// decodeEncodedCommand reverses what powershell.exe -EncodedCommand expects.
+func decodeEncodedCommand(t *testing.T, encoded string) string {
+	t.Helper()
+
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(raw)%2, "UTF-16 needs an even number of bytes")
+
+	units := make([]uint16, 0, len(raw)/2)
+	for i := 0; i < len(raw); i += 2 {
+		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
+	}
+	return string(utf16.Decode(units))
+}
+
+// The elevated script is the only thing standing between a staging directory
+// an unprivileged process can write and an install with administrator rights,
+// so its guards are pinned here rather than left to review.
+func TestViGEmInstallCommandGuardsTheElevatedInstall(t *testing.T) {
+	t.Parallel()
+
+	script := decodeEncodedCommand(t, vigemInstallCommand("ViGEmBus.x64.msi"))
+
+	assert.Contains(t, script, "ViGEmBus.x64.msi", "the script must look for this architecture's package")
+	assert.Contains(t, script, "Get-AuthenticodeSignature", "the package must be checked before it is installed")
+	assert.Contains(t, script, "Nefarius Software Solutions", "the publisher must be pinned")
+	assert.Contains(t, script, "SetSecurityDescriptorSddlForm", "the copy must be locked down")
+
+	// Order is the whole point: a package checked before it is locked could be
+	// checked as one file and installed as another.
+	lock := strings.Index(script, "Set-Acl")
+	check := strings.Index(script, "Get-AuthenticodeSignature")
+	install := strings.Index(script, "msiexec")
+	require.Positive(t, lock)
+	assert.Less(t, lock, check, "the copy must be locked before it is checked")
+	assert.Less(t, check, install, "the package must be checked before it is installed")
+
+	// A single backslash: a raw Go string keeps whatever is written, and a
+	// doubled one would send PowerShell to a path that does not exist.
+	assert.Contains(t, script, `Zaparoo\vigembus-stage`)
+	assert.NotContains(t, script, `Zaparoo\\vigembus-stage`)
+}
+
+func TestViGEmInstallCommandIsEmptyWithoutAPackage(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, vigemInstallCommand(""))
 }
