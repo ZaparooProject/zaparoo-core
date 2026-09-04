@@ -150,13 +150,16 @@ func TestDarwinIntegration_StopForOtherGameIsIgnored(t *testing.T) {
 }
 
 // Nothing owns the game after shutdown, so a search that outlives it cannot
-// publish anything.
+// publish anything. Stopping twice must also be safe: the tracker's done
+// channel is closed on the way down, and closing it again would panic the
+// whole process rather than just this call.
 func TestDarwinIntegration_StopForgetsOwnership(t *testing.T) {
 	t.Parallel()
 	pi, fp := newFakeDarwinIntegration(t)
 
 	pi.claimLaunch(440, 100)
 	pi.Stop()
+	assert.NotPanics(t, pi.Stop, "a second shutdown must not close the done channel again")
 
 	assert.False(t, pi.ownsLaunch(440, 100))
 	assert.False(t, pi.trackProcessIfActive(440, 100, &os.Process{Pid: 100}))
