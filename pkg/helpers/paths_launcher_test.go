@@ -938,3 +938,52 @@ func TestResolveLaunchableLauncher_NoLaunchableLauncher(t *testing.T) {
 	_, err := ResolveLaunchableLauncher(&scanOnly, filepath.Join(tmpDir, "Rockman 4.nes"))
 	require.ErrorIs(t, err, ErrNoLauncher)
 }
+
+// TestShouldSkipScanDirectory_DuplicateLauncherIDs covers the scan-exclude
+// agreement when two launchers share an ID. The agreement is decided by what
+// every launcher sharing a root asks for, so a launcher dropped from it because
+// its cache entry was blanked would let an excluded directory be walked.
+func TestShouldSkipScanDirectory_DuplicateLauncherIDs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+
+	duplicateID := "PS2"
+	excluding := platforms.Launcher{
+		ID:                    duplicateID,
+		SystemID:              "PS2",
+		Folders:               []string{tmpDir},
+		Extensions:            []string{".iso"},
+		ScanDirectoryExcludes: []string{"updates"},
+	}
+	other := platforms.Launcher{
+		ID:                    duplicateID,
+		SystemID:              "PS2",
+		Folders:               []string{tmpDir},
+		Extensions:            []string{".chd"},
+		ScanDirectoryExcludes: []string{"updates"},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{excluding, other})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "updates")),
+		"an excluded directory must still be skipped when another launcher shares the ID")
+	assert.False(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "games")),
+		"a directory nothing excludes must still be scanned")
+}
