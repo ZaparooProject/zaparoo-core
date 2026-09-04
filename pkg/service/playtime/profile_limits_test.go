@@ -209,6 +209,54 @@ func TestCheckLimits_EnforcesPinnedLimitsAfterProfileDeactivates(t *testing.T) {
 	platform.AssertCalled(t, "StopActiveLauncher", platforms.StopForMenu)
 }
 
+// A limit that fires while the platform cannot actually end the game must not
+// record the session as over. The game is still running, so its time keeps
+// counting and the launch-time pin stays in force for the next enforcement
+// pass, which tries the stop again.
+func TestCheckLimits_KeepsSessionWhenStopFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	const profileID = "kid-a"
+
+	mockDB := testhelpers.NewMockUserDBI()
+	// Two hours already played today against a one hour pinned daily limit.
+	mockDB.On("SumMediaPlayTimeForDayByProfile", mock.AnythingOfType("time.Time"), profileID).
+		Return(int64(7200), nil).Maybe()
+	mockDB.On("SumMediaPlayTimeForDay", mock.AnythingOfType("time.Time")).
+		Return(int64(7200), nil).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("StopActiveLauncher", platforms.StopForMenu).Return(platforms.ErrStopFailed).Once()
+	platform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+
+	clock := clockwork.NewFakeClockAt(now)
+	tm := NewLimitsManager(
+		&database.Database{UserDB: mockDB}, platform, cfg, clock, newNoOpMockPlayer(),
+	)
+	t.Cleanup(tm.Stop)
+
+	tm.SetLimitsProvider(stubProvider{enabled: false, daily: 0, profileID: ""})
+	tm.sessionLimits = &pinnedLimits{
+		profileID: profileID, enabled: true, daily: time.Hour, session: time.Hour,
+	}
+	tm.sessionStart = clock.Now().Add(-90 * time.Minute)
+	tm.sessionStartReliable = true
+	tm.state = StateActive
+
+	tm.checkLimits()
+
+	platform.AssertExpectations(t)
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	assert.Equal(t, StateActive, tm.state, "a game that is still running is still being timed")
+	assert.NotNil(t, tm.sessionLimits, "the launch-time pin outlives a stop that did not happen")
+	assert.False(t, tm.sessionStart.IsZero(), "the session start is kept for the retry")
+}
+
 func TestCheckBeforeLaunch_ProviderDisabledSkipsChecks(t *testing.T) {
 	t.Parallel()
 
