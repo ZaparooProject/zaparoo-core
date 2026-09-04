@@ -35,8 +35,13 @@ func newPlatformKeyboard() (KeyboardDevice, error) {
 	return kbd, nil
 }
 
-// Virtual gamepad support on Windows needs the ViGEmBus driver and is not
-// implemented yet.
+// newPlatformGamepad plugs a virtual Xbox 360 pad into the ViGEmBus driver.
+// The driver is an optional install, so a machine without it reports that
+// rather than failing obscurely.
 func newPlatformGamepad() (GamepadDevice, error) {
-	return nil, ErrInputUnsupported
+	gpd, err := windowsinput.NewGamepad()
+	if err != nil {
+		return nil, fmt.Errorf("create windows gamepad: %w", err)
+	}
+	return gpd, nil
 }
