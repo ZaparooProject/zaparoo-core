@@ -73,10 +73,24 @@ type InputManager struct {
 	gamepadRefs   map[int]int
 	kbd           KeyboardDevice
 	gpd           GamepadDevice
+	gamepadErr    error
 	keyboardDelay time.Duration
 	gamepadDelay  time.Duration
 	sequenceMu    syncutil.Mutex
 	inputMu       syncutil.Mutex
+}
+
+// ErrGamepadDisabled reports that virtual gamepad support is switched off.
+var ErrGamepadDisabled = errors.New("virtual gamepad is disabled")
+
+// gamepadUnavailable explains why there is no gamepad to drive. A gamepad that
+// was asked for but could not be created reports the reason it failed, rather
+// than claiming it was never enabled.
+func (l *InputManager) gamepadUnavailable() error {
+	if l.gamepadErr != nil {
+		return fmt.Errorf("virtual gamepad unavailable: %w", l.gamepadErr)
+	}
+	return ErrGamepadDisabled
 }
 
 // InitDevices initializes keyboard and optionally gamepad based on config.
@@ -98,13 +112,20 @@ func (l *InputManager) InitDevices(cfg *config.Instance, gamepadEnabledByDefault
 	l.kbd = kbd
 	l.keyboardDelay = DefaultInputDelay
 
+	l.gamepadErr = nil
 	if cfg.VirtualGamepadEnabled(gamepadEnabledByDefault) {
 		gpd, err := newGpd()
 		if err != nil {
-			return fmt.Errorf("failed to create gamepad: %w", err)
+			// The virtual gamepad is optional, and on Windows it needs a
+			// driver installed separately from Core. Losing it must not stop
+			// the service from starting, so the error is kept and reported by
+			// the commands that actually need a gamepad.
+			l.gamepadErr = err
+			log.Warn().Err(err).Msg("virtual gamepad unavailable")
+		} else {
+			l.gpd = gpd
+			l.gamepadDelay = DefaultInputDelay
 		}
-		l.gpd = gpd
-		l.gamepadDelay = DefaultInputDelay
 	}
 
 	log.Debug().Msg("input devices initialized successfully")

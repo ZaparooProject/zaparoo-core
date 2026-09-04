@@ -231,7 +231,7 @@ func (l *InputManager) gamepadDownLocked(code int) error {
 		return nil
 	}
 	if l.gpd == nil {
-		return errors.New("virtual gamepad is disabled")
+		return l.gamepadUnavailable()
 	}
 	if err := l.gpd.ButtonDown(code); err != nil {
 		return fmt.Errorf("button down %d: %w", code, err)
@@ -250,7 +250,7 @@ func (l *InputManager) gamepadUpLocked(code int) error {
 		return nil
 	}
 	if l.gpd == nil {
-		return errors.New("virtual gamepad is disabled")
+		return l.gamepadUnavailable()
 	}
 	if err := l.gpd.ButtonUp(code); err != nil {
 		return fmt.Errorf("button up %d: %w", code, err)
@@ -559,7 +559,7 @@ func (l *InputManager) pressGamepadToken(name string) (retErr error) {
 	l.sequenceMu.Lock()
 	defer l.sequenceMu.Unlock()
 	if !l.gamepadDeviceEnabled() {
-		return errors.New("virtual gamepad is disabled")
+		return l.gamepadUnavailable()
 	}
 	code, ok := gamepadmap.ToGamepadCode(name)
 	if !ok {
@@ -758,7 +758,7 @@ func (l *InputManager) gamepadPressSequenceLocked(
 	session *inputSession,
 ) (retErr error) {
 	if !l.gamepadDeviceEnabled() {
-		return errors.New("virtual gamepad is disabled")
+		return l.gamepadUnavailable()
 	}
 	if interKeyDelay == 0 {
 		interKeyDelay = DefaultInterKeyDelay
