@@ -43,9 +43,12 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   Tasks: runonstartup; Flags: uninsdeletevalue
 ; Registers the cleanup of the firewall marker. The marker itself is written
 ; by MarkFirewallRuleAdded, so that it records a rule that was really created
-; rather than a task that was merely ticked.
-Root: HKCU; Subkey: "Software\Zaparoo\Core"; Flags: dontcreatekey uninsdeletekey
-Root: HKCU; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempty
+; rather than a task that was merely ticked. HKA follows the install mode: a
+; firewall rule is machine-wide, so an administrative install must record it
+; somewhere any administrator can find it again at uninstall time, not in the
+; installing user's hive.
+Root: HKA; Subkey: "Software\Zaparoo\Core"; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempty
 
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -93,12 +96,12 @@ LaunchAfterInstall=&Launch Zaparoo Core after installation
 // silent install must not show.
 procedure MarkFirewallRuleAdded;
 begin
-  RegWriteDWordValue(HKEY_CURRENT_USER, 'Software\Zaparoo\Core', 'FirewallRule', 1);
+  RegWriteDWordValue(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule', 1);
 end;
 
 // FirewallRuleWasAdded gates the uninstaller's netsh step, so an uninstall
 // only raises an elevation prompt when there is a rule to remove.
 function FirewallRuleWasAdded: Boolean;
 begin
-  Result := RegValueExists(HKEY_CURRENT_USER, 'Software\Zaparoo\Core', 'FirewallRule');
+  Result := RegValueExists(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule');
 end;
