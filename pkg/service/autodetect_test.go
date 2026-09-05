@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -36,8 +37,7 @@ import (
 func TestNewAutoDetector(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	ad := NewAutoDetector(cfg)
+	ad := NewAutoDetector(nil)
 
 	require.NotNil(t, ad)
 	assert.NotNil(t, ad.connected, "connected map should be initialized")
@@ -76,14 +76,14 @@ func TestAutoDetector_FailedPathOperations(t *testing.T) {
 	ad.setFailed("/dev/ttyUSB1")
 
 	// Get all failed paths
-	failed := ad.getFailedPaths()
+	failed := ad.suppressedPaths()
 	assert.Len(t, failed, 2)
 	assert.Contains(t, failed, "/dev/ttyUSB0")
 	assert.Contains(t, failed, "/dev/ttyUSB1")
 
 	// Clear failed path
 	ad.ClearFailedPath("/dev/ttyUSB0")
-	failed = ad.getFailedPaths()
+	failed = ad.suppressedPaths()
 	assert.Len(t, failed, 1)
 	assert.Contains(t, failed, "/dev/ttyUSB1")
 }
@@ -97,13 +97,13 @@ func TestAutoDetector_FailedPathsAreSharedAcrossDrivers(t *testing.T) {
 	// no driver should retry it until it's cleared
 	ad.setFailed("/dev/ttyUSB0")
 
-	failed := ad.getFailedPaths()
+	failed := ad.suppressedPaths()
 	assert.Len(t, failed, 1)
 	assert.Contains(t, failed, "/dev/ttyUSB0")
 
 	// Clear and verify
 	ad.ClearFailedPath("/dev/ttyUSB0")
-	failed = ad.getFailedPaths()
+	failed = ad.suppressedPaths()
 	assert.Empty(t, failed)
 }
 
@@ -414,7 +414,7 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 
 	require.NoError(t, err) // DetectReaders doesn't return errors for individual failures
 	// Path should be marked as failed
-	failed := ad.getFailedPaths()
+	failed := ad.suppressedPaths()
 	assert.Contains(t, failed, "/dev/ttyUSB0")
 	// Regression: reader must be closed when Open fails, not left running.
 	mockReader.AssertCalled(t, "Close")
@@ -449,7 +449,7 @@ func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
 
 	require.NoError(t, err)
 	// Path should be marked as failed
-	failed := ad.getFailedPaths()
+	failed := ad.suppressedPaths()
 	assert.Contains(t, failed, "/dev/ttyUSB0")
 	mockReader.AssertCalled(t, "Close")
 }
@@ -600,8 +600,8 @@ func TestAutoDetector_LogDetectionResults_WithFailedAttempts(t *testing.T) {
 	// Should have logged (heartbeat triggered on first call)
 	assert.False(t, ad.lastLogTime.IsZero())
 
-	// Summary should include failed count
-	assert.Contains(t, ad.lastDetectionSummary, "total_failed:2")
+	// Summary should name the paths held out of detection
+	assert.Contains(t, ad.lastDetectionSummary, "suppressed:/dev/ttyUSB0,/dev/ttyUSB1")
 }
 
 func TestAutoDetector_ConcurrentAccess(t *testing.T) {
@@ -629,7 +629,7 @@ func TestAutoDetector_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for range 100 {
 			_ = ad.isConnected("/dev/ttyUSB0")
-			_ = ad.getFailedPaths()
+			_ = ad.suppressedPaths()
 		}
 		done <- struct{}{}
 	}()
@@ -710,7 +710,7 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 
 	// Pre-mark as failed
 	ad.setFailed("/dev/ttyUSB0")
-	require.Len(t, ad.getFailedPaths(), 1)
+	require.Len(t, ad.suppressedPaths(), 1)
 
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{
@@ -743,7 +743,7 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 
 	require.NoError(t, err)
 	// Failed should be cleared after successful connection
-	assert.Empty(t, ad.getFailedPaths())
+	assert.Empty(t, ad.suppressedPaths())
 
 	st.StopService()
 	close(st.Notifications)
@@ -759,7 +759,7 @@ func TestAutoDetector_GetFailedPaths_AnyPath(t *testing.T) {
 	ad.setFailed("some-path")
 	ad.setFailed("/dev/ttyUSB0")
 
-	failed := ad.getFailedPaths()
+	failed := ad.suppressedPaths()
 	assert.Len(t, failed, 2)
 	assert.Contains(t, failed, "some-path")
 	assert.Contains(t, failed, "/dev/ttyUSB0")
@@ -898,7 +898,7 @@ func TestAutoDetector_ReconnectAfterUnplugReplug(t *testing.T) {
 
 	// Simulate a failed connection attempt (e.g., device briefly unavailable during plug-in)
 	ad.setFailed(path)
-	require.Contains(t, ad.getFailedPaths(), path, "path should be in failed list after failed connection")
+	require.Contains(t, ad.suppressedPaths(), path, "path should be in failed list after failed connection")
 
 	// Simulate reader disconnect (unplug) - this is what readers.go does when pruning
 	// disconnected readers. Previously this used ClearFailedConnection(readerID) with
@@ -907,13 +907,13 @@ func TestAutoDetector_ReconnectAfterUnplugReplug(t *testing.T) {
 	ad.ClearFailedPath(path)
 
 	// Verify the path is cleared from failed list
-	assert.NotContains(t, ad.getFailedPaths(), path,
+	assert.NotContains(t, ad.suppressedPaths(), path,
 		"path should be cleared from failed list after disconnect, allowing reconnection on replug")
 
 	// Simulate replug - a new detection cycle should be able to try this path again
 	// If the bug were present, the path would still be in the failed list and
 	// auto-detect would skip it forever
-	failedPaths := ad.getFailedPaths()
+	failedPaths := ad.suppressedPaths()
 	for _, p := range failedPaths {
 		if p == path {
 			t.Fatal("REGRESSION: path still in failed list after disconnect - reader would never reconnect")
@@ -999,4 +999,95 @@ func TestAutoDetector_ExcludeListFormat_Regression(t *testing.T) {
 	st.StopService()
 	close(st.Notifications)
 	<-done
+}
+
+func TestAutoDetector_FailedPathBackoffExpires(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: a path that had never connected was excluded from
+	// auto-detect for the whole process lifetime, so one failed open at boot
+	// ended auto-detect for that device until Core restarted. See #1400.
+	clock := clockwork.NewFakeClock()
+	ad := NewAutoDetector(clock)
+
+	ad.setFailed("/dev/ttyUSB0")
+	assert.Equal(t, []string{"/dev/ttyUSB0"}, ad.suppressedPaths())
+
+	clock.Advance(failedPathInitialBackoff)
+	assert.Empty(t, ad.suppressedPaths(), "the path must be retried once its backoff expires")
+}
+
+func TestAutoDetector_FailedPathBackoffEscalates(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	ad := NewAutoDetector(clock)
+
+	ad.setFailed("/dev/ttyUSB0")
+	clock.Advance(failedPathInitialBackoff)
+	require.Empty(t, ad.suppressedPaths())
+
+	// A second failure waits longer than the first, so a port that never
+	// answers is not retried every tick forever.
+	ad.setFailed("/dev/ttyUSB0")
+	clock.Advance(failedPathInitialBackoff)
+	assert.Equal(t, []string{"/dev/ttyUSB0"}, ad.suppressedPaths())
+
+	clock.Advance(failedPathInitialBackoff)
+	assert.Empty(t, ad.suppressedPaths())
+}
+
+func TestAutoDetector_FailedPathBackoffIsCapped(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	ad := NewAutoDetector(clock)
+
+	for range 20 {
+		ad.setFailed("/dev/ttyUSB0")
+		clock.Advance(failedPathMaxBackoff)
+	}
+
+	ad.setFailed("/dev/ttyUSB0")
+	clock.Advance(failedPathMaxBackoff)
+	assert.Empty(t, ad.suppressedPaths(), "backoff must not grow past failedPathMaxBackoff")
+}
+
+func TestAutoDetector_IgnoresPathlessConnectionStrings(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: libnfc's ACR122 fallback returns the bare
+	// "libnfcauto:", so the path is empty. Recording that made one pathless
+	// driver's failure apply to every other pathless driver, and put an entry
+	// no device owned into the detection summary. Observed on a MiSTer as
+	// suppressed_paths:[""].
+	clock := clockwork.NewFakeClock()
+	ad := NewAutoDetector(clock)
+
+	ad.setFailed("")
+	assert.Empty(t, ad.suppressedPaths(), "an empty path is not a device to suppress")
+
+	ad.setConnected("")
+	assert.False(t, ad.isConnected(""),
+		"an empty path must never count as connected, or it suppresses other pathless drivers")
+
+	// A real path alongside it still behaves normally.
+	ad.setFailed("/dev/ttyUSB0")
+	assert.Equal(t, []string{"/dev/ttyUSB0"}, ad.suppressedPaths())
+}
+
+func TestAutoDetector_UpdateConnectedSkipsPathlessReaders(t *testing.T) {
+	t.Parallel()
+
+	ad := NewAutoDetector(nil)
+
+	pathless := mocks.NewMockReader()
+	pathless.On("Path").Return("")
+	withPath := mocks.NewMockReader()
+	withPath.On("Path").Return("/dev/ttyUSB0")
+
+	ad.updateConnectedFromReaders([]readers.Reader{pathless, withPath})
+
+	assert.False(t, ad.isConnected(""))
+	assert.True(t, ad.isConnected("/dev/ttyUSB0"))
 }

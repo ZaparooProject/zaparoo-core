@@ -274,6 +274,32 @@ func connectReaders(
 	return nil
 }
 
+// resolveAutoDetector keeps the detector in step with readers.auto_detect,
+// which the API can change at any time.
+//
+// The detector used to be built once, before the loop started, and only if
+// auto-detect happened to be on then. Turning the setting off still took effect
+// immediately, but turning it on did nothing until Core was restarted — so a
+// user who found the toggle in the app saw it do nothing at all. Dropping the
+// detector when the setting goes off also means re-enabling starts from clean
+// connected and failed state rather than from whatever the last run left.
+func resolveAutoDetector(
+	cfg *config.Instance,
+	current *AutoDetector,
+	clock clockwork.Clock,
+) *AutoDetector {
+	switch enabled := cfg.AutoDetect(); {
+	case enabled && current == nil:
+		log.Info().Msg("reader auto-detect enabled")
+		return NewAutoDetector(clock)
+	case !enabled && current != nil:
+		log.Info().Msg("reader auto-detect disabled")
+		return nil
+	default:
+		return current
+	}
+}
+
 func cancelTimedExit(exitTimer clockwork.Timer, exitGeneration *atomic.Uint64) bool {
 	exitGeneration.Add(1)
 	return exitTimer != nil && exitTimer.Stop()
@@ -501,9 +527,6 @@ func readerManager(
 	}
 
 	var autoDetector *AutoDetector
-	if svc.Config.AutoDetect() {
-		autoDetector = NewAutoDetector(svc.Config)
-	}
 
 	readerTicker := time.NewTicker(1 * time.Second)
 
@@ -542,6 +565,8 @@ func readerManager(
 					}
 					lastReaderCount = 0
 				}
+
+				autoDetector = resolveAutoDetector(svc.Config, autoDetector, clock)
 
 				readerConnectAttempts++
 				rs := svc.State.ListReaders()
