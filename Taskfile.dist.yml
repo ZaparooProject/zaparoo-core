@@ -141,6 +141,8 @@ tasks:
           "FuzzParseTitleFromFilename ./pkg/database/tags"
           "FuzzExtractSpecialPatterns ./pkg/database/tags"
           "FuzzParseLine ./pkg/readers/rs232barcode"
+          "FuzzParseChunk ./pkg/bluetooth/apigatt"
+          "FuzzReassembler ./pkg/bluetooth/apigatt"
           "FuzzDecodeURIIfNeeded ./pkg/helpers"
           "FuzzIsValidExtension ./pkg/helpers"
           "FuzzFilenameFromPath ./pkg/helpers"

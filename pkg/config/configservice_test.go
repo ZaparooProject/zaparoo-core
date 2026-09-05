@@ -122,6 +122,60 @@ func TestDiscoveryEnabled(t *testing.T) {
 	}
 }
 
+func TestBLEEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		enabled *bool
+		name    string
+		want    bool
+	}{
+		{name: "nil returns false (default disabled)", enabled: nil, want: false},
+		{name: "true returns true", enabled: boolPtr(true), want: true},
+		{name: "false returns false", enabled: boolPtr(false), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Service: Service{
+						BLE: BLE{Enabled: tt.enabled},
+					},
+				},
+			}
+
+			assert.Equal(t, tt.want, inst.BLEEnabled())
+		})
+	}
+}
+
+func TestSetBLEEnabled(t *testing.T) {
+	t.Parallel()
+
+	inst := &Instance{}
+	assert.False(t, inst.BLEEnabled())
+	inst.SetBLEEnabled(true)
+	assert.True(t, inst.BLEEnabled())
+	inst.SetBLEEnabled(false)
+	assert.False(t, inst.BLEEnabled())
+}
+
+func TestBLEName(t *testing.T) {
+	t.Parallel()
+
+	inst := &Instance{}
+	assert.Empty(t, inst.BLEName(), "unset name falls back to the discovery name")
+
+	inst = &Instance{vals: Values{Service: Service{BLE: BLE{Name: "Lounge MiSTer"}}}}
+	assert.Equal(t, "Lounge MiSTer", inst.BLEName())
+
+	inst.SetBLEName("Den")
+	assert.Equal(t, "Den", inst.BLEName())
+}
+
 func TestDiscoveryInstanceName(t *testing.T) {
 	t.Parallel()
 

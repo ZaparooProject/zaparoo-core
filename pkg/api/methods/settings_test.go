@@ -327,6 +327,56 @@ func TestHandleSettingsUpdate_RemoteMemberCannotChangeProfileGate(t *testing.T) 
 	require.ErrorIs(t, err, ErrForbidden)
 }
 
+func TestHandleSettings_ReportsBLESetting(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Service: config.Service{BLE: config.BLE{Enabled: &enabled}},
+	})
+	require.NoError(t, err)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	result, err := HandleSettings(requests.RequestEnv{Platform: mockPlatform, Config: cfg, State: appState})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.True(t, resp.BLEEnabled)
+}
+
+func TestHandleSettingsUpdate_BLEEnabled(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	params, err := json.Marshal(models.UpdateSettingsParams{BLEEnabled: &enabled})
+	require.NoError(t, err)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	require.False(t, cfg.BLEEnabled())
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Config:  cfg,
+		IsLocal: true,
+		Params:  params,
+	})
+	require.NoError(t, err)
+	assert.True(t, cfg.BLEEnabled())
+
+	disabled := false
+	params, err = json.Marshal(models.UpdateSettingsParams{BLEEnabled: &disabled})
+	require.NoError(t, err)
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Config:  cfg,
+		IsLocal: true,
+		Params:  params,
+	})
+	require.NoError(t, err)
+	assert.False(t, cfg.BLEEnabled())
+}
+
 func TestHandleSettingsUpdate_EncryptionLocalOnly(t *testing.T) {
 	t.Parallel()
 

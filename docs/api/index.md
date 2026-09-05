@@ -95,6 +95,39 @@ data: {"jsonrpc":"2.0","method":"media.started","params":{"systemId":"NES","syst
 
 SSE connections are long-lived and will continue receiving events until the client disconnects. To call methods, use HTTP POST to the standard API endpoint alongside the SSE connection.
 
+### Bluetooth LE
+
+On Linux platforms with a Bluetooth adapter, Core can also serve the API over Bluetooth Low Energy, so the app works with no shared Wi-Fi at all: discovery, pairing and every method run over the one Bluetooth connection. The transport is off by default; enable it with the `bleEnabled` setting (`[service.ble] enabled = true` in the config file). Core is the peripheral and the client is the central.
+
+Core advertises a primary service and the local name from `[service.ble] name`, falling back to the mDNS discovery instance name. The name is read when advertising starts, so a rename shows up after the transport restarts:
+
+| Characteristic | UUID                                   | Properties                     | Purpose                                                                 |
+| -------------- | -------------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| Service        | `0da70001-b359-443b-836f-477d34b6a638` |                                | Primary service, also in the advertisement so clients can filter on it. |
+| RX             | `0da70002-b359-443b-836f-477d34b6a638` | write, write without response  | Chunks from the client to Core.                                         |
+| TX             | `0da70003-b359-443b-836f-477d34b6a638` | notify                         | Chunks from Core to the client.                                         |
+| Info           | `0da70004-b359-443b-836f-477d34b6a638` | read                           | JSON description of the endpoint, readable before authenticating.       |
+
+Info returns `{"v": 1, "deviceId": "<device id>", "maxMessage": 262144, "preferredMtu": 512}`. `deviceId` lets a client pick the stored credentials for this device before it speaks; peer addresses are not stable enough for that. Clients should request the largest ATT MTU the platform allows.
+
+**Framing.** A message is one complete WebSocket-equivalent frame: an encrypted frame, or one of the plaintext pairing requests below. It is split into chunks that fit `MTU - 3` bytes and written to RX one after another; Core sends replies the same way on TX. Every chunk starts with a header:
+
+```text
+byte 0    flags   bits 7..4 = protocol version (1), bit 1 = LAST, bit 0 = FIRST, bits 3..2 reserved (0)
+byte 1    seq     0 on the FIRST chunk of a message, +1 per chunk, wrapping at 256
+byte 2-3  tag     session tag, big-endian
+byte 4-7  length  total message length, big-endian, FIRST chunk only
+payload           at least one byte
+```
+
+The client picks a random non-zero 16-bit tag for the connection and sends it on every chunk. Core stamps the same tag on every chunk it sends that client, and clients must drop TX chunks carrying any other tag, because the radio delivers notifications to every subscribed central: every connected central sees every TX chunk, including pairing replies, and only the per-session encryption keeps another client's traffic unreadable. A message may not exceed `maxMessage` bytes in either direction; a response that would is replaced by error `-32004` (`response too large for transport`) whose `data` carries the `limit` and `size`. Chunks may reach Core slightly out of order; a chunk more than 128 places ahead of the one expected, a repeated sequence number, or a length that does not add up ends the connection.
+
+**Pairing.** Pairing runs the same exchange as the [HTTP pairing endpoints](./encryption#pairing-flow), carried as two plaintext JSON-RPC requests that exist only on this transport: `pair.start` with params `{"pake": "<base64 PAKE message A>", "name": "<client name>"}` returning `{"session": "...", "pake": "<base64 PAKE message B>"}`, then `pair.finish` with params `{"session": "...", "confirm": "<base64 client HMAC>"}` returning `{"authToken": "...", "clientId": "...", "confirm": "<base64 server HMAC>"}`. The pairing PIN is still generated and shown on the device by `clients.pair.start`. Failures return error `-32005` (`pairing failed`) whose `data` carries the HTTP `status` and `message` the endpoints would have used, including `429` when a connection sends more than a couple of pairing requests per second.
+
+**Sessions.** A connection accepts only pairing requests and an [encrypted first frame](./encryption#first-frame-client--server); plaintext method calls end the connection, and there is no localhost or legacy access over Bluetooth. The encrypted frames are exactly the WebSocket ones with the AAD transport label `ble` (see [AAD](./encryption#aad)). After pairing, the client sends its encrypted first frame on the same connection. An unauthenticated connection that stays silent for two minutes is dropped, and an authenticated one that sends nothing for five minutes is dropped too, so send the `ping` heartbeat at least once a minute; it works unchanged over Bluetooth. Once authenticated, notifications arrive on TX like WebSocket notifications, except that `media.indexing` and `media.scraping` are skipped while the link is backed up.
+
+**Readers.** The same adapter also serves the `simpleserial_ble` reader driver, which connects to a configured Nordic UART Service device as a central. A configured reader that cannot be reached scans for it with pauses growing from one to thirty seconds; scanning shares the radio with advertising, so the device can be a little harder for the app to discover until the reader turns up.
+
 ### JSON Payloads
 
 Server and clients communicate back and forth using JSON payloads, following the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.

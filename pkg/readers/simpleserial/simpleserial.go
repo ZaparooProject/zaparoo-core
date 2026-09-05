@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -32,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/simpleproto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -71,55 +71,20 @@ func (*SimpleSerialReader) IDs() []string {
 	return []string{"simpleserial", "simple_serial"}
 }
 
+// parseLine parses one protocol line and applies a removable= argument to
+// the reader's capabilities. A nil token with a nil error means the line
+// carried nothing to act on.
 func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
-	line = strings.TrimSpace(line)
-	line = strings.Trim(line, "\r")
-
-	if line == "" {
-		return nil, nil //nolint:nilnil // nil response means empty line, not an error
+	parsed, ok := simpleproto.ParseLine(line, r.ReaderID())
+	if !ok {
+		return nil, nil //nolint:nilnil // nil response means no token on this line, not an error
 	}
-
-	if !strings.HasPrefix(line, "SCAN\t") {
-		return nil, nil //nolint:nilnil // nil response means invalid format, not an error
+	if parsed.Removable != nil {
+		r.mu.Lock()
+		r.removable = *parsed.Removable
+		r.mu.Unlock()
 	}
-
-	args := line[5:]
-	if args == "" {
-		return nil, nil //nolint:nilnil // nil response means no args, not an error
-	}
-
-	t := tokens.Token{
-		Data:     line,
-		ScanTime: time.Now(),
-		Source:   tokens.SourceReader,
-		ReaderID: r.ReaderID(),
-	}
-
-	ps := strings.Split(args, "\t")
-	hasArg := false
-	for i := 0; i < len(ps); i++ {
-		ps[i] = strings.TrimSpace(ps[i])
-		switch {
-		case strings.HasPrefix(ps[i], "uid="):
-			t.UID = ps[i][4:]
-			hasArg = true
-		case strings.HasPrefix(ps[i], "text="):
-			t.Text = ps[i][5:]
-			hasArg = true
-		case strings.HasPrefix(ps[i], "removable="):
-			r.mu.Lock()
-			r.removable = ps[i][10:] != "no"
-			r.mu.Unlock()
-			hasArg = true
-		}
-	}
-
-	// if there are no named arguments, whole args becomes text
-	if !hasArg {
-		t.Text = args
-	}
-
-	return &t, nil
+	return parsed.Token, nil
 }
 
 func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {

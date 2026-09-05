@@ -167,6 +167,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
+            dbus \
             libnfc-dev \
             libpcsclite-dev
 
@@ -290,6 +291,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
+            dbus \
             libnfc-dev \
             libpcsclite-dev
 

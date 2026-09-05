@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -108,6 +109,21 @@ var JSONRPCErrorInternalError = models.ErrorObject{
 var JSONRPCErrorServerBusy = models.ErrorObject{
 	Code:    -32000,
 	Message: "Server busy",
+}
+
+// JSONRPCErrorResponseTooLarge replaces a response the transport cannot
+// carry. Data holds the limit and the size that exceeded it.
+var JSONRPCErrorResponseTooLarge = models.ErrorObject{
+	Code:    -32004,
+	Message: "response too large for transport",
+}
+
+// JSONRPCErrorPairingFailed is returned by the pre-auth pairing methods.
+// Data holds the HTTP status the pairing endpoints would have used and its
+// public message, so clients can share their handling.
+var JSONRPCErrorPairingFailed = models.ErrorObject{
+	Code:    -32005,
+	Message: "pairing failed",
 }
 
 func makeJSONRPCError(code int, message string) models.ErrorObject {
@@ -614,7 +630,7 @@ func logWebSocketTransportTiming(
 }
 
 // sendWSResponse marshals a method result and sends it to the client.
-func sendWSResponse(session *melody.Session, id models.RPCID, result any) error {
+func sendWSResponse(session sessionWriter, id models.RPCID, result any) error {
 	logSafeResponse(result)
 
 	resp := models.ResponseObject{
@@ -642,7 +658,7 @@ func sendWSResponse(session *melody.Session, id models.RPCID, result any) error 
 }
 
 // sendWSError sends a JSON-RPC error object response to the client.
-func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorObject) error {
+func sendWSError(session sessionWriter, id models.RPCID, errObj models.ErrorObject) error {
 	log.Debug().Int("code", errObj.Code).Str("message", errObj.Message).Msg("sending error")
 
 	resp := models.ResponseErrorObject{
@@ -1114,7 +1130,7 @@ func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	}
 	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
 		logWSWriteError(err, "broadcasting notification")
-		closeMelodySession(s)
+		closeSession(s)
 	}
 }
 
@@ -1278,6 +1294,10 @@ func handleWSMessage(
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	tracker RequestTracker,
 ) func(session *melody.Session, msg []byte) {
+	deps := newRequestDeps(
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
+		player, playbackManager, indexPauser, scrapePauser, backupPauser,
+	)
 	return func(session *melody.Session, msg []byte) {
 		trackerActive := false
 		defer func() {
@@ -1337,7 +1357,7 @@ func handleWSMessage(
 			log.Warn().
 				Str("remote_addr", session.Request.RemoteAddr).
 				Msg("ws: rejecting encrypted connection from unparseable remote addr")
-			closeMelodySession(session)
+			closeSession(session)
 			endTrackedRequest()
 			return
 		}
@@ -1370,35 +1390,16 @@ func handleWSMessage(
 			if err := dispatcher.enqueuePong(cs, tracker); err != nil {
 				logWSWriteError(err, "queueing pong")
 				endTrackedRequest()
-				closeMelodySession(session)
+				closeSession(session)
 				return
 			}
 			handoffTrackedRequest()
 			return
 		}
 
-		env := requests.RequestEnv{
-			Context:         st.GetContext(),
-			Platform:        platform,
-			Config:          cfg,
-			State:           st,
-			Database:        db,
-			LimitsManager:   limitsManager,
-			Profiles:        profilesSvc,
-			LauncherCache:   helpers.GlobalLauncherCache,
-			Player:          player,
-			PlaybackManager: playbackManager,
-			UI:              st.UIEvents(),
-			TokenQueue:      inTokenQueue,
-			ConfirmQueue:    confirmQueue,
-			IndexPauser:     indexPauser,
-			ScrapePauser:    scrapePauser,
-			BackupPauser:    backupPauser,
-			InputSession:    dispatcher.inputSession,
-			PlatformID:      platformID,
-			IsLocal:         isLocal,
-			ClientID:        session.Request.RemoteAddr,
-		}
+		env := deps.newRequestEnv(
+			st.GetContext(), dispatcher.inputSession, session.Request.RemoteAddr, platformID, isLocal,
+		)
 		if cs != nil {
 			env.ClientRole = cs.ClientRole()
 		}
@@ -1438,12 +1439,82 @@ func handleWSMessage(
 				session, cs, models.NullRPCID, JSONRPCErrorInternalError,
 			); sendErr != nil {
 				logWSWriteError(sendErr, "error sending queue failure response")
-				closeMelodySession(session)
+				closeSession(session)
 			}
 			return
 		}
 		handoffTrackedRequest()
 	}
+}
+
+// frameOutcome classifies what decryptFrame found on the wire.
+type frameOutcome uint8
+
+const (
+	// frameDecrypted is a subsequent frame on an established session.
+	frameDecrypted frameOutcome = iota + 1
+	// frameEstablished is an encrypted first frame; on success a new session
+	// was created.
+	frameEstablished
+	// frameUnsupportedVersion is an encrypted first frame with a protocol
+	// version this server does not speak.
+	frameUnsupportedVersion
+	// framePlaintext is a frame that is not encrypted at all.
+	framePlaintext
+)
+
+// decryptedFrame is what decryptFrame found on the wire. session is set only
+// when an encrypted first frame established a new session.
+type decryptedFrame struct {
+	session   *apimiddleware.ClientSession
+	plaintext []byte
+	outcome   frameOutcome
+}
+
+// decryptFrame is the transport-agnostic half of the encryption decision:
+// decrypt on an established session, establish a session from an encrypted
+// first frame, or report plaintext. Whether plaintext is acceptable and what
+// to do with the connection on failure are the caller's decisions.
+//
+// The outcome is always set, even on error, so the caller can tell a frame
+// that failed to decrypt from one that failed to establish a session.
+func decryptFrame(
+	cs *apimiddleware.ClientSession,
+	msg []byte,
+	encGateway *apimiddleware.EncryptionGateway,
+	sourceIP string,
+	transport string,
+) (decryptedFrame, error) {
+	if cs != nil {
+		var frame apimiddleware.EncryptedFrame
+		if unmarshalErr := json.Unmarshal(msg, &frame); unmarshalErr != nil || frame.Ciphertext == "" {
+			return decryptedFrame{outcome: frameDecrypted},
+				fmt.Errorf("%w: malformed encrypted frame", apimiddleware.ErrInvalidFrame)
+		}
+		pt, decryptErr := cs.DecryptSubsequent(frame)
+		if decryptErr != nil {
+			return decryptedFrame{outcome: frameDecrypted}, fmt.Errorf("decrypt frame: %w", decryptErr)
+		}
+		return decryptedFrame{plaintext: pt, outcome: frameDecrypted}, nil
+	}
+
+	if !apimiddleware.IsEncryptedFirstFrame(msg) {
+		return decryptedFrame{plaintext: msg, outcome: framePlaintext}, nil
+	}
+
+	var frame apimiddleware.EncryptedFirstFrame
+	if unmarshalErr := json.Unmarshal(msg, &frame); unmarshalErr != nil {
+		return decryptedFrame{outcome: frameEstablished},
+			fmt.Errorf("%w: malformed encrypted first frame", apimiddleware.ErrInvalidFrame)
+	}
+	if frame.Version != apimiddleware.EncryptionProtoVersion {
+		return decryptedFrame{outcome: frameUnsupportedVersion}, apimiddleware.ErrUnsupportedVersion
+	}
+	newCS, pt, establishErr := encGateway.EstablishSessionForTransport(frame, sourceIP, transport)
+	if establishErr != nil {
+		return decryptedFrame{outcome: frameEstablished}, fmt.Errorf("establish session: %w", establishErr)
+	}
+	return decryptedFrame{plaintext: pt, session: newCS, outcome: frameEstablished}, nil
 }
 
 // decryptIncomingFrame is the encryption decision point for WebSocket frames.
@@ -1466,72 +1537,56 @@ func decryptIncomingFrame(
 	isLocal bool,
 	sourceIP string,
 ) (plaintext []byte, cs *apimiddleware.ClientSession, ok bool) {
-	// Already-established encrypted session: decrypt with the stored state.
-	if cs = getClientSession(session); cs != nil {
-		var frame apimiddleware.EncryptedFrame
-		if err := json.Unmarshal(msg, &frame); err != nil || frame.Ciphertext == "" {
-			log.Warn().Err(err).Msg("ws: malformed encrypted frame on established session")
-			closeMelodySession(session)
-			return nil, nil, false
-		}
-		pt, err := cs.DecryptSubsequent(frame)
+	cs = getClientSession(session)
+	frame, err := decryptFrame(cs, msg, encGateway, sourceIP, apimiddleware.TransportWebSocket)
+	switch frame.outcome {
+	case frameDecrypted:
 		if err != nil {
 			log.Warn().Err(err).Msg("ws: decryption failed on established session")
-			closeMelodySession(session)
+			closeSession(session)
 			return nil, nil, false
 		}
-		return pt, cs, true
-	}
+		return frame.plaintext, cs, true
 
-	// No session yet: detect whether this is an encrypted first frame.
-	if apimiddleware.IsEncryptedFirstFrame(msg) {
-		var frame apimiddleware.EncryptedFirstFrame
-		if err := json.Unmarshal(msg, &frame); err != nil {
-			log.Warn().Err(err).Msg("ws: malformed encrypted first frame")
-			closeMelodySession(session)
-			return nil, nil, false
-		}
-		if frame.Version != apimiddleware.EncryptionProtoVersion {
-			data, marshalErr := unsupportedEncryptionVersionResponse()
-			if marshalErr == nil {
-				sendWSPlaintext(session, data)
-			}
-			closeMelodySession(session)
-			return nil, nil, false
-		}
-		newSession, pt, err := encGateway.EstablishSession(frame, sourceIP)
+	case frameEstablished:
 		if err != nil {
 			log.Warn().Err(err).Msg("ws: failed to establish encrypted session")
-			closeMelodySession(session)
+			closeSession(session)
 			return nil, nil, false
 		}
-		setClientSession(session, newSession)
+		setClientSession(session, frame.session)
 		settleWebSocketTransport(session, webSocketAuthEncrypted, false)
-		return pt, newSession, true
-	}
+		return frame.plaintext, frame.session, true
 
-	// Plaintext frame: only allowed when encryption is disabled, or from
-	// loopback (localhost is always exempt so the TUI / local clients keep
-	// working without pairing).
-	if encryptionEnabled && !isLocal {
-		data, marshalErr := encryptionRequiredErrorResponse()
+	case frameUnsupportedVersion:
+		data, marshalErr := unsupportedEncryptionVersionResponse()
 		if marshalErr == nil {
 			sendWSPlaintext(session, data)
 		}
-		closeMelodySession(session)
+		closeSession(session)
 		return nil, nil, false
-	}
-	// The client spoke plaintext, so the transport mode is now settled and
-	// anything queued while it was unknown can be released in the clear.
-	settleWebSocketTransport(session, webSocketAuthPlaintext, false)
-	return msg, nil, true
-}
 
-// closeMelodySession best-effort closes a melody WebSocket session, logging
-// any error at debug level (the connection may already be closed).
-func closeMelodySession(session *melody.Session) {
-	if err := session.Close(); err != nil {
-		log.Debug().Err(err).Msg("ws: failed to close session")
+	case framePlaintext:
+		// Plaintext frame: only allowed when encryption is disabled, or from
+		// loopback (localhost is always exempt so the TUI / local clients keep
+		// working without pairing).
+		if encryptionEnabled && !isLocal {
+			data, marshalErr := encryptionRequiredErrorResponse()
+			if marshalErr == nil {
+				sendWSPlaintext(session, data)
+			}
+			closeSession(session)
+			return nil, nil, false
+		}
+		// The client spoke plaintext, so the transport mode is now settled and
+		// anything queued while it was unknown can be released in the clear.
+		settleWebSocketTransport(session, webSocketAuthPlaintext, false)
+		return msg, nil, true
+
+	default:
+		log.Error().Uint8("outcome", uint8(frame.outcome)).Msg("ws: unhandled frame outcome")
+		closeSession(session)
+		return nil, nil, false
 	}
 }
 
@@ -1564,7 +1619,7 @@ func writePong(writeFn func([]byte) error, cs *apimiddleware.ClientSession) erro
 // SendEncryptedFrame so concurrent writers cannot reorder counters on the
 // wire.
 func sendWSEncryptedResponse(
-	session *melody.Session,
+	session sessionWriter,
 	cs *apimiddleware.ClientSession,
 	id models.RPCID,
 	result any,
@@ -1599,7 +1654,7 @@ func sendWSEncryptedResponse(
 // the per-session mutex via SendEncryptedFrame so concurrent writers
 // cannot reorder counters on the wire.
 func sendWSEncryptedError(
-	session *melody.Session,
+	session sessionWriter,
 	cs *apimiddleware.ClientSession,
 	id models.RPCID,
 	rpcErr models.ErrorObject,
@@ -1646,6 +1701,10 @@ func handlePostRequest(
 	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
+	deps := newRequestDeps(
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
+		player, playbackManager, indexPauser, scrapePauser, backupPauser,
+	)
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Bracket the entire request lifecycle (read body → dispatch →
 		// marshal → Write → Flush → AfterWrite) so the idle scheduler
@@ -1697,28 +1756,8 @@ func handlePostRequest(
 		if !isLocal {
 			platformID = platform.ID()
 		}
-		env := requests.RequestEnv{
-			Context:             reqCtx,
-			Platform:            platform,
-			Config:              cfg,
-			State:               st,
-			Database:            db,
-			LimitsManager:       limitsManager,
-			Profiles:            profilesSvc,
-			LauncherCache:       helpers.GlobalLauncherCache,
-			Player:              player,
-			PlaybackManager:     playbackManager,
-			UI:                  st.UIEvents(),
-			TokenQueue:          inTokenQueue,
-			ConfirmQueue:        confirmQueue,
-			IndexPauser:         indexPauser,
-			ScrapePauser:        scrapePauser,
-			BackupPauser:        backupPauser,
-			PlatformID:          platformID,
-			IsLocal:             isLocal,
-			ClientID:            r.RemoteAddr,
-			APIKeyAuthenticated: apimiddleware.APIKeyAuthenticated(r),
-		}
+		env := deps.newRequestEnv(reqCtx, nil, r.RemoteAddr, platformID, isLocal)
+		env.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(r)
 
 		result := processRequestObject(methodMap, env, body)
 		if !result.ShouldReply {
@@ -1784,6 +1823,19 @@ func handlePostRequest(
 	}
 }
 
+// ServerOption configures optional parts of the API server.
+type ServerOption func(*serverOptions)
+
+type serverOptions struct {
+	bluetooth *bluetooth.Manager
+}
+
+// WithBluetooth serves the API over Bluetooth Low Energy whenever the
+// manager has an adapter ready.
+func WithBluetooth(m *bluetooth.Manager) ServerOption {
+	return func(o *serverOptions) { o.bluetooth = m }
+}
+
 // Start starts the API web server and blocks until it shuts down.
 func Start(
 	platform platforms.Platform,
@@ -1828,7 +1880,13 @@ func StartWithReady(
 	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 	ready chan<- error,
+	opts ...ServerOption,
 ) error {
+	var o serverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	notifyReady := func(err error) {
 		if ready != nil {
 			ready <- err
@@ -1970,6 +2028,23 @@ func StartWithReady(
 	defer func() {
 		<-lastSeenDone
 	}()
+
+	if o.bluetooth != nil {
+		bt := newBLETransport(&bleTransportDeps{
+			core: newRequestDeps(
+				platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
+				player, playbackManager, indexPauser, scrapePauser, backupPauser,
+			),
+			methodMap:   methodMap,
+			encGateway:  encGateway,
+			lastSeen:    lastSeenTracker,
+			tracker:     tracker,
+			pairing:     pairingMgr,
+			notifBroker: notifBroker,
+		})
+		bt.unregister = o.bluetooth.OnPeripheral(bt.serve)
+		defer bt.stop()
+	}
 
 	session := newWebSocketSession()
 	defer func() {

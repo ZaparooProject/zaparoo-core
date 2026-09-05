@@ -194,6 +194,7 @@ type UpdateSettingsParams struct {
 	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
 	ErrorReporting          *bool     `json:"errorReporting"`
 	Encryption              *bool     `json:"encryption"`
+	BLEEnabled              *bool     `json:"bleEnabled"`
 	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
 	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
 	RemoteControlEnabled    *bool     `json:"remoteControlEnabled"`
