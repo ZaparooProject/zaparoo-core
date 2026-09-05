@@ -131,17 +131,19 @@ func BuildExportLogModal(
 }
 
 func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {
-	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
-	newPath := logDestPath
-	err := helpers.CopyFile(logPath, newPath)
-	outcome := ""
+	// Writes the bundle rather than copying the file, so a crash captured in
+	// the stderr file travels with the log the user hands over.
+	// No limit: this writes to storage, not the upload service.
+	data, err := helpers.ReadLogBundle(pl, 0)
 	if err != nil {
-		outcome = fmt.Sprintf("Unable to copy log file to %s.", logDestName)
-		log.Error().Err(err).Msgf("error copying log file")
-	} else {
-		outcome = fmt.Sprintf("Copied %s to %s.", config.LogFile, logDestName)
+		log.Error().Err(err).Msg("error reading log file")
+		return fmt.Sprintf("Unable to copy log file to %s.", logDestName)
 	}
-	return outcome
+	if err := os.WriteFile(logDestPath, data, 0o600); err != nil {
+		log.Error().Err(err).Msgf("error copying log file")
+		return fmt.Sprintf("Unable to copy log file to %s.", logDestName)
+	}
+	return fmt.Sprintf("Copied %s to %s.", config.LogFile, logDestName)
 }
 
 var (
@@ -152,8 +154,6 @@ var (
 )
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
-	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
-
 	loadingDialog := NewDialog().
 		SetText("Uploading log file...").
 		SetTitle("Log upload")
@@ -161,8 +161,9 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	app.SetFocus(loadingDialog)
 	app.ForceDraw()
 
-	//nolint:gosec // logPath is from internal platform settings, not user input
-	logContent, err := os.ReadFile(logPath)
+	// Uploads the bundle: this is where a reported log usually comes from, and
+	// a crash exists only in the captured stderr.
+	logContent, err := helpers.ReadLogBundle(pl, config.LogBundleMaxBytes)
 	if err != nil {
 		pages.RemovePage("temp_upload")
 		log.Error().Err(err).Msg("failed to read log file")

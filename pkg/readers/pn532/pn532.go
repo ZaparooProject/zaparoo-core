@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -622,12 +623,20 @@ func (*Reader) Detect(connected []string) string {
 	// allow mock-based testing.
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
+	// Enumerate before probing rather than after. The port list is needed for
+	// the failed-probe bookkeeping below either way, and reading it up front
+	// means the detection summary can report what was on the bus even when the
+	// probe found nothing at all. DetectAll does not expose the candidates it
+	// tried; see https://github.com/ZaparooProject/go-pn532/issues/94.
+	currentPorts, enumErr := helpers.GetSerialDeviceList()
+
 	// Try to detect PN532 devices
 	opts := newDetectionOptions(ignorePaths)
 
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
+	logDetectionSummary(currentPorts, ignorePaths, devices, enumErr, err)
 	if err != nil {
 		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
@@ -649,10 +658,6 @@ func (*Reader) Detect(connected []string) string {
 	// Track which enumerated ports were NOT detected as PN532 devices.
 	// Store the device file's ModTime so we can detect device swaps at
 	// the same path (the file is recreated with a new ModTime on replug).
-	// DetectAll currently does not expose candidate paths it tried; see
-	// https://github.com/ZaparooProject/go-pn532/issues/94. Until then,
-	// enumerate serial ports here to infer failed probe paths.
-	currentPorts, enumErr := helpers.GetSerialDeviceList()
 	if enumErr == nil {
 		detectedPaths := make(map[string]bool, len(devices))
 		for _, device := range devices {
@@ -710,6 +715,75 @@ func (*Reader) Detect(connected []string) string {
 	// All detected devices are already in use
 	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
+}
+
+// Detection summary state. This is package level because SupportedReaders
+// builds a fresh Reader for every auto-detect tick, so nothing kept on the
+// instance survives into the next one.
+var (
+	detectSummaryMu   syncutil.Mutex
+	lastDetectSummary string
+)
+
+// logDetectionSummary reports the state of PN532 auto-detect once per change.
+//
+// A user log of a reader that auto-detect never found had nothing in it to work
+// from: the ports Core enumerated, the paths it had been told to skip, and what
+// the probe returned were all trace-level or absent, so "the reader was never
+// enumerated" and "the reader was enumerated and did not answer" looked
+// identical. This logs at info, because someone reporting a reader that is not
+// detected has no reason to have enabled debug logging first, and only when the
+// picture changes, so the 1 Hz tick still costs a handful of lines per session.
+func logDetectionSummary(
+	ports, ignored []string,
+	devices []detection.DeviceInfo,
+	enumErr, detectErr error,
+) {
+	// Sorted copies: ignored is built from map iteration, and the enumerated
+	// ports arrive in directory order, so an unsorted summary would report a
+	// change on ticks where nothing actually changed.
+	sortedPorts := slices.Clone(ports)
+	slices.Sort(sortedPorts)
+	sortedIgnored := slices.Clone(ignored)
+	slices.Sort(sortedIgnored)
+
+	detected := make([]string, 0, len(devices))
+	for _, d := range devices {
+		detected = append(detected, d.Transport+":"+d.Path)
+	}
+	slices.Sort(detected)
+
+	summary := fmt.Sprintf("ports:%s ignored:%s detected:%s enum_err:%v err:%v",
+		strings.Join(sortedPorts, ","),
+		strings.Join(sortedIgnored, ","),
+		strings.Join(detected, ","),
+		enumErr,
+		detectErr)
+
+	detectSummaryMu.Lock()
+	changed := summary != lastDetectSummary
+	lastDetectSummary = summary
+	detectSummaryMu.Unlock()
+	if !changed {
+		return
+	}
+
+	event := log.Info().Strs("ports", sortedPorts)
+	if enumErr != nil {
+		// Without this an enumeration failure is indistinguishable from a bus
+		// with no serial ports on it: both report an empty port list.
+		event = event.AnErr("enumeration_error", enumErr)
+	}
+	if len(sortedIgnored) > 0 {
+		event = event.Strs("ignored", sortedIgnored)
+	}
+	if len(detected) > 0 {
+		event = event.Strs("detected", detected)
+	}
+	if detectErr != nil && !isExpectedDetectionMiss(detectErr) {
+		event = event.Err(detectErr)
+	}
+	event.Msg("PN532 auto-detect")
 }
 
 func isExpectedDetectionMiss(err error) bool {

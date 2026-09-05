@@ -54,8 +54,28 @@ RUN chmod +x /usr/local/bin/build_c_lib.sh
 ENV TARGETS="x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf"
 ENV HOSTS="x86_64-linux aarch64-linux arm-linux"
 
+# Pin the native dependencies by commit. These were cloned from master with
+# --depth 1, so the C libraries linked into every release were whatever
+# upstream HEAD happened to be on the day the image was built: not recorded
+# anywhere, not reproducible, and able to change under a Core release with no
+# diff in this repo to show it.
+#
+# These are the exact commits the last production image (v1.5.0, built
+# 2026-09-03 04:05 UTC) picked up, so the pin reproduces what is already
+# shipping rather than changing it. Release tags would not: master was 140
+# commits past v1.0.30 for libusb and 79 past libnfc-1.8.0, and because
+# configure.ac only bumps at release both still report the released version
+# number — so a tag pin looks identical by version string while silently
+# rolling the C libraries back.
+ENV LIBUSB_COMMIT="a45bb163a603ac5ae3499806b151509848b0065c"
+ENV LIBUSB_COMPAT_COMMIT="4831748a1439aec81e9cbb9984b1b0289c1c7051"
+ENV LIBNFC_COMMIT="3fa0751ad58fb0053d3de2e61bbbd4066259104c"
+
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/libusb/libusb.git
+RUN mkdir libusb && cd libusb && git init -q . && \
+    git remote add origin https://github.com/libusb/libusb.git && \
+    git fetch -q --depth 1 origin "$LIBUSB_COMMIT" && \
+    git checkout -q FETCH_HEAD
 WORKDIR /src/libusb
 
 # Generate configure script
@@ -66,7 +86,10 @@ RUN /usr/local/bin/build_c_lib.sh libusb "/opt/deps" "--disable-udev --enable-st
 
 # Build libusb-compat-0.1 for each target (provides old libusb-0.1 API on top of libusb-1.0)
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/libusb/libusb-compat-0.1.git
+RUN mkdir libusb-compat-0.1 && cd libusb-compat-0.1 && git init -q . && \
+    git remote add origin https://github.com/libusb/libusb-compat-0.1.git && \
+    git fetch -q --depth 1 origin "$LIBUSB_COMPAT_COMMIT" && \
+    git checkout -q FETCH_HEAD
 WORKDIR /src/libusb-compat-0.1
 
 # Generate configure script for libusb-compat
@@ -79,7 +102,10 @@ RUN /usr/local/bin/build_c_lib.sh libusb-compat "/opt/deps" "" "$TARGETS" "$HOST
 FROM libusb-builder AS libnfc-builder
 
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/nfc-tools/libnfc.git
+RUN mkdir libnfc && cd libnfc && git init -q . && \
+    git remote add origin https://github.com/nfc-tools/libnfc.git && \
+    git fetch -q --depth 1 origin "$LIBNFC_COMMIT" && \
+    git checkout -q FETCH_HEAD
 WORKDIR /src/libnfc
 
 # Generate configure script for libnfc

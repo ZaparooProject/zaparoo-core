@@ -307,9 +307,24 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 	switch r.mode {
 	case modeACR122Only:
 		return readers.DriverMetadata{
-			ID:                "libnfcacr122",
-			DefaultEnabled:    true,
-			DefaultAutoDetect: true,
+			ID:             "libnfcacr122",
+			DefaultEnabled: true,
+			// Auto-detect is off by default because Detect calls
+			// nfc.ListDevices, which enumerates the USB bus through libusb.
+			// On the reader manager's 1 Hz tick that ran once a second on every
+			// device, whether or not an ACR122 was attached, and enumerating
+			// while the bus changes under it killed the service outright: on a
+			// MiSTer, unplugging a USB reader produced
+			//
+			//   panic: member access within misaligned address 0x327ffc4 for
+			//   type 'struct libusb_context', which requires 8 byte alignment
+			//
+			// which is a hard abort from the cgo side, with no Go panic and
+			// nothing in the log. rs232barcode and mqtt already ship
+			// enabled-but-not-auto-detected for the milder version of this
+			// trade-off; an ACR122 owner opts in with a readers.connect entry
+			// or readers.drivers.libnfcacr122.auto_detect = true.
+			DefaultAutoDetect: false,
 			Description:       "LibNFC ACR122 USB NFC reader",
 		}
 	case modeLegacyUART:

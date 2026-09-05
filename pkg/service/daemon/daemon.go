@@ -1048,6 +1048,34 @@ func (s *Service) waitForServicePidFile(expectedPID int, timeout time.Duration) 
 	}
 }
 
+// openServiceStderr opens the file the service process's stdout and stderr are
+// pointed at. It appends and stamps each start, because the interesting case is
+// a service that keeps dying and the previous crash is worth keeping. It lives
+// in LogDir so the log-download and upload paths can ship it with the log.
+func (s *Service) openServiceStderr() (*os.File, error) {
+	logDir := s.pl.Settings().LogDir
+	if logDir == "" {
+		// filepath.Join would yield a bare filename and the capture would land
+		// in whatever directory the service happened to start from.
+		return nil, errors.New("no log directory configured")
+	}
+	path := filepath.Join(logDir, config.StderrFile)
+	//nolint:gosec // Path is derived from the configured temp directory and fixed filename.
+	f, err := os.OpenFile(
+		path,
+		os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW,
+		0o600,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error opening service stderr file: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "=== service start %s ===\n",
+		time.Now().Format(time.RFC3339)); err != nil {
+		log.Debug().Err(err).Msg("error stamping service stderr file")
+	}
+	return f, nil
+}
+
 // Start a new service daemon in the background. If the service is already
 // running (started by a peer wrapper invocation), Start returns nil without
 // re-doing prep work.
@@ -1094,6 +1122,24 @@ func (s *Service) Start() error {
 	// Detach from parent: create new session
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true,
+	}
+
+	// Without this the service's stdout and stderr go to /dev/null, so a panic
+	// or a Go runtime fatal error leaves no trace at all: the process
+	// disappears and core.log simply stops mid-session, which is
+	// indistinguishable from a clean exit that forgot to log. Nothing routine
+	// is written here, so the file stays empty unless something goes wrong.
+	stderrFile, stderrErr := s.openServiceStderr()
+	if stderrErr != nil {
+		log.Warn().Err(stderrErr).Msg("service stderr will not be captured")
+	} else {
+		defer func() {
+			if closeErr := stderrFile.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("error closing service stderr file")
+			}
+		}()
+		cmd.Stdout = stderrFile
+		cmd.Stderr = stderrFile
 	}
 
 	// point new binary to existing config file
