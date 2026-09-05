@@ -189,3 +189,41 @@ func TestReadLogBundle_DropsAPartialFirstLine(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(body[1]),
 		"nothing but the notice should survive when no whole line fits, got %q", body[1])
 }
+
+func TestReadLogBundle_CaptureSurvivesALogThatFillsTheBudget(t *testing.T) {
+	t.Parallel()
+
+	// The capture is budgeted before the log for this reason: the log rotates
+	// at the size of the whole upload budget, so budgeting the other way round
+	// lets a full log crowd out the crash — losing the one thing worth
+	// reporting, in the one case worth reporting it.
+	const limit = 2048
+	pl := bundlePlatform(t,
+		strings.Repeat("{\"filler\":\"aaaaaaaaaaaaaaaaaaaa\"}\n", 400),
+		"panic: the crash that matters\n")
+
+	data, err := helpers.ReadLogBundle(pl, limit)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(data), limit)
+	assert.Contains(t, string(data), "panic: the crash that matters")
+}
+
+func TestReadLogBundle_CaptureIsKeptWhenItIsOneLongLine(t *testing.T) {
+	t.Parallel()
+
+	// A capture is free text, not JSON, so it is trimmed by bytes rather than
+	// lines. Line-aligning it would discard a single-line capture whole, which
+	// an earlier attempt at this did.
+	const limit = 512
+	pl := bundlePlatform(t,
+		strings.Repeat("{\"a\":1}\n", 200),
+		strings.Repeat("X", 900)+"TAIL_OF_CAPTURE")
+
+	data, err := helpers.ReadLogBundle(pl, limit)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(data), limit)
+	assert.Contains(t, string(data), "TAIL_OF_CAPTURE",
+		"a single-line capture must be trimmed, not discarded")
+}
