@@ -58,10 +58,20 @@ const (
 	MediaDir             = "media"
 	CacheDir             = "cache"
 	LogUploadURL         = "https://logs.zaparoo.org/"
-	// LogUploadMaxBytes is the largest payload logs.zaparoo.org accepts. The
-	// log rotates at 1 MB, so a bundle has to be trimmed to leave room for the
-	// stderr capture or the upload is rejected outright.
-	LogUploadMaxBytes = 1 << 20
+	// LogUploadMaxBytes is the largest request logs.zaparoo.org accepts, and
+	// it is a decimal megabyte rather than a mebibyte. The limit applies to
+	// the whole request body, not the file part, so a bundle sent at exactly
+	// this size comes back 413 once multipart framing is added around it.
+	// Measured against the service: a 999,912 byte body is accepted and a
+	// 1,000,112 byte body is rejected.
+	LogUploadMaxBytes = 1_000_000
+	// LogUploadEnvelopeReserve is headroom for that framing. The boundary and
+	// part headers come to about 200 bytes; this is deliberately generous.
+	LogUploadEnvelopeReserve = 4 * 1024
+	// LogBundleMaxBytes is what a log bundle destined for upload may occupy.
+	// Both the TUI upload and the download API budget against this, because
+	// what the API hands back is what a client uploads.
+	LogBundleMaxBytes = LogUploadMaxBytes - LogUploadEnvelopeReserve
 	MinFreeDiskBytes  = 500 * 1024 * 1024 // 500 MB
 
 	// VersionFlagName is the flag that prints VersionLine and exits. The

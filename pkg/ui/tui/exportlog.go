@@ -163,7 +163,7 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 
 	// Uploads the bundle: this is where a reported log usually comes from, and
 	// a crash exists only in the captured stderr.
-	logContent, err := helpers.ReadLogBundle(pl, uploadBudgetBytes())
+	logContent, err := helpers.ReadLogBundle(pl, config.LogBundleMaxBytes)
 	if err != nil {
 		pages.RemovePage("temp_upload")
 		log.Error().Err(err).Msg("failed to read log file")
@@ -174,13 +174,6 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	result := doUploadLog(logContent, config.LogUploadURL, client)
 	pages.RemovePage("temp_upload")
 	return result
-}
-
-// uploadBudgetBytes is the room a bundle has inside the upload limit, once the
-// multipart envelope around it is accounted for.
-func uploadBudgetBytes() int {
-	const multipartOverhead = 4 * 1024
-	return config.LogUploadMaxBytes - multipartOverhead
 }
 
 // doUploadLog performs the upload and returns a user-friendly message.

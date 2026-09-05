@@ -35,7 +35,7 @@ func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	// Carries the captured stderr with the log: a crash that kills the service
 	// exists only there, and this is the path a user's uploaded log comes from.
-	data, err := helpers.ReadLogBundle(env.Platform, config.LogUploadMaxBytes)
+	data, err := helpers.ReadLogBundle(env.Platform, config.LogBundleMaxBytes)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to read log file")
 		return nil, fmt.Errorf("failed to read log file: %w", err)
