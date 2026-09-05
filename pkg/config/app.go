@@ -34,10 +34,12 @@ func IsDevelopmentVersion() bool {
 }
 
 const (
-	AppName              = "zaparoo"
-	MediaDbFile          = "media.db"
-	UserDbFile           = "user.db"
-	LogFile              = "core.log"
+	AppName     = "zaparoo"
+	MediaDbFile = "media.db"
+	UserDbFile  = "user.db"
+	LogFile     = "core.log"
+	// StderrFile holds panics and runtime fatal errors, which never reach zerolog.
+	StderrFile           = "core.stderr.log"
 	PidFile              = "core.pid"
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"
@@ -56,7 +58,11 @@ const (
 	MediaDir             = "media"
 	CacheDir             = "cache"
 	LogUploadURL         = "https://logs.zaparoo.org/"
-	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
+	// LogUploadMaxBytes is the largest payload logs.zaparoo.org accepts. The
+	// log rotates at 1 MB, so a bundle has to be trimmed to leave room for the
+	// stderr capture or the upload is rejected outright.
+	LogUploadMaxBytes = 1 << 20
+	MinFreeDiskBytes  = 500 * 1024 * 1024 // 500 MB
 
 	// VersionFlagName is the flag that prints VersionLine and exits. The
 	// self-update probe passes it to a binary it has just downloaded, so the

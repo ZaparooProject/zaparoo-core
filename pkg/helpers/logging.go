@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -96,6 +97,81 @@ func LogWriter() io.Writer {
 
 // CloseLogging closes the active file logger so tests and shutdown paths can
 // safely remove the log directory on Windows.
+// ReadLogBundle returns the log file's contents with the service's captured
+// stderr appended when it holds anything, trimmed to fit maxBytes.
+//
+// Panics and Go runtime fatal errors never reach zerolog, so they exist only in
+// the stderr file. Every path that hands a log to a user ships a single file,
+// so a crash has to travel inside that file or it does not travel at all.
+//
+// maxBytes of zero or less means no limit. Otherwise the stderr capture is kept
+// whole and the log is trimmed from the front to make room: the log rotates at
+// 1 MB, which is already the whole upload budget, so appending anything without
+// trimming would push the payload over and lose the upload entirely — taking
+// the crash report with it. Trimming the front keeps the most recent entries,
+// which are the ones next to the crash.
+func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
+	logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
+	//nolint:gosec // Path is derived from platform settings and a fixed filename.
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read log file: %w", err)
+	}
+
+	stderrPath := filepath.Join(pl.Settings().LogDir, config.StderrFile)
+	//nolint:gosec // Path is derived from platform settings and a fixed filename.
+	stderrData, stderrErr := os.ReadFile(stderrPath)
+	if stderrErr != nil {
+		// A missing or unreadable stderr file is the normal case: it only
+		// exists once the service has been started by the daemon, and it is
+		// empty unless something crashed. The log itself is still worth
+		// returning, so this is not an error for the caller.
+		stderrData = nil //nolint:nilerr // the log is usable without the stderr capture
+	}
+	if len(bytes.TrimSpace(stderrData)) == 0 {
+		return trimLogFront(data, maxBytes), nil
+	}
+
+	separator := fmt.Sprintf("\n===== %s =====\n", config.StderrFile)
+	if maxBytes > 0 {
+		// The capture is the reason this function exists, so it gets its space
+		// first and the log takes what is left.
+		stderrData = trimLogFront(stderrData, maxBytes-len(separator))
+		data = trimLogFront(data, maxBytes-len(separator)-len(stderrData))
+	}
+
+	var buf bytes.Buffer
+	_, _ = buf.Write(data)
+	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+		_ = buf.WriteByte('\n')
+	}
+	_, _ = buf.WriteString(separator)
+	_, _ = buf.Write(stderrData)
+	return buf.Bytes(), nil
+}
+
+// trimLogFront drops whole lines from the start of data until it fits maxBytes,
+// and says how much it dropped. Cutting mid-line would leave a broken JSON
+// entry at the top of the log, which readers and any parser trip over.
+func trimLogFront(data []byte, maxBytes int) []byte {
+	if maxBytes <= 0 || len(data) <= maxBytes {
+		return data
+	}
+
+	notice := fmt.Sprintf("... %d earlier bytes trimmed to fit the upload limit ...\n",
+		len(data)-maxBytes)
+	budget := maxBytes - len(notice)
+	if budget <= 0 {
+		return []byte(notice)
+	}
+
+	tail := data[len(data)-budget:]
+	if idx := bytes.IndexByte(tail, '\n'); idx >= 0 && idx+1 < len(tail) {
+		tail = tail[idx+1:]
+	}
+	return append([]byte(notice), tail...)
+}
+
 func CloseLogging() error {
 	logMu.Lock()
 	defer logMu.Unlock()
