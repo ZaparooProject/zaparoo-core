@@ -21,6 +21,7 @@ package service
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,21 +30,55 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// failedPathInitialBackoff and failedPathMaxBackoff bound how long a path
+	// that failed to open is kept out of auto-detect.
+	failedPathInitialBackoff = 2 * time.Second
+	failedPathMaxBackoff     = 60 * time.Second
+)
+
+// failedPath suppresses a device path that failed to open, temporarily.
+//
+// It used to suppress it permanently: nothing cleared an entry for a path that
+// had never connected, so one failed open — a port still settling at boot, a
+// momentary busy or permission error — ended auto-detect for that device until
+// Core was restarted. The suppression only exists to stop a 1 Hz retry storm
+// against a device that is not answering, which a growing backoff does just as
+// well without the dead end.
+type failedPath struct {
+	retryAt time.Time
+	backoff time.Duration
+}
+
+// AutoDetector tracks auto-detected readers by device path.
+//
+// A path is the identity here, so an empty one is not tracked at all. Some
+// drivers return a connection string with no path — libnfc's ACR122 fallback
+// returns the bare "libnfcauto:" — and keying either map on "" made one
+// pathless driver's state apply to every other pathless driver: one failing to
+// open would suppress the rest, and the shared entry surfaced in the detection
+// summary as a suppressed path that no device owned.
 type AutoDetector struct {
+	clock                clockwork.Clock
 	lastLogTime          time.Time
 	connected            map[string]bool
-	failed               map[string]bool
+	failed               map[string]failedPath
 	lastDetectionSummary string
 	mu                   syncutil.RWMutex
 }
 
-func NewAutoDetector(_ *config.Instance) *AutoDetector {
+func NewAutoDetector(clock clockwork.Clock) *AutoDetector {
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
 	return &AutoDetector{
+		clock:     clock,
 		connected: make(map[string]bool),
-		failed:    make(map[string]bool),
+		failed:    make(map[string]failedPath),
 	}
 }
 
@@ -62,7 +97,7 @@ func (ad *AutoDetector) DetectReaders(
 	ad.updateConnectedFromReaders(connectedReaders)
 
 	var detectedDevices []string
-	var detectionErrors []string
+	var skippedDrivers []string
 
 	for _, reader := range supportedReaders {
 		metadata := reader.Metadata()
@@ -79,11 +114,12 @@ func (ad *AutoDetector) DetectReaders(
 		}
 
 		if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextAutoDetect) {
+			skippedDrivers = append(skippedDrivers, metadata.ID)
 			closeUnused()
 			continue
 		}
 
-		failedPaths := ad.getFailedPaths()
+		failedPaths := ad.suppressedPaths()
 
 		// Build exclude list from connected reader paths and failed paths.
 		// The exclude list uses "driver:path" format for compatibility with Detect()
@@ -139,41 +175,55 @@ func (ad *AutoDetector) DetectReaders(
 		}
 	}
 
-	ad.logDetectionResults(detectedDevices, detectionErrors)
+	ad.logDetectionResults(detectedDevices, skippedDrivers)
 
 	return nil
 }
 
-// logDetectionResults provides intelligent logging that only logs when detection state changes
-// or when a heartbeat is needed to show auto-detect is still active
-func (ad *AutoDetector) logDetectionResults(detectedDevices, _ []string) {
-	// Create a summary of the current detection state (only track what's relevant for changes)
-	summary := fmt.Sprintf("new_detected:%d total_failed:%d",
-		len(detectedDevices), len(ad.failed))
+// logDetectionResults reports what auto-detect did, once per change rather than
+// once per tick.
+//
+// It logs at info because this is the only account of an auto-detect that found
+// nothing, and a user reporting "my reader is not detected" has no reason to
+// have turned debug logging on first. The 1 Hz tick makes that affordable only
+// because the summary is stable while the hardware is: a run that keeps finding
+// the same nothing logs one line and then stays quiet until something changes.
+func (ad *AutoDetector) logDetectionResults(detectedDevices, skippedDrivers []string) {
+	suppressed := ad.suppressedPaths()
 
-	// Check if we should log (state changed or heartbeat timeout)
+	summary := fmt.Sprintf("detected:%s skipped:%s suppressed:%s",
+		strings.Join(detectedDevices, ","),
+		strings.Join(skippedDrivers, ","),
+		strings.Join(suppressed, ","))
+
 	const heartbeatInterval = 30 * time.Second
 	stateChanged := summary != ad.lastDetectionSummary
-	heartbeatTime := ad.lastLogTime.IsZero() || time.Since(ad.lastLogTime) > heartbeatInterval
-
-	if stateChanged || heartbeatTime {
-		if len(detectedDevices) > 0 {
-			log.Debug().
-				Strs("new_devices_detected", detectedDevices).
-				Msg("auto-detect found new devices available for connection")
-		} else if heartbeatTime {
-			if len(ad.failed) > 0 {
-				log.Trace().
-					Int("total_failed_attempts", len(ad.failed)).
-					Msg("auto-detect active: no new devices found")
-			} else {
-				log.Trace().Msg("auto-detect active: no devices detected")
-			}
-		}
-
-		ad.lastDetectionSummary = summary
-		ad.lastLogTime = time.Now()
+	heartbeatTime := ad.lastLogTime.IsZero() || ad.clock.Since(ad.lastLogTime) > heartbeatInterval
+	if !stateChanged && !heartbeatTime {
+		return
 	}
+
+	if stateChanged {
+		event := log.Info()
+		if len(detectedDevices) > 0 {
+			event = event.Strs("detected", detectedDevices)
+		}
+		if len(skippedDrivers) > 0 {
+			event = event.Strs("skipped_drivers", skippedDrivers)
+		}
+		if len(suppressed) > 0 {
+			event = event.Strs("suppressed_paths", suppressed)
+		}
+		event.Msg("reader auto-detect result changed")
+	} else {
+		log.Trace().
+			Int("detected", len(detectedDevices)).
+			Int("suppressed", len(suppressed)).
+			Msg("reader auto-detect still active")
+	}
+
+	ad.lastDetectionSummary = summary
+	ad.lastLogTime = ad.clock.Now()
 }
 
 func (ad *AutoDetector) connectReader(
@@ -217,7 +267,7 @@ func (ad *AutoDetector) updateConnectedFromReaders(connectedReaders []readers.Re
 
 	ad.connected = make(map[string]bool)
 	for _, r := range connectedReaders {
-		if r != nil {
+		if r != nil && r.Path() != "" {
 			ad.connected[r.Path()] = true
 		}
 	}
@@ -230,6 +280,9 @@ func (ad *AutoDetector) isConnected(path string) bool {
 }
 
 func (ad *AutoDetector) setConnected(path string) {
+	if path == "" {
+		return
+	}
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
 	ad.connected[path] = true
@@ -241,20 +294,41 @@ func (ad *AutoDetector) ClearPath(path string) {
 	delete(ad.connected, path)
 }
 
+// setFailed backs a path off after a failed open, doubling the wait each time
+// up to failedPathMaxBackoff. The entry is kept once the wait expires so a path
+// that keeps failing keeps escalating instead of restarting at the short wait.
 func (ad *AutoDetector) setFailed(path string) {
+	if path == "" {
+		return
+	}
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
-	ad.failed[path] = true
+
+	entry := ad.failed[path]
+	if entry.backoff == 0 {
+		entry.backoff = failedPathInitialBackoff
+	} else {
+		entry.backoff = min(entry.backoff*2, failedPathMaxBackoff)
+	}
+	entry.retryAt = ad.clock.Now().Add(entry.backoff)
+	ad.failed[path] = entry
 }
 
-func (ad *AutoDetector) getFailedPaths() []string {
+// suppressedPaths returns the paths still inside their failure backoff, sorted
+// so the detection summary a caller builds from them does not flap on map
+// iteration order.
+func (ad *AutoDetector) suppressedPaths() []string {
 	ad.mu.RLock()
 	defer ad.mu.RUnlock()
 
+	now := ad.clock.Now()
 	paths := make([]string, 0, len(ad.failed))
-	for path := range ad.failed {
-		paths = append(paths, path)
+	for path, entry := range ad.failed {
+		if now.Before(entry.retryAt) {
+			paths = append(paths, path)
+		}
 	}
+	slices.Sort(paths)
 	return paths
 }
 

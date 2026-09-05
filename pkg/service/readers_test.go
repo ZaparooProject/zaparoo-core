@@ -1385,3 +1385,47 @@ on_scan = "**echo:on_scan ran"`))
 	tok := env.expectToken(t)
 	assert.Equal(t, "token-a", tok.UID, "scan must still reach the token queue when ZapScript is disabled")
 }
+
+func TestResolveAutoDetector_EnablingAtRuntimeCreatesDetector(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: the detector used to be built once before the loop
+	// started, so turning readers.auto_detect on through the API did nothing
+	// until Core restarted while turning it off took effect immediately.
+	// See #1400.
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(false)
+	clock := clockwork.NewFakeClock()
+
+	var detector *AutoDetector
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.Nil(t, detector, "auto-detect off must not build a detector")
+
+	cfg.SetAutoDetect(true)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.NotNil(t, detector, "enabling auto-detect must take effect without a restart")
+
+	same := resolveAutoDetector(cfg, detector, clock)
+	assert.Same(t, detector, same, "a steady setting must keep the same detector")
+}
+
+func TestResolveAutoDetector_DisablingDropsDetectorState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(true)
+	clock := clockwork.NewFakeClock()
+
+	detector := resolveAutoDetector(cfg, nil, clock)
+	require.NotNil(t, detector)
+	detector.setFailed("/dev/ttyUSB0")
+
+	cfg.SetAutoDetect(false)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.Nil(t, detector)
+
+	cfg.SetAutoDetect(true)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.NotNil(t, detector)
+	assert.Empty(t, detector.suppressedPaths(), "re-enabling must not inherit stale failure state")
+}

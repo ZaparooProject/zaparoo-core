@@ -72,6 +72,7 @@ func newTestService(t *testing.T) *Service {
 	pl.On("Settings").Return(platforms.Settings{
 		DataDir: dataDir,
 		TempDir: tempDir,
+		LogDir:  tempDir,
 	})
 
 	return &Service{pl: pl}
@@ -152,7 +153,8 @@ func TestPrepareBinary_CreatesDataDir(t *testing.T) {
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{
 		DataDir: dataDir,
-		TempDir: t.TempDir(),
+		TempDir: tempDir,
+		LogDir:  tempDir,
 	})
 	svc := &Service{pl: pl}
 
@@ -298,6 +300,7 @@ func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
 	pl.On("Settings").Return(platforms.Settings{
 		DataDir: string(filepath.Separator) + "data",
 		TempDir: string(filepath.Separator) + "temp",
+		LogDir:  string(filepath.Separator) + "temp",
 	})
 	svc := &Service{pl: pl, fs: memFS}
 	srcPath := filepath.Join(string(filepath.Separator), "src", "zaparoo.bin")
@@ -1280,4 +1283,61 @@ func TestStart_FailsWhenServiceExitsDuringStartup(t *testing.T) {
 	err := svc.Start()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did not become ready")
+}
+
+func TestStart_CapturesServiceStderr(t *testing.T) {
+	// Regression test: the service was spawned with nil Stdout/Stderr, so they
+	// went to /dev/null. A panic or a Go runtime fatal error left no trace
+	// anywhere — core.log just stopped mid-session, which looks identical to a
+	// clean exit that forgot to log.
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	script := fmt.Sprintf("#!/bin/sh\n"+
+		"cleanup() { rm -f %[1]q; exit 0; }\n"+
+		"trap cleanup INT TERM HUP\n"+
+		"printf '%%s' \"$$\" > %[1]q\n"+
+		"printf 'panic: boom\\n' >&2\n"+
+		"while :; do sleep 1; done\n", pidFile)
+	sourcePath := writeFakeServiceScriptWithBody(t, script)
+	t.Setenv(config.AppEnv, sourcePath)
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && requireServiceRunning(t, svc) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	stderrPath := filepath.Join(settings.LogDir, config.StderrFile)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		content, err := os.ReadFile(stderrPath) //nolint:gosec // test-controlled file
+		assert.NoError(c, err)
+		assert.Contains(c, string(content), "panic: boom")
+	}, 5*time.Second, 50*time.Millisecond, "service stderr should reach %s", stderrPath)
+
+	content, err := os.ReadFile(stderrPath) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "=== service start ",
+		"each start should be stamped so repeated crashes stay distinguishable")
+}
+
+func TestOpenServiceStderr_RefusesEmptyLogDir(t *testing.T) {
+	t.Parallel()
+
+	// filepath.Join("", name) is a bare filename, so without this guard the
+	// capture lands in whatever directory the service started from. It showed
+	// up as a stray core.stderr.log committed into the package directory.
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	svc := &Service{pl: pl}
+
+	f, err := svc.openServiceStderr()
+
+	require.Error(t, err)
+	assert.Nil(t, f)
+	assert.NoFileExists(t, config.StderrFile, "must never write to the working directory")
 }

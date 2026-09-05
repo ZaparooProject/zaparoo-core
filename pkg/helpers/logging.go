@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -96,6 +97,113 @@ func LogWriter() io.Writer {
 
 // CloseLogging closes the active file logger so tests and shutdown paths can
 // safely remove the log directory on Windows.
+// ReadLogBundle returns the log file's contents with the service's captured
+// stderr appended when it holds anything, trimmed to fit maxBytes.
+//
+// Panics and Go runtime fatal errors never reach zerolog, so they exist only in
+// the stderr file. Every path that hands a log to a user ships a single file,
+// so a crash has to travel inside that file or it does not travel at all.
+//
+// maxBytes of zero or less means no limit. Otherwise the capture is budgeted
+// first and the log takes what is left: the log rotates at 1 MB, which is
+// already the whole upload budget, so budgeting the other way round loses the
+// crash to a full log in exactly the case worth reporting.
+func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
+	logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
+	//nolint:gosec // Path is derived from platform settings and a fixed filename.
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read log file: %w", err)
+	}
+
+	stderrPath := filepath.Join(pl.Settings().LogDir, config.StderrFile)
+	//nolint:gosec // Path is derived from platform settings and a fixed filename.
+	stderrData, stderrErr := os.ReadFile(stderrPath)
+	if stderrErr != nil {
+		// A missing or unreadable stderr file is the normal case: it only
+		// exists once the service has been started by the daemon, and it is
+		// empty unless something crashed. The log itself is still worth
+		// returning, so this is not an error for the caller.
+		stderrData = nil //nolint:nilerr // the log is usable without the stderr capture
+	}
+
+	unlimited := maxBytes <= 0
+	if len(bytes.TrimSpace(stderrData)) == 0 {
+		if unlimited {
+			return data, nil
+		}
+		return trimLines(data, maxBytes), nil
+	}
+
+	separator := fmt.Sprintf("\n===== %s =====\n", config.StderrFile)
+	if !unlimited {
+		// One byte held back for the newline the log may need before the
+		// separator, so the assembled bundle cannot overshoot by one.
+		captureBudget := maxBytes - len(separator) - 1
+		if captureBudget <= 0 {
+			// No room for the capture and its label; the log alone is all that
+			// can be delivered within the limit.
+			return trimLines(data, maxBytes), nil
+		}
+		// Trimmed by bytes rather than lines: this is free text, not JSON, and
+		// half a panic is worth more than none. A capture that is one long line
+		// would otherwise be discarded whole.
+		stderrData = trimBytes(stderrData, captureBudget)
+		data = trimLines(data, maxBytes-len(separator)-len(stderrData)-1)
+	}
+
+	var buf bytes.Buffer
+	_, _ = buf.Write(data)
+	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+		_ = buf.WriteByte('\n')
+	}
+	_, _ = buf.WriteString(separator)
+	_, _ = buf.Write(stderrData)
+	return buf.Bytes(), nil
+}
+
+// trimBytes keeps the last maxBytes bytes of data. A non-positive budget keeps
+// nothing: callers use it for a computed remainder, where zero means no room
+// rather than no limit.
+func trimBytes(data []byte, maxBytes int) []byte {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if len(data) <= maxBytes {
+		return data
+	}
+	return data[len(data)-maxBytes:]
+}
+
+// trimLines drops whole lines from the start of data until it fits maxBytes,
+// and says how much it dropped. A non-positive budget keeps nothing.
+//
+// Cutting mid-line would leave a broken JSON entry that readers and parsers
+// trip over, so a budget that lands inside a single line keeps none of it.
+func trimLines(data []byte, maxBytes int) []byte {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if len(data) <= maxBytes {
+		return data
+	}
+
+	notice := fmt.Sprintf("... %d earlier bytes trimmed to fit the upload limit ...\n",
+		len(data)-maxBytes)
+	if len(notice) > maxBytes {
+		// Too small to even say what happened, let alone carry content.
+		return nil
+	}
+
+	tail := data[len(data)-(maxBytes-len(notice)):]
+	idx := bytes.IndexByte(tail, '\n')
+	if idx < 0 || idx+1 >= len(tail) {
+		// The budget lands inside one line; keeping any of it emits a fragment.
+		return []byte(notice)
+	}
+	return append([]byte(notice), tail[idx+1:]...)
+}
+
 func CloseLogging() error {
 	logMu.Lock()
 	defer logMu.Unlock()
