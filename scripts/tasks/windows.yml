@@ -10,6 +10,26 @@ tasks:
           IMAGE_NAME: zaparoo/zigcc
           EXEC: sh -c 'cd cmd/windows && go-winres make --arch="amd64,arm64,386"'
 
+  fetch-vigembus:
+    internal: true
+    desc: Download the pinned ViGEmBus driver installer for bundling
+    vars:
+      # 1.22.0 is the last release of ViGEmBus, which was archived in November
+      # 2023. Its driver binary is identical to 1.21.442.0's; only the
+      # installer wrapper differs.
+      VIGEMBUS_VERSION: 1.22.0
+      VIGEMBUS_SHA256: 89220a7865076b342892f98865f3499fb7c4cfd673159e89d352c360fd014c6a
+    cmds:
+      - mkdir -p _build/vendor
+      - |
+        set -e
+        out=_build/vendor/ViGEmBusSetup.exe
+        if [ ! -f "$out" ]; then
+          curl -fsSL -o "$out" \
+            "https://github.com/nefarius/ViGEmBus/releases/download/v{{.VIGEMBUS_VERSION}}/ViGEmBus_{{.VIGEMBUS_VERSION}}_x64_x86_arm64.exe"
+        fi
+        echo "{{.VIGEMBUS_SHA256}}  $out" | sha256sum -c -
+
   build-installer:
     internal: true
     cmds:
@@ -22,6 +42,12 @@ tasks:
       - docker cp "_build/windows_{{.BUILD_ARCH}}/LICENSE.txt" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/README.txt" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/icon.ico" zaparoo-innosetup:/work/
+      # Only the architectures the driver ships for fetch it, and the generated
+      # setup.iss leaves the task out entirely on the others.
+      - |
+        if [ -f "_build/vendor/ViGEmBusSetup.exe" ] && grep -q "ViGEmBusSetup.exe" "_build/windows_{{.BUILD_ARCH}}/setup.iss"; then
+          docker cp "_build/vendor/ViGEmBusSetup.exe" zaparoo-innosetup:/work/
+        fi
       - docker start -i -a zaparoo-innosetup
       - mkdir -p "_build/windows_{{.BUILD_ARCH}}/Output"
       - docker cp zaparoo-innosetup:/work/Output/. "_build/windows_{{.BUILD_ARCH}}/Output"
@@ -49,6 +75,7 @@ tasks:
       - task: :zigcc:setup
       - task: build-metadata
       - task: :zigcc:build-windows-amd64
+      - task: fetch-vigembus
       - task: build-installer
         vars:
           BUILD_ARCH: amd64
@@ -59,6 +86,7 @@ tasks:
       - task: :zigcc:setup
       - task: build-metadata
       - task: :zigcc:build-windows-386
+      - task: fetch-vigembus
       - task: build-installer
         vars:
           BUILD_ARCH: "386"

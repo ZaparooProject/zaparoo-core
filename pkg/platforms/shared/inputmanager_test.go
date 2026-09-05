@@ -157,9 +157,39 @@ func TestInitDevices_GamepadError(t *testing.T) {
 		},
 	}
 
+	// A gamepad that cannot be created must not stop the service from
+	// starting: on Windows it needs a driver installed separately from Core.
 	err = input.InitDevices(cfg, true)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create gamepad")
+	require.NoError(t, err)
+	assert.False(t, input.gamepadDeviceEnabled())
+
+	// The failure still has to reach whoever asks for a gamepad, naming the
+	// real cause rather than reporting the feature as switched off.
+	err = input.GamepadPress("A")
+	require.ErrorIs(t, err, expectedErr)
+	assert.Contains(t, err.Error(), "virtual gamepad unavailable")
+}
+
+func TestInitDevices_GamepadDisabledReportsDisabled(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	input := &InputManager{
+		NewKeyboard: func() (KeyboardDevice, error) {
+			return &mockKeyboard{}, nil
+		},
+		NewGamepad: func() (GamepadDevice, error) {
+			t.Error("gamepad must not be created when it is disabled")
+			return nil, errors.New("unexpected gamepad creation")
+		},
+	}
+
+	require.NoError(t, input.InitDevices(cfg, false))
+
+	err = input.GamepadPress("A")
+	require.ErrorIs(t, err, ErrGamepadDisabled)
 }
 
 // TestCloseDevices_NilGamepad tests that CloseDevices handles nil gamepad gracefully

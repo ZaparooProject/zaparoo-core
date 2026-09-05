@@ -5198,6 +5198,10 @@ Keys sent by a client that is neither localhost nor an admin are checked against
 
 On Windows, Core runs unelevated in the user's desktop session, so two limits apply that Core cannot detect or work around: keys sent to a window belonging to an elevated program are silently discarded by Windows, and nothing reaches the secure desktop, meaning UAC prompts, the lock screen and Ctrl+Alt+Del. Keys are injected as scancodes, so which character a key produces still depends on the active keyboard layout.
 
+The virtual gamepad needs a driver on Windows. `input.gamepad` emulates an Xbox 360 controller through ViGEmBus, a kernel-mode driver the Zaparoo installer offers as an optional task; Core never installs it on its own, and installing it is the only step that needs administrator rights. Gamepad support is also off by default on Windows, because an unexpected virtual pad changes controller numbering in games: set `gamepad_enabled = true` under `[input]` to turn it on. With the setting on and the driver absent, `input.gamepad` reports that the driver is missing instead of reporting success. Uninstalling Zaparoo leaves the driver in place, because other software may be using it; remove it separately through Apps & Features, where it is listed as "ViGEm Bus Driver".
+
+The driver is published for x86 and x64 only, so the ARM64 build of Zaparoo does not offer the task and has no virtual gamepad: `gamepad_enabled` there reports the driver as missing whatever the setting says. Keyboard input is unaffected on every architecture.
+
 ### input.keyboard
 
 **Access:** Requires `input`.
