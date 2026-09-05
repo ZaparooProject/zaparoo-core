@@ -186,11 +186,13 @@ Counters don't wrap. Disconnect and reconnect with a fresh salt to start over.
 
 ### AAD
 
-All encrypt/decrypt operations bind ciphertext to the session:
+All encrypt/decrypt operations bind ciphertext to the session and to the transport it travels over:
 
 ```text
-aad = authToken + ":ws"
+aad = authToken + ":" + transport
 ```
+
+`transport` is `ws` for WebSocket and `ble` for Bluetooth LE. A frame encrypted for one transport fails authentication on the other, so credentials captured on one link cannot be replayed on another.
 
 ## Security limits
 
@@ -242,6 +244,8 @@ WebSocket errors (plaintext JSON-RPC error, then connection closed):
 |---|---|
 | -32001 | Unsupported encryption version |
 | -32002 | Encryption required. Remote clients must send an encrypted first frame. |
+| -32004 | Response too large for the transport (Bluetooth LE only). `data.limit` and `data.size` say by how much. |
+| -32005 | Pairing failed (Bluetooth LE `pair.start` / `pair.finish` only). `data.status` and `data.message` mirror the HTTP endpoints. |
 
 ## Connection lifecycle
 
@@ -280,7 +284,7 @@ function connect(url, authToken, pairingKey):
     c2sBase = hkdf_expand(prk, info="zaparoo-c2s-nonce-v1", len=12)
     s2cBase = hkdf_expand(prk, info="zaparoo-s2c-nonce-v1", len=12)
 
-    aad         = encode(authToken + ":ws")
+    aad         = encode(authToken + ":ws")   // ":ble" over Bluetooth LE
     sendCounter = 0
     recvCounter = 0
 

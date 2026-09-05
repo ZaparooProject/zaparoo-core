@@ -97,6 +97,8 @@ var (
 	errTooManyClients        = errors.New("maximum number of paired clients reached")
 	errPairingHMACMismatch   = errors.New("pairing confirmation HMAC mismatch")
 	errPairingMessageTooLong = errors.New("pairing PAKE message too long")
+	errPairingInvalidPake    = errors.New("invalid pake message")
+	errPairingInvalidConfirm = errors.New("invalid confirmation")
 )
 
 // HKDF info strings used to derive confirmation keys and the long-term
@@ -538,6 +540,49 @@ func writeLP(h io.Writer, b []byte) {
 	_, _ = h.Write(b)
 }
 
+// pairStart decodes a start request and runs the server side of the PAKE
+// exchange. It is shared by every transport that carries pairing.
+func (m *PairingManager) pairStart(req pairStartRequest) (pairStartResponse, error) {
+	msgA, err := base64.StdEncoding.DecodeString(req.PAKE)
+	if err != nil || len(msgA) == 0 {
+		return pairStartResponse{}, errPairingInvalidPake
+	}
+
+	sessionID, msgB, err := m.startSession(req.Name, msgA)
+	if err != nil {
+		return pairStartResponse{}, err
+	}
+
+	return pairStartResponse{
+		Session: sessionID,
+		PAKE:    base64.StdEncoding.EncodeToString(msgB),
+	}, nil
+}
+
+// pairFinish decodes a finish request, verifies the client's HMAC and
+// persists the new client. source names the caller for the audit log.
+func (m *PairingManager) pairFinish(req pairFinishRequest, source string) (pairFinishResponse, error) {
+	clientHMAC, err := base64.StdEncoding.DecodeString(req.Confirm)
+	if err != nil || len(clientHMAC) == 0 {
+		return pairFinishResponse{}, errPairingInvalidConfirm
+	}
+
+	result, err := m.finishSession(req.Session, clientHMAC)
+	if err != nil {
+		// Audit-log security-relevant failures with the source. Other
+		// errors (expired session, unknown session, etc.) are handled by
+		// the generic mapping in the caller.
+		logFailedPairingAttempt(source, err)
+		return pairFinishResponse{}, err
+	}
+
+	return pairFinishResponse{
+		AuthToken: result.Client.AuthToken,
+		ClientID:  result.Client.ClientID,
+		Confirm:   base64.StdEncoding.EncodeToString(result.ServerHMAC),
+	}, nil
+}
+
 // HandlePairStart runs the PAKE exchange and returns sessionID + server message.
 func (m *PairingManager) HandlePairStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -549,23 +594,15 @@ func (m *PairingManager) HandlePairStart() http.HandlerFunc {
 			pairingErrorResponse(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		msgA, decErr := base64.StdEncoding.DecodeString(req.PAKE)
-		if decErr != nil || len(msgA) == 0 {
-			pairingErrorResponse(w, http.StatusBadRequest, "invalid pake message")
-			return
-		}
 
-		sessionID, msgB, err := m.startSession(req.Name, msgA)
+		resp, err := m.pairStart(req)
 		if err != nil {
 			status, msg := pairingErrorStatus(err)
 			pairingErrorResponse(w, status, msg)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, pairStartResponse{
-			Session: sessionID,
-			PAKE:    base64.StdEncoding.EncodeToString(msgB),
-		})
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -580,42 +617,29 @@ func (m *PairingManager) HandlePairFinish() http.HandlerFunc {
 			pairingErrorResponse(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		clientHMAC, decErr := base64.StdEncoding.DecodeString(req.Confirm)
-		if decErr != nil || len(clientHMAC) == 0 {
-			pairingErrorResponse(w, http.StatusBadRequest, "invalid confirmation")
-			return
-		}
 
-		result, err := m.finishSession(req.Session, clientHMAC)
+		resp, err := m.pairFinish(req, sourceIPForAudit(r))
 		if err != nil {
-			// Audit-log security-relevant failures with the source IP.
-			// Other errors (expired session, unknown session, etc.) are
-			// handled by the generic mapping below.
-			logFailedPairingAttempt(r, err)
 			status, msg := pairingErrorStatus(err)
 			pairingErrorResponse(w, status, msg)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, pairFinishResponse{
-			AuthToken: result.Client.AuthToken,
-			ClientID:  result.Client.ClientID,
-			Confirm:   base64.StdEncoding.EncodeToString(result.ServerHMAC),
-		})
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
 // logFailedPairingAttempt logs HMAC mismatch and exhaustion (not operational errors).
-func logFailedPairingAttempt(r *http.Request, err error) {
+func logFailedPairingAttempt(source string, err error) {
 	switch {
 	case errors.Is(err, errPairingHMACMismatch):
 		log.Warn().
-			Str("source_ip", sourceIPForAudit(r)).
+			Str("source_ip", source).
 			Str("event", "pairing_hmac_mismatch").
 			Msg("pairing: failed PIN verification")
 	case errors.Is(err, errPairingExhausted):
 		log.Warn().
-			Str("source_ip", sourceIPForAudit(r)).
+			Str("source_ip", source).
 			Str("event", "pairing_attempts_exhausted").
 			Msg("pairing: PIN attempts exhausted, PIN invalidated")
 	}
@@ -646,6 +670,10 @@ func pairingErrorStatus(err error) (status int, msg string) {
 		return http.StatusBadRequest, "client name required"
 	case errors.Is(err, errPairingMessageTooLong):
 		return http.StatusBadRequest, "PAKE message too long"
+	case errors.Is(err, errPairingInvalidPake):
+		return http.StatusBadRequest, "invalid pake message"
+	case errors.Is(err, errPairingInvalidConfirm):
+		return http.StatusBadRequest, "invalid confirmation"
 	case errors.Is(err, crypto.ErrInvalidPakeMessage):
 		return http.StatusBadRequest, "invalid PAKE message"
 	case errors.Is(err, errTooManyClients):

@@ -127,7 +127,7 @@ type wsResponseJob struct {
 type wsSessionDispatcher struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
-	session      *melody.Session
+	session      sessionWriter
 	inputSession platforms.InputSession
 	high         chan *wsRequestJob
 	run          chan *wsRequestJob
@@ -153,6 +153,19 @@ func getOrCreateWSDispatcher(
 		}
 	}
 
+	d := newSessionDispatcher(parent, session, platform)
+	session.Set(wsDispatcherSessionKey, d)
+	return d
+}
+
+// newSessionDispatcher builds and starts a per-connection dispatcher for any
+// transport that delivers whole messages. The caller owns its lifetime and
+// must call close when the connection ends.
+func newSessionDispatcher(
+	parent context.Context,
+	session sessionWriter,
+	platform platforms.Platform,
+) *wsSessionDispatcher {
 	ctx, cancel := context.WithCancel(parent)
 	var inputSession platforms.InputSession
 	if provider, ok := platform.(platforms.InputSessionProvider); ok {
@@ -171,7 +184,6 @@ func getOrCreateWSDispatcher(
 		responses:    make(chan *wsResponseJob, wsResponseQueueSize),
 		inputDone:    make(chan struct{}),
 	}
-	session.Set(wsDispatcherSessionKey, d)
 	d.start()
 	return d
 }
@@ -520,7 +532,7 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 	if resp.pong {
 		if err := writePong(d.session.Write, resp.cs); err != nil {
 			logWSWriteError(err, "sending pong")
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 		return
 	}
@@ -537,7 +549,7 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 			if !isAPIContextFailure(resp.ctx, err) {
 				logWSWriteError(err, "error sending error response")
 			}
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 	} else {
 		if err := sendWSEncryptedResponse(
@@ -547,7 +559,7 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 			if !isAPIContextFailure(resp.ctx, err) {
 				logWSWriteError(err, "error sending response")
 			}
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 	}
 	if resp.result.AfterWrite != nil {

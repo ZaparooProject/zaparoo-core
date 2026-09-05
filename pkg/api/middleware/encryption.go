@@ -68,8 +68,15 @@ var (
 	ErrSessionNotEstablished = errors.New("encryption session not established")
 )
 
-// EncryptedFirstFrame is the JSON payload sent on the first WebSocket frame
-// to establish an encrypted session.
+// Transport labels bound into the AEAD associated data so a frame encrypted
+// for one transport cannot be replayed on another.
+const (
+	TransportWebSocket = "ws"
+	TransportBLE       = "ble"
+)
+
+// EncryptedFirstFrame is the JSON payload sent on the first frame of a
+// connection to establish an encrypted session.
 type EncryptedFirstFrame struct {
 	Ciphertext  string `json:"e"`
 	AuthToken   string `json:"t"`
@@ -105,7 +112,7 @@ func IsEncryptedFirstFrame(data []byte) bool {
 	return probe.V > 0 && probe.E != "" && probe.T != "" && probe.S != ""
 }
 
-// ClientSession holds per-WebSocket encryption state. All AEAD calls
+// ClientSession holds per-connection encryption state. All AEAD calls
 // MUST happen inside the mutex (golang/go#25882, golang-fips/go#187).
 type ClientSession struct {
 	client      *database.Client
@@ -319,17 +326,29 @@ func (m *EncryptionGateway) StartCleanup(ctx context.Context) {
 	}()
 }
 
-// EstablishSession validates, decrypts, and returns a ClientSession for the
-// first encrypted frame. Failures increment the (authToken, sourceIP) rate
-// limiter; callers should close the WebSocket on error.
+// EstablishSession is EstablishSessionForTransport for the WebSocket
+// transport.
+func (m *EncryptionGateway) EstablishSession(
+	frame EncryptedFirstFrame,
+	sourceIP string,
+) (*ClientSession, []byte, error) {
+	return m.EstablishSessionForTransport(frame, sourceIP, TransportWebSocket)
+}
+
+// EstablishSessionForTransport validates, decrypts, and returns a
+// ClientSession for the first encrypted frame. transport is bound into the
+// AEAD associated data, so the client must use the same label. Failures
+// increment the (authToken, sourceIP) rate limiter; callers should close the
+// connection on error.
 //
 // Non-constant-time: auth token validity is distinguishable by timing, but
 // tokens are already plaintext on the wire and grant no capability without
 // the 32-byte pairing key. If a future credential is NOT public on the
 // wire, these branches MUST be refactored to constant-time.
-func (m *EncryptionGateway) EstablishSession(
+func (m *EncryptionGateway) EstablishSessionForTransport(
 	frame EncryptedFirstFrame,
 	sourceIP string,
+	transport string,
 ) (*ClientSession, []byte, error) {
 	if frame.Version != EncryptionProtoVersion {
 		return nil, nil, ErrUnsupportedVersion
@@ -400,8 +419,9 @@ func (m *EncryptionGateway) EstablishSession(
 		s2cGCM:   s2cGCM,
 		c2sNonce: keys.C2SNonce,
 		s2cNonce: keys.S2CNonce,
-		// AAD bound to DB-resolved token (resilient to future canonicalization).
-		aad:         []byte(c.AuthToken + ":ws"),
+		// AAD bound to DB-resolved token (resilient to future canonicalization)
+		// and to the transport the frame arrived on.
+		aad:         []byte(c.AuthToken + ":" + transport),
 		recvCounter: 0,
 		sendCounter: 0,
 	}
