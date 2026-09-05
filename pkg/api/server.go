@@ -513,6 +513,33 @@ func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handle
 	}
 }
 
+// mountWebSocketRoutes registers the WebSocket upgrade routes on r behind
+// rateLimit. The group carries no request timeout: the upgrade handler
+// returns only when the connection closes, and chi's Timeout middleware
+// writes a 504 header on return whenever its deadline has passed, which on
+// a hijacked connection is discarded by net/http with a warning on stderr.
+// Per-message deadlines are applied in handleWSMessage instead.
+func mountWebSocketRoutes(
+	r chi.Router,
+	rateLimit func(http.Handler) http.Handler,
+	handle func(w http.ResponseWriter, r *http.Request, version string),
+) {
+	r.Group(func(r chi.Router) {
+		r.Use(rateLimit)
+		r.Use(middleware.NoCache)
+
+		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "latest")
+		})
+		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0")
+		})
+		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0.1")
+		})
+	})
+}
+
 // apiMethodManagesRestoreAccess lists methods that coordinate with the
 // backup-restore gate themselves instead of taking the shared read lock:
 // the restore methods hold the write side, and media.active.update resolves
@@ -2094,21 +2121,7 @@ func StartWithReady(
 	// WebSocket routes — open to remote clients regardless of AllowedIPs.
 	// Encryption (when enabled) or API key auth (when disabled) is the
 	// security mechanism here.
-	r.Group(func(r chi.Router) {
-		r.Use(apiRateLimitMiddleware)
-		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
-
-		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "latest")
-		})
-		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0")
-		})
-		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0.1")
-		})
-	})
+	mountWebSocketRoutes(r, apiRateLimitMiddleware, wsHandler)
 
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.
