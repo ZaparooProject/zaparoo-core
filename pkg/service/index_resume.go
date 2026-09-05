@@ -291,6 +291,13 @@ type mediaDBGenerateFunc func(
 // UserDB), so recovery discards the corrupt file rather than attempting an unreliable
 // in-process repair, then triggers a full reindex. The durable sidecar marker is the
 // authoritative signal because the in-DB status write can itself fail on a malformed file.
+//
+// This entry point also trusts a persisted corrupt indexing status when the marker is
+// absent, covering a marker that could not be written or was removed. Every writer of
+// that status writes the marker first, and the status write is followed by a
+// media-indexing notification, a direct call here, or at worst the next startup check,
+// so those triggers use this form. The periodic poll uses
+// checkAndRecoverMarkedCorruptMediaDB instead.
 func checkAndRecoverCorruptMediaDB(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -298,7 +305,35 @@ func checkAndRecoverCorruptMediaDB(
 	st *state.State,
 	pauser *syncutil.Pauser,
 ) {
-	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDBWithLease)
+	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDBWithLease, true)
+}
+
+// checkAndRecoverMarkedCorruptMediaDB is the cheap form used by the periodic poll. It keys
+// on the sidecar marker alone, a single stat when the database is healthy, and never
+// queries the persisted indexing status.
+func checkAndRecoverMarkedCorruptMediaDB(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+) {
+	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDBWithLease, false)
+}
+
+// mediaDBFlaggedCorrupt reports whether recovery should run. The sidecar marker is the
+// authoritative signal because every corruption detection writes it. trustPersistedStatus
+// also accepts a persisted corrupt indexing status, which covers a marker that could not
+// be written or was removed.
+func mediaDBFlaggedCorrupt(mediaDB database.MediaDBI, trustPersistedStatus bool) bool {
+	if mediaDB.IsMarkedCorrupt() {
+		return true
+	}
+	if !trustPersistedStatus {
+		return false
+	}
+	status, err := mediaDB.GetIndexingStatus()
+	return err == nil && status == mediadb.IndexingStatusCorrupt
 }
 
 func checkAndRecoverCorruptMediaDBWithGenerator(
@@ -308,6 +343,7 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 	st *state.State,
 	pauser *syncutil.Pauser,
 	generate mediaDBGenerateFunc,
+	trustPersistedStatus bool,
 ) {
 	if db == nil || db.MediaDB == nil {
 		return
@@ -320,14 +356,7 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 	}
 	defer mediaDBRecovering.Store(false)
 
-	corrupt := db.MediaDB.IsMarkedCorrupt()
-	if !corrupt {
-		// Backstop: trust a persisted corrupt status even if the marker is missing.
-		if status, err := db.MediaDB.GetIndexingStatus(); err == nil && status == mediadb.IndexingStatusCorrupt {
-			corrupt = true
-		}
-	}
-	if !corrupt {
+	if !mediaDBFlaggedCorrupt(db.MediaDB, trustPersistedStatus) {
 		return
 	}
 
@@ -517,7 +546,10 @@ func mediaDBCorruptionRecoveryBlocked(mediaDB database.MediaDBI) bool {
 // watchForCorruptMediaDBRecovery triggers recovery at runtime once an indexing or
 // optimization operation completes. It also polls the durable marker so corruption first
 // observed by a foreground query self-heals without requiring an unrelated indexing event
-// or service restart. The marker check is a cheap stat when no corruption is present.
+// or service restart. The poll is a single stat when no corruption is present. The
+// persisted corrupt status is a fallback for a marker that could not be written, consulted
+// only at startup and on media-indexing notifications; every writer of that status writes
+// the marker first, so the timer never needs to query the database.
 func watchForCorruptMediaDBRecovery(
 	ctx context.Context,
 	b *broker.Broker,
@@ -560,7 +592,7 @@ func watchForCorruptMediaDBRecoveryAtInterval(
 			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 			retryDurableMediaWriteOperations(ctx, pl, cfg, db, st, indexPauser, scrapePauser)
 		case <-ticker.C:
-			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			checkAndRecoverMarkedCorruptMediaDB(pl, cfg, db, st, indexPauser)
 			retryDurableMediaWriteOperations(ctx, pl, cfg, db, st, indexPauser, scrapePauser)
 		}
 	}

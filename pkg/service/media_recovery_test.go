@@ -158,7 +158,7 @@ func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *tes
 		) error {
 			generateCalled = true
 			return errors.New("injected reindex failure")
-		})
+		}, true)
 
 	started := <-ns
 	finished := <-ns
@@ -199,7 +199,7 @@ func TestCheckAndRecoverCorruptMediaDB_TransfersRecoveryLeaseToReindex(t *testin
 		) error {
 			transferred = lease
 			return nil
-		})
+		}, true)
 
 	require.NotNil(t, transferred)
 	assert.True(t, transferred.ValidFor(database.MediaWriteOperationIndexing))
@@ -256,7 +256,7 @@ func TestCheckAndRecoverCorruptMediaDB_ReleasesGateBeforeReindex(t *testing.T) {
 				targetDB.MediaDB.BackgroundOperationDone()
 				close(reindexRegistered)
 				return errors.New("stop after background registration")
-			})
+			}, true)
 	}()
 
 	select {
@@ -511,4 +511,127 @@ func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher did not exit after context cancellation")
 	}
+}
+
+// TestWatchForCorruptMediaDBRecovery_TickDoesNotQueryIndexingStatus verifies the periodic
+// poll costs a single marker stat when the database is healthy. Every writer of the
+// persisted corrupt status also writes the marker and is followed by a media-indexing
+// notification or a direct recovery check, so the timer never needs to query the database.
+func TestWatchForCorruptMediaDBRecovery_TickDoesNotQueryIndexingStatus(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	const ticks = 3
+	checked := make(chan struct{}, ticks)
+	mockDB.On("IsMarkedCorrupt").Return(false).Run(func(mock.Arguments) {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+	})
+	// The mock only records calls for methods with an expectation; without this the
+	// AssertNotCalled below would pass vacuously.
+	mockDB.On("GetIndexingStatus").Return("", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	source := make(chan models.Notification, 1)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		watchForCorruptMediaDBRecoveryAtInterval(
+			ctx, b, nil, nil, &database.Database{MediaDB: mockDB}, nil, nil, nil, 10*time.Millisecond,
+		)
+		close(done)
+	}()
+
+	for range ticks {
+		select {
+		case <-checked:
+		case <-time.After(2 * time.Second):
+			t.Fatal("recovery watcher stopped polling the corruption marker")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
+
+	mockDB.AssertNotCalled(t, "GetIndexingStatus")
+}
+
+// TestWatchForCorruptMediaDBRecovery_NotificationRunsStatusBackstop verifies the
+// media-indexing notification branch still trusts a persisted corrupt status when the
+// marker is missing, which is where that backstop lives now that the poll is marker-only.
+func TestWatchForCorruptMediaDBRecovery_NotificationRunsStatusBackstop(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(false)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
+	// The backstop detects corruption; a running scrape then defers recovery, which keeps
+	// the test off the reindex path and gives the deferral a call to observe.
+	mockDB.On("HasBackgroundOperations").Return(true)
+	deferred := make(chan struct{}, 1)
+	mockDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Run(func(mock.Arguments) {
+		select {
+		case deferred <- struct{}{}:
+		default:
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	source := make(chan models.Notification, 10)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		// A poll interval far beyond the test's lifetime, so only the notification can
+		// trigger a check.
+		watchForCorruptMediaDBRecoveryAtInterval(
+			ctx, b, nil, nil, &database.Database{MediaDB: mockDB}, nil, nil, nil, time.Hour,
+		)
+		close(done)
+	}()
+
+	// Re-publish until the watcher has subscribed and run a check; each check is idempotent.
+	require.Eventually(t, func() bool {
+		select {
+		case source <- models.Notification{Method: models.NotificationMediaIndexing}:
+		default:
+		}
+		select {
+		case <-deferred:
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
+}
+
+// TestCheckAndRecoverMarkedCorruptMediaDB_IgnoresPersistedStatus verifies the marker-only
+// form used by the poll neither queries the persisted status nor starts recovery from it.
+func TestCheckAndRecoverMarkedCorruptMediaDB_IgnoresPersistedStatus(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(false)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
+	mockDB.On("HasBackgroundOperations").Return(false)
+
+	checkAndRecoverMarkedCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertNotCalled(t, "GetIndexingStatus")
+	mockDB.AssertNotCalled(t, "HasBackgroundOperations")
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
 }
