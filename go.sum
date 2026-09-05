@@ -37,8 +37,8 @@ github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaik
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/ZaparooProject/go-gameid v0.2.0 h1:nYDxozhwsJXacdh/lwHOJofz4SlA609WKTD38UOQy+0=
 github.com/ZaparooProject/go-gameid v0.2.0/go.mod h1:gPQg1jQ4jgkguOJeKUiIqZeucz0GsSR67UQ/JOgYUDI=
-github.com/ZaparooProject/go-pn532 v0.24.0 h1:PkFrB01e3WNit9sBQJ15SWAFzJNahbL7cFwrI3mmRys=
-github.com/ZaparooProject/go-pn532 v0.24.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
+github.com/ZaparooProject/go-pn532 v0.25.0 h1:R9pewRLrsPXmTTpMUdTQRcMuHXsXRecr3stjdiHSbBI=
+github.com/ZaparooProject/go-pn532 v0.25.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
 github.com/ZaparooProject/go-zapscript v0.19.0 h1:M4t3dlOrfx0g8ZkLuGt7pRhNa5SqWMs5oAgucZpovQE=
 github.com/ZaparooProject/go-zapscript v0.19.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
