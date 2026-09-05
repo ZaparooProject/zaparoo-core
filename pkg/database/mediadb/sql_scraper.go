@@ -2609,7 +2609,9 @@ func (db *MediaDB) loadMediaTitlePropertiesByMediaTitleDBIDs(
 	args := int64Args(mediaTitleDBIDs)
 	where := `WHERE mtp.MediaTitleDBID IN (` + prepareVariadic("?", ",", len(mediaTitleDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.Load().QueryContext(ctx, mediaTitlePropertyQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(
+		ctx, mediaTitlePropertyQuery(where, propertyGroupInclude), args...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaTitlePropertiesByMediaTitleDBIDs: %w", err)
 	}
@@ -2667,7 +2669,9 @@ func (db *MediaDB) GetMediaTitlePropertyMetadataByMediaTitleDBIDs(
 	args := int64Args(mediaTitleDBIDs)
 	where := `WHERE mtp.MediaTitleDBID IN (` + prepareVariadic("?", ",", len(mediaTitleDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.Load().QueryContext(ctx, mediaTitlePropertyMetadataQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(
+		ctx, mediaTitlePropertyMetadataQuery(where, propertyGroupInclude), args...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaTitlePropertyMetadataByMediaTitleDBIDs: %w", err)
 	}
@@ -2737,7 +2741,9 @@ func (db *MediaDB) loadMediaPropertiesByMediaDBIDs(
 	args := int64Args(mediaDBIDs)
 	where := `WHERE mp.MediaDBID IN (` + prepareVariadic("?", ",", len(mediaDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.Load().QueryContext(ctx, mediaPropertyQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(
+		ctx, mediaPropertyQuery(where, propertyGroupInclude), args...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaPropertiesByMediaDBIDs: %w", err)
 	}
@@ -2792,7 +2798,9 @@ func (db *MediaDB) GetMediaPropertyMetadataByMediaDBIDs(
 	args := int64Args(mediaDBIDs)
 	where := `WHERE mp.MediaDBID IN (` + prepareVariadic("?", ",", len(mediaDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.Load().QueryContext(ctx, mediaPropertyMetadataQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(
+		ctx, mediaPropertyMetadataQuery(where, propertyGroupInclude), args...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaPropertyMetadataByMediaDBIDs: %w", err)
 	}
@@ -3148,12 +3156,19 @@ func propertyMetadataSelectColumns(entityIDColumn string, groupMode propertyGrou
 	return strings.Join(parts, ", ")
 }
 
+// The property query builders below join with CROSS JOIN, which SQLite
+// treats as an inner join whose nesting order is fixed left to right. Without
+// it, and without fresh statistics on the property tables, the planner drives
+// a lookup of many IDs from TagTypes outward and probes the property index
+// once per tag per requested ID - a few thousand IDs then take minutes on a
+// MiSTer. Starting from the property table keeps every lookup at one index
+// search per requested ID whatever the statistics say.
 func mediaTitlePropertyQuery(where string, groupMode propertyGroupMode) string {
 	return `
 		SELECT ` + propertySelectColumns("mtp.MediaTitleDBID", groupMode) + `
 		FROM MediaTitleProperties mtp
-		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		CROSS JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
+		CROSS JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
 		` + where
 }
@@ -3162,8 +3177,8 @@ func mediaTitlePropertyMetadataQuery(where string, groupMode propertyGroupMode) 
 	return `
 		SELECT ` + propertyMetadataSelectColumns("mtp.MediaTitleDBID", groupMode) + `
 		FROM MediaTitleProperties mtp
-		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		CROSS JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
+		CROSS JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
 		` + where
 }
@@ -3172,8 +3187,8 @@ func mediaPropertyQuery(where string, groupMode propertyGroupMode) string {
 	return `
 		SELECT ` + propertySelectColumns("mp.MediaDBID", groupMode) + `
 		FROM MediaProperties mp
-		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		CROSS JOIN Tags t      ON mp.TypeTagDBID = t.DBID
+		CROSS JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
 		` + where
 }
@@ -3182,8 +3197,8 @@ func mediaPropertyMetadataQuery(where string, groupMode propertyGroupMode) strin
 	return `
 		SELECT ` + propertyMetadataSelectColumns("mp.MediaDBID", groupMode) + `
 		FROM MediaProperties mp
-		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		CROSS JOIN Tags t      ON mp.TypeTagDBID = t.DBID
+		CROSS JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
 		` + where
 }

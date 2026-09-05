@@ -22,7 +22,9 @@ package misterdocs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -176,6 +178,9 @@ func TestScrapeLoop_ForceSkipsCleanupAfterSourceLoadFailure(t *testing.T) {
 	docsRoot := filepath.Join("media", "fat", "docs")
 	sourcePath := filepath.Join(docsRoot, "SNES", artworkDirName)
 	require.NoError(t, fs.MkdirAll(sourcePath, 0o750))
+	require.NoError(t, afero.WriteFile(
+		fs, filepath.Join(sourcePath, indexFileName), []byte("#title\tartwork\n"), 0o600,
+	))
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{
@@ -202,7 +207,7 @@ func TestScrapeLoop_ForceSkipsCleanupAfterSourceLoadFailure(t *testing.T) {
 	}
 	require.Len(t, updates, 2)
 	require.Error(t, updates[0].Err)
-	require.ErrorContains(t, updates[0].Err, "parse artwork index")
+	require.ErrorContains(t, updates[0].Err, "requires name and key columns")
 	assert.True(t, updates[1].Done)
 	mediaDB.AssertNotCalled(t, "GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, assertmock.Anything)
 	mediaDB.AssertNotCalled(
@@ -220,6 +225,11 @@ func TestScrapeLoop_AccumulatesSourceLoadFailures(t *testing.T) {
 	secondSource := filepath.Join(docsRoot, "SNES", "Artwork Two")
 	require.NoError(t, fs.MkdirAll(firstSource, 0o750))
 	require.NoError(t, fs.MkdirAll(secondSource, 0o750))
+	for _, source := range []string{firstSource, secondSource} {
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(source, indexFileName), []byte("#title\tartwork\n"), 0o600,
+		))
+	}
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{}, nil)
@@ -531,7 +541,9 @@ func TestScrapeLoop_BatchWritesAndFallback(t *testing.T) {
 			for update := range ch {
 				updates = append(updates, update)
 			}
-			require.Len(t, updates, 2)
+			// A progress update announcing the step size precedes the final one.
+			require.Len(t, updates, 3)
+			updates = updates[1:]
 			require.Len(t, mediaDB.batches, 1)
 			require.Len(t, mediaDB.batches[0], 1)
 			if writeErr == nil {
@@ -549,4 +561,139 @@ func TestScrapeLoop_BatchWritesAndFallback(t *testing.T) {
 			baseDB.AssertExpectations(t)
 		})
 	}
+}
+
+func TestScrapeLoop_ResolvesArcadeArtworkThroughMRASetNames(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	docsRoot := filepath.Join("media", "fat", "docs")
+	artwork := filepath.Join(docsRoot, "Arcade", artworkDirName)
+	arcade := filepath.Join("media", "fat", "_Arcade")
+	require.NoError(t, fs.MkdirAll(artwork, 0o750))
+	require.NoError(t, fs.MkdirAll(arcade, 0o750))
+	// Keys and index names are MAME setnames; a clone row points at its parent.
+	files := map[string]string{
+		filepath.Join(artwork, indexFileName): "#name\tcrc\tsize\tkey\n" +
+			"sfa3\t\t\tsfa3\n" +
+			"sfa3u\t\t\tsfa3\n" +
+			"shocktro\t\t\tshocktro\n",
+		filepath.Join(artwork, "sfa3.jpg"):     "image",
+		filepath.Join(artwork, "shocktro.jpg"): "image",
+		filepath.Join(arcade, "Street Fighter Alpha 3 (USA).mra"): "<misterromdescription>" +
+			"<name>Street Fighter Alpha 3</name><setname>sfa3u</setname></misterromdescription>",
+		filepath.Join(arcade, "Shock Troopers.mra"): "<misterromdescription>" +
+			"<setname>SHOCKTRO</setname></misterromdescription>",
+		filepath.Join(arcade, "Broken.mra"): "not xml at all",
+	}
+	for path, content := range files {
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{
+		{DBID: 10, Slug: "streetfighteralpha3", Name: "Street Fighter Alpha 3", SystemID: systemdefs.SystemArcade},
+		{DBID: 20, Slug: "shocktroopers", Name: "Shock Troopers", SystemID: systemdefs.SystemArcade},
+		{DBID: 30, Slug: "broken", Name: "Broken", SystemID: systemdefs.SystemArcade},
+	}, nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
+		{DBID: 100, MediaTitleDBID: 10, Path: filepath.Join(arcade, "Street Fighter Alpha 3 (USA).mra")},
+		{DBID: 200, MediaTitleDBID: 20, Path: filepath.Join(arcade, "Shock Troopers.mra")},
+		{DBID: 300, MediaTitleDBID: 30, Path: filepath.Join(arcade, "Broken.mra")},
+	}, nil)
+	written := make(map[int64]string, 2)
+	mediaDB.On("ApplyScrapeResult", assertmock.Anything, assertmock.Anything, assertmock.Anything, assertmock.Anything).
+		Run(func(args assertmock.Arguments) {
+			write, ok := args.Get(3).(*database.ScrapeWrite)
+			require.True(t, ok)
+			require.Len(t, write.MediaProps, 1)
+			mediaID, ok := args.Get(1).(int64)
+			require.True(t, ok)
+			written[mediaID] = write.MediaProps[0].Text
+		}).Return(nil)
+
+	impl := &scraperImpl{
+		fs: fs, db: mediaDB, docsRoots: []string{docsRoot},
+		sources: map[string][]sourceDir{systemdefs.SystemArcade: {
+			{Path: artwork, SystemID: systemdefs.SystemArcade, Kind: sourceArtwork},
+		}},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 4)
+	impl.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []string{systemdefs.SystemArcade}, ch)
+
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		updates = append(updates, update)
+	}
+	// Live progress updates precede the step's final update; the final one
+	// for the system is the last before Done.
+	require.GreaterOrEqual(t, len(updates), 3)
+	final := updates[len(updates)-2]
+	assert.Equal(t, systemdefs.SystemArcade, final.SystemID)
+	require.NoError(t, final.Err)
+	assert.Equal(t, 2, final.Matched)
+	assert.Equal(t, final.Processed, final.Total)
+	assert.True(t, updates[len(updates)-1].Done)
+	first := updates[0]
+	assert.Equal(t, 0, first.Processed, "first update announces the step size before matching")
+	assert.Equal(t, final.Total, first.Total)
+	assert.Equal(t, map[int64]string{
+		100: filepath.ToSlash(filepath.Join(artwork, "sfa3.jpg")),
+		200: filepath.ToSlash(filepath.Join(artwork, "shocktro.jpg")),
+	}, written)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_SkipsMRAScanWithoutArcadeSource(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	docsRoot := filepath.Join("media", "fat", "docs")
+	artwork := filepath.Join(docsRoot, "SNES", artworkDirName)
+	require.NoError(t, fs.MkdirAll(artwork, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(artwork, indexFileName), []byte("#name\tkey\n"), 0o600))
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{}, nil)
+	// An MRA path that does not exist on the filesystem: reading it would
+	// fail, and the scan must not even be attempted for a console system.
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return([]database.MediaWithFullPath{
+		{DBID: 100, MediaTitleDBID: 10, Path: "/games/SNES/Stray.mra"},
+	}, nil)
+
+	opened := 0
+	countingFS := &openCountingFS{Fs: fs, count: &opened}
+	impl := &scraperImpl{
+		fs: countingFS, db: mediaDB, docsRoots: []string{docsRoot},
+		sources: map[string][]sourceDir{systemdefs.SystemSNES: {
+			{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork},
+		}},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 4)
+	impl.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []string{systemdefs.SystemSNES}, ch)
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		updates = append(updates, update)
+	}
+	require.NotEmpty(t, updates)
+	assert.True(t, updates[len(updates)-1].Done)
+	assert.Zero(t, opened, "no MRA should be opened for a system without an arcade source")
+	mediaDB.AssertExpectations(t)
+}
+
+// openCountingFS counts opens of .mra files.
+type openCountingFS struct {
+	afero.Fs
+	count *int
+}
+
+func (fs *openCountingFS) Open(name string) (afero.File, error) {
+	if strings.EqualFold(filepath.Ext(name), mraExt) {
+		*fs.count++
+	}
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	return file, nil
 }
