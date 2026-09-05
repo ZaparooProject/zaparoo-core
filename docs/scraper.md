@@ -186,11 +186,11 @@ Game manuals can be selected through Update All's **Game Manuals (EN)** settings
 
 ### Discovery
 
-Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots. It recognizes content by installed format rather than repository name:
+Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots, and also probes `/media/usb6` and `/media/usb7`, which artwork packs may be installed to but MiSTer's games-folder list does not reach. It recognizes content by installed format rather than repository name, following the [MiSTer Artwork Pack format](https://github.com/chipster6502/MiSTer_artwork_pack/blob/main/PACK_FORMAT.md):
 
-- Artwork: `docs/<system>/Artwork/index.tsv` plus image files in the same directory.
-- Optional title metadata: `gameinfo.tsv` beside the artwork index.
-- Optional description: `synopsis_en.tsv` beside the artwork index.
+- Artwork: `docs/<System>/Artwork/` holding one `<key>.jpg` per game, normally with an `index.tsv` beside them that maps every known dump to its key. `<System>` is the MiSTer `games/` folder name. A directory with images and no index still resolves games filed under their exact key.
+- Optional title metadata: `gameinfo.tsv` beside the images. Games it lists without an image still receive their metadata.
+- Optional description: `synopsis_<lang>.tsv` beside the images. Which languages a pack ships varies per system, so Core reads whichever files exist and picks the first match from `media.default_langs`, then English, then the first available language.
 - Manuals: direct PDF files in a child directory whose name contains `manual`, for example `docs/SNES/Manuals/` or `docs/NES/Famicom Disk System Manuals/`.
 
 This format-based discovery means future compatible databases need no Core update. Run `mister-docs` again after Downloader installs or updates content. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art/manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
@@ -199,7 +199,14 @@ Metadata files are treated as untrusted input. Core bounds their size and record
 
 ### Matching And Fields
 
-`index.tsv` maps ROM or MRA basenames to canonical artwork keys. Core prefers an exact media basename match. When no exact media match exists, a unique title-slug match may receive title-level artwork; ambiguous matches are skipped. CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O.
+`index.tsv` maps catalogued dump names to artwork keys: No-Intro names for cartridges, Redump names for CD systems, and MAME parent setnames for arcade. Core resolves each pack entry to installed media in the pack format's order, stopping at the first hit:
+
+1. The catalogued name as a media basename, at media scope.
+2. For arcade, the `<setname>` inside each installed `.mra`, at media scope. MRA filenames are titles, so the setname is the only handle an arcade key has; Core reads it from the MRA only for systems that have an arcade artwork source.
+3. A media basename whose trailing parenthesised tag is itself a pack key, such as `Shock Troopers (set 1) (shocktro)`, at media scope.
+4. A unique bare-title match, at title scope. This step is skipped when the stripped title is not unique among the pack's keys or among the library's titles, and it is only available to index rows: images the index does not mention resolve by exact name alone.
+
+CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O; the pack format treats that step as optional.
 
 | Source | Destination |
 |---|---|
@@ -208,10 +215,12 @@ Metadata files are treated as untrusted input. Core bounds their size and record
 | `gameinfo.tsv` genre | title tag `genre` |
 | `gameinfo.tsv` developer | title tag `developer` |
 | `gameinfo.tsv` players | title tag `players` using highest numeric value |
-| `synopsis_en.tsv` synopsis | title property `property:description` |
+| `synopsis_<lang>.tsv` synopsis | title property `property:description` |
 | Manual PDF | title property `property:manual` |
 
-Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
+Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately.
+
+Base-system sources enrich their variants, such as SNES MSU-1, Genesis MSU, and the granular arcade systems. On top of that, Core applies the pack format's shared-catalogue rules: Game Boy and Game Boy Color each fall back to the other, Super Game Boy reads both, and FDS falls back to NES but never the reverse. Systems the pack catalogues separately do not fill each other's gaps, so SG-1000 never receives ColecoVision art and Neo Geo Pocket Color never receives Neo Geo Pocket art, even though the general system fallbacks allow it.
 
 If multiple docs roots provide the same property, MiSTer root order decides which source wins. As with other scrapers, running a different scraper later may replace exclusive tags or same-type properties.
 

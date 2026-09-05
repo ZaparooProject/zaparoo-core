@@ -32,6 +32,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -40,12 +41,26 @@ const (
 	maxMetadataBytes   = int64(8 * 1024 * 1024)
 	maxMetadataRecords = 100_000
 	directoryReadBatch = 256
+
+	gameInfoFileName = "gameinfo.tsv"
+	// Synopsis files are named per language, and which languages a pack ships
+	// varies by system, so they are globbed rather than probed by name.
+	synopsisFilePrefix  = "synopsis_"
+	synopsisFileSuffix  = ".tsv"
+	defaultSynopsisLang = "en"
 )
 
+// artworkRecord is one resolvable entry from a pack. ImagePath is empty for a
+// game the pack holds metadata but no image for; those still carry year, genre
+// and synopsis so a title can show details without artwork.
 type artworkRecord struct {
 	Name      string
 	Key       string
 	ImagePath string
+	// SlugUnique is false when another key in the same pack reduces to the
+	// same bare title. Falling back to a title match then serves a coin-flip
+	// image, which the format treats as worse than serving none.
+	SlugUnique bool
 }
 
 type gameInfoRecord struct {
@@ -64,10 +79,10 @@ type sourceRecords struct {
 	RowErrors int
 }
 
-func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir) (sourceRecords, error) {
+func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir, langs []string) (sourceRecords, error) {
 	switch source.Kind {
 	case sourceArtwork:
-		return loadArtworkRecords(ctx, fs, source.Path)
+		return loadArtworkRecords(ctx, fs, source.Path, langs)
 	case sourceManuals:
 		manuals, err := loadManualRecords(ctx, fs, source.Path)
 		return sourceRecords{Manuals: manuals}, err
@@ -76,31 +91,57 @@ func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir) (sour
 	}
 }
 
-func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRecords, error) {
+func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string, langs []string) (sourceRecords, error) {
 	images, err := imageFilesByStem(ctx, fs, dir)
 	if err != nil {
 		return sourceRecords{}, err
 	}
-	rows, err := readTSV(ctx, fs, filepath.Join(dir, indexFileName))
-	if err != nil {
-		return sourceRecords{}, fmt.Errorf("misterdocs: parse artwork index: %w", err)
-	}
 	result := sourceRecords{
-		Artwork:  make([]artworkRecord, 0, len(rows.records)),
+		Artwork:  make([]artworkRecord, 0, len(images)),
 		GameInfo: make(map[string]gameInfoRecord),
 		Synopsis: make(map[string]string),
+	}
+	if err := loadArtworkIndex(ctx, fs, dir, images, &result); err != nil {
+		return sourceRecords{}, err
+	}
+	// Only index rows may fall back to a bare-title match. Records added
+	// after this point resolve by exact name alone, which is all the format
+	// promises for an image the index does not mention.
+	markUniqueSlugs(result.Artwork)
+	loadArtworkMetadata(ctx, fs, dir, langs, &result)
+	appendUnindexedRecords(images, &result)
+	return result, nil
+}
+
+// loadArtworkIndex resolves every catalogued dump to the image that represents
+// it. A pack with no index still serves images filed under their own key, so a
+// missing index is not an error; appendUnindexedRecords covers those images.
+func loadArtworkIndex(
+	ctx context.Context,
+	fs afero.Fs,
+	dir string,
+	images map[string]string,
+	result *sourceRecords,
+) error {
+	indexPath := filepath.Join(dir, indexFileName)
+	if !isRegularFile(fs, indexPath) {
+		return nil
+	}
+	rows, err := readTSV(ctx, fs, indexPath)
+	if err != nil {
+		return fmt.Errorf("misterdocs: parse artwork index: %w", err)
 	}
 	nameCol, nameOK := rows.columns["name"]
 	keyCol, keyOK := rows.columns["key"]
 	if !nameOK || !keyOK {
-		return sourceRecords{}, errors.New("misterdocs: index.tsv requires name and key columns")
+		return errors.New("misterdocs: index.tsv requires name and key columns")
 	}
 	recordsByName := make(map[string]artworkRecord)
 	recordOrder := make([]string, 0, len(rows.records))
 	ambiguousNames := make(map[string]struct{})
 	for _, row := range rows.records {
 		if err := ctx.Err(); err != nil {
-			return sourceRecords{}, err
+			return err
 		}
 		name, key, ok := rowValues(row, nameCol, keyCol)
 		if !ok || name == "" || key == "" {
@@ -120,6 +161,8 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRec
 		if existing, duplicate := recordsByName[nameKey]; duplicate {
 			result.RowErrors++
 			if !strings.EqualFold(existing.Key, key) {
+				// Two keys claim one name, so the row accepted earlier is
+				// unusable too and is retracted along with this one.
 				delete(recordsByName, nameKey)
 				ambiguousNames[nameKey] = struct{}{}
 				result.RowErrors++
@@ -134,9 +177,14 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRec
 			result.Artwork = append(result.Artwork, record)
 		}
 	}
+	return nil
+}
 
-	if isRegularFile(fs, filepath.Join(dir, "gameinfo.tsv")) {
-		parsed, parseErr := loadGameInfo(ctx, fs, filepath.Join(dir, "gameinfo.tsv"))
+func loadArtworkMetadata(ctx context.Context, fs afero.Fs, dir string, langs []string, result *sourceRecords) {
+	gameInfoPath := filepath.Join(dir, gameInfoFileName)
+	if isRegularFile(fs, gameInfoPath) {
+		parsed, rowErrors, parseErr := loadGameInfo(ctx, fs, gameInfoPath)
+		result.RowErrors += rowErrors
 		if parseErr != nil {
 			result.RowErrors++
 			log.Warn().Err(parseErr).Str("dir", dir).Msg("misterdocs: skipped optional game metadata")
@@ -144,38 +192,166 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRec
 			result.GameInfo = parsed
 		}
 	}
-	if isRegularFile(fs, filepath.Join(dir, "synopsis_en.tsv")) {
-		parsed, parseErr := loadSynopsis(ctx, fs, filepath.Join(dir, "synopsis_en.tsv"))
-		if parseErr != nil {
-			result.RowErrors++
-			log.Warn().Err(parseErr).Str("dir", dir).Msg("misterdocs: skipped optional synopsis")
-		} else {
-			result.Synopsis = parsed
-		}
+	synopsisPath := synopsisFileForLangs(ctx, fs, dir, langs)
+	if synopsisPath == "" {
+		return
 	}
-	return result, nil
+	parsed, rowErrors, parseErr := loadSynopsis(ctx, fs, synopsisPath)
+	result.RowErrors += rowErrors
+	if parseErr != nil {
+		result.RowErrors++
+		log.Warn().Err(parseErr).Str("path", synopsisPath).Msg("misterdocs: skipped optional synopsis")
+		return
+	}
+	result.Synopsis = parsed
 }
 
-func loadGameInfo(ctx context.Context, fs afero.Fs, path string) (map[string]gameInfoRecord, error) {
-	rows, err := readTSV(ctx, fs, path)
+// appendUnindexedRecords adds what the index does not cover. Every image no
+// row names is filed under its own key, because a key used as a filename
+// resolves whether or not the index mentions it - and it is the only step left
+// when a pack ships with no index at all. Every gameinfo key with neither an
+// image nor a row becomes a metadata-only record, so a game the pack holds
+// details but no artwork for still gets them; the key itself, a catalogue name
+// or a setname, is the only handle such a game has. Neither kind is an index
+// row, so neither is eligible for the bare-title fallback.
+func appendUnindexedRecords(images map[string]string, result *sourceRecords) {
+	names := make(map[string]struct{}, len(result.Artwork))
+	keys := make(map[string]struct{}, len(result.Artwork))
+	for i := range result.Artwork {
+		names[strings.ToLower(result.Artwork[i].Name)] = struct{}{}
+		keys[strings.ToLower(result.Artwork[i].Key)] = struct{}{}
+	}
+	stems := make([]string, 0, len(images))
+	for stem := range images {
+		if _, ok := names[stem]; !ok {
+			stems = append(stems, stem)
+		}
+	}
+	sort.Strings(stems)
+	for _, stem := range stems {
+		path := images[stem]
+		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		result.Artwork = append(result.Artwork, artworkRecord{Name: name, Key: name, ImagePath: path})
+		keys[stem] = struct{}{}
+	}
+	infoKeys := make([]string, 0, len(result.GameInfo))
+	for key := range result.GameInfo {
+		lowered := strings.ToLower(key)
+		if _, ok := keys[lowered]; ok {
+			continue
+		}
+		// A gameinfo key that is already an index name resolves through that
+		// row to its representative image and metadata; a second record for
+		// it would only re-match the same media.
+		if _, ok := names[lowered]; ok {
+			continue
+		}
+		infoKeys = append(infoKeys, key)
+	}
+	sort.Strings(infoKeys)
+	for _, key := range infoKeys {
+		result.Artwork = append(result.Artwork, artworkRecord{Name: key, Key: key})
+	}
+}
+
+// markUniqueSlugs flags the records whose bare title identifies exactly one
+// key, which are the only ones allowed to match a title rather than a dump.
+func markUniqueSlugs(records []artworkRecord) {
+	recordSlugs := make([]string, len(records))
+	keysBySlug := make(map[string]map[string]struct{}, len(records))
+	for i := range records {
+		slug := slugs.Slugify(slugs.MediaTypeGame, records[i].Name)
+		recordSlugs[i] = slug
+		if slug == "" {
+			continue
+		}
+		if keysBySlug[slug] == nil {
+			keysBySlug[slug] = make(map[string]struct{}, 1)
+		}
+		keysBySlug[slug][strings.ToLower(records[i].Key)] = struct{}{}
+	}
+	for i := range records {
+		records[i].SlugUnique = recordSlugs[i] != "" && len(keysBySlug[recordSlugs[i]]) == 1
+	}
+}
+
+// synopsisFileForLangs picks a synopsis file by preferred language. A pack
+// ships a language file only where the source held text in it, so the set
+// varies per system and has to be globbed rather than assumed.
+func synopsisFileForLangs(ctx context.Context, fs afero.Fs, dir string, langs []string) string {
+	entries, err := afero.ReadDir(fs, dir)
 	if err != nil {
-		return nil, fmt.Errorf("misterdocs: parse gameinfo: %w", err)
+		return ""
+	}
+	byLang := make(map[string]string, len(entries))
+	available := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return ""
+		}
+		name := strings.ToLower(entry.Name())
+		if entry.IsDir() || !strings.HasPrefix(name, synopsisFilePrefix) ||
+			!strings.HasSuffix(name, synopsisFileSuffix) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if !isRegularFile(fs, path) {
+			continue
+		}
+		lang := strings.TrimSuffix(strings.TrimPrefix(name, synopsisFilePrefix), synopsisFileSuffix)
+		if lang == "" {
+			continue
+		}
+		byLang[lang] = path
+		available = append(available, lang)
+	}
+	if len(available) == 0 {
+		return ""
+	}
+	for _, lang := range append(append([]string{}, langs...), defaultSynopsisLang) {
+		lang = strings.ToLower(strings.TrimSpace(lang))
+		if path := byLang[lang]; path != "" {
+			return path
+		}
+		if sep := strings.IndexAny(lang, "-_"); sep > 0 {
+			if path := byLang[lang[:sep]]; path != "" {
+				return path
+			}
+		}
+	}
+	sort.Strings(available)
+	return byLang[available[0]]
+}
+
+// loadGameInfo returns the metadata rows keyed by pack key. rowErrors counts
+// rows dropped for repeating a key; the first row for a key is kept.
+func loadGameInfo(
+	ctx context.Context,
+	fs afero.Fs,
+	path string,
+) (records map[string]gameInfoRecord, rowErrors int, err error) {
+	rows, readErr := readTSV(ctx, fs, path)
+	if readErr != nil {
+		return nil, 0, fmt.Errorf("misterdocs: parse gameinfo: %w", readErr)
 	}
 	keyCol, ok := rows.columns["key"]
 	if !ok {
-		return nil, errors.New("misterdocs: gameinfo.tsv requires key column")
+		return nil, 0, errors.New("misterdocs: gameinfo.tsv requires key column")
 	}
 	result := make(map[string]gameInfoRecord, len(rows.records))
 	for _, row := range rows.records {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, rowErrors, ctxErr
 		}
 		key := field(row, keyCol)
 		if key == "" {
 			continue
 		}
 		if _, duplicate := result[key]; duplicate {
-			return nil, fmt.Errorf("misterdocs: gameinfo.tsv contains duplicate key %q", key)
+			// Keep the first row. Dropping the whole file over one repeated
+			// key would cost every other game its metadata.
+			rowErrors++
+			continue
 		}
 		result[key] = gameInfoRecord{
 			Name:      fieldByName(row, rows.columns, "name"),
@@ -185,34 +361,41 @@ func loadGameInfo(ctx context.Context, fs afero.Fs, path string) (map[string]gam
 			Players:   fieldByName(row, rows.columns, "players"),
 		}
 	}
-	return result, nil
+	return result, rowErrors, nil
 }
 
-func loadSynopsis(ctx context.Context, fs afero.Fs, path string) (map[string]string, error) {
-	rows, err := readTSV(ctx, fs, path)
-	if err != nil {
-		return nil, fmt.Errorf("misterdocs: parse synopsis: %w", err)
+// loadSynopsis returns descriptions keyed by pack key. rowErrors counts rows
+// dropped for repeating a key; the first row for a key is kept.
+func loadSynopsis(
+	ctx context.Context,
+	fs afero.Fs,
+	path string,
+) (records map[string]string, rowErrors int, err error) {
+	rows, readErr := readTSV(ctx, fs, path)
+	if readErr != nil {
+		return nil, 0, fmt.Errorf("misterdocs: parse synopsis: %w", readErr)
 	}
 	keyCol, keyOK := rows.columns["key"]
 	synopsisCol, synopsisOK := rows.columns["synopsis"]
 	if !keyOK || !synopsisOK {
-		return nil, errors.New("misterdocs: synopsis_en.tsv requires key and synopsis columns")
+		return nil, 0, errors.New("misterdocs: synopsis file requires key and synopsis columns")
 	}
 	result := make(map[string]string, len(rows.records))
 	for _, row := range rows.records {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, rowErrors, ctxErr
 		}
 		key, synopsis, ok := rowValues(row, keyCol, synopsisCol)
 		if !ok || key == "" || synopsis == "" {
 			continue
 		}
 		if _, duplicate := result[key]; duplicate {
-			return nil, fmt.Errorf("misterdocs: synopsis_en.tsv contains duplicate key %q", key)
+			rowErrors++
+			continue
 		}
 		result[key] = synopsis
 	}
-	return result, nil
+	return result, rowErrors, nil
 }
 
 func loadManualRecords(ctx context.Context, fs afero.Fs, dir string) ([]string, error) {
