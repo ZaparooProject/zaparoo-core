@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -251,8 +252,10 @@ func TestScrapeLoop_AccumulatesSourceLoadFailures(t *testing.T) {
 	}
 	require.Len(t, updates, 2)
 	require.Error(t, updates[0].Err)
-	require.ErrorContains(t, updates[0].Err, firstSource)
-	require.ErrorContains(t, updates[0].Err, secondSource)
+	// The error quotes each path with %q, which escapes the backslashes in a
+	// Windows path, so compare against the quoted form.
+	require.ErrorContains(t, updates[0].Err, strconv.Quote(firstSource))
+	require.ErrorContains(t, updates[0].Err, strconv.Quote(secondSource))
 	mediaDB.AssertExpectations(t)
 }
 
