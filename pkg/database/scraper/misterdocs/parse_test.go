@@ -82,11 +82,17 @@ func TestLoadArtworkRecords_ImportsIndexAndOptionalMetadata(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
 	require.NoError(t, err)
-	require.Len(t, got.Artwork, 1)
+	require.Len(t, got.Artwork, 2)
 	assert.Equal(t, "Game (USA)", got.Artwork[0].Name)
 	assert.Equal(t, filepath.Join(dir, "Canonical Game.jpg"), got.Artwork[0].ImagePath)
+	assert.True(t, got.Artwork[0].SlugUnique)
+	// The image the index points at is also reachable under its own key, but
+	// only by exact name: it is not an index row, so no bare-title fallback.
+	assert.Equal(t, artworkRecord{
+		Name: "Canonical Game", Key: "Canonical Game", ImagePath: filepath.Join(dir, "Canonical Game.jpg"),
+	}, got.Artwork[1])
 	assert.Equal(t, "1994", got.GameInfo["Canonical Game"].Year)
 	assert.Equal(t, "A &amp; B", got.Synopsis["Canonical Game"])
 	assert.Equal(t, 1, got.RowErrors)
@@ -107,9 +113,13 @@ func TestLoadArtworkRecords_OmitsAmbiguousDuplicateNames(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
 	require.NoError(t, err)
-	assert.Empty(t, got.Artwork)
+	// Neither key may claim the shared name, but each image still resolves
+	// under its own key.
+	require.Len(t, got.Artwork, 2)
+	assert.Equal(t, "First", got.Artwork[0].Name)
+	assert.Equal(t, "Second", got.Artwork[1].Name)
 	assert.Equal(t, 2, got.RowErrors)
 }
 
@@ -129,7 +139,7 @@ func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 1)
 	assert.Empty(t, got.GameInfo)
@@ -137,7 +147,7 @@ func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
 	assert.Equal(t, 2, got.RowErrors)
 }
 
-func TestLoadArtworkRecords_SkipsDuplicateOptionalMetadataKeys(t *testing.T) {
+func TestLoadArtworkRecords_KeepsFirstOfDuplicateOptionalMetadataKeys(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
@@ -155,11 +165,11 @@ func TestLoadArtworkRecords_SkipsDuplicateOptionalMetadataKeys(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 1)
-	assert.Empty(t, got.GameInfo)
-	assert.Empty(t, got.Synopsis)
+	assert.Equal(t, "1994", got.GameInfo["Game"].Year)
+	assert.Equal(t, "First", got.Synopsis["Game"])
 	assert.Equal(t, 2, got.RowErrors)
 }
 
@@ -171,7 +181,7 @@ func TestLoadArtworkRecords_RequiresColumns(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(dir, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "index.tsv"), []byte("#name\nGame\n"), 0o600))
 
-	_, err := loadArtworkRecords(context.Background(), fs, dir)
+	_, err := loadArtworkRecords(context.Background(), fs, dir, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires name and key")
 }
@@ -185,11 +195,11 @@ func TestLoadSourceRecords_HandlesManualsAndRejectsUnknownKinds(t *testing.T) {
 	manualPath := filepath.Join(dir, "Game.pdf")
 	require.NoError(t, afero.WriteFile(fs, manualPath, []byte("pdf"), 0o600))
 
-	got, err := loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceManuals})
+	got, err := loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceManuals}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{manualPath}, got.Manuals)
 
-	_, err = loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceKind(255)})
+	_, err = loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceKind(255)}, nil)
 	require.ErrorContains(t, err, "unknown source kind")
 }
 
@@ -296,4 +306,191 @@ func TestNormalizePlayers(t *testing.T) {
 	assert.Equal(t, "4", normalizePlayers("1-4"))
 	assert.Equal(t, "8", normalizePlayers("1, 2 / 8"))
 	assert.Empty(t, normalizePlayers("unknown"))
+}
+
+func TestLoadArtworkRecords_PicksSynopsisByPreferredLanguage(t *testing.T) {
+	t.Parallel()
+
+	writeSynopsisPack := func(t *testing.T) (afero.Fs, string) {
+		t.Helper()
+		fs := afero.NewMemMapFs()
+		dir := filepath.Join("docs", "Genesis", "Artwork")
+		require.NoError(t, fs.MkdirAll(dir, 0o750))
+		files := map[string]string{
+			"index.tsv":       "#name\tkey\nGame\tGame\n",
+			"Game.jpg":        "image",
+			"synopsis_de.tsv": "#key\tsynopsis\nGame\tDeutsch\n",
+			"synopsis_fr.tsv": "#key\tsynopsis\nGame\tFrançais\n",
+		}
+		for name, content := range files {
+			require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+		}
+		return fs, dir
+	}
+
+	tests := []struct {
+		name  string
+		want  string
+		langs []string
+	}{
+		{name: "first preferred language present", langs: []string{"fr", "en"}, want: "Français"},
+		{name: "later preferred language present", langs: []string{"es", "de"}, want: "Deutsch"},
+		{name: "regional tag falls back to its base", langs: []string{"fr-CA"}, want: "Français"},
+		{name: "underscore regional tag falls back to its base", langs: []string{"de_DE"}, want: "Deutsch"},
+		{name: "case is ignored", langs: []string{"FR"}, want: "Français"},
+		{name: "no preference and no english picks deterministically", langs: nil, want: "Deutsch"},
+		{name: "unavailable preference picks deterministically", langs: []string{"es"}, want: "Deutsch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs, dir := writeSynopsisPack(t)
+			got, err := loadArtworkRecords(context.Background(), fs, dir, tt.langs)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Synopsis["Game"])
+		})
+	}
+}
+
+func TestLoadArtworkRecords_PrefersEnglishOverArbitraryLanguage(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "Genesis", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string]string{
+		"index.tsv":       "#name\tkey\nGame\tGame\n",
+		"Game.jpg":        "image",
+		"synopsis_de.tsv": "#key\tsynopsis\nGame\tDeutsch\n",
+		"synopsis_en.tsv": "#key\tsynopsis\nGame\tEnglish\n",
+		"synopsis_it.tsv": "#key\tsynopsis\nGame\tItaliano\n",
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir, []string{"es"})
+	require.NoError(t, err)
+	assert.Equal(t, "English", got.Synopsis["Game"])
+}
+
+func TestLoadArtworkRecords_AddsMetadataOnlyRecordsForImagelessGames(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string]string{
+		"index.tsv": "#name\tkey\nShown (USA)\tShown (USA)\n",
+		"gameinfo.tsv": "#key\tname\tyear\n" +
+			"Shown (USA)\tShown\t1994\n" +
+			"Unseen (USA)\tUnseen\t1995\n",
+		"Shown (USA).jpg": "image",
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	require.NoError(t, err)
+	require.Len(t, got.Artwork, 2)
+	assert.Equal(t, "Shown (USA)", got.Artwork[0].Key)
+	assert.NotEmpty(t, got.Artwork[0].ImagePath)
+	assert.Equal(t, artworkRecord{Name: "Unseen (USA)", Key: "Unseen (USA)"}, got.Artwork[1])
+	assert.Equal(t, "1995", got.GameInfo["Unseen (USA)"].Year)
+	assert.Zero(t, got.RowErrors)
+}
+
+func TestLoadArtworkRecords_DegradesToExactKeysWithoutIndex(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string]string{
+		"Zelda (USA).jpg": "image",
+		"Mario (USA).jpg": "image",
+		"gameinfo.tsv":    "#key\tyear\nMario (USA)\t1991\n",
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []artworkRecord{
+		{Name: "Mario (USA)", Key: "Mario (USA)", ImagePath: filepath.Join(dir, "Mario (USA).jpg")},
+		{Name: "Zelda (USA)", Key: "Zelda (USA)", ImagePath: filepath.Join(dir, "Zelda (USA).jpg")},
+	}, got.Artwork)
+	assert.Equal(t, "1991", got.GameInfo["Mario (USA)"].Year)
+	assert.Zero(t, got.RowErrors)
+}
+
+func TestLoadArtworkRecords_MarksSlugUniquenessPerKey(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "GAMEBOY", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string]string{
+		// Two dumps of one game share a bare title and a key: still unique.
+		// Two games whose bare titles collide across keys are not.
+		"index.tsv": "#name\tkey\n" +
+			"Blaster Master Boy (USA)\tBlaster Master Boy (USA)\n" +
+			"Blaster Master Boy (USA) (Beta)\tBlaster Master Boy (USA)\n" +
+			"Tetris (World)\tTetris (World)\n" +
+			"Tetris (Japan)\tTetris (Japan)\n",
+		"Blaster Master Boy (USA).jpg": "image",
+		"Tetris (World).jpg":           "image",
+		"Tetris (Japan).jpg":           "image",
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	require.NoError(t, err)
+	unique := make(map[string]bool, len(got.Artwork))
+	for _, record := range got.Artwork {
+		unique[record.Name] = record.SlugUnique
+	}
+	assert.True(t, unique["Blaster Master Boy (USA)"])
+	assert.True(t, unique["Blaster Master Boy (USA) (Beta)"])
+	assert.False(t, unique["Tetris (World)"])
+	assert.False(t, unique["Tetris (Japan)"])
+}
+
+func TestLoadArtworkRecords_DoesNotDuplicateDumpsAlreadyNamedInIndex(t *testing.T) {
+	t.Parallel()
+
+	// Real PSX pack shape: a demo dump is an index name resolving to the
+	// representative key, and also a gameinfo key with no image of its own.
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "PSX", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string]string{
+		"index.tsv": "#name\tcrc\tsize\tkey\n" +
+			"'98 Koushien (Japan) (Demo)\t6ab3e4ce\t93\t'98 Koushien - Koukou Yakyuu Simulation (Japan)\n" +
+			"'98 Koushien - Koukou Yakyuu Simulation (Japan)\tda95e43a\t113\t" +
+			"'98 Koushien - Koukou Yakyuu Simulation (Japan)\n",
+		"gameinfo.tsv": "#key\tname\tyear\n" +
+			"'98 Koushien (Japan) (Demo)\t'98 Koushien\t1998\n" +
+			"'98 Koushien - Koukou Yakyuu Simulation (Japan)\t'98 Koushien\t1998\n",
+		"'98 Koushien - Koukou Yakyuu Simulation (Japan).jpg": "image",
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	require.NoError(t, err)
+	names := make([]string, 0, len(got.Artwork))
+	for _, record := range got.Artwork {
+		names = append(names, record.Name)
+	}
+	assert.Equal(t, []string{
+		"'98 Koushien (Japan) (Demo)",
+		"'98 Koushien - Koukou Yakyuu Simulation (Japan)",
+	}, names)
+	assert.Zero(t, got.RowErrors)
 }

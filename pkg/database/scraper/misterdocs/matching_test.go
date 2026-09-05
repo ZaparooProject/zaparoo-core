@@ -57,7 +57,8 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 		Manuals:  []string{manualPath},
 	}}
 
-	targets, stats, found := buildPendingWrites(testSystemIndex(), records, "run-1")
+	matched := buildPendingWrites(testSystemIndex(), records, "run-1")
+	targets, stats, found := matched.Targets, matched.Stats, matched.Found
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 2, Matched: 2}, stats)
 	assert.Contains(t, found, filepath.Clean(artPath))
@@ -96,7 +97,8 @@ func TestBuildPendingWrites_SkipsDuplicateArtworkForMedia(t *testing.T) {
 		{Name: "Game (USA)", Key: "Game", ImagePath: secondPath},
 	}}}
 
-	targets, stats, _ := buildPendingWrites(testSystemIndex(), records, "")
+	matched := buildPendingWrites(testSystemIndex(), records, "")
+	targets, stats := matched.Targets, matched.Stats
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 2, Matched: 1, Skipped: 1}, stats)
 	require.Len(t, targets[0].Write.MediaProps, 1)
@@ -106,7 +108,7 @@ func TestBuildPendingWrites_SkipsDuplicateArtworkForMedia(t *testing.T) {
 func TestMatchArtwork_UsesUniqueTitleFallbackAtTitleScope(t *testing.T) {
 	t.Parallel()
 
-	record := artworkRecord{Name: "The Game", Key: "Game", ImagePath: "Game.jpg"}
+	record := artworkRecord{Name: "The Game", Key: "Game", ImagePath: "Game.jpg", SlugUnique: true}
 	media, title, exact := matchArtwork(testSystemIndex(), record)
 	require.NotNil(t, media)
 	require.NotNil(t, title)
@@ -167,7 +169,7 @@ func TestMatchArtwork_TitleFallbackPrefersPresentMedia(t *testing.T) {
 		},
 	)
 
-	media, title, exact := matchArtwork(idx, artworkRecord{Name: "Game"})
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "Game", SlugUnique: true})
 	require.NotNil(t, media)
 	require.NotNil(t, title)
 	assert.Equal(t, int64(200), media.DBID)
@@ -203,4 +205,127 @@ func TestNormalizedYear(t *testing.T) {
 
 	assert.Equal(t, "1994", normalizedYear("1994-01-01"))
 	assert.Empty(t, normalizedYear("unknown"))
+}
+
+func TestMatchArtwork_ResolvesArcadeBySetName(t *testing.T) {
+	t.Parallel()
+
+	idx := newSystemIndex(
+		[]database.TitleWithSystem{{DBID: 10, Slug: "streetfighteralpha3", Name: "Street Fighter Alpha 3"}},
+		[]database.MediaWithFullPath{{
+			DBID: 100, MediaTitleDBID: 10, Path: "/games/_Arcade/Street Fighter Alpha 3.mra",
+		}},
+	)
+	idx.mediaBySetName["sfa3"] = []database.MediaWithFullPath{{
+		DBID: 100, MediaTitleDBID: 10, Path: "/games/_Arcade/Street Fighter Alpha 3.mra",
+	}}
+
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "SFA3", Key: "sfa3", ImagePath: "sfa3.jpg"})
+	require.NotNil(t, media)
+	require.NotNil(t, title)
+	assert.True(t, exact)
+	assert.Equal(t, int64(100), media.DBID)
+}
+
+func TestMatchArtwork_ResolvesTrailingTagOnlyWhenItIsAKey(t *testing.T) {
+	t.Parallel()
+
+	idx := newSystemIndex(
+		[]database.TitleWithSystem{
+			{DBID: 10, Slug: "shocktroopers", Name: "Shock Troopers"},
+			{DBID: 20, Slug: "sonicthehedgehog", Name: "Sonic The Hedgehog"},
+		},
+		[]database.MediaWithFullPath{
+			{DBID: 100, MediaTitleDBID: 10, Path: "/games/NEOGEO/Shock Troopers (set 1) (shocktro).zip"},
+			{DBID: 200, MediaTitleDBID: 20, Path: "/games/Genesis/Sonic The Hedgehog (USA, Europe).md"},
+		},
+	)
+
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "shocktro", Key: "shocktro", ImagePath: "x.jpg"})
+	require.NotNil(t, media)
+	require.NotNil(t, title)
+	assert.True(t, exact)
+	assert.Equal(t, int64(100), media.DBID)
+
+	// A region tag is a trailing tag too, but no pack key is a region, so it
+	// must never fire; with no unique bare title either, nothing matches.
+	media, title, _ = matchArtwork(idx, artworkRecord{
+		Name: "Sonic The Hedgehog 2 (USA, Europe)", Key: "Sonic The Hedgehog 2 (USA, Europe)", ImagePath: "y.jpg",
+	})
+	assert.Nil(t, media)
+	assert.Nil(t, title)
+}
+
+func TestMatchArtwork_RefusesTitleFallbackForNonUniqueSlug(t *testing.T) {
+	t.Parallel()
+
+	record := artworkRecord{Name: "The Game", Key: "Game", ImagePath: "Game.jpg", SlugUnique: false}
+	media, title, exact := matchArtwork(testSystemIndex(), record)
+	assert.Nil(t, media)
+	assert.Nil(t, title)
+	assert.False(t, exact)
+}
+
+func TestBuildPendingWrites_WritesMetadataWithoutImage(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{
+		Artwork:  []artworkRecord{{Name: "Game (USA)", Key: "Game (USA)"}},
+		GameInfo: map[string]gameInfoRecord{"Game (USA)": {Year: "1994", Genre: "Platform"}},
+		Synopsis: map[string]string{"Game (USA)": "Details without a box."},
+	}}
+
+	matched := buildPendingWrites(testSystemIndex(), records, "")
+	targets, stats, found := matched.Targets, matched.Stats, matched.Found
+	require.Len(t, targets, 1)
+	assert.Equal(t, matchStats{Processed: 1, Matched: 1}, stats)
+	assert.Empty(t, found)
+	write := targets[0].Write
+	assert.Empty(t, write.MediaProps)
+	require.Len(t, write.TitleProps, 1)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyDescription), write.TitleProps[0].TypeTag)
+	tagValues := make(map[string]string, len(write.TitleTags))
+	for _, tag := range write.TitleTags {
+		tagValues[tag.Type] = tag.Tag
+	}
+	assert.Equal(t, "1994", tagValues[string(tags.TagTypeYear)])
+}
+
+func TestTrailingParenTag(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "shocktro", trailingParenTag("shock troopers (set 1) (shocktro)"))
+	assert.Equal(t, "usa, europe", trailingParenTag("Sonic (USA, Europe)"))
+	assert.Empty(t, trailingParenTag("plain name"))
+	assert.Empty(t, trailingParenTag("(unbalanced"))
+	assert.Empty(t, trailingParenTag("unbalanced)"))
+}
+
+func TestBuildPendingWrites_FirstRecordWinsTitleMetadata(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{
+		Artwork: []artworkRecord{
+			{Name: "Game (USA)", Key: "Game", ImagePath: filepath.Join("docs", "SNES", "Artwork", "Game.jpg")},
+			{Name: "Game (USA) (Demo)", Key: "Game (USA) (Demo)", SlugUnique: true},
+		},
+		GameInfo: map[string]gameInfoRecord{
+			"Game":              {Year: "1994", Genre: "Platform"},
+			"Game (USA) (Demo)": {Year: "1993", Genre: "Demo"},
+		},
+		Synopsis: map[string]string{"Game": "Full release.", "Game (USA) (Demo)": "Demo disc."},
+	}}
+
+	matched := buildPendingWrites(testSystemIndex(), records, "")
+	targets, stats := matched.Targets, matched.Stats
+	require.Len(t, targets, 1)
+	assert.Equal(t, matchStats{Processed: 2, Matched: 2}, stats)
+	tagValues := make(map[string]string, len(targets[0].Write.TitleTags))
+	for _, tag := range targets[0].Write.TitleTags {
+		tagValues[tag.Type] = tag.Tag
+	}
+	assert.Equal(t, "1994", tagValues[string(tags.TagTypeYear)])
+	assert.Equal(t, "platform", tagValues[string(tags.TagTypeGenre)])
+	require.Len(t, targets[0].Write.TitleProps, 1)
+	assert.Equal(t, "Full release.", targets[0].Write.TitleProps[0].Text)
 }

@@ -27,10 +27,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -74,9 +76,13 @@ func NewPlatformScraper() platforms.Scraper {
 				return fmt.Errorf("misterdocs: list indexed systems: %w", err)
 			}
 			targets := orderedTargetSystems(indexed, opts.Systems)
+			var langs []string
+			if cfg != nil {
+				langs = cfg.DefaultLangs()
+			}
 			impl := &scraperImpl{
 				fs: fs, db: db.MediaDB, docsRoots: candidateDocsRoots(rootDirs),
-				sources: sourcesBySystem(sources),
+				sources: sourcesBySystem(sources), langs: langs,
 			}
 			go impl.scrapeLoop(ctx, opts, targets, ch)
 			return nil
@@ -89,6 +95,7 @@ type scraperImpl struct {
 	fs        afero.Fs
 	db        database.MediaDBI
 	docsRoots []string
+	langs     []string
 }
 
 func (s *scraperImpl) scrapeLoop(
@@ -124,8 +131,20 @@ func (s *scraperImpl) scrapeLoop(
 			return
 		}
 
+		stepStart := time.Now()
+		report := func(processed, total, matched, skipped int) {
+			select {
+			case ch <- scraper.ScrapeUpdate{
+				SystemID: targetID, Processed: processed, Total: total, Matched: matched, Skipped: skipped,
+				TotalSteps: len(steps), CurrentStep: step + 1,
+			}:
+			case <-ctx.Done():
+			}
+		}
+
 		var records []sourceRecords
 		var sourceError error
+		arcadeSource := false
 		successfulRoots := make(map[string]struct{})
 		for _, sourceID := range sourceIDsForTarget(targetID) {
 			for _, source := range s.sources[sourceID] {
@@ -135,7 +154,7 @@ func (s *scraperImpl) scrapeLoop(
 					}
 					return
 				}
-				loaded, loadErr := loadSourceRecords(ctx, s.fs, source)
+				loaded, loadErr := loadSourceRecords(ctx, s.fs, source, s.langs)
 				if loadErr != nil {
 					sourceError = errors.Join(
 						sourceError,
@@ -144,10 +163,24 @@ func (s *scraperImpl) scrapeLoop(
 					continue
 				}
 				records = append(records, loaded)
+				if source.Kind == sourceArtwork && sourceID == systemdefs.SystemArcade {
+					arcadeSource = true
+				}
 				if root := s.docsRootForSource(source.Path); root != "" {
 					successfulRoots[root] = struct{}{}
 				}
 			}
+		}
+
+		loadDuration := time.Since(stepStart)
+		totalRecords := 0
+		for i := range records {
+			totalRecords += len(records[i].Artwork) + len(records[i].Manuals) + records[i].RowErrors
+		}
+		// A large pack takes minutes to match and write, so tell the API how
+		// big the step is before any of that starts.
+		if totalRecords > 0 {
+			report(0, totalRecords, 0, 0)
 		}
 
 		cleanupRoots := make([]string, 0, len(successfulRoots))
@@ -156,21 +189,64 @@ func (s *scraperImpl) scrapeLoop(
 				cleanupRoots = append(cleanupRoots, root)
 			}
 		}
+		scanStart := time.Now()
 		idx := newSystemIndex(titles, media)
-		writeTargets, stats, foundPaths := buildPendingWrites(idx, records, opts.RunID)
+		if arcadeSource {
+			if err := s.indexArcadeSetNames(ctx, opts, &idx, media); err != nil {
+				ch <- scraper.ScrapeUpdate{
+					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				}
+				return
+			}
+		}
+		scanDuration := time.Since(scanStart)
+		matchStart := time.Now()
+		matched := buildPendingWrites(idx, records, opts.RunID)
+		writeTargets, stats := matched.Targets, matched.Stats
+		matchDuration := time.Since(matchStart)
+		cleanupStart := time.Now()
 		if opts.Force && sourceError == nil && len(cleanupRoots) > 0 {
 			if _, cleanupErr := s.deleteStaleProperties(
-				ctx, opts, media, titles, foundPaths, cleanupRoots,
+				ctx, opts, media, titles, matched.Found, cleanupRoots,
 			); cleanupErr != nil {
 				sourceError = cleanupErr
 			}
 		}
+		cleanupDuration := time.Since(cleanupStart)
 
+		// Skipped records are finished once matching is; matched ones finish
+		// as their rows commit, so progress advances with each write batch.
+		if len(writeTargets) > 0 && stats.Skipped > 0 {
+			report(stats.Skipped, stats.Processed, 0, stats.Skipped)
+		}
+		writeStart := time.Now()
+		matchedWritten := 0
 		stepError := sourceError
-		if err := s.applyTargets(ctx, opts, writeTargets); err != nil {
+		if err := s.applyTargets(ctx, opts, writeTargets, func(from, to int) {
+			for i := from; i < to; i++ {
+				matchedWritten += matched.RecordsPerTarget[i]
+			}
+			if to < len(writeTargets) {
+				report(stats.Skipped+matchedWritten, stats.Processed, matchedWritten, stats.Skipped)
+			}
+		}); err != nil {
 			stepError = errors.Join(stepError, err)
 			stats.Skipped++
 		}
+		writeDuration := time.Since(writeStart)
+		log.Debug().
+			Str("system", targetID).
+			Int("records", stats.Processed).
+			Int("matched", stats.Matched).
+			Int("skipped", stats.Skipped).
+			Int("targets", len(writeTargets)).
+			Dur("load", loadDuration).
+			Dur("scan", scanDuration).
+			Dur("match", matchDuration).
+			Dur("cleanup", cleanupDuration).
+			Dur("write", writeDuration).
+			Dur("total", time.Since(stepStart)).
+			Msg("misterdocs: step complete")
 		totalProcessed += stats.Processed
 		totalMatched += stats.Matched
 		totalSkipped += stats.Skipped
@@ -183,6 +259,44 @@ func (s *scraperImpl) scrapeLoop(
 		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
 		TotalSteps: len(steps), CurrentStep: len(steps),
 	}
+}
+
+// indexArcadeSetNames resolves installed MRAs to the setname they declare.
+// Arcade artwork is filed under the MAME parent setname, which lives inside the
+// MRA and never in its filename, so without this pass an arcade pack matches
+// nothing. It runs only for systems that actually have an arcade source.
+func (s *scraperImpl) indexArcadeSetNames(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	idx *systemIndex,
+	media []database.MediaWithFullPath,
+) error {
+	started := time.Now()
+	scanned, resolved := 0, 0
+	for i := range media {
+		if !strings.EqualFold(filepath.Ext(media[i].Path), mraExt) {
+			continue
+		}
+		if err := waitForScrape(ctx, opts); err != nil {
+			return err
+		}
+		scanned++
+		setName, ok := readMRASetName(s.fs, media[i].Path)
+		if !ok {
+			continue
+		}
+		resolved++
+		key := strings.ToLower(setName)
+		idx.mediaBySetName[key] = append(idx.mediaBySetName[key], media[i])
+	}
+	if scanned > 0 {
+		log.Debug().
+			Int("mraFiles", scanned).
+			Int("resolved", resolved).
+			Dur("elapsed", time.Since(started)).
+			Msg("misterdocs: resolved arcade setnames")
+	}
+	return nil
 }
 
 func (s *scraperImpl) eligibleTargets(targets []string, force bool) []string {
@@ -202,10 +316,13 @@ func (s *scraperImpl) eligibleTargets(targets []string, force bool) []string {
 	return result
 }
 
+// applyTargets writes targets in batches, calling onBatch with the half-open
+// index range of each batch once it has committed.
 func (s *scraperImpl) applyTargets(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
 	targets []database.ScrapeWriteTarget,
+	onBatch func(from, to int),
 ) error {
 	batcher, canBatch := s.db.(database.ScrapeResultBatchApplier)
 	for start := 0; start < len(targets); start += writeBatchSize {
@@ -214,19 +331,34 @@ func (s *scraperImpl) applyTargets(
 		}
 		end := min(start+writeBatchSize, len(targets))
 		batch := targets[start:end]
-		if canBatch {
-			batchErr := batcher.ApplyScrapeResults(ctx, batch)
-			if batchErr == nil {
-				continue
-			}
-			log.Warn().Err(batchErr).
-				Int("targets", len(batch)).
-				Msg("misterdocs: batch write failed, falling back to per-record writes")
+		if err := s.applyBatch(ctx, batcher, canBatch, batch); err != nil {
+			return err
 		}
-		for _, target := range batch {
-			if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
-				return fmt.Errorf("misterdocs: write media %d: %w", target.MediaDBID, err)
-			}
+		if onBatch != nil {
+			onBatch(start, end)
+		}
+	}
+	return nil
+}
+
+func (s *scraperImpl) applyBatch(
+	ctx context.Context,
+	batcher database.ScrapeResultBatchApplier,
+	canBatch bool,
+	batch []database.ScrapeWriteTarget,
+) error {
+	if canBatch {
+		batchErr := batcher.ApplyScrapeResults(ctx, batch)
+		if batchErr == nil {
+			return nil
+		}
+		log.Warn().Err(batchErr).
+			Int("targets", len(batch)).
+			Msg("misterdocs: batch write failed, falling back to per-record writes")
+	}
+	for _, target := range batch {
+		if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
+			return fmt.Errorf("misterdocs: write media %d: %w", target.MediaDBID, err)
 		}
 	}
 	return nil

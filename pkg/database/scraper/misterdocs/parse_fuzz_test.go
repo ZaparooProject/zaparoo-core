@@ -90,3 +90,31 @@ func FuzzPathWithin(f *testing.F) {
 		}
 	})
 }
+
+func FuzzReadMRASetName(f *testing.F) {
+	f.Add([]byte("<misterromdescription><setname>sfa3</setname></misterromdescription>"))
+	f.Add([]byte(`<?xml version="1.0" encoding="ISO-8859-1"?><a><setname>x</setname></a>`))
+	f.Add([]byte("<setname>"))
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if int64(len(data)) > maxMRABytes {
+			t.Skip()
+		}
+		fs := afero.NewMemMapFs()
+		path := filepath.Join("games", "_Arcade", "Game.mra")
+		if err := fs.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := afero.WriteFile(fs, path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		setName, ok := readMRASetName(fs, path)
+		if ok && strings.TrimSpace(setName) == "" {
+			t.Fatalf("readMRASetName reported ok with a blank setname for %q", data)
+		}
+		if !ok && setName != "" {
+			t.Fatalf("readMRASetName returned %q without ok", setName)
+		}
+	})
+}

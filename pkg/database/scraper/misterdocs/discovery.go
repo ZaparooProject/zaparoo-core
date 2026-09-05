@@ -69,7 +69,19 @@ func candidateDocsRoots(roots []string) []string {
 		}
 		appendRoot(filepath.Join(root, "docs"))
 	}
+	for _, root := range extraDocsRoots {
+		appendRoot(root)
+	}
 	return result
+}
+
+// extraDocsRoots are mount points artwork packs tell consumers to probe that
+// MiSTer's own games-folder list does not reach. Packs install with the
+// Downloader's "pext" path, so docs can land on any USB drive. Roots that do
+// not exist are skipped during discovery, so probing costs one stat each.
+var extraDocsRoots = []string{ //nolint:gochecknoglobals // Fixed MiSTer mount points.
+	"/media/usb6/docs",
+	"/media/usb7/docs",
 }
 
 func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
@@ -100,8 +112,7 @@ func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
 				var kind sourceKind
 				var systemID string
 				switch {
-				case strings.EqualFold(child.Name(), artworkDirName) &&
-					isRegularFile(fs, filepath.Join(path, indexFileName)):
+				case strings.EqualFold(child.Name(), artworkDirName) && hasArtworkContent(fs, path):
 					kind = sourceArtwork
 					systemID = resolveSourceSystem(systemEntry.Name(), "")
 				case strings.Contains(strings.ToLower(child.Name()), "manual"):
@@ -172,6 +183,33 @@ func pathWithin(path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// hasArtworkContent reports whether an Artwork directory holds anything worth
+// loading. The index resolves every dump not filed under its own key, but a
+// pack shipped without one still serves exact-key images, so a directory with
+// images and no index is a valid source rather than a directory to ignore.
+func hasArtworkContent(fs afero.Fs, dir string) bool {
+	if isRegularFile(fs, filepath.Join(dir, indexFileName)) {
+		return true
+	}
+	directory, err := fs.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = directory.Close() }()
+	for {
+		entries, readErr := directory.Readdir(directoryReadBatch)
+		for _, entry := range entries {
+			if !entry.IsDir() && entry.Mode()&os.ModeSymlink == 0 &&
+				supportedImageExt(filepath.Ext(entry.Name())) {
+				return true
+			}
+		}
+		if readErr != nil {
+			return false
+		}
+	}
+}
+
 func isRegularDir(fs afero.Fs, path string) bool {
 	info, err := lstat(fs, path)
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
@@ -205,6 +243,29 @@ func sourcesBySystem(sources []sourceDir) map[string][]sourceDir {
 	return result
 }
 
+// artworkSiblings adds the shared-catalogue fallbacks the artwork pack format
+// specifies and the general system definitions do not model. ScreenScraper
+// splits dual-mode cartridges between the Game Boy and Game Boy Color
+// catalogues on its own criteria, so each has to try the other, and Super Game
+// Boy ships no pack of its own. Famicom Disk System is asymmetric on purpose:
+// a disk release may borrow the cartridge box, but a cartridge must never
+// receive the disk release's.
+var artworkSiblings = map[string][]string{ //nolint:gochecknoglobals // Fixed artwork pack rules.
+	systemdefs.SystemGameboy:      {systemdefs.SystemGameboyColor},
+	systemdefs.SystemGameboyColor: {systemdefs.SystemGameboy},
+	systemdefs.SystemSuperGameboy: {systemdefs.SystemGameboy, systemdefs.SystemGameboyColor},
+	systemdefs.SystemFDS:          {systemdefs.SystemNES},
+}
+
+// artworkFallbackBlocks drops general system fallbacks between systems the
+// artwork pack catalogues separately. Filling an SG-1000 gap with a
+// ColecoVision box serves art for a different release, and the pack's own rule
+// is that an absent image beats a wrong one.
+var artworkFallbackBlocks = map[string]map[string]struct{}{ //nolint:gochecknoglobals // Fixed artwork pack rules.
+	systemdefs.SystemSG1000:            {systemdefs.SystemColecoVision: {}},
+	systemdefs.SystemNeoGeoPocketColor: {systemdefs.SystemNeoGeoPocket: {}},
+}
+
 func sourceIDsForTarget(targetID string) []string {
 	seen := make(map[string]struct{})
 	var result []string
@@ -215,12 +276,17 @@ func sourceIDsForTarget(targetID string) []string {
 		}
 		seen[id] = struct{}{}
 		result = append(result, id)
-		sys, err := systemdefs.GetSystem(id)
-		if err != nil {
-			return
+		blocked := artworkFallbackBlocks[id]
+		if sys, err := systemdefs.GetSystem(id); err == nil {
+			for _, fallback := range sys.Fallbacks {
+				if _, ok := blocked[fallback]; ok {
+					continue
+				}
+				visit(fallback)
+			}
 		}
-		for _, fallback := range sys.Fallbacks {
-			visit(fallback)
+		for _, sibling := range artworkSiblings[id] {
+			visit(sibling)
 		}
 	}
 	visit(targetID)
