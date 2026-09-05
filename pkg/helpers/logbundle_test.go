@@ -136,3 +136,56 @@ func TestReadLogBundle_NoLimitKeepsEverything(t *testing.T) {
 
 	assert.Len(t, data, len(body), "an unlimited bundle should not trim, e.g. a copy to storage")
 }
+
+func TestReadLogBundle_NeverExceedsBudgetWhenStderrIsLarge(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: the log budget was computed as
+	// maxBytes - separator - len(stderr), which goes negative once the capture
+	// is large. trimFront read a non-positive budget as "no limit" and returned
+	// the log untrimmed, so the bundle blew the cap in exactly the case the cap
+	// exists for — a full log plus a crash.
+	const limit = 300
+	pl := bundlePlatform(t,
+		strings.Repeat("{\"a\":1}\n", 500),
+		strings.Repeat("E", 400)+"\n")
+
+	data, err := helpers.ReadLogBundle(pl, limit)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(data), limit, "bundle must fit the limit however large the capture is")
+	assert.Contains(t, string(data), "EEEE", "the capture is appended last, so trimming must keep it")
+}
+
+func TestReadLogBundle_NeverExceedsTinyBudget(t *testing.T) {
+	t.Parallel()
+
+	// The trim notice itself is ~60 bytes, and it used to be returned whole
+	// even when it was longer than the entire budget.
+	pl := bundlePlatform(t, strings.Repeat("{\"a\":1}\n", 500), "")
+
+	for _, limit := range []int{1, 10, 20, 59, 80} {
+		data, err := helpers.ReadLogBundle(pl, limit)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, len(data), limit, "limit %d", limit)
+	}
+}
+
+func TestReadLogBundle_DropsAPartialFirstLine(t *testing.T) {
+	t.Parallel()
+
+	// A budget that lands inside a single long line has no whole line to keep.
+	// It used to return the tail of that line, which is a fragment: the output
+	// began mid-JSON and any parser reading it trips on the first entry.
+	oneLongLine := "{\"k\":\"" + strings.Repeat("v", 400) + "\"}\n"
+	pl := bundlePlatform(t, oneLongLine, "")
+
+	data, err := helpers.ReadLogBundle(pl, 120)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(data), 120)
+	body := strings.SplitN(string(data), "\n", 2)
+	require.Len(t, body, 2)
+	assert.Empty(t, strings.TrimSpace(body[1]),
+		"nothing but the notice should survive when no whole line fits, got %q", body[1])
+}

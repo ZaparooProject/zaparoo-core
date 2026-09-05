@@ -629,9 +629,6 @@ func (*Reader) Detect(connected []string) string {
 	// probe found nothing at all. DetectAll does not expose the candidates it
 	// tried; see https://github.com/ZaparooProject/go-pn532/issues/94.
 	currentPorts, enumErr := helpers.GetSerialDeviceList()
-	if enumErr != nil {
-		log.Debug().Err(enumErr).Msg("PN532: failed to enumerate serial ports")
-	}
 
 	// Try to detect PN532 devices
 	opts := newDetectionOptions(ignorePaths)
@@ -639,7 +636,7 @@ func (*Reader) Detect(connected []string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
-	logDetectionSummary(currentPorts, ignorePaths, devices, err)
+	logDetectionSummary(currentPorts, ignorePaths, devices, enumErr, err)
 	if err != nil {
 		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
@@ -737,7 +734,11 @@ var (
 // identical. This logs at info, because someone reporting a reader that is not
 // detected has no reason to have enabled debug logging first, and only when the
 // picture changes, so the 1 Hz tick still costs a handful of lines per session.
-func logDetectionSummary(ports, ignored []string, devices []detection.DeviceInfo, detectErr error) {
+func logDetectionSummary(
+	ports, ignored []string,
+	devices []detection.DeviceInfo,
+	enumErr, detectErr error,
+) {
 	// Sorted copies: ignored is built from map iteration, and the enumerated
 	// ports arrive in directory order, so an unsorted summary would report a
 	// change on ticks where nothing actually changed.
@@ -752,10 +753,11 @@ func logDetectionSummary(ports, ignored []string, devices []detection.DeviceInfo
 	}
 	slices.Sort(detected)
 
-	summary := fmt.Sprintf("ports:%s ignored:%s detected:%s err:%v",
+	summary := fmt.Sprintf("ports:%s ignored:%s detected:%s enum_err:%v err:%v",
 		strings.Join(sortedPorts, ","),
 		strings.Join(sortedIgnored, ","),
 		strings.Join(detected, ","),
+		enumErr,
 		detectErr)
 
 	detectSummaryMu.Lock()
@@ -767,6 +769,11 @@ func logDetectionSummary(ports, ignored []string, devices []detection.DeviceInfo
 	}
 
 	event := log.Info().Strs("ports", sortedPorts)
+	if enumErr != nil {
+		// Without this an enumeration failure is indistinguishable from a bus
+		// with no serial ports on it: both report an empty port list.
+		event = event.AnErr("enumeration_error", enumErr)
+	}
 	if len(sortedIgnored) > 0 {
 		event = event.Strs("ignored", sortedIgnored)
 	}
