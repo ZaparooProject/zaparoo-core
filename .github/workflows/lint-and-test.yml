@@ -58,11 +58,23 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # A release gate runs Linux on ubuntu-latest, not Ubicloud. SignPath
+      # refuses to sign an artifact if any job upstream of it ran on a runner
+      # outside the "GitHub Actions" group, and since build.yml's build job
+      # depends on this workflow, the v2.17.2 signing request was rejected
+      # for this job alone. Everything else here already uses GitHub-hosted
+      # runners; Cross Lint is PR-only.
       matrix:
         include: >-
           ${{
             github.event_name == 'pull_request'
               && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
+              || inputs.release_gate
+              && fromJSON('[
+                   {"os":"ubuntu","runner":"ubuntu-latest"},
+                   {"os":"macos","runner":"macos-latest"},
+                   {"os":"windows","runner":"windows-latest"}
+                 ]')
               || fromJSON('[
                    {"os":"ubuntu","runner":"ubicloud-standard-4"},
                    {"os":"macos","runner":"macos-latest"},
