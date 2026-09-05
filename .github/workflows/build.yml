@@ -65,6 +65,12 @@ jobs:
       contents: read
       pull-requests: read
       packages: read
+      # lint-and-test.yml declares this at workflow level for its SARIF
+      # upload. The gate skips that upload, but a caller must still grant
+      # every permission the called workflow declares or the run fails at
+      # startup before any job exists, which is how the first v2.17.2 tag
+      # build ended.
+      security-events: write
 
   create-release:
     needs: lint-and-test
