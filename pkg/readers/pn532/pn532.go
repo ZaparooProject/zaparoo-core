@@ -786,8 +786,12 @@ func logDetectionSummary(
 	event.Msg("PN532 auto-detect")
 }
 
+// isExpectedDetectionMiss reports whether a detection error is the normal
+// "nothing there" answer. A timeout is not: go-pn532 bounds each port's probe
+// on its own, so the pass only runs out of time when something on the bus has
+// parked a probe in the kernel, and that is worth reporting.
 func isExpectedDetectionMiss(err error) bool {
-	return errors.Is(err, detection.ErrNoDevicesFound) || errors.Is(err, detection.ErrDetectionTimeout)
+	return errors.Is(err, detection.ErrNoDevicesFound)
 }
 
 // defaultDetectionTransports limits PN532 auto-detect to transports safe for

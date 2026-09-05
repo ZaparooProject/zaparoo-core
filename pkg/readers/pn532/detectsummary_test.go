@@ -134,6 +134,19 @@ func TestLogDetectionSummary_OmitsExpectedDetectionMiss(t *testing.T) {
 		"an expected miss should not be dressed up as an error")
 }
 
+func TestLogDetectionSummary_ReportsADetectionTimeout(t *testing.T) {
+	// A pass that runs out of time used to be filed with "nothing there" and
+	// vanished at trace level. That hid a controller adapter parking every
+	// probe for months; it now travels in the summary.
+	resetDetectSummary(t)
+	buf := captureDebugLog(t)
+
+	logDetectionSummary([]string{"/dev/ttyACM0", "/dev/ttyUSB0"}, nil, nil, nil, detection.ErrDetectionTimeout)
+
+	require.Len(t, decodeLogEntries(t, buf), 1)
+	assert.Contains(t, buf.String(), detection.ErrDetectionTimeout.Error())
+}
+
 func TestLogDetectionSummary_ReportsUnexpectedDetectionError(t *testing.T) {
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
