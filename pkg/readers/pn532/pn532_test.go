@@ -84,7 +84,8 @@ func TestIsExpectedDetectionMiss(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, isExpectedDetectionMiss(detection.ErrNoDevicesFound))
-	assert.True(t, isExpectedDetectionMiss(detection.ErrDetectionTimeout))
+	assert.False(t, isExpectedDetectionMiss(detection.ErrDetectionTimeout),
+		"a timeout means a probe is parked in the kernel, which is worth reporting")
 	assert.False(t, isExpectedDetectionMiss(errors.New("serial permission denied")))
 }
 
