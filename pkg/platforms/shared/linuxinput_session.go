@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
@@ -114,18 +113,11 @@ func parseInputMacroToken(token string) (parsedInputMacro, bool) {
 	case inputMacroPress, inputMacroRelease:
 		return parsedInputMacro{action: control.Action, name: control.Value}, true
 	case inputMacroHold:
-		name, duration := splitInputHold(control.Value)
+		name, duration := inputmacro.SplitHold(control.Value)
 		return parsedInputMacro{action: control.Action, name: name, duration: duration}, true
 	default:
 		return parsedInputMacro{}, false
 	}
-}
-
-func splitInputHold(value string) (name, duration string) {
-	if idx := strings.LastIndex(value, ":"); idx != -1 {
-		return value[:idx], value[idx+1:]
-	}
-	return value, ""
 }
 
 func parseBoundedInputMacroDuration(value string) (time.Duration, error) {
