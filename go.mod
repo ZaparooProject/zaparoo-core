@@ -42,7 +42,7 @@ require (
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/mackerelio/go-osstat v0.2.8
 	github.com/mattn/go-sqlite3 v1.14.50
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.4.3
@@ -138,10 +138,8 @@ require (
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
-	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
