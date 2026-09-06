@@ -1,0 +1,21 @@
+{
+  "kernel": {
+    "url": "https://codeload.github.com/MiSTer-devel/Linux-Kernel_MiSTer/tar.gz/5fcfae36975b217f6ab82b501065f3b13173ae15",
+    "name": "kernel.tar.gz",
+    "sha256": "fda82daa065b08bd0e43b472f4e14cb833e0e1ed54065d86dd25eaf72e107f83",
+    "prefix": "Linux-Kernel_MiSTer-5fcfae36975b217f6ab82b501065f3b13173ae15"
+  },
+  "userspace": {
+    "url": "https://raw.githubusercontent.com/MiSTer-devel/SD-Installer-Win64_MiSTer/b8531c7848526d9a8227841923cc4a493cb6e631/release_20250402.7z",
+    "name": "release_20250402.7z",
+    "sha256": "5d087d9c501b2bc50aaf918146e7bf30e5981c08268d5a0e67a3233a4da642ba",
+    "member": "files/linux/linux.img",
+    "image_sha256": "4acd6edaaeca7474b1f1be5e40dc0fb6828950dd6f8a033b4bcd8f26f8201a70"
+  },
+  "release": {
+    "version": "2.17.2",
+    "url": "https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.17.2/zaparoo-mister_arm-2.17.2.zip",
+    "name": "zaparoo-mister_arm-2.17.2.zip",
+    "sha256": "e81d78ae277396986415913637c26ac9e48a49181309fe0d117d68836f3025ae"
+  }
+}
