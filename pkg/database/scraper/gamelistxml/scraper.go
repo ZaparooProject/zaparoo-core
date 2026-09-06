@@ -75,6 +75,7 @@ const (
 	gamelistMatchSlugOnly     gamelistMatchKind = "slug_only"
 	gamelistMatchSlugConflict gamelistMatchKind = "slug_conflict"
 	gamelistMatchPathOnly     gamelistMatchKind = "path_only"
+	gamelistMatchArcadeSet    gamelistMatchKind = "arcade_setname"
 )
 
 type slugMediaSelection struct {
@@ -91,6 +92,7 @@ type GamelistXMLScraper struct {
 	fs                 afero.Fs
 	cfg                *config.Instance
 	externalAssetRoots []string
+	matchArcadeSets    bool
 }
 
 type companionStats struct {
@@ -173,6 +175,7 @@ type loadRecordIndexes struct {
 	MediaByPathFold  map[string]database.Media
 	MediaByTitleDBID map[int64][]database.Media
 	MediaByFilename  map[string][]database.Media
+	ArcadeBySetName  map[string][]database.Media
 	// Containers resolves directory paths to the single media row they collapse
 	// to, matching what browse shows for the same folder. It is built over every
 	// indexed row, including already-scraped ones, because a directory holding
@@ -226,6 +229,7 @@ func NewPlatformScraper() platforms.Scraper {
 				fs:                 fs,
 				cfg:                cfg,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
+				matchArcadeSets:    pl.ID() == ids.Mister || pl.ID() == ids.Mistex,
 			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
 			return nil
@@ -441,6 +445,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	parsed parsedGamelistSystem,
 ) ([]*GamelistRecord, error) {
 	var records []*GamelistRecord
+	var arcadeRecords []*GamelistRecord
 	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
 	candidateMedia := len(indexes.MediaByPathFold)
 	candidateTitles := len(indexes.TitlesBySlug)
@@ -474,6 +479,33 @@ outer:
 			}
 
 			resolved := esmedia.ResolvePath(game.Path, file.RootPath)
+			var pathMedia database.Media
+			var matchedPathKey string
+			var pathOK bool
+			if resolved != "" {
+				pathMedia, matchedPathKey, pathOK = g.canonicalMediaForResolvedPath(indexes, resolved)
+				if !pathOK {
+					// Directory entries retain the same collapsed-container rule as browse.
+					pathMedia, matchedPathKey, pathOK = containerMediaForDir(indexes, resolved)
+					if pathOK {
+						containerPathResolutions++
+					}
+				}
+			}
+			if !pathOK {
+				if media, known := arcadeMediaForSet(indexes, game.Path); known {
+					if media.DBID != 0 {
+						arcadeRecords = append(arcadeRecords, &GamelistRecord{
+							SystemRootPath: file.RootPath, AssetRootPath: file.AssetRootPath,
+							MediaDirsByRoot: fileMediaDirsByRoot, Game: *game,
+							MatchKind: gamelistMatchArcadeSet, MatchedTitleDBID: media.MediaTitleDBID,
+							MatchedMediaDBID: media.DBID, MediaLevelWriteSafe: true,
+							RequireExistingImage: file.RequireExistingImage,
+						})
+					}
+					continue
+				}
+			}
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -486,19 +518,6 @@ outer:
 				NoExt:        true,
 				ProvidedName: game.Name,
 			})
-
-			pathMedia, matchedPathKey, pathOK := g.canonicalMediaForResolvedPath(indexes, resolved)
-			if !pathOK {
-				// ES-DE writes <game> entries whose path is a directory when the
-				// folder name carries a ROM extension, so a disc folder reads as
-				// one game. Resolve those through the same container rule browse
-				// uses, otherwise the entry falls back to a slug-only match and
-				// its artwork is dropped as unsafe for media scope.
-				pathMedia, matchedPathKey, pathOK = containerMediaForDir(indexes, resolved)
-				if pathOK {
-					containerPathResolutions++
-				}
-			}
 
 			title, titleOK := indexes.TitlesBySlug[pf.Slug]
 			switch {
@@ -627,8 +646,25 @@ outer:
 		}
 	}
 
+	// Identity fallbacks run last so direct path/slug entries win regardless of
+	// XML ordering. Remaining duplicates follow the configured source order.
+	claimed := make(map[int64]struct{}, len(records))
+	for _, record := range records {
+		claimed[record.MatchedMediaDBID] = struct{}{}
+	}
+	var arcadeSetMatches int
+	for _, record := range arcadeRecords {
+		if _, exists := claimed[record.MatchedMediaDBID]; exists {
+			continue
+		}
+		claimed[record.MatchedMediaDBID] = struct{}{}
+		records = append(records, record)
+		arcadeSetMatches++
+	}
+
 	log.Info().
 		Str("system", system.ID).
+		Int("arcade_set_matches", arcadeSetMatches).
 		Int("candidate_titles", candidateTitles).
 		Int("candidate_media", candidateMedia).
 		Int("gamelist_files", gamelistFiles).
@@ -868,6 +904,13 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return
 			}
 			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: parseErr, Done: true})
+			return
+		}
+
+		var arcadeErr error
+		indexes.ArcadeBySetName, arcadeErr = g.indexArcadeSets(ctx, allMedia, parsed)
+		if arcadeErr != nil {
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 			return
 		}
 
@@ -1223,6 +1266,13 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
+	if record.MatchKind == gamelistMatchArcadeSet {
+		stem := arcadeSetStem(game.Path)
+		fallbackNames = []string{stem + ".png"}
+		if lower := strings.ToLower(stem); lower != stem {
+			fallbackNames = append(fallbackNames, lower+".png")
+		}
+	}
 
 	if game.Desc != "" {
 		titleProps = append(titleProps,
@@ -2458,6 +2508,13 @@ func matchCompanionChildMedia(
 	}
 
 	if media, _, ok := matchMediaByResolvedPath(indexes, child.ResolvedPath); ok {
+		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
+	}
+
+	if media, known := arcadeMediaForSet(indexes, child.ResolvedPath); known {
+		if media.DBID == 0 {
+			return companionMediaMatch{}
+		}
 		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
 	}
 
