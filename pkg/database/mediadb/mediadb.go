@@ -3837,9 +3837,13 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	// separately, so an untagged random keeps the cached per-system totals
 	// instead of re-aggregating Media behind the injected NOT filter.
 	weightTags := query.Tags
+	// A required user:hidden or user:favorite filter is an explicit ask for
+	// those entries, the same exception browse and search make. Without it a
+	// random over hidden media would be a query that cannot match.
+	excludeHidden := discoveryExcludesHidden(query.Tags)
 	scoped := *query
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, true)
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, excludeHidden)
 	if visibilityErr != nil {
 		return result, visibilityErr
 	}
@@ -3849,7 +3853,7 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	// broad system scopes before random row selection touches the Media table.
 	if query.PathPrefix == "" && query.PathGlob == "" && len(query.Systems) > 1 {
 		started := time.Now()
-		counts, err := db.SystemMediaCounts(ctx, weightTags, true)
+		counts, err := db.SystemMediaCounts(ctx, weightTags, excludeHidden)
 		if err != nil {
 			return result, fmt.Errorf("failed to get system media counts for random selection: %w", err)
 		}

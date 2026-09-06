@@ -296,9 +296,9 @@ func applyHiddenToVirtualSchemes(
 	return filtered
 }
 
-// Unfiltered browse aggregates remain useful when no hidden preferences exist.
-// Once one does, use scoped SQL instead: stale aggregate caches must never
-// publish the pre-hide counts while a background rebuild catches up.
+// sqlNeedsVisibilityFilter is the presence probe row-level queries use before
+// paying for a NOT filter. Aggregates do not go through it: they keep their
+// cached counts and subtract the hidden set instead.
 func sqlNeedsVisibilityFilter(ctx context.Context, db sqlQueryable, excludeHidden bool) (bool, error) {
 	if !excludeHidden {
 		return false, nil
@@ -330,6 +330,14 @@ func sqlAnyVisibleMedia(
 		return false, fmt.Errorf("probe visible media: %w", err)
 	}
 	return exists, nil
+}
+
+// discoveryExcludesHidden is the shared rule for whether a query counts as
+// ordinary discovery. A required user:hidden or user:favorite filter is an
+// explicit ask for those entries and opts out of the exclusion, matching what
+// browse and search do with the same filters.
+func discoveryExcludesHidden(tags []zapscript.TagFilter) bool {
+	return !filters.IncludesHidden(tags, false)
 }
 
 func discoveryTags(ctx context.Context, db sqlQueryable, tags []zapscript.TagFilter, excludeHidden bool) (

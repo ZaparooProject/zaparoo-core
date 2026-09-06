@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -389,4 +390,36 @@ func insertForSystem(t *testing.T, mediaDB *MediaDB, systemDBID int64, name, pat
 		SortName:       name,
 	})
 	require.NoError(t, err)
+}
+
+// Random selection skips hidden media, but a required user:hidden filter is an
+// explicit ask for exactly those entries. Forcing the exclusion there would
+// build a query that can never match.
+func TestRandomHonoursExplicitHiddenFilter(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("Visible", root+"Visible.nes")
+	f.insert("Concealed", root+"Concealed.nes")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"Concealed.nes")
+
+	for range 10 {
+		game, err := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}})
+		require.NoError(t, err)
+		assert.Equal(t, root+"Visible.nes", game.Path, "ordinary random skips hidden media")
+	}
+
+	hiddenOnly := []zapscript.TagFilter{{
+		Type: "user", Value: "hidden", Operator: zapscript.TagOperatorAND,
+	}}
+	for range 10 {
+		game, err := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{
+			Systems: []string{"NES"}, Tags: hiddenOnly,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, root+"Concealed.nes", game.Path)
+	}
 }
