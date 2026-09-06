@@ -229,7 +229,7 @@ func NewPlatformScraper() platforms.Scraper {
 				fs:                 fs,
 				cfg:                cfg,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
-				matchArcadeSets:    pl.ID() == ids.Mister || pl.ID() == ids.Mistex,
+				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
 			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
 			return nil
@@ -261,6 +261,13 @@ func orderedScrapeSystemIDs(indexed, requested []string) []string {
 		ordered = append(ordered, id)
 	}
 	return ordered
+}
+
+// arcadeSetMatchingEnabled reports whether set-name matching applies. It reads
+// MRA descriptors off the scrape path, so it is limited to the platforms that
+// index `_Arcade` in the first place.
+func arcadeSetMatchingEnabled(pl platforms.Platform) bool {
+	return pl.ID() == ids.Mister || pl.ID() == ids.Mistex
 }
 
 // customBundleExists reports whether a per-system metadata bundle is installed

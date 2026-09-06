@@ -32,6 +32,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -367,6 +369,46 @@ func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
 	systems, err = resolveSystemsFromPlatform(t.Context(), plain, pl, fs, mdb, nil)
 	require.NoError(t, err)
 	assert.Empty(t, systems, "without a configured bundle directory the systems are still skipped")
+}
+
+// TestPlatformScraperGatesArcadeSetsByPlatform pins the wiring: set-name
+// matching reads MRA descriptors off the scrape path, so it must stay off for
+// platforms that have no `_Arcade` to read.
+func TestPlatformScraperGatesArcadeSetsByPlatform(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		platformID string
+		want       bool
+	}{
+		{platformID: ids.Mister, want: true},
+		{platformID: ids.Mistex, want: true},
+		{platformID: ids.Batocera, want: false},
+		{platformID: "mock-platform", want: false},
+	} {
+		t.Run(tc.platformID, func(t *testing.T) {
+			t.Parallel()
+			pl := mocks.NewMockPlatform()
+			pl.SetupBasicMock()
+			pl.ExpectedCalls = nil
+			pl.On("ID").Return(tc.platformID)
+			pl.On("RootDirs", mock.Anything).Return([]string{})
+			pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+			mdb := helpers.NewMockMediaDBI()
+			mdb.On("IndexedSystems").Return([]string{}, nil)
+			cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+			require.NoError(t, err)
+			ch := make(chan scraper.ScrapeUpdate, 8)
+			require.NoError(t, NewPlatformScraper().Scrape(t.Context(), cfg, pl, afero.NewMemMapFs(),
+				&database.Database{MediaDB: mdb}, scraper.ScrapeOptions{Pauser: syncutil.NewPauser()}, nil, ch))
+			var last scraper.ScrapeUpdate
+			for update := range ch {
+				require.NoError(t, update.FatalErr)
+				last = update
+			}
+			assert.True(t, last.Done)
+			assert.Equal(t, tc.want, arcadeSetMatchingEnabled(pl))
+		})
+	}
 }
 
 func TestArcadeArtworkFallbackExtensions(t *testing.T) {
