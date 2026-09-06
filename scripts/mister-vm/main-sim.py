@@ -50,6 +50,14 @@ def resolve(command):
     return 'SNES', str(game)
 
 
+def frames(data):
+    # Writes under PIPE_BUF are atomic, but one read still returns every
+    # command queued since the last read. Splitting keeps a coalesced read from
+    # looking like a single command with embedded control characters. A
+    # newline-less remainder is a command in its own right, as Main treats it.
+    return [x for x in data.split(b'\n') if x]
+
+
 def event(kind, **data):
     with Path('/tmp/mister-sim-events.jsonl').open('a') as stream:
         stream.write(json.dumps(dict(kind=kind, time=time.time(), **data)) + '\n')
@@ -76,17 +84,15 @@ def main():
     try:
         while True:
             poll.poll()
-            raw = os.read(fd, 1023)
-            if raw.endswith(b'\n'):
-                raw = raw[:-1]
-            try:
-                command = raw.decode('utf-8')
-                event('command', command=command)
-                core, game = resolve(command)
-                time.sleep(0.1)  # Synthetic delay, not calibrated FPGA loading.
-                publish(core, game)
-            except (ValueError, OSError, ET.ParseError) as exc:
-                event('rejected', reason=str(exc))
+            for raw in frames(os.read(fd, 65536)):
+                try:
+                    command = raw.decode('utf-8')
+                    event('command', command=command)
+                    core, game = resolve(command)
+                    time.sleep(0.1)  # Synthetic delay, not calibrated FPGA loading.
+                    publish(core, game)
+                except (ValueError, OSError, ET.ParseError) as exc:
+                    event('rejected', reason=str(exc))
     finally:
         os.close(fd)
 

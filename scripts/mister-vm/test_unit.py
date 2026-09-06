@@ -69,6 +69,22 @@ class SimulatorTests(unittest.TestCase):
             sim.resolve(self.command)
 
 
+class FramingTests(unittest.TestCase):
+    def test_single_command(self):
+        self.assertEqual(sim.frames(b'load_core menu.rbf\n'), [b'load_core menu.rbf'])
+
+    def test_coalesced_reads_stay_separate(self):
+        # Two writes queued between reads must not become one rejected command.
+        self.assertEqual(sim.frames(b'load_core a.mgl\nload_core menu.rbf\n'),
+                         [b'load_core a.mgl', b'load_core menu.rbf'])
+
+    def test_unterminated_command_is_a_frame(self):
+        self.assertEqual(sim.frames(b'fb_cmd0 rgb32 0 1'), [b'fb_cmd0 rgb32 0 1'])
+
+    def test_blank_writes_ignored(self):
+        self.assertEqual(sim.frames(b'\n\n'), [])
+
+
 class FetchTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
