@@ -84,6 +84,7 @@ class IntegrationTests(unittest.TestCase):
         with (
             patch.object(sys, 'argv', self.command()[1:]),
             patch.object(run, 'digest', return_value='fixture-hash'),
+            patch.object(run, 'verify_prepared'),
             patch.object(run.shutil, 'which', return_value='/fixture/tool'),
             patch.object(run.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'QEMU fixture\n')),
             patch.object(run.fixtures, 'build', side_effect=SystemExit(23)),

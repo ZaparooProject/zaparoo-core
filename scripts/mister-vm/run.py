@@ -37,6 +37,14 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def verify_prepared(assets, base_hash, kernel_hash):
+    # The end-of-run comparison only proves this run changed nothing. Setup's
+    # record is what proves the assets are still the ones it prepared.
+    prepared = json.loads((assets / 'ready.json').read_text())
+    if base_hash != prepared['base_sha256'] or kernel_hash != prepared['kernel_sha256']:
+        raise RuntimeError('Prepared base image or kernel does not match setup record')
+
+
 def validate_binary(path):
     if not path.is_file():
         raise ValueError('Expected regular ARM ELF binary')
@@ -60,8 +68,8 @@ def main():
     if not 1 <= args.timeout <= 3600:
         parser.error('--timeout must be between 1 and 3600 seconds')
     assets, binary = args.assets.resolve(), args.binary.resolve()
-    if not assets.is_dir() or (assets / 'setup.lock').exists() or (assets / 'FAILED').exists():
-        parser.error('Asset directory absent or setup in progress; run setup.py first')
+    if not assets.is_dir() or not (assets / 'ready.json').is_file() or (assets / 'setup.lock').exists() or (assets / 'FAILED').exists():
+        parser.error('Asset directory absent, incomplete or setup in progress; run setup.py first')
     runs = assets / 'runs'
     if runs.is_symlink():
         parser.error('Refusing symlinked runs directory')
@@ -81,6 +89,7 @@ def main():
             if not shutil.which(command):
                 raise RuntimeError('Required executable missing: ' + command)
         state['base_sha256'], state['kernel_sha256'] = digest(base), digest(kernel)
+        verify_prepared(assets, state['base_sha256'], state['kernel_sha256'])
         state['binary_sha256'] = digest(binary)
         state['sources'] = {p.name: digest(p) for p in SOURCE.iterdir() if p.suffix in ('.py', '.json', '.txt')}
         state['qemu'] = subprocess.run(['qemu-system-arm', '--version'], check=True, capture_output=True, text=True, timeout=10).stdout.splitlines()[0]
