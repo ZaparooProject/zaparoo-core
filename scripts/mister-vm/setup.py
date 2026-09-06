@@ -31,22 +31,21 @@ def fetch(pin, cache):
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / pin['name']
     if not target.exists():
+        # Failed partials are never cleaned up: the file may belong to a
+        # concurrent download, and an owned one is evidence for diagnosis.
         partial = target.with_name(target.name + '.part')
-        try:
-            with partial.open('xb') as out, urllib.request.urlopen(pin['url'], timeout=30) as response:
-                start, total = time.monotonic(), 0
-                while data := response.read(1024 * 1024):
-                    total += len(data)
-                    if total > 512 * 1024 * 1024 or time.monotonic() - start > 600:
-                        raise RuntimeError('Download exceeded size/time bound')
-                    out.write(data)
-            if digest(partial) != pin['sha256']:
-                raise RuntimeError('Download checksum mismatch: ' + pin['name'])
-            partial.rename(target)
-        except BaseException:
-            # Do not remove another process's existing partial download.
-            # Failed owned partials remain available for diagnosis.
-            raise
+        if partial.exists():
+            raise RuntimeError('Partial download in progress or left by a failed run: ' + str(partial))
+        with partial.open('xb') as out, urllib.request.urlopen(pin['url'], timeout=30) as response:
+            start, total = time.monotonic(), 0
+            while data := response.read(1024 * 1024):
+                total += len(data)
+                if total > 512 * 1024 * 1024 or time.monotonic() - start > 600:
+                    raise RuntimeError('Download exceeded size/time bound')
+                out.write(data)
+        if digest(partial) != pin['sha256']:
+            raise RuntimeError('Download checksum mismatch: ' + pin['name'])
+        partial.rename(target)
     if digest(target) != pin['sha256']:
         raise RuntimeError('Cached checksum mismatch: ' + str(target))
     return target
