@@ -455,22 +455,23 @@ func (g *GamelistXMLScraper) LoadRecords(
 }
 
 // arcadeSetOutranks reports whether a MiSTer arcade set name is better evidence
-// for a media row than the record already holding it. Only a title guess is: a
-// path match, a slug match its own path confirmed, and another set name all
-// named the row directly. Without this an arcade gamelist's clone entries,
-// which routinely share one display name, can take the canonical MRA from the
-// entry that identified it exactly and then write less to it.
+// for a media row than the record already holding it. It beats a title guess
+// and nothing else: a path match, a slug match the entry's own path confirmed,
+// and another set name all named the row directly. Without this, the clone
+// entries in an arcade gamelist, which routinely share one display name, take
+// the canonical MRA from the entry that identified it exactly and then write
+// less to it than that entry would have.
 func arcadeSetOutranks(record *GamelistRecord) bool {
 	return record.MatchKind == gamelistMatchSlugOnly || record.MatchKind == gamelistMatchSlugConflict
 }
 
 // loadRecordsFromParsed pairs every gamelist <game> and <folder> entry with the
-// media row it should write to. Entries are matched in descending order of
-// evidence: an indexed path, the container a directory entry collapses to, a
-// MiSTer arcade set name, then the title slug. Each row is claimed once, and
-// set-name records are held back until every file has been walked so a direct
-// match anywhere in them still wins the row, and so a set name still outranks
-// a title guess that happened to be read first.
+// media row it should write to. An entry that names the row directly wins it:
+// an indexed path, the container a directory entry collapses to, or a slug
+// whose own path agrees. A MiSTer arcade set name comes next, and a title slug
+// alone last. Each row is claimed once, and set-name records are held back
+// until every file has been walked, so neither of those two rankings depends
+// on the order the entries happen to appear in.
 func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
@@ -519,7 +520,11 @@ outer:
 			if resolved != "" {
 				pathMedia, matchedPathKey, pathOK = g.canonicalMediaForResolvedPath(indexes, resolved)
 				if !pathOK {
-					// Directory entries retain the same collapsed-container rule as browse.
+					// ES-DE writes <game> entries whose path is a directory when the
+					// folder name carries a ROM extension, so a disc folder reads as
+					// one game. Resolve those through the same container rule browse
+					// uses, otherwise the entry falls back to a slug-only match and
+					// its artwork is dropped as unsafe for media scope.
 					pathMedia, matchedPathKey, pathOK = containerMediaForDir(indexes, resolved)
 					if pathOK {
 						containerPathResolutions++
@@ -958,6 +963,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		var arcadeErr error
 		indexes.ArcadeBySetName, arcadeErr = g.indexArcadeSets(ctx, allMedia, parsed)
 		if arcadeErr != nil {
+			// The only failure is cancellation: an unreadable descriptor is
+			// counted and skipped rather than raised, so nothing here is fatal.
 			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 			return
 		}
@@ -1311,13 +1318,14 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		assetRoot = root
 	}
 
-	// fallbackNames are ROM-relative PNG filenames used to locate matching
-	// artwork files under media/ sub-directories.
+	// fallbackNames are ROM-relative artwork filenames used to locate matching
+	// files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
 	if record.MatchKind == gamelistMatchArcadeSet {
 		// Set-name entries commonly carry a foreign or sibling ROM path that
-		// resolves to nothing, so the ROM-relative names are empty. Artwork is
-		// named after the set instead, in either case the scraper wrote it.
+		// resolves to nothing, leaving no ROM-relative names at all. Artwork a
+		// scraper wrote for those is named after the set, in whichever case it
+		// used.
 		if stem := arcadeSetStem(game.Path); stem != "" {
 			names := fallbackArtworkNames(stem)
 			if lower := strings.ToLower(stem); lower != stem {
