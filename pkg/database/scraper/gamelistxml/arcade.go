@@ -169,8 +169,6 @@ func decodeArcadeSetName(decoder *xml.Decoder) (setName string, ok bool) {
 			if rootClosed {
 				return "", false
 			}
-		default:
-			return "", false
 		}
 	}
 }

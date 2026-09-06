@@ -270,9 +270,6 @@ func customBundleExists(fs afero.Fs, customBase, systemID string) bool {
 	if customBase == "" {
 		return false
 	}
-	if fs == nil {
-		fs = afero.NewOsFs()
-	}
 	exists, err := afero.Exists(fs, filepath.Join(customBase, systemID, "gamelist.xml"))
 	return err == nil && exists
 }
@@ -464,14 +461,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 // which routinely share one display name, can take the canonical MRA from the
 // entry that identified it exactly and then write less to it.
 func arcadeSetOutranks(record *GamelistRecord) bool {
-	switch record.MatchKind {
-	case gamelistMatchSlugOnly, gamelistMatchSlugConflict:
-		return true
-	case gamelistMatchSlugPath, gamelistMatchPathOnly, gamelistMatchArcadeSet:
-		return false
-	default:
-		return false
-	}
+	return record.MatchKind == gamelistMatchSlugOnly || record.MatchKind == gamelistMatchSlugConflict
 }
 
 // loadRecordsFromParsed pairs every gamelist <game> and <folder> entry with the

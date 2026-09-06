@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -360,6 +361,12 @@ func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
 	require.Len(t, systems, 1, "only the system with an installed bundle survives having no launcher paths")
 	assert.Equal(t, systemdefs.SystemCPS1, systems[0].ID)
 	assert.Empty(t, systems[0].ROMPaths)
+
+	plain, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	systems, err = resolveSystemsFromPlatform(t.Context(), plain, pl, fs, mdb, nil)
+	require.NoError(t, err)
+	assert.Empty(t, systems, "without a configured bundle directory the systems are still skipped")
 }
 
 func TestArcadeArtworkFallbackExtensions(t *testing.T) {
