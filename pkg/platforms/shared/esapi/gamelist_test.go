@@ -35,6 +35,45 @@ import (
 // TestUnmarshalGameIDVariants verifies that both the XML attribute form
 // (ScreenScraperIDAttr) and the element form (ScreenScraperID) of the "id"
 // field parse correctly in isolation and together.
+func TestGameBox2DAlias(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		fields string
+		want   string
+	}{
+		{name: "alias", fields: "<box2d>./covers/alias.png</box2d>", want: "./covers/alias.png"},
+		{name: "canonical", fields: "<boxart2d>./covers/canonical.png</boxart2d>", want: "./covers/canonical.png"},
+		{
+			name:   "canonical wins",
+			fields: "<boxart2d>./covers/canonical.png</boxart2d><box2d>./covers/alias.png</box2d>",
+			want:   "./covers/canonical.png",
+		},
+		{
+			name:   "alias first",
+			fields: "<box2d>./covers/alias.png</box2d><boxart2d>./covers/canonical.png</boxart2d>",
+			want:   "./covers/canonical.png",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data := []byte("<gameList><game><path>./Game.gbc</path><image>./image.png</image>" +
+				tc.fields + "</game></gameList>")
+			gl, err := ParseGameListXML(data)
+			require.NoError(t, err)
+			require.Len(t, gl.Games, 1)
+			assert.Equal(t, tc.want, gl.Games[0].Boxart2D)
+			assert.Equal(t, "./image.png", gl.Games[0].Image)
+			assert.Equal(t, "./Game.gbc", gl.Games[0].Path)
+			encoded, err := xml.Marshal(gl)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), "<boxart2d>"+tc.want+"</boxart2d>")
+			assert.NotContains(t, string(encoded), "<box2d>")
+		})
+	}
+}
+
 func TestUnmarshalGameIDVariants(t *testing.T) {
 	t.Parallel()
 

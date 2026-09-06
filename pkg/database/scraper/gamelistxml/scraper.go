@@ -59,6 +59,7 @@ import (
 type GamelistRecord struct {
 	MediaDirsByRoot      []map[string]string
 	SystemRootPath       string
+	ROMRootPath          string
 	AssetRootPath        string
 	MatchKind            gamelistMatchKind
 	Game                 esapi.Game
@@ -473,7 +474,7 @@ outer:
 				continue
 			}
 
-			resolved := esmedia.ResolvePath(game.Path, file.RootPath)
+			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -508,6 +509,7 @@ outer:
 					slugPathSelections++
 					records = append(records, &GamelistRecord{
 						SystemRootPath:       file.RootPath,
+						ROMRootPath:          romRoot,
 						AssetRootPath:        file.AssetRootPath,
 						MediaDirsByRoot:      fileMediaDirsByRoot,
 						Game:                 *game,
@@ -527,9 +529,11 @@ outer:
 						Str("system", system.ID).
 						Str("slug", pf.Slug).
 						Int64("mediaTitleDBID", title.DBID).
-						Msg("gamelistxml: slug matched title but no media row found, skipping")
+						Msg("gamelistxml: slug matched title but no compatible media row found, skipping")
 					unmatchedRecords++
-					delete(indexes.TitlesBySlug, pf.Slug)
+					if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
+						delete(indexes.TitlesBySlug, pf.Slug)
+					}
 					continue
 				}
 
@@ -545,6 +549,7 @@ outer:
 				}
 				records = append(records, &GamelistRecord{
 					SystemRootPath:       file.RootPath,
+					ROMRootPath:          romRoot,
 					AssetRootPath:        file.AssetRootPath,
 					MediaDirsByRoot:      fileMediaDirsByRoot,
 					Game:                 *game,
@@ -568,6 +573,7 @@ outer:
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
 					SystemRootPath:       file.RootPath,
+					ROMRootPath:          romRoot,
 					AssetRootPath:        file.AssetRootPath,
 					MediaDirsByRoot:      fileMediaDirsByRoot,
 					Game:                 *game,
@@ -600,7 +606,7 @@ outer:
 		// the folder's launch target always wins the row.
 		for i := range file.Folders {
 			folder := &file.Folders[i]
-			resolved := esmedia.ResolvePath(folder.Path, file.RootPath)
+			resolved, romRoot := resolveGamelistROMPath(folder.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -614,6 +620,7 @@ outer:
 			folderMatches++
 			records = append(records, &GamelistRecord{
 				SystemRootPath:       file.RootPath,
+				ROMRootPath:          romRoot,
 				AssetRootPath:        file.AssetRootPath,
 				MediaDirsByRoot:      fileMediaDirsByRoot,
 				Game:                 folderAsGame(folder),
@@ -840,6 +847,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		containerRows := make([]database.Media, 0, len(allMedia))
 		for i := range allMedia {
 			m := &allMedia[i]
+			// Reindexing retains renamed/deleted paths as missing rows. They
+			// must not claim XML entries or make a live slug match ambiguous.
+			if m.IsMissing {
+				continue
+			}
 			media := database.Media{
 				DBID:           m.DBID,
 				MediaTitleDBID: m.MediaTitleDBID,
@@ -858,6 +870,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 		indexes.Containers = container.NewIndex(containerRows)
+		for slug, title := range titlesBySlug {
+			if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
+				delete(titlesBySlug, slug)
+			}
+		}
 
 		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
@@ -1223,6 +1240,12 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
+	if record.ROMRootPath != "" && record.ROMRootPath != record.SystemRootPath {
+		resolved, ok := esmedia.ResolvePathAbs(game.Path, record.SystemRootPath)
+		if ok {
+			fallbackNames = artworkFallbackNames(resolved, record.ROMRootPath)
+		}
+	}
 
 	if game.Desc != "" {
 		titleProps = append(titleProps,
@@ -1404,6 +1427,25 @@ func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string
 	return append(tagInfos, database.TagInfo{Type: tagType, Tag: normalized, Label: label})
 }
 
+// resolveGamelistROMPath allows a gamelist to refer to another configured ROM
+// root of the same system, but never to an arbitrary sibling directory. Asset
+// paths keep their separate policy and remain relative to the gamelist root.
+func resolveGamelistROMPath(esPath, root string, romRoots []string) (path, matchedRoot string) {
+	resolved, ok := esmedia.ResolvePathAbs(esPath, root)
+	if !ok {
+		return "", ""
+	}
+	if esmedia.PathWithinRoot(resolved, root) {
+		return resolved, root
+	}
+	for _, romRoot := range romRoots {
+		if esmedia.PathWithinRoot(resolved, romRoot) {
+			return resolved, romRoot
+		}
+	}
+	return "", ""
+}
+
 // pathPropFS resolves esPath to an absolute path and returns a MediaProperty
 // for typeTag. When requireExists is true, unresolved and missing paths are
 // skipped so another artwork source can provide the property.
@@ -1578,16 +1620,26 @@ func selectMediaForSlugMatch(
 			Msg("gamelistxml: slug match path points at different title, writing title metadata only")
 	}
 
-	mediaRows := indexes.MediaByTitleDBID[mediaTitleDBID]
-	if len(mediaRows) == 0 {
-		return slugMediaSelection{matchKind: matchKind}
+	var first database.Media
+	var candidates int
+	ext := strings.ToLower(filepath.Ext(resolved))
+	for _, row := range indexes.MediaByTitleDBID[mediaTitleDBID] {
+		// GB and GBC share ROM roots on MiSTer, but a name match must never
+		// transfer metadata between their distinct ROM formats. Exact paths
+		// above still support launchers that deliberately index both formats.
+		rowExt := strings.ToLower(filepath.Ext(row.Path))
+		if (ext == ".gb" && rowExt == ".gbc") || (ext == ".gbc" && rowExt == ".gb") {
+			continue
+		}
+		if candidates == 0 {
+			first = row
+		}
+		candidates++
 	}
-	// A pure slug-only match with exactly one media row is unambiguous: there is
-	// only one place the artwork can go, so media-level writes are safe.
-	// slug_conflict (path points at a different title) and multi-row titles stay
-	// unsafe to avoid attaching art to the wrong regional variant.
-	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && len(mediaRows) == 1
-	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
+	// A pure slug-only match with exactly one compatible media row is
+	// unambiguous. Conflicting paths and multiple variants stay unsafe.
+	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && candidates == 1
+	return slugMediaSelection{media: first, matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
 }
 
 // containerMediaForDir resolves a directory path to the unscraped media row it
@@ -1930,7 +1982,7 @@ func companionEntriesFromParsed(
 					RequireExistingImage: file.RequireExistingImage,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
-				resolved := esmedia.ResolvePath(game.Path, file.RootPath)
+				resolved, _ := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
 				if resolved == "" {
 					unresolvedChildPaths++
 					continue
