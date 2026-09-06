@@ -32,9 +32,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestUnmarshalGameIDVariants verifies that both the XML attribute form
-// (ScreenScraperIDAttr) and the element form (ScreenScraperID) of the "id"
-// field parse correctly in isolation and together.
+// TestGameBox2DAlias verifies that the ZapScraper box2d alias decodes into the
+// canonical Boxart2D field, that an explicit boxart2d value wins regardless of
+// element order, and that marshalling only ever emits boxart2d.
 func TestGameBox2DAlias(t *testing.T) {
 	t.Parallel()
 
@@ -74,6 +74,22 @@ func TestGameBox2DAlias(t *testing.T) {
 	}
 }
 
+// TestGameDecodeErrorPropagates covers the alias decoder's error path: a
+// malformed numeric element must surface as a parse failure rather than a
+// silently zeroed game, since gamelist.xml is untrusted input.
+func TestGameDecodeErrorPropagates(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseGameListXML([]byte(
+		`<gameList><game><path>./Game.gb</path><playcount>many</playcount></game></gameList>`,
+	))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode gamelist game")
+}
+
+// TestUnmarshalGameIDVariants verifies that both the XML attribute form
+// (ScreenScraperIDAttr) and the element form (ScreenScraperID) of the "id"
+// field parse correctly in isolation and together.
 func TestUnmarshalGameIDVariants(t *testing.T) {
 	t.Parallel()
 
