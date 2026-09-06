@@ -153,6 +153,10 @@ Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for co
 
 ## Media
 
+### media.visibility
+
+An indexed media item's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing browse and letter-index cursors. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
+
 ### media.started
 
 New media was started on server.

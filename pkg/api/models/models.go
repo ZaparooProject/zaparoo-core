@@ -34,6 +34,7 @@ const (
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationMediaScraping        = "media.scraping"
+	NotificationMediaVisibility      = "media.visibility"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"

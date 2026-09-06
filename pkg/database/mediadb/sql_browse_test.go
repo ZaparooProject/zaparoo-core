@@ -865,6 +865,11 @@ func TestFetchAndAttachUtilityTags_NoFavorites(t *testing.T) {
 		ExpectQuery().
 		WillReturnRows(tagRows)
 
+	// This fixture predates user:hidden; its utility lookup finds no tag type.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
+
 	// MediaTags query returns no rows — neither entry has any utility tag.
 	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
 		WithArgs(int64(10), int64(11), int64(42)).
@@ -898,6 +903,10 @@ func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
 	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
 		ExpectQuery().
 		WillReturnRows(tagRows)
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
 
 	// Only media ID 20 has the favorite utility tag.
 	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).

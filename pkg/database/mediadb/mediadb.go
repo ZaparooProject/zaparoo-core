@@ -2958,6 +2958,7 @@ func (c *browseCall) finish(db *MediaDB) {
 	event.Msg("browse call timing")
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func (db *MediaDB) BrowseDirectories(
 	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
@@ -2988,7 +2989,12 @@ func (db *MediaDB) BrowseFiles(
 		return nil, err
 	}
 	defer call.finish(db)
-	results, err := sqlBrowseFiles(ctx, call.conn, opts)
+	scoped := *opts
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	results, err := sqlBrowseFiles(ctx, call.conn, &scoped)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -3029,6 +3035,10 @@ func (db *MediaDB) BrowseFileCount(
 		return 0, err
 	}
 	defer call.finish(db)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return 0, err
+	}
 	return sqlBrowseFileCount(ctx, call.conn, opts)
 }
 
@@ -3070,6 +3080,10 @@ func (db *MediaDB) BrowseIndex(
 		return database.BrowseIndexResult{}, err
 	}
 	defer call.finish(db)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return database.BrowseIndexResult{}, err
+	}
 	return sqlBrowseIndex(ctx, call.conn, &opts)
 }
 
@@ -3087,7 +3101,7 @@ func (db *MediaDB) BrowseVirtualSchemes(
 // under each root. A nil *int means the count is not yet available (cache not
 // populated). A non-nil *int is the actual count (which may be 0).
 func (db *MediaDB) BrowseRootCounts(
-	ctx context.Context, rootDirs []string,
+	ctx context.Context, rootDirs []string, excludeHidden ...bool,
 ) (map[string]*int, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
@@ -3097,7 +3111,7 @@ func (db *MediaDB) BrowseRootCounts(
 		return nil, err
 	}
 	defer call.finish(db)
-	return sqlBrowseRootCounts(ctx, call.conn, rootDirs)
+	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden...)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -3223,6 +3237,14 @@ func (db *MediaDB) SearchMediaWithFilters(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
+
+	scoped := *filters
+	var visibilityErr error
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden)
+	if visibilityErr != nil {
+		return nil, visibilityErr
+	}
+	filters = &scoped
 
 	qWords := strings.Fields(filters.Query)
 	if len(qWords) == 0 || len(filters.Systems) == 0 {
@@ -3732,9 +3754,17 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) SystemMediaCounts(
 	ctx context.Context,
 	tagFilters []zapscript.TagFilter,
+	excludeHidden ...bool,
 ) ([]database.SystemMediaCount, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
+	}
+	var visibilityErr error
+	tagFilters, visibilityErr = discoveryTags(
+		ctx, db.sql.Load(), tagFilters, len(excludeHidden) > 0 && excludeHidden[0],
+	)
+	if visibilityErr != nil {
+		return nil, visibilityErr
 	}
 	if len(tagFilters) > 0 {
 		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
@@ -3779,6 +3809,14 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	if db.sql.Load() == nil {
 		return result, ErrNullSQL
 	}
+
+	scoped := *query
+	var visibilityErr error
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, true)
+	if visibilityErr != nil {
+		return result, visibilityErr
+	}
+	query = &scoped
 
 	// Per-system counts preserve uniform media-row weighting while narrowing
 	// broad system scopes before random row selection touches the Media table.

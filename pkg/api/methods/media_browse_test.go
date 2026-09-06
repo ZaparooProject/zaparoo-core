@@ -178,7 +178,7 @@ func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseRootCounts", mock.Anything, mock.Anything).
 		Return(map[string]*int{romsRoot: intPtr(500)}, nil)
-	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{}).
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{ExcludeHidden: true}).
 		Return([]database.BrowseVirtualScheme{
 			{Scheme: "steam://", FileCount: 42},
 		}, nil)
@@ -2628,7 +2628,7 @@ func TestHandleMediaBrowse_VirtualGrouping(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseRootCounts", mock.Anything, []string{}).
 		Return(map[string]*int{}, nil)
-	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{}).
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{ExcludeHidden: true}).
 		Return([]database.BrowseVirtualScheme{
 			{Scheme: "kodi-episode://", FileCount: 200},
 			{Scheme: "kodi-movie://", FileCount: 80},

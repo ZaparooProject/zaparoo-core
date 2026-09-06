@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/rs/zerolog/log"
 )
@@ -83,7 +84,8 @@ func HandleMediaBrowseIndex(env requests.RequestEnv) (any, error) { //nolint:goc
 	return result, err
 }
 
-func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // Request environment is a per-handler value.
+func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error) {
 	select {
 	case browseSem <- struct{}{}:
 		defer func() { <-browseSem }()
@@ -103,6 +105,16 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err != nil {
 		return nil, err
 	}
+	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
+	revision, err := validateBrowseVisibility(&env, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if responseErr == nil {
+			response, responseErr = stampBrowseVisibility(&env, response, revision, !env.ExcludeHidden)
+		}
+	}()
 
 	var sortOrder string
 	if params.Sort != nil {
@@ -143,10 +155,11 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 		started := time.Now()
 		result, indexErr := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
-			Overlay: &database.BrowseOverlay{Sources: sources},
-			Sort:    sortOrder,
-			Systems: systems,
-			Tags:    tagFilters,
+			ExcludeHidden: env.ExcludeHidden,
+			Overlay:       &database.BrowseOverlay{Sources: sources},
+			Sort:          sortOrder,
+			Systems:       systems,
+			Tags:          tagFilters,
 		})
 		logBrowseTiming("root_contents_index", "", started, len(result.Buckets))
 		if indexErr != nil {
@@ -162,10 +175,11 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	started := time.Now()
 	result, err := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
-		PathPrefix: prefix,
-		Sort:       sortOrder,
-		Systems:    systems,
-		Tags:       tagFilters,
+		ExcludeHidden: env.ExcludeHidden,
+		PathPrefix:    prefix,
+		Sort:          sortOrder,
+		Systems:       systems,
+		Tags:          tagFilters,
 	})
 	logBrowseTiming("index", prefix, started, len(result.Buckets))
 	if err != nil {

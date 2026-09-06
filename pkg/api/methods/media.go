@@ -1079,15 +1079,16 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	searchFilters := database.SearchFilters{
-		Systems:    systems,
-		PathPrefix: pathPrefix,
-		Query:      query,
-		Sort:       sortOrder,
-		Tags:       tagFilters, // Will be empty if no tags provided
-		Letter:     validatedLetter,
-		Cursor:     cursor,
-		SortCursor: sortCursor,
-		Limit:      limit,
+		ExcludeHidden: !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+		Systems:       systems,
+		PathPrefix:    pathPrefix,
+		Query:         query,
+		Sort:          sortOrder,
+		Tags:          tagFilters, // Will be empty if no tags provided
+		Letter:        validatedLetter,
+		Cursor:        cursor,
+		SortCursor:    sortCursor,
+		Limit:         limit,
 	}
 
 	searchStarted := time.Now()

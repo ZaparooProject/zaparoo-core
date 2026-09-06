@@ -576,11 +576,22 @@ func browseOverlaySoleSource(overlay *database.BrowseOverlay) (source database.B
 	return sources[0], true
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectories(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	if filtered {
+		if len(browseOverlaySources(opts.Overlay)) > 0 {
+			return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
+		}
+		return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+	}
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
 		return sqlBrowseOverlayDirectories(ctx, db, opts)
 	}
@@ -615,12 +626,13 @@ func sqlBrowseDirectories(
 // a directory can be dropped when a higher-priority route already provides that
 // name as a file. Shared by both overlay directory statements; the caller
 // appends the system filter's args when systemClause is non-empty.
-func browseOverlayDirectFilesCTE(systemClause string) string {
+func browseOverlayDirectFilesCTE(systemClause string, excludeHidden ...bool) string {
 	query := `direct_files AS (
 			SELECT sources.priority,
 				substr(m.Path, length(m.ParentDir) + 1) AS name
 			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN ` + browseMediaSource(len(excludeHidden) > 0 && excludeHidden[0]) + ` m
+				ON m.ParentDir = sources.parent_dir
 			INNER JOIN Systems s ON m.SystemDBID = s.DBID
 			WHERE m.IsMissing = 0`
 	if systemClause != "" {
@@ -668,6 +680,8 @@ const browseOverlaySingleRouteDirectoryTail = ` SELECT name, file_count, system_
 // per page just to take len(dirs). BrowseDirCounts already holds those names and
 // counts, built from the same IsMissing = 0 rows, so the two agree by
 // construction.
+//
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseOverlayDirectories(
 	ctx context.Context,
 	db sqlQueryable,
@@ -724,6 +738,7 @@ func browseOverlayCacheParents(
 	return parentIDs, true, nil
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseOverlayDirectoriesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
@@ -739,6 +754,8 @@ func sqlBrowseOverlayDirectoriesFromCache(
 // arguments. Separate from the exec so the query-plan regression test measures
 // the statement production actually runs rather than a copy of it, matching
 // browseOverlayFileCountQuery.
+//
+//nolint:gocritic // Value options preserve the browse contract.
 func browseOverlayDirectoriesCacheQuery(
 	opts database.BrowseDirectoriesOptions,
 	sources []database.BrowseSource,
@@ -785,6 +802,7 @@ func browseOverlayDirectoriesCacheQuery(
 	return query + `, ` + browseOverlayDirectoryTail, args
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseOverlayDirectoriesFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
@@ -798,6 +816,8 @@ func sqlBrowseOverlayDirectoriesFromMedia(
 // derives the child directories by scanning every media row beneath each route.
 // Factored out alongside browseOverlayDirectoriesCacheQuery so the plan test can
 // compare the two shapes.
+//
+//nolint:gocritic // Value options preserve the browse contract.
 func browseOverlayDirectoriesMediaQuery(
 	opts database.BrowseDirectoriesOptions,
 ) (query string, args []any) {
@@ -817,7 +837,7 @@ func browseOverlayDirectoriesMediaQuery(
 				substr(m.Path, length(sources.parent_dir) + 1) AS rest,
 				s.SystemID
 			FROM sources
-			INNER JOIN Media m
+			INNER JOIN ` + browseMediaSource(opts.ExcludeHidden) + ` m
 				ON m.Path >= sources.parent_dir
 				AND m.Path < sources.parent_dir || char(1114111)
 			INNER JOIN Systems s ON m.SystemDBID = s.DBID
@@ -840,7 +860,7 @@ func browseOverlayDirectoriesMediaQuery(
 	if len(sources) == 1 {
 		return query + browseOverlaySingleRouteDirectoryTail, args
 	}
-	query += `, ` + browseOverlayDirectFilesCTE(systemClause)
+	query += `, ` + browseOverlayDirectFilesCTE(systemClause, opts.ExcludeHidden)
 	if systemClause != "" {
 		args = append(args, systemArgs...)
 	}
@@ -849,6 +869,8 @@ func browseOverlayDirectoriesMediaQuery(
 
 // runBrowseOverlayDirectories appends the paging clauses both overlay directory
 // statements end with and reads the rows.
+//
+//nolint:gocritic // Value options preserve the browse contract.
 func runBrowseOverlayDirectories(
 	ctx context.Context,
 	db sqlQueryable,
@@ -888,6 +910,7 @@ func runBrowseOverlayDirectories(
 	return results, nil
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectoriesFromMediaFallback(
 	ctx context.Context,
 	db sqlQueryable,
@@ -919,6 +942,7 @@ func browseSystemIDsForLog(systems []systemdefs.System) []string {
 	return systemIDs
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectoriesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
@@ -979,6 +1003,7 @@ func sqlBrowseDirectoriesFromCache(
 	return results, true, nil
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectoriesFromCacheForSingleSystem(
 	ctx context.Context,
 	db sqlQueryable,
@@ -1026,6 +1051,7 @@ func sqlBrowseDirectoriesFromCacheForSingleSystem(
 	return results, nil
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectoriesFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
@@ -1035,7 +1061,7 @@ func sqlBrowseDirectoriesFromMedia(
 	args := append([]any{opts.PathPrefix}, pathArgs...)
 	query := `WITH matched AS (
 			 SELECT substr(Path, length(?) + 1) AS Rest
-			 FROM Media
+			 FROM ` + browseMediaSource(opts.ExcludeHidden) + `
 			 WHERE IsMissing = 0 AND ` + pathCondition + `
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
@@ -1072,6 +1098,7 @@ func sqlBrowseDirectoriesFromMedia(
 	return results, nil
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func sqlBrowseDirectoriesForSystemsFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
@@ -1085,7 +1112,7 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	args = append(args, systemArgs...)
 	query := `WITH matched AS (
 			 SELECT substr(m.Path, length(?) + 1) AS Rest, s.SystemID
-			 FROM Media m
+			 FROM ` + browseMediaSource(opts.ExcludeHidden) + ` m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 			 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
 		 )
@@ -1532,15 +1559,19 @@ func sqlBrowseFiles(
 // two are 0.6 ms and 22 ms, because the bounds become a covering range scan.
 // The index is created by the base schema migration and recreated by
 // CreateSecondaryIndexes, so it is always present.
-const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
+func overlayHigherPriorityDirectoryCondition(excludeHidden bool) string {
+	return `NOT EXISTS (
 	SELECT 1
 	FROM sources higher
 	INNER JOIN Media descendant INDEXED BY idx_media_browse_sort ON descendant.IsMissing = 0
 	WHERE higher.priority < sources.priority
 		AND higher.include_dirs = 1
 		AND descendant.ParentDir >= higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/'
-		AND descendant.ParentDir < higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
+		AND descendant.ParentDir < higher.parent_dir ||
+			substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)` +
+		browseVisibilityCondition("descendant.DBID", excludeHidden) + `
 )`
+}
 
 // browseOverlayPreferredRouteCondition drops a candidate whose filename a
 // higher-priority route already supplies as a file.
@@ -1560,14 +1591,16 @@ const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
 //
 // The rival must pass the same system filter as the candidate, because ranking
 // partitioned only over rows that had already passed it.
-func browseOverlayPreferredRouteCondition(systems []systemdefs.System) (condition string, args []any) {
+func browseOverlayPreferredRouteCondition(
+	systems []systemdefs.System, excludeHidden bool,
+) (condition string, args []any) {
 	condition = `(sources.priority = 0 OR NOT EXISTS (
 		SELECT 1
 		FROM sources preferred
 		INNER JOIN Media rival
 			ON rival.Path = preferred.parent_dir || substr(m.Path, length(m.ParentDir) + 1)
 		WHERE preferred.priority < sources.priority
-			AND rival.IsMissing = 0`
+			AND rival.IsMissing = 0` + browseVisibilityCondition("rival.DBID", excludeHidden)
 	if clause, systemArgs := browseSystemFilterClause("rs.SystemID", systems); clause != "" {
 		condition += `
 			AND rival.SystemDBID IN (SELECT rs.DBID FROM Systems rs WHERE ` + clause + `)`
@@ -1580,8 +1613,8 @@ func browseOverlayPreferredRouteCondition(systems []systemdefs.System) (conditio
 // browseOverlayShadowedByDirectoryCondition is the directory shadow rule under
 // the same short-circuit: nothing outranks priority 0, so the first route never
 // runs the correlated probe.
-func browseOverlayShadowedByDirectoryCondition() string {
-	return `(sources.priority = 0 OR ` + overlayHigherPriorityDirectoryCondition + `)`
+func browseOverlayShadowedByDirectoryCondition(excludeHidden bool) string {
+	return `(sources.priority = 0 OR ` + overlayHigherPriorityDirectoryCondition(excludeHidden) + `)`
 }
 
 // browseOverlayMergeSource is the FROM clause both merge statements read
@@ -1618,21 +1651,24 @@ const browseOverlayRouteDedupeCondition = `NOT EXISTS (
 // INDEXED BY: the ParentDir bounds are built by concatenation from the outer
 // row, so without the hint the planner takes media_missing_idx and each
 // candidate scans the whole of Media (#1279).
-const browseOverlayRouteShadowCondition = `NOT EXISTS (
+func browseOverlayRouteShadowCondition(excludeHidden bool) string {
+	return `NOT EXISTS (
 			SELECT 1 FROM Media descendant INDEXED BY idx_media_browse_sort
 			WHERE descendant.IsMissing = 0
 				AND descendant.ParentDir >= ? || substr(m.Path, length(m.ParentDir) + 1) || '/'
-				AND descendant.ParentDir < ? || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
+				AND descendant.ParentDir < ? || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)` +
+		browseVisibilityCondition("descendant.DBID", excludeHidden) + `
 		)`
+}
 
 // browseOverlayRouteMergeConditions returns the merge predicates route i must
 // pass, one pair per route the merge prefers, along with their arguments.
 func browseOverlayRouteMergeConditions(
-	sources []database.BrowseSource, index int, systems []systemdefs.System,
+	sources []database.BrowseSource, index int, systems []systemdefs.System, excludeHidden bool,
 ) (conditions []string, args []any) {
 	systemClause, systemArgs := browseSystemFilterClause("rs.SystemID", systems)
 	for j := range index {
-		dedupe := browseOverlayRouteDedupeCondition
+		dedupe := browseOverlayRouteDedupeCondition + browseVisibilityCondition("rival.DBID", excludeHidden)
 		args = append(args, sources[j].PathPrefix)
 		if systemClause != "" {
 			dedupe += `
@@ -1644,7 +1680,7 @@ func browseOverlayRouteMergeConditions(
 		if !sources[j].IncludeDirs {
 			continue
 		}
-		conditions = append(conditions, browseOverlayRouteShadowCondition)
+		conditions = append(conditions, browseOverlayRouteShadowCondition(excludeHidden))
 		args = append(args, sources[j].PathPrefix, sources[j].PathPrefix)
 	}
 	return conditions, args
@@ -1720,7 +1756,7 @@ func browseOverlayMergedFilesQuery(
 		where += route.rangeClause
 		args = append(args, route.rangeArgs...)
 
-		mergeConditions, mergeArgs := browseOverlayRouteMergeConditions(sources, i, opts.Systems)
+		mergeConditions, mergeArgs := browseOverlayRouteMergeConditions(sources, i, opts.Systems, opts.ExcludeHidden)
 		if len(mergeConditions) > 0 {
 			where += `
 			AND ` + strings.Join(mergeConditions, `
@@ -2434,7 +2470,7 @@ func browseOverlayFileCountQuery(
 	}, false, tagPlan)
 	args = append(args, filterArgs...)
 
-	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
+	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems, opts.ExcludeHidden)
 	args = append(args, preferredArgs...)
 
 	return browseOverlaySourcesCTE + values + `)
@@ -2442,7 +2478,7 @@ func browseOverlayFileCountQuery(
 		` + browseOverlayMergeSource + `
 		WHERE ` + where + `
 			AND ` + preferred + `
-			AND ` + browseOverlayShadowedByDirectoryCondition(), args
+			AND ` + browseOverlayShadowedByDirectoryCondition(opts.ExcludeHidden), args
 }
 
 func sqlBrowseOverlayFileCount(
@@ -2731,6 +2767,19 @@ func sqlBrowseDirCount(
 	db sqlQueryable,
 	opts database.BrowseDirCountOptions,
 ) (int, error) {
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	if err != nil {
+		return 0, err
+	}
+	if filtered {
+		if len(browseOverlaySources(opts.Overlay)) > 0 {
+			dirs, dirErr := sqlBrowseOverlayDirectoriesFromMedia(ctx, db, database.BrowseDirectoriesOptions{
+				Overlay: opts.Overlay, Systems: opts.Systems, ExcludeHidden: true,
+			})
+			return len(dirs), dirErr
+		}
+		return sqlBrowseDirCountFromMedia(ctx, db, opts)
+	}
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
 		sole, single := browseOverlaySoleSource(opts.Overlay)
 		if !single {
@@ -2820,7 +2869,7 @@ func sqlBrowseDirCountFromMedia(
 		args = append(args, systemArgs...)
 		inner = `WITH matched AS (
 				 SELECT substr(m.Path, length(?) + 1) AS Rest
-				 FROM Media m
+				 FROM ` + browseMediaSource(opts.ExcludeHidden) + ` m
 				 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 				 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
 			 )
@@ -2834,7 +2883,7 @@ func sqlBrowseDirCountFromMedia(
 		args = append(args, pathArgs...)
 		inner = `WITH matched AS (
 				 SELECT substr(Path, length(?) + 1) AS Rest
-				 FROM Media
+				 FROM ` + browseMediaSource(opts.ExcludeHidden) + `
 				 WHERE IsMissing = 0 AND ` + pathCondition + `
 			 )
 			 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name
@@ -2979,9 +3028,10 @@ func sqlBrowseOverlayIndex(
 		// total takes the same routing every other browse total does: collapsed
 		// for one route, cached for two.
 		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
-			Overlay: opts.Overlay,
-			Systems: opts.Systems,
-			Tags:    opts.Tags,
+			ExcludeHidden: opts.ExcludeHidden,
+			Overlay:       opts.Overlay,
+			Systems:       opts.Systems,
+			Tags:          opts.Tags,
 		})
 		if err != nil {
 			return database.BrowseIndexResult{}, err
@@ -3003,7 +3053,7 @@ func sqlBrowseOverlayIndex(
 		Tags:    opts.Tags,
 	}, false, browseOverlayRoutesTagPlan(ctx, db, opts.Overlay, opts.Systems, opts.Tags))
 	args = append(args, filterArgs...)
-	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems)
+	preferred, preferredArgs := browseOverlayPreferredRouteCondition(opts.Systems, opts.ExcludeHidden)
 	args = append(args, preferredArgs...)
 
 	desc := opts.Sort == "name-desc"
@@ -3022,7 +3072,7 @@ func sqlBrowseOverlayIndex(
 			` + browseOverlayMergeSource + `
 			WHERE ` + where + `
 				AND ` + preferred + `
-				AND ` + browseOverlayShadowedByDirectoryCondition() + `
+				AND ` + browseOverlayShadowedByDirectoryCondition(opts.ExcludeHidden) + `
 		), counts AS (
 			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
 		)
@@ -3072,6 +3122,16 @@ func sqlBrowseVirtualSchemes(
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	if filtered {
+		if len(opts.Systems) > 0 {
+			return sqlBrowseVirtualSchemesForSystemsFromMedia(ctx, db, opts)
+		}
+		return sqlBrowseVirtualSchemesFromMedia(ctx, db, true)
+	}
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
@@ -3129,11 +3189,13 @@ func sqlBrowseVirtualSchemesFromCache(
 	return results, nil
 }
 
-func sqlBrowseVirtualSchemesFromMedia(ctx context.Context, db sqlQueryable) ([]database.BrowseVirtualScheme, error) {
+func sqlBrowseVirtualSchemesFromMedia(
+	ctx context.Context, db sqlQueryable, excludeHidden ...bool,
+) ([]database.BrowseVirtualScheme, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT substr(Path, 1, instr(Path, '://') + 2) AS Scheme,
 			COUNT(*) AS FileCount
-		 FROM Media
+		 FROM `+browseMediaSource(len(excludeHidden) > 0 && excludeHidden[0])+`
 		 WHERE IsMissing = 0 AND instr(Path, '://') > 0
 		 GROUP BY Scheme
 		 ORDER BY Scheme ASC`)
@@ -3166,7 +3228,7 @@ func sqlBrowseVirtualSchemesForSystemsFromMedia(
 		`SELECT substr(m.Path, 1, instr(m.Path, '://') + 2) AS Scheme,
 			COUNT(*) AS FileCount,
 			GROUP_CONCAT(DISTINCT s.SystemID)
-		 FROM Media m
+		 FROM `+browseMediaSource(opts.ExcludeHidden)+` m
 		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		 WHERE m.IsMissing = 0 AND instr(m.Path, '://') > 0 AND `+systemClause+`
 		 GROUP BY Scheme
@@ -3204,6 +3266,13 @@ func sqlBrowseRouteCounts(
 	db sqlQueryable,
 	opts database.BrowseRouteCountsOptions,
 ) (map[string]database.BrowseRouteCount, error) {
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	if filtered {
+		return sqlVisibleRouteCounts(ctx, db, opts.Routes, opts.Systems)
+	}
 	if len(opts.Routes) == 0 || len(opts.Systems) == 0 {
 		return make(map[string]database.BrowseRouteCount), nil
 	}
@@ -3425,6 +3494,10 @@ func sqlBrowseSystemRootCandidates(
 	if len(opts.Roots) == 0 || len(opts.Systems) == 0 {
 		return result, true, nil
 	}
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	if err != nil || filtered {
+		return result, false, err
+	}
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return result, false, err
@@ -3566,8 +3639,25 @@ func loadBrowseSystemRootChildren(
 	return nil
 }
 
-func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string) (map[string]*int, error) {
+func sqlBrowseRootCounts(
+	ctx context.Context, db sqlQueryable, rootDirs []string, excludeHidden ...bool,
+) (map[string]*int, error) {
 	counts := make(map[string]*int, len(rootDirs))
+	filtered, err := sqlNeedsVisibilityFilter(ctx, db, len(excludeHidden) > 0 && excludeHidden[0])
+	if err != nil {
+		return nil, err
+	}
+	if filtered {
+		visible, countErr := sqlVisibleRouteCounts(ctx, db, rootDirs, nil)
+		if countErr != nil {
+			return nil, countErr
+		}
+		for _, root := range rootDirs {
+			count := visible[root].FileCount
+			counts[root] = &count
+		}
+		return counts, nil
+	}
 	for _, root := range rootDirs {
 		counts[root] = nil
 	}
