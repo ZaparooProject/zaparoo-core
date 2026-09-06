@@ -29,6 +29,9 @@ class VM:
                      '-drive', f'if=none,id=outer,file={drive(disk)},format=raw',
                      '-device', 'virtio-blk-device,drive=outer']
         else:
+            # QEMU allocates virtio-mmio transports in reverse of -device order,
+            # so the guest enumerates the last block device added as vda. With a
+            # fixtures disk present the overlay is therefore vdb, not vda.
             root = '/dev/vdb1' if fixtures else '/dev/vda1'
             args += ['-append', f'console=ttyAMA0,115200 root={root} loop=linux/linux.img loop.max_part=8 ro rootwait',
                      '-drive', f'if=none,id=root,file={drive(disk)},format=qcow2',
