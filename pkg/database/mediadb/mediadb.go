@@ -3101,7 +3101,7 @@ func (db *MediaDB) BrowseVirtualSchemes(
 // under each root. A nil *int means the count is not yet available (cache not
 // populated). A non-nil *int is the actual count (which may be 0).
 func (db *MediaDB) BrowseRootCounts(
-	ctx context.Context, rootDirs []string, excludeHidden ...bool,
+	ctx context.Context, rootDirs []string, excludeHidden bool,
 ) (map[string]*int, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
@@ -3111,7 +3111,7 @@ func (db *MediaDB) BrowseRootCounts(
 		return nil, err
 	}
 	defer call.finish(db)
-	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden...)
+	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -3754,21 +3754,44 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) SystemMediaCounts(
 	ctx context.Context,
 	tagFilters []zapscript.TagFilter,
-	excludeHidden ...bool,
+	excludeHidden bool,
 ) ([]database.SystemMediaCount, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	var visibilityErr error
-	tagFilters, visibilityErr = discoveryTags(
-		ctx, db.sql.Load(), tagFilters, len(excludeHidden) > 0 && excludeHidden[0],
-	)
-	if visibilityErr != nil {
-		return nil, visibilityErr
-	}
 	if len(tagFilters) > 0 {
-		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
+		if visibilityErr != nil {
+			return nil, visibilityErr
+		}
+		return sqlSystemMediaCounts(ctx, db.sql.Load(), scoped)
 	}
+	// The untagged totals are cached per index generation and shared with random
+	// weighting, so subtract hidden media from them rather than re-aggregating
+	// Media behind a NOT filter.
+	hidden, err := loadHiddenMedia(ctx, db.sql.Load(), excludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := db.cachedSystemMediaCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if hidden.empty() {
+		return counts, nil
+	}
+	visible := counts[:0]
+	for i := range counts {
+		counts[i].Count -= hidden.countForSystem(counts[i].SystemID)
+		if counts[i].Count <= 0 {
+			continue
+		}
+		visible = append(visible, counts[i])
+	}
+	return visible, nil
+}
+
+func (db *MediaDB) cachedSystemMediaCounts(ctx context.Context) ([]database.SystemMediaCount, error) {
 	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
 		cached.generation == db.systemMediaCountsGen.Load() {
 		return slices.Clone(cached.counts), nil
@@ -3810,6 +3833,10 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 		return result, ErrNullSQL
 	}
 
+	// Weighting reads the caller's own tags with visibility asked for
+	// separately, so an untagged random keeps the cached per-system totals
+	// instead of re-aggregating Media behind the injected NOT filter.
+	weightTags := query.Tags
 	scoped := *query
 	var visibilityErr error
 	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, true)
@@ -3822,7 +3849,7 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	// broad system scopes before random row selection touches the Media table.
 	if query.PathPrefix == "" && query.PathGlob == "" && len(query.Systems) > 1 {
 		started := time.Now()
-		counts, err := db.SystemMediaCounts(ctx, query.Tags)
+		counts, err := db.SystemMediaCounts(ctx, weightTags, true)
 		if err != nil {
 			return result, fmt.Errorf("failed to get system media counts for random selection: %w", err)
 		}

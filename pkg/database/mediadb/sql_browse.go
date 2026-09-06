@@ -582,18 +582,12 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
 	if err != nil {
 		return nil, err
 	}
-	if filtered {
-		if len(browseOverlaySources(opts.Overlay)) > 0 {
-			return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
-		}
-		return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
-	}
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
-		return sqlBrowseOverlayDirectories(ctx, db, opts)
+		return sqlBrowseOverlayDirectories(ctx, db, opts, hidden)
 	}
 
 	ready, err := sqlBrowseCacheReady(ctx, db)
@@ -601,9 +595,18 @@ func sqlBrowseDirectories(
 		return nil, err
 	}
 	if ready {
-		results, parentFound, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
-		if cacheErr != nil || parentFound {
-			return results, cacheErr
+		scoped := opts
+		scoped.Limit = browseHiddenFetchLimit(
+			opts.Limit, hidden.childNameCount([]string{opts.PathPrefix}, opts.Systems),
+		)
+		results, parentFound, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, scoped)
+		if cacheErr != nil {
+			return nil, cacheErr
+		}
+		if parentFound {
+			return browseTruncateDirectories(
+				applyHiddenToDirectories(results, hidden, opts.PathPrefix, opts.Systems), opts.Limit,
+			), nil
 		}
 
 		fallback, fallbackErr := sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
@@ -626,12 +629,12 @@ func sqlBrowseDirectories(
 // a directory can be dropped when a higher-priority route already provides that
 // name as a file. Shared by both overlay directory statements; the caller
 // appends the system filter's args when systemClause is non-empty.
-func browseOverlayDirectFilesCTE(systemClause string, excludeHidden ...bool) string {
+func browseOverlayDirectFilesCTE(systemClause string, excludeHidden bool) string {
 	query := `direct_files AS (
 			SELECT sources.priority,
 				substr(m.Path, length(m.ParentDir) + 1) AS name
 			FROM sources
-			INNER JOIN ` + browseMediaSource(len(excludeHidden) > 0 && excludeHidden[0]) + ` m
+			INNER JOIN ` + browseMediaSource(excludeHidden) + ` m
 				ON m.ParentDir = sources.parent_dir
 			INNER JOIN Systems s ON m.SystemDBID = s.DBID
 			WHERE m.IsMissing = 0`
@@ -686,16 +689,31 @@ func sqlBrowseOverlayDirectories(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
+	hidden *hiddenMedia,
 ) ([]database.BrowseDirectoryResult, error) {
 	sources := browseOverlaySources(opts.Overlay)
 	parentIDs, usable, err := browseOverlayCacheParents(ctx, db, sources, opts.Systems)
 	if err != nil {
 		return nil, err
 	}
-	if usable {
-		return sqlBrowseOverlayDirectoriesFromCache(ctx, db, opts, sources, parentIDs)
+	if !usable {
+		return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
 	}
-	return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
+	prefixes := make([]string, len(sources))
+	for i := range sources {
+		prefixes[i] = sources[i].PathPrefix
+	}
+	scoped := opts
+	scoped.Limit = browseHiddenFetchLimit(opts.Limit, hidden.childNameCount(prefixes, opts.Systems))
+	results, err := sqlBrowseOverlayDirectoriesFromCache(ctx, db, scoped, sources, parentIDs)
+	if err != nil {
+		return nil, err
+	}
+	// Overlay rows carry the winning route's path, so the empty pathPrefix here
+	// is never consulted.
+	return browseTruncateDirectories(
+		applyHiddenToDirectories(results, hidden, "", opts.Systems), opts.Limit,
+	), nil
 }
 
 // browseOverlayCacheParents resolves each directory-contributing route to its
@@ -795,7 +813,9 @@ func browseOverlayDirectoriesCacheQuery(
 	if len(sources) == 1 {
 		return query + browseOverlaySingleRouteDirectoryTail, args
 	}
-	query += `, ` + browseOverlayDirectFilesCTE(systemClause)
+	// direct_files reads Media even on the cache path, so hidden files can be
+	// kept from shadowing a directory here without giving up the cached counts.
+	query += `, ` + browseOverlayDirectFilesCTE(systemClause, opts.ExcludeHidden)
 	if systemClause != "" {
 		args = append(args, systemArgs...)
 	}
@@ -2767,26 +2787,18 @@ func sqlBrowseDirCount(
 	db sqlQueryable,
 	opts database.BrowseDirCountOptions,
 ) (int, error) {
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
 	if err != nil {
 		return 0, err
-	}
-	if filtered {
-		if len(browseOverlaySources(opts.Overlay)) > 0 {
-			dirs, dirErr := sqlBrowseOverlayDirectoriesFromMedia(ctx, db, database.BrowseDirectoriesOptions{
-				Overlay: opts.Overlay, Systems: opts.Systems, ExcludeHidden: true,
-			})
-			return len(dirs), dirErr
-		}
-		return sqlBrowseDirCountFromMedia(ctx, db, opts)
 	}
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
 		sole, single := browseOverlaySoleSource(opts.Overlay)
 		if !single {
 			dirs, overlayErr := sqlBrowseOverlayDirectories(ctx, db, database.BrowseDirectoriesOptions{
-				Overlay: opts.Overlay,
-				Systems: opts.Systems,
-			})
+				Overlay:       opts.Overlay,
+				Systems:       opts.Systems,
+				ExcludeHidden: opts.ExcludeHidden,
+			}, hidden)
 			return len(dirs), overlayErr
 		}
 		// A route excluded from the directory listing contributes no directories
@@ -2807,11 +2819,76 @@ func sqlBrowseDirCount(
 	}
 	if ready {
 		count, parentFound, cacheErr := sqlBrowseDirCountFromCache(ctx, db, opts)
-		if cacheErr != nil || parentFound {
+		if cacheErr != nil {
 			return count, cacheErr
+		}
+		if parentFound {
+			emptied, emptyErr := sqlEmptiedChildDirCount(ctx, db, opts, hidden)
+			if emptyErr != nil {
+				return 0, emptyErr
+			}
+			return max(count-emptied, 0), nil
 		}
 	}
 	return sqlBrowseDirCountFromMedia(ctx, db, opts)
+}
+
+// sqlEmptiedChildDirCount reports how many immediate child directories hold
+// nothing but hidden media, so the listing and its count agree on the pages a
+// browse can turn. Only directories that hold hidden media can qualify, and
+// that set is read from the small hidden index rather than from Media.
+func sqlEmptiedChildDirCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+	hidden *hiddenMedia,
+) (int, error) {
+	drops := hidden.childCounts(opts.PathPrefix, opts.Systems)
+	if len(drops) == 0 {
+		return 0, nil
+	}
+	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
+	if err != nil || !ok {
+		return 0, err
+	}
+	placeholders := make([]string, 0, len(drops))
+	args := []any{parentID}
+	for name := range drops {
+		placeholders = append(placeholders, "?")
+		args = append(args, name)
+	}
+	query := `SELECT d.Name, SUM(c.FileCount)
+		FROM BrowseDirCounts c
+		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID != c.ParentDirDBID AND d.IsVirtual = 0
+			AND d.Name IN (` + strings.Join(placeholders, ",") + `)`
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += ` GROUP BY d.DBID, d.Name`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("browse cache hidden child dir counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	emptied := 0
+	for rows.Next() {
+		var name string
+		var total int
+		if scanErr := rows.Scan(&name, &total); scanErr != nil {
+			return 0, fmt.Errorf("browse cache hidden child dir scan: %w", scanErr)
+		}
+		if total-drops[name] <= 0 {
+			emptied++
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return 0, fmt.Errorf("browse cache hidden child dir rows: %w", rowsErr)
+	}
+	return emptied, nil
 }
 
 func sqlBrowseDirCountFromCache(
@@ -3122,16 +3199,22 @@ func sqlBrowseVirtualSchemes(
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
+	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
 	if err != nil {
 		return nil, err
 	}
-	if filtered {
-		if len(opts.Systems) > 0 {
-			return sqlBrowseVirtualSchemesForSystemsFromMedia(ctx, db, opts)
-		}
-		return sqlBrowseVirtualSchemesFromMedia(ctx, db, true)
+	schemes, err := sqlBrowseVisibleVirtualSchemes(ctx, db, opts)
+	if err != nil {
+		return nil, err
 	}
+	return applyHiddenToVirtualSchemes(schemes, hidden, opts.Systems), nil
+}
+
+func sqlBrowseVisibleVirtualSchemes(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseVirtualSchemesOptions,
+) ([]database.BrowseVirtualScheme, error) {
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
@@ -3150,7 +3233,10 @@ func sqlBrowseVirtualSchemesFromCache(
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	rootID, ok, err := sqlBrowseDirID(ctx, db, "")
+	// Virtual scheme dirs hang off the filesystem root, which BrowseDirs stores
+	// as "/". Looking up "" instead found nothing, so a ready cache silently
+	// dropped every virtual root from the pathless browse listing.
+	rootID, ok, err := sqlBrowseDirID(ctx, db, "/")
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -3190,12 +3276,12 @@ func sqlBrowseVirtualSchemesFromCache(
 }
 
 func sqlBrowseVirtualSchemesFromMedia(
-	ctx context.Context, db sqlQueryable, excludeHidden ...bool,
+	ctx context.Context, db sqlQueryable,
 ) ([]database.BrowseVirtualScheme, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT substr(Path, 1, instr(Path, '://') + 2) AS Scheme,
 			COUNT(*) AS FileCount
-		 FROM `+browseMediaSource(len(excludeHidden) > 0 && excludeHidden[0])+`
+		 FROM Media
 		 WHERE IsMissing = 0 AND instr(Path, '://') > 0
 		 GROUP BY Scheme
 		 ORDER BY Scheme ASC`)
@@ -3228,7 +3314,7 @@ func sqlBrowseVirtualSchemesForSystemsFromMedia(
 		`SELECT substr(m.Path, 1, instr(m.Path, '://') + 2) AS Scheme,
 			COUNT(*) AS FileCount,
 			GROUP_CONCAT(DISTINCT s.SystemID)
-		 FROM `+browseMediaSource(opts.ExcludeHidden)+` m
+		 FROM Media m
 		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		 WHERE m.IsMissing = 0 AND instr(m.Path, '://') > 0 AND `+systemClause+`
 		 GROUP BY Scheme
@@ -3266,24 +3352,27 @@ func sqlBrowseRouteCounts(
 	db sqlQueryable,
 	opts database.BrowseRouteCountsOptions,
 ) (map[string]database.BrowseRouteCount, error) {
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
-	if err != nil {
-		return nil, err
-	}
-	if filtered {
-		return sqlVisibleRouteCounts(ctx, db, opts.Routes, opts.Systems)
-	}
 	if len(opts.Routes) == 0 || len(opts.Systems) == 0 {
 		return make(map[string]database.BrowseRouteCount), nil
+	}
+	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
 	}
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
+	var counts map[string]database.BrowseRouteCount
 	if ready {
-		return sqlBrowseRouteCountsFromCache(ctx, db, opts)
+		counts, err = sqlBrowseRouteCountsFromCache(ctx, db, opts)
+	} else {
+		counts, err = sqlBrowseRouteCountsFromMedia(ctx, db, opts)
 	}
-	return sqlBrowseRouteCountsFromMedia(ctx, db, opts)
+	if err != nil {
+		return nil, err
+	}
+	return applyHiddenToRouteCounts(counts, hidden, opts.Systems), nil
 }
 
 func sqlBrowseRouteCountsFromCache(
@@ -3494,8 +3583,8 @@ func sqlBrowseSystemRootCandidates(
 	if len(opts.Roots) == 0 || len(opts.Systems) == 0 {
 		return result, true, nil
 	}
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, opts.ExcludeHidden)
-	if err != nil || filtered {
+	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
+	if err != nil {
 		return result, false, err
 	}
 	ready, err := sqlBrowseCacheReady(ctx, db)
@@ -3542,10 +3631,61 @@ func sqlBrowseSystemRootCandidates(
 	); err != nil {
 		return result, true, err
 	}
+	if err := applyHiddenToRootCandidates(ctx, db, opts, hidden, &result); err != nil {
+		return result, true, err
+	}
 	for root := range result.Children {
 		sort.Strings(result.Children[root])
 	}
 	return result, true, nil
+}
+
+// applyHiddenToRootCandidates drops roots and child directories whose media is
+// entirely hidden. Only subtrees that actually hold hidden media are probed, and
+// the probe stops at the first visible row, so the work scales with the hidden
+// set rather than with the library.
+func applyHiddenToRootCandidates(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseSystemRootCandidatesOptions,
+	hidden *hiddenMedia,
+	result *database.BrowseSystemRootCandidates,
+) error {
+	if hidden.empty() {
+		return nil
+	}
+	for root := range result.HasMedia {
+		key := browseRouteCacheKey(root)
+		if hidden.countUnder(key, opts.Systems) == 0 {
+			continue
+		}
+		visible, err := sqlAnyVisibleMedia(ctx, db, key, opts.Systems)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			delete(result.HasMedia, root)
+		}
+	}
+	for root, children := range result.Children {
+		key := browseRouteCacheKey(root)
+		kept := children[:0]
+		for _, name := range children {
+			prefix := key + name + "/"
+			if hidden.countUnder(prefix, opts.Systems) > 0 {
+				visible, err := sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems)
+				if err != nil {
+					return err
+				}
+				if !visible {
+					continue
+				}
+			}
+			kept = append(kept, name)
+		}
+		result.Children[root] = kept
+	}
+	return nil
 }
 
 // loadBrowseSystemRootHasMedia populates HasMedia[root] for any roots whose
@@ -3640,24 +3780,35 @@ func loadBrowseSystemRootChildren(
 }
 
 func sqlBrowseRootCounts(
-	ctx context.Context, db sqlQueryable, rootDirs []string, excludeHidden ...bool,
+	ctx context.Context, db sqlQueryable, rootDirs []string, excludeHidden bool,
 ) (map[string]*int, error) {
-	counts := make(map[string]*int, len(rootDirs))
-	filtered, err := sqlNeedsVisibilityFilter(ctx, db, len(excludeHidden) > 0 && excludeHidden[0])
+	hidden, err := loadHiddenMedia(ctx, db, excludeHidden)
 	if err != nil {
 		return nil, err
 	}
-	if filtered {
-		visible, countErr := sqlVisibleRouteCounts(ctx, db, rootDirs, nil)
-		if countErr != nil {
-			return nil, countErr
-		}
-		for _, root := range rootDirs {
-			count := visible[root].FileCount
-			counts[root] = &count
-		}
+	counts, err := sqlBrowseRootCountsFromCache(ctx, db, rootDirs)
+	if err != nil {
+		return nil, err
+	}
+	if hidden.empty() {
 		return counts, nil
 	}
+	for _, root := range rootDirs {
+		if counts[root] == nil {
+			continue
+		}
+		visible := max(*counts[root]-hidden.countUnder(browseRouteCacheKey(root), nil), 0)
+		counts[root] = &visible
+	}
+	return counts, nil
+}
+
+// A nil count means the cache cannot answer for that root yet; callers show the
+// root without a count rather than treating it as empty.
+func sqlBrowseRootCountsFromCache(
+	ctx context.Context, db sqlQueryable, rootDirs []string,
+) (map[string]*int, error) {
+	counts := make(map[string]*int, len(rootDirs))
 	for _, root := range rootDirs {
 		counts[root] = nil
 	}

@@ -1136,7 +1136,7 @@ type MediaDBI interface {
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
-	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden ...bool) (map[string]*int, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
 	BrowseSystemRootCandidates(
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
@@ -1147,7 +1147,7 @@ type MediaDBI interface {
 
 	IndexedSystems() ([]string, error)
 	SystemMediaCounts(
-		ctx context.Context, tags []zapscript.TagFilter, excludeHidden ...bool,
+		ctx context.Context, tags []zapscript.TagFilter, excludeHidden bool,
 	) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)

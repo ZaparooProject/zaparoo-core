@@ -1584,7 +1584,7 @@ func (m *MockMediaDBI) IndexedSystems() ([]string, error) {
 func (m *MockMediaDBI) SystemMediaCounts(
 	ctx context.Context,
 	tags []zapscript.TagFilter,
-	_ ...bool,
+	_ bool,
 ) ([]database.SystemMediaCount, error) {
 	args := m.Called(ctx, tags)
 	if counts, ok := args.Get(0).([]database.SystemMediaCount); ok {
@@ -2986,7 +2986,7 @@ func (m *MockMediaDBI) BrowseSystemRootCandidates(
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(
-	ctx context.Context, rootDirs []string, _ ...bool,
+	ctx context.Context, rootDirs []string, _ bool,
 ) (map[string]*int, error) {
 	args := m.Called(ctx, rootDirs)
 	if results, ok := args.Get(0).(map[string]*int); ok {

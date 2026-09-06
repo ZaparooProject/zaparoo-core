@@ -98,3 +98,169 @@ func TestHiddenOverlayDoesNotShadowVisibleEntries(t *testing.T) {
 		})
 	}
 }
+
+// hideMediaPaths marks each path hidden through the same projection the API
+// writes, so the tests read what a real hide leaves behind.
+func hideMediaPaths(t *testing.T, mediaDB *MediaDB, paths ...string) {
+	t.Helper()
+	ctx := context.Background()
+	system, err := mediaDB.FindSystemBySystemID("NES")
+	require.NoError(t, err)
+	for _, path := range paths {
+		media, lookupErr := mediaDB.FindMediaBySystemAndPath(ctx, system.DBID, path)
+		require.NoError(t, lookupErr)
+		require.NoError(t, mediaDB.UpdateMediaTags(ctx, media.DBID, nil,
+			[]database.MediaTagRef{{Type: "user", Tag: "hidden"}}))
+	}
+}
+
+// Hiding one file must not push browse off its cached aggregates: on a real
+// library that swap turns a 100 ms page into a table scan that outlives the
+// request deadline. Every assertion here is on the cache-backed path.
+func TestHiddenCountsSubtractFromBrowseCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("OnlyHidden", root+"AllHidden/Game.nes")
+	f.insert("MixedHidden", root+"Mixed/Hidden.nes")
+	f.insert("MixedVisible", root+"Mixed/Visible.nes")
+	f.insert("Direct", root+"Direct.nes")
+	f.commit(t, true)
+
+	ready, err := sqlBrowseCacheReady(ctx, f.mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.True(t, ready, "the cached aggregates are what this test covers")
+	hideMediaPaths(t, f.mediaDB, root+"AllHidden/Game.nes", root+"Mixed/Hidden.nes")
+
+	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 1, "a directory holding only hidden media disappears")
+	assert.Equal(t, "Mixed", dirs[0].Name)
+	assert.Equal(t, 1, dirs[0].FileCount)
+
+	dirCount, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, len(dirs), dirCount, "the count and the listing must agree")
+
+	counts, err := f.mediaDB.BrowseRootCounts(ctx, []string{root}, true)
+	require.NoError(t, err)
+	require.NotNil(t, counts[root])
+	assert.Equal(t, 2, *counts[root])
+
+	routeCounts, err := f.mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes: []string{root}, Systems: []systemdefs.System{f.system}, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.Contains(t, routeCounts, root)
+	assert.Equal(t, 2, routeCounts[root].FileCount)
+
+	candidates, cacheReady, err := f.mediaDB.BrowseSystemRootCandidates(
+		ctx, database.BrowseSystemRootCandidatesOptions{
+			Roots: []string{root}, Systems: []systemdefs.System{f.system}, ExcludeHidden: true,
+		})
+	require.NoError(t, err)
+	assert.True(t, cacheReady, "candidates stay cache-backed once media is hidden")
+	assert.True(t, candidates.HasMedia[root])
+	assert.Equal(t, []string{"Mixed"}, candidates.Children[root])
+}
+
+// A directory emptied by hiding must not cost the page a row: the listing
+// over-fetches by the number of directories hidden media could empty.
+func TestHiddenDirectoryPageStaysFull(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	for _, name := range []string{"A", "B", "C"} {
+		f.insert(name+"Game", root+name+"/Game.nes")
+	}
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"B/Game.nes")
+
+	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true, Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	assert.Equal(t, []string{"A", "C"}, []string{dirs[0].Name, dirs[1].Name})
+}
+
+// Virtual scheme roots hang off "/" in BrowseDirs. Looking the root up as ""
+// found nothing, so a populated cache dropped every virtual root from the
+// pathless listing.
+func TestVirtualSchemesComeFromBrowseCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	f.insert("Hidden", "steam://1/Hidden")
+	f.insert("Visible", "steam://2/Visible")
+	f.commit(t, true)
+
+	ready, err := sqlBrowseCacheReady(ctx, f.mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	schemes, err := f.mediaDB.BrowseVirtualSchemes(ctx, database.BrowseVirtualSchemesOptions{})
+	require.NoError(t, err)
+	require.Len(t, schemes, 1)
+	assert.Equal(t, "steam://", schemes[0].Scheme)
+	assert.Equal(t, 2, schemes[0].FileCount)
+
+	hideMediaPaths(t, f.mediaDB, "steam://1/Hidden")
+	schemes, err = f.mediaDB.BrowseVirtualSchemes(ctx, database.BrowseVirtualSchemesOptions{
+		ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, schemes, 1)
+	assert.Equal(t, 1, schemes[0].FileCount)
+
+	hideMediaPaths(t, f.mediaDB, "steam://2/Visible")
+	schemes, err = f.mediaDB.BrowseVirtualSchemes(ctx, database.BrowseVirtualSchemesOptions{
+		ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, schemes, "a fully hidden scheme stops being a browse root")
+}
+
+// System counts come from the per-generation cache, so hidden media has to be
+// subtracted from it rather than re-aggregated behind a NOT filter.
+func TestSystemMediaCountsSubtractHidden(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("First", root+"First.nes")
+	f.insert("Second", root+"Second.nes")
+	f.commit(t, true)
+
+	counts, err := f.mediaDB.SystemMediaCounts(ctx, nil, false)
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	assert.Equal(t, 2, counts[0].Count)
+
+	hideMediaPaths(t, f.mediaDB, root+"First.nes")
+	counts, err = f.mediaDB.SystemMediaCounts(ctx, nil, true)
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	assert.Equal(t, 1, counts[0].Count)
+
+	// The shared cache must keep reporting the unfiltered totals.
+	counts, err = f.mediaDB.SystemMediaCounts(ctx, nil, false)
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	assert.Equal(t, 2, counts[0].Count)
+
+	hideMediaPaths(t, f.mediaDB, root+"Second.nes")
+	counts, err = f.mediaDB.SystemMediaCounts(ctx, nil, true)
+	require.NoError(t, err)
+	assert.Empty(t, counts, "a fully hidden system drops out of the indexed list")
+}

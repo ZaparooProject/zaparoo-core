@@ -576,7 +576,7 @@ None.
 
 Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 

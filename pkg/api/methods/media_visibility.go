@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
 // Counts embedded in a cursor are valid only for the same visibility mode and
@@ -94,9 +95,45 @@ func stampVisibilityCursor(cursor, revision string, includeHidden bool) (string,
 	return encodeCursorData(&data)
 }
 
-func mediaTagsHidden(tags []database.TagInfo) bool {
-	for _, tag := range tags {
-		if tag.Type == "user" && tag.Tag == "hidden" {
+// searchVisibility is the visibility mode and preference revision one search
+// request runs under, carried into every cursor it hands back.
+type searchVisibility struct {
+	Revision      string
+	IncludeHidden bool
+}
+
+// Search cursors carry the same stamp browse cursors do: a page taken under a
+// different visibility mode, or after a preference edit, would skip or repeat
+// rows. Cursors minted before any edit carry no revision and stay usable.
+func validateSearchVisibility(
+	env *requests.RequestEnv, cursor string, excludeHidden bool,
+) (searchVisibility, error) {
+	visibility := searchVisibility{IncludeHidden: !excludeHidden}
+	revision, err := browsePreferencesRevision(env)
+	if err != nil {
+		return visibility, err
+	}
+	visibility.Revision = revision
+	if cursor == "" {
+		return visibility, nil
+	}
+	data, err := decodeCursorData(cursor)
+	if err != nil {
+		return visibility, err
+	}
+	if data == nil {
+		return visibility, nil
+	}
+	if data.PreferencesRevision != revision ||
+		(data.IncludeHidden != nil && *data.IncludeHidden == excludeHidden) {
+		return visibility, models.ClientErrf("library visibility changed; restart search without cursor")
+	}
+	return visibility, nil
+}
+
+func mediaTagsHidden(mediaTags []database.TagInfo) bool {
+	for _, tag := range mediaTags {
+		if tag.Type == string(tags.TagTypeUser) && tag.Tag == string(tags.TagUserHidden) {
 			return true
 		}
 	}
