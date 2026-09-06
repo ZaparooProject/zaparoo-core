@@ -183,8 +183,11 @@ func TestHiddenDirectoryPageStaysFull(t *testing.T) {
 	for _, name := range []string{"A", "B", "C"} {
 		f.insert(name+"Game", root+name+"/Game.nes")
 	}
+	// "A" also holds a hidden file, so it is a drop candidate that survives and
+	// the over-fetch has to be trimmed back to the page size.
+	f.insert("AExtra", root+"A/Extra.nes")
 	f.commit(t, true)
-	hideMediaPaths(t, f.mediaDB, root+"B/Game.nes")
+	hideMediaPaths(t, f.mediaDB, root+"B/Game.nes", root+"A/Extra.nes")
 
 	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
 		PathPrefix: root, ExcludeHidden: true, Limit: 2,
@@ -192,6 +195,38 @@ func TestHiddenDirectoryPageStaysFull(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dirs, 2)
 	assert.Equal(t, []string{"A", "C"}, []string{dirs[0].Name, dirs[1].Name})
+	assert.Equal(t, 1, dirs[0].FileCount)
+
+	// The next page continues from the name the first one ended on.
+	next, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true, AfterName: "A", Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, next, 1)
+	assert.Equal(t, "C", next[0].Name)
+}
+
+// A route with nothing visible left stops being a browse root, the same way a
+// directory does.
+func TestFullyHiddenRouteDropsOut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 2)
+	t.Cleanup(cleanup)
+	f.insert("Kept", f.roots[0]+"Kept.nes")
+	f.insert("Gone", f.roots[1]+"Gone.nes")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, f.roots[1]+"Gone.nes")
+
+	counts, err := f.mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes:        []string{f.roots[0], f.roots[1]},
+		Systems:       []systemdefs.System{f.system},
+		ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, counts, f.roots[0])
+	assert.Equal(t, 1, counts[f.roots[0]].FileCount)
+	assert.NotContains(t, counts, f.roots[1])
 }
 
 // Virtual scheme roots hang off "/" in BrowseDirs. Looking the root up as ""
