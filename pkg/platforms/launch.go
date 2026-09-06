@@ -220,8 +220,9 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return nil
 	}
 
-	// "details" action just shows info page, doesn't launch a game
-	if IsActionDetails(action) {
+	// Launchers may redirect an automatic launch to details during preflight.
+	// Use the effective action, not the default captured before Launch.
+	if IsActionDetails(params.Options.Action) {
 		log.Debug().Msg("skipping ActiveMedia for details action")
 		return nil
 	}

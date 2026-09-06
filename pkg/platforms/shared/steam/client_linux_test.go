@@ -313,7 +313,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://123/GameName", nil)
+		_, err := client.Launch(nil, "steam://123/GameName", &platforms.LaunchOptions{Action: "run"})
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
@@ -325,7 +325,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: false}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://456/AnotherGame", nil)
+		_, err := client.Launch(nil, "steam://456/AnotherGame", &platforms.LaunchOptions{Action: "run"})
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "steam", []string{"steam://rungameid/456"})
@@ -337,7 +337,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://rungameid/789", nil)
+		_, err := client.Launch(nil, "steam://rungameid/789", &platforms.LaunchOptions{Action: "run"})
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/789"})
@@ -363,7 +363,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("command failed"))
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://123/Game", nil)
+		_, err := client.Launch(nil, "steam://123/Game", &platforms.LaunchOptions{Action: "run"})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to launch Steam")

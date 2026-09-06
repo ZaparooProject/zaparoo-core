@@ -288,8 +288,11 @@ type LaunchOptions struct {
 	// available output dimensions. It does not change physical display mode.
 	RenderScale *int
 	// Action specifies the launch action. Common values:
-	// - "" or "run": Default behavior (launch/play the media)
+	// - "": Automatic behavior (may open details if media is not installed)
+	// - "run": Explicitly launch/play the media
 	// - "details": Show media details/info page instead of launching
+	// Launchers may update Action to reflect a successful automatic redirect;
+	// Core uses the effective action when deciding whether to publish ActiveMedia.
 	Action string
 	// RenderResolution is the preferred fixed internal rendering size in
 	// WIDTHxHEIGHT form. It is mutually exclusive with RenderScale.

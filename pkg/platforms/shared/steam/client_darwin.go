@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,7 +35,7 @@ import (
 func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	// Check for user-configured Steam install directory first
 	if def := cfg.LookupLauncherDefaults("Steam", nil); def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
+		if _, err := c.fs.Stat(def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
 			return def.InstallDir
 		}
@@ -55,7 +54,7 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	}
 
 	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := c.fs.Stat(path); err == nil {
 			log.Debug().Msgf("found Steam installation: %s", path)
 			return path
 		}
@@ -65,31 +64,10 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	return c.opts.FallbackPath
 }
 
-// Launch launches a Steam game on macOS using the open command.
-func (c *Client) Launch(
-	_ *config.Instance, path string, opts *platforms.LaunchOptions,
-) (*os.Process, error) {
-	id, err := ExtractAndValidateID(path)
-	if err != nil {
-		return nil, err
-	}
-
-	action := ""
-	if opts != nil {
-		action = opts.Action
-	}
-
-	// Build the appropriate Steam URL based on the action
-	var steamURL string
-	if platforms.IsActionDetails(action) {
-		steamURL = BuildSteamDetailsURL(id)
-	} else {
-		steamURL = BuildSteamURL(id)
-	}
-
-	// On macOS, we use "open" to open Steam URLs
+// openURL uses the macOS URL handler.
+func (c *Client) openURL(steamURL string) error {
 	if err := c.cmd.Start(context.Background(), "open", steamURL); err != nil {
-		return nil, fmt.Errorf("failed to launch Steam: %w", err)
+		return fmt.Errorf("failed to launch Steam: %w", err)
 	}
-	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget
+	return nil
 }

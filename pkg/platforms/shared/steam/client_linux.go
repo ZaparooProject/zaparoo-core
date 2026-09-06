@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -50,7 +49,7 @@ func flatpakAppPath(appID string) string {
 func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	// Check for user-configured Steam install directory first
 	if def := cfg.LookupLauncherDefaults("Steam", nil); def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
+		if _, err := c.fs.Stat(def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
 			return def.InstallDir
 		}
@@ -90,13 +89,13 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 
 	firstExisting := ""
 	for _, path := range paths {
-		if _, err := os.Stat(path); err != nil {
+		if _, err := c.fs.Stat(path); err != nil {
 			continue
 		}
 		if firstExisting == "" {
 			firstExisting = path
 		}
-		if info, err := os.Stat(filepath.Join(path, "steamapps")); err == nil && info.IsDir() {
+		if info, err := c.fs.Stat(filepath.Join(path, "steamapps")); err == nil && info.IsDir() {
 			log.Debug().Msgf("found Steam installation: %s", path)
 			return path
 		}
@@ -110,27 +109,8 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	return c.opts.FallbackPath
 }
 
-// Launch launches a Steam game on Linux using xdg-open or the direct steam command.
-func (c *Client) Launch(
-	_ *config.Instance, path string, opts *platforms.LaunchOptions,
-) (*os.Process, error) {
-	id, err := ExtractAndValidateID(path)
-	if err != nil {
-		return nil, err
-	}
-
-	action := ""
-	if opts != nil {
-		action = opts.Action
-	}
-
-	var steamURL string
-	if platforms.IsActionDetails(action) {
-		steamURL = BuildSteamDetailsURL(id)
-	} else {
-		steamURL = BuildSteamURL(id)
-	}
-
+// openURL uses xdg-open on desktops or the direct steam command in Game Mode.
+func (c *Client) openURL(steamURL string) error {
 	var cmdName string
 	if c.opts.UseXdgOpen {
 		// Desktop-friendly: works with native + Flatpak Steam
@@ -142,7 +122,7 @@ func (c *Client) Launch(
 
 	log.Debug().Str("cmd", cmdName).Str("url", steamURL).Msg("launching Steam game")
 	if err := c.cmd.Start(context.Background(), cmdName, steamURL); err != nil {
-		return nil, fmt.Errorf("failed to launch Steam: %w", err)
+		return fmt.Errorf("failed to launch Steam: %w", err)
 	}
-	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget
+	return nil
 }
