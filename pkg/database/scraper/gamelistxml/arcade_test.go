@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -227,12 +228,11 @@ func TestArcadeSetStemRejectsNonIdentities(t *testing.T) {
 	assert.Equal(t, strings.Repeat("a", 128), arcadeSetStem(strings.Repeat("a", 128)+".zip"))
 }
 
-// hostileFs reports a file as small and readable but fails or over-delivers on
-// read, standing in for a descriptor that changes between stat and open.
+// hostileFs refuses to open a descriptor that stats cleanly, standing in for a
+// file whose permissions or backing storage fail after the walk saw it.
 type hostileFs struct {
 	afero.Fs
-	openErr    error
-	extraBytes int
+	openErr error
 }
 
 func (h hostileFs) Open(name string) (afero.File, error) {
@@ -241,21 +241,6 @@ func (h hostileFs) Open(name string) (afero.File, error) {
 	}
 	return h.Fs.Open(name) //nolint:wrapcheck // test double forwards verbatim
 }
-
-func (h hostileFs) Stat(name string) (os.FileInfo, error) {
-	info, err := h.Fs.Stat(name)
-	if err != nil || h.extraBytes == 0 {
-		return info, err //nolint:wrapcheck // test double forwards verbatim
-	}
-	return shrunkFileInfo{FileInfo: info, size: info.Size() - int64(h.extraBytes)}, nil
-}
-
-type shrunkFileInfo struct {
-	os.FileInfo
-	size int64
-}
-
-func (s shrunkFileInfo) Size() int64 { return s.size }
 
 func wrapTestFs(wrap func(afero.Fs) afero.Fs, base afero.Fs) afero.Fs {
 	if wrap == nil {
@@ -278,11 +263,9 @@ func TestReadArcadeSetNameRejectsUnreadableDescriptors(t *testing.T) {
 			},
 		},
 		{
-			name:    "content past the reported size",
-			content: valid + strings.Repeat(" ", maxArcadeMRABytes),
-			fs: func(base afero.Fs) afero.Fs {
-				return hostileFs{Fs: base, extraBytes: maxArcadeMRABytes}
-			},
+			name: "header longer than the read bound",
+			content: `<misterromdescription><about>` + strings.Repeat("x", maxArcadeMRAHeaderBytes) +
+				`</about><setname>pacman</setname></misterromdescription>`,
 		},
 		{name: "trailing text", content: valid + "garbage"},
 		{name: "trailing syntax error", content: valid + "<"},
@@ -351,6 +334,32 @@ func TestIndexArcadeSetsSkipsUnusableDescriptors(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bySet["pacman"], 1, "a descriptor that cannot be parsed must not make its set ambiguous")
 	assert.Equal(t, int64(10), bySet["pacman"][0].DBID)
+}
+
+// TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths covers the granular
+// MiSTer arcade systems: their media is indexed by the arcade classifier rather
+// than by a launcher scan folder, so path discovery finds nothing for them and
+// their bundle would never be read.
+func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	custom := t.TempDir()
+	bundle := filepath.Join(custom, systemdefs.SystemCPS1, "gamelist.xml")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(bundle), 0o750))
+	require.NoError(t, afero.WriteFile(fs, bundle,
+		[]byte(`<gameList><game><path>./sf2.zip</path><name>Street Fighter II</name></game></gameList>`), 0o600))
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	mdb := helpers.NewMockMediaDBI()
+	mdb.On("IndexedSystems").Return([]string{systemdefs.SystemCPS1, systemdefs.SystemCPS2}, nil)
+	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS1).Return(database.System{DBID: 1}, nil)
+	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS2).Return(database.System{DBID: 2}, nil)
+
+	systems, err := resolveSystemsFromPlatform(t.Context(), newCustomGamelistConfig(t, custom), pl, fs, mdb, nil)
+	require.NoError(t, err)
+	require.Len(t, systems, 1, "only the system with an installed bundle survives having no launcher paths")
+	assert.Equal(t, systemdefs.SystemCPS1, systems[0].ID)
+	assert.Empty(t, systems[0].ROMPaths)
 }
 
 func TestArcadeArtworkFallbackExtensions(t *testing.T) {
@@ -522,7 +531,14 @@ func TestReadArcadeSetName(t *testing.T) {
 		{"nested set", `<misterromdescription><rom><setname>pacman</setname></rom></misterromdescription>`, ""},
 		{"unsafe set", `<misterromdescription><setname>../pacman.zip</setname></misterromdescription>`, ""},
 		{"extra document", `<misterromdescription><setname>pacman</setname></misterromdescription><extra/>`, ""},
-		{"oversized", strings.Repeat(" ", maxArcadeMRABytes+1), ""},
+		{"unterminated header past the read bound", strings.Repeat(" ", maxArcadeMRAHeaderBytes+1), ""},
+		{"payload stops the header scan", `<misterromdescription><setname>pacman</setname>` +
+			`<rom index="0"><part>` + strings.Repeat("A", maxArcadeMRAHeaderBytes*2) +
+			`</part></rom></misterromdescription>`, "pacman"},
+		{"set name after the payload is not a duplicate", `<misterromdescription><setname>pacman</setname>` +
+			`<rom index="0"/><setname>puckman</setname></misterromdescription>`, "pacman"},
+		{"payload before any set name", `<misterromdescription><rom index="0"/>` +
+			`<setname>pacman</setname></misterromdescription>`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -627,7 +643,7 @@ func FuzzArcadeSetIdentity(f *testing.F) {
 		`<setname>two</setname></misterromdescription>`), "../two.7z")
 	f.Add([]byte(`<misterromdescription>`), `C:\roms\pacman.zip`)
 	f.Fuzz(func(t *testing.T, data []byte, source string) {
-		if len(data) > maxArcadeMRABytes+1 || len(source) > 4096 {
+		if len(data) > maxArcadeMRAHeaderBytes+1 || len(source) > 4096 {
 			t.Skip()
 		}
 		fs := afero.NewMemMapFs()

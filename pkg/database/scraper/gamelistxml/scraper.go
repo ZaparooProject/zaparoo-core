@@ -220,7 +220,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.Systems)
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.Systems)
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
@@ -263,6 +263,20 @@ func orderedScrapeSystemIDs(indexed, requested []string) []string {
 	return ordered
 }
 
+// customBundleExists reports whether a per-system metadata bundle is installed
+// for systemID. It is only consulted for systems whose launchers scan no
+// folders, so an ordinary scrape pays one stat at most per such system.
+func customBundleExists(fs afero.Fs, customBase, systemID string) bool {
+	if customBase == "" {
+		return false
+	}
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	exists, err := afero.Exists(fs, filepath.Join(customBase, systemID, "gamelist.xml"))
+	return err == nil && exists
+}
+
 // resolveSystemsFromPlatform builds the list of ScrapeSystem values by
 // querying the indexed systems from mdb, looking up their definitions, and
 // resolving ROM root paths via the platform launcher configuration.
@@ -270,6 +284,7 @@ func resolveSystemsFromPlatform(
 	ctx context.Context,
 	cfg *config.Instance,
 	pl platforms.Platform,
+	fs afero.Fs,
 	mdb database.MediaDBI,
 	systemIDs []string,
 ) ([]scraper.ScrapeSystem, error) {
@@ -302,10 +317,14 @@ func resolveSystemsFromPlatform(
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
 
+	customBase := cfg.ScraperGamelistXMLCustomPath()
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
-		if len(romPaths) == 0 {
+		if len(romPaths) == 0 && !customBundleExists(fs, customBase, sys.ID) {
+			// A system indexed by a launcher with no scan folders of its own,
+			// such as the granular MiSTer arcade systems, still has media rows
+			// worth enriching from a custom bundle.
 			log.Debug().Str("system", sys.ID).Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
 			continue
 		}

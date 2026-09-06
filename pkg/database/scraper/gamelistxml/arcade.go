@@ -36,7 +36,19 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
-const maxArcadeMRABytes = 256 * 1024
+// maxArcadeMRAHeaderBytes bounds the descriptor header a set name may be read
+// from. It is not a file size limit: MiSTer MRAs embed their ROM payload as
+// base64 <part> data and run to tens of megabytes, and refusing those would
+// leave real arcade games with no identity at all.
+const maxArcadeMRAHeaderBytes = 256 * 1024
+
+const (
+	arcadeMRARootElement    = "misterromdescription"
+	arcadeMRASetNameElement = "setname"
+	// arcadeMRAPayloadElement opens the embedded ROM data. Everything that
+	// identifies the set is written before it.
+	arcadeMRAPayloadElement = "rom"
+)
 
 // arcadeSetStem treats ZIP paths as identities, never as files to open. Source
 // bundles may contain absolute paths from a different machine, including Windows.
@@ -66,9 +78,10 @@ func arcadeSetStem(sourcePath string) string {
 	return base
 }
 
-// readArcadeSetName requires one complete, bounded descriptor. Unlike optional
-// docs artwork lookup, this identity can select a different title's write target,
-// so malformed documents and repeated setname elements must not select a row.
+// readArcadeSetName requires one complete, bounded descriptor header. Unlike
+// optional docs artwork lookup, this identity can select a different title's
+// write target, so malformed documents and repeated setname elements must not
+// select a row.
 func readArcadeSetName(fs afero.Fs, filename string) string {
 	// Lstat, not Stat: Arcade Organizer aliases the same descriptor under its
 	// category folders, and an alias that reached the index would read as a
@@ -81,7 +94,7 @@ func readArcadeSetName(fs afero.Fs, filename string) string {
 	} else {
 		info, err = fs.Stat(filename)
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxArcadeMRABytes {
+	if err != nil || !info.Mode().IsRegular() {
 		return ""
 	}
 	file, err := fs.Open(filename)
@@ -89,43 +102,77 @@ func readArcadeSetName(fs afero.Fs, filename string) string {
 		return ""
 	}
 	defer func() { _ = file.Close() }()
-	limited := &io.LimitedReader{R: file, N: maxArcadeMRABytes + 1}
-	decoder := xml.NewDecoder(limited)
+	decoder := xml.NewDecoder(&io.LimitedReader{R: file, N: maxArcadeMRAHeaderBytes})
 	decoder.CharsetReader = charset.NewReaderLabel
-	var mra struct {
-		XMLName  xml.Name `xml:"misterromdescription"`
-		SetNames []string `xml:"setname"`
-	}
-	if err := decoder.Decode(&mra); err != nil || len(mra.SetNames) != 1 {
-		return ""
-	}
-	// Decode only consumes one element; reject additional documents or garbage.
-	for {
-		token, tokenErr := decoder.Token()
-		if errors.Is(tokenErr, io.EOF) {
-			break
-		}
-		if tokenErr != nil {
-			return ""
-		}
-		switch data := token.(type) {
-		case xml.CharData:
-			if strings.TrimSpace(string(data)) != "" {
-				return ""
-			}
-		case xml.Comment, xml.ProcInst:
-		default:
-			return ""
-		}
-	}
-	if limited.N == 0 {
-		return ""
-	}
-	setName := strings.TrimSpace(mra.SetNames[0])
-	if arcadeSetStem(setName) != setName {
+	setName, ok := decodeArcadeSetName(decoder)
+	if !ok || arcadeSetStem(setName) != setName {
 		return ""
 	}
 	return strings.ToLower(setName)
+}
+
+// decodeArcadeSetName returns the descriptor's single <setname>. Every element
+// ahead of the ROM payload is examined, so a repeated, nested or absent set
+// name still yields nothing; parsing then stops rather than reading megabytes
+// of base64 that can carry no identity. A header that is malformed, outruns the
+// read bound, names another root, or is trailed by a second document is not an
+// identity source.
+func decodeArcadeSetName(decoder *xml.Decoder) (setName string, ok bool) {
+	var setNames, depth int
+	var rootClosed bool
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return setName, rootClosed && setNames == 1
+		}
+		if err != nil {
+			return "", false
+		}
+		switch data := token.(type) {
+		case xml.StartElement:
+			if rootClosed {
+				return "", false
+			}
+			depth++
+			switch {
+			case depth == 1:
+				if data.Name.Local != arcadeMRARootElement {
+					return "", false
+				}
+			case depth == 2 && data.Name.Local == arcadeMRAPayloadElement:
+				return setName, setNames == 1
+			case depth == 2 && data.Name.Local == arcadeMRASetNameElement:
+				setNames++
+				if err := decoder.DecodeElement(&setName, &data); err != nil {
+					return "", false
+				}
+				setName = strings.TrimSpace(setName)
+				depth--
+			default:
+				if err := decoder.Skip(); err != nil {
+					return "", false
+				}
+				depth--
+			}
+		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				rootClosed = true
+			}
+		case xml.CharData:
+			if depth == 0 && strings.TrimSpace(string(data)) != "" {
+				return "", false
+			}
+		case xml.Comment, xml.ProcInst:
+		case xml.Directive:
+			// Tolerated only ahead of the document it declares.
+			if rootClosed {
+				return "", false
+			}
+		default:
+			return "", false
+		}
+	}
 }
 
 // indexArcadeSets maps each MAME set name referenced by the gamelist to the

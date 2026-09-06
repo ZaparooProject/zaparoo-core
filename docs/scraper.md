@@ -207,13 +207,13 @@ Example `Arcade/gamelist.xml`:
 </gameList>
 ```
 
-Index the MRAs first, then run `gamelist.xml` for `Arcade`. For a granular arcade system such as `CPS1`, use a `CPS1` bundle directory and scrape that indexed system. Existing arcade classification determines system membership; the scraper neither creates MRA entries nor guesses membership from catalog titles.
+Index the MRAs first, then run `gamelist.xml` for `Arcade`. For a granular arcade system such as `CPS1`, use a `CPS1` bundle directory and scrape that indexed system; those systems are classified out of `_Arcade` rather than scanned from a folder of their own, so an installed bundle is what makes them scrapable at all. Existing arcade classification determines system membership; the scraper neither creates MRA entries nor guesses membership from catalog titles.
 
 A gamelist in `_Arcade` also supports these ROM/set-name references. Core does **not** automatically discover `games/mame/gamelist.xml` or arbitrary nested gamelists: put the bundle in the configured layout above, or place a gamelist in a configured ROM root.
 
 Regular set-name entries may retain absolute or sibling ROM ZIP paths from the scraper machine, including Windows paths. Core extracts only the basename identity; it never opens or launches those source ZIP paths. Image, video, and manual references keep the existing asset-root restrictions. Custom images must exist at scrape time. Relative Companion ZIP child references also support unique set-name matching; existing Companion path validation and parent metadata behavior remain unchanged.
 
-Unreadable, malformed, oversized (over 256 KiB), or repeated-setname MRA descriptors are not identity sources. No MRA, ROM archive, or launcher configuration is rewritten. AmigaVision `games.txt` and `demos.txt` integration is separate from arcade matching.
+Unreadable or malformed MRA descriptors, and those repeating `<setname>` in their header, are not identity sources. Only the descriptor header up to its first `<rom>` element is read, so the embedded ROM payload of a large MRA costs nothing and does not disqualify it. No MRA, ROM archive, or launcher configuration is rewritten. AmigaVision `games.txt` and `demos.txt` integration is separate from arcade matching.
 
 ## MiSTer Installed Docs Databases
 
