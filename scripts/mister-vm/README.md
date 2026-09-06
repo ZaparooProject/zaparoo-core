@@ -122,7 +122,7 @@ python3 scripts/mister-vm/test_unit.py
 python3 scripts/mister-vm/test_integration.py
 ```
 
-12 unit tests cover simulator parsing and checksum-cache behavior without network/VM dependencies. Six integration tests cover parallel local/release launch, published-release persistence, invalid input, wrong version, timeout and termination. Intentional `FAIL:` run lines are expected; unittest's final `OK` determines suite success. Integration tests require setup, pinned release download and local `_build/mister_arm/zaparoo.sh`; override `--assets` / `--binary` when needed.
+12 unit tests cover simulator parsing and checksum-cache behavior without network/VM dependencies. Seven integration tests cover parallel local/release launch, published-release persistence, invalid input, wrong version, timeout, termination and propagation of unrelated `SystemExit` exceptions. Intentional `FAIL:` run lines are expected; unittest's final `OK` determines suite success. Integration tests require setup, pinned release download and local `_build/mister_arm/zaparoo.sh`; override `--assets` / `--binary` when needed.
 
 Tests verify process exit, released ports (accounting for TCP TIME_WAIT), immutable base/kernel and disk cleanup. One integration case intentionally retains disks per suite execution.
 

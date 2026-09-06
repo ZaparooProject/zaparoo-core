@@ -21,7 +21,7 @@ DEFAULT_ASSETS = SOURCE.parents[1] / '_scratch/mister-vm-assets'
 
 
 class Deadline(BaseException):
-    pass
+    """Escape retry wrappers; handled explicitly at the runner boundary."""
 
 
 def timed_out(_signal, _frame):
@@ -101,7 +101,7 @@ def main():
             finally:
                 harness.close()
         state['passed'] = True
-    except BaseException as exc:
+    except (Exception, Deadline, KeyboardInterrupt) as exc:
         state['error'] = type(exc).__name__ + ': ' + str(exc)
         (output / 'failure.txt').write_text(traceback.format_exc())
         if harness:

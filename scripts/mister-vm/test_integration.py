@@ -9,6 +9,9 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
+
+import run
 
 SOURCE = Path(__file__).resolve().parent
 ASSETS = SOURCE.parents[1] / '_scratch/mister-vm-assets'
@@ -74,6 +77,20 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(len(state['processes']), 2)
         checks = json.loads((output / 'results.json').read_text())['checks']
         self.assertIn('cold_boot_history', [x['check'] for x in checks])
+
+    def test_system_exit_propagates(self):
+        # Framework exits must survive the runner boundary; only its explicit
+        # deadline and user interruption signals become failed-run reports.
+        with (
+            patch.object(sys, 'argv', self.command()[1:]),
+            patch.object(run, 'digest', return_value='fixture-hash'),
+            patch.object(run.shutil, 'which', return_value='/fixture/tool'),
+            patch.object(run.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'QEMU fixture\n')),
+            patch.object(run.fixtures, 'build', side_effect=SystemExit(23)),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                run.main()
+        self.assertEqual(raised.exception.code, 23)
 
     def test_version_failure(self):
         result = subprocess.run(self.command(extra=('--expect-version', 'intentional-mismatch')), capture_output=True, text=True, timeout=180)
