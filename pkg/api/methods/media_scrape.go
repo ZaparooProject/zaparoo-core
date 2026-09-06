@@ -454,7 +454,7 @@ func ResumeMediaScrape(env *requests.RequestEnv, operation database.ScrapingOper
 		Systems:   operation.Systems,
 		Force:     operation.Force,
 	}
-	_, err := startMediaScrapeWithRunID(env, params, operation.RunID)
+	_, err := startMediaScrapeResolved(env, params, operation.RunID, operation.Scope)
 	return err
 }
 
@@ -463,6 +463,12 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 }
 
 func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScrapeParams, runID string) (any, error) {
+	return startMediaScrapeResolved(env, params, runID, nil)
+}
+
+func startMediaScrapeResolved(
+	env *requests.RequestEnv, params models.MediaScrapeParams, runID string, scope *database.ScrapeScope,
+) (any, error) {
 	platformScrapers := env.Platform.Scrapers(env.Config)
 	s, ok := platformScrapers[params.ScraperID]
 	if !ok {
@@ -483,6 +489,28 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		}
 	}()
 
+	// Resolve while holding the indexing exclusion lease so IDs cannot change
+	// between validation and the background scraper's selection queries.
+	if scope == nil {
+		scope, err = resolveScrapeScope(env, params)
+	} else {
+		err = scope.Validate()
+		if err == nil && !scope.Subtree {
+			var rows []database.MediaFullRow
+			rows, err = env.Database.MediaDB.GetScrapeMedia(env.Context, *scope)
+			if err == nil && len(rows) != 1 {
+				err = models.ClientErrf("stored scrape media no longer exists")
+			}
+		}
+	}
+	if err != nil {
+		scrapingStatusInstance.clear()
+		return nil, err
+	}
+	if scope != nil {
+		params.Systems = []string{scope.SystemID}
+	}
+
 	ns := env.State.Notifications
 	db := env.Database
 	preparingStatus := models.ScrapingStatusResponse{
@@ -498,6 +526,7 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		runID = uuid.NewString()
 	}
 	operation := database.ScrapingOperation{
+		Scope:     scope,
 		ScraperID: params.ScraperID,
 		Systems:   params.Systems,
 		RunID:     runID,
@@ -536,7 +565,9 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 	throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
-	opts := scraper.ScrapeOptions{Systems: params.Systems, RunID: runID, Force: params.Force, Pauser: env.ScrapePauser}
+	opts := scraper.ScrapeOptions{
+		Scope: scope, Systems: params.Systems, RunID: runID, Force: params.Force, Pauser: env.ScrapePauser,
+	}
 	ch := make(chan scraper.ScrapeUpdate, 32)
 	if err := s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
 		cancelFunc()

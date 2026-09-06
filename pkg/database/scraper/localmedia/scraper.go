@@ -78,7 +78,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.Systems)
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("localmedia: resolve systems: %w", err)
 			}
@@ -171,13 +171,31 @@ func (s *scraperImpl) scrapeLoop(
 	// Lowest CPU/IO priority for the whole scrape run; the locked thread
 	// dies with this goroutine so the change never leaks.
 	bgpriority.Apply()
+	if opts.Scope != nil && len(systems) == 0 {
+		selection, err := scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+		if err != nil {
+			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+			return
+		}
+		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
+		return
+	}
 	for systemIdx, system := range systems {
 		if err := waitForScrape(ctx, opts); err != nil {
 			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 			return
 		}
 
-		mediaRows, err := s.db.GetMediaBySystemID(system.ID)
+		var mediaRows []database.MediaWithFullPath
+		var completed map[int64]struct{}
+		var err error
+		if opts.Scope != nil {
+			var selection scraper.ScopedSelection
+			selection, err = scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+			mediaRows, completed = selection.Media, selection.Completed
+		} else {
+			mediaRows, err = s.db.GetMediaBySystemID(system.ID)
+		}
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{
 				FatalErr: fmt.Errorf("localmedia: load media for %s: %w", system.ID, err),
@@ -188,7 +206,14 @@ func (s *scraperImpl) scrapeLoop(
 
 		processed, matched, skipped := 0, 0, 0
 		availableDirs := s.availableDirsByRoot(system.ROMPaths)
-		containers := containerIndexForMedia(mediaRows)
+		var containers scraper.ContainerResolver = containerIndexForMedia(mediaRows)
+		if opts.Scope != nil {
+			containers, err = scraper.ScopedContainers(ctx, s.db, system.ID, mediaRows)
+			if err != nil {
+				ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+				return
+			}
+		}
 		ch <- scraper.ScrapeUpdate{
 			SystemID:    system.ID,
 			Total:       len(mediaRows),
@@ -203,6 +228,16 @@ func (s *scraperImpl) scrapeLoop(
 				return
 			}
 
+			if _, done := completed[media.DBID]; done {
+				processed++
+				skipped++
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, Total: len(mediaRows),
+					Processed: processed, Matched: matched, Skipped: skipped,
+					TotalSteps: len(systems), CurrentStep: systemIdx + 1,
+				}
+				continue
+			}
 			isContainerTarget := isContainerLaunchTarget(containers, media)
 			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs, isContainerTarget)
 			staleDeleted := 0
@@ -270,6 +305,13 @@ func (s *scraperImpl) scrapeLoop(
 				TotalSteps:  len(systems),
 				CurrentStep: systemIdx + 1,
 			}
+		}
+		if opts.Scope != nil {
+			ch <- scraper.ScrapeUpdate{
+				SystemID: system.ID, Total: len(mediaRows), Processed: processed, Matched: matched, Skipped: skipped,
+				TotalSteps: 1, CurrentStep: 1, Done: true,
+			}
+			return
 		}
 	}
 	ch <- scraper.ScrapeUpdate{TotalSteps: len(systems), CurrentStep: len(systems), Done: true}
@@ -351,7 +393,7 @@ func containerIndexForMedia(rows []database.MediaWithFullPath) *container.Index 
 	return container.NewIndex(media)
 }
 
-func isContainerLaunchTarget(containers *container.Index, media *database.MediaWithFullPath) bool {
+func isContainerLaunchTarget(containers scraper.ContainerResolver, media *database.MediaWithFullPath) bool {
 	parent := media.ParentDir
 	if parent == "" {
 		parent = container.ParentDir(media.Path)

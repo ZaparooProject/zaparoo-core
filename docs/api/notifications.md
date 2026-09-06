@@ -299,7 +299,7 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | total     | number  | Yes      | Total source records for the current system, or 0 before known.   |
 | matched   | number  | Yes      | Number of records matched to existing media rows.                 |
 | skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
-| totalScraped | number | Yes   | Number of media records already marked scraped.                   |
+| totalScraped | number | Yes   | Number of media records already marked scraped, across the scraper/library rather than the current scope. |
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
 | paused    | boolean | Yes      | True when the active scrape is paused.                            |

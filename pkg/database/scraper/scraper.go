@@ -42,6 +42,9 @@ type MapResult struct {
 
 // ScrapeOptions configures a scrape run.
 type ScrapeOptions struct {
+	// Scope narrows database selection; nil retains the legacy Systems behavior.
+	Scope *database.ScrapeScope
+
 	// Pauser pauses scrape work while another foreground activity needs the system.
 	Pauser *syncutil.Pauser
 

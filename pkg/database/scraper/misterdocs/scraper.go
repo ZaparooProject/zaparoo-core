@@ -75,7 +75,7 @@ func NewPlatformScraper() platforms.Scraper {
 			if err != nil {
 				return fmt.Errorf("misterdocs: list indexed systems: %w", err)
 			}
-			targets := orderedTargetSystems(indexed, opts.Systems)
+			targets := orderedTargetSystems(indexed, opts.SystemIDs())
 			var langs []string
 			if cfg != nil {
 				langs = cfg.DefaultLangs()
@@ -108,6 +108,9 @@ func (s *scraperImpl) scrapeLoop(
 	bgpriority.Apply()
 
 	steps := s.eligibleTargets(targetSystems, opts.Force)
+	if opts.Scope != nil {
+		steps = opts.SystemIDs()
+	}
 	totalProcessed, totalMatched, totalSkipped := 0, 0, 0
 	for step, targetID := range steps {
 		if err := waitForScrape(ctx, opts); err != nil {
@@ -116,14 +119,25 @@ func (s *scraperImpl) scrapeLoop(
 			}
 			return
 		}
-		titles, err := s.db.GetTitlesBySystemID(targetID)
+		var selection scraper.ScopedSelection
+		var titles []database.TitleWithSystem
+		var media []database.MediaWithFullPath
+		var err error
+		if opts.Scope != nil {
+			selection, err = scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+			media, titles = selection.Pending()
+		} else {
+			titles, err = s.db.GetTitlesBySystemID(targetID)
+		}
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{
 				FatalErr: fmt.Errorf("misterdocs: load titles for %s: %w", targetID, err), Done: true,
 			}
 			return
 		}
-		media, err := s.db.GetMediaBySystemID(targetID)
+		if opts.Scope == nil {
+			media, err = s.db.GetMediaBySystemID(targetID)
+		}
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{
 				FatalErr: fmt.Errorf("misterdocs: load media for %s: %w", targetID, err), Done: true,
@@ -131,8 +145,16 @@ func (s *scraperImpl) scrapeLoop(
 			return
 		}
 
+		if opts.Scope != nil && len(media) == 0 {
+			scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
+			return
+		}
+
 		stepStart := time.Now()
 		report := func(processed, total, matched, skipped int) {
+			if opts.Scope != nil {
+				processed, total, matched, skipped = 0, len(selection.Media), 0, 0
+			}
 			select {
 			case ch <- scraper.ScrapeUpdate{
 				SystemID: targetID, Processed: processed, Total: total, Matched: matched, Skipped: skipped,
@@ -213,6 +235,14 @@ func (s *scraperImpl) scrapeLoop(
 			}
 		}
 		cleanupDuration := time.Since(cleanupStart)
+		if opts.Scope != nil {
+			if sourceError != nil {
+				ch <- scraper.ScrapeUpdate{FatalErr: sourceError, Done: true}
+				return
+			}
+			scraper.ApplyScopedTargets(ctx, s.db, opts, selection, writeTargets, ch)
+			return
+		}
 
 		// Skipped records are finished once matching is; matched ones finish
 		// as their rows commit, so progress advances with each write batch.

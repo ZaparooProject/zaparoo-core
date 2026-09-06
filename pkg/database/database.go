@@ -42,10 +42,11 @@ type Database struct {
 }
 
 type ScrapingOperation struct {
-	ScraperID string   `json:"scraperId"`
-	RunID     string   `json:"runId,omitempty"`
-	Systems   []string `json:"systems"`
-	Force     bool     `json:"force"`
+	Scope     *ScrapeScope `json:"scope,omitempty"`
+	ScraperID string       `json:"scraperId"`
+	RunID     string       `json:"runId,omitempty"`
+	Systems   []string     `json:"systems"`
+	Force     bool         `json:"force"`
 }
 
 // Structs for SQL records
@@ -1192,6 +1193,10 @@ type MediaDBI interface {
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	// GetScrapeMedia selects present indexed media and their titles within an exact resolved scope.
+	GetScrapeMedia(ctx context.Context, scope ScrapeScope) ([]MediaFullRow, error)
+	// GetScopedScrapeMediaIDs selects sentinel or force-run markers without loading an entire system.
+	GetScopedScrapeMediaIDs(ctx context.Context, scope ScrapeScope, scraperID, runID string) (map[int64]struct{}, error)
 
 	// Scraper support methods
 

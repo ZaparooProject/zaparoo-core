@@ -37,6 +37,18 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 `media.scrape.status` returns the latest in-memory status snapshot plus a fresh scraped-count query. `media.scrape.cancel` cancels the active scrape context. `media.scrape.resume` resumes the shared scrape pauser. Scraping and indexing are mutually exclusive.
 
+## Scoped Runs
+
+`media.scrape` accepts an optional [scope](./api/methods.md#scope): a media ID, an exact system/file path, or a system-bound directory subtree. Existing `systems` requests retain their behavior.
+
+The handler resolves scope while holding the media-write lease and persists `database.ScrapeScope` with the operation. An item pins its ID, system, and canonical path; a subtree pins its system and lexical directory boundary. Restart recovery validates the stored scope and never substitutes an entire system. These additive fields live in the existing `DBConfig` operation JSON, not a new database table.
+
+`GetScrapeMedia` and `GetScopedScrapeMediaIDs` query only selected media, titles, and sentinel/run markers. `ScrapeOptions.SystemIDs()` makes the normalized scope authoritative. All three scrapers propagate it to their selection queries and restrict force cleanup to selected media and their titles. Shared title updates remain visible on sibling ROMs.
+
+Scoped gamelist matching requires a selected path, a verified container/CD reference, or a Companion `.slug` title reference. It does not use unrestricted slug-only or basename-only fallback, which could make an unrelated source record appear unambiguous after narrowing the index. Container resolution consults full directory context without loading every system row, so selecting one file does not invent a single-game folder.
+
+Scoped progress counts selected media rather than source records. The shared scoped writer validates target identities and deduplicates writes. Source XML/docs files may still require parsing, but selection does not load whole-system media/title lists. Library-wide `totalScraped` status counts are unchanged.
+
 ## Run Loop
 
 There is no generic source-record scrape loop. `pkg/database/scraper/run.go` only provides a small helper for wrapping callback/channel startup. The `gamelist.xml` implementation owns its loop in `GamelistXMLScraper.scrapeLoop`.

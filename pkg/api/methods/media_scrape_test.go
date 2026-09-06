@@ -894,6 +894,9 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	statusInstance.clear()
 
 	operation := database.ScrapingOperation{
+		Scope: &database.ScrapeScope{
+			SystemID: "SNES", Path: filepath.ToSlash(filepath.Join(t.TempDir(), "games")), Subtree: true,
+		},
 		ScraperID: "resume-scraper",
 		Systems:   []string{"SNES"},
 		RunID:     "resume-run",
@@ -936,6 +939,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	require.NoError(t, ResumeMediaScrape(&env, operation))
 	assert.Equal(t, []string{"SNES"}, gotOptions.Systems)
 	assert.Equal(t, "resume-run", gotOptions.RunID)
+	assert.Equal(t, operation.Scope, gotOptions.Scope)
 	assert.True(t, gotOptions.Force)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()

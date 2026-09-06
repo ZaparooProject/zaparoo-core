@@ -388,9 +388,10 @@ type MediaImageParams struct {
 }
 
 type MediaScrapeParams struct {
-	ScraperID string   `json:"scraperId" validate:"required,min=1"`
-	Systems   []string `json:"systems"   validate:"omitempty,dive,min=1"`
-	Force     bool     `json:"force"`
+	Scope     *MediaScrapeScope `json:"scope,omitempty"`
+	ScraperID string            `json:"scraperId" validate:"required,min=1"`
+	Systems   []string          `json:"systems"   validate:"omitempty,dive,min=1"`
+	Force     bool              `json:"force"`
 }
 
 type MediaLookupParams struct {
