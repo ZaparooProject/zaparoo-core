@@ -30,6 +30,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -298,6 +299,7 @@ func resolveSystemsFromPlatform(
 	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
+	extsBySystem := indexedExtensionsBySystem(pl.Launchers(cfg))
 
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
@@ -307,12 +309,56 @@ func resolveSystemsFromPlatform(
 			continue
 		}
 		result = append(result, scraper.ScrapeSystem{
-			DBID:     dbSystems[sys.ID].DBID,
-			ID:       sys.ID,
-			ROMPaths: romPaths,
+			DBID:       dbSystems[sys.ID].DBID,
+			ID:         sys.ID,
+			ROMPaths:   romPaths,
+			Extensions: extsBySystem[sys.ID],
 		})
 	}
 	return result, nil
+}
+
+// indexedExtensionsBySystem collects, per system, the extensions its launchers
+// accept. A launcher with a Test function can accept a file its extension list
+// does not name, so any such launcher makes the system's set unknown and the
+// entry is left out rather than reported as a partial list.
+func indexedExtensionsBySystem(launchers []platforms.Launcher) map[string][]string {
+	unknown := make(map[string]struct{})
+	seen := make(map[string]map[string]struct{})
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" {
+			continue
+		}
+		if launcher.Test != nil {
+			unknown[launcher.SystemID] = struct{}{}
+			continue
+		}
+		for _, ext := range launcher.Extensions {
+			normalized := strings.ToLower(ext)
+			if normalized == "" {
+				continue
+			}
+			if seen[launcher.SystemID] == nil {
+				seen[launcher.SystemID] = make(map[string]struct{})
+			}
+			seen[launcher.SystemID][normalized] = struct{}{}
+		}
+	}
+
+	result := make(map[string][]string, len(seen))
+	for systemID, exts := range seen {
+		if _, skip := unknown[systemID]; skip {
+			continue
+		}
+		ordered := make([]string, 0, len(exts))
+		for ext := range exts {
+			ordered = append(ordered, ext)
+		}
+		slices.Sort(ordered)
+		result[systemID] = ordered
+	}
+	return result
 }
 
 type parsedGamelistFile struct {
@@ -523,7 +569,7 @@ outer:
 					continue
 				}
 
-				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved)
+				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved, system.Extensions)
 				if selection.media.DBID == 0 {
 					log.Debug().
 						Str("system", system.ID).
@@ -1603,6 +1649,7 @@ func selectMediaForSlugMatch(
 	indexes loadRecordIndexes,
 	mediaTitleDBID int64,
 	resolved string,
+	systemExtensions []string,
 ) slugMediaSelection {
 	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
@@ -1620,26 +1667,39 @@ func selectMediaForSlugMatch(
 			Msg("gamelistxml: slug match path points at different title, writing title metadata only")
 	}
 
-	var first database.Media
-	var candidates int
-	ext := strings.ToLower(filepath.Ext(resolved))
-	for _, row := range indexes.MediaByTitleDBID[mediaTitleDBID] {
-		// GB and GBC share ROM roots on MiSTer, but a name match must never
-		// transfer metadata between their distinct ROM formats. Exact paths
-		// above still support launchers that deliberately index both formats.
-		rowExt := strings.ToLower(filepath.Ext(row.Path))
-		if (ext == ".gb" && rowExt == ".gbc") || (ext == ".gbc" && rowExt == ".gb") {
-			continue
-		}
-		if candidates == 0 {
-			first = row
-		}
-		candidates++
+	if !systemIndexesExtension(systemExtensions, resolved) {
+		return slugMediaSelection{matchKind: matchKind}
 	}
-	// A pure slug-only match with exactly one compatible media row is
-	// unambiguous. Conflicting paths and multiple variants stay unsafe.
-	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && candidates == 1
-	return slugMediaSelection{media: first, matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
+
+	mediaRows := indexes.MediaByTitleDBID[mediaTitleDBID]
+	if len(mediaRows) == 0 {
+		return slugMediaSelection{matchKind: matchKind}
+	}
+	// A pure slug-only match with exactly one media row is unambiguous: there is
+	// only one place the artwork can go, so media-level writes are safe.
+	// slug_conflict (path points at a different title) and multi-row titles stay
+	// unsafe to avoid attaching art to the wrong regional variant.
+	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && len(mediaRows) == 1
+	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
+}
+
+// systemIndexesExtension reports whether resolved names a file this system's
+// launchers would index. MiSTer systems share ROM folders with siblings that use
+// a different format — GAMEBOY holds .gb, .gbc and MegaDuck .bin; SMS holds
+// .sms, .gg and .sg; NES holds .nes, .fds and .nsf — so one system's gamelist
+// routinely describes another's ROMs. Those entries must not reach the name
+// based fallback, or the sibling's metadata and artwork land on this system's
+// media row. An exact path match is checked before this and still wins, so a
+// launcher that deliberately indexes several formats is unaffected.
+func systemIndexesExtension(systemExtensions []string, resolved string) bool {
+	if len(systemExtensions) == 0 {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(resolved))
+	if ext == "" {
+		return true
+	}
+	return slices.Contains(systemExtensions, ext)
 }
 
 // containerMediaForDir resolves a directory path to the unscraped media row it

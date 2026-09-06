@@ -37,6 +37,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// misterExtensions mirrors the MiSTer launcher table for systems that share a
+// ROM folder with a sibling using a different format. See CreateLaunchers in
+// pkg/platforms/mister/launchers.go; every launcher there also accepts .mgl.
+func misterExtensions(t *testing.T, systemID string) []string {
+	t.Helper()
+	byID := map[string][]string{
+		systemdefs.SystemGameboy:         {".gb", ".mgl"},
+		systemdefs.SystemGameboyColor:    {".gbc", ".mgl"},
+		systemdefs.SystemMasterSystem:    {".sms", ".mgl"},
+		systemdefs.SystemGameGear:        {".gg", ".mgl"},
+		systemdefs.SystemSG1000:          {".sg", ".mgl"},
+		systemdefs.SystemWonderSwan:      {".ws", ".mgl"},
+		systemdefs.SystemWonderSwanColor: {".wsc", ".mgl"},
+		systemdefs.SystemNES:             {".nes", ".mgl"},
+		systemdefs.SystemFDS:             {".fds", ".mgl"},
+		systemdefs.SystemSuperGrafx:      {".sgx", ".mgl"},
+	}
+	exts, ok := byID[systemID]
+	require.True(t, ok, "no launcher extensions recorded for %s", systemID)
+	return exts
+}
+
 func TestGameboySiblingGamelistPaths(t *testing.T) {
 	t.Parallel()
 	for _, companion := range []bool{false, true} {
@@ -70,7 +92,11 @@ func TestGameboySiblingGamelistPaths(t *testing.T) {
 				if allowed {
 					roots = append(roots, gbRoot)
 				}
-				system := scraper.ScrapeSystem{ID: systemdefs.SystemGameboyColor, ROMPaths: roots}
+				system := scraper.ScrapeSystem{
+					ID:         systemdefs.SystemGameboyColor,
+					ROMPaths:   roots,
+					Extensions: misterExtensions(t, systemdefs.SystemGameboyColor),
+				}
 				s := &GamelistXMLScraper{fs: fs}
 				if companion {
 					_, children := s.loadCompanionEntries(context.Background(), system)
@@ -119,7 +145,9 @@ func TestGameboySiblingArtworkFallback(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(gbcRoot, "gamelist.xml"), []byte(xml), 0o600))
 	s := &GamelistXMLScraper{fs: fs}
 	records, err := s.LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID: systemdefs.SystemGameboyColor, ROMPaths: []string{gbRoot, gbcRoot},
+		ID:         systemdefs.SystemGameboyColor,
+		ROMPaths:   []string{gbRoot, gbcRoot},
+		Extensions: misterExtensions(t, systemdefs.SystemGameboyColor),
 	}, mediaByPath(database.Media{DBID: 2, MediaTitleDBID: 1, Path: rom}))
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -215,8 +243,14 @@ func TestGameboyScrapeLayouts(t *testing.T) {
 				gbc, err := db.FindSystemBySystemID(systemdefs.SystemGameboyColor)
 				require.NoError(t, err)
 				systems := []scraper.ScrapeSystem{
-					{ID: gb.SystemID, DBID: gb.DBID, ROMPaths: []string{gbRoot}},
-					{ID: gbc.SystemID, DBID: gbc.DBID, ROMPaths: []string{gbRoot, gbcRoot}},
+					{
+						ID: gb.SystemID, DBID: gb.DBID, ROMPaths: []string{gbRoot},
+						Extensions: misterExtensions(t, gb.SystemID),
+					},
+					{
+						ID: gbc.SystemID, DBID: gbc.DBID, ROMPaths: []string{gbRoot, gbcRoot},
+						Extensions: misterExtensions(t, gbc.SystemID),
+					},
 				}
 				s := &GamelistXMLScraper{fs: fs, db: db}
 				for _, force := range []bool{false, false, true} {
@@ -273,7 +307,10 @@ func TestGameboyRenameReindexForceScrape(t *testing.T) {
 			scantest.IndexMediaPaths(t, db, systemdefs.SystemGameboyColor, oldPath)
 			sys, err := db.FindSystemBySystemID(systemdefs.SystemGameboyColor)
 			require.NoError(t, err)
-			systems := []scraper.ScrapeSystem{{ID: sys.SystemID, DBID: sys.DBID, ROMPaths: []string{root}}}
+			systems := []scraper.ScrapeSystem{{
+				ID: sys.SystemID, DBID: sys.DBID, ROMPaths: []string{root},
+				Extensions: misterExtensions(t, sys.SystemID),
+			}}
 			writeXML := func(name, image string) {
 				xml := fmt.Sprintf(`<gameList><game><path>./%s</path><name>Game</name>
 <image>./covers/%s.png</image></game></gameList>`, name, image)
@@ -333,7 +370,10 @@ func TestGameboySharedFolderDoesNotMatchOtherSystemBySlug(t *testing.T) {
 			indexes := mediaBySlugAndPath("game", &database.MediaTitle{DBID: 1, Slug: "game"},
 				database.Media{DBID: 2, MediaTitleDBID: 1, Path: filepath.Join(root, "Game"+tc.extension)})
 			records, err := (&GamelistXMLScraper{fs: fs}).LoadRecords(context.Background(),
-				scraper.ScrapeSystem{ID: tc.system, ROMPaths: []string{root}}, indexes)
+				scraper.ScrapeSystem{
+					ID: tc.system, ROMPaths: []string{root},
+					Extensions: misterExtensions(t, tc.system),
+				}, indexes)
 			require.NoError(t, err)
 			assert.Empty(t, records, "another system's entry must not write metadata or a scrape sentinel")
 
@@ -342,7 +382,10 @@ func TestGameboySharedFolderDoesNotMatchOtherSystemBySlug(t *testing.T) {
 			xml = `<gameList><game><path>./old/Game` + tc.extension + `</path><name>Game</name></game></gameList>`
 			require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "gamelist.xml"), []byte(xml), 0o600))
 			records, err = (&GamelistXMLScraper{fs: fs}).LoadRecords(context.Background(),
-				scraper.ScrapeSystem{ID: tc.system, ROMPaths: []string{root}}, indexes)
+				scraper.ScrapeSystem{
+					ID: tc.system, ROMPaths: []string{root},
+					Extensions: misterExtensions(t, tc.system),
+				}, indexes)
 			require.NoError(t, err)
 			require.Len(t, records, 1)
 			assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
