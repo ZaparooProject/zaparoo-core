@@ -174,7 +174,7 @@ On MiSTer and MiSTeX, the `gamelist.xml` scraper can bridge these identities usi
 - A `<game><path>` ending in `.zip` or `.7z`, or containing a bare set name, supplies the set-name key. Keys are case-insensitive; they contain letters, digits, underscores, or hyphens, up to 128 characters.
 - The matching MRA must be live and uniquely identified within the system currently being scraped. Already-scraped MRAs still count when checking uniqueness; force and resume cannot make a duplicate set appear unique.
 - Multiple MRAs with the same set name are skipped, including alternate-core variants and duplicates sharing one title. Use an exact MRA path to choose a variant instead of relying on ROM-set matching.
-- Existing direct-path and slug records take precedence over set-name fallback records. Unknown set names retain existing slug matching. A known ambiguous set does not fall back to guessing by title.
+- Entries that name the row directly take precedence: an indexed path, or a slug match the entry's own path confirms. A set name outranks a record that only guessed the row from its title, in either XML order, because arcade clone sets routinely share one display name. Unknown set names retain existing slug matching. A known ambiguous set does not fall back to guessing by title.
 - A unique match receives title metadata and media-level artwork. Artwork filename fallback uses the source set name in any supported artwork extension, such as `media/images/pacman.png` or `media/images/pacman.jpg`, rather than the MRA's display filename.
 
 ### Exporting A Scraper Bundle

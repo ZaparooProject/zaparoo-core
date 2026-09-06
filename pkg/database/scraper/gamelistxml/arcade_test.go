@@ -427,6 +427,86 @@ func TestArcadeSetNameWinsOverCompetingSlug(t *testing.T) {
 	assert.Equal(t, gamelistMatchArcadeSet, records[0].MatchKind)
 }
 
+// TestArcadeSetNameOutranksTitleGuess reproduces what a Skraper arcade bundle
+// does on real hardware: MAME clone sets share one display name, so an entry
+// with no indexed set of its own slug-matches the title and takes the canonical
+// MRA from the entry that named that set exactly.
+func TestArcadeSetNameOutranksTitleGuess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, gamelist string
+	}{
+		{
+			name: "guess read first",
+			gamelist: `<game><path>./rtypeclone.zip</path><name>R-Type</name><desc>GUESS</desc></game>` +
+				`<game><path>./rtype.zip</path><name>R-Type</name><desc>SET</desc></game>`,
+		},
+		{
+			name: "guess read last",
+			gamelist: `<game><path>./rtype.zip</path><name>R-Type</name><desc>SET</desc></game>` +
+				`<game><path>./rtypeclone.zip</path><name>R-Type</name><desc>GUESS</desc></game>`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			root := filepath.Join(t.TempDir(), "_Arcade")
+			require.NoError(t, fs.MkdirAll(root, 0o750))
+			media := database.Media{DBID: 10, MediaTitleDBID: 1, Path: filepath.Join(root, "R-Type (World).mra")}
+			require.NoError(t, afero.WriteFile(fs, media.Path,
+				[]byte(`<misterromdescription><setname>rtype</setname></misterromdescription>`), 0o600))
+			indexes := mediaBySlugAndPath("rtype", &database.MediaTitle{DBID: 1, Slug: "rtype"}, media)
+			gl, err := esapi.ParseGameListXML([]byte(`<gameList>` + tc.gamelist + `</gameList>`))
+			require.NoError(t, err)
+			parsed := parsedGamelistSystem{Files: []parsedGamelistFile{{RootPath: root, Games: gl.Games}}}
+			s := &GamelistXMLScraper{fs: fs, matchArcadeSets: true}
+			indexes.ArcadeBySetName, err = s.indexArcadeSets(t.Context(), []database.MediaWithFullPath{{
+				DBID: media.DBID, MediaTitleDBID: media.MediaTitleDBID, Path: media.Path,
+			}}, parsed)
+			require.NoError(t, err)
+			records, err := s.loadRecordsFromParsed(t.Context(),
+				scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+			require.NoError(t, err)
+			require.Len(t, records, 1)
+			assert.Equal(t, media.DBID, records[0].MatchedMediaDBID)
+			assert.Equal(t, "SET", records[0].Game.Desc,
+				"a clone sharing the display name must not displace the exact set-name match")
+			assert.Equal(t, gamelistMatchArcadeSet, records[0].MatchKind)
+			assert.True(t, records[0].MediaLevelWriteSafe)
+		})
+	}
+}
+
+// TestArcadeSetNameYieldsToPathMatch keeps the other half of the rule: a record
+// that named the row by path is at least as exact as the set name, so it holds
+// the row and the set entry is dropped.
+func TestArcadeSetNameYieldsToPathMatch(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(t.TempDir(), "_Arcade")
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	media := database.Media{DBID: 10, MediaTitleDBID: 1, Path: filepath.Join(root, "R-Type.mra")}
+	require.NoError(t, afero.WriteFile(fs, media.Path,
+		[]byte(`<misterromdescription><setname>rtype</setname></misterromdescription>`), 0o600))
+	indexes := mediaBySlugAndPath("rtype", &database.MediaTitle{DBID: 1, Slug: "rtype"}, media)
+	gl, err := esapi.ParseGameListXML([]byte(`<gameList>` +
+		`<game><path>./rtype.zip</path><name>R-Type</name><desc>SET</desc></game>` +
+		`<game><path>./R-Type.mra</path><name>R-Type</name><desc>PATH</desc></game>` +
+		`</gameList>`))
+	require.NoError(t, err)
+	parsed := parsedGamelistSystem{Files: []parsedGamelistFile{{RootPath: root, Games: gl.Games}}}
+	s := &GamelistXMLScraper{fs: fs, matchArcadeSets: true}
+	indexes.ArcadeBySetName, err = s.indexArcadeSets(t.Context(), []database.MediaWithFullPath{{
+		DBID: media.DBID, MediaTitleDBID: media.MediaTitleDBID, Path: media.Path,
+	}}, parsed)
+	require.NoError(t, err)
+	records, err := s.loadRecordsFromParsed(t.Context(),
+		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "PATH", records[0].Game.Desc)
+}
+
 func TestArcadeCompanionSetMatchThroughIndex(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()

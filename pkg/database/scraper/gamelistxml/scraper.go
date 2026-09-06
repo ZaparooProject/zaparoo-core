@@ -457,12 +457,30 @@ func (g *GamelistXMLScraper) LoadRecords(
 	return g.loadRecordsFromParsed(ctx, system, indexes, parsed)
 }
 
+// arcadeSetOutranks reports whether a MiSTer arcade set name is better evidence
+// for a media row than the record already holding it. Only a title guess is: a
+// path match, a slug match its own path confirmed, and another set name all
+// named the row directly. Without this an arcade gamelist's clone entries,
+// which routinely share one display name, can take the canonical MRA from the
+// entry that identified it exactly and then write less to it.
+func arcadeSetOutranks(record *GamelistRecord) bool {
+	switch record.MatchKind {
+	case gamelistMatchSlugOnly, gamelistMatchSlugConflict:
+		return true
+	case gamelistMatchSlugPath, gamelistMatchPathOnly, gamelistMatchArcadeSet:
+		return false
+	default:
+		return false
+	}
+}
+
 // loadRecordsFromParsed pairs every gamelist <game> and <folder> entry with the
 // media row it should write to. Entries are matched in descending order of
 // evidence: an indexed path, the container a directory entry collapses to, a
 // MiSTer arcade set name, then the title slug. Each row is claimed once, and
-// set-name records are held back until the file has been walked so a direct
-// match anywhere in it still wins the row.
+// set-name records are held back until every file has been walked so a direct
+// match anywhere in them still wins the row, and so a set name still outranks
+// a title guess that happened to be read first.
 func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
@@ -677,19 +695,25 @@ outer:
 		}
 	}
 
-	// Identity fallbacks run last so direct path/slug entries win regardless of
-	// XML ordering. Remaining duplicates follow the configured source order.
-	claimed := make(map[int64]struct{}, len(records))
-	for _, record := range records {
-		claimed[record.MatchedMediaDBID] = struct{}{}
+	// Identity fallbacks are resolved last so an entry that named the row by
+	// path wins it regardless of XML ordering, and so a set name outranks a
+	// title guess whichever order the two entries appear in.
+	claimedBy := make(map[int64]int, len(records))
+	for i, record := range records {
+		claimedBy[record.MatchedMediaDBID] = i
 	}
 	var arcadeSetMatches int
 	for _, record := range arcadeRecords {
-		if _, exists := claimed[record.MatchedMediaDBID]; exists {
-			arcadeSetsSuperseded++
+		if i, exists := claimedBy[record.MatchedMediaDBID]; exists {
+			if !arcadeSetOutranks(records[i]) {
+				arcadeSetsSuperseded++
+				continue
+			}
+			records[i] = record
+			arcadeSetMatches++
 			continue
 		}
-		claimed[record.MatchedMediaDBID] = struct{}{}
+		claimedBy[record.MatchedMediaDBID] = len(records)
 		records = append(records, record)
 		arcadeSetMatches++
 	}
