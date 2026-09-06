@@ -24,9 +24,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -68,9 +70,16 @@ func arcadeSetStem(sourcePath string) string {
 // docs artwork lookup, this identity can select a different title's write target,
 // so malformed documents and repeated setname elements must not select a row.
 func readArcadeSetName(fs afero.Fs, filename string) string {
-	info, err := fs.Stat(filename)
+	// Lstat, not Stat: Arcade Organizer aliases the same descriptor under its
+	// category folders, and an alias that reached the index would read as a
+	// second row for one set and block it as ambiguous. Skipping links keeps
+	// the canonical `_Arcade` row as the only identity source.
+	var info os.FileInfo
+	var err error
 	if lstater, ok := fs.(afero.Lstater); ok {
 		info, _, err = lstater.LstatIfPossible(filename)
+	} else {
+		info, err = fs.Stat(filename)
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxArcadeMRABytes {
 		return ""
@@ -119,6 +128,10 @@ func readArcadeSetName(fs afero.Fs, filename string) string {
 	return strings.ToLower(setName)
 }
 
+// indexArcadeSets maps each MAME set name referenced by the gamelist to the
+// indexed MRA descriptors that declare it. Only set names the gamelist actually
+// asks for are kept, so a system with no ROM-style entries costs one pass over
+// the parsed games and never touches the filesystem.
 func (g *GamelistXMLScraper) indexArcadeSets(
 	ctx context.Context, rows []database.MediaWithFullPath, parsed parsedGamelistSystem,
 ) (map[string][]database.Media, error) {
@@ -137,6 +150,8 @@ func (g *GamelistXMLScraper) indexArcadeSets(
 	if len(wanted) == 0 {
 		return bySet, nil
 	}
+	start := time.Now()
+	var descriptors, unreadable int
 	// Include already-scraped rows: a previous write cannot turn an ambiguous
 	// set into a unique match on the next run. Missing rows are not launch targets.
 	for _, row := range rows {
@@ -146,7 +161,12 @@ func (g *GamelistXMLScraper) indexArcadeSets(
 		if row.IsMissing || !strings.EqualFold(filepath.Ext(row.Path), ".mra") {
 			continue
 		}
+		descriptors++
 		setName := readArcadeSetName(g.filesystem(), row.Path)
+		if setName == "" {
+			unreadable++
+			continue
+		}
 		if _, ok := wanted[setName]; !ok {
 			continue
 		}
@@ -154,6 +174,15 @@ func (g *GamelistXMLScraper) indexArcadeSets(
 			DBID: row.DBID, MediaTitleDBID: row.MediaTitleDBID, Path: row.Path,
 		})
 	}
+	// A silent zero here is indistinguishable from the feature being off, so
+	// the read cost and the unusable descriptor count are always reported.
+	log.Debug().
+		Int("wanted_sets", len(wanted)).
+		Int("descriptors_read", descriptors).
+		Int("descriptors_unusable", unreadable).
+		Int("indexed_sets", len(bySet)).
+		Dur("duration", time.Since(start)).
+		Msg("gamelistxml: indexed arcade set names")
 	return bySet, nil
 }
 

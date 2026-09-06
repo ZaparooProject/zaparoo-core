@@ -438,6 +438,12 @@ func (g *GamelistXMLScraper) LoadRecords(
 	return g.loadRecordsFromParsed(ctx, system, indexes, parsed)
 }
 
+// loadRecordsFromParsed pairs every gamelist <game> and <folder> entry with the
+// media row it should write to. Entries are matched in descending order of
+// evidence: an indexed path, the container a directory entry collapses to, a
+// MiSTer arcade set name, then the title slug. Each row is claimed once, and
+// set-name records are held back until the file has been walked so a direct
+// match anywhere in it still wins the row.
 func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
@@ -452,6 +458,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
 	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
 	var containerPathResolutions, folderEntries, folderMatches, folderUnmatched int
+	var arcadeSetsUnresolved, arcadeSetsSuperseded int
 
 outer:
 	for _, file := range parsed.Files {
@@ -494,15 +501,20 @@ outer:
 			}
 			if !pathOK {
 				if media, known := arcadeMediaForSet(indexes, game.Path); known {
-					if media.DBID != 0 {
-						arcadeRecords = append(arcadeRecords, &GamelistRecord{
-							SystemRootPath: file.RootPath, AssetRootPath: file.AssetRootPath,
-							MediaDirsByRoot: fileMediaDirsByRoot, Game: *game,
-							MatchKind: gamelistMatchArcadeSet, MatchedTitleDBID: media.MediaTitleDBID,
-							MatchedMediaDBID: media.DBID, MediaLevelWriteSafe: true,
-							RequireExistingImage: file.RequireExistingImage,
-						})
+					if media.DBID == 0 {
+						// The set exists but has no single writable row, so the
+						// entry is dropped rather than guessed at by title.
+						arcadeSetsUnresolved++
+						unmatchedRecords++
+						continue
 					}
+					arcadeRecords = append(arcadeRecords, &GamelistRecord{
+						SystemRootPath: file.RootPath, AssetRootPath: file.AssetRootPath,
+						MediaDirsByRoot: fileMediaDirsByRoot, Game: *game,
+						MatchKind: gamelistMatchArcadeSet, MatchedTitleDBID: media.MediaTitleDBID,
+						MatchedMediaDBID: media.DBID, MediaLevelWriteSafe: true,
+						RequireExistingImage: file.RequireExistingImage,
+					})
 					continue
 				}
 			}
@@ -655,6 +667,7 @@ outer:
 	var arcadeSetMatches int
 	for _, record := range arcadeRecords {
 		if _, exists := claimed[record.MatchedMediaDBID]; exists {
+			arcadeSetsSuperseded++
 			continue
 		}
 		claimed[record.MatchedMediaDBID] = struct{}{}
@@ -665,6 +678,8 @@ outer:
 	log.Info().
 		Str("system", system.ID).
 		Int("arcade_set_matches", arcadeSetMatches).
+		Int("arcade_sets_unresolved", arcadeSetsUnresolved).
+		Int("arcade_sets_superseded", arcadeSetsSuperseded).
 		Int("candidate_titles", candidateTitles).
 		Int("candidate_media", candidateMedia).
 		Int("gamelist_files", gamelistFiles).
@@ -1267,10 +1282,15 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// artwork files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
 	if record.MatchKind == gamelistMatchArcadeSet {
-		stem := arcadeSetStem(game.Path)
-		fallbackNames = []string{stem + ".png"}
-		if lower := strings.ToLower(stem); lower != stem {
-			fallbackNames = append(fallbackNames, lower+".png")
+		// Set-name entries commonly carry a foreign or sibling ROM path that
+		// resolves to nothing, so the ROM-relative names are empty. Artwork is
+		// named after the set instead, in either case the scraper wrote it.
+		if stem := arcadeSetStem(game.Path); stem != "" {
+			names := fallbackArtworkNames(stem)
+			if lower := strings.ToLower(stem); lower != stem {
+				names = append(names, fallbackArtworkNames(lower)...)
+			}
+			fallbackNames = append(names, fallbackNames...)
 		}
 	}
 
@@ -2478,6 +2498,11 @@ func logScrapeWriteStats(message, systemID string, stats *scrapeWriteStats) {
 		Msg(message)
 }
 
+// matchCompanionChildMedia resolves a companion child reference to the media
+// rows its parent's metadata should be written to. A ".slug" reference selects
+// every row of the named title; otherwise an indexed path, a MiSTer arcade set
+// name and finally a unique filename are tried in that order. An empty result
+// means the child is unmatched or too ambiguous to write.
 func matchCompanionChildMedia(
 	system scraper.ScrapeSystem,
 	child companionChild,

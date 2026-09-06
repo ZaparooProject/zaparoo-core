@@ -175,7 +175,7 @@ On MiSTer and MiSTeX, the `gamelist.xml` scraper can bridge these identities usi
 - The matching MRA must be live and uniquely identified within the system currently being scraped. Already-scraped MRAs still count when checking uniqueness; force and resume cannot make a duplicate set appear unique.
 - Multiple MRAs with the same set name are skipped, including alternate-core variants and duplicates sharing one title. Use an exact MRA path to choose a variant instead of relying on ROM-set matching.
 - Existing direct-path and slug records take precedence over set-name fallback records. Unknown set names retain existing slug matching. A known ambiguous set does not fall back to guessing by title.
-- A unique match receives title metadata and media-level artwork. Artwork filename fallback uses the source set name, such as `media/images/pacman.png`, rather than the MRA's display filename.
+- A unique match receives title metadata and media-level artwork. Artwork filename fallback uses the source set name in any supported artwork extension, such as `media/images/pacman.png` or `media/images/pacman.jpg`, rather than the MRA's display filename.
 
 ### Exporting A Scraper Bundle
 

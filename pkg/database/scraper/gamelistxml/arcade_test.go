@@ -21,6 +21,7 @@ package gamelistxml
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -204,6 +205,305 @@ func TestArcadeArtworkFallbackAndBoundary(t *testing.T) {
 	assert.Equal(t, filepath.ToSlash(image), prop.Text)
 	_, ok = propertyByType(mapped.MediaProps, "property:manual")
 	assert.False(t, ok, "identity matching must not broaden asset path permissions")
+}
+
+func TestArcadeSetStemRejectsNonIdentities(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, sourcePath string }{
+		{"nul byte", "pac\x00man.zip"},
+		{"newline", "pacman\n.zip"},
+		{"carriage return", "pacman\r.zip"},
+		{"url", "http://example.com/pacman.zip"},
+		{"archive with empty stem", "./.zip"},
+		{"over length limit", strings.Repeat("a", 129) + ".zip"},
+		{"space", "Pac Man.zip"},
+		{"unsupported extension", "pacman.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Empty(t, arcadeSetStem(tc.sourcePath))
+		})
+	}
+	assert.Equal(t, strings.Repeat("a", 128), arcadeSetStem(strings.Repeat("a", 128)+".zip"))
+}
+
+// hostileFs reports a file as small and readable but fails or over-delivers on
+// read, standing in for a descriptor that changes between stat and open.
+type hostileFs struct {
+	afero.Fs
+	openErr    error
+	extraBytes int
+}
+
+func (h hostileFs) Open(name string) (afero.File, error) {
+	if h.openErr != nil {
+		return nil, h.openErr
+	}
+	return h.Fs.Open(name) //nolint:wrapcheck // test double forwards verbatim
+}
+
+func (h hostileFs) Stat(name string) (os.FileInfo, error) {
+	info, err := h.Fs.Stat(name)
+	if err != nil || h.extraBytes == 0 {
+		return info, err //nolint:wrapcheck // test double forwards verbatim
+	}
+	return shrunkFileInfo{FileInfo: info, size: info.Size() - int64(h.extraBytes)}, nil
+}
+
+type shrunkFileInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (s shrunkFileInfo) Size() int64 { return s.size }
+
+func wrapTestFs(wrap func(afero.Fs) afero.Fs, base afero.Fs) afero.Fs {
+	if wrap == nil {
+		return base
+	}
+	return wrap(base)
+}
+
+func TestReadArcadeSetNameRejectsUnreadableDescriptors(t *testing.T) {
+	t.Parallel()
+	valid := `<misterromdescription><setname>pacman</setname></misterromdescription>`
+	for _, tc := range []struct {
+		fs            func(afero.Fs) afero.Fs
+		name, content string
+	}{
+		{
+			name: "unopenable", content: valid,
+			fs: func(base afero.Fs) afero.Fs {
+				return hostileFs{Fs: base, openErr: os.ErrPermission}
+			},
+		},
+		{
+			name:    "content past the reported size",
+			content: valid + strings.Repeat(" ", maxArcadeMRABytes),
+			fs: func(base afero.Fs) afero.Fs {
+				return hostileFs{Fs: base, extraBytes: maxArcadeMRABytes}
+			},
+		},
+		{name: "trailing text", content: valid + "garbage"},
+		{name: "trailing syntax error", content: valid + "<"},
+		{name: "trailing directive", content: valid + "<!DOCTYPE mra>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base := afero.NewMemMapFs()
+			filename := filepath.Join(t.TempDir(), "test.mra")
+			require.NoError(t, base.MkdirAll(filepath.Dir(filename), 0o750))
+			require.NoError(t, afero.WriteFile(base, filename, []byte(tc.content), 0o600))
+			assert.Empty(t, readArcadeSetName(wrapTestFs(tc.fs, base), filename))
+		})
+	}
+}
+
+func TestReadArcadeSetNameSkipsSymlinkedDescriptors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "Pac-Man.mra")
+	require.NoError(t, os.WriteFile(target,
+		[]byte(`<misterromdescription><setname>pacman</setname></misterromdescription>`), 0o600))
+	alias := filepath.Join(dir, "alias.mra")
+	require.NoError(t, os.Symlink(target, alias))
+	fs := afero.NewOsFs()
+	assert.Equal(t, "pacman", readArcadeSetName(fs, target))
+	assert.Empty(t, readArcadeSetName(fs, alias),
+		"an Arcade Organizer alias must not read as a second row for the same set")
+}
+
+func TestIndexArcadeSetsWithoutSetReferences(t *testing.T) {
+	t.Parallel()
+	s := &GamelistXMLScraper{
+		fs:              hostileFs{Fs: afero.NewMemMapFs(), openErr: os.ErrPermission},
+		matchArcadeSets: true,
+	}
+	bySet, err := s.indexArcadeSets(t.Context(),
+		[]database.MediaWithFullPath{{DBID: 10, Path: filepath.Join("_Arcade", "Pac-Man.mra")}},
+		parsedGamelistSystem{Files: []parsedGamelistFile{{Games: []esapi.Game{
+			{Path: "./Pac Man.rom"}, {Path: ""},
+		}}}})
+	require.NoError(t, err)
+	assert.Empty(t, bySet, "no set-name references means no descriptor reads at all")
+}
+
+func TestIndexArcadeSetsSkipsUnusableDescriptors(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(t.TempDir(), "_Arcade")
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	good := filepath.Join(root, "Pac-Man.mra")
+	truncated := filepath.Join(root, "Truncated.mra")
+	require.NoError(t, afero.WriteFile(fs, good,
+		[]byte(`<misterromdescription><setname>pacman</setname></misterromdescription>`), 0o600))
+	require.NoError(t, afero.WriteFile(fs, truncated, []byte(`<misterromdescription><setname>pac`), 0o600))
+	bySet, err := (&GamelistXMLScraper{fs: fs, matchArcadeSets: true}).indexArcadeSets(t.Context(),
+		[]database.MediaWithFullPath{
+			{DBID: 10, MediaTitleDBID: 1, Path: good},
+			{DBID: 20, MediaTitleDBID: 2, Path: truncated},
+			{DBID: 30, MediaTitleDBID: 3, Path: filepath.Join(root, "Absent.mra")},
+			{DBID: 40, MediaTitleDBID: 4, Path: filepath.Join(root, "Not a descriptor.txt")},
+		},
+		parsedGamelistSystem{Files: []parsedGamelistFile{{
+			RootPath: root, Games: []esapi.Game{{Path: "./pacman.zip"}},
+		}}})
+	require.NoError(t, err)
+	require.Len(t, bySet["pacman"], 1, "a descriptor that cannot be parsed must not make its set ambiguous")
+	assert.Equal(t, int64(10), bySet["pacman"][0].DBID)
+}
+
+func TestArcadeArtworkFallbackExtensions(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, sourcePath, artwork string }{
+		{"png", "./pacman.zip", "pacman.png"},
+		{"jpg", "./pacman.zip", "pacman.jpg"},
+		{"jpeg", "./pacman.zip", "pacman.jpeg"},
+		{"webp", "./pacman.zip", "pacman.webp"},
+		{"upper case source keeps its own casing", "./PACMAN.ZIP", "PACMAN.jpg"},
+		{"upper case source falls back to lower", "./PACMAN.ZIP", "pacman.jpg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			bundle := filepath.Join(t.TempDir(), "Arcade")
+			image := filepath.Join(bundle, "media", "images", tc.artwork)
+			require.NoError(t, fs.MkdirAll(filepath.Dir(image), 0o750))
+			require.NoError(t, afero.WriteFile(fs, image, []byte("art"), 0o600))
+			mapped := (&GamelistXMLScraper{fs: fs}).MapToDB(&GamelistRecord{
+				SystemRootPath: t.TempDir(), AssetRootPath: bundle, MatchKind: gamelistMatchArcadeSet,
+				MediaLevelWriteSafe: true,
+				MediaDirsByRoot:     []map[string]string{statMediaDirsFS(fs, bundle)},
+				Game:                esapi.Game{Path: tc.sourcePath},
+			})
+			prop, ok := propertyByType(mapped.MediaProps, "property:image-image")
+			require.True(t, ok, "set-name artwork must use the same extensions as every other match")
+			assert.Equal(t, filepath.ToSlash(image), prop.Text)
+		})
+	}
+}
+
+// TestArcadeSetNameWinsOverCompetingSlug pins the precedence that makes clone
+// sets safe: `<setname>` is the arcade ROM's identity, while a catalog <name>
+// is only a label several sets can share. Ranking the slug first would send a
+// clone's metadata to the parent's MRA.
+func TestArcadeSetNameWinsOverCompetingSlug(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(t.TempDir(), "_Arcade")
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	midway := database.Media{DBID: 10, MediaTitleDBID: 1, Path: filepath.Join(root, "Pac-Man (Midway).mra")}
+	japan := database.Media{DBID: 20, MediaTitleDBID: 2, Path: filepath.Join(root, "PuckMan (Japan).mra")}
+	for path, setName := range map[string]string{midway.Path: "pacman", japan.Path: "puckman"} {
+		require.NoError(t, afero.WriteFile(fs, path,
+			[]byte(`<misterromdescription><setname>`+setName+`</setname></misterromdescription>`), 0o600))
+	}
+	indexes := mediaBySlugAndPath("pacman", &database.MediaTitle{DBID: 1, Slug: "pacman"}, midway, japan)
+	gl, err := esapi.ParseGameListXML([]byte(
+		`<gameList><game><path>./puckman.zip</path><name>Pac-Man</name><desc>Japan set</desc></game></gameList>`))
+	require.NoError(t, err)
+	parsed := parsedGamelistSystem{Files: []parsedGamelistFile{{RootPath: root, Games: gl.Games}}}
+	s := &GamelistXMLScraper{fs: fs, matchArcadeSets: true}
+	indexes.ArcadeBySetName, err = s.indexArcadeSets(t.Context(), []database.MediaWithFullPath{
+		{DBID: midway.DBID, MediaTitleDBID: midway.MediaTitleDBID, Path: midway.Path},
+		{DBID: japan.DBID, MediaTitleDBID: japan.MediaTitleDBID, Path: japan.Path},
+	}, parsed)
+	require.NoError(t, err)
+	records, err := s.loadRecordsFromParsed(t.Context(),
+		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, japan.DBID, records[0].MatchedMediaDBID,
+		"the entry named its set, so the slug of its display name must not redirect the write")
+	assert.Equal(t, gamelistMatchArcadeSet, records[0].MatchKind)
+}
+
+func TestArcadeCompanionSetMatchThroughIndex(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(t.TempDir(), "_Arcade")
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	media := database.Media{DBID: 10, MediaTitleDBID: 1, Path: filepath.Join(root, "Pac-Man.mra")}
+	require.NoError(t, afero.WriteFile(fs, media.Path,
+		[]byte(`<misterromdescription><setname>pacman</setname></misterromdescription>`), 0o600))
+	gl, err := esapi.ParseGameListXML([]byte(`<gameList>` +
+		`<game source="ZaparooCompanion" id="42"><name>Pac-Man</name><desc>Parent</desc></game>` +
+		`<game source="ZaparooCompanion" parentid="42"><path>./pacman.zip</path><region>jp</region></game>` +
+		`</gameList>`))
+	require.NoError(t, err)
+	parsed := parsedGamelistSystem{Files: []parsedGamelistFile{{RootPath: root, Games: gl.Games}}}
+	indexes := mediaByPath(media)
+	s := &GamelistXMLScraper{fs: fs, matchArcadeSets: true}
+	indexes.ArcadeBySetName, err = s.indexArcadeSets(t.Context(), []database.MediaWithFullPath{{
+		DBID: media.DBID, MediaTitleDBID: media.MediaTitleDBID, Path: media.Path,
+	}}, parsed)
+	require.NoError(t, err)
+	require.Contains(t, indexes.ArcadeBySetName, "pacman",
+		"companion child ROM references must contribute the set names the index reads")
+	_, children := companionEntriesFromParsed(t.Context(), scraper.ScrapeSystem{ID: systemdefs.SystemArcade}, parsed)
+	require.Len(t, children, 1)
+	matched := matchCompanionChildMedia(scraper.ScrapeSystem{ID: systemdefs.SystemArcade}, children[0], indexes, nil)
+	require.Equal(t, []database.Media{media}, matched.Media)
+	assert.True(t, matched.MediaLevelWriteSafe)
+}
+
+func TestScrapeLoop_ArcadeIndexCanceled(t *testing.T) {
+	t.Parallel()
+	base := afero.NewMemMapFs()
+	root := filepath.Join(t.TempDir(), "_Arcade")
+	custom := t.TempDir()
+	bundle := filepath.Join(custom, systemdefs.SystemArcade)
+	rows := make([]database.MediaWithFullPath, 0, 2)
+	for i, name := range []string{"Pac-Man.mra", "Ms. Pac-Man.mra"} {
+		path := filepath.Join(root, name)
+		require.NoError(t, base.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, afero.WriteFile(base, path,
+			[]byte(`<misterromdescription><setname>pacman</setname></misterromdescription>`), 0o600))
+		rows = append(rows, database.MediaWithFullPath{DBID: int64(10 + i), MediaTitleDBID: 1, Path: path})
+	}
+	glPath := filepath.Join(bundle, "gamelist.xml")
+	require.NoError(t, base.MkdirAll(bundle, 0o750))
+	require.NoError(t, afero.WriteFile(base, glPath,
+		[]byte(`<gameList><game><path>./pacman.zip</path><name>Pac-Man</name></game></gameList>`), 0o600))
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	mdb := helpers.NewMockMediaDBI()
+	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
+		DBID: 1, Slug: "pacman", Name: "Pac-Man", SystemDBID: 100,
+	}}, nil)
+	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return(rows, nil)
+	s := &GamelistXMLScraper{
+		db: mdb, fs: cancelOnOpenFs{Fs: base, suffix: ".mra", cancel: cancel},
+		cfg: newCustomGamelistConfig(t, custom), matchArcadeSets: true,
+	}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(ctx, scraper.ScrapeOptions{Force: true, Pauser: syncutil.NewPauser()},
+		[]scraper.ScrapeSystem{{ID: systemdefs.SystemArcade, DBID: 100, ROMPaths: []string{root}}}, mdb, ch)
+	var done scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr, "cancellation is not a scrape failure")
+		if update.Done {
+			done = update
+		}
+	}
+	assert.True(t, done.Done)
+	assert.Equal(t, 0, done.Matched)
+	mdb.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// cancelOnOpenFs cancels the scrape the first time a matching file is opened,
+// standing in for a user stopping a scrape while descriptors are being read.
+type cancelOnOpenFs struct {
+	afero.Fs
+	cancel context.CancelFunc
+	suffix string
+}
+
+func (c cancelOnOpenFs) Open(name string) (afero.File, error) {
+	if strings.HasSuffix(strings.ToLower(name), c.suffix) {
+		c.cancel()
+	}
+	return c.Fs.Open(name) //nolint:wrapcheck // test double forwards verbatim
 }
 
 func TestReadArcadeSetName(t *testing.T) {
