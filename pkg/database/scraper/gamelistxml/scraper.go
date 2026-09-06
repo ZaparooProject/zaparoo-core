@@ -1481,15 +1481,28 @@ func resolveGamelistROMPath(esPath, root string, romRoots []string) (path, match
 	if !ok {
 		return "", ""
 	}
-	if esmedia.PathWithinRoot(resolved, root) {
-		return resolved, root
-	}
-	for _, romRoot := range romRoots {
-		if esmedia.PathWithinRoot(resolved, romRoot) {
-			return resolved, romRoot
+	// Configured roots may nest, so the first container is not necessarily the
+	// right one. The most specific root owns the ROM: artwork fallback names are
+	// relative to it, and an outer root would prefix them with the nested
+	// directory and miss the media/ directory beside the ROM.
+	depth := -1
+	consider := func(candidate string) {
+		if candidate == "" || !esmedia.PathWithinRoot(resolved, candidate) {
+			return
+		}
+		if abs, err := filepath.Abs(candidate); err == nil && len(filepath.Clean(abs)) > depth {
+			depth = len(filepath.Clean(abs))
+			matchedRoot = candidate
 		}
 	}
-	return "", ""
+	consider(root)
+	for _, romRoot := range romRoots {
+		consider(romRoot)
+	}
+	if matchedRoot == "" {
+		return "", ""
+	}
+	return resolved, matchedRoot
 }
 
 // pathPropFS resolves esPath to an absolute path and returns a MediaProperty
