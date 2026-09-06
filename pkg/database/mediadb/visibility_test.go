@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -263,4 +264,129 @@ func TestSystemMediaCountsSubtractHidden(t *testing.T) {
 	counts, err = f.mediaDB.SystemMediaCounts(ctx, nil, true)
 	require.NoError(t, err)
 	assert.Empty(t, counts, "a fully hidden system drops out of the indexed list")
+}
+
+// Subtracting hidden media from cached aggregates has to match the scope each
+// aggregate was built over, or a neighbouring directory loses files it still
+// has. These are the boundaries that get it wrong when the match is sloppy.
+func TestHiddenSubtractionRespectsScopeBoundaries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	// "A" and "AB" share a prefix; "A/Deep" nests one level further.
+	f.insert("AGame", root+"A/Game.nes")
+	f.insert("ADeep", root+"A/Deep/Game.nes")
+	f.insert("ABGame", root+"AB/Game.nes")
+	// "Outer" holds nothing but a nested hidden file, so the whole branch goes.
+	f.insert("Buried", root+"Outer/Inner/Game.nes")
+	// A file sitting directly in the browsed directory belongs to no child.
+	f.insert("Loose", root+"Loose.nes")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB,
+		root+"A/Deep/Game.nes", root+"Outer/Inner/Game.nes", root+"Loose.nes")
+
+	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	byName := make(map[string]int, len(dirs))
+	for _, dir := range dirs {
+		byName[dir.Name] = dir.FileCount
+	}
+	assert.Equal(t, map[string]int{"A": 1, "AB": 1}, byName,
+		"a nested hide only reduces its own branch, and a sibling sharing a name prefix is untouched")
+
+	dirCount, err := f.mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, len(dirs), dirCount)
+
+	counts, err := f.mediaDB.BrowseRootCounts(ctx, []string{root}, true)
+	require.NoError(t, err)
+	require.NotNil(t, counts[root])
+	assert.Equal(t, 2, *counts[root], "a loose hidden file still leaves the root total")
+}
+
+// The system filter narrows which hidden rows an aggregate ever counted, so
+// subtracting one system's hidden media from another system's total would
+// silently shrink it.
+func TestHiddenSubtractionRespectsSystemFilter(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	snes, err := f.mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+	require.NoError(t, err)
+	f.insert("NESGame", root+"Shared/NESGame.nes")
+	insertForSystem(t, f.mediaDB, snes.DBID, "SNESGame", root+"Shared/SNESGame.sfc")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"Shared/NESGame.nes")
+
+	nesDirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true, Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, nesDirs, 1)
+	assert.Equal(t, 1, nesDirs[0].FileCount, "hiding NES media cannot shrink the SNES total")
+
+	bothDirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, bothDirs, 1)
+	assert.Equal(t, 1, bothDirs[0].FileCount)
+}
+
+// A hidden row that has gone missing was never in the cached totals, so
+// subtracting it again would take the count below the truth.
+func TestHiddenMissingMediaIsNotSubtractedTwice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("Present", root+"Dir/Present.nes")
+	f.insert("Gone", root+"Dir/Gone.nes")
+	f.commit(t, true)
+	hideMediaPaths(t, f.mediaDB, root+"Dir/Gone.nes")
+
+	system, err := f.mediaDB.FindSystemBySystemID("NES")
+	require.NoError(t, err)
+	gone, err := f.mediaDB.FindMediaBySystemAndPath(ctx, system.DBID, root+"Dir/Gone.nes")
+	require.NoError(t, err)
+	_, err = f.mediaDB.sql.Load().ExecContext(ctx,
+		`UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, gone.DBID)
+	require.NoError(t, err)
+	require.NoError(t, sqlPopulateBrowseCache(ctx, f.mediaDB.sql.Load()))
+
+	dirs, err := f.mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: root, ExcludeHidden: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 1)
+	assert.Equal(t, 1, dirs[0].FileCount)
+}
+
+// insertForSystem adds one media row for a second system inside the fixture's
+// open transaction, so a directory can hold media from more than one system.
+func insertForSystem(t *testing.T, mediaDB *MediaDB, systemDBID int64, name, path string) {
+	t.Helper()
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: systemDBID,
+		Slug:       slugs.Slugify("game", name+path),
+		Name:       name,
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     systemDBID,
+		MediaTitleDBID: title.DBID,
+		Path:           path,
+		ParentDir:      filepath.ToSlash(filepath.Dir(path)) + "/",
+		SortName:       name,
+	})
+	require.NoError(t, err)
 }

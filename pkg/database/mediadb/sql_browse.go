@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2851,10 +2852,44 @@ func sqlEmptiedChildDirCount(
 	if err != nil || !ok {
 		return 0, err
 	}
-	placeholders := make([]string, 0, len(drops))
-	args := []any{parentID}
+	names := make([]string, 0, len(drops))
 	for name := range drops {
-		placeholders = append(placeholders, "?")
+		names = append(names, name)
+	}
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	emptied := 0
+	for chunk := range slices.Chunk(names, hiddenChildDirNamesPerQuery) {
+		batch, batchErr := sqlChildDirFileCounts(ctx, db, parentID, chunk, systemClause, systemArgs)
+		if batchErr != nil {
+			return 0, batchErr
+		}
+		for name, total := range batch {
+			if total-drops[name] <= 0 {
+				emptied++
+			}
+		}
+	}
+	return emptied, nil
+}
+
+// hiddenChildDirNamesPerQuery bounds one IN list of child directory names. How
+// many directories hold hidden media is user-driven, so without this a heavily
+// curated library builds a single statement past SQLite's parameter cap.
+const hiddenChildDirNamesPerQuery = 200
+
+func sqlChildDirFileCounts(
+	ctx context.Context,
+	db sqlQueryable,
+	parentID int64,
+	names []string,
+	systemClause string,
+	systemArgs []any,
+) (map[string]int, error) {
+	placeholders := make([]string, len(names))
+	args := make([]any, 0, len(names)+len(systemArgs)+1)
+	args = append(args, parentID)
+	for i, name := range names {
+		placeholders[i] = "?"
 		args = append(args, name)
 	}
 	query := `SELECT d.Name, SUM(c.FileCount)
@@ -2863,7 +2898,7 @@ func sqlEmptiedChildDirCount(
 		INNER JOIN Systems s ON c.SystemDBID = s.DBID
 		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID != c.ParentDirDBID AND d.IsVirtual = 0
 			AND d.Name IN (` + strings.Join(placeholders, ",") + `)`
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+	if systemClause != "" {
 		query += ` AND ` + systemClause
 		args = append(args, systemArgs...)
 	}
@@ -2871,24 +2906,22 @@ func sqlEmptiedChildDirCount(
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("browse cache hidden child dir counts: %w", err)
+		return nil, fmt.Errorf("browse cache hidden child dir counts: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	emptied := 0
+	counts := make(map[string]int, len(names))
 	for rows.Next() {
 		var name string
 		var total int
 		if scanErr := rows.Scan(&name, &total); scanErr != nil {
-			return 0, fmt.Errorf("browse cache hidden child dir scan: %w", scanErr)
+			return nil, fmt.Errorf("browse cache hidden child dir scan: %w", scanErr)
 		}
-		if total-drops[name] <= 0 {
-			emptied++
-		}
+		counts[name] = total
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return 0, fmt.Errorf("browse cache hidden child dir rows: %w", rowsErr)
+		return nil, fmt.Errorf("browse cache hidden child dir rows: %w", rowsErr)
 	}
-	return emptied, nil
+	return counts, nil
 }
 
 func sqlBrowseDirCountFromCache(
