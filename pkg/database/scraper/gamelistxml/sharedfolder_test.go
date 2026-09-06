@@ -104,6 +104,7 @@ func TestIndexedExtensionsBySystem(t *testing.T) {
 			Test: func(*config.Instance, string) bool { return true },
 		},
 		{ID: "NoSystem", Extensions: []string{".zip"}},
+		{ID: "Blank", SystemID: systemdefs.SystemGameboy, Extensions: []string{""}},
 	}
 	got := indexedExtensionsBySystem(launchers)
 	assert.Equal(t, []string{".gb", ".mgl"}, got[systemdefs.SystemGameboy])

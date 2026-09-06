@@ -53,7 +53,12 @@ func TestResolveGamelistROMPathNestedRoots(t *testing.T) {
 		assert.Equal(t, inner, matchedRoot, "most specific root must win, order %v", order)
 	}
 
-	resolved, matchedRoot := resolveGamelistROMPath("", gbcRoot, []string{outer})
+	// A blank configured root is ignored rather than treated as a container.
+	resolved, matchedRoot := resolveGamelistROMPath("../GAMEBOY/Subset/Game.gbc", gbcRoot, []string{"", inner})
+	assert.Equal(t, filepath.Join(inner, "Game.gbc"), resolved)
+	assert.Equal(t, inner, matchedRoot)
+
+	resolved, matchedRoot = resolveGamelistROMPath("", gbcRoot, []string{outer})
 	assert.Empty(t, resolved)
 	assert.Empty(t, matchedRoot)
 }
