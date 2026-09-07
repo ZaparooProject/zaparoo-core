@@ -30,6 +30,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ import (
 type GamelistRecord struct {
 	MediaDirsByRoot      []map[string]string
 	SystemRootPath       string
+	ROMRootPath          string
 	AssetRootPath        string
 	MatchKind            gamelistMatchKind
 	Game                 esapi.Game
@@ -297,6 +299,7 @@ func resolveSystemsFromPlatform(
 	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
+	extsBySystem := indexedExtensionsBySystem(pl.Launchers(cfg))
 
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
@@ -306,12 +309,56 @@ func resolveSystemsFromPlatform(
 			continue
 		}
 		result = append(result, scraper.ScrapeSystem{
-			DBID:     dbSystems[sys.ID].DBID,
-			ID:       sys.ID,
-			ROMPaths: romPaths,
+			DBID:       dbSystems[sys.ID].DBID,
+			ID:         sys.ID,
+			ROMPaths:   romPaths,
+			Extensions: extsBySystem[sys.ID],
 		})
 	}
 	return result, nil
+}
+
+// indexedExtensionsBySystem collects, per system, the extensions its launchers
+// accept. A launcher with a Test function can accept a file its extension list
+// does not name, so any such launcher makes the system's set unknown and the
+// entry is left out rather than reported as a partial list.
+func indexedExtensionsBySystem(launchers []platforms.Launcher) map[string][]string {
+	unknown := make(map[string]struct{})
+	seen := make(map[string]map[string]struct{})
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" {
+			continue
+		}
+		if launcher.Test != nil {
+			unknown[launcher.SystemID] = struct{}{}
+			continue
+		}
+		for _, ext := range launcher.Extensions {
+			normalized := strings.ToLower(ext)
+			if normalized == "" {
+				continue
+			}
+			if seen[launcher.SystemID] == nil {
+				seen[launcher.SystemID] = make(map[string]struct{})
+			}
+			seen[launcher.SystemID][normalized] = struct{}{}
+		}
+	}
+
+	result := make(map[string][]string, len(seen))
+	for systemID, exts := range seen {
+		if _, skip := unknown[systemID]; skip {
+			continue
+		}
+		ordered := make([]string, 0, len(exts))
+		for ext := range exts {
+			ordered = append(ordered, ext)
+		}
+		slices.Sort(ordered)
+		result[systemID] = ordered
+	}
+	return result
 }
 
 type parsedGamelistFile struct {
@@ -473,7 +520,7 @@ outer:
 				continue
 			}
 
-			resolved := esmedia.ResolvePath(game.Path, file.RootPath)
+			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -508,6 +555,7 @@ outer:
 					slugPathSelections++
 					records = append(records, &GamelistRecord{
 						SystemRootPath:       file.RootPath,
+						ROMRootPath:          romRoot,
 						AssetRootPath:        file.AssetRootPath,
 						MediaDirsByRoot:      fileMediaDirsByRoot,
 						Game:                 *game,
@@ -521,15 +569,17 @@ outer:
 					continue
 				}
 
-				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved)
+				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved, system.Extensions)
 				if selection.media.DBID == 0 {
 					log.Debug().
 						Str("system", system.ID).
 						Str("slug", pf.Slug).
 						Int64("mediaTitleDBID", title.DBID).
-						Msg("gamelistxml: slug matched title but no media row found, skipping")
+						Msg("gamelistxml: slug matched title but no compatible media row found, skipping")
 					unmatchedRecords++
-					delete(indexes.TitlesBySlug, pf.Slug)
+					if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
+						delete(indexes.TitlesBySlug, pf.Slug)
+					}
 					continue
 				}
 
@@ -545,6 +595,7 @@ outer:
 				}
 				records = append(records, &GamelistRecord{
 					SystemRootPath:       file.RootPath,
+					ROMRootPath:          romRoot,
 					AssetRootPath:        file.AssetRootPath,
 					MediaDirsByRoot:      fileMediaDirsByRoot,
 					Game:                 *game,
@@ -568,6 +619,7 @@ outer:
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
 					SystemRootPath:       file.RootPath,
+					ROMRootPath:          romRoot,
 					AssetRootPath:        file.AssetRootPath,
 					MediaDirsByRoot:      fileMediaDirsByRoot,
 					Game:                 *game,
@@ -600,7 +652,7 @@ outer:
 		// the folder's launch target always wins the row.
 		for i := range file.Folders {
 			folder := &file.Folders[i]
-			resolved := esmedia.ResolvePath(folder.Path, file.RootPath)
+			resolved, romRoot := resolveGamelistROMPath(folder.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -614,6 +666,7 @@ outer:
 			folderMatches++
 			records = append(records, &GamelistRecord{
 				SystemRootPath:       file.RootPath,
+				ROMRootPath:          romRoot,
 				AssetRootPath:        file.AssetRootPath,
 				MediaDirsByRoot:      fileMediaDirsByRoot,
 				Game:                 folderAsGame(folder),
@@ -840,6 +893,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		containerRows := make([]database.Media, 0, len(allMedia))
 		for i := range allMedia {
 			m := &allMedia[i]
+			// Reindexing retains renamed/deleted paths as missing rows. They
+			// must not claim XML entries or make a live slug match ambiguous.
+			if m.IsMissing {
+				continue
+			}
 			media := database.Media{
 				DBID:           m.DBID,
 				MediaTitleDBID: m.MediaTitleDBID,
@@ -858,6 +916,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 		indexes.Containers = container.NewIndex(containerRows)
+		for slug, title := range titlesBySlug {
+			if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
+				delete(titlesBySlug, slug)
+			}
+		}
 
 		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
@@ -1223,6 +1286,12 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
+	if record.ROMRootPath != "" && record.ROMRootPath != record.SystemRootPath {
+		resolved, ok := esmedia.ResolvePathAbs(game.Path, record.SystemRootPath)
+		if ok {
+			fallbackNames = artworkFallbackNames(resolved, record.ROMRootPath)
+		}
+	}
 
 	if game.Desc != "" {
 		titleProps = append(titleProps,
@@ -1404,6 +1473,38 @@ func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string
 	return append(tagInfos, database.TagInfo{Type: tagType, Tag: normalized, Label: label})
 }
 
+// resolveGamelistROMPath allows a gamelist to refer to another configured ROM
+// root of the same system, but never to an arbitrary sibling directory. Asset
+// paths keep their separate policy and remain relative to the gamelist root.
+func resolveGamelistROMPath(esPath, root string, romRoots []string) (path, matchedRoot string) {
+	resolved, ok := esmedia.ResolvePathAbs(esPath, root)
+	if !ok {
+		return "", ""
+	}
+	// Configured roots may nest, so the first container is not necessarily the
+	// right one. The most specific root owns the ROM: artwork fallback names are
+	// relative to it, and an outer root would prefix them with the nested
+	// directory and miss the media/ directory beside the ROM.
+	depth := -1
+	consider := func(candidate string) {
+		if candidate == "" || !esmedia.PathWithinRoot(resolved, candidate) {
+			return
+		}
+		if abs, err := filepath.Abs(candidate); err == nil && len(filepath.Clean(abs)) > depth {
+			depth = len(filepath.Clean(abs))
+			matchedRoot = candidate
+		}
+	}
+	consider(root)
+	for _, romRoot := range romRoots {
+		consider(romRoot)
+	}
+	if matchedRoot == "" {
+		return "", ""
+	}
+	return resolved, matchedRoot
+}
+
 // pathPropFS resolves esPath to an absolute path and returns a MediaProperty
 // for typeTag. When requireExists is true, unresolved and missing paths are
 // skipped so another artwork source can provide the property.
@@ -1561,6 +1662,7 @@ func selectMediaForSlugMatch(
 	indexes loadRecordIndexes,
 	mediaTitleDBID int64,
 	resolved string,
+	systemExtensions []string,
 ) slugMediaSelection {
 	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
@@ -1578,6 +1680,10 @@ func selectMediaForSlugMatch(
 			Msg("gamelistxml: slug match path points at different title, writing title metadata only")
 	}
 
+	if !systemIndexesExtension(systemExtensions, resolved) {
+		return slugMediaSelection{matchKind: matchKind}
+	}
+
 	mediaRows := indexes.MediaByTitleDBID[mediaTitleDBID]
 	if len(mediaRows) == 0 {
 		return slugMediaSelection{matchKind: matchKind}
@@ -1588,6 +1694,25 @@ func selectMediaForSlugMatch(
 	// unsafe to avoid attaching art to the wrong regional variant.
 	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && len(mediaRows) == 1
 	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
+}
+
+// systemIndexesExtension reports whether resolved names a file this system's
+// launchers would index. MiSTer systems share ROM folders with siblings that use
+// a different format — GAMEBOY holds .gb, .gbc and MegaDuck .bin; SMS holds
+// .sms, .gg and .sg; NES holds .nes, .fds and .nsf — so one system's gamelist
+// routinely describes another's ROMs. Those entries must not reach the name
+// based fallback, or the sibling's metadata and artwork land on this system's
+// media row. An exact path match is checked before this and still wins, so a
+// launcher that deliberately indexes several formats is unaffected.
+func systemIndexesExtension(systemExtensions []string, resolved string) bool {
+	if len(systemExtensions) == 0 {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(resolved))
+	if ext == "" {
+		return true
+	}
+	return slices.Contains(systemExtensions, ext)
 }
 
 // containerMediaForDir resolves a directory path to the unscraped media row it
@@ -1930,7 +2055,7 @@ func companionEntriesFromParsed(
 					RequireExistingImage: file.RequireExistingImage,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
-				resolved := esmedia.ResolvePath(game.Path, file.RootPath)
+				resolved, _ := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
 				if resolved == "" {
 					unresolvedChildPaths++
 					continue
