@@ -246,9 +246,14 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 			return &tr.NameMap[i]
 		}
 
-		_, err := systemdefs.LookupSystem(name)
+		// The name map deliberately carries alternate core names such as RA_GBC
+		// and the LLAPI and DB9 variants, which are CORENAME values rather than
+		// system IDs. Validating the core name rejected every one of them, so
+		// the mapped system is what has to resolve.
+		_, err := systemdefs.LookupSystem(mapping.System)
 		if err != nil {
-			log.Error().Msgf("error getting system: %s", err)
+			log.Error().Err(err).Str("core", name).Str("system", mapping.System).
+				Msg("tracker: name map entry does not resolve to a known system")
 			continue
 		}
 
