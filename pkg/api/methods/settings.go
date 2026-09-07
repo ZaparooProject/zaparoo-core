@@ -76,6 +76,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		SystemDefaults:            systemDefaults,
 		ErrorReporting:            env.Config.ErrorReporting(),
 		Encryption:                env.Config.EncryptionEnabled(),
+		BLEEnabled:                env.Config.BLEEnabled(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
@@ -256,6 +257,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.Encryption != nil {
 		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
 		env.Config.SetEncryptionEnabled(*params.Encryption)
+	}
+
+	if params.BLEEnabled != nil {
+		log.Debug().Bool("bleEnabled", *params.BLEEnabled).Msg("updating setting")
+		env.Config.SetBLEEnabled(*params.BLEEnabled)
 	}
 
 	if params.BackupRemoteEnabled != nil {

@@ -28,6 +28,7 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Launch endpoint**: `/l/{zapscript}` - GET-based execution for QR codes
 - **Auth**: API keys via `auth.toml`, anonymous access from localhost
 - **Discovery**: mDNS (`_zaparoo._tcp`)
+- **Bluetooth LE** (Linux, off by default): the same JSON-RPC API and pairing over a GATT service, `pkg/bluetooth` + `pkg/api/ble_*.go`. See the "Bluetooth LE" section of `docs/api/index.md`.
 - **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime, global UI). See `docs/api/notifications.md`.
 - **Full docs**: `docs/api/`
 
@@ -69,4 +70,4 @@ Device profiles are named buckets of preferences and limits, with no passwords o
 
 ## Reader Auto-Detection
 
-11 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, tty2oled
+12 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, operator (MiSTer only), opticaldrive, pn532, rs232barcode, simpleserial, simpleserialble (Linux only, Nordic UART Service over Bluetooth LE, manual configuration only), tty2oled

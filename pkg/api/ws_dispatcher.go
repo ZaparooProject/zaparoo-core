@@ -21,6 +21,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -112,7 +113,7 @@ type wsResponseJob struct {
 type wsSessionDispatcher struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
-	session      *melody.Session
+	session      sessionWriter
 	inputSession platforms.InputSession
 	high         chan *wsRequestJob
 	run          chan *wsRequestJob
@@ -121,7 +122,11 @@ type wsSessionDispatcher struct {
 	low          chan *wsRequestJob
 	responses    chan *wsResponseJob
 	inputDone    chan struct{}
-	closeOnce    sync.Once
+	// maxResponseSize, when positive, replaces any result whose JSON is
+	// larger with JSONRPCErrorResponseTooLarge. Transports with a small
+	// per-message limit set it; WebSocket leaves it at zero.
+	maxResponseSize int
+	closeOnce       sync.Once
 }
 
 func getOrCreateWSDispatcher(
@@ -135,6 +140,19 @@ func getOrCreateWSDispatcher(
 		}
 	}
 
+	d := newSessionDispatcher(parent, session, platform)
+	session.Set(wsDispatcherSessionKey, d)
+	return d
+}
+
+// newSessionDispatcher builds and starts a per-connection dispatcher for any
+// transport that delivers whole messages. The caller owns its lifetime and
+// must call close when the connection ends.
+func newSessionDispatcher(
+	parent context.Context,
+	session sessionWriter,
+	platform platforms.Platform,
+) *wsSessionDispatcher {
 	ctx, cancel := context.WithCancel(parent)
 	var inputSession platforms.InputSession
 	if provider, ok := platform.(platforms.InputSessionProvider); ok {
@@ -153,7 +171,6 @@ func getOrCreateWSDispatcher(
 		responses:    make(chan *wsResponseJob, wsResponseQueueSize),
 		inputDone:    make(chan struct{}),
 	}
-	session.Set(wsDispatcherSessionKey, d)
 	d.start()
 	return d
 }
@@ -452,7 +469,7 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 	if resp.pong {
 		if err := writePong(d.session.Write, resp.cs); err != nil {
 			logWSWriteError(err, "sending pong")
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 		return
 	}
@@ -461,20 +478,61 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 		return
 	}
 
+	d.capResponse(resp)
+
 	if resp.result.Error != nil {
 		if err := sendWSEncryptedError(d.session, resp.cs, resp.result.ID, *resp.result.Error); err != nil {
 			logWSWriteError(err, "error sending error response")
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 	} else {
 		if err := sendWSEncryptedResponse(d.session, resp.cs, resp.result.ID, resp.result.Result); err != nil {
 			logWSWriteError(err, "error sending response")
-			closeMelodySession(d.session)
+			closeSession(d.session)
 		}
 	}
 	if resp.result.AfterWrite != nil {
 		resp.result.AfterWrite()
 	}
+}
+
+// capResponse swaps a response the transport cannot carry for an error
+// that says so, sized against the plaintext JSON since encryption happens
+// later. Error responses are measured too: a message that echoes a large
+// request can be just as big.
+func (d *wsSessionDispatcher) capResponse(resp *wsResponseJob) {
+	if d.maxResponseSize <= 0 {
+		return
+	}
+	var (
+		data []byte
+		err  error
+	)
+	if resp.result.Error != nil {
+		data, err = json.Marshal(models.ResponseErrorObject{
+			JSONRPC: "2.0",
+			ID:      resp.result.ID,
+			Error:   resp.result.Error,
+		})
+	} else {
+		data, err = json.Marshal(models.ResponseObject{
+			JSONRPC: "2.0",
+			ID:      resp.result.ID,
+			Result:  resp.result.Result,
+		})
+	}
+	if err != nil || len(data) <= d.maxResponseSize {
+		return
+	}
+	log.Warn().
+		Str("method", resp.method).
+		Int("responseBytes", len(data)).
+		Int("limit", d.maxResponseSize).
+		Msg("response exceeds transport limit, replacing with error")
+	tooLarge := JSONRPCErrorResponseTooLarge
+	tooLarge.Data = map[string]any{"limit": d.maxResponseSize, "size": len(data)}
+	resp.result.Result = nil
+	resp.result.Error = &tooLarge
 }
 
 func enqueueWSRequest(

@@ -160,6 +160,7 @@ type SettingsResponse struct {
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
 	Encryption                bool               `json:"encryption"`
+	BLEEnabled                bool               `json:"bleEnabled"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
