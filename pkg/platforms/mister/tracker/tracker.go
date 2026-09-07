@@ -553,6 +553,9 @@ func (tr *Tracker) loadGame() {
 	tr.loadGameLocked()
 }
 
+// loadGameLocked resolves the current ACTIVEGAME value to a game and publishes
+// it as the active media, skipping the publish when it names the game already
+// active. Callers hold tr.mu.
 func (tr *Tracker) loadGameLocked() {
 	activeGame, err := tr.activeGame()
 	switch {
