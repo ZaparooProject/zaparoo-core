@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -79,7 +80,7 @@ func TestResolveSystemsFromPlatformCarriesLauncherExtensions(t *testing.T) {
 		},
 	})
 
-	systems, err := resolveSystemsFromPlatform(context.Background(), cfg, pl, db, nil)
+	systems, err := resolveSystemsFromPlatform(context.Background(), cfg, pl, afero.NewOsFs(), db, nil)
 	require.NoError(t, err)
 
 	byID := make(map[string]struct {
