@@ -194,6 +194,7 @@ type MediaDB struct {
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	dbPath                  string
+	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
 	backgroundOpsCount      atomic.Int64
 	vacuumRetryDelay        time.Duration
@@ -296,6 +297,7 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 		clearImagePropertyTagCache()
 		db.utilityTagCacheDirty = false
 	}
+	db.slugCacheState.mu.Lock()
 	switch {
 	case scope.PreserveSlugSearchCache:
 		// An indexing run publishes each system's new entries as it commits
@@ -320,6 +322,15 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	default:
 		db.slugSearchCache.Store(nil)
 	}
+
+	if scope.PreserveSlugSearchCache {
+		// A recovery scan already in flight must not publish across a commit,
+		// even though indexing deliberately keeps last-good coverage in place.
+		db.slugCacheState.generation++
+	} else {
+		db.slugCacheInvalidatedLocked()
+	}
+	db.slugCacheState.mu.Unlock()
 
 	// MediaCountCache: always nuke everything (queries are too complex to selectively invalidate)
 	if err := db.InvalidateCountCache(); err != nil {
@@ -467,8 +478,11 @@ func shouldCheckpointAfterCommit(mode database.WALCheckpointMode) bool {
 }
 
 func (db *MediaDB) DropSlugSearchCacheForSystems(systemIDs []string) {
+	db.slugCacheState.mu.Lock()
+	defer db.slugCacheState.mu.Unlock()
 	if cache := db.slugSearchCache.Load(); cache != nil {
 		db.slugSearchCache.Store(cache.withoutSystems(systemIDs))
+		db.slugCacheInvalidatedLocked()
 	}
 }
 
@@ -548,7 +562,7 @@ func (db *MediaDB) Open() error {
 	// happen to equal baseMaxOpenConns: an idle cap below the open cap lets the
 	// pool recycle connections and lose their pragmas. See SetIndexingConnBoost.
 	sqlInstance.SetMaxIdleConns(baseMaxOpenConns)
-	db.sql.Store(sqlInstance)
+	db.resetSlugCacheSource(sqlInstance)
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
 			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
@@ -1635,7 +1649,10 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// same generation value, so leaving generation-zero files behind can make stale
 	// title candidates look valid even though their SQL rows no longer exist.
 	db.inMemoryTagCache.Store(nil)
+	db.slugCacheState.mu.Lock()
 	db.slugSearchCache.Store(nil)
+	db.slugCacheState.generation++
+	db.slugCacheState.mu.Unlock()
 	cacheErr := errors.Join(
 		removePersistedCacheFile(db.tagCachePath(), tagCacheKind),
 		removePersistedCacheFile(db.slugSearchCachePath(), slugSearchCacheKind),
@@ -2013,6 +2030,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 }
 
 func (db *MediaDB) Close() error {
+	db.stopSlugCacheRecovery(true)
 	sqlDB := db.sql.Load()
 	if sqlDB == nil {
 		return nil
@@ -2075,7 +2093,8 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
 // This method should only be used in tests to set up in-memory databases.
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
-	db.sql.Store(sqlDB)
+	db.stopSlugCacheRecovery(true)
+	db.resetSlugCacheSource(sqlDB)
 	clearUtilityTagCache()
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
@@ -4812,6 +4831,7 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 // This should be called before closing the database to ensure clean shutdown.
 func (db *MediaDB) WaitForBackgroundOperations() {
 	db.backgroundOps.Wait()
+	db.waitForSlugCacheRecovery()
 }
 
 // SetIndexingConnBoost widens the connection pool while an index runs (the
@@ -4853,6 +4873,7 @@ func (db *MediaDB) SetIndexingConnBoost(active bool) {
 // BeginRecovery prevents new background operations from registering, then waits
 // for operations already registered to drain. EndRecovery must follow it.
 func (db *MediaDB) BeginRecovery() {
+	db.stopSlugCacheRecovery(false)
 	db.backgroundOpsMu.Lock()
 	db.backgroundOps.Wait()
 }
@@ -4860,6 +4881,10 @@ func (db *MediaDB) BeginRecovery() {
 // EndRecovery allows background operations to register after recovery completes.
 func (db *MediaDB) EndRecovery() {
 	db.backgroundOpsMu.Unlock()
+	db.slugCacheState.mu.Lock()
+	db.slugCacheState.paused = false
+	db.startSlugCacheRecoveryLocked()
+	db.slugCacheState.mu.Unlock()
 }
 
 // TrackBackgroundOperation increments the background operations counter.
@@ -4875,7 +4900,10 @@ func (db *MediaDB) TrackBackgroundOperation() {
 // HasBackgroundOperations reports whether this process currently owns media database
 // background work. Persisted running statuses cannot answer this after a crash.
 func (db *MediaDB) HasBackgroundOperations() bool {
-	return db.backgroundOpsCount.Load() > 0
+	db.slugCacheState.mu.Lock()
+	recovering := db.slugCacheState.worker != nil
+	db.slugCacheState.mu.Unlock()
+	return recovering || db.backgroundOpsCount.Load() > 0
 }
 
 // BackgroundOperationDone decrements the background operations counter.

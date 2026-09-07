@@ -162,6 +162,8 @@ tasks:
           "FuzzEstablishSession ./pkg/api/middleware"
           "FuzzStartSession ./pkg/api"
           "FuzzHandleRun ./pkg/api/methods"
+          "FuzzHandleMediaLookupCandidates ./pkg/api/methods"
+          "FuzzTitleCandidateSimilarityBound ./pkg/database/mediadb"
           "FuzzRPCIDUnmarshalJSON ./pkg/api/models"
           "FuzzMQTTMessageHandler ./pkg/readers/mqtt"
           "FuzzParseMQTTPath ./pkg/readers/mqtt"

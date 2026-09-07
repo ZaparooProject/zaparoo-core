@@ -278,7 +278,7 @@ func TestPersistSlugSearchCache_RemovesStaleFileWhenEmpty(t *testing.T) {
 // TestPersistedSlugSearchCacheMirrorsCacheStruct guards against drift
 // between SlugSearchCache and persistedSlugSearchCache. The persisted
 // struct must hold every in-memory field plus the three header fields —
-// except the transient mid-scan fields, which are never persisted:
+// except derived fields rebuilt on load and transient mid-scan fields:
 // PersistSlugSearchCache refuses caches where hasMidScanState is true.
 // If a field is added to SlugSearchCache but not mirrored here, the
 // round-trip silently drops data.
@@ -288,15 +288,17 @@ func TestPersistedSlugSearchCacheMirrorsCacheStruct(t *testing.T) {
 	persistedT := reflect.TypeOf(persistedSlugSearchCache{})
 	headerT := reflect.TypeOf(persistedHeader{})
 
-	// Mid-scan state with no on-disk representation; each must exist on the
-	// struct so renames keep this list honest.
+	// Runtime state with no on-disk representation; each must exist on the
+	// struct so renames keep this list honest. source is rebound to the live
+	// database incarnation on load, never serialized. candidateBlocks are
+	// derived from slug arrays on load; their round-trip is tested separately.
 	//
 	// derivedFromComplete and droppedSystems describe a cache partway through
 	// an index. PersistSlugSearchCache refuses such a cache (hasMidScanState),
 	// and a cache read back from disk is either complete or rebuilt, so both
 	// are correct at their zero value on load.
 	transientFields := []string{
-		"trigramDeltas", "droppedRanges", "liveEntries",
+		"source", "candidateBlocks", "trigramDeltas", "droppedRanges", "liveEntries",
 		"derivedFromComplete", "droppedSystems",
 	}
 	for _, name := range transientFields {

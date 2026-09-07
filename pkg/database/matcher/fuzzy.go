@@ -29,6 +29,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Shared thresholds keep title discovery and launch resolution aligned.
+const (
+	MinSlugLengthForFuzzy   = 5
+	FuzzyMatchMaxLengthDiff = 2
+	FuzzyMatchMinSimilarity = 0.85
+)
+
 // FuzzyMatch represents a slug that matches the query with a similarity score.
 type FuzzyMatch struct {
 	Slug       string
