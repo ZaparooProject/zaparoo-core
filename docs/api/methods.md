@@ -2503,9 +2503,9 @@ Returns `null` on success.
 }
 ```
 
-##### Background audio example
+##### Slot and arguments example
 
-Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`, and `rewind` controls on the `background` slot. `fast_forward` and `rewind` accept an optional `seconds` argument; default is 10 seconds.
+This request targets the background slot and supplies an action argument. Discover supported actions through `launcherControls`.
 
 ```json
 {
