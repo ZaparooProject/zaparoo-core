@@ -753,6 +753,106 @@ func TestLaunchClosurePreservesExplicitLauncher(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+type normalizedLaunchPlatform struct {
+	*mocks.MockPlatform
+	path string
+}
+
+func (p *normalizedLaunchPlatform) NormalizeLaunchPath(string) string {
+	return p.path
+}
+
+func TestLaunchClosureSkipsNormalizedTargetBeforeEffects(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	path := filepath.Join(t.TempDir(), "game.zip", "game.sfc")
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES"}
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: path}
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			assert.Equal(t, path, target.Path)
+			assert.Equal(t, launcher.ID, target.Launcher.ID)
+			return true
+		},
+		PrepareMediaLaunch: func(platforms.ResolvedLaunch) (bool, error) {
+			t.Fatal("a no-op must not prepare playback or prompt")
+			return false, nil
+		},
+		BeforeExit: func() { t.Fatal("a no-op must not run before_exit") },
+		AcquireLaunch: func() (func(), error) {
+			t.Fatal("a no-op must not acquire the launch guard")
+			return func() {}, nil
+		},
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.ErrorIs(t, launch(launchTarget{path: filepath.Dir(path)}), errMediaLaunchSkipped)
+	pl.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestLaunchClosurePreservesArchiveMediaOverride(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	archive := filepath.Join(root, "game.zip")
+	path := filepath.Join(archive, "game.sfc")
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: path}
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("RootDirs", cfg).Return([]string{root}).Maybe()
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "Default", SystemID: "SNES", Folders: []string{root}, Extensions: []string{".zip"}},
+		{ID: "Override", SystemID: "SNES"},
+	})
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("FindSystemBySystemID", "SNES").
+		Return(database.System{DBID: 10, SystemID: "SNES"}, nil).Once()
+	mediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), archive).
+		Return(&database.Media{DBID: 123, Path: archive}, nil).Once()
+	mediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{TypeTag: launcherOverridePropertyTypeTag(), Text: "Override"}}, nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg, Database: &database.Database{MediaDB: mediaDB},
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			assert.Equal(t, path, target.Path)
+			require.NotNil(t, target.Launcher)
+			assert.Equal(t, "Override", target.Launcher.ID)
+			return true
+		},
+	}
+	launch := getLaunchClosure(pl, &env, false)
+	require.ErrorIs(t, launch(launchTarget{path: archive, resolveMediaByPath: true}), errMediaLaunchSkipped)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestLaunchClosureResolvesDefaultActionBeforeSuppression(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[[launchers.default]]
+launcher = "SNES"
+action = "details"`))
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES"}
+	path := filepath.Join(t.TempDir(), "game.sfc")
+	pl := mocks.NewMockPlatform()
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	pl.On("LaunchMedia", cfg, path, mock.Anything, (*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Action == "details"
+		})).Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			return target.Options == nil || target.Options.Action != "details"
+		},
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.NoError(t, launch(launchTarget{path: path}))
+	pl.AssertExpectations(t)
+}
+
 func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
 	t.Parallel()
 

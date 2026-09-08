@@ -530,6 +530,7 @@ func startService(
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		LaunchGuardCancel:   lgcq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
