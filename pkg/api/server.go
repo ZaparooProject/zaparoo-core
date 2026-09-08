@@ -711,9 +711,10 @@ var mimeFallbacks = map[string]string{
 // Unknown paths fall back to index.html for client-side routing.
 func fsCustom404(root http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
 		upath := r.URL.Path
 
-		f, err := root.Open(upath)
+		f, err := root.Open(upath + ".gz")
 		if err != nil {
 			if os.IsNotExist(err) {
 				serveIndex(w, r, root)
@@ -745,13 +746,16 @@ func fsCustom404(root http.FileSystem) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
-		http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
+		if upath == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		serveCompressedAppContent(w, r, upath, stat, f)
 	})
 }
 
 // serveIndex serves the SPA index.html for client-side routing.
 func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
-	index, err := root.Open("index.html")
+	index, err := root.Open("index.html.gz")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening index.html")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -769,22 +773,22 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
+	serveCompressedAppContent(w, r, "index.html", stat, index)
 }
 
 const errMsgAppNotFound = "Zaparoo App files not found. " +
-	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
+	"Copy the built zaparoo-app files to pkg/assets/_app/dist/ and run task app:compress before building."
 
 // handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
-	appFs, err := fs.Sub(assets.App, "_app/dist")
+	appFs, err := fs.Sub(assets.App, "_app/packed/dist")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening app dist")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
 	}
 
-	if _, err := appFs.Open("index.html"); err != nil {
+	if _, err := fs.Stat(appFs, "index.html.gz"); err != nil {
 		log.Error().Msg("zaparoo-app files not found in embedded filesystem")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return

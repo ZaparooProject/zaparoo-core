@@ -51,6 +51,8 @@ tasks:
       CC: "{{.CC}}"
       CXX: "{{.CXX}}"
     cmds:
+      - task: expr:check-profile
+      - task: app:compress
       - >-
         go build -trimpath
         -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/v2/pkg/config.AppVersion=${APP_VERSION}'
@@ -58,9 +60,27 @@ tasks:
         '{{if not .NO_LIBNFC}}${CGO_LDFLAGS}{{end}}
         {{if not .NO_STATIC}}-static{{end}}'
         -s -w {{.EXTRA_LDFLAGS}}"
-        -tags "netgo,osusergo,sqlite_omit_load_extension{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
+        -tags "netgo,osusergo,sqlite_omit_load_extension,validator_novalidatefn,expr_static_methods{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
         -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
         "./cmd/${PLATFORM}"
+
+  expr:check-profile:
+    desc: Verify Expr method profile matches dependencies and Core environments
+    env:
+      GOOS: '{{OS}}'
+      GOARCH: '{{ARCH}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go run ./scripts/expr-method-profile
+
+  app:compress:
+    desc: Prepare compressed embedded app assets
+    env:
+      GOOS: '{{OS}}'
+      GOARCH: '{{ARCH}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go run ./scripts/compress-app
 
   clean:
     desc: Clean build artifacts (optionally specific platform/arch)
@@ -117,7 +137,8 @@ tasks:
     vars:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go test -race {{.TEST_ARGS}}
+      - task: expr:check-profile
+      - go test -race -tags=validator_novalidatefn,expr_static_methods {{.TEST_ARGS}}
       - |
         if [ '{{.TEST_ARGS}}' = './...' ]; then
           (cd mister && go test -race ./...)
@@ -211,7 +232,7 @@ tasks:
   deadlock:
     desc: Run tests with go-deadlock to detect lock ordering violations
     cmds:
-      - go test -tags=deadlock -race -count=1 ./...
+      - go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./...
 
   mutesting:
     desc: Run mutation testing on a package

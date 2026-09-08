@@ -220,16 +220,22 @@ jobs:
           sarif_file: govulncheck.sarif
           category: govulncheck
 
+      - name: Verify Expr method profile
+        if: matrix.os == 'ubuntu'
+        run: |
+          go run ./scripts/expr-method-profile
+          go test -race -tags=expr_static_methods github.com/expr-lang/expr/internal/staticmethod github.com/ZaparooProject/go-zapscript/...
+
       - name: Run full tests (Windows)
         if: matrix.os == 'windows'
         shell: msys2 {0}
         env:
           GOMAXPROCS: 2
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Run full tests (Unix)
         if: matrix.os != 'windows'
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload rapid failure artifacts
         if: failure()
@@ -241,7 +247,7 @@ jobs:
 
       - name: Run deadlock detection tests
         if: matrix.os == 'ubuntu'
-        run: go test -tags=deadlock -race -count=1 ./...
+        run: go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./...
 
       - name: Upload coverage to Codecov
         # Coverage is tracked per branch, so a release gate's run has nothing to

@@ -43,7 +43,7 @@ func TestFsCustom404(t *testing.T) {
 		"assets/font.woff2": {Data: []byte("WOFF2 binary data")},
 	}
 
-	handler := fsCustom404(http.FS(mockFS))
+	handler := fsCustom404(http.FS(compressAppTestFS(t, mockFS)))
 
 	tests := []struct {
 		name                 string
@@ -175,7 +175,7 @@ func TestFsCustom404_MissingIndex(t *testing.T) {
 		"other.txt": {Data: []byte("not index")},
 	}
 
-	handler := fsCustom404(http.FS(mockFS))
+	handler := fsCustom404(http.FS(compressAppTestFS(t, mockFS)))
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/unknown", http.NoBody)
