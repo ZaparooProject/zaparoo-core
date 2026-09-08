@@ -515,6 +515,10 @@ type Scraper struct {
 	ID                 string
 	Name               string
 	SupportedSystemIDs []string
+	// AutoScrapeLaunchers opts successful index contributions into ordinary
+	// fill-missing jobs. Empty leaves this scraper manual-only.
+	AutoScrapeLaunchers []string
+	SupportsFillMissing bool
 }
 
 // LauncherResolver looks up a launcher by its unique ID. Implementations cover

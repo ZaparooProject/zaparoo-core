@@ -2154,6 +2154,7 @@ func (m *MockMediaDBI) GetScrapingStatus() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+//nolint:gocritic // Implements the existing MediaDBI value-parameter contract.
 func (m *MockMediaDBI) SetScrapingOperation(operation database.ScrapingOperation) error {
 	if !m.hasExpectation("SetScrapingOperation") {
 		return nil

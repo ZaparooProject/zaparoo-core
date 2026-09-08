@@ -53,6 +53,10 @@ type ScrapeOptions struct {
 
 	// Force re-processes records that already have a sentinel tag.
 	Force bool
+
+	// FillMissing revisits records but never replaces existing metadata.
+	// It is mutually exclusive with Force and requires scraper support.
+	FillMissing bool
 }
 
 // ScrapeUpdate is one progress event emitted on the channel returned by Scrape.

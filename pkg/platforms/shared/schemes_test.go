@@ -280,6 +280,7 @@ func TestValidCustomSchemes(t *testing.T) {
 		"flashpoint",
 		"launchbox",
 		"scummvm",
+		"popper",
 		"kodi-movie",
 		"kodi-episode",
 		"kodi-song",

@@ -416,6 +416,13 @@ func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
 	return false
 }
 
+// MatchLauncherFileForScan uses the same matching and exclusion rules as a
+// system scan when identifying one launcher's indexed contribution.
+func (m *LauncherMatcher) MatchLauncherFileForScan(l *platforms.Launcher, path string) bool {
+	normalized := NormalizePathForComparison(path)
+	return m.pathIsLauncher(l, path, strings.ToLower(path), normalized) && !m.pathIsExcludedFromScan(l, normalized)
+}
+
 // MatchSystemFileForScan returns true if path matches a launcher for the given
 // system and is not blocked by that launcher's scan-only exclude patterns.
 func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {

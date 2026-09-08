@@ -1523,7 +1523,71 @@ func TestCheckAndResumeScraping_WriteConflictPreservesDurableOperation(t *testin
 	mockMediaDB.AssertExpectations(t)
 }
 
-func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
+func TestCheckAndResumeScrapingVersionedQueueWaitsForOptimization(t *testing.T) {
+	methods.ClearScrapingStatus()
+	t.Cleanup(methods.ClearScrapingStatus)
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+	cfg, err := testhelpers.NewTestConfig(testhelpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	op := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "local", RunID: "durable", FillMissing: true, Systems: []string{"SNES"},
+	}
+	mdb := testhelpers.NewMockMediaDBI()
+	// Simulate a failed legacy-status update after queue acceptance.
+	mdb.On("GetScrapingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	mdb.On("GetScrapingOperation").Return(op, true, nil).Times(3)
+	mdb.On("GetOptimizationStatus").Return(mediadb.IndexingStatusPending, nil).Once()
+	mdb.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	running := op
+	running.Status = mediadb.IndexingStatusRunning
+	mdb.On("SetScrapingOperation", running).Return(nil).Once()
+	mdb.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mdb.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mdb.On("ClearScrapingOperation").Return(nil).Once()
+	mdb.On("ClearScrapeRunMarkers", mock.Anything, "local", "durable").Return(nil).Once()
+	mdb.On("GetScrapedMediaCount", mock.Anything, "local").Return(0, nil)
+	mdb.On("WALCheckpoint").Return(nil).Once()
+	mdb.On("TrackBackgroundOperation").Return().Once()
+	done := make(chan struct{})
+	mdb.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(done) }).Return().Once()
+	pauser := syncutil.NewPauser()
+	started := false
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", cfg).Return(map[string]platforms.Scraper{"local": {
+		ID: "local", SupportsFillMissing: true,
+		Scrape: func(_ context.Context, _ *config.Instance, _ platforms.Platform, _ afero.Fs,
+			_ *database.Database, opts scraper.ScrapeOptions, _ platforms.ScraperCustomOptions,
+			ch chan<- scraper.ScrapeUpdate,
+		) error {
+			started = true
+			require.Same(t, pauser, opts.Pauser)
+			require.Equal(t, "durable", opts.RunID)
+			require.True(t, opts.FillMissing)
+			ch <- scraper.ScrapeUpdate{Done: true}
+			close(ch)
+			return nil
+		},
+	}})
+	st, _ := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+	db := &database.Database{MediaDB: mdb}
+	checkAndResumeScraping(pl, cfg, db, st, pauser)
+	require.False(t, started)
+	require.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryOptimization)
+	checkAndResumeScraping(pl, cfg, db, st, pauser)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("queued scrape did not drain")
+	}
+	require.True(t, started)
+	require.Eventually(t, func() bool { return !methods.IsScrapingRunning() }, time.Second, time.Millisecond)
+	mdb.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_PersistenceFailurePreservesJob(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	methods.ClearScrapingStatus()
 	fs := testhelpers.NewMemoryFS()
@@ -1532,11 +1596,16 @@ func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) 
 
 	operation := database.ScrapingOperation{ScraperID: "test-scraper"}
 	mockMediaDB := testhelpers.NewMockMediaDBI()
-	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
-	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
-	mockMediaDB.On("SetScrapingOperation", operation).Return(assert.AnError).Once()
-	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
-	mockMediaDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Twice()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Twice()
+	upgraded := operation
+	upgraded.Version, upgraded.Status = 1, mediadb.IndexingStatusRunning
+	mockMediaDB.On("SetScrapingOperation", upgraded).Return(assert.AnError).Once()
+	mockMediaDB.On("ClearScrapingOperation").Return(nil).Maybe()
+	t.Cleanup(func() {
+		mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
+		mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)
+	})
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Scrapers", cfg).Return(map[string]platforms.Scraper{

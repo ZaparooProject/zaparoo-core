@@ -1141,7 +1141,18 @@ func NewNamesIndex(
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
 ) (indexedFiles int, err error) {
+	return NewNamesIndexWithSources(ctx, platform, cfg, systems, fdb, update, pauser, nil)
+}
+
+// NewNamesIndexWithSources reports selected successful launcher contributions
+// without changing the existing filesystem or custom scanner contracts.
+func NewNamesIndexWithSources(
+	ctx context.Context, platform platforms.Platform, cfg *config.Instance,
+	systems []systemdefs.System, fdb *database.Database, update func(IndexStatus),
+	pauser *syncutil.Pauser, sourceOptions *IndexSourceOptions,
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
+	sourceCollector := newIndexSourceCollector(cfg, platform, sourceOptions)
 	indexStartTime := time.Now()
 	logIndexingEnvironment(db, platform)
 	metrics := perfmetrics.NewRecorderForDB(db)
@@ -1607,6 +1618,11 @@ func NewNamesIndex(
 		// then a subset of the library, so the reconcile must not treat
 		// absence from it as evidence media is missing.
 		scanIncomplete := false
+		filesystemIncomplete := false
+		var successfulSources map[string]bool
+		if sourceCollector != nil {
+			successfulSources = make(map[string]bool)
+		}
 
 		log.Info().
 			Str("system", systemID).
@@ -1624,6 +1640,7 @@ func NewNamesIndex(
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
 				scanIncomplete = true
+				filesystemIncomplete = true
 				continue
 			}
 			for _, f := range pathFiles {
@@ -1653,11 +1670,13 @@ func NewNamesIndex(
 			}
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			var scanErr error
+			produced := 0
 			if l.SkipFilesystemScan {
 				// Isolated: scanner gets empty input, results accumulated
 				var independent []platforms.ScanResult
 				independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
 				if scanErr == nil {
+					produced = len(independent)
 					files = append(files, independent...)
 				}
 			} else {
@@ -1667,6 +1686,7 @@ func NewNamesIndex(
 				var piped []platforms.ScanResult
 				piped, scanErr = l.Scanner(ctx, cfg, systemID, files)
 				if scanErr == nil {
+					produced = len(piped)
 					files = piped
 				}
 			}
@@ -1685,6 +1705,9 @@ func NewNamesIndex(
 				continue
 			}
 			scannedLaunchers[l.ID] = true
+			if sourceCollector != nil && produced > 0 {
+				successfulSources[l.ID] = true
+			}
 		}
 
 		// 3. Any-scanners — no SystemID, run for every system.
@@ -1702,6 +1725,9 @@ func NewNamesIndex(
 				continue
 			}
 			files = append(files, results...)
+			if sourceCollector != nil && len(results) > 0 {
+				successfulSources[anyScanners[i].ID] = true
+			}
 		}
 
 		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
@@ -1716,6 +1742,14 @@ func NewNamesIndex(
 		}
 
 		files = coalesceScanResults(systemID, files)
+		if sourceCollector != nil {
+			for i := range sysLaunchers {
+				sourceCollector.record(systemID, files, &sysLaunchers[i], successfulSources, filesystemIncomplete)
+			}
+			for _, launcher := range anyScanners {
+				sourceCollector.record(systemID, files, launcher, successfulSources, filesystemIncomplete)
+			}
+		}
 
 		if len(files) == 0 {
 			log.Debug().Msgf("no files found for system: %s", systemID)
@@ -2330,5 +2364,8 @@ func NewNamesIndex(
 		Dur("elapsed", indexElapsed).
 		Msg("media indexing completed successfully")
 
+	if sourceCollector != nil {
+		sourceOptions.Completed(sourceCollector.sources)
+	}
 	return indexedFiles, nil
 }
