@@ -1484,6 +1484,8 @@ func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) mo
 		coreName := info.ShortName
 		if setName, found := retroAchievementsSetName(l.ID); found {
 			coreName = setName
+		} else if l.ID == hybridDVDCore.LauncherID {
+			coreName = hybridDVDCore.SetName
 		}
 		runtime.MisterCore = &models.MisterCoreInfo{
 			Name:    coreName,
@@ -1745,7 +1747,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 	setCoreAvailability(ls)
 
-	return helpers.CombineLaunchers(cfg, p, ls)
+	return helpers.CombineLaunchers(cfg, p, prioritizeNGPCCore(cfg, ls))
 }
 
 func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {

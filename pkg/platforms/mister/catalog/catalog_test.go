@@ -29,8 +29,8 @@ func TestCatalogDefinitions(t *testing.T) {
 	t.Parallel()
 
 	all := catalog.All()
-	if len(all) != 118 {
-		t.Fatalf("expected 118 systems, got %d", len(all))
+	if len(all) != 120 {
+		t.Fatalf("expected 120 systems, got %d", len(all))
 	}
 	if all[0].ID != "3DO" {
 		t.Fatalf("catalog is not sorted: first ID %q", all[0].ID)
