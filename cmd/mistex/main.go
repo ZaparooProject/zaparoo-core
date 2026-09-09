@@ -173,7 +173,9 @@ func run() error {
 	}
 
 	running, runningErr := svc.Running()
-	if runningErr != nil {
+	// A stale PID file is cleared by Start under the start gate, so it must
+	// not abort auto-start here.
+	if runningErr != nil && !daemon.IsStalePIDConflict(runningErr) {
 		return fmt.Errorf("error checking service status: %w", runningErr)
 	}
 	if !running {
