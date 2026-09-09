@@ -1382,14 +1382,41 @@ func browseSortClause(sortOrder string) string {
 	}
 }
 
+// browseCursorCondition is the keyset predicate for a cursor page, written so
+// the planner can start the index scan at the cursor instead of filtering from
+// the top of the partition.
+//
+// The obvious form is the row-value comparison (expr, m.DBID) > (?, ?), which
+// says exactly the right thing but is not something SQLite turns into an index
+// range: measured against idx_media_browse_sort it plans as
+// (ParentDir=? AND IsMissing=?) and reads the partition from its first row on
+// every page. Paging a folder was therefore quadratic in its size — the last
+// page of a 7,000-file folder scanned all 7,000 index entries to return six
+// rows (#1460).
+//
+// Splitting it into a redundant bound on the ordered column plus the tie-break
+// gives the planner the bounds it needs, and plans as
+// (ParentDir=? AND IsMissing=? AND SortName>?). The two forms select the same
+// rows: expr >= ? admits the cursor's own value, and the disjunction then keeps
+// only rows past it. This is the same reasoning as the redundant range in
+// browseOverlayRouteSort: the bound is implied by the data either way, but only
+// spelled out does the planner see it.
+//
+// The caller binds three values: the sort bound, the sort tie-break, and the
+// last row's DBID.
 func browseCursorCondition(sortOrder string) string {
 	expr := browseSortExpr(sortOrder)
 	switch sortOrder {
 	case "name-desc", "filename-desc", browseSortRankPrefixDesc, browseSortDatePrefixDesc:
-		return ` AND (` + expr + `, m.DBID) < (?, ?)`
+		return ` AND ` + expr + ` <= ? AND (` + expr + ` < ? OR m.DBID < ?)`
 	default:
-		return ` AND (` + expr + `, m.DBID) > (?, ?)`
+		return ` AND ` + expr + ` >= ? AND (` + expr + ` > ? OR m.DBID > ?)`
 	}
+}
+
+// browseCursorArgs are the values browseCursorCondition binds, in order.
+func browseCursorArgs(cursor *database.BrowseCursor) []any {
+	return []any{cursor.SortValue, cursor.SortValue, cursor.LastID}
 }
 
 func resolveBrowseSortMode(ctx context.Context, db sqlQueryable, opts *database.BrowseFilesOptions) string {
@@ -1692,6 +1719,20 @@ func browseOverlayRouteSort(
 	return route
 }
 
+// browseOverlayCursorCondition is browseCursorCondition for a merge branch,
+// where the ordered expression varies per route. Same reason for the redundant
+// bound: a row-value comparison is not turned into an index range, so without
+// it every branch re-read its route from the first row on every page.
+func browseOverlayCursorCondition(orderExpr, cursorOp string) string {
+	bound, tie := ">=", ">"
+	if cursorOp == "<" {
+		bound, tie = "<=", "<"
+	}
+	return `
+			AND ` + orderExpr + ` ` + bound + ` ?
+			AND (` + orderExpr + ` ` + tie + ` ? OR m.DBID ` + tie + ` ?)`
+}
+
 // browseRouteSort is how one route is ordered and seeked within the merge.
 type browseRouteSort struct {
 	cursorValue any
@@ -1740,9 +1781,8 @@ func browseOverlayMergedFilesQuery(
 		args = append(args, mergeArgs...)
 
 		if opts.Cursor != nil {
-			where += `
-			AND (` + route.orderExpr + `, m.DBID) ` + cursorOp + ` (?, ?)`
-			args = append(args, route.cursorValue, opts.Cursor.LastID)
+			where += browseOverlayCursorCondition(route.orderExpr, cursorOp)
+			args = append(args, route.cursorValue, route.cursorValue, opts.Cursor.LastID)
 		}
 		branches[i] = `SELECT * FROM (
 			SELECT m.DBID AS dbid, ` + sortExpr + ` AS sortval
@@ -1812,8 +1852,8 @@ func browseOverlayFilesQuery(
 		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 		WHERE ` + where
 	if opts.Cursor != nil {
-		query += ` AND (` + route.orderExpr + `, m.DBID) ` + cursorOp + ` (?, ?)`
-		args = append(args, route.cursorValue, opts.Cursor.LastID)
+		query += browseOverlayCursorCondition(route.orderExpr, cursorOp)
+		args = append(args, route.cursorValue, route.cursorValue, opts.Cursor.LastID)
 	}
 	query += ` ORDER BY ` + route.orderExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
 	return query, append(args, opts.Limit)
@@ -1866,29 +1906,38 @@ func sqlBrowseOverlayFilesFromMedia(
 	return results, nil
 }
 
-func sqlBrowseFilesFromMedia(
-	ctx context.Context,
-	db sqlQueryable,
-	opts *database.BrowseFilesOptions,
-) ([]database.SearchResultWithCursor, error) {
-	tagPlan := browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags)
+// browseFilesQuery builds the single-directory file-listing statement and its
+// arguments. Separate from the exec so a query-plan test can measure the
+// statement production actually runs rather than a copy of it, matching
+// browseOverlayFilesQuery.
+func browseFilesQuery(
+	opts *database.BrowseFilesOptions, sortMode string, tagPlan browseTagPlan,
+) (query string, args []any) {
 	where, args := browseFilesBaseCondition(opts, tagPlan)
-	sortModeStarted := time.Now()
-	sortMode := resolveBrowseSortMode(ctx, db, opts)
-	sortModeElapsed := time.Since(sortModeStarted)
-	sortExpr := browseSortExpr(sortMode)
-	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` +
-		`mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
+	query = `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` +
+		`mt.DisambiguationTypes, ` + browseSortExpr(sortMode) + ` AS SortValue
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 		WHERE ` + where
 	if opts.Cursor != nil {
 		query += browseCursorCondition(sortMode)
-		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
+		args = append(args, browseCursorArgs(opts.Cursor)...)
 	}
 	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?`
-	args = append(args, opts.Limit)
+	return query, append(args, opts.Limit)
+}
+
+func sqlBrowseFilesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	tagPlan := browsePrefixTagPlan(ctx, db, opts.PathPrefix, opts.Systems, opts.Tags)
+	sortModeStarted := time.Now()
+	sortMode := resolveBrowseSortMode(ctx, db, opts)
+	sortModeElapsed := time.Since(sortModeStarted)
+	query, args := browseFilesQuery(opts, sortMode, tagPlan)
 
 	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, args...)

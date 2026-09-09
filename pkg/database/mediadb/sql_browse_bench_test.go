@@ -219,6 +219,76 @@ func seedBenchCoverFlagsDB(b *testing.B, mediaDB *MediaDB, rows int) []int64 {
 	return mediaIDs
 }
 
+// BenchmarkBrowseFilesDeepPage measures the cost of a page late in a large flat
+// folder against a page at its start.
+//
+// This is the #1460 shape: a system folder holding thousands of files directly,
+// paged a visual page at a time. If the keyset predicate is not something the
+// planner can turn into an index range, a page starts at the top of the folder
+// and filters forward, so the deep page costs proportionally more than the
+// first one and walking the folder is quadratic in its size. The two sub-cases
+// are the same statement over the same data, differing only in how far in the
+// cursor sits, so the ratio between them is the thing to watch.
+func BenchmarkBrowseFilesDeepPage(b *testing.B) {
+	const (
+		rows     = 7000
+		pageSize = 6
+	)
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+
+	// The cursor a client holds at each depth, taken from a real page walk so
+	// the values are the ones production would carry.
+	cursorAt := func(offset int) *database.BrowseCursor {
+		var cursor *database.BrowseCursor
+		for read := 0; read < offset; read += pageSize {
+			page, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+				PathPrefix: parentDir,
+				Cursor:     cursor,
+				Limit:      pageSize,
+				Sort:       "name-asc",
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, page)
+			last := page[len(page)-1]
+			cursor = &database.BrowseCursor{
+				SortValue: last.SortValue,
+				SortMode:  last.SortMode,
+				LastID:    last.MediaID,
+			}
+		}
+		return cursor
+	}
+
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"page_2", pageSize},
+		{"page_1000", rows - 2*pageSize},
+	} {
+		cursor := cursorAt(tc.offset)
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(rows), "folder_files")
+			for b.Loop() {
+				page, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+					PathPrefix: parentDir,
+					Cursor:     cursor,
+					Limit:      pageSize,
+					Sort:       "name-asc",
+				})
+				require.NoError(b, err)
+				require.Len(b, page, pageSize)
+			}
+		})
+	}
+}
+
 // BenchmarkBrowseOverlayFileCount_LargeRoute measures what #1398 paid to count
 // the files in a system's root.
 //
@@ -307,6 +377,75 @@ func BenchmarkBrowseOverlayMerge_TwoRoutes(b *testing.B) {
 			require.Len(b, files, 26)
 		}
 	})
+}
+
+// BenchmarkBrowseOverlayDeepPage is BenchmarkBrowseFilesDeepPage for a merged
+// system root, which is the view a frontend opens a system into and the one
+// #1460 was reported against. Each route seeks separately, so a keyset the
+// planner cannot use as an index range costs the deep page every row of every
+// route before it.
+func BenchmarkBrowseOverlayDeepPage(b *testing.B) {
+	const (
+		rows     = 7000
+		pageSize = 6
+	)
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	large := seedBenchBrowseDB(b, mediaDB, rows, false)
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: large, IncludeDirs: true},
+	}}
+
+	cursorAt := func(offset int) *database.BrowseCursor {
+		var cursor *database.BrowseCursor
+		for read := 0; read < offset; read += pageSize {
+			page, err := sqlBrowseFiles(ctx, sqlDB, &database.BrowseFilesOptions{
+				Overlay: overlay,
+				Cursor:  cursor,
+				Limit:   pageSize,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, page)
+			last := page[len(page)-1]
+			cursor = &database.BrowseCursor{
+				SortValue: last.SortValue,
+				SortMode:  last.SortMode,
+				LastID:    last.MediaID,
+			}
+		}
+		return cursor
+	}
+
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"page_2", pageSize},
+		{"page_1000", rows - 2*pageSize},
+	} {
+		cursor := cursorAt(tc.offset)
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(rows), "route_files")
+			for b.Loop() {
+				page, err := sqlBrowseFiles(ctx, sqlDB, &database.BrowseFilesOptions{
+					Overlay: overlay,
+					Cursor:  cursor,
+					Limit:   pageSize,
+				})
+				require.NoError(b, err)
+				require.Len(b, page, pageSize)
+			}
+		})
+	}
 }
 
 // seedBenchSecondRoute adds a small second route for the same system, so the
