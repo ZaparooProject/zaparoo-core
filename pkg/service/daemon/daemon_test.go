@@ -30,6 +30,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -714,6 +715,12 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 	assert.Contains(t, runningErr.Error(), "does not match the Zaparoo service binary")
 	assert.True(t, pidRunning(process.Process.Pid))
 	assert.FileExists(t, pidFile)
+	// The platform wrappers auto-start on this error instead of aborting, so
+	// Start can clear the stale file. Without this the recovery is unreachable
+	// from the only entry point users have.
+	assert.True(t, IsStalePIDConflict(runningErr))
+	assert.False(t, IsStalePIDConflict(nil))
+	assert.False(t, IsStalePIDConflict(errors.New("some other failure")))
 }
 
 func TestStartRecoversLiveUnrelatedPID(t *testing.T) {
@@ -769,6 +776,34 @@ func TestServiceScriptIdentityRejectsDataArguments(t *testing.T) {
 	assert.True(t, serviceScriptIdentity("/bin/busybox", []byte("sh\x00"+service+"\x00"), dataDir))
 	assert.False(t, serviceScriptIdentity("/bin/tail", []byte("tail\x00"+service+"\x00"), dataDir))
 	assert.False(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00-c\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00-s\x00"+service+"\x00"), dataDir))
+	// A data argument after the script is not identity either.
+	assert.False(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00/opt/other.sh\x00"+service+"\x00"), dataDir))
+}
+
+// The kernel puts a shebang option at argv[1] and the script after it, so an
+// interpreter list that only reads argv[1] reports a live service as foreign
+// and lets Start remove its PID file and start a second one.
+func TestServiceScriptIdentityAcceptsShebangOptionAndBusyboxShells(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	service := filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh")
+
+	// "#!/bin/sh -e" => argv = [sh, -e, <script>, ...]
+	assert.True(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00-e\x00"+service+"\x00-service\x00exec\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00--\x00"+service+"\x00"), dataDir))
+	// Buildroot images resolve /bin/sh to a standalone applet, not to busybox.
+	assert.True(t, serviceScriptIdentity("/bin/ash", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/ksh", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/zsh", []byte("sh\x00"+service+"\x00"), dataDir))
+	// An unrelated interpreter still cannot vouch for the path.
+	assert.False(t, serviceScriptIdentity("/usr/bin/python3", []byte("python3\x00"+service+"\x00"), dataDir))
+	// An empty cmdline (kernel thread) must not be identity.
+	assert.False(t, serviceScriptIdentity("/bin/sh", nil, dataDir))
 }
 
 func TestUnavailableProcessIdentityIsNotPIDConflict(t *testing.T) {

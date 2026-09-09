@@ -233,6 +233,15 @@ func servicePIDConflictError(pid int) error {
 	return &servicePIDMismatchError{pid: pid}
 }
 
+// IsStalePIDConflict reports whether err is the PID-file conflict that Start
+// clears under the start gate. Callers that auto-start the service must treat
+// it as "not running" and let Start recover it, otherwise a reused PID leaves
+// the service unstartable from the wrapper.
+func IsStalePIDConflict(err error) bool {
+	var conflict *servicePIDMismatchError
+	return errors.As(err, &conflict)
+}
+
 // Running returns true if the service is running.
 func (s *Service) Running() (bool, error) {
 	pid, err := s.Pid()
@@ -1342,15 +1351,28 @@ func (s *Service) serviceProcessIdentity(pid int) (bool, error) {
 }
 
 func serviceScriptIdentity(exePath string, cmdline []byte, dataDir string) bool {
-	// A data argument to cat/tail/etc. is not service identity. The supported
-	// shell-backed caches are executed as interpreter argv[1] by the shebang.
+	// A data argument to cat/tail/etc. is not service identity, so only a known
+	// interpreter can vouch for a shell-backed cache.
 	switch filepath.Base(exePath) {
-	case "sh", "bash", "dash", "busybox":
-		args := strings.Split(string(cmdline), "\x00")
-		return len(args) > 1 && pathLooksLikeServiceBinary(args[1], dataDir)
+	case "sh", "bash", "dash", "ash", "busybox", "ksh", "zsh":
 	default:
 		return false
 	}
+	// The kernel places the script after any shebang option, so the interpreted
+	// script is the first argument that is not a flag. Misreading it as foreign
+	// would let Start delete a live service's PID file and start a second one.
+	for _, arg := range strings.Split(string(cmdline), "\x00")[1:] {
+		if arg == "-c" || arg == "-s" {
+			// The program text comes from the next argument or stdin, so a
+			// matching path after this point is data rather than the script.
+			return false
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return pathLooksLikeServiceBinary(arg, dataDir)
+	}
+	return false
 }
 
 func procDir() string {
