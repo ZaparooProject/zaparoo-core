@@ -252,6 +252,12 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			message:  "ZapScript is invalid",
 		},
 		{
+			name:     "unsupported control action",
+			cause:    fmt.Errorf("wrapped: %w", zapscript.ErrUnsupportedControlAction),
+			category: models.ErrorCategoryInvalidScript,
+			message:  "ZapScript is invalid",
+		},
+		{
 			name:     "unknown system",
 			cause:    fmt.Errorf("%w: neo", systemdefs.ErrUnknownSystem),
 			category: models.ErrorCategoryInvalidScript,

@@ -613,6 +613,7 @@ func RunCommand(
 			errors.Is(err, systemdefs.ErrUnknownSystem),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),
+			errors.Is(err, ErrUnsupportedControlAction),
 			errors.Is(err, ErrNoHistory),
 			// Refusals by configuration are the setting working, not a bug.
 			errors.Is(err, ErrExecuteNotAllowed),

@@ -55,6 +55,11 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
 		{name: "invalid script", err: zapscript.ErrInvalidScript, expected: true},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, expected: true},
+		{
+			name: "wrapped unsupported control action",
+			err:  fmt.Errorf("wrapped: %w", zapscript.ErrUnsupportedControlAction), expected: true,
+		},
+		{name: "untyped action error", err: errors.New("not supported by launcher"), expected: false},
 		{name: "command blocked", err: zapscript.ErrCommandBlocked, expected: true},
 		{name: "hook blocked launch", err: state.ErrLaunchBlockedByHook, expected: true},
 		{name: "launch panicked", err: errLaunchPanicked, expected: false},

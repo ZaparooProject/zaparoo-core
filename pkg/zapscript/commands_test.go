@@ -842,6 +842,16 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			level: "warn",
 		},
 		{
+			name:  "unsupported control action remains an error without Sentry reporting",
+			err:   fmt.Errorf("wrapped: %w", ErrUnsupportedControlAction),
+			level: "warn",
+		},
+		{
+			name:  "malformed Kodi response stays reportable",
+			err:   fmt.Errorf("control action stop failed: %w", &json.SyntaxError{}),
+			level: "error",
+		},
+		{
 			name:  "unexpected launch failure still reaches Sentry",
 			err:   assert.AnError,
 			level: "error",

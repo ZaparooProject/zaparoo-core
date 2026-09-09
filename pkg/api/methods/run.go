@@ -255,6 +255,7 @@ func runError(err error) error {
 		return scriptTooLongErr(err)
 	case errors.Is(err, zapscript.ErrInvalidScript),
 		errors.Is(err, zapscript.ErrUnknownCommand),
+		errors.Is(err, zapscript.ErrUnsupportedControlAction),
 		errors.Is(err, systemdefs.ErrUnknownSystem),
 		errors.Is(err, state.ErrInvalidNextAction):
 		return models.CategorizedErr(models.ErrorCategoryInvalidScript,

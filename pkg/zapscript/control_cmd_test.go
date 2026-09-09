@@ -300,8 +300,8 @@ func TestCmdControl_UnknownAction(t *testing.T) {
 	}
 
 	_, err := cmdControl(mockPlatform, env)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not supported by launcher")
+	require.ErrorIs(t, err, ErrUnsupportedControlAction)
+	require.EqualError(t, err, `action "nonexistent_action" not supported by launcher test-launcher`)
 }
 
 func TestCmdControl_NoImplementation(t *testing.T) {
