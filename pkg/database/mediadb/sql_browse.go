@@ -219,6 +219,7 @@ func unregisterCoverAvailabilityCacheOwner(db sqlQueryable) {
 }
 
 func cachedCoverAvailabilityIndex(db sqlQueryable) *coverAvailabilityIndex {
+	db = cacheHandle(db)
 	coverAvailabilityCacheMu.RLock()
 	defer coverAvailabilityCacheMu.RUnlock()
 	entry := coverAvailabilityCacheMap[db]
@@ -229,6 +230,10 @@ func cachedCoverAvailabilityIndex(db sqlQueryable) *coverAvailabilityIndex {
 }
 
 func ensureCoverAvailabilityIndexBuild(db sqlQueryable, imageTagIDs []int64) {
+	// Resolved before anything else: the build runs on a goroutine that outlives
+	// the browse call, so it must hold the pool rather than that call's
+	// connection, which is released as soon as the page is served.
+	db = cacheHandle(db)
 	coverAvailabilityCacheMu.Lock()
 	owner := coverAvailabilityOwnerMap[db]
 	if owner == nil {
@@ -341,6 +346,7 @@ func prefixPolicyCacheKey(pathPrefix string, systems []systemdefs.System) string
 }
 
 func cachedPrefixPolicy(db sqlQueryable, key string) (browseprefix.Policy, bool) {
+	db = cacheHandle(db)
 	prefixPolicyCacheMu.RLock()
 	defer prefixPolicyCacheMu.RUnlock()
 	if prefixPolicyCacheMap == nil {
@@ -351,6 +357,7 @@ func cachedPrefixPolicy(db sqlQueryable, key string) (browseprefix.Policy, bool)
 }
 
 func storePrefixPolicy(db sqlQueryable, key string, policy browseprefix.Policy) {
+	db = cacheHandle(db)
 	prefixPolicyCacheMu.Lock()
 	defer prefixPolicyCacheMu.Unlock()
 	if prefixPolicyCacheMap == nil {
@@ -367,9 +374,12 @@ func storePrefixPolicy(db sqlQueryable, key string, policy browseprefix.Policy) 
 // MediaDB instance (or test mock) has its own cache slot, and
 // clearUtilityTagCache clears all slots when utility tag DBIDs can change.
 func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]database.TagInfo, error) {
+	// Queries stay on the caller's handle so a browse keeps its one connection;
+	// only the cache slot is looked up by pool.
+	cacheKey := cacheHandle(db)
 	utilityTagCacheMu.RLock()
 	if utilityTagCacheMap != nil {
-		if cached, ok := utilityTagCacheMap[db]; ok {
+		if cached, ok := utilityTagCacheMap[cacheKey]; ok {
 			utilityTagCacheMu.RUnlock()
 			return cached, nil
 		}
@@ -405,15 +415,16 @@ func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]dat
 	if utilityTagCacheMap == nil {
 		utilityTagCacheMap = make(map[sqlQueryable]map[int64]database.TagInfo)
 	}
-	utilityTagCacheMap[db] = tagInfoByDBID
+	utilityTagCacheMap[cacheKey] = tagInfoByDBID
 	utilityTagCacheMu.Unlock()
 	return tagInfoByDBID, nil
 }
 
 func resolveImagePropertyTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
+	cacheKey := cacheHandle(db)
 	imagePropertyTagCacheMu.RLock()
 	if imagePropertyTagCacheMap != nil {
-		if cached, ok := imagePropertyTagCacheMap[db]; ok {
+		if cached, ok := imagePropertyTagCacheMap[cacheKey]; ok {
 			imagePropertyTagCacheMu.RUnlock()
 			return cached, nil
 		}
@@ -457,7 +468,7 @@ func resolveImagePropertyTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64
 	if imagePropertyTagCacheMap == nil {
 		imagePropertyTagCacheMap = make(map[sqlQueryable][]int64)
 	}
-	imagePropertyTagCacheMap[db] = tagIDs
+	imagePropertyTagCacheMap[cacheKey] = tagIDs
 	imagePropertyTagCacheMu.Unlock()
 	return tagIDs, nil
 }

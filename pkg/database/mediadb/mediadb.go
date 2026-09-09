@@ -2905,10 +2905,37 @@ var (
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
 	started time.Time
-	conn    *sql.Conn
+	conn    browseConn
 	op      string
 	wait    time.Duration
 	routes  int
+}
+
+// browseConn is the connection a browse runs its statements on, carrying the
+// pool it was taken from.
+//
+// The per-database browse caches (prefix policy, utility tags, image property
+// tags, cover availability) are keyed on the handle a statement runs against
+// and are cleared with the pool handle. A bare *sql.Conn cannot serve as that
+// key: sql.DB.Conn allocates a new one for every acquisition, so each page
+// filed its entry under a connection released microseconds later, every page
+// re-ran the detection the cache exists to avoid, and the clear functions never
+// matched anything. cacheHandle resolves a browse connection back to its pool.
+type browseConn struct {
+	*sql.Conn
+	pool *sql.DB
+}
+
+func (c browseConn) cacheHandle() sqlQueryable { return c.pool }
+
+// cacheHandle returns the handle a per-database cache should be keyed on: the
+// pool behind a browse connection, or the handle itself for callers that
+// already hold a pool or a transaction.
+func cacheHandle(db sqlQueryable) sqlQueryable {
+	if h, ok := db.(interface{ cacheHandle() sqlQueryable }); ok {
+		return h.cacheHandle()
+	}
+	return db
 }
 
 // beginBrowse acquires the request's connection. The caller must always call
@@ -2924,7 +2951,13 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
-	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
+	return &browseCall{
+		conn:    browseConn{Conn: conn, pool: sqlDB},
+		op:      op,
+		routes:  routes,
+		started: started,
+		wait:    wait,
+	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {
