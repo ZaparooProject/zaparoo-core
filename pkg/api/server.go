@@ -713,8 +713,18 @@ func fsCustom404(root http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		upath := r.URL.Path
+		assetPath := strings.TrimPrefix(upath, "/")
+		if assetPath == "" {
+			serveIndex(w, r, root)
+			return
+		}
+		// Confine request-derived names before passing them to any filesystem.
+		if !filepath.IsLocal(assetPath) {
+			http.NotFound(w, r)
+			return
+		}
 
-		f, err := root.Open(upath + ".gz")
+		f, err := root.Open(assetPath + ".gz")
 		if err != nil {
 			if os.IsNotExist(err) {
 				serveIndex(w, r, root)

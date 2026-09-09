@@ -20,11 +20,76 @@
 package main
 
 import (
+	"encoding/json"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateProfileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	root, candidate := t.TempDir(), t.TempDir()
+	source := filepath.Join(candidate, "builtin.go")
+	require.NoError(t, os.WriteFile(source, []byte("package expr\nconst Version = 1\n"), 0o600))
+
+	// Compare the complete reflected inventory with the reviewed manifest, not
+	// only the newly generated output with itself.
+	reviewed, err := os.ReadFile("profile.json")
+	require.NoError(t, err)
+	var expected profile
+	require.NoError(t, json.Unmarshal(reviewed, &expected))
+	expected.ExprSourceSHA256, err = sourceDigest(candidate)
+	require.NoError(t, err)
+	require.NoError(t, generateProfile(false, candidate, root, expected.GoZapScriptVersion))
+
+	manifestPath := filepath.Join(root, "scripts", "expr-method-profile", "profile.json")
+	// #nosec G304 -- Generated artifact inside t.TempDir.
+	manifest, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	var actual profile
+	require.NoError(t, json.Unmarshal(manifest, &actual))
+	require.Equal(t, expected, actual)
+
+	artifacts := make([]string, 1, 3)
+	artifacts[0] = manifestPath
+	for _, name := range []string{"methods_static.go", "upgrade_static_test.go"} {
+		path := filepath.Join(candidate, "internal", "staticmethod", name)
+		_, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.AllErrors)
+		require.NoError(t, parseErr)
+		artifacts = append(artifacts, path)
+	}
+	require.NoError(t, generateProfile(true, candidate, root, expected.GoZapScriptVersion))
+	for _, path := range artifacts {
+		// #nosec G304 -- Generated artifact inside t.TempDir.
+		original, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		require.NoError(t, os.WriteFile(path, []byte("tampered"), 0o600))
+		require.ErrorContains(t, generateProfile(true, candidate, root, expected.GoZapScriptVersion), "profile drift")
+		// #nosec G304 -- Generated artifact inside t.TempDir.
+		unchanged, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		require.Equal(t, "tampered", string(unchanged), "check mode must not repair drift")
+		// #nosec G703 -- Both path and restored artifact belong to this test's temporary directory.
+		require.NoError(t, os.WriteFile(path, original, 0o600))
+	}
+
+	require.ErrorContains(t, generateProfile(true, candidate, root, "changed-version"), "profile drift")
+	require.NoError(t, os.WriteFile(source, []byte("package expr\nconst Version = 2\n"), 0o600))
+	require.ErrorContains(t, generateProfile(true, candidate, root, expected.GoZapScriptVersion), "profile drift")
+}
+
+func TestGenerateProfileRejectsMissingSource(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	err := generateProfile(false, filepath.Join(root, "missing"), root, "test")
+	require.ErrorContains(t, err, "open Expr source root")
+}
 
 func TestEnvironmentGateRejectsUnboundedValues(t *testing.T) {
 	values := []any{

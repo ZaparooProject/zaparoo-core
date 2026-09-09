@@ -85,17 +85,23 @@ func run(check bool, candidate string) error {
 			return errors.New("expr module directory is empty")
 		}
 	}
-	p := profile{GoVersion: runtime.Version()}
+	var zapScriptVersion string
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, dep := range info.Deps {
 			if dep.Path == "github.com/ZaparooProject/go-zapscript" {
-				p.GoZapScriptVersion = dep.Version
+				zapScriptVersion = dep.Version
 			}
 		}
 	}
-	if p.GoZapScriptVersion == "" {
+	if zapScriptVersion == "" {
 		return errors.New("cannot identify go-zapscript version")
 	}
+	return generateProfile(check, candidate, root, zapScriptVersion)
+}
+
+func generateProfile(check bool, candidate, root, zapScriptVersion string) error {
+	p := profile{GoVersion: runtime.Version(), GoZapScriptVersion: zapScriptVersion}
+	var err error
 	p.ExprSourceSHA256, err = sourceDigest(candidate)
 	if err != nil {
 		return err

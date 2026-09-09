@@ -29,6 +29,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFsCustom404RejectsNonLocalPaths(t *testing.T) {
+	t.Parallel()
+
+	root := http.FS(compressAppTestFS(t, fstest.MapFS{
+		"index.html": {Data: []byte("SPA")},
+		"secret":     {Data: []byte("not a traversal target")},
+	}))
+	for _, target := range []string{"/..", "/../secret", "/assets/../../secret", "/%2e%2e/secret", "//secret"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+			fsCustom404(root).ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "not a traversal target")
+		})
+	}
+}
+
 func TestFsCustom404(t *testing.T) {
 	t.Parallel()
 

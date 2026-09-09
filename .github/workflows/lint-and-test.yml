@@ -51,6 +51,7 @@ jobs:
     name: Linux C sanitizers
     permissions:
       contents: read
+      packages: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -63,6 +64,12 @@ jobs:
           cache: true
       - name: Set up Task
         run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # Native archives are rebuilt from this checkout; reuse already published
       # tooling so PR validation does not depend on publishing the new image.
       - name: Pull release toolchain
@@ -521,13 +528,17 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [actionlint, ci, cross-lint, native-pr-tests]
+    needs: [actionlint, c-sanitizers, ci, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
         run: |
           if [ "${{ needs.actionlint.result }}" != "success" ]; then
             echo "CI failed: actionlint=${{ needs.actionlint.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.c-sanitizers.result }}" != "success" ]; then
+            echo "CI failed: c-sanitizers=${{ needs.c-sanitizers.result }}"
             exit 1
           fi
           if [ "${{ needs.ci.result }}" != "success" ]; then
