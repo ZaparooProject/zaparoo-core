@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -87,7 +88,9 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		entries, err = env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
 	}
 	if err != nil {
-		log.Error().Err(err).Bool("distinctMedia", distinctMedia).Msg("error getting media history")
+		if !apidiag.IsContextFailure(env.Context, err) {
+			log.Error().Err(err).Bool("distinctMedia", distinctMedia).Msg("error getting media history")
+		}
 		return nil, fmt.Errorf("error getting media history: %w", err)
 	}
 	queryElapsed := time.Since(queryStarted)

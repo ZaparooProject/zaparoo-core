@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
@@ -2904,11 +2905,12 @@ var (
 // connection for the whole request replaces those with a single wait, and the
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
-	started time.Time
-	conn    *sql.Conn
-	op      string
-	wait    time.Duration
-	routes  int
+	endDiagnostic func()
+	started       time.Time
+	conn          *sql.Conn
+	op            string
+	wait          time.Duration
+	routes        int
 }
 
 // beginBrowse acquires the request's connection. The caller must always call
@@ -2919,15 +2921,21 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 		return nil, ErrNullSQL
 	}
 	started := time.Now()
+	endWait := apidiag.Begin(ctx, apidiag.DatabasePool)
 	conn, err := sqlDB.Conn(ctx)
+	endWait()
 	wait := time.Since(started)
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
-	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
+	return &browseCall{
+		conn: conn, op: op, routes: routes, started: started, wait: wait,
+		endDiagnostic: apidiag.Begin(ctx, apidiag.Database),
+	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {
+	defer c.endDiagnostic()
 	if err := c.conn.Close(); err != nil {
 		log.Warn().Err(err).Str("op", c.op).Msg("failed to release browse connection")
 	}
@@ -3220,6 +3228,8 @@ func (db *MediaDB) SearchMediaWithFilters(
 	ctx context.Context,
 	filters *database.SearchFilters,
 ) ([]database.SearchResultWithCursor, error) {
+	endDiagnostic := apidiag.Begin(ctx, apidiag.Database)
+	defer endDiagnostic()
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
@@ -3428,6 +3438,8 @@ func (db *MediaDB) slugCacheSearch(
 func (db *MediaDB) SearchMediaBySlug(
 	ctx context.Context, systemID string, slug string, tagFilters []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
+	endDiagnostic := apidiag.Begin(ctx, apidiag.Database)
+	defer endDiagnostic()
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}

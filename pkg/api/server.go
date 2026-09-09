@@ -39,6 +39,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -195,6 +196,7 @@ type methodDefinition struct {
 }
 
 type MethodMap struct {
+	timeoutReporter func(apidiag.Report)
 	sync.Map
 }
 
@@ -561,14 +563,23 @@ func handleRequest(
 
 	env.Params = req.Params
 
+	endHandler := apidiag.Begin(env.Context, apidiag.Handler)
+	defer endHandler()
 	resp, err := definition.handler(env)
+	apidiag.RecordError(env.Context, err)
+	endHandler()
 	if err != nil {
+		contextFailure := isAPIContextFailure(env.Context, err)
 		var catErr *models.CategorizedError
 		if errors.As(err, &catErr) {
 			// The producer already logged the cause at the right level; the
 			// wire only gets the safe message and the category.
-			log.Warn().Err(catErr.Err).Str("method", req.Method).
-				Str("category", catErr.Category).Msg("method reported failure")
+			if contextFailure {
+				logAPIContextFailure(env.Context, err, req.Method)
+			} else {
+				log.Warn().Err(catErr.Err).Str("method", req.Method).
+					Str("category", catErr.Category).Msg("method reported failure")
+			}
 			return nil, &models.ErrorObject{
 				Code:    1,
 				Message: catErr.Message,
@@ -577,7 +588,9 @@ func handleRequest(
 		}
 		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
-		if errors.As(err, &quietErr) {
+		if contextFailure {
+			logAPIContextFailure(env.Context, err, req.Method)
+		} else if errors.As(err, &quietErr) {
 			log.Debug().Err(err).Str("method", req.Method).Msg("client error")
 		} else if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
@@ -614,7 +627,7 @@ func logWebSocketTransportTiming(
 }
 
 // sendWSResponse marshals a method result and sends it to the client.
-func sendWSResponse(session *melody.Session, id models.RPCID, result any) error {
+func sendWSResponse(ctx context.Context, session *melody.Session, id models.RPCID, result any) error {
 	logSafeResponse(result)
 
 	resp := models.ResponseObject{
@@ -624,14 +637,17 @@ func sendWSResponse(session *melody.Session, id models.RPCID, result any) error 
 	}
 
 	marshalStarted := time.Now()
-	data, err := json.Marshal(resp)
+	data, err := marshalDiagnosticResponse(ctx, resp)
 	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling response: %w", err)
 	}
 
+	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
+	defer endWrite()
 	writeStarted := time.Now()
 	writeErr := session.Write(data)
+	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "result", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
 	)
@@ -642,7 +658,7 @@ func sendWSResponse(session *melody.Session, id models.RPCID, result any) error 
 }
 
 // sendWSError sends a JSON-RPC error object response to the client.
-func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorObject) error {
+func sendWSError(ctx context.Context, session *melody.Session, id models.RPCID, errObj models.ErrorObject) error {
 	log.Debug().Int("code", errObj.Code).Str("message", errObj.Message).Msg("sending error")
 
 	resp := models.ResponseErrorObject{
@@ -652,14 +668,17 @@ func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorOb
 	}
 
 	marshalStarted := time.Now()
-	data, err := json.Marshal(resp)
+	data, err := marshalDiagnosticResponse(ctx, resp)
 	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling error response: %w", err)
 	}
 
+	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
+	defer endWrite()
 	writeStarted := time.Now()
 	writeErr := session.Write(data)
+	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "error", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
 	)
@@ -1286,7 +1305,7 @@ func handleWSMessage(
 					tracker.RequestEnded()
 				}
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
-				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
+				err := sendWSError(context.Background(), session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
 					logWSWriteError(err, "error sending panic error response")
 				}
@@ -1435,7 +1454,7 @@ func handleWSMessage(
 			log.Warn().Err(err).Msg("failed to queue websocket request")
 			endTrackedRequest()
 			if sendErr := sendWSEncryptedError(
-				session, cs, models.NullRPCID, JSONRPCErrorInternalError,
+				env.Context, session, cs, models.NullRPCID, JSONRPCErrorInternalError,
 			); sendErr != nil {
 				logWSWriteError(sendErr, "error sending queue failure response")
 				closeMelodySession(session)
@@ -1564,13 +1583,14 @@ func writePong(writeFn func([]byte) error, cs *apimiddleware.ClientSession) erro
 // SendEncryptedFrame so concurrent writers cannot reorder counters on the
 // wire.
 func sendWSEncryptedResponse(
+	ctx context.Context,
 	session *melody.Session,
 	cs *apimiddleware.ClientSession,
 	id models.RPCID,
 	result any,
 ) error {
 	if cs == nil {
-		return sendWSResponse(session, id, result)
+		return sendWSResponse(ctx, session, id, result)
 	}
 	resp := models.ResponseObject{
 		JSONRPC: "2.0",
@@ -1578,13 +1598,16 @@ func sendWSEncryptedResponse(
 		Result:  result,
 	}
 	marshalStarted := time.Now()
-	data, err := json.Marshal(resp)
+	data, err := marshalDiagnosticResponse(ctx, resp)
 	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
 	}
+	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
+	defer endWrite()
 	writeStarted := time.Now()
 	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "result", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
 	)
@@ -1599,13 +1622,14 @@ func sendWSEncryptedResponse(
 // the per-session mutex via SendEncryptedFrame so concurrent writers
 // cannot reorder counters on the wire.
 func sendWSEncryptedError(
+	ctx context.Context,
 	session *melody.Session,
 	cs *apimiddleware.ClientSession,
 	id models.RPCID,
 	rpcErr models.ErrorObject,
 ) error {
 	if cs == nil {
-		return sendWSError(session, id, rpcErr)
+		return sendWSError(ctx, session, id, rpcErr)
 	}
 	resp := models.ResponseErrorObject{
 		JSONRPC: "2.0",
@@ -1613,13 +1637,16 @@ func sendWSEncryptedError(
 		Error:   &rpcErr,
 	}
 	marshalStarted := time.Now()
-	data, err := json.Marshal(resp)
+	data, err := marshalDiagnosticResponse(ctx, resp)
 	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal error response: %w", err)
 	}
+	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
+	defer endWrite()
 	writeStarted := time.Now()
 	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "error", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
 	)
@@ -1691,6 +1718,9 @@ func handlePostRequest(
 			stopAppCancel()
 			reqCancel()
 		}()
+		diagnosticEnv := requests.RequestEnv{Database: db, State: st}
+		reqCtx, diagnostics := beginAPIDiagnostics(reqCtx, methodMap, &diagnosticEnv, method, apidiag.HTTP, 0)
+		defer diagnostics.Finish()
 
 		isLocal := apimiddleware.IsLoopbackAddr(r.RemoteAddr)
 		platformID := ""
@@ -1729,6 +1759,8 @@ func handlePostRequest(
 
 		var respBody []byte
 		responseType := "result"
+		endBuild := apidiag.Begin(env.Context, apidiag.ResponseBuild)
+		defer endBuild()
 		marshalStarted := time.Now()
 		if result.Error != nil {
 			responseType = "error"
@@ -1739,7 +1771,10 @@ func handlePostRequest(
 			}
 			respBody, err = json.Marshal(errorResp)
 			if err != nil {
-				log.Error().Err(err).Msg("error marshalling error response")
+				apidiag.RecordError(env.Context, err)
+				if !isAPIContextFailure(env.Context, err) {
+					log.Error().Err(err).Msg("error marshalling error response")
+				}
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
@@ -1751,19 +1786,28 @@ func handlePostRequest(
 			}
 			respBody, err = json.Marshal(resp)
 			if err != nil {
-				log.Error().Err(err).Msg("error marshalling response")
+				apidiag.RecordError(env.Context, err)
+				if !isAPIContextFailure(env.Context, err) {
+					log.Error().Err(err).Msg("error marshalling response")
+				}
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		}
 		marshalDuration := time.Since(marshalStarted)
+		endBuild()
 
+		endWrite := apidiag.Begin(env.Context, apidiag.ResponseWrite)
+		defer endWrite()
 		writeStarted := time.Now()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writtenBytes, writeErr := w.Write(respBody)
 		if writeErr != nil {
-			log.Error().Err(writeErr).Msg("failed to write response")
+			apidiag.RecordError(env.Context, writeErr)
+			if !isAPIContextFailure(env.Context, writeErr) {
+				log.Error().Err(writeErr).Msg("failed to write response")
+			}
 		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -1778,7 +1822,10 @@ func handlePostRequest(
 			Dur("writeDuration", time.Since(writeStarted)).
 			Bool("writeError", writeErr != nil).
 			Msg("http response transport timing")
+		endWrite()
 		if result.AfterWrite != nil {
+			endAfterWrite := apidiag.Begin(env.Context, apidiag.AfterWrite)
+			defer endAfterWrite()
 			result.AfterWrite()
 		}
 	}
