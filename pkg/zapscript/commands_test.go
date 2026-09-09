@@ -21,6 +21,8 @@ package zapscript
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +31,7 @@ import (
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -817,6 +820,52 @@ func TestIsValidCommand(t *testing.T) {
 			t.Parallel()
 			got := IsValidCommand(tt.cmdName)
 			assert.Equal(t, tt.want, got, "IsValidCommand(%q) = %v, want %v", tt.cmdName, got, tt.want)
+		})
+	}
+}
+
+func TestRunCommandSystemErrorReporting(t *testing.T) {
+	// This test replaces the global logger; keep it and its subtests serial.
+	for _, tt := range []struct {
+		err   error
+		name  string
+		level string
+	}{
+		{
+			name:  "unsupported system remains an error without Sentry reporting",
+			err:   fmt.Errorf("failed to lookup system GameCom: %w: GameCom", systemdefs.ErrUnknownSystem),
+			level: "warn",
+		},
+		{
+			name:  "unexpected launch failure still reaches Sentry",
+			err:   assert.AnError,
+			level: "error",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			cfg := &config.Instance{}
+			pl := mocks.NewMockPlatform()
+			pl.On("LaunchSystem", cfg, "GameCom").Return(tt.err).Once()
+
+			_, err := RunCommand(
+				t.Context(), pl, cfg, playlists.PlaylistController{}, tokens.Token{},
+				zapscript.Command{Name: zapscript.ZapScriptCmdLaunchSystem, Args: []string{"GameCom"}},
+				1, 0, nil, RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+				&zapscript.ArgExprEnv{},
+			)
+
+			require.ErrorIs(t, err, tt.err)
+			require.EqualError(t, err, "failed to launch system 'GameCom': mock operation failed: "+tt.err.Error())
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, tt.level, entry["level"])
+			assert.Equal(t, err.Error(), entry["error"])
+			pl.AssertExpectations(t)
 		})
 	}
 }

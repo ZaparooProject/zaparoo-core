@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -372,6 +373,30 @@ func TestGetCore(t *testing.T) {
 			}
 			if got == nil || got.ID != tc.id {
 				t.Fatalf("unexpected core: %#v", got)
+			}
+		})
+	}
+}
+
+func TestUnknownCoreError(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{systemdefs.SystemGameCom, "TotallyUnknown", ""} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			for name, lookup := range map[string]func(string) (*Core, error){
+				"exact":  GetCore,
+				"lookup": LookupCore,
+			} {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					core, err := lookup(id)
+					require.ErrorIs(t, err, systemdefs.ErrUnknownSystem)
+					require.EqualError(t, err, "unknown system: "+id)
+					assert.Nil(t, core)
+				})
 			}
 		})
 	}
