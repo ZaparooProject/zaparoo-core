@@ -637,3 +637,49 @@ func seedBenchBrowseCacheSystems(b *testing.B, mediaDB *MediaDB, systems int) []
 	require.NoError(b, tx.Commit())
 	return systemIDs
 }
+
+// BenchmarkBrowseIndexFacet measures the letter rail on a large flat folder,
+// the shape #1460 reported. The facet reads the whole partition by design, so
+// it is the one browse statement that cannot be made page-sized; what it can
+// avoid is doing that read three times over.
+func BenchmarkBrowseIndexFacet(b *testing.B) {
+	const rows = 7000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	b.Run("single_directory", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "folder_files")
+		for b.Loop() {
+			result, err := sqlBrowseIndex(ctx, sqlDB, &database.BrowseIndexOptions{
+				PathPrefix: parentDir,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, result.Buckets)
+		}
+	})
+
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, sqlDB))
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+
+	b.Run("merged_root", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			result, err := sqlBrowseIndex(ctx, sqlDB, &database.BrowseIndexOptions{
+				Overlay: overlay,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, result.Buckets)
+		}
+	})
+}

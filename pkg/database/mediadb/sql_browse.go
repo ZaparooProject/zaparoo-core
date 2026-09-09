@@ -2914,6 +2914,70 @@ const (
 	browseIndexSchemeNone  = "none"
 )
 
+// browseIndexFold turns an ordered (sortValue, dbid) stream into the
+// first-character facet: one bucket per leading character in sort order, each
+// with its count and the keyset a media.browse cursor seeks to.
+//
+// Both facet statements used to do this in SQL as three passes — a ROW_NUMBER
+// window over the whole partition, a GROUP BY on the folded bucket, and a join
+// back to recover each bucket's first row. None of that buys anything a single
+// ordered read cannot: rows arrive in the order the buckets are wanted, so a
+// bucket's first row is simply the first one seen with that key and its offset
+// is the running position. Dropping them removes the transient b-tree the
+// GROUP BY needed and the second pass over the rows. The facet measured
+// 3.2-4.2s on a 7,000-file folder on MiSTer (#1460).
+//
+// BrowseNameFirstChar folds exactly as browseBucketKeyExpr did in SQL, and is
+// already the twin the letter filter uses, so the facet and the filter still
+// agree about which bucket a row belongs to.
+func browseIndexFold(
+	rows *sql.Rows, sortMode string, desc bool,
+) (database.BrowseIndexResult, error) {
+	result := database.BrowseIndexResult{Scheme: browseIndexSchemeLatin, SortMode: sortMode}
+	bucketIndex := make(map[string]int, browseIndexBucketHint)
+
+	var position int
+	for rows.Next() {
+		var (
+			sortValue string
+			dbid      int64
+		)
+		if err := rows.Scan(&sortValue, &dbid); err != nil {
+			return database.BrowseIndexResult{}, fmt.Errorf("browse index scan: %w", err)
+		}
+		position++
+
+		key := BrowseNameFirstChar(sortValue)
+		if at, seen := bucketIndex[key]; seen {
+			result.Buckets[at].Count++
+			continue
+		}
+		// Nudge the tiebreaker so the strict keyset comparison includes this row:
+		// ascending uses (>) so subtract one; descending uses (<) so add one.
+		cursorID := dbid - 1
+		if desc {
+			cursorID = dbid + 1
+		}
+		bucketIndex[key] = len(result.Buckets)
+		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
+			Key:       key,
+			SortValue: sortValue,
+			LastID:    cursorID,
+			Count:     1,
+			Offset:    position - 1,
+			AtStart:   len(result.Buckets) == 0,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse index rows: %w", err)
+	}
+	result.TotalFiles = position
+	return result, nil
+}
+
+// browseIndexBucketHint is A-Z plus 0-9 plus the symbol bucket.
+const browseIndexBucketHint = 38
+
 // sqlBrowseIndex computes the first-character bucket facet for a browse scope:
 // per-bucket counts plus each bucket's first-row keyset, from which a seek
 // cursor is derived so a media.browse page lands on the bucket's first item.
@@ -2965,28 +3029,16 @@ func sqlBrowseIndex(
 	if len(opts.Systems) > 0 {
 		join = " INNER JOIN Systems s ON m.SystemDBID = s.DBID"
 	}
-	bucketExpr := browseBucketKeyExpr("m.SortName")
-	// The window orders by the browse sort expression, which idx_media_browse_sort
-	// already provides (ParentDir, IsMissing equality then naturally collated
-	// SortName, DBID), so the window needs no sort; only the GROUP BY (folded
-	// bucket, not index order) uses a transient btree. rn gives each row's
-	// position so MIN(rn) per bucket finds the first row, joined back for its keyset.
+	// One ordered read of the partition, folded by browseIndexFold.
+	// idx_media_browse_sort already provides this order (ParentDir and IsMissing
+	// equality, then naturally collated SortName, DBID) and covers both selected
+	// columns, so the scan needs neither a sort nor a table lookup.
 	desc := sortMode == "name-desc"
 
-	query := `WITH ordered AS (
-		SELECT ` + bucketExpr + ` AS bucket,
-			m.SortName AS sortValue,
-			m.DBID AS dbid,
-			ROW_NUMBER() OVER (ORDER BY ` + browseSortClause(sortMode) + `) AS rn
+	query := `SELECT m.SortName, m.DBID
 		FROM Media m` + join + `
 		WHERE ` + where + `
-	), counts AS (
-		SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
-	)
-	SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
-	FROM ordered o
-	INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
-	ORDER BY o.rn`
+		ORDER BY ` + browseSortClause(sortMode)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2994,39 +3046,7 @@ func sqlBrowseIndex(
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := database.BrowseIndexResult{Scheme: browseIndexSchemeLatin, SortMode: sortMode}
-	for rows.Next() {
-		var (
-			bucket    string
-			sortValue string
-			dbid      int64
-			count     int
-			firstRN   int64
-		)
-		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
-			return database.BrowseIndexResult{}, fmt.Errorf("browse index scan: %w", scanErr)
-		}
-		// Nudge the tiebreaker so the strict keyset comparison includes this row:
-		// ascending uses (>) so subtract one; descending uses (<) so add one.
-		cursorID := dbid - 1
-		if desc {
-			cursorID = dbid + 1
-		}
-		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
-			Key:       bucket,
-			SortValue: sortValue,
-			LastID:    cursorID,
-			Count:     count,
-			// rn is 1-based; the bucket's first item is its 0-based file offset.
-			Offset:  int(firstRN - 1),
-			AtStart: len(result.Buckets) == 0,
-		})
-		result.TotalFiles += count
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return database.BrowseIndexResult{}, fmt.Errorf("browse index rows: %w", rowsErr)
-	}
-	return result, nil
+	return browseIndexFold(rows, sortMode, desc)
 }
 
 func sqlBrowseOverlayIndex(
@@ -3071,60 +3091,24 @@ func sqlBrowseOverlayIndex(
 	if desc {
 		direction = "DESC"
 	}
-	bucketExpr := browseBucketKeyExpr("m.SortName")
-	query := browseOverlaySourcesCTE + values + `),
-		ordered AS (
-			SELECT ` + bucketExpr + ` AS bucket,
-				m.SortName AS sortValue,
-				m.DBID AS dbid,
-				ROW_NUMBER() OVER (ORDER BY ` + browseTitleSortExpr() + ` ` + direction +
-		`, m.DBID ` + direction + `) AS rn
-			` + browseOverlayMergeSource + `
-			WHERE ` + where + `
-				AND ` + preferred + `
-				AND ` + browseOverlayShadowedByDirectoryCondition() + `
-		), counts AS (
-			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
-		)
-		SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
-		FROM ordered o
-		INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
-		ORDER BY o.rn`
+	// One ordered read of the merged routes, folded by browseIndexFold. The
+	// merge still has to sort, because no single index spans several routes, but
+	// the window function, the GROUP BY b-tree and the join back to recover each
+	// bucket's first row are gone.
+	query := browseOverlaySourcesCTE + values + `)
+		SELECT m.SortName, m.DBID
+		` + browseOverlayMergeSource + `
+		WHERE ` + where + `
+			AND ` + preferred + `
+			AND ` + browseOverlayShadowedByDirectoryCondition() + `
+		ORDER BY ` + browseTitleSortExpr() + ` ` + direction + `, m.DBID ` + direction
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := database.BrowseIndexResult{
-		Scheme:   browseIndexSchemeLatin,
-		SortMode: opts.Sort,
-	}
-	for rows.Next() {
-		var bucket, sortValue string
-		var dbid, firstRN int64
-		var count int
-		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
-			return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index scan: %w", scanErr)
-		}
-		cursorID := dbid - 1
-		if desc {
-			cursorID = dbid + 1
-		}
-		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
-			Key:       bucket,
-			SortValue: sortValue,
-			LastID:    cursorID,
-			Count:     count,
-			Offset:    int(firstRN - 1),
-			AtStart:   len(result.Buckets) == 0,
-		})
-		result.TotalFiles += count
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index rows: %w", rowsErr)
-	}
-	return result, nil
+	return browseIndexFold(rows, opts.Sort, desc)
 }
 
 func sqlBrowseVirtualSchemes(
