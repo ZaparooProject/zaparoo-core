@@ -224,7 +224,7 @@ func TestHandleMediaBrowse_RootContentsRequiresOneSystem(t *testing.T) {
 func TestHandleMediaBrowse_RejectsRootContentsCursorOutsideContentsView(t *testing.T) {
 	t.Parallel()
 
-	cursor, err := encodeDirCursor("RPGs", 10, 2, browseRootViewContents)
+	cursor, err := encodeDirCursor("RPGs", 10, 2, &browseCursorScope{RootView: browseRootViewContents})
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -390,6 +390,94 @@ func TestHandleMediaBrowse_RootContentsPaginatesDirectories(t *testing.T) {
 	assert.Equal(t, 2, cursor.TotalDirs)
 	assert.Equal(t, 1, cursor.TotalFiles)
 	mockMediaDB.AssertExpectations(t)
+}
+
+// TestHandleMediaBrowse_RootContentsCursorPageSkipsScopeResolution pins that a
+// merged system root resolves its routes once per listing, not once per page.
+//
+// Resolving means discovering every route the system could live under and
+// counting each to drop the empty ones. On the MiSTer that is 21 candidate
+// routes for NES holding three with media, measured at 79ms of a 115ms page
+// when it ran on every page (#1460). The scope cannot change between pages of
+// one listing, so the first page hands it to the rest through the cursor.
+//
+// The second page runs against a mock with no route-resolution stubs at all: if
+// the handler asks for them, the call fails rather than quietly costing a
+// device 79ms a page again.
+func TestHandleMediaBrowse_RootContentsCursorPageSkipsScopeResolution(t *testing.T) {
+	t.Parallel()
+
+	root := browseTestAbsPath("roms")
+	route := filepath.ToSlash(filepath.Join(root, "SNES"))
+
+	newPlatform := func() *mocks.MockPlatform {
+		p := mocks.NewMockPlatform()
+		p.On("SupportedReaders", mock.Anything).Return(nil)
+		p.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+		p.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+			{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+		})
+		return p
+	}
+
+	firstDB := helpers.NewMockMediaDBI()
+	firstDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, true, nil)
+	firstDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	firstDB.On("BrowseRouteCounts", mock.Anything, mock.Anything).
+		Return(map[string]database.BrowseRouteCount{
+			route: {Path: route, FileCount: 4, SystemIDs: []string{"SNES"}},
+		}, nil)
+	firstDB.On("BrowseDirectories", mock.Anything, mock.Anything).
+		Return([]database.BrowseDirectoryResult(nil), nil)
+	firstDB.On("BrowseDirCount", mock.Anything, mock.Anything).Return(0, nil)
+	firstDB.On("BrowseFileCount", mock.Anything, mock.Anything).Return(4, nil)
+	firstDB.On("BrowseFiles", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{
+			{MediaID: 1, SystemID: "SNES", Name: "A", Path: route + "/a.sfc"},
+			{MediaID: 2, SystemID: "SNES", Name: "B", Path: route + "/b.sfc"},
+		}, nil)
+	stubNoSingletonAliases(firstDB, "SNES")
+
+	systems := []string{"SNES"}
+	maxResults := 1
+	result, err := HandleMediaBrowse(newBrowseEnv(t, firstDB, newPlatform(), models.BrowseParams{
+		Systems:    &systems,
+		RootView:   stringPtr(browseRootViewContents),
+		MaxResults: &maxResults,
+	}))
+	require.NoError(t, err)
+	first, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.NotNil(t, first.Pagination)
+	require.NotNil(t, first.Pagination.NextCursor)
+
+	decoded, err := decodeBrowseCursor(*first.Pagination.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+	require.Len(t, decoded.Sources, 1,
+		"the first page must carry the routes it resolved forward in its cursor")
+	assert.Equal(t, route+"/", decoded.Sources[0].PathPrefix)
+
+	secondDB := helpers.NewMockMediaDBI()
+	secondDB.On("BrowseFiles", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{
+			{MediaID: 3, SystemID: "SNES", Name: "C", Path: route + "/c.sfc"},
+		}, nil)
+	stubNoSingletonAliases(secondDB, "SNES")
+
+	_, err = HandleMediaBrowse(newBrowseEnv(t, secondDB, newPlatform(), models.BrowseParams{
+		Systems:    &systems,
+		RootView:   stringPtr(browseRootViewContents),
+		MaxResults: &maxResults,
+		Cursor:     first.Pagination.NextCursor,
+	}))
+	require.NoError(t, err)
+
+	secondDB.AssertNotCalled(t, "BrowseSystemRootCandidates", mock.Anything, mock.Anything)
+	secondDB.AssertNotCalled(t, "BrowseRouteCounts", mock.Anything, mock.Anything)
+	secondDB.AssertNotCalled(t, "BrowseVirtualSchemes", mock.Anything, mock.Anything)
 }
 
 func TestHandleMediaBrowse_RootContentsTransitionsFromDirectoriesToFiles(t *testing.T) {
@@ -2018,7 +2106,7 @@ func TestHandleMediaBrowse_DirPaginationCursorAdvance(t *testing.T) {
 		Return([]platforms.Launcher{})
 
 	// A dirs-phase cursor positioned after "Beta" carrying the first-page counts.
-	cursorStr, err := encodeDirCursor("Beta", 5, 10)
+	cursorStr, err := encodeDirCursor("Beta", 5, 10, nil)
 	require.NoError(t, err)
 
 	path := "/roms/SNES"
