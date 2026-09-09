@@ -1204,6 +1204,65 @@ func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
 	return nil
 }
 
+// EnsureBrowseSortIndex brings the secondary indexes browse and search read up
+// to the definitions those queries need, without waiting for an indexing run.
+//
+// The base migration creates the index without the ZAPAROO_TITLE_V1 collation
+// and only CreateSecondaryIndexes replaces it, which runs at the end of a media
+// index and nowhere else. A device that upgrades and does not reindex therefore
+// browses against an index whose ordering disagrees with every browse query, so
+// the planner cannot use it for the ORDER BY at all: it falls back to
+// idx_media_parentdir_system plus a temp b-tree and reads and sorts the whole
+// folder for each page. On a folder of several thousand files that is the
+// difference between a page costing a page and a page costing the folder
+// (#1460).
+//
+// The same reasoning covers an index that is merely absent: the search title
+// sort index was added after these databases were built, and creating it in a
+// migration cost 17.7s of startup on the MiSTer test device with nothing on
+// screen to explain the pause. Both cases are what CreateSecondaryIndexes
+// already resolves — it replaces an index whose definition has moved on and
+// creates any that are missing — so this only decides *when* that runs.
+//
+// Deliberately off the startup path: it is minutes of work on a large library
+// on SD. Skipped while indexing or optimization owns the database, because
+// CreateSecondaryIndexes runs at the end of that work anyway.
+func (db *MediaDB) EnsureBrowseSortIndex() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	if db.HasBackgroundOperations() {
+		log.Debug().Msg("skipping browse index check while background work owns the database")
+		return nil
+	}
+
+	stale, err := db.missingSecondaryIndexes()
+	if err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(stale))
+	for i := range stale {
+		names[i] = stale[i].name
+	}
+	log.Info().Strs("indexes", names).
+		Msg("browse indexes are missing or predate their collation, building them so browsing and search stay fast")
+	// Tracked only around the build: taken any earlier and the
+	// HasBackgroundOperations check above would see this call's own tracking.
+	db.TrackBackgroundOperation()
+	defer db.BackgroundOperationDone()
+	started := time.Now()
+	if err := db.CreateSecondaryIndexes(); err != nil {
+		return fmt.Errorf("building browse indexes: %w", err)
+	}
+	log.Info().Strs("indexes", names).Dur("elapsed", time.Since(started)).
+		Msg("browse indexes built")
+	return nil
+}
+
 // CreateSecondaryIndexes recreates dropped secondary indexes after bulk inserts
 // and self-heals any required indexes missing from existing databases.
 // Called synchronously at the end of indexing so the database is fully
