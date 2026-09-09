@@ -716,23 +716,69 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 	assert.FileExists(t, pidFile)
 }
 
-func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
+func TestStartRecoversLiveUnrelatedPID(t *testing.T) {
 	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
-	settings := svc.pl.Settings()
-	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
 
 	process := exec.CommandContext(context.Background(), "sleep", "1000")
 	require.NoError(t, process.Start())
-	t.Cleanup(func() { _ = process.Process.Kill() })
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
 	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && pid != process.Process.Pid {
+			require.NoError(t, svc.Stop())
+		}
+	})
 
-	err := svc.Start()
+	// Competing ensures must recover the stale file and publish only one PID.
+	const racers = 4
+	results := make(chan error, racers)
+	for range racers {
+		go func() { results <- svc.Start() }()
+	}
+	for range racers {
+		require.NoError(t, <-results)
+	}
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.NotEqual(t, process.Process.Pid, pid)
+	assert.True(t, requireServiceRunning(t, svc))
+	assert.True(t, pidRunning(process.Process.Pid), "unrelated process must not be signaled")
+
+	// An idempotent ensure after recovery must retain the same service.
+	require.NoError(t, svc.Start())
+	nextPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, pid, nextPID)
+}
+
+func TestServiceScriptIdentityRejectsDataArguments(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	service := filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh")
+	assert.True(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00"+service+"\x00-service\x00exec\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/busybox", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/tail", []byte("tail\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00-c\x00"+service+"\x00"), dataDir))
+}
+
+func TestUnavailableProcessIdentityIsNotPIDConflict(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	matches, err := newTestService(t).serviceProcessIdentity(-1)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
-	assert.True(t, pidRunning(process.Process.Pid))
-	assert.FileExists(t, pidFile)
+	assert.False(t, matches)
+	var conflict *servicePIDMismatchError
+	assert.NotErrorAs(t, err, &conflict, "unknown identity must not authorize PID-file removal")
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
