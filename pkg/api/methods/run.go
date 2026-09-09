@@ -234,6 +234,9 @@ func scriptTooLongErr(err error) error {
 // kept for logging and errors.Is.
 func runError(err error) error {
 	switch {
+	case errors.Is(err, platforms.ErrScriptAlreadyRunning):
+		return models.CategorizedErr(models.ErrorCategoryBusy,
+			"a script is already running", err)
 	case errors.Is(err, state.ErrLaunchInProgress),
 		errors.Is(err, state.ErrMediaLaunchInProgress):
 		return models.CategorizedErr(models.ErrorCategoryBusy,

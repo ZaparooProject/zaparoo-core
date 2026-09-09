@@ -103,6 +103,7 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
 		errors.Is(err, zapscript.ErrRemoteSource) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
+		errors.Is(err, platforms.ErrScriptAlreadyRunning) ||
 		errors.Is(err, state.ErrLaunchBlockedByHook) ||
 		errors.Is(err, systemdefs.ErrUnknownSystem) ||
 		errors.Is(err, state.ErrRunZapScriptDisabled)

@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,12 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "file not found", err: zapscript.ErrFileNotFound, expected: true},
 		{name: "no playlist active", err: zapscript.ErrNoPlaylistActive, expected: true},
 		{name: "launch in progress", err: state.ErrLaunchInProgress, expected: true},
+		{name: "script busy", err: platforms.ErrScriptAlreadyRunning, expected: true},
+		{
+			name: "wrapped script busy", err: fmt.Errorf("forward: %w", platforms.ErrScriptAlreadyRunning),
+			expected: true,
+		},
+		{name: "untyped similar error", err: errors.New("a script is already running"), expected: false},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, expected: true},
 		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
 		{name: "invalid script", err: zapscript.ErrInvalidScript, expected: true},

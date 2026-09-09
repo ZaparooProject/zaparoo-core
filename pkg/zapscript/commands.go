@@ -609,6 +609,7 @@ func RunCommand(
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
 		case errors.Is(err, ErrFileNotFound),
+			errors.Is(err, platforms.ErrScriptAlreadyRunning),
 			errors.Is(err, systemdefs.ErrUnknownSystem),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),

@@ -42,6 +42,10 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// ErrScriptAlreadyRunning reports a script launch refused because the platform's
+// script runner is occupied. The caller must still receive the refusal.
+var ErrScriptAlreadyRunning = errors.New("a script is already running")
+
 // ErrStopFailed reports that a stop was attempted and did not succeed: the
 // media is still running. Callers must not treat the media as stopped, and
 // platforms returning it must leave active media in place so Core's state

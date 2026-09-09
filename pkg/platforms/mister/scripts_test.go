@@ -21,6 +21,7 @@ import (
 func restoreScriptTestHooks(t *testing.T) {
 	t.Helper()
 
+	oldCheckScriptActive := checkScriptActive
 	oldGetConsoleManager := getScriptConsoleManager
 	oldRunChvt := runScriptChvt
 	oldWriteLauncher := writeScriptLauncher
@@ -28,6 +29,7 @@ func restoreScriptTestHooks(t *testing.T) {
 	oldRunHiddenCommand := runHiddenScriptCommand
 	oldKillHiddenProcessGroup := killHiddenScriptProcessGroup
 	t.Cleanup(func() {
+		checkScriptActive = oldCheckScriptActive
 		getScriptConsoleManager = oldGetConsoleManager
 		runScriptChvt = oldRunChvt
 		writeScriptLauncher = oldWriteLauncher
@@ -47,6 +49,30 @@ func newTestScript(t *testing.T, name string) string {
 
 func newTestScriptPlatform() *Platform {
 	return &Platform{activeMedia: func() *models.ActiveMedia { return nil }}
+}
+
+func TestRunScriptContext_RejectsBusyRunnerBeforeSideEffects(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hidden=%t", hidden), func(t *testing.T) {
+			restoreScriptTestHooks(t)
+			checkScriptActive = func(context.Context) bool { return true }
+			getScriptConsoleManager = func(*Platform) platforms.ConsoleManager {
+				t.Fatal("busy refusal must not open a console")
+				return nil
+			}
+			startScriptCommand = func(*exec.Cmd) error {
+				t.Fatal("busy refusal must not start a visible script")
+				return nil
+			}
+			runHiddenScriptCommand = func(*exec.Cmd) error {
+				t.Fatal("busy refusal must not start a hidden script")
+				return nil
+			}
+			err := runScriptContext(t.Context(), nil, newTestScript(t, "busy.sh"), "", hidden)
+			require.ErrorIs(t, err, platforms.ErrScriptAlreadyRunning)
+			require.EqualError(t, err, "a script is already running")
+		})
+	}
 }
 
 func TestRunScriptContext_CancelsHiddenScriptWithExecutionContext(t *testing.T) {

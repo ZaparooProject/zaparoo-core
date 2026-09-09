@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -196,6 +197,12 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 		category string
 		message  string
 	}{
+		{
+			name:     "script already running",
+			cause:    fmt.Errorf("failed to forward command: %w", platforms.ErrScriptAlreadyRunning),
+			category: models.ErrorCategoryBusy,
+			message:  "a script is already running",
+		},
 		{
 			name:     "launch in progress",
 			cause:    fmt.Errorf("launch guard: %w", state.ErrLaunchInProgress),

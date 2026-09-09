@@ -837,6 +837,11 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			level: "warn",
 		},
 		{
+			name:  "script busy remains an error without Sentry reporting",
+			err:   fmt.Errorf("forward: %w", platforms.ErrScriptAlreadyRunning),
+			level: "warn",
+		},
+		{
 			name:  "unexpected launch failure still reaches Sentry",
 			err:   assert.AnError,
 			level: "error",
