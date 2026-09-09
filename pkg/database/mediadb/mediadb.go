@@ -579,6 +579,13 @@ func (db *MediaDB) Open() error {
 	}
 
 	registerCoverAvailabilityCacheOwner(sqlInstance, db)
+
+	// A library indexed before AnalyzeApproximate corrected this row still
+	// carries the sampled figure. Fix it on open so the first search after an
+	// upgrade gets the right plan instead of waiting for the next index run.
+	if err = sqlTruthfulMissingIndexStat(db.ctx, sqlInstance); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics on open")
+	}
 	return nil
 }
 
@@ -996,6 +1003,13 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	elapsed := time.Since(started)
 	if err != nil {
 		return fmt.Errorf("failed to run pragma optimize: %w", err)
+	}
+	// The sampled pass misreports the single-valued IsMissing index; see
+	// sqlTruthfulMissingIndexStat for the plan that cost. The refresh itself
+	// succeeded, so a failed touch-up is logged rather than returned: the next
+	// refresh or open repeats it.
+	if err := sqlTruthfulMissingIndexStat(db.ctx, sqlDB); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics")
 	}
 	// Warn rather than debug when it was not a no-op: the whole point of this
 	// telemetry is that a multi-second planner refresh is invisible otherwise.
