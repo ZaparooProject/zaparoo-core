@@ -1,12 +1,18 @@
 version: "3"
 
+vars:
+  # Explicit flags avoid Zig's unoptimized, UBSan-instrumented C defaults.
+  # Keep stack protection and frame pointers in release builds.
+  LINUX_CFLAGS: "-Os -fstack-protector-strong -fno-omit-frame-pointer"
+  LINUX_UBSAN_FLAGS: "-fsanitize=undefined -fno-sanitize-trap=all -fno-sanitize-recover=all -D_DEBUG -UNDEBUG"
+
 tasks:
   setup:
     internal: true
     cmds:
       - task: :docker:build-image
         vars:
-          IMAGE_NAME: zaparoo/zigcc
+          IMAGE_NAME: '{{default "zaparoo/zigcc" .ZIGCC_IMAGE}}'
           DOCKERFILE: "./scripts/zigcc"
 
   build-linux-amd64:
@@ -18,7 +24,7 @@ tasks:
           PLATFORM: '{{default "linux" .PLATFORM}}'
           BUILD_OS: linux
           BUILD_ARCH: amd64
-          IMAGE_NAME: zaparoo/zigcc
+          IMAGE_NAME: '{{default "zaparoo/zigcc" .ZIGCC_IMAGE}}'
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
           CC: "zig cc -target x86_64-linux-gnu"
           CXX: "zig c++ -target x86_64-linux-gnu"
@@ -26,8 +32,35 @@ tasks:
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_TAGS: "nopkgconfig{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include"
+            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} -I/opt/libnfc/x86_64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
+
+  test-linux-amd64-sanitized:
+    internal: true
+    preconditions:
+      - sh: test '{{ARCH}}' = amd64
+        msg: Sanitized Linux tests require an amd64 Docker host.
+    cmds:
+      # Always evaluate the Docker build cache so source/flag changes cannot
+      # silently reuse an older, unsanitized set of native archives.
+      - >-
+        docker build --target native-test -t zaparoo/zigcc-sanitized
+        --build-arg TOOLCHAIN_IMAGE={{default "zaparoo/zigcc" .ZIGCC_IMAGE}}
+        --build-arg TARGETS=x86_64-linux-gnu --build-arg HOSTS=x86_64-linux
+        --build-arg NATIVE_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}}"
+        ./scripts/zigcc
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc-sanitized
+          CC: "zig cc -target x86_64-linux-gnu"
+          CXX: "zig c++ -target x86_64-linux-gnu"
+          EXEC: sh -c 'task test:c-sanitizer-canary && task test:native-sanitized && task test:linux-release'
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_ENABLED=1
+            -e GOFLAGS="-a -buildvcs=false"
+            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} {{.LINUX_UBSAN_FLAGS}} -I/opt/libnfc/x86_64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
+            -e UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 
   build-linux-arm64:
     internal: true
@@ -38,7 +71,7 @@ tasks:
           PLATFORM: '{{default "linux" .PLATFORM}}'
           BUILD_OS: linux
           BUILD_ARCH: arm64
-          IMAGE_NAME: zaparoo/zigcc
+          IMAGE_NAME: '{{default "zaparoo/zigcc" .ZIGCC_IMAGE}}'
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
           CC: "zig cc -target aarch64-linux-gnu"
           CXX: "zig c++ -target aarch64-linux-gnu"
@@ -46,7 +79,7 @@ tasks:
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_TAGS: "nopkgconfig{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-gnu/include"
+            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} -I/opt/libnfc/aarch64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-gnu/lib -L/opt/deps/aarch64-linux-gnu/lib /opt/libnfc/aarch64-linux-gnu/lib/libnfc.a /opt/deps/aarch64-linux-gnu/lib/libusb.a /opt/deps/aarch64-linux-gnu/lib/libusb-1.0.a -ldl"
 
   build-linux-arm:
@@ -58,7 +91,7 @@ tasks:
           PLATFORM: '{{default "linux" .PLATFORM}}'
           BUILD_OS: linux
           BUILD_ARCH: arm
-          IMAGE_NAME: zaparoo/zigcc
+          IMAGE_NAME: '{{default "zaparoo/zigcc" .ZIGCC_IMAGE}}'
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
           CC: "zig cc -target arm-linux-gnueabihf"
           CXX: "zig c++ -target arm-linux-gnueabihf"
@@ -66,7 +99,7 @@ tasks:
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_TAGS: "nopkgconfig{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
+            -e CGO_CFLAGS="{{.LINUX_CFLAGS}} -I/opt/libnfc/arm-linux-gnueabihf/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
 
   build-windows-amd64:
