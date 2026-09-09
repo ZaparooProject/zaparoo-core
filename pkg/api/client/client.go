@@ -65,27 +65,44 @@ func isExpectedWebsocketClose(err error) bool {
 // The returned function must be run even if there is an error so the service
 // isn't left in an unusable state.
 func DisableZapScript(cfg *config.Instance) func() {
-	_, err := LocalClient(
+	return disableZapScriptWithRequest(cfg, LocalClient)
+}
+
+func disableZapScriptWithRequest(
+	cfg *config.Instance,
+	request func(context.Context, *config.Instance, string, string) (string, error),
+) func() {
+	_, err := request(
 		context.Background(),
 		cfg,
 		models.MethodSettingsUpdate,
 		"{\"runZapScript\":false}",
 	)
 	if err != nil {
-		log.Error().Err(err).Msg("error disabling runZapScript")
+		logZapScriptToggleError(err, "error disabling runZapScript")
 		return func() {}
 	}
 
 	return func() {
-		_, err = LocalClient(
+		_, err = request(
 			context.Background(),
 			cfg,
 			models.MethodSettingsUpdate,
 			"{\"runZapScript\":true}",
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("error enabling runZapScript")
+			logZapScriptToggleError(err, "error enabling runZapScript")
 		}
+	}
+}
+
+// A stopped local service is expected when entering or leaving a management UI.
+// Keep authentication, protocol and other transport failures reportable.
+func logZapScriptToggleError(err error, message string) {
+	if isConnectionRefused(err) {
+		log.Warn().Err(err).Msg(message)
+	} else {
+		log.Error().Err(err).Msg(message)
 	}
 }
 

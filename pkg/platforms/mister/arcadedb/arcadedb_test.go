@@ -361,7 +361,9 @@ func TestClient_Read_EmbeddedFallback(t *testing.T) {
 }
 
 func TestClient_Read_InvalidCSV(t *testing.T) {
-	t.Parallel()
+	original := EmbeddedArcadeDB
+	EmbeddedArcadeDB = nil
+	t.Cleanup(func() { EmbeddedArcadeDB = original })
 
 	fs := afero.NewMemMapFs()
 	client := NewClient(nil, fs, "", "")
@@ -371,9 +373,9 @@ func TestClient_Read_InvalidCSV(t *testing.T) {
 
 	entries, err := client.Read("/data/arcade.csv")
 
-	// gocsv parses it but all required fields are empty, so filtering
-	// drops every entry
-	require.NoError(t, err)
+	// Syntactically valid input without usable entries is not a catalog.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no usable entries")
 	assert.Empty(t, entries)
 }
 

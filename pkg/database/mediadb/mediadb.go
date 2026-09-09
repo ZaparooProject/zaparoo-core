@@ -2146,67 +2146,76 @@ func (db *MediaDB) closeAllPreparedStatements() {
 	}
 }
 
-// closeAllBatchInserters closes all batch inserters and sets them to nil.
-func (db *MediaDB) closeAllBatchInserters() error {
+// closeAllBatchInserters releases batches, discarding on abort or after the first
+// flush failure so cleanup cannot write outside an automatically rolled-back transaction.
+func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 	var closeErrs []error
 	if db.batchInsertSystem != nil {
-		if closeErr := db.batchInsertSystem.Close(); closeErr != nil {
+		if closeErr := db.batchInsertSystem.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertSystem")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertSystem: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertSystem = nil
 	}
 	if db.batchInsertMediaTitle != nil {
-		if closeErr := db.batchInsertMediaTitle.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMediaTitle.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTitle")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTitle: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMediaTitle = nil
 	}
 	if db.batchInsertMedia != nil {
-		if closeErr := db.batchInsertMedia.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMedia.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMedia")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMedia: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMedia = nil
 	}
 	if db.batchInsertTag != nil {
-		if closeErr := db.batchInsertTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertTag = nil
 	}
 	if db.batchInsertTagType != nil {
-		if closeErr := db.batchInsertTagType.Close(); closeErr != nil {
+		if closeErr := db.batchInsertTagType.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTagType")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTagType: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertTagType = nil
 	}
 	if db.batchInsertMediaTag != nil {
-		if closeErr := db.batchInsertMediaTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMediaTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMediaTag = nil
 	}
 	if db.batchInsertScanStage != nil {
-		if closeErr := db.batchInsertScanStage.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanStage.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanStage")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanStage: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertScanStage = nil
 	}
 	if db.batchInsertScanTag != nil {
-		if closeErr := db.batchInsertScanTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertScanTag = nil
 	}
 	if db.batchInsertScanProperty != nil {
-		if closeErr := db.batchInsertScanProperty.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanProperty.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanProperty")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanProperty: %w", closeErr))
 		}
@@ -2349,8 +2358,8 @@ func (db *MediaDB) rollbackTransactionLocked() error {
 	}
 
 	db.closeAllPreparedStatements()
-	batchErr := db.closeAllBatchInserters()
-	rbErr := db.tx.Rollback()
+	batchErr := db.closeAllBatchInserters(false)
+	rbErr := rollbackSQLTransaction(db.tx, db.txConn)
 	db.clearTransactionState()
 	connErr := db.releaseWriterConn()
 	return errors.Join(batchErr, rbErr, connErr)
@@ -2634,10 +2643,15 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return nil // No active transaction
 	}
 
+	if sqliteTransactionEnded(db.txConn) {
+		cleanupErr := db.rollbackTransactionLocked()
+		return errors.Join(errors.New("cannot commit: SQLite transaction already ended"), cleanupErr)
+	}
+
 	flushStart := time.Now()
 	// Flush all batch inserters before committing (if any were created).
 	if db.batchInsertSystem != nil {
-		if closeErr := db.closeAllBatchInserters(); closeErr != nil {
+		if closeErr := db.closeAllBatchInserters(true); closeErr != nil {
 			cleanupErr := db.rollbackTransactionLocked()
 			return errors.Join(fmt.Errorf("failed to flush batch inserts: %w", closeErr), cleanupErr)
 		}

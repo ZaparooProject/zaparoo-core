@@ -213,9 +213,11 @@ func (c *Client) Update(arcadeDBPath string) (bool, error) {
 		return false, fmt.Errorf("download failed with status %d", statusCode)
 	}
 
-	err = afero.WriteFile(c.fs, arcadeDBPath, body, 0o600)
-	if err != nil {
-		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
+	if _, err = parseCatalog(bytes.NewReader(body)); err != nil {
+		return false, fmt.Errorf("invalid downloaded arcadedb: %w", err)
+	}
+	if err := c.replaceCatalog(arcadeDBPath, body); err != nil {
+		return false, err
 	}
 
 	return true, nil
@@ -252,13 +254,16 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 		_ = file.Close()
 	}()
 
-	entries := make([]ArcadeDbEntry, 0)
-	err = gocsv.Unmarshal(file, &entries)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
+	entries, parseErr := parseCatalog(file)
+	if parseErr == nil {
+		return entries, nil
 	}
-
-	return filterValidEntries(entries), nil
+	fallback, fallbackErr := c.readEmbedded()
+	if fallbackErr != nil {
+		return nil, errors.Join(parseErr, fallbackErr)
+	}
+	log.Error().Err(parseErr).Msg("invalid cached arcade database; using embedded fallback")
+	return fallback, nil
 }
 
 func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {
