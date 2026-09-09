@@ -74,6 +74,12 @@ func expectBrowseCacheReady(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 }
 
+func expectNoBrowseDirectoryCovers(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("SELECT t.DBID").
+		WithArgs(tags.TagTypeProperty, "image-%").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}))
+}
+
 func TestLogBrowseMediaCountsBySystem_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
@@ -163,6 +169,7 @@ func TestSqlBrowseDirectoriesFromCache_ReturnsSystemCounts(t *testing.T) {
 		WithArgs(int64(10), "SNES").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
 			AddRow("SNES", 42))
+	expectNoBrowseDirectoryCovers(mock)
 
 	snes := systemdefs.System{ID: "SNES"}
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
@@ -190,6 +197,7 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 	mock.ExpectQuery("WITH matched AS").
 		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).AddRow("SNES", 2))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: romsDir,
@@ -238,6 +246,7 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T)
 	mock.ExpectQuery("WITH matched AS").
 		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).AddRow("USA", 273, "PSX"))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: psxDir,
@@ -267,6 +276,7 @@ func TestSqlBrowseDirectoriesFromCache_SingleSystemPaginates(t *testing.T) {
 		WithArgs(int64(10), "SNES", "Beta", 3).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
 			AddRow("Delta", 1).AddRow("Epsilon", 1))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: gamesDir,
@@ -297,6 +307,7 @@ func TestSqlBrowseDirectoriesFromCache_MultiSystemPaginates(t *testing.T) {
 		WithArgs(int64(10), "NES", "SNES", "Beta", 3).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
 			AddRow("Delta", 1, "SNES").AddRow("Epsilon", 1, "NES"))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: gamesDir,
@@ -326,6 +337,7 @@ func TestSqlBrowseDirectories_MediaFallbackPaginates(t *testing.T) {
 		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "Beta", 3).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
 			AddRow("Delta", 2).AddRow("Epsilon", 2))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: romsDir,
@@ -354,6 +366,7 @@ func TestSqlBrowseDirectoriesForSystems_MediaFallbackPaginates(t *testing.T) {
 		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX", "Beta", 3).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
 			AddRow("USA", 273, "PSX").AddRow("World", 10, "PSX"))
+	expectNoBrowseDirectoryCovers(mock)
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
 		PathPrefix: psxDir,

@@ -724,6 +724,42 @@ func TestHandleMediaImage_TimingLog(t *testing.T) {
 	})
 }
 
+func TestHandleMediaImage_DirectoryPathUsesDirectoryArtwork(t *testing.T) {
+	// Not parallel: resets process-wide no-image cache.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	var imageData bytes.Buffer
+	require.NoError(t, png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+	imagePath := filepath.Join(t.TempDir(), "Collection.png")
+	require.NoError(t, os.WriteFile(imagePath, imageData.Bytes(), 0o600))
+	directoryPath := filepath.Join("games", "Collection")
+	system := database.System{DBID: 100, SystemID: "NES", Name: "NES"}
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("FindSystemBySystemID", system.SystemID).Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, directoryPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("GetDirectoryProperties", mock.Anything, system.DBID, directoryPath).
+		Return([]database.MediaProperty{{
+			TypeTag: "property:image-boxart", Text: imagePath,
+		}}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(fmt.Sprintf(
+		`{"system":%q,"path":%q,"imageTypes":["boxart"]}`, system.SystemID, directoryPath,
+	)))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/png", resp.ContentType)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	decoded, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	assert.Equal(t, imageData.Bytes(), decoded)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	fs := afero.NewMemMapFs()

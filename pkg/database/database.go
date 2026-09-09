@@ -296,6 +296,14 @@ type MediaProperty struct {
 	BlobSize    int64
 }
 
+// DirectoryProperty is one file-backed property attached to a stable
+// (SystemDBID, Path) directory identity in MediaDB.
+type DirectoryProperty struct {
+	Path    string
+	TypeTag string
+	Text    string
+}
+
 // MediaBlob is a row from the MediaBlobs content-addressed store.
 // Data is identified by the hex-encoded SHA-256 of its framed content type and bytes.
 type MediaBlob struct {
@@ -400,6 +408,7 @@ type BrowseDirectoryResult struct {
 	Path      string
 	SystemIDs []string
 	FileCount int
+	HasCover  bool
 }
 
 // SingletonContainerAlias is the resolved launch media for a child directory
@@ -1274,6 +1283,12 @@ type MediaDBI interface {
 	// UpsertMediaProperties upserts properties into MediaProperties.
 	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
 	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// ReplaceDirectoryProperties atomically replaces the complete file-backed
+	// property snapshot for one system. It reports whether stored rows changed.
+	ReplaceDirectoryProperties(ctx context.Context, systemDBID int64, props []DirectoryProperty) (bool, error)
+	// GetDirectoryProperties returns properties for one canonical directory path.
+	GetDirectoryProperties(ctx context.Context, systemDBID int64, path string) ([]MediaProperty, error)
 
 	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
 	// writes the sentinel tag last.

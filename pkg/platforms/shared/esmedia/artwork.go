@@ -141,20 +141,27 @@ func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
 	if resolved == "" {
 		return nil
 	}
+	return DirectoryArtworkFallbackNames(filepath.Dir(resolved), systemRootPath)
+}
+
+// DirectoryArtworkFallbackNames returns candidate artwork filenames named
+// after directoryPath. Nested paths are checked before flat names, matching
+// ArtworkFallbackNames and EmulationStation media-folder layouts.
+func DirectoryArtworkFallbackNames(directoryPath, systemRootPath string) []string {
+	resolved := ResolvePath(directoryPath, systemRootPath)
+	if resolved == "" {
+		return nil
+	}
 
 	rootAbs, err := filepath.Abs(systemRootPath)
 	if err != nil {
 		return nil
 	}
-	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	dir, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
+	if err != nil || dir == "." || dir == ".." || strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
 		return nil
 	}
 
-	dir := filepath.Dir(rel)
-	if dir == "." || dir == "" {
-		return nil
-	}
 	base := filepath.Base(dir)
 	if base == "." || base == "" {
 		return nil
@@ -189,7 +196,7 @@ func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
 // folder after the disc image or playlist it stands in for.
 func isDiscFolderExt(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".cue", ".m3u", ".chd", ".iso", ".bin":
+	case ".cue", ".m3u", ".chd", ".iso", ".bin", ".img", ".pbp":
 		return true
 	default:
 		return false
