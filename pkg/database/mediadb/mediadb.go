@@ -1104,6 +1104,13 @@ var secondaryIndexes = []secondaryIndex{
 			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
 		replaceWhenEnsured: true,
 	},
+	{
+		// Serves media.search's name ordering, which is NOCASE on
+		// MediaTitles.Name; see searchSortExpr and the migration that adds it.
+		name: "mediatitles_name_sort_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS mediatitles_name_sort_idx " +
+			"ON MediaTitles(Name COLLATE NOCASE, DBID)",
+	},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
