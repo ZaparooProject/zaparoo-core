@@ -132,6 +132,61 @@ tasks:
       - chmod +x .git/hooks/pre-push
       - echo "Installed .git/hooks/pre-push"
 
+  test:c-sanitizer-canary:
+    desc: Verify the C compiler flags make undefined behavior fail the job
+    cmds:
+      - |
+        set -eu
+        : "${CC:?C compiler required}" "${CGO_CFLAGS:?Sanitizer flags required}"
+        work=$(mktemp -d)
+        trap 'rm -rf "$work"' EXIT
+        $CC $CGO_CFLAGS scripts/testing/c-sanitizer-canary.c -o "$work/probe"
+        if "$work/probe" >"$work/result" 2>&1; then
+          echo 'C sanitizer canary unexpectedly succeeded' >&2
+          exit 1
+        fi
+        if ! grep -q 'signed integer overflow' "$work/result"; then
+          cat "$work/result" >&2
+          exit 1
+        fi
+        echo 'C sanitizer canary correctly rejected signed integer overflow'
+
+  test:native-sanitized:
+    desc: Verify instrumented native archives and exercise hardware-free C APIs
+    cmds:
+      - |
+        set -eu
+        : "${CC:?C compiler required}" "${CGO_CFLAGS:?Sanitizer flags required}"
+        : "${CGO_LDFLAGS:?Native archive paths required}"
+        for archive in /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a; do
+          if ! nm -u "$archive" | grep -q '__ubsan_handle_'; then
+            echo "Native archive lacks UBSan instrumentation: $archive" >&2
+            exit 1
+          fi
+        done
+        work=$(mktemp -d)
+        trap 'rm -rf "$work"' EXIT
+        $CC $CGO_CFLAGS -I/opt/deps/x86_64-linux-gnu/include -I/opt/deps/x86_64-linux-gnu/include/libusb-1.0 \
+          scripts/testing/native-library-smoke.c $CGO_LDFLAGS -lpthread -o "$work/smoke"
+        "$work/smoke"
+
+  test:linux-release:
+    desc: Race-test Core packages reachable from the Linux release entry point
+    vars:
+      RELEASE_TAGS: netgo,osusergo,sqlite_omit_load_extension,validator_novalidatefn,expr_static_methods,nopkgconfig
+    preconditions:
+      - sh: test '{{OS}}' = linux
+        msg: Linux release tests must run in a Linux environment.
+    cmds:
+      - task: expr:check-profile
+      # The release image lacks PC/SC development files. Test the shipping
+      # graph rather than unrelated reader packages excluded by nopkgconfig.
+      - |
+        set -eu
+        deps=$(go list -deps -tags={{.RELEASE_TAGS}} ./cmd/linux)
+        packages=$(printf '%s\n' "$deps" | grep '^github.com/ZaparooProject/zaparoo-core/v2/')
+        go test -race -count=1 -tags={{.RELEASE_TAGS}} $packages
+
   test:
     desc: Run all tests
     vars:

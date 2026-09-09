@@ -47,6 +47,31 @@ jobs:
       - name: Run actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
+  c-sanitizers:
+    name: Linux C sanitizers
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
+      # Native archives are rebuilt from this checkout; reuse already published
+      # tooling so PR validation does not depend on publishing the new image.
+      - name: Pull release toolchain
+        run: |
+          docker pull ghcr.io/zaparooproject/zigcc:1.5.0
+          docker tag ghcr.io/zaparooproject/zigcc:1.5.0 zaparoo/zigcc
+      - name: Build sanitized native libraries and run release tests
+        run: task linux:test-sanitized-amd64
+
   ci:
     name: CI
     # Windows takes 12 to 13 minutes here even with its Go build cache warm, so
