@@ -24,6 +24,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -197,7 +198,7 @@ func launch(
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
 			err := mgls.LaunchBasicFile(path)
 			if err != nil {
-				log.Error().Err(err).Msg("error launching mgl")
+				logMGLLaunchError(err)
 				return nil, fmt.Errorf("failed to launch generic file: %w", err)
 			}
 			err = activegame.SetActiveGame(path)
@@ -723,12 +724,20 @@ func launchGroovyCore() func(*config.Instance, string, *platforms.LaunchOptions)
 	}
 }
 
+func logMGLLaunchError(err error) {
+	if errors.Is(err, zapscript.ErrFileNotFound) {
+		log.Warn().Err(err).Msg("error launching mgl")
+	} else {
+		log.Error().Err(err).Msg("error launching mgl")
+	}
+}
+
 func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
 			err := mgls.LaunchBasicFile(path)
 			if err != nil {
-				log.Error().Err(err).Msg("error launching mgl")
+				logMGLLaunchError(err)
 				return nil, fmt.Errorf("failed to launch generic file: %w", err)
 			}
 			err = activegame.SetActiveGame(path)
