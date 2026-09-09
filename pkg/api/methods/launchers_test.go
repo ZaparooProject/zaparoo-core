@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -95,6 +96,37 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 
 	// Verify Launchers was called (cache was refreshed)
 	mockPlatform.AssertCalled(t, "Launchers", mock.AnythingOfType("*config.Instance"))
+}
+
+func TestHandleLaunchersRefresh_UnknownFieldsAreClientErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, document string
+		clientError    bool
+	}{
+		{name: "unknown fields", document: "[[launchers.custom]]\nexcute='private value'", clientError: true},
+		{name: "syntax error", document: "broken {{{", clientError: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := helpers.NewMemoryFS()
+			configDir := filepath.Join(string(filepath.Separator), "config")
+			dataDir := filepath.Join(string(filepath.Separator), "data")
+			dir := filepath.Join(dataDir, config.LaunchersDir)
+			require.NoError(t, fs.Fs.MkdirAll(configDir, 0o750))
+			require.NoError(t, fs.Fs.MkdirAll(dir, 0o750))
+			cfg, err := helpers.NewTestConfig(fs, configDir)
+			require.NoError(t, err)
+			require.NoError(t, afero.WriteFile(fs.Fs, filepath.Join(dir, "bad.toml"), []byte(tc.document), 0o600))
+			pl := mocks.NewMockPlatform()
+			pl.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+			_, err = HandleLaunchersRefresh(requests.RequestEnv{Context: t.Context(), Config: cfg, Platform: pl})
+			require.EqualError(t, err, "error loading custom launchers")
+			var clientErr *models.ClientError
+			assert.Equal(t, tc.clientError, errors.As(err, &clientErr))
+			pl.AssertNotCalled(t, "Launchers", mock.Anything)
+		})
+	}
 }
 
 func TestHandleLaunchersRefresh_ForcesPlatformDependencies(t *testing.T) {
