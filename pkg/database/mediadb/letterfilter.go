@@ -25,17 +25,33 @@ const browseNameSymbolBucket = "#"
 
 // browseBucketExpr returns the SQL expression that derives a first-character
 // bucket from the given column. It is the single source of truth for the bucket
-// vocabulary on the SQL side, used by BuildLetterFilterSQL. When the sort key
-// changes (e.g. a future normalized SortKey column), this expression and
+// vocabulary on the SQL side: BuildLetterFilterSQL and the media.browse.index
+// facet both go through it so the filter, the facet, and the seek can never
+// disagree about which bucket a title belongs to. When the sort key changes
+// (e.g. a future normalized SortKey column), only this expression and
 // BrowseNameFirstChar need to move together.
 func browseBucketExpr(column string) string {
 	return "UPPER(SUBSTR(" + column + ", 1, 1))"
 }
 
+// browseBucketKeyExpr returns the SQL expression that folds the first character
+// of column into the canonical browse bucket key ("A".."Z", "0-9", "#"). It is
+// the SQL twin of BrowseNameFirstChar: the media.browse.index facet groups by
+// this expression, so the two must stay in lockstep or the facet and the letter
+// filter would disagree about bucket membership. UPPER leaves digits unchanged,
+// so the numeric test works on the upper-cased character.
+func browseBucketKeyExpr(column string) string {
+	c := browseBucketExpr(column)
+	return "CASE" +
+		" WHEN " + c + " BETWEEN 'A' AND 'Z' THEN " + c +
+		" WHEN " + c + " BETWEEN '0' AND '9' THEN '0-9'" +
+		" ELSE '" + browseNameSymbolBucket + "' END"
+}
+
 // BrowseNameFirstChar folds a name into the canonical browse bucket key
-// ("A".."Z", "0-9", "#"). It is the Go twin of the SQL expressions above: the
-// media.browse.index facet folds with this while the letter filter selects with
-// browseBucketExpr, so the two must stay in lockstep or the facet and the
+// ("A".."Z", "0-9", "#"). It is the Go twin of browseBucketKeyExpr, which the
+// media.browse.index facet groups by while the letter filter selects with
+// browseBucketExpr, so all three must stay in lockstep or the facet and the
 // filter would disagree about which bucket a title belongs to.
 func BrowseNameFirstChar(name string) string {
 	if name == "" {
