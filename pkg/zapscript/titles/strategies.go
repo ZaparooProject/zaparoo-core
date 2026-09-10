@@ -336,11 +336,19 @@ func TryAdvancedFuzzyMatching(
 
 	// Build pre-filter query with tolerance thresholds:
 	// ±3 characters for edit distance, ±1 word for token count
+	//
+	// A typo in an abbreviation costs the slug its whole expansion, so the
+	// title being reached for can sit further above the query than any ordinary
+	// typo would put it: "Super Mario Bros." indexes as "supermariobrothers"
+	// while "Super Mario Bross" normalises to "supermariobross". Allow for the
+	// expansion the typo lost, upwards only, and only when a word is one edit
+	// from a known abbreviation. Expansion does not change the word count.
+	expansionSlack := slugs.AbbreviationExpansionSlack(gameName)
 	minLength := metadata.SlugLength - 3
 	if minLength < 0 {
 		minLength = 0
 	}
-	maxLength := metadata.SlugLength + 3
+	maxLength := metadata.SlugLength + 3 + expansionSlack
 	minWordCount := metadata.SlugWordCount - 1
 	if minWordCount < 1 {
 		minWordCount = 1
@@ -354,6 +362,7 @@ func TryAdvancedFuzzyMatching(
 		Int("max_length", maxLength).
 		Int("min_word_count", minWordCount).
 		Int("max_word_count", maxWordCount).
+		Int("expansion_slack", expansionSlack).
 		Msg("using pre-filter for advanced fuzzy matching")
 
 	// Fetch pre-filtered candidates once for all fuzzy strategies
@@ -406,7 +415,7 @@ func TryAdvancedFuzzyMatching(
 	// Sub-strategy 5b: Jaro-Winkler fuzzy matching
 	log.Info().Msg("trying Jaro-Winkler fuzzy matching")
 	fuzzyMatches := matcher.FindFuzzyMatches(
-		slug, candidateSlugs, FuzzyMatchMaxLengthDiff, FuzzyMatchMinSimilarity)
+		slug, candidateSlugs, FuzzyMatchMaxLengthDiff+expansionSlack, FuzzyMatchMinSimilarity)
 
 	if len(fuzzyMatches) > 0 {
 		log.Debug().Int("count", len(fuzzyMatches)).Msg("found Jaro-Winkler candidates")
