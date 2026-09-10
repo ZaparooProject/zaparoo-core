@@ -404,6 +404,33 @@ func TestHandleMediaBrowse_RootContentsPaginatesDirectories(t *testing.T) {
 // The second page runs against a mock with no route-resolution stubs at all: if
 // the handler asks for them, the call fails rather than quietly costing a
 // device 79ms a page again.
+// Cursors are unsigned client input, and every source becomes another branch of
+// the overlay statement while holding one of three browseSem slots.
+func TestDecodeBrowseCursor_RejectsOversizedSourceList(t *testing.T) {
+	t.Parallel()
+
+	build := func(n int) string {
+		sources := make([]browseCursorSource, n)
+		for i := range sources {
+			sources[i] = browseCursorSource{Path: "/roms/SNES/", IncludeDirs: true}
+		}
+		encoded, err := encodeCursorData(&browseCursorData{
+			Phase: browsePhaseFiles, Sources: sources,
+		})
+		require.NoError(t, err)
+		return encoded
+	}
+
+	atLimit, err := decodeBrowseCursor(build(maxBrowseCursorSources))
+	require.NoError(t, err)
+	require.NotNil(t, atLimit)
+	assert.Len(t, atLimit.Sources, maxBrowseCursorSources)
+
+	_, err = decodeBrowseCursor(build(maxBrowseCursorSources + 1))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too many sources")
+}
+
 func TestHandleMediaBrowse_RootContentsCursorPageSkipsScopeResolution(t *testing.T) {
 	t.Parallel()
 
@@ -461,19 +488,30 @@ func TestHandleMediaBrowse_RootContentsCursorPageSkipsScopeResolution(t *testing
 	assert.Equal(t, route+"/", decoded.Sources[0].PathPrefix)
 
 	secondDB := helpers.NewMockMediaDBI()
-	secondDB.On("BrowseFiles", mock.Anything, mock.Anything).
+	// Match on the options so the cursor's resolved scope is what actually
+	// reaches the query, not merely that some BrowseFiles call happened.
+	secondDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return opts != nil && opts.Overlay != nil && len(opts.Overlay.Sources) == 1 &&
+			opts.Overlay.Sources[0].PathPrefix == route+"/" &&
+			opts.Cursor != nil && len(opts.Cursor.Sources) == 1
+	})).
 		Return([]database.SearchResultWithCursor{
 			{MediaID: 3, SystemID: "SNES", Name: "C", Path: route + "/c.sfc"},
-		}, nil)
+		}, nil).Once()
 	stubNoSingletonAliases(secondDB, "SNES")
 
-	_, err = HandleMediaBrowse(newBrowseEnv(t, secondDB, newPlatform(), models.BrowseParams{
+	secondResult, err := HandleMediaBrowse(newBrowseEnv(t, secondDB, newPlatform(), models.BrowseParams{
 		Systems:    &systems,
 		RootView:   stringPtr(browseRootViewContents),
 		MaxResults: &maxResults,
 		Cursor:     first.Pagination.NextCursor,
 	}))
 	require.NoError(t, err)
+	second, ok := secondResult.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, second.Entries, 1, "the cursor page must return the next row, not an empty page")
+	assert.Equal(t, "C", second.Entries[0].Name)
+	secondDB.AssertExpectations(t)
 
 	secondDB.AssertNotCalled(t, "BrowseSystemRootCandidates", mock.Anything, mock.Anything)
 	secondDB.AssertNotCalled(t, "BrowseRouteCounts", mock.Anything, mock.Anything)

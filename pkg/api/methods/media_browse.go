@@ -211,6 +211,13 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 		TotalFiles: data.TotalFiles,
 		TotalDirs:  data.TotalDirs,
 	}
+	if len(data.Sources) > maxBrowseCursorSources {
+		// Cursors are unsigned client input. Each source becomes another
+		// branch of the overlay statement, so an invented list would build a
+		// huge query while holding one of the three browseSem slots. A merged
+		// system root resolves to tens of routes; this is far above that.
+		return nil, models.ClientErrf("cursor carries too many sources: %d", len(data.Sources))
+	}
 	if len(data.Sources) > 0 {
 		decoded.Sources = make([]database.BrowseSource, len(data.Sources))
 		for i := range data.Sources {
@@ -222,6 +229,9 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 	}
 	return decoded, nil
 }
+
+// maxBrowseCursorSources bounds the resolved routes a cursor may carry.
+const maxBrowseCursorSources = 256
 
 // browseSem limits concurrent media.browse requests to avoid saturating SQLite.
 var browseSem = make(chan struct{}, 3)
