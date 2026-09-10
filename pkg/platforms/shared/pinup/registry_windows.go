@@ -22,11 +22,33 @@ package pinup
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 
 	"golang.org/x/sys/windows/registry"
 )
+
+// progIDCLSID reads the ProgID's CLSID, checking the 32-bit view as well as the
+// default one. A 64-bit process sees only the 64-bit view of HKEY_CLASSES_ROOT,
+// so a PinUP Player that registered its COM server 32-bit is invisible here and
+// the LocalServer32 lookup below never gets a CLSID to try.
+func progIDCLSID() string {
+	const path = `PinUpPlayer.PinDisplay\CLSID`
+	for _, access := range []uint32{
+		registry.QUERY_VALUE,
+		registry.QUERY_VALUE | registry.WOW64_32KEY,
+	} {
+		key, err := registry.OpenKey(registry.CLASSES_ROOT, path, access)
+		if err != nil {
+			continue
+		}
+		clsid, _, valErr := key.GetStringValue("")
+		_ = key.Close()
+		if valErr == nil && clsid != "" {
+			return clsid
+		}
+	}
+	return ""
+}
 
 // LocateFromRegistry finds the PinUP System folder through the COM server
 // PinUP Player registers: the PinUpPlayer.PinDisplay ProgID names a CLSID
@@ -34,13 +56,8 @@ import (
 // install. Both the native and the 32-bit (WOW6432Node) views are checked
 // because older PinUP Player builds were 32-bit.
 func LocateFromRegistry() (string, error) {
-	progID, err := registry.OpenKey(registry.CLASSES_ROOT, `PinUpPlayer.PinDisplay\CLSID`, registry.QUERY_VALUE)
-	if err != nil {
-		return "", fmt.Errorf("open PinUpPlayer.PinDisplay CLSID key: %w", err)
-	}
-	clsid, _, err := progID.GetStringValue("")
-	_ = progID.Close()
-	if err != nil || clsid == "" {
+	clsid := progIDCLSID()
+	if clsid == "" {
 		return "", errors.New("PinUpPlayer.PinDisplay has no CLSID")
 	}
 
