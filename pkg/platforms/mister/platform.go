@@ -898,12 +898,16 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	return nil
 }
 
+func (*Platform) NormalizeLaunchPath(path string) string {
+	return checkInZip(path)
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
-	path = checkInZip(path)
+	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
 
 	if launcher == nil {

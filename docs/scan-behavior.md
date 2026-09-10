@@ -11,10 +11,41 @@ When `readers.scan.mode='tap'` (default setting) and a game is launched using a 
 - [ ] Removing the card from the reader won't close the game.
 - [ ] Leaving the card on the reader will have no effect.
 - [ ] Tapping another card to launch a game will start the new game without returning to the core menu.
-- [ ] Tapping the same card will reload the game from the beginning.
+- [ ] Tapping a card whose launch resolves to the game already running leaves that game uninterrupted. This applies to different cards, mappings, and scripts that resolve to the same target, not just repeated scans of one card.
+- [ ] A repeated random or dynamic script still resolves normally; a different target launches, while the current target is a successful no-op.
+- [ ] A skipped launch does not run launch/exit hooks, reset playtime, clear the active playlist, or transfer hold ownership. Other commands on the card still execute.
+- [ ] Scanning a utility card does not reset this protection. After the game stops, tapping its card launches it again.
 - [ ] Tapping a command like `input.coin` will execute the command without interrupting the game.
 - [ ] Exiting the game manually through the internal menu will reset the state, allowing you to tap any card to launch a different game.
 - [ ] Exiting the game manually while the card remains on the reader will not cause the game to relaunch once in the menu.
+
+---
+
+### Restoring restart-on-tap behavior
+
+To allow tap-mode reader scans to restart the current game:
+
+```toml
+[readers.scan]
+allow_relaunch = true
+```
+
+The default is `false`, including when this key is absent from an existing
+configuration. It applies to the token's effective tap mode, including per-reader
+overrides and `#tap`. Hold mode, API/hook launches, automatic playlist progression,
+and audio/video repeat behavior are unchanged. System-only and platform-specific
+commands without a resolved media target also retain their existing behavior.
+Explicit changes of launcher or
+MiSTer `setname`, and non-run actions such as `details`, are not suppressed.
+
+Matching uses resolved launch paths and systems, not display names. Different ROM
+files remain different targets, even when they share a title. MiSTer ZIP launches
+are compared after selecting the contained file.
+
+With launch guard enabled, a single resolved tap-mode launch only asks for
+confirmation if it would change the game. Confirmation resumes the selected
+target without resolving it again. Compound scripts and HTTP(S) ZapLinks retain
+whole-token confirmation before execution.
 
 ---
 
