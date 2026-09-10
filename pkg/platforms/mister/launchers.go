@@ -1093,6 +1093,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		ID:                 "ScummVM",
 		SystemID:           systemdefs.SystemScummVM,
 		Schemes:            []string{shared.SchemeScummVM},
+		Test:               shared.SchemeIDTest(shared.SchemeScummVM),
 		SkipFilesystemScan: true,
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,

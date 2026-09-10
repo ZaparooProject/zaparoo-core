@@ -143,6 +143,7 @@ func NewLutrisLauncher(opts LutrisOptions) platforms.Launcher {
 
 	return platforms.Launcher{
 		ID: "Lutris", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeLutris},
+		Test:      shared.SchemeIDTest(shared.SchemeLutris),
 		Lifecycle: platforms.LifecycleBlocking,
 		Availability: func(*config.Instance) error {
 			_, err := resolve()
