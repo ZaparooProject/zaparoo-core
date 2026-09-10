@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -72,10 +73,15 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 		{SystemID: "NES", Path: ""},
 	}
 
-	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathOne, pathTwo}).Return(
+	// The database holds canonical forward-slash paths, so the lookup is made
+	// in that form whatever form the refs arrived in, and rows come back
+	// under the refs as given.
+	canonicalOne := pathutil.CanonicalMediaPath(pathOne)
+	canonicalTwo := pathutil.CanonicalMediaPath(pathTwo)
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{canonicalOne, canonicalTwo}).Return(
 		[]database.MediaPathID{
-			{SystemID: "NES", Path: pathOne, DBID: 10},
-			{SystemID: "NES", Path: pathTwo, DBID: 11},
+			{SystemID: "NES", Path: canonicalOne, DBID: 10},
+			{SystemID: "NES", Path: canonicalTwo, DBID: 11},
 		}, nil,
 	)
 
@@ -233,7 +239,7 @@ func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {
 
 	// The same path can exist under multiple systems; only the requested
 	// (system, path) pair should be resolved.
-	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{path}).Return(
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(path)}).Return(
 		[]database.MediaPathID{
 			{SystemID: "NES", Path: path, DBID: 10},
 			{SystemID: "FDS", Path: path, DBID: 22},

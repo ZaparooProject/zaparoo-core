@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -107,7 +108,7 @@ func TestHandleMediaHistoryTop_WithMediaIDAndRelativePath(t *testing.T) {
 			LastPlayedAt:  now,
 		},
 	}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "SNES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420}}, nil)
 
 	env := requests.RequestEnv{
@@ -481,7 +482,11 @@ func TestHandleMediaHistoryTop_IncludesTags(t *testing.T) {
 				TotalPlayTime: 100, SessionCount: 1, LastPlayedAt: now,
 			},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{taggedPath, untaggedPath, missingPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{
+		pathutil.CanonicalMediaPath(taggedPath),
+		pathutil.CanonicalMediaPath(untaggedPath),
+		pathutil.CanonicalMediaPath(missingPath),
+	}).
 		Return([]database.MediaPathID{
 			{SystemID: "SNES", Path: taggedPath, DBID: 42, MediaTitleDBID: 420},
 			{SystemID: "SNES", Path: untaggedPath, DBID: 43, MediaTitleDBID: 430},
@@ -535,7 +540,7 @@ func TestHandleMediaHistoryTop_TagLookupFailureIsNonFatal(t *testing.T) {
 				TotalPlayTime: 300, SessionCount: 3, LastPlayedAt: time.Now(),
 			},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "SNES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420}}, nil)
 	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, []database.MediaRef{{MediaDBID: 42, MediaTitleDBID: 420}}).
 		Run(func(args mock.Arguments) {
@@ -574,7 +579,7 @@ func TestHandleMediaHistoryTop_IdentityLookupFailureIsNonFatal(t *testing.T) {
 				TotalPlayTime: 300, SessionCount: 3, LastPlayedAt: time.Now(),
 			},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return(nil, errors.New("identity lookup failed"))
 	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).
 		Return(map[int64][]database.TagInfo{}, nil).Maybe()
