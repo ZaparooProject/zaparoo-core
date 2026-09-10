@@ -947,13 +947,56 @@ func searchSortClause(sortOrder string) string {
 	}
 }
 
+// searchCursorPredicate is the keyset predicate for a search cursor page.
+//
+// Written as a bound on the sort column plus a tie-break rather than the
+// row-value comparison it replaces, for the reason spelled out in
+// browseCursorCondition: SQLite does not turn a row value into an index range,
+// so the row-value form is evaluated per row and the cursor cannot narrow the
+// scan at all. A filename sort now rides media_path_idx.
+//
+// A name sort still has nothing to ride — no index orders MediaTitles.Name —
+// so it sorts the matched set on every page regardless of this predicate. That
+// wants an index, not a rewrite, and is deliberately left alone here.
+//
+// The caller binds three values: the sort bound, the sort tie-break, and the
+// last row's DBID.
 func searchCursorPredicate(sortOrder string) string {
 	expr := searchSortExpr(sortOrder)
 	switch sortOrder {
 	case "name-desc", "filename-desc":
-		return "(" + expr + ", Media.DBID) < (?, ?)"
+		return expr + " <= ? AND (" + expr + " < ? OR Media.DBID < ?)"
 	default:
-		return "(" + expr + ", Media.DBID) > (?, ?)"
+		return expr + " >= ? AND (" + expr + " > ? OR Media.DBID > ?)"
+	}
+}
+
+// searchCursorArgs are the values searchCursorPredicate binds, in order.
+func searchCursorArgs(sortValue any, lastID int64) []any {
+	return []any{sortValue, sortValue, lastID}
+}
+
+// searchSortFloorCondition is an always-true lower bound on a name sort's
+// ordered column, emitted on the first page where there is no cursor to supply
+// one.
+//
+// Without it the planner has nothing to enter mediatitles_name_sort_idx with, so
+// it drives the join from media_missing_idx instead — IsMissing = 0 matches every
+// present row — and sorts the entire matched set to return a page. That is the
+// same trap overlayHigherPriorityDirectoryCondition documents for browse, and on
+// the MiSTer test device it made a broad query exceed the request deadline
+// outright rather than merely run slowly (#1460 audit).
+//
+// MediaTitles.Name is NOT NULL, so >= ” admits every row and the results are
+// unchanged; it exists only so the ordering has a range the planner can see.
+// Only name sorts need it: a filename sort already rides media_path_idx for its
+// ordering, and the legacy unsorted path rides the rowid.
+func searchSortFloorCondition(sortOrder string) (condition string, args []any) {
+	switch sortOrder {
+	case "name-asc", "name-desc":
+		return " AND " + searchSortExpr(sortOrder) + " >= ? ", []any{""}
+	default:
+		return "", nil
 	}
 }
 
@@ -977,9 +1020,18 @@ func sqlSearchMediaWithFilters(
 		ctx, db, systems, variantGroups, rawWords, "", tags, letter, cursor, nil, "", limit, includeName)
 }
 
-func sqlSearchMediaWithFiltersSorted(
-	ctx context.Context,
-	db sqlQueryable,
+// searchFilteredStatement is one media.search SQL statement and its bound
+// arguments, built by searchFilteredQuery.
+type searchFilteredStatement struct {
+	query            string
+	args             []any
+	skipSystemFilter bool
+}
+
+// searchFilteredQuery builds the statement sqlSearchMediaWithFiltersSorted runs.
+// It is separate so plan tests measure the production statement rather than a
+// hand-written approximation of it.
+func searchFilteredQuery(
 	systems []systemdefs.System,
 	variantGroups [][]string,
 	rawWords []string,
@@ -991,19 +1043,33 @@ func sqlSearchMediaWithFiltersSorted(
 	sortOrder string,
 	limit int,
 	includeName bool,
-) ([]database.SearchResultWithCursor, error) {
-	results := make([]database.SearchResultWithCursor, 0, limit)
-	if len(systems) == 0 {
-		return nil, errors.New("no systems provided for media search")
-	}
-
+) (searchFilteredStatement, error) {
 	// Tag-only browses (e.g. favorites: empty query + user:favorite) constrain
 	// Media directly via the tag subquery's rowid IN-list. When the system list
 	// covers every defined system the SystemID IN (...) clause filters nothing,
 	// but its presence makes SQLite drive the join from Systems and scan every
 	// title instead of the handful of tag matches. Omit it in that case.
+	//
+	// Extending this to explicit sorts was tried and measured worse: on the
+	// MiSTer test device a "Mario" name-sorted search went from 705ms to 1182ms
+	// per page, because without the system filter the planner reads titles it
+	// would otherwise have skipped. The redundant-looking clause is still
+	// earning its place for a sorted search.
+	//
+	// Only a positive tag gives that IN-list. A NOT tag excludes rows instead of
+	// selecting them, so it constrains nothing and the join has to be driven the
+	// ordinary way; counting it here would drop the system filter from a plain
+	// search. Media visibility appends exactly such a tag to every search once
+	// anything is hidden, which would otherwise hand every user the 705ms-to-
+	// 1182ms regression measured above.
+	selectingTags := 0
+	for i := range tags {
+		if tags[i].Operator != zapscript.TagOperatorNOT {
+			selectingTags++
+		}
+	}
 	skipSystemFilter := requestedAllSystems(systems) && (pathPrefix != "" ||
-		(len(variantGroups) == 0 && !includeName && len(tags) > 0))
+		(len(variantGroups) == 0 && !includeName && selectingTags > 0))
 
 	// Build system ID args
 	args := make([]any, 0)
@@ -1057,16 +1123,18 @@ func sqlSearchMediaWithFiltersSorted(
 	switch {
 	case sortCursor != nil:
 		if sortOrder == "" || sortCursor.Sort != sortOrder {
-			return nil, errors.New("search cursor sort does not match request")
+			return searchFilteredStatement{}, errors.New("search cursor sort does not match request")
 		}
 		cursorCondition = searchCursorCondition(sortOrder)
-		cursorArgs = []any{sortCursor.SortValue, sortCursor.LastID}
+		cursorArgs = searchCursorArgs(sortCursor.SortValue, sortCursor.LastID)
 	case cursor != nil:
 		if sortOrder != "" {
-			return nil, errors.New("legacy search cursor cannot continue explicit sort")
+			return searchFilteredStatement{}, errors.New("legacy search cursor cannot continue explicit sort")
 		}
 		cursorCondition = " AND Media.DBID > ? "
 		cursorArgs = []any{*cursor}
+	default:
+		cursorCondition, cursorArgs = searchSortFloorCondition(sortOrder)
 	}
 
 	pathFilterCondition := ""
@@ -1135,6 +1203,40 @@ func sqlSearchMediaWithFiltersSorted(
 	mediaArgs = append(mediaArgs, tagFilterArgs...)  // Tag filters
 	mediaArgs = append(mediaArgs, letterArgs...)     // Letter filters
 	mediaArgs = append(mediaArgs, limit)
+
+	return searchFilteredStatement{
+		query:            mediaQuery,
+		args:             mediaArgs,
+		skipSystemFilter: skipSystemFilter,
+	}, nil
+}
+
+func sqlSearchMediaWithFiltersSorted(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	variantGroups [][]string,
+	rawWords []string,
+	pathPrefix string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	sortCursor *database.SearchCursor,
+	sortOrder string,
+	limit int,
+	includeName bool,
+) ([]database.SearchResultWithCursor, error) {
+	results := make([]database.SearchResultWithCursor, 0, limit)
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+
+	stmt, err := searchFilteredQuery(systems, variantGroups, rawWords, pathPrefix, tags,
+		letter, cursor, sortCursor, sortOrder, limit, includeName)
+	if err != nil {
+		return nil, err
+	}
+	mediaQuery, mediaArgs, skipSystemFilter := stmt.query, stmt.args, stmt.skipSystemFilter
 
 	queryStarted := time.Now()
 	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
@@ -1266,7 +1368,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 			return nil, errors.New("search cursor sort does not match request")
 		}
 		extraConditions = append(extraConditions, searchCursorPredicate(sortOrder))
-		extraArgs = append(extraArgs, sortCursor.SortValue, sortCursor.LastID)
+		extraArgs = append(extraArgs, searchCursorArgs(sortCursor.SortValue, sortCursor.LastID)...)
 	case cursor != nil:
 		if sortOrder != "" {
 			return nil, errors.New("legacy search cursor cannot continue explicit sort")

@@ -579,6 +579,13 @@ func (db *MediaDB) Open() error {
 	}
 
 	registerCoverAvailabilityCacheOwner(sqlInstance, db)
+
+	// A library indexed before AnalyzeApproximate corrected this row still
+	// carries the sampled figure. Fix it on open so the first search after an
+	// upgrade gets the right plan instead of waiting for the next index run.
+	if err = sqlTruthfulMissingIndexStat(db.ctx, sqlInstance); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics on open")
+	}
 	return nil
 }
 
@@ -997,6 +1004,13 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	if err != nil {
 		return fmt.Errorf("failed to run pragma optimize: %w", err)
 	}
+	// The sampled pass misreports the single-valued IsMissing index; see
+	// sqlTruthfulMissingIndexStat for the plan that cost. The refresh itself
+	// succeeded, so a failed touch-up is logged rather than returned: the next
+	// refresh or open repeats it.
+	if err := sqlTruthfulMissingIndexStat(db.ctx, sqlDB); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics")
+	}
 	// Warn rather than debug when it was not a no-op: the whole point of this
 	// telemetry is that a multi-second planner refresh is invisible otherwise.
 	logEvent := log.Debug()
@@ -1104,6 +1118,13 @@ var secondaryIndexes = []secondaryIndex{
 			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
 		replaceWhenEnsured: true,
 	},
+	{
+		// Serves media.search's name ordering, which is NOCASE on
+		// MediaTitles.Name; see searchSortExpr and the migration that adds it.
+		name: "mediatitles_name_sort_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS mediatitles_name_sort_idx " +
+			"ON MediaTitles(Name COLLATE NOCASE, DBID)",
+	},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -1201,6 +1222,65 @@ func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit replacement index %s: %w", idx.name, err)
 	}
+	return nil
+}
+
+// EnsureBrowseSortIndex brings the secondary indexes browse and search read up
+// to the definitions those queries need, without waiting for an indexing run.
+//
+// The base migration creates the index without the ZAPAROO_TITLE_V1 collation
+// and only CreateSecondaryIndexes replaces it, which runs at the end of a media
+// index and nowhere else. A device that upgrades and does not reindex therefore
+// browses against an index whose ordering disagrees with every browse query, so
+// the planner cannot use it for the ORDER BY at all: it falls back to
+// idx_media_parentdir_system plus a temp b-tree and reads and sorts the whole
+// folder for each page. On a folder of several thousand files that is the
+// difference between a page costing a page and a page costing the folder
+// (#1460).
+//
+// The same reasoning covers an index that is merely absent: the search title
+// sort index was added after these databases were built, and creating it in a
+// migration cost 17.7s of startup on the MiSTer test device with nothing on
+// screen to explain the pause. Both cases are what CreateSecondaryIndexes
+// already resolves — it replaces an index whose definition has moved on and
+// creates any that are missing — so this only decides *when* that runs.
+//
+// Deliberately off the startup path: it is minutes of work on a large library
+// on SD. Skipped while indexing or optimization owns the database, because
+// CreateSecondaryIndexes runs at the end of that work anyway.
+func (db *MediaDB) EnsureBrowseSortIndex() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	if db.HasBackgroundOperations() {
+		log.Debug().Msg("skipping browse index check while background work owns the database")
+		return nil
+	}
+
+	stale, err := db.missingSecondaryIndexes()
+	if err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(stale))
+	for i := range stale {
+		names[i] = stale[i].name
+	}
+	log.Info().Strs("indexes", names).
+		Msg("browse indexes are missing or predate their collation, building them so browsing and search stay fast")
+	// Tracked only around the build: taken any earlier and the
+	// HasBackgroundOperations check above would see this call's own tracking.
+	db.TrackBackgroundOperation()
+	defer db.BackgroundOperationDone()
+	started := time.Now()
+	if err := db.CreateSecondaryIndexes(); err != nil {
+		return fmt.Errorf("building browse indexes: %w", err)
+	}
+	log.Info().Strs("indexes", names).Dur("elapsed", time.Since(started)).
+		Msg("browse indexes built")
 	return nil
 }
 
@@ -2905,10 +2985,37 @@ var (
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
 	started time.Time
-	conn    *sql.Conn
+	conn    browseConn
 	op      string
 	wait    time.Duration
 	routes  int
+}
+
+// browseConn is the connection a browse runs its statements on, carrying the
+// pool it was taken from.
+//
+// The per-database browse caches (prefix policy, utility tags, image property
+// tags, cover availability) are keyed on the handle a statement runs against
+// and are cleared with the pool handle. A bare *sql.Conn cannot serve as that
+// key: sql.DB.Conn allocates a new one for every acquisition, so each page
+// filed its entry under a connection released microseconds later, every page
+// re-ran the detection the cache exists to avoid, and the clear functions never
+// matched anything. cacheHandle resolves a browse connection back to its pool.
+type browseConn struct {
+	*sql.Conn
+	pool *sql.DB
+}
+
+func (c browseConn) cacheHandle() sqlQueryable { return c.pool }
+
+// cacheHandle returns the handle a per-database cache should be keyed on: the
+// pool behind a browse connection, or the handle itself for callers that
+// already hold a pool or a transaction.
+func cacheHandle(db sqlQueryable) sqlQueryable {
+	if h, ok := db.(interface{ cacheHandle() sqlQueryable }); ok {
+		return h.cacheHandle()
+	}
+	return db
 }
 
 // beginBrowse acquires the request's connection. The caller must always call
@@ -2924,7 +3031,13 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
-	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
+	return &browseCall{
+		conn:    browseConn{Conn: conn, pool: sqlDB},
+		op:      op,
+		routes:  routes,
+		started: started,
+		wait:    wait,
+	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {

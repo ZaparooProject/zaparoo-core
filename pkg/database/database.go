@@ -451,11 +451,15 @@ type BrowseDirCountOptions struct {
 // SortValue/SortMode/LastID. TotalFiles and TotalDirs carry the first-page
 // counts so cursor pages do not rerun the count queries.
 type BrowseCursor struct {
-	SortValue  string
-	SortMode   string
-	Phase      string
-	DirName    string
-	RootView   string
+	SortValue string
+	SortMode  string
+	Phase     string
+	DirName   string
+	RootView  string
+	// Sources is the merged system root's resolved routes, carried forward from
+	// the page that discovered them so later pages do not rediscover the scope.
+	// Empty for an ordinary path browse, whose scope is the path itself.
+	Sources    []BrowseSource
 	LastID     int64
 	TotalFiles int
 	TotalDirs  int
