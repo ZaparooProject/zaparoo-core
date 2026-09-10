@@ -1,3 +1,4 @@
+ARG TOOLCHAIN_IMAGE=base
 FROM debian:trixie AS base
 
 # Install base dependencies
@@ -44,15 +45,20 @@ RUN env GOBIN=/usr/local/bin go install github.com/konoui/lipo@v0.9.3 && \
 RUN go version && zig version
 
 # Build libusb for each target architecture
-FROM base AS libusb-builder
+FROM ${TOOLCHAIN_IMAGE} AS libusb-builder
+USER root
+# Keep root-owned native build cache separate from the final non-root Go cache.
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/native-zig-cache
 
 # Copy build script
 COPY build_c_lib.sh /usr/local/bin/build_c_lib.sh
 RUN chmod +x /usr/local/bin/build_c_lib.sh
 
 # Define target architectures and their corresponding host triplets
-ENV TARGETS="x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf"
-ENV HOSTS="x86_64-linux aarch64-linux arm-linux"
+ARG TARGETS="x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf"
+ARG HOSTS="x86_64-linux aarch64-linux arm-linux"
+# CI builds a separate image with fatal UBSan instrumentation in native archives.
+ARG NATIVE_CFLAGS
 
 # Pin the native dependencies by commit. These were cloned from master with
 # --depth 1, so the C libraries linked into every release were whatever
@@ -113,6 +119,12 @@ RUN autoreconf -vis
 
 # Build libnfc for all targets using the consolidated script
 RUN /usr/local/bin/build_c_lib.sh libnfc "/opt/libnfc" "--with-drivers=acr122_usb,pn532_i2c,pn532_uart" "$TARGETS" "$HOSTS"
+
+# Sanitizer CI reuses the published toolchain and replaces only native archives.
+# Targeting this stage skips the unrelated Windows/macOS toolchain build.
+FROM ${TOOLCHAIN_IMAGE} AS native-test
+COPY --from=libnfc-builder /opt/deps /opt/deps
+COPY --from=libnfc-builder /opt/libnfc /opt/libnfc
 
 # Final builder stage with all cross-compiled libraries
 FROM base AS builder
