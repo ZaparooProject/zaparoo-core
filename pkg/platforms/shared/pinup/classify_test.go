@@ -82,6 +82,23 @@ func TestClassifyEmulator(t *testing.T) {
 		},
 		{name: "pc games", emu: Emulator{Name: "PC Games", GamesExt: "lnk;exe"}, want: ClassNone},
 		{name: "empty", emu: Emulator{}, want: ClassNone},
+		{
+			// The usual Baller Installer tree is C:\vPinball\..., so any
+			// emulator whose script names a path under it contains "pinball".
+			// Classifying on that indexes its games as pinball tables.
+			name: "non-pinball emulator installed under a vPinball tree",
+			emu: Emulator{
+				Name: "MAME", Display: "MAME",
+				LaunchScript: `"C:\vPinball\Emulators\MAME\mame64.exe" -rompath "C:\vPinball\roms"`,
+			},
+			want: ClassNone,
+		},
+		{
+			// The specific keywords still apply to a script.
+			name: "future pinball script still classifies",
+			emu:  Emulator{Name: "FP", LaunchScript: `"C:\Games\Future Pinball\Future Pinball.exe"`},
+			want: ClassFuturePinball,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

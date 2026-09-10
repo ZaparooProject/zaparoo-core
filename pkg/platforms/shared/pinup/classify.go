@@ -107,7 +107,51 @@ func ClassifyEmulator(e *Emulator) EmulatorClass {
 	for _, helper := range popperHelpers {
 		script = strings.ReplaceAll(script, helper, "")
 	}
-	return matchKeywords(script)
+	return matchKeywords(scriptFileNames(script))
+}
+
+// scriptFileNames reduces a launch script to the file names it names, dropping
+// directory components. The usual Baller Installer tree is C:\vPinball\...,
+// so every emulator installed under it — MAME included — carries "vpinball" in
+// its paths, and matching the whole script classified those as Visual Pinball
+// and indexed their games as tables. Quoted spans stay whole so a name like
+// "Future Pinball.exe" survives.
+func scriptFileNames(script string) string {
+	names := make([]string, 0, 8)
+	for _, token := range tokenizeScript(script) {
+		if idx := strings.LastIndexAny(token, `\/`); idx >= 0 {
+			token = token[idx+1:]
+		}
+		if token != "" {
+			names = append(names, token)
+		}
+	}
+	return strings.Join(names, " ")
+}
+
+// tokenizeScript splits on whitespace while keeping double-quoted spans whole.
+func tokenizeScript(script string) []string {
+	var tokens []string
+	var current strings.Builder
+	quoted := false
+	flush := func() {
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
+		}
+	}
+	for _, r := range script {
+		switch {
+		case r == '"':
+			quoted = !quoted
+		case !quoted && (r == ' ' || r == '\t' || r == '\n' || r == '\r'):
+			flush()
+		default:
+			_, _ = current.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
 }
 
 // matchKeywords returns the first rule whose keywords appear in text.
