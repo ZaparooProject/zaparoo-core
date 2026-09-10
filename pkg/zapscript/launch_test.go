@@ -853,6 +853,34 @@ action = "details"`))
 	pl.AssertExpectations(t)
 }
 
+// The allow list is user policy written against the requested path. Normalizing
+// before the check tested a MiSTer ZIP as game.zip/game.sfc in tap mode and as
+// game.zip everywhere else, so the same allow_file entry decided differently
+// depending on scan mode.
+func TestLaunchClosureChecksAllowListOnRequestedPath(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML("[launchers]\nallow_file = ['.*\\.zip']"))
+	root := t.TempDir()
+	archive := filepath.Join(root, "game.zip")
+	child := filepath.Join(archive, "game.sfc")
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES", AllowListOnly: true}
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: child}
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	pl.On("LaunchMedia", cfg, child, mock.Anything, (*database.Database)(nil), mock.Anything).
+		Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		// Non-nil so the path is normalized, but never suppressing, so the
+		// launch runs through both allow-list checks.
+		SkipMediaLaunch: func(platforms.ResolvedLaunch) bool { return false },
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.NoError(t, launch(launchTarget{path: archive}))
+	pl.AssertExpectations(t)
+}
+
 func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
 	t.Parallel()
 

@@ -823,6 +823,10 @@ func getLaunchClosure(
 
 		// Per-media overrides belong to the requested/indexed path. Normalize
 		// only afterward so a ZIP's override is not looked up on its child file.
+		// The allow list is a user-facing policy written against the requested
+		// path, so it keeps that form: normalizing first would test a MiSTer
+		// ZIP as game.zip/game.sfc here and as game.zip everywhere else.
+		allowListPath := target.path
 		if env.SkipMediaLaunch != nil {
 			if normalizer, ok := pl.(platforms.LaunchPathNormalizer); ok {
 				target.path = normalizer.NormalizeLaunchPath(target.path)
@@ -890,8 +894,8 @@ func getLaunchClosure(
 				opts.Action = resolvedAction
 			}
 		}
-		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
-			return errors.New("file not allowed: " + target.path)
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
 		}
 
 		resolved := platforms.ResolvedLaunch{
@@ -923,8 +927,8 @@ func getLaunchClosure(
 		}
 
 		// Allowlist policy may have changed while waiting for confirmation.
-		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
-			return errors.New("file not allowed: " + target.path)
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
 		}
 
 		// The outgoing media's before_exit hook. Everything that can reject this
