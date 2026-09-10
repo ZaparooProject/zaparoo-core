@@ -40,6 +40,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/cancellation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
@@ -4464,7 +4465,7 @@ func (db *MediaDB) RunBackgroundOptimization(
 		return
 	}
 	if err := db.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
-		log.Error().Err(err).Msg("background optimization failed")
+		cancellation.LogFailure(err, "background optimization failed")
 	}
 }
 
@@ -4488,6 +4489,11 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	if !lease.ValidFor(database.MediaWriteOperationOptimization) {
 		lease.Release()
 		return database.ErrMediaWriteLease
+	}
+	if db.ctx != nil && cancellation.Only(db.ctx.Err()) {
+		lease.Release()
+		notifyOptimizationStatus(statusCallback, false)
+		return db.ctx.Err()
 	}
 
 	db.isOptimizing.Store(true)
@@ -4555,7 +4561,10 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 				_ = db.SetOptimizationStatus(IndexingStatusFailed)
 			}
 			runErr = fmt.Errorf("background optimization panic: %v", r)
-			notifyOptimizationStatus(statusCallback, false)
+		}
+		notifyOptimizationStatus(statusCallback, false)
+		if cancellation.Only(runErr) {
+			log.Debug().Err(runErr).Msg("background optimization canceled; retaining checkpoint")
 		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
@@ -4564,9 +4573,6 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	if db.sql.Load() == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
-		if statusCallback != nil {
-			statusCallback(false)
-		}
 		return ErrNullSQL
 	}
 
@@ -4574,10 +4580,7 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	// Set status to running
 	if err := db.SetOptimizationStatus(IndexingStatusRunning); err != nil {
-		log.Error().Err(err).Msg("failed to set optimization status to running")
-		if statusCallback != nil {
-			statusCallback(false)
-		}
+		cancellation.LogFailure(err, "failed to set optimization status to running")
 		return fmt.Errorf("failed to set optimization status to running: %w", err)
 	}
 
@@ -4669,6 +4672,9 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	// pragma_optimize/page_prefetch work already done on a previous boot.
 	startStep := 0
 	if persisted, stepErr := db.GetOptimizationStep(); stepErr != nil {
+		if cancellation.Only(stepErr) {
+			return fmt.Errorf("read optimization checkpoint: %w", stepErr)
+		}
 		log.Warn().Err(stepErr).Msg("failed to read persisted optimization step; starting from the first step")
 	} else if persisted != "" {
 		for i := range steps {
@@ -4690,54 +4696,64 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	// Execute each step with retry logic
 	for _, step := range steps[startStep:] {
-		// Wait if paused (e.g. game is running)
+		if err := db.ctx.Err(); err != nil {
+			return err
+		}
+		// Wait if paused (e.g. game is running). Cancellation keeps the last
+		// checkpoint intact so the next run can resume unfinished work.
 		if err := pauser.Wait(db.ctx); err != nil {
-			log.Info().Msg("background optimization cancelled while paused")
-			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				if errors.Is(setErr, context.Canceled) {
-					log.Debug().Err(setErr).Msg("set optimization status to failed skipped (cancelled)")
-				} else {
-					log.Error().Err(setErr).Msg("failed to set optimization status to failed")
-				}
-			}
-			if statusCallback != nil {
-				statusCallback(false)
-			}
 			return fmt.Errorf("wait to run background optimization: %w", err)
 		}
 
 		log.Info().Msgf("running optimization step: %s", step.name)
 
 		if err := db.SetOptimizationStep(step.name); err != nil {
-			// A cancelled context here just means the service is shutting down
-			// mid-optimization; that's expected, so keep it out of Sentry.
-			if errors.Is(err, context.Canceled) {
-				log.Debug().Err(err).Msgf("set optimization step to %s skipped (cancelled)", step.name)
-			} else {
-				log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
+			if cancellation.Only(err) {
+				return err
 			}
+			log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
 		}
 
 		// Execute step with retry and exponential backoff
 		stepMetricsStart := stepRecorder.Capture(db.ctx, true)
 		var stepErr error
+		attempts := 0
 		for attempt := 0; attempt <= step.maxRetries; attempt++ {
+			if err := db.ctx.Err(); err != nil {
+				stepErr = errors.Join(stepErr, err)
+				break
+			}
+			attempts++
 			stepErr = step.fn()
 			if stepErr == nil {
 				break // Success
 			}
 
+			if cancellation.Only(stepErr) {
+				break
+			}
+			if err := db.ctx.Err(); err != nil {
+				stepErr = errors.Join(stepErr, err)
+				break
+			}
 			if attempt < step.maxRetries {
 				delay := step.retryDelay * time.Duration(1<<attempt) // Exponential backoff
 				log.Warn().Err(stepErr).Msgf("optimization step %s failed (attempt %d/%d), retrying in %v",
 					step.name, attempt+1, step.maxRetries+1, delay)
-				db.clock.Sleep(delay)
+				if err := db.waitOptimizationRetry(delay); err != nil {
+					stepErr = errors.Join(stepErr, err)
+					break
+				}
 			}
 		}
 
+		// A canceled step is unfinished, not failed. Keep its checkpoint.
+		if cancellation.Only(stepErr) {
+			return stepErr
+		}
 		// Final check after all retries
 		if stepErr != nil {
-			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
+			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, attempts)
 			// Database corruption can't be repaired by optimization. Route it to the
 			// same corrupt-database state the indexer uses so the app surfaces the
 			// repair/rebuild flow instead of repeatedly failing maintenance. The sidecar
@@ -4747,8 +4763,11 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 				log.Error().Strs("integrity", db.IntegrityReport()).
 					Msg("media database integrity check after optimization failure")
 				db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", step.name, stepErr))
-				if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
-					log.Error().Err(setErr).Msg("failed to mark media database as corrupt after optimization failure")
+				if !cancellation.Only(db.ctx.Err()) {
+					if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
+						cancellation.LogFailure(setErr,
+							"failed to mark media database as corrupt after optimization failure")
+					}
 				}
 			}
 			// Clear the step before writing the failed status: a crash between the
@@ -4756,16 +4775,15 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 			// next boot's failure-resume would start mid-list and skip the steps
 			// before it. The reverse gap (step cleared, status still running) just
 			// re-runs everything from the first step.
-			if setErr := db.SetOptimizationStep(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear optimization step on failure")
-			}
-			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
-			}
-
-			// Notify that optimization has failed
-			if statusCallback != nil {
-				statusCallback(false)
+			if !cancellation.Only(db.ctx.Err()) {
+				if setErr := db.SetOptimizationStep(""); setErr != nil {
+					cancellation.LogFailure(setErr, "failed to clear optimization step on failure")
+				}
+				if !cancellation.Only(db.ctx.Err()) {
+					if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
+						cancellation.LogFailure(setErr, "failed to set optimization status to failed")
+					}
+				}
 			}
 			return stepErr
 		}
@@ -4777,19 +4795,20 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 		log.Info().Msgf("optimization step %s completed", step.name)
 	}
 
+	if err := db.ctx.Err(); err != nil {
+		return err
+	}
 	// Mark as completed
 	if err := db.SetOptimizationStatus(IndexingStatusCompleted); err != nil {
-		log.Error().Err(err).Msg("failed to set optimization status to completed")
+		cancellation.LogFailure(err, "failed to set optimization status to completed")
 		return fmt.Errorf("failed to set optimization status to completed: %w", err)
 	}
 	// Clear optimization step on completion
 	if err := db.SetOptimizationStep(""); err != nil {
-		log.Error().Err(err).Msg("failed to clear optimization step on completion")
-	}
-
-	// Notify that optimization has completed
-	if statusCallback != nil {
-		statusCallback(false)
+		cancellation.LogFailure(err, "failed to clear optimization step on completion")
+		if cancellation.Only(err) {
+			return err
+		}
 	}
 
 	log.Info().Msg("background database optimization completed")

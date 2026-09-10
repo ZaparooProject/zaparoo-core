@@ -443,7 +443,16 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 }
 
 func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(expected, actual string) error {
+			if actual == "SELECT COUNT(*) FROM Tags" {
+				cancel()
+			}
+			return sqlmock.QueryMatcherRegexp.Match(expected, actual)
+		},
+	)))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -468,14 +477,11 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("^SELECT COUNT\\(\\*\\) FROM Tags$").
 		WillReturnError(context.Canceled)
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
-		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mediaDB.RunBackgroundOptimization(nil, nil)
+	mediaDB.ctx = ctx
+	lease, err := mediaDB.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+	require.ErrorIs(t, mediaDB.RunBackgroundOptimizationWithLease(nil, nil, lease), context.Canceled)
 
 	assert.False(t, mediaDB.isOptimizing.Load())
 	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
