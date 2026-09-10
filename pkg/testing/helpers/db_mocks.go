@@ -3221,6 +3221,29 @@ func (m *MockMediaDBI) UpsertMediaProperties(
 	return nil
 }
 
+func (m *MockMediaDBI) ReplaceDirectoryProperties(
+	ctx context.Context, systemDBID int64, props []database.DirectoryProperty,
+) (bool, error) {
+	if !m.hasExpectedCall("ReplaceDirectoryProperties") {
+		return false, nil
+	}
+	args := m.Called(ctx, systemDBID, props)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) GetDirectoryProperties(
+	ctx context.Context, systemDBID int64, path string,
+) ([]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetDirectoryProperties") {
+		return nil, nil
+	}
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) ApplyScrapeResult(
 	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
 ) error {

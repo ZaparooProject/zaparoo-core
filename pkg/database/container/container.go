@@ -33,7 +33,8 @@ import (
 // SelectLaunchMedia returns the single logical launch target for a directory's
 // direct media rows, or nil when the set is ambiguous. A lone file is its own
 // target; otherwise one m3u playlist or one cue sheet surrounded only by its
-// companion files stands in for the set.
+// companion files stands in for the set. A flat set of disc images also
+// collapses when every row belongs to the same known media title.
 func SelectLaunchMedia(rows []database.Media) *database.Media {
 	if len(rows) == 0 {
 		return nil
@@ -52,7 +53,25 @@ func SelectLaunchMedia(rows []database.Media) *database.Media {
 		return cue
 	}
 
-	return nil
+	return sharedTitleDiscSetTarget(rows)
+}
+
+func sharedTitleDiscSetTarget(rows []database.Media) *database.Media {
+	mediaTitleDBID := rows[0].MediaTitleDBID
+	if mediaTitleDBID <= 0 {
+		return nil
+	}
+
+	lowest := &rows[0]
+	for i := range rows {
+		if rows[i].MediaTitleDBID != mediaTitleDBID || !isDiscSetExt(MediaExt(rows[i].Path)) {
+			return nil
+		}
+		if rows[i].Path < lowest.Path || (rows[i].Path == lowest.Path && rows[i].DBID < lowest.DBID) {
+			lowest = &rows[i]
+		}
+	}
+	return lowest
 }
 
 func singleMediaWithExt(rows []database.Media, ext string) *database.Media {
@@ -95,14 +114,22 @@ func MediaExt(mediaPath string) string {
 }
 
 // MayHaveContainerTarget reports whether a media path could sit in a directory
-// whose launch target is a different file. Only the extensions that can
-// accompany a cue sheet or an m3u playlist qualify, so a caller holding an
-// ordinary rom can skip a container lookup entirely. The m3u companion set
-// contains the cue set, so one test covers both kinds: a .bin may be standing
-// in for a cue, and a .cue or .chd for an m3u. An .m3u itself is excluded
+// whose launch target is a different file. Only extensions accepted by the cue,
+// playlist, or shared-title disc-set rules qualify, so a caller holding an
+// ordinary ROM can skip a container lookup entirely. An .m3u itself is excluded
 // because promoting one could only return itself.
 func MayHaveContainerTarget(mediaPath string) bool {
-	return isM3UCompanionExt(MediaExt(mediaPath))
+	ext := MediaExt(mediaPath)
+	return isM3UCompanionExt(ext) || isDiscSetExt(ext)
+}
+
+func isDiscSetExt(ext string) bool {
+	switch ext {
+	case ".cue", ".chd", ".iso", ".bin", ".img", ".pbp":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCueCompanionExt(ext string) bool {

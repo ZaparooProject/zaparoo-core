@@ -109,6 +109,71 @@ func TestScrape_ImportsLocalMediaFolderArtwork(t *testing.T) {
 	pl.AssertExpectations(t)
 }
 
+func TestScrape_ImportsArtworkForUncollapsedDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	collectionDir := filepath.Join(root, "Collection")
+	boxartPath := filepath.Join(root, "media", "boxart", "Collection.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(boxartPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxartPath, []byte("folder"), 0o600))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
+		{
+			DBID: 11, MediaTitleDBID: 101, Path: filepath.Join(collectionDir, "One.nes"),
+			ParentDir: filepath.ToSlash(collectionDir) + "/", SystemID: "NES",
+		},
+		{
+			DBID: 12, MediaTitleDBID: 102, Path: filepath.Join(collectionDir, "Two.nes"),
+			ParentDir: filepath.ToSlash(collectionDir) + "/", SystemID: "NES",
+		},
+	}, nil)
+	mockDB.On(
+		"ReplaceDirectoryProperties",
+		mock.Anything,
+		int64(1),
+		[]database.DirectoryProperty{{
+			Path:    filepath.ToSlash(collectionDir),
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+			Text:    filepath.ToSlash(boxartPath),
+		}},
+	).Return(true, nil).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	s := &scraperImpl{db: mockDB, fs: fs}
+	go s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: 1, ID: "NES", ROMPaths: []string{root},
+	}}, ch)
+
+	var final scraper.ScrapeUpdate
+	for update := range ch {
+		final = update
+	}
+	assert.True(t, final.Done)
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestIndexedDirectoryPaths_DedupesAncestorsAndSkipsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := indexedDirectoryPaths([]database.MediaWithFullPath{
+		{Path: filepath.Join(root, "RPGs", "Game", "Disc 1.chd")},
+		{Path: filepath.Join(root, "RPGs", "Game", "Disc 2.chd")},
+		{Path: filepath.Join(root, "Missing", "Game.chd"), IsMissing: true},
+		{Path: filepath.Join(filepath.Dir(root), "Outside", "Game.chd")},
+		{Path: filepath.Join(root, "Root Game.nes")},
+	}, []string{root})
+
+	assert.Equal(t, []string{
+		filepath.ToSlash(filepath.Join(root, "RPGs")),
+		filepath.ToSlash(filepath.Join(root, "RPGs", "Game")),
+	}, paths)
+}
+
 func TestOrderedScrapeSystemIDs(t *testing.T) {
 	t.Parallel()
 

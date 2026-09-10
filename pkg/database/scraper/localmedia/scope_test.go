@@ -75,3 +75,38 @@ func TestScopedLocalMedia(t *testing.T) {
 		})
 	}
 }
+
+// ReplaceDirectoryProperties swaps the complete folder-artwork set for a
+// system. A scoped run only loads the media in its scope, so the directory set
+// it can derive is a fraction of the system's: writing it would delete the
+// artwork of every directory the run never looked at. Scoping a scrape to one
+// file must not cost the rest of the system its folder images.
+func TestScopedRunDoesNotReplaceDirectoryProperties(t *testing.T) {
+	t.Parallel()
+
+	props := []database.DirectoryProperty{{Path: "/roms/SNES/Sub", TypeTag: "property:image-boxart", Text: "a.png"}}
+
+	t.Run("scoped run writes nothing", func(t *testing.T) {
+		t.Parallel()
+		mdb := helpers.NewMockMediaDBI()
+		// The expectation has to exist for the call to be recorded at all: the
+		// mock returns zero values without registering anything when none is
+		// set, which makes an uncalled assertion pass however the code behaved.
+		// Maybe so registering it does not itself demand a call.
+		mdb.On("ReplaceDirectoryProperties", mock.Anything, mock.Anything, mock.Anything).
+			Return(true, nil).Maybe()
+		s := &scraperImpl{db: mdb, fs: afero.NewMemMapFs()}
+		opts := scraper.ScrapeOptions{Scope: &database.ScrapeScope{SystemID: "SNES", Path: "/roms/SNES/game.sfc"}}
+		require.NoError(t, s.replaceDirectoryPropertiesUnlessScoped(t.Context(), opts, 1, props))
+		mdb.AssertNumberOfCalls(t, "ReplaceDirectoryProperties", 0)
+	})
+
+	t.Run("whole-system run still writes the snapshot", func(t *testing.T) {
+		t.Parallel()
+		mdb := helpers.NewMockMediaDBI()
+		mdb.On("ReplaceDirectoryProperties", mock.Anything, int64(1), props).Return(true, nil).Once()
+		s := &scraperImpl{db: mdb, fs: afero.NewMemMapFs()}
+		require.NoError(t, s.replaceDirectoryPropertiesUnlessScoped(t.Context(), scraper.ScrapeOptions{}, 1, props))
+		mdb.AssertExpectations(t)
+	})
+}

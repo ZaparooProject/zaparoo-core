@@ -269,6 +269,30 @@ func TestFindSingleContainerLaunchMedia_ReturnsM3UForDiscFolder(t *testing.T) {
 	assert.Equal(t, m3uPath, media.Path)
 }
 
+func TestFindSingleContainerLaunchMedia_ReturnsFirstSharedTitleDisc(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	containerPath := filepath.ToSlash(filepath.Join("roms", "PSX", "Shared Title"))
+	parentDir := containerPath + "/"
+	disc1Path := filepath.ToSlash(filepath.Join(containerPath, "Game (Disc 1).chd"))
+	disc2Path := filepath.ToSlash(filepath.Join(containerPath, "Game (Disc 2).chd"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 2, 1, ?, ?);
+	`, disc2Path, parentDir, disc1Path, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, containerPath)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, disc1Path, media.Path)
+}
+
 func TestFindSingleContainerLaunchMedia_RejectsAmbiguousDirectChildren(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -2369,6 +2393,32 @@ func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
 	assert.Equal(t, cuePath, aliases[0].Row.Path)
 }
 
+func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "SharedTitle")
+	disc1Path := filepath.ToSlash(filepath.Join(parent, "SharedTitle", "Game (Disc 1).pbp"))
+	disc2Path := filepath.ToSlash(filepath.Join(parent, "SharedTitle", "Game (Disc 2).pbp"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?);
+	`, disc2Path, gameDir, disc1Path, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, disc1Path, aliases[0].Row.Path)
+}
+
 func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupAliasTestDB(t)
@@ -3083,10 +3133,12 @@ func TestResolveSingletonContainerAliases_AmbiguousDirIsNotAliased(t *testing.T)
 	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
 	gameDir := aliasTestDir(parent, "TwoGames")
 	_, err := mediaDB.sql.Load().ExecContext(ctx, `
-		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'one', 'One');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'one', 'One'),
+			(2, 2, 'two', 'Two');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
 			(1, 1, 2, ?, ?),
-			(2, 1, 2, ?, ?);
+			(2, 2, 2, ?, ?);
 	`,
 		filepath.ToSlash(filepath.Join(parent, "TwoGames", "One.cue")), gameDir,
 		filepath.ToSlash(filepath.Join(parent, "TwoGames", "Two.cue")), gameDir)

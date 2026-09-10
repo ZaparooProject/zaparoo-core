@@ -5,7 +5,7 @@ The scraper subsystem enriches existing MediaDB records with metadata from exter
 Current scraper implementations:
 
 - `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
-- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A file that is the single launch target of its directory also matches artwork named after that directory. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
+- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
@@ -172,7 +172,7 @@ Filesystem fallback searches known subdirectories under `<systemRootPath>/media/
 
 ### Directory Entries
 
-Both `<folder>` entries and `<game>` entries whose `<path>` resolves to a directory are matched to the single media row that directory collapses to, using the same rule browse uses to show a disc folder as one game. A directory qualifies when its direct contents are one file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and it holds no media in subdirectories.
+Both `<folder>` entries and `<game>` entries whose `<path>` resolves to a directory are matched to the single media row that directory collapses to, using the same rule browse uses to show a disc folder as one game. A directory qualifies when it has no nested media and its direct contents are one file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive `MediaTitleDBID`. Supported shared-title disc extensions are `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title IDs or other extensions remain ambiguous.
 
 This covers the two common EmulationStation layouts for multi-disc games: a `<folder>` entry describing a per-game folder, and the ES-DE convention of naming that folder with a ROM extension so it reads as one game and gets an ordinary `<game>` entry.
 
@@ -180,7 +180,15 @@ This covers the two common EmulationStation layouts for multi-disc games: a `<fo
 
 A directory entry only ever resolves through the container rule, whichever kind it is, so use a `<folder>` entry only for a directory that collapses. A `<game>` entry naming a directory that holds media in subdirectories no longer matches the single row underneath it, because resolving a directory by scanning for indexed paths beneath it is only unambiguous until an earlier entry has claimed one of them, and switching it to a `<folder>` entry does not help: that is skipped for the same reason. For any directory that does not collapse, point the `<game>` entry at the media file itself.
 
-Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game. Only a disc extension (`.cue`, `.m3u`, `.chd`, `.iso`, `.bin`) is stripped from that name before the search; any other dot is treated as part of the folder name, so a folder called `Sonic 3.0` does not pick up `Sonic 3`'s artwork.
+Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game. Only a disc extension (`.cue`, `.m3u`, `.chd`, `.iso`, `.bin`, `.img`, `.pbp`) is stripped from that name before the search; any other dot is treated as part of the folder name, so a folder called `Sonic 3.0` does not pick up `Sonic 3`'s artwork.
+
+## media-folder Directory Artwork
+
+For every present indexed media row, `media-folder` considers each ancestor directory below its system ROM root. It searches the usual artwork categories under `<systemRoot>/media/`, first at the mirrored ROM-relative location and then by flat directory basename. For example, directory `RPGs/Final Fantasy VII` checks `media/boxart/RPGs/Final Fantasy VII.png` before `media/boxart/Final Fantasy VII.png`. System root itself is excluded.
+
+Folder artwork does not change browse structure. Arbitrary collections remain `type: "directory"`; only existing container rules add launch metadata. `media.browse` reports `hasCover: true` when a directory image property exists for one of that entry's systems, and `media.image` accepts the directory's `(system, path)` to return it.
+
+Directory properties are collected in memory for one system and committed as a complete snapshot only after all its directories finish. Cancellation or failure before replacement preserves that system's previous snapshot. A completed empty snapshot removes stale directory rows. Rebuilding `BrowseDirs` does not affect these properties because they are keyed by stable system DBID and canonical path rather than browse-cache DBID.
 
 By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
 
