@@ -149,6 +149,7 @@ const (
 	ControlRewind      = "rewind"
 	ControlNext        = "next"
 	ControlPrevious    = "previous"
+	ControlToggleTray  = "toggle_tray"
 )
 
 // ControlParams contains parameters for a control action.
