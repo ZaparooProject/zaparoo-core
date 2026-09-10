@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -757,6 +758,118 @@ func TestLoadGameAcceptsUnlistedArcadeSetName(t *testing.T) {
 
 		assert.Nil(t, published)
 	})
+}
+
+// The Zaparoo fork of MiSTer Main rewrites ACTIVEGAME with the MGL it was
+// started from, so the same launch is observed twice: once by its game path
+// from DoLaunch and once through the MGL wrapper. Both must identify the game
+// by the file the MGL loads, or the second observation looks like a new game.
+func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared GlobalLauncherCache, and
+	// ResolvePath changes the process working directory.
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:         "Genesis",
+		SystemID:   systemdefs.SystemGenesis,
+		Extensions: []string{".md"},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	dir := t.TempDir()
+	gamePath := filepath.Join(dir, "Sonic The Hedgehog (USA).md")
+	require.NoError(t, os.WriteFile(gamePath, []byte{}, 0o600))
+	mglPath := filepath.Join(dir, ".LASTLAUNCH.mgl")
+	mgl := `<mistergamedescription><rbf>_Console/Genesis</rbf>` +
+		`<file delay="1" type="f" index="0" path="` + gamePath + `"/></mistergamedescription>`
+	require.NoError(t, os.WriteFile(mglPath, []byte(mgl), 0o600))
+
+	var published *models.ActiveMedia
+	tr := &Tracker{
+		pl:             pl,
+		cfg:            &config.Instance{},
+		ActiveCore:     "Genesis",
+		NameMap:        []NameMapping{{CoreName: "Genesis", System: systemdefs.SystemGenesis}},
+		readActiveGame: func() (string, error) { return mglPath, nil },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+	}
+
+	tr.loadGame()
+
+	require.NotNil(t, published)
+	assert.Equal(t, systemdefs.SystemGenesis, published.SystemID)
+	assert.Equal(t, gamePath, published.Path)
+	assert.Equal(t, gamePath, tr.ActiveGamePath)
+	assert.Equal(t, systemdefs.SystemGenesis+"/"+filepath.Base(gamePath), tr.ActiveGameID)
+
+	// What DoLaunch published for the same launch, by the game's own path.
+	launched := models.NewActiveMedia(
+		systemdefs.SystemGenesis, published.SystemName, gamePath, published.Name, "Genesis",
+	)
+	assert.True(t, launched.Equal(published), "the MGL observation must not look like new media")
+}
+
+// .LASTLAUNCH.mgl is one reused file, so identifying a launch by the wrapper
+// gives every game behind it the same id. The second game then matches the
+// first's id and is dropped, leaving the tracker publishing media that is no
+// longer running.
+func TestLoadGameTracksSecondGameThroughSameMGLWrapper(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared GlobalLauncherCache, and
+	// ResolvePath changes the process working directory.
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:         "Genesis",
+		SystemID:   systemdefs.SystemGenesis,
+		Extensions: []string{".md"},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	dir := t.TempDir()
+	mglPath := filepath.Join(dir, ".LASTLAUNCH.mgl")
+	wrapGame := func(name string) string {
+		gamePath := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(gamePath, []byte{}, 0o600))
+		mgl := `<mistergamedescription><rbf>_Console/Genesis</rbf>` +
+			`<file delay="1" type="f" index="0" path="` + gamePath + `"/></mistergamedescription>`
+		require.NoError(t, os.WriteFile(mglPath, []byte(mgl), 0o600))
+		return gamePath
+	}
+
+	var published *models.ActiveMedia
+	tr := &Tracker{
+		pl:             pl,
+		cfg:            &config.Instance{},
+		ActiveCore:     "Genesis",
+		NameMap:        []NameMapping{{CoreName: "Genesis", System: systemdefs.SystemGenesis}},
+		readActiveGame: func() (string, error) { return mglPath, nil },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+	}
+
+	first := wrapGame("Sonic The Hedgehog (USA).md")
+	tr.loadGame()
+	require.NotNil(t, published)
+	require.Equal(t, first, published.Path)
+
+	second := wrapGame("Streets of Rage (USA).md")
+	tr.loadGame()
+
+	require.NotNil(t, published)
+	assert.Equal(t, second, published.Path, "the second game behind the wrapper must be published")
+	assert.Equal(t, second, tr.ActiveGamePath)
+	assert.Equal(t, systemdefs.SystemGenesis+"/"+filepath.Base(second), tr.ActiveGameID)
 }
 
 func TestClearActiveGameRetiresStateEvenWhenSignalWriteFails(t *testing.T) {
