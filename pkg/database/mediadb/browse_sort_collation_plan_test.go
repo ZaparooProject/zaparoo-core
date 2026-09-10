@@ -265,3 +265,37 @@ func TestBrowseSortIndexRepair_LeavesCurrentIndexAlone(t *testing.T) {
 	require.NoError(t, mediaDB.EnsureBrowseSortIndex())
 	assert.Equal(t, before, browseSortIndexDDL(t, mediaDB))
 }
+
+// The slug cache rebuild starts at the same moment the browse index repair
+// does, and both are launched from startup right after the database opens. If
+// the repair stands back for it, it silently never runs on any install that
+// warms the cache, and large-folder browsing stays slow for exactly the reason
+// the repair exists. Only a media write may hold it off.
+func TestBrowseSortIndexRepair_RunsWhileTheSlugCacheRecovers(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupMigratedOnlyMediaDB(t)
+	defer cleanup()
+	parentDir := seedFlatFolderLibrary(t, mediaDB)
+
+	// Stand in for the recovery worker the cache starts at open. Already
+	// finished, so closing the database does not wait on it.
+	finished := make(chan struct{})
+	close(finished)
+	mediaDB.slugCacheState.mu.Lock()
+	mediaDB.slugCacheState.worker = &slugCacheRecovery{cancel: func() {}, done: finished}
+	mediaDB.slugCacheState.mu.Unlock()
+	require.True(t, mediaDB.HasBackgroundOperations(),
+		"fixture must reproduce the state that used to skip the repair")
+
+	require.NoError(t, mediaDB.EnsureBrowseSortIndex())
+	assert.Contains(t, browseSortIndexDDL(t, mediaDB), browseTitleCollationName,
+		"the repair must still install the collated index while the cache rebuilds")
+	assertCursorPageSeeks(t, cursorPagePlan(t, mediaDB, parentDir))
+
+	// A media write still holds it off: that one drops the secondary indexes.
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+	assert.True(t, mediaDB.hasBackgroundWrites(),
+		"a tracked media write must still stop the repair racing an index drop")
+}

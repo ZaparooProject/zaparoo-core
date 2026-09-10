@@ -1275,7 +1275,7 @@ func (db *MediaDB) EnsureBrowseSortIndex() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	if db.HasBackgroundOperations() {
+	if db.hasBackgroundWrites() {
 		log.Debug().Msg("skipping browse index check while background work owns the database")
 		return nil
 	}
@@ -5057,6 +5057,18 @@ func (db *MediaDB) HasBackgroundOperations() bool {
 	recovering := db.slugCacheState.worker != nil
 	db.slugCacheState.mu.Unlock()
 	return recovering || db.backgroundOpsCount.Load() > 0
+}
+
+// hasBackgroundWrites reports whether a media write operation owns the database.
+// The browse index repair has to stand back for one of those, because a full
+// index run drops the secondary indexes to keep bulk inserts fast and recreates
+// them at the end. It must not stand back for the slug cache rebuild, which is
+// a read-only in-memory pass that touches no index and starts at the same
+// moment the repair does: counting it would leave the repair silently skipping
+// every startup, and browsing large folders slow, for the one reason the repair
+// exists.
+func (db *MediaDB) hasBackgroundWrites() bool {
+	return db.backgroundOpsCount.Load() > 0
 }
 
 // BackgroundOperationDone decrements the background operations counter.
