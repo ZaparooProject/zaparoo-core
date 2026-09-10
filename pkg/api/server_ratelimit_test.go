@@ -59,8 +59,9 @@ func TestRateLimiter_AppRoutesNotLimited(t *testing.T) {
 	})
 
 	// App routes WITHOUT rate limiting
+	appHandler := fsCustom404(http.FS(compressAppTestFS(t, mockFS)))
 	r.Get("/app/*", func(w http.ResponseWriter, req *http.Request) {
-		fsCustom404(http.FS(mockFS)).ServeHTTP(w, req)
+		appHandler.ServeHTTP(w, req)
 	})
 
 	ctx := context.Background()

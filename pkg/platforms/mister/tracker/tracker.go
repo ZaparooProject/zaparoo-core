@@ -553,6 +553,9 @@ func (tr *Tracker) loadGame() {
 	tr.loadGameLocked()
 }
 
+// loadGameLocked resolves the current ACTIVEGAME value to a game and publishes
+// it as the active media, skipping the publish when it names the game already
+// active. Callers hold tr.mu.
 func (tr *Tracker) loadGameLocked() {
 	activeGame, err := tr.activeGame()
 	switch {
@@ -586,6 +589,10 @@ func (tr *Tracker) loadGameLocked() {
 			}
 		} else {
 			path = ResolvePath(mgl.File.Path)
+			// The MGL is only a wrapper; identify the game by the file it
+			// loads so an MGL-observed launch dedupes against the same game
+			// seen by its direct path.
+			filename = filepath.Base(path)
 			log.Info().Msgf("mgl path: %s", path)
 		}
 	}

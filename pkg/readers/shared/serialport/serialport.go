@@ -17,21 +17,31 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package testutils
+// Package serialport provides the production serial boundary shared by readers.
+package serialport
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
+	"fmt"
+	"time"
+
 	"go.bug.st/serial"
 )
 
-// SerialPort preserves compatibility for existing reader test helpers.
-type SerialPort = serialport.SerialPort
+// SerialPort is the subset of serial operations used by scan readers.
+type SerialPort interface {
+	Read(p []byte) (n int, err error)
+	Close() error
+	SetReadTimeout(t time.Duration) error
+}
 
-// SerialPortFactory preserves compatibility for existing reader test helpers.
-type SerialPortFactory = serialport.SerialPortFactory
+// SerialPortFactory allows readers to inject a serial connection.
+type SerialPortFactory func(path string, mode *serial.Mode) (SerialPort, error)
 
-// DefaultSerialPortFactory delegates to the production serial factory.
+// DefaultSerialPortFactory opens a hardware serial connection.
 func DefaultSerialPortFactory(path string, mode *serial.Mode) (SerialPort, error) {
-	//nolint:wrapcheck // Preserve existing errors in this compatibility wrapper.
-	return serialport.DefaultSerialPortFactory(path, mode)
+	port, err := serial.Open(path, mode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open serial port: %w", err)
+	}
+	return port, nil
 }
