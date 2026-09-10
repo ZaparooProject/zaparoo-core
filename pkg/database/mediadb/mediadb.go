@@ -1092,6 +1092,15 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID)",
 	},
 	{
+		name: "directoryproperties_path_system_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS directoryproperties_path_system_idx " +
+			"ON DirectoryProperties(Path, SystemDBID, TypeTagDBID)",
+	},
+	{
+		name: "directoryproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS directoryproperties_typetag_idx ON DirectoryProperties(TypeTagDBID)",
+	},
+	{
 		name: "idx_systemtagscache_type_tag",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
 	},

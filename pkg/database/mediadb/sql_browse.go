@@ -592,34 +592,182 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	var results []database.BrowseDirectoryResult
 	if len(browseOverlaySources(opts.Overlay)) > 0 {
-		return sqlBrowseOverlayDirectories(ctx, db, opts)
+		var err error
+		results, err = sqlBrowseOverlayDirectories(ctx, db, opts)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		ready, err := sqlBrowseCacheReady(ctx, db)
+		if err != nil {
+			return nil, err
+		}
+		if ready {
+			var parentFound bool
+			results, parentFound, err = sqlBrowseDirectoriesFromCache(ctx, db, opts)
+			if err != nil {
+				return nil, err
+			}
+			if !parentFound {
+				results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+				if err != nil {
+					return nil, err
+				}
+				if len(results) > 0 {
+					log.Warn().
+						Str("pathPrefix", opts.PathPrefix).
+						Strs("systems", browseSystemIDsForLog(opts.Systems)).
+						Int("directories", len(results)).
+						Msg("browse cache returned no directories; using media fallback")
+				}
+			}
+		} else {
+			results, err = sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, opts, results); err != nil {
+		return nil, fmt.Errorf("browse directory cover flags: %w", err)
+	}
+	return results, nil
+}
+
+func browseDirectoryPropertyPath(
+	opts database.BrowseDirectoriesOptions, result database.BrowseDirectoryResult,
+) (string, error) {
+	path := result.Path
+	if path == "" {
+		path = filepath.ToSlash(filepath.Join(opts.PathPrefix, result.Name))
+	}
+	return normalizeDirectoryPropertyPath(path)
+}
+
+func fetchDirectoryCoverSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	paths []string,
+	imageTagIDs []int64,
+	covered map[string]map[string]struct{},
+) error {
+	pathPlaceholders := prepareVariadic("?", ",", len(paths))
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	query := `SELECT DISTINCT dp.Path, s.SystemID
+		FROM DirectoryProperties dp INDEXED BY directoryproperties_path_system_idx
+		JOIN Systems s ON s.DBID = dp.SystemDBID
+		WHERE dp.Path IN (` + pathPlaceholders + `)
+		  AND dp.TypeTagDBID IN (` + tagPlaceholders + `)`
+	args := make([]any, 0, len(paths)+len(imageTagIDs))
+	for _, path := range paths {
+		args = append(args, path)
+	}
+	for _, tagDBID := range imageTagIDs {
+		args = append(args, tagDBID)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("query directory covers: %w", err)
 	}
-	if ready {
-		results, parentFound, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
-		if cacheErr != nil || parentFound {
-			return results, cacheErr
-		}
+	defer func() { _ = rows.Close() }()
 
-		fallback, fallbackErr := sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
-		if fallbackErr != nil {
-			return nil, fallbackErr
+	for rows.Next() {
+		var path, systemID string
+		if scanErr := rows.Scan(&path, &systemID); scanErr != nil {
+			return fmt.Errorf("scan directory cover: %w", scanErr)
 		}
-		if len(fallback) > 0 {
-			log.Warn().
-				Str("pathPrefix", opts.PathPrefix).
-				Strs("systems", browseSystemIDsForLog(opts.Systems)).
-				Int("directories", len(fallback)).
-				Msg("browse cache returned no directories; using media fallback")
+		if covered[path] == nil {
+			covered[path] = make(map[string]struct{})
 		}
-		return fallback, nil
+		covered[path][systemID] = struct{}{}
 	}
-	return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("directory cover rows: %w", rowsErr)
+	}
+	return nil
+}
+
+func fetchAndAttachDirectoryCoverFlags(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+	results []database.BrowseDirectoryResult,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+	imageTagIDs, err := resolveImagePropertyTagDBIDs(ctx, db)
+	if err != nil {
+		return fmt.Errorf("resolve image property tags: %w", err)
+	}
+	if len(imageTagIDs) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(results))
+	pathIndexes := make(map[string][]int, len(results))
+	for i := range results {
+		path, pathErr := browseDirectoryPropertyPath(opts, results[i])
+		if pathErr != nil {
+			continue
+		}
+		if _, seen := pathIndexes[path]; !seen {
+			paths = append(paths, path)
+		}
+		pathIndexes[path] = append(pathIndexes[path], i)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	requestedSystems := make(map[string]struct{}, len(opts.Systems))
+	for i := range opts.Systems {
+		requestedSystems[opts.Systems[i].ID] = struct{}{}
+	}
+	covered := make(map[string]map[string]struct{}, len(paths))
+	chunkSize := sqliteMaxParams - len(imageTagIDs)
+	if chunkSize <= 0 {
+		return fmt.Errorf("too many image property tag IDs: %d", len(imageTagIDs))
+	}
+	for start := 0; start < len(paths); start += chunkSize {
+		chunk := paths[start:min(start+chunkSize, len(paths))]
+		if err := fetchDirectoryCoverSystems(ctx, db, chunk, imageTagIDs, covered); err != nil {
+			return err
+		}
+	}
+
+	for path, indexes := range pathIndexes {
+		systems := covered[path]
+		if len(systems) == 0 {
+			continue
+		}
+		for _, idx := range indexes {
+			allowed := results[idx].SystemIDs
+			if len(allowed) == 0 && len(requestedSystems) > 0 {
+				for systemID := range systems {
+					if _, ok := requestedSystems[systemID]; ok {
+						results[idx].HasCover = true
+						break
+					}
+				}
+				continue
+			}
+			if len(allowed) == 0 {
+				results[idx].HasCover = true
+				continue
+			}
+			for _, systemID := range allowed {
+				if _, ok := systems[systemID]; ok {
+					results[idx].HasCover = true
+					break
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // browseOverlayDirectFilesCTE names the files sitting directly in each route, so

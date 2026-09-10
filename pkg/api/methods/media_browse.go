@@ -1335,6 +1335,7 @@ func buildBrowseResponse(
 			Type:      "directory",
 			FileCount: &dir.FileCount,
 			SystemIDs: dir.SystemIDs,
+			HasCover:  dir.HasCover,
 		}
 		if alias, ok := singletonAliases[strings.TrimSuffix(dirPath, "/")+"/"]; ok {
 			result := database.SearchResultWithCursor{
@@ -1354,7 +1355,7 @@ func buildBrowseResponse(
 			entry.ZapScript = mediaEntry.ZapScript
 			entry.Tags = mediaEntry.Tags
 			entry.DisambiguatingTags = mediaEntry.DisambiguatingTags
-			entry.HasCover = mediaEntry.HasCover
+			entry.HasCover = entry.HasCover || mediaEntry.HasCover
 		}
 		entries = append(entries, entry)
 	}
