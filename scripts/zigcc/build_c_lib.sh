@@ -10,6 +10,9 @@ EXTRA_CONFIGURE_ARGS=$3
 TARGETS_CSV=$4
 HOSTS_CSV=$5
 
+# Keep release hardening explicit; sanitizer builds override the complete policy.
+NATIVE_CFLAGS=${NATIVE_CFLAGS:--Os -fstack-protector-strong -fno-omit-frame-pointer}
+
 # Convert space-separated strings to arrays
 IFS=' ' read -r -a TARGET_ARRAY <<< "$TARGETS_CSV"
 IFS=' ' read -r -a HOST_ARRAY <<< "$HOSTS_CSV"
@@ -37,11 +40,11 @@ for i in "${!TARGET_ARRAY[@]}"; do
     # For libnfc, we need to point to the libusb dependencies in /opt/deps
     if [ "${LIB_NAME}" = "libnfc" ]; then
         export PKG_CONFIG_PATH="/opt/deps/${TARGET}/lib/pkgconfig"
-        export CFLAGS="-I/opt/deps/${TARGET}/include"
+        export CFLAGS="${NATIVE_CFLAGS} -I/opt/deps/${TARGET}/include"
         export LDFLAGS="-L/opt/deps/${TARGET}/lib"
     else
         export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig"
-        export CFLAGS="-I${PREFIX}/include"
+        export CFLAGS="${NATIVE_CFLAGS} -I${PREFIX}/include"
         export LDFLAGS="-L${PREFIX}/lib"
     fi
     
