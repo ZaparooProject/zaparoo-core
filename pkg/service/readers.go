@@ -311,6 +311,7 @@ func timedExit(
 	exitTimer clockwork.Timer,
 	exitGeneration *atomic.Uint64,
 	owner *tokens.Token,
+	ownerGeneration uint64,
 ) clockwork.Timer {
 	// Every path that does not arm a timer returns nil rather than the timer
 	// it was handed: that one was just cancelled, and a caller keeping it
@@ -421,7 +422,10 @@ func timedExit(
 			}
 		}
 		select {
-		case svc.LaunchSoftwareQueue <- nil:
+		case svc.LaunchSoftwareQueue <- softwareTokenUpdate{
+			ownerGeneration: ownerGeneration,
+			exitGeneration:  generation,
+		}:
 		case <-svc.State.GetContext().Done():
 			return
 		}
@@ -459,6 +463,7 @@ func readerManager(
 	removalHookResults := make(chan removalHookResult, 1)
 	var exitTimer clockwork.Timer
 	var exitGeneration atomic.Uint64
+	var ownerGeneration uint64
 	var removalHookGeneration uint64
 	var activeRemovalHook *pendingRemovalHook
 
@@ -472,7 +477,7 @@ func readerManager(
 		}
 		delete(pendingRemovals, key)
 		owner := withHoldOwnerTraits(svc.State, removedToken)
-		exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, &owner)
+		exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, &owner, ownerGeneration)
 	}
 
 	var stagedToken *tokens.Token
@@ -664,7 +669,13 @@ preprocessing:
 				log.Warn().Err(hookResult.err).Msg("on_remove hook blocked exit, media will keep running")
 			}
 			continue preprocessing
-		case stoken := <-svc.LaunchSoftwareQueue:
+		case update := <-svc.LaunchSoftwareQueue:
+			stoken := update.token
+			if stoken == nil && (update.ownerGeneration != ownerGeneration ||
+				update.exitGeneration != exitGeneration.Load()) {
+				log.Debug().Msg("ignoring stale hold-owner clear")
+				continue preprocessing
+			}
 			// A token has launched primary software and now owns hold-mode exit.
 			log.Debug().Msgf("new software token: %v", stoken)
 			if activeRemovalHook != nil && !helpers.TokensEqual(stoken, &activeRemovalHook.token) {
@@ -679,12 +690,15 @@ preprocessing:
 					log.Info().Msg("software token changed, cancelling exit")
 				}
 			}
+			// Even equal tokens can be distinct launches. Timer cancellation alone
+			// cannot distinguish an old exit from a same-card relaunch.
+			ownerGeneration++
 			svc.State.SetSoftwareToken(stoken)
 			if stoken != nil {
 				key := newHoldTokenKey(stoken)
 				if removedToken, ok := pendingRemovals[key]; ok && helpers.TokensEqual(stoken, &removedToken) {
 					delete(pendingRemovals, key)
-					exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, stoken)
+					exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, stoken, ownerGeneration)
 				}
 			}
 			continue preprocessing

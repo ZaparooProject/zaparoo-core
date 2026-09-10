@@ -326,7 +326,7 @@ func runTokenZapScriptWithContext(
 					softwareToken := *holdToken
 					log.Debug().Msg("media changed, updating hold owner")
 					select {
-					case svc.LaunchSoftwareQueue <- &softwareToken:
+					case svc.LaunchSoftwareQueue <- softwareTokenUpdate{token: &softwareToken}:
 					case <-runCtx.Done():
 						select {
 						case <-svc.State.GetContext().Done():
