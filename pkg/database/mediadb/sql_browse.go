@@ -648,14 +648,14 @@ func sqlBrowseDirectories(
 	// Decorate what the caller will actually see. Attaching cover flags before
 	// the hidden rows are dropped would query artwork for directories the page
 	// is about to discard.
-	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, opts, results); err != nil {
+	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, &opts, results); err != nil {
 		return nil, fmt.Errorf("browse directory cover flags: %w", err)
 	}
 	return results, nil
 }
 
 func browseDirectoryPropertyPath(
-	opts database.BrowseDirectoriesOptions, result database.BrowseDirectoryResult,
+	opts *database.BrowseDirectoriesOptions, result *database.BrowseDirectoryResult,
 ) (string, error) {
 	path := result.Path
 	if path == "" {
@@ -710,7 +710,7 @@ func fetchDirectoryCoverSystems(
 func fetchAndAttachDirectoryCoverFlags(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseDirectoriesOptions,
+	opts *database.BrowseDirectoriesOptions,
 	results []database.BrowseDirectoryResult,
 ) error {
 	if len(results) == 0 {
@@ -727,7 +727,7 @@ func fetchAndAttachDirectoryCoverFlags(
 	paths := make([]string, 0, len(results))
 	pathIndexes := make(map[string][]int, len(results))
 	for i := range results {
-		path, pathErr := browseDirectoryPropertyPath(opts, results[i])
+		path, pathErr := browseDirectoryPropertyPath(opts, &results[i])
 		if pathErr != nil {
 			continue
 		}
