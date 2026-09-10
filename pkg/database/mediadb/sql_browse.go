@@ -541,8 +541,21 @@ func sqlBrowseCacheStatus(ctx context.Context, db sqlQueryable) (browseCacheStat
 	return browseCacheStale, nil
 }
 
+// browseCacheDirKey converts a browse path into the key the cache builder
+// stores it under. browseCacheAncestorDirs hangs every filesystem directory
+// under "/", so a Windows directory such as C:/roms/ is stored as /C:/roms/.
+// Looking it up in the form callers hold never matched, which made every
+// cache lookup on Windows a miss: the root listing then reported every
+// filesystem root as empty and left it out.
+func browseCacheDirKey(dirPath string) string {
+	if dirPath == "" || strings.HasPrefix(dirPath, "/") || strings.Contains(dirPath, "://") {
+		return dirPath
+	}
+	return "/" + dirPath
+}
+
 func sqlBrowseDirID(ctx context.Context, db sqlQueryable, dirPath string) (id int64, ok bool, err error) {
-	err = db.QueryRowContext(ctx, `SELECT DBID FROM BrowseDirs WHERE Path = ?`, dirPath).Scan(&id)
+	err = db.QueryRowContext(ctx, `SELECT DBID FROM BrowseDirs WHERE Path = ?`, browseCacheDirKey(dirPath)).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
@@ -4053,7 +4066,11 @@ func sqlBrowseRootCounts(
 		if counts[root] == nil {
 			continue
 		}
-		visible := max(*counts[root]-hidden.countUnder(browseRouteCacheKey(root), nil), 0)
+		// Hidden rows carry Media.Path, which is the cleaned forward-slash
+		// form; a root arrives as the platform reports it, which on Windows
+		// has backslashes and would match nothing.
+		prefix := browseRouteCacheKey(browseCacheNormalizePath(root))
+		visible := max(*counts[root]-hidden.countUnder(prefix, nil), 0)
 		counts[root] = &visible
 	}
 	return counts, nil
@@ -4081,7 +4098,10 @@ func sqlBrowseRootCountsFromCache(
 	for _, root := range rootDirs {
 		count := 0
 		counts[root] = &count
-		dirID, ok, lookupErr := sqlBrowseDirID(ctx, db, browseRouteCacheKey(root))
+		// The platform reports roots in native form; the cache keys them
+		// cleaned with forward slashes.
+		key := browseRouteCacheKey(browseCacheNormalizePath(root))
+		dirID, ok, lookupErr := sqlBrowseDirID(ctx, db, key)
 		if lookupErr != nil {
 			return nil, lookupErr
 		}
@@ -4090,7 +4110,7 @@ func sqlBrowseRootCountsFromCache(
 		}
 		var dbCount int
 		query := `SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`
-		if browseRouteCacheKey(root) != "/" {
+		if key != "/" {
 			query += ` AND ParentDirDBID != ChildDirDBID`
 		}
 		if scanErr := db.QueryRowContext(ctx, query, dirID).Scan(&dbCount); scanErr != nil {
