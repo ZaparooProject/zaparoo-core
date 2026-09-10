@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
@@ -268,6 +269,9 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 	mockPlatform.On("StartPre", cfg).Return(nil)
 	mockPlatform.On("Stop").Return(nil).Maybe()
 
+	// The runtime keeps the crash file open until the process exits, which
+	// stops Windows removing this test's TempDir.
+	t.Cleanup(crashdump.Stop)
 	svcResult, err := Start(mockPlatform, cfg)
 	require.Nil(t, svcResult)
 	require.Error(t, err)

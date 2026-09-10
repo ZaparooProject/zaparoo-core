@@ -30,6 +30,8 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -385,6 +387,14 @@ func startService(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (*StartResult, error) {
+	// CLI and widget processes never enter here, so they cannot rotate the
+	// running service's crash file. Capture must precede native initialization.
+	previousCrash, crashErr := crashdump.Start(helpers.DataDir(pl), config.AppVersion)
+	if crashErr != nil {
+		log.Warn().Err(crashErr).Msg("could not initialize persistent crash capture")
+	}
+	telemetry.ReportCrash(previousCrash)
+
 	// A config file created outside Core can lack a device ID. The service
 	// daemon owns device identity (TUI/CLI processes only read it), so
 	// mint and persist one before anything reads it. Save generates a

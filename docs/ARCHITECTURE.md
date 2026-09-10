@@ -55,6 +55,16 @@ Clients consume `ui.changed`, replace local state using newest `revision`, query
 - **Thread-safe**: `config.Instance` uses `syncutil.RWMutex`
 - Maintain backward compatibility — use migrations for breaking changes
 
+## Crash Evidence
+
+Service startup registers Go's `debug.SetCrashOutput` before native initialization. Crash output goes to `core.crash.log` in the platform's persistent data directory (`/media/fat/zaparoo` on MiSTer), independently of routine logs and stderr capture. A small version header is written at startup; subsequent writes are runtime fatal output, using synchronous file writes.
+
+On the next service start, a crash is renamed to `core.crash.previous.log` before fresh capture opens. Healthy starts leave that previous crash untouched; a newer crash replaces it. Both files travel with log bundles, with crash evidence taking priority over routine logs within upload limits.
+
+When error reporting is enabled, rotation triggers one best-effort Sentry event containing crash kind, original release, and selected code symbols. Raw panic messages, argument values, source paths, and register contents remain local. Reporting never deletes evidence. There is no upload retry queue; disabling telemetry or failed delivery does not prevent local retention.
+
+Coverage includes unrecovered Go panics, runtime fatal errors, and native signals handled by the Go runtime (such as a normal C `abort()` on Linux). Native exits that bypass Go, SIGKILL, power loss, and failures before capture registration are not covered. Synchronous writes reduce reset-related data loss but cannot guarantee SD hardware behavior during abrupt power removal.
+
 ## Profiles
 
 Device profiles are named buckets of preferences and limits, with no passwords or accounts. See `pkg/service/profiles/`.
