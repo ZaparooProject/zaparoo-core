@@ -491,6 +491,9 @@ func startMediaScrapeOperation(
 	params := models.MediaScrapeParams{
 		ScraperID: operation.ScraperID, Systems: operation.Systems, Force: operation.Force,
 	}
+	// A resumed or queued job already carries a resolved scope; a fresh request
+	// resolves one from its parameters below.
+	scope := operation.Scope
 	platformScrapers := env.Platform.Scrapers(env.Config)
 	s, ok := platformScrapers[params.ScraperID]
 	var startErr error
@@ -517,6 +520,28 @@ func startMediaScrapeOperation(
 		}
 	}()
 
+	// Resolve while holding the indexing exclusion lease so IDs cannot change
+	// between validation and the background scraper's selection queries.
+	if scope == nil {
+		scope, err = resolveScrapeScope(env, params)
+	} else {
+		err = scope.Validate()
+		if err == nil && !scope.Subtree {
+			var rows []database.MediaFullRow
+			rows, err = env.Database.MediaDB.GetScrapeMedia(env.Context, *scope)
+			if err == nil && len(rows) != 1 {
+				err = models.ClientErrf("stored scrape media no longer exists")
+			}
+		}
+	}
+	if err != nil {
+		scrapingStatusInstance.clear()
+		return nil, err
+	}
+	if scope != nil {
+		params.Systems = []string{scope.SystemID}
+	}
+
 	ns := env.State.Notifications
 	db := env.Database
 	preparingStatus := models.ScrapingStatusResponse{
@@ -528,6 +553,9 @@ func startMediaScrapeOperation(
 	}
 	publishScrapingStatus(ns, &preparingStatus)
 
+	// The durable record has to carry the resolved scope, or a resume after a
+	// restart would widen the request back to its whole system.
+	operation.Scope, operation.Systems = scope, params.Systems
 	if err := scrapingStatusInstance.persistStart(env.Database.MediaDB, &operation, resume); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
 		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
@@ -553,7 +581,7 @@ func startMediaScrapeOperation(
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 	throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
 	opts := scraper.ScrapeOptions{
-		Systems: params.Systems, RunID: runID, Force: params.Force,
+		Scope: scope, Systems: params.Systems, RunID: runID, Force: params.Force,
 		FillMissing: operation.FillMissing, Pauser: env.ScrapePauser,
 	}
 	ch := make(chan scraper.ScrapeUpdate, 32)

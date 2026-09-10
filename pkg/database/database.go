@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -44,11 +45,14 @@ type Database struct {
 // ScrapeJob is shared by explicit requests, index-triggered requests, and recovery.
 // RunID scopes completed-row markers to this particular request.
 type ScrapeJob struct {
-	ScraperID   string   `json:"scraperId"`
-	RunID       string   `json:"runId,omitempty"`
-	Systems     []string `json:"systems"`
-	Force       bool     `json:"force"`
-	FillMissing bool     `json:"fillMissing,omitempty"`
+	// Scope narrows the job the same way ScrapingOperation.Scope does, so a
+	// scoped request that is queued behind another still runs scoped.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
 }
 
 // ScrapingOperation retains the legacy current-job fields while adding ordinary
@@ -56,14 +60,18 @@ type ScrapeJob struct {
 type ScrapingOperation struct {
 	// Status is authoritative for versioned jobs, so queue acceptance and
 	// cancellation do not depend on a second config-key write.
-	Status      string      `json:"status,omitempty"`
-	ScraperID   string      `json:"scraperId"`
-	RunID       string      `json:"runId,omitempty"`
-	Systems     []string    `json:"systems"`
-	Pending     []ScrapeJob `json:"pending,omitempty"`
-	Version     int         `json:"version,omitempty"`
-	Force       bool        `json:"force"`
-	FillMissing bool        `json:"fillMissing,omitempty"`
+	// Scope narrows the run to one indexed item, file or subtree. A queued job
+	// carries its own, or resuming after an index would silently widen a
+	// single-file request into a whole-system scrape.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	Status      string       `json:"status,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Pending     []ScrapeJob  `json:"pending,omitempty"`
+	Version     int          `json:"version,omitempty"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
 }
 
 // Validate checks persisted job options before any scraper can execute them.
@@ -84,6 +92,16 @@ func (o *ScrapingOperation) Validate() error {
 	for _, job := range o.Pending {
 		if job.ScraperID == "" || job.Force && job.FillMissing {
 			return errors.New("invalid pending scraper job")
+		}
+		if job.Scope != nil {
+			if err := job.Scope.Validate(); err != nil {
+				return fmt.Errorf("invalid pending scraper job scope: %w", err)
+			}
+		}
+	}
+	if o.Scope != nil {
+		if err := o.Scope.Validate(); err != nil {
+			return fmt.Errorf("invalid scraping operation scope: %w", err)
 		}
 	}
 	return nil
@@ -1277,6 +1295,10 @@ type MediaDBI interface {
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	// GetScrapeMedia selects present indexed media and their titles within an exact resolved scope.
+	GetScrapeMedia(ctx context.Context, scope ScrapeScope) ([]MediaFullRow, error)
+	// GetScopedScrapeMediaIDs selects sentinel or force-run markers without loading an entire system.
+	GetScopedScrapeMediaIDs(ctx context.Context, scope ScrapeScope, scraperID, runID string) (map[int64]struct{}, error)
 
 	// Scraper support methods
 

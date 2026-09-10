@@ -2285,8 +2285,39 @@ An object:
 | Key       | Type     | Required | Description                                                                 |
 | :-------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | scraperId | string   | Yes      | Scraper ID from the `scrapers` method, for example `gamelist.xml`.          |
-| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. |
-| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag. Default is false. |
+| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. Cannot be combined with `scope`. |
+| scope     | object   | No       | Select one indexed media item or one directory subtree; see below. |
+| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag, within the selected scope. Default is false. |
+
+#### Scope
+
+Without `scope` (or with `scope: null`), existing `systems` behavior is unchanged. Otherwise, supply exactly one of these forms:
+
+```json
+{"scope": {"mediaId": 42}}
+```
+
+```json
+{"scope": {"file": {"system": "SNES", "path": "/games/SNES/Game.sfc"}}}
+```
+
+```json
+{"scope": {"subtree": {"system": "SNES", "path": "/games/SNES/RPG"}}}
+```
+
+These are parameter fragments; `scraperId` is still required.
+
+- `mediaId` must be a positive indexed media ID, available from `media.search` or `media.browse` **before scraping**. Use it when available; clients that only have a file path can use `file` instead.
+- `file` matches one indexed file or virtual URI exactly. It does not resolve a directory to its launch target. `subtree` selects indexed files below a directory recursively, within the specified system. `/games/foo` does not select `/games/foobar`. A filesystem or volume root is valid.
+- `system` accepts canonical IDs and existing system aliases, case-insensitively, and must identify an indexed system. Path spelling is **case-sensitive on all platforms**, including Windows; use the indexed spelling. Windows native separators and forward slashes are accepted. On Unix, backslashes are literal filename characters.
+- Filesystem paths must be absolute. Relative paths, `..` components, control characters, invalid UTF-8, and paths longer than 4096 bytes are rejected. Repeated native separators, `.` components, and trailing separators are normalized. Paths are matched lexically against the index; symlinks are not resolved and directories are not scanned.
+- Virtual URIs such as `steam://123` are opaque, exact identities supported by `mediaId` or `file`; they are not valid subtree paths. Whether metadata exists depends on the selected scraper's sources.
+- Missing or index-marked-missing IDs/files are client errors. A valid subtree with no present indexed matches succeeds with zero work, even if that directory no longer exists. Unindexed media must be indexed first.
+- Empty scope objects, unknown scope fields, multiple scope forms, and combining `scope` with `systems` (including `[]`) are client errors. Selector arrays are not supported. Duplicate source matches do not scrape a selected media row more than once per run.
+- Scoped progress counts selected media rows: `total` is selection size; unmatched, already-scraped, and already-completed-on-resume rows count as skipped. `totalScraped` retains its existing scraper/library-wide meaning. Source files may still need parsing even when only one media row is selected.
+- Metadata and cleanup writes stay within selected media and their shared titles. Title-level metadata is shared with other ROMs of that title, so those ROMs may display updated title metadata too.
+- Interrupted operations persist normalized scope and force-run markers. Restart recovery restores that scope, never a whole-system fallback. Single-item scopes also pin system and path alongside the ID; an identity that disappeared or changed fails recovery. Subtrees are re-queried within the same stored boundary, not snapshotted as an ID list.
+- Status, cancellation, and playback pause/resume remain operation-wide. Cancellation discards resumable operation state; `media.scrape.resume` resumes a playback-paused run, not a cancelled run. IDs are local to the current media database and are not portable across rebuilds.
 
 #### Result
 

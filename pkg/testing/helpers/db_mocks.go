@@ -2339,6 +2339,34 @@ func (m *MockMediaDBI) GetTitlesBySystemID(systemID string) ([]database.TitleWit
 }
 
 // GetMediaBySystemID mock method for per-system lazy loading during resume
+func (m *MockMediaDBI) GetScrapeMedia(
+	ctx context.Context, scope database.ScrapeScope,
+) ([]database.MediaFullRow, error) {
+	args := m.Called(ctx, scope)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock scoped media: %w", err)
+	}
+	rows, ok := args.Get(0).([]database.MediaFullRow)
+	if !ok {
+		return nil, nil //nolint:nilnil // Mock nil represents no matching rows.
+	}
+	return rows, nil
+}
+
+func (m *MockMediaDBI) GetScopedScrapeMediaIDs(
+	ctx context.Context, scope database.ScrapeScope, scraperID, runID string,
+) (map[int64]struct{}, error) {
+	args := m.Called(ctx, scope, scraperID, runID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock scoped markers: %w", err)
+	}
+	ids, ok := args.Get(0).(map[int64]struct{})
+	if !ok {
+		return nil, nil //nolint:nilnil // Mock nil represents no matching markers.
+	}
+	return ids, nil
+}
+
 func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
 	// Try to get mock expectations, but don't fail if none are set
 	if len(m.ExpectedCalls) > 0 {

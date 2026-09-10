@@ -153,6 +153,9 @@ func (s *scrapingStatus) advance(
 		Version: 1, Status: mediadb.IndexingStatusPending,
 		ScraperID: job.ScraperID, Systems: job.Systems, Force: job.Force,
 		FillMissing: job.FillMissing, RunID: job.RunID, Pending: current.Pending[1:],
+		// Without this a queued single-file request is promoted to a
+		// whole-system scrape when its turn comes.
+		Scope: job.Scope,
 	}
 	if next.RunID == "" && (next.Force || next.FillMissing) {
 		next.RunID = uuid.NewString()

@@ -82,10 +82,24 @@ func sameScrapeJob(a, b *database.ScrapeJob) bool {
 	if a.ScraperID != b.ScraperID || a.Force != b.Force || a.FillMissing != b.FillMissing {
 		return false
 	}
+	// Scope is part of a job's identity. A single-file request and a
+	// whole-system one name the same scraper and the same system, so ignoring
+	// it here would let the dedupe below discard one of them.
+	if !sameScrapeScope(a.Scope, b.Scope) {
+		return false
+	}
 	x, y := slices.Clone(a.Systems), slices.Clone(b.Systems)
 	sort.Strings(x)
 	sort.Strings(y)
 	return slices.Equal(slices.Compact(x), slices.Compact(y))
+}
+
+// sameScrapeScope compares two optional scopes, treating absent as unscoped.
+func sameScrapeScope(a, b *database.ScrapeScope) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // enqueueScrapeJobs runs while indexing owns the media write lease. It only
@@ -113,6 +127,10 @@ func enqueueScrapeJobs(db database.MediaDBI, jobs []database.ScrapeJob) error {
 		queued = append(queued, database.ScrapeJob{
 			ScraperID: op.ScraperID, RunID: op.RunID,
 			Systems: op.Systems, Force: op.Force, FillMissing: op.FillMissing,
+			// A scoped run that is in flight when an index finishes is folded
+			// back into the queue here. Dropping its scope would turn a
+			// single-file request into a scrape of the whole system.
+			Scope: op.Scope,
 		})
 		queued = append(queued, op.Pending...)
 	}
@@ -131,6 +149,8 @@ func enqueueScrapeJobs(db database.MediaDBI, jobs []database.ScrapeJob) error {
 		Version: 1, Status: mediadb.IndexingStatusPending,
 		ScraperID: first.ScraperID, Systems: first.Systems, RunID: first.RunID, Force: first.Force,
 		FillMissing: first.FillMissing, Pending: queued[1:],
+		// The head becomes the current operation again, scope included.
+		Scope: first.Scope,
 	}
 	if err := op.Validate(); err != nil {
 		return fmt.Errorf("validate scrape queue: %w", err)

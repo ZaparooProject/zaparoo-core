@@ -218,6 +218,7 @@ tasks:
           "FuzzExtractSpecialPatterns ./pkg/database/tags"
           "FuzzParseLine ./pkg/readers/rs232barcode"
           "FuzzDecodeURIIfNeeded ./pkg/helpers"
+          "FuzzCanonicalScrapePath ./pkg/database"
           "FuzzIsValidExtension ./pkg/helpers"
           "FuzzFilenameFromPath ./pkg/helpers"
           "FuzzContainsControlChar ./pkg/helpers"

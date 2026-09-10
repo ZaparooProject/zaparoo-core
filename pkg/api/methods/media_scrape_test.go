@@ -912,6 +912,9 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	statusInstance.clear()
 
 	operation := database.ScrapingOperation{
+		Scope: &database.ScrapeScope{
+			SystemID: "SNES", Path: filepath.ToSlash(filepath.Join(t.TempDir(), "games")), Subtree: true,
+		},
 		ScraperID: "resume-scraper",
 		Systems:   []string{"SNES"},
 		RunID:     "resume-run",
@@ -958,6 +961,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	require.NoError(t, ResumeMediaScrape(&env, operation))
 	assert.Equal(t, []string{"SNES"}, gotOptions.Systems)
 	assert.Equal(t, "resume-run", gotOptions.RunID)
+	assert.Equal(t, operation.Scope, gotOptions.Scope)
 	assert.True(t, gotOptions.Force)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
@@ -1760,4 +1764,61 @@ func TestCheckpointScrapingWAL_Success(t *testing.T) {
 
 	assert.False(t, checkpointScrapingWAL(mockDB, "scraper-1"))
 	mockDB.AssertNotCalled(t, "NoteCorruption", assertmock.Anything)
+}
+
+// A scoped request is the whole point of media.scrape scopes, and the queue
+// flattens the running operation into a job when an index finishes. Dropping
+// the scope there turns a single-file request into a scrape of its whole
+// system, silently and only on installs that index while one is running.
+func TestScrapeQueueKeepsScopeAcrossTheQueue(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	scope := &database.ScrapeScope{SystemID: "SNES", Path: "/roms/SNES/game.sfc", MediaID: 7}
+	running := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "manual", RunID: "retained", Systems: []string{"SNES"}, Scope: scope,
+	}
+	db.On("GetScrapingOperation").Return(running, true, nil).Once()
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+			stored = operation
+		}
+	}).Return(nil).Once()
+	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+
+	// A post-index fill-missing job for the same scraper and system must not be
+	// deduplicated against the scoped one: they are different requests.
+	wide := database.ScrapeJob{ScraperID: "manual", FillMissing: true, Systems: []string{"SNES"}}
+	require.NoError(t, enqueueScrapeJobs(db, []database.ScrapeJob{wide}))
+	require.Equal(t, scope, stored.Scope, "the running scope must survive being folded into the queue")
+	require.Len(t, stored.Pending, 1, "a whole-system job is not a duplicate of a scoped one")
+	require.Nil(t, stored.Pending[0].Scope)
+	db.AssertExpectations(t)
+}
+
+// advance promotes the head of the queue to the current operation.
+func TestScrapeQueueAdvancePromotesJobScope(t *testing.T) {
+	ClearScrapingStatus()
+	t.Cleanup(ClearScrapingStatus)
+	db := testhelpers.NewMockMediaDBI()
+	scope := &database.ScrapeScope{SystemID: "NES", Path: "/roms/NES", Subtree: true}
+	current := database.ScrapingOperation{
+		Version: 1, ScraperID: "first", Pending: []database.ScrapeJob{
+			{ScraperID: "second", Systems: []string{"NES"}, Scope: scope},
+		},
+	}
+	var stored database.ScrapingOperation
+	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
+		if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+			stored = operation
+		}
+	}).Return(nil).Once()
+
+	next, err := scrapingStatusInstance.advance(t.Context(), db, &current)
+	require.NoError(t, err)
+	require.Equal(t, scope, next.Scope, "a queued scope must survive promotion")
+	require.Equal(t, scope, stored.Scope, "and must be persisted with it")
+	db.AssertExpectations(t)
 }
