@@ -488,9 +488,10 @@ func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
 
 	launcher := &platforms.Launcher{
-		ID:        "Steam",
-		SystemID:  "pc",
-		Lifecycle: platforms.LifecycleFireAndForget,
+		ID:              "Steam",
+		SystemID:        "pc",
+		Lifecycle:       platforms.LifecycleFireAndForget,
+		SupportsDetails: true,
 		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 			// Fire-and-forget launcher returns no process handle
 			var noProcess *os.Process
@@ -1047,4 +1048,43 @@ func TestDoLaunch_ProceedsWhenNothingWasRunning(t *testing.T) {
 	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "Brotato" }))
 	assert.True(t, launchCalled)
 	mockPlatform.AssertExpectations(t)
+}
+
+// A launcher with no details concept — every MiSTer launcher, for one — used to
+// receive a details request as an ordinary launch: it loaded the media and
+// DoLaunch merely skipped publishing it as active, so the media played while
+// Core reported nothing running. The request is refused instead.
+func TestDoLaunch_DetailsRefusedWhenLauncherCannotShowThem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	// Registered so an unexpected call is counted rather than panicking.
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
+
+	launched := false
+	launcher := &platforms.Launcher{
+		ID:        "MisterNES",
+		SystemID:  "NES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launched = true
+			return nil, nil //nolint:nilnil // Mirrors a fire-and-forget launcher.
+		},
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) { t.Error("must not publish active media") },
+		Launcher:       launcher,
+		Path:           "/media/fat/games/NES/game.nes",
+		Options:        &platforms.LaunchOptions{Action: "details"},
+	}
+
+	err := platforms.DoLaunch(params, func(string) string { return "game" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot show details")
+	assert.False(t, launched, "the media must not be launched for a details request")
+	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
 }

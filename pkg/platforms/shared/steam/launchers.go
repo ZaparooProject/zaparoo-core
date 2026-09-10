@@ -75,6 +75,8 @@ func NewSteamLauncher(opts Options) platforms.Launcher {
 			return results, nil
 		},
 		Preflight: client.Preflight,
+		// Steam's Launch opens the store page for a details request.
+		SupportsDetails: true,
 		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			return client.Launch(cfg, path, opts)
 		},

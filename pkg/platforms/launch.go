@@ -173,6 +173,13 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 	}
 
+	// A launcher that ignores the action would launch the media for a details
+	// request and only skip publishing it, which is not what was asked for.
+	// Checked after Preflight so an automatic redirect is judged the same way.
+	if IsActionDetails(params.Options.Action) && !params.Launcher.SupportsDetails {
+		return fmt.Errorf("launcher %q cannot show details for: %s", params.Launcher.ID, params.Path)
+	}
+
 	// Stop any currently running launcher only after validating the
 	// replacement. A details request opens an information page instead of
 	// starting anything, so it must leave the running media alone.
