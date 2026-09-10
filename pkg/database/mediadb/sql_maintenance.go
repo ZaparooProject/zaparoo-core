@@ -108,6 +108,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	// that the vocabulary rows exist, and leaving it behind would make the next
 	// index run skip seeding them into the now-empty tables.
 	sqlStmt := `
+	delete from DirectoryProperties;
 	delete from MediaProperties;
 	delete from MediaTitleProperties;
 	delete from MediaBlobs;
@@ -193,9 +194,9 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		_, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS _tts_candidate_tags")
 	}()
 
-	// Each UNION branch needs its own copy of the system DBID args (4 branches).
-	candidateArgs := make([]any, 0, len(systemDBIDs)*4)
-	for range 4 {
+	// Each UNION branch needs its own copy of the system DBID args (5 branches).
+	candidateArgs := make([]any, 0, len(systemDBIDs)*5)
+	for range 5 {
 		candidateArgs = append(candidateArgs, systemDBIDs...)
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
@@ -211,7 +212,10 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))
 		UNION
 		    SELECT TypeTagDBID FROM MediaProperties
-		        WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))`,
+		        WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))
+		UNION
+		    SELECT TypeTagDBID FROM DirectoryProperties
+		        WHERE SystemDBID IN (%[1]s)`,
 		dbidPlaceholders), candidateArgs...); err != nil {
 		return fmt.Errorf("failed to collect candidate tags: %w", err)
 	}
@@ -227,6 +231,14 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	}()
 
 	// Delete children in reverse dependency order, scoped to target SystemDBIDs.
+	// DirectoryProperties references Systems directly and must be explicit while
+	// foreign key enforcement is disabled.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM DirectoryProperties WHERE SystemDBID IN (%s)",
+		dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete DirectoryProperties: %w", err)
+	}
 	// MediaTags references Media(DBID) — must route through Media.SystemDBID.
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
@@ -280,7 +292,8 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		      AND NOT EXISTS (SELECT 1 FROM MediaTags            WHERE TagDBID     = Tags.DBID)
 		      AND NOT EXISTS (SELECT 1 FROM MediaTitleTags       WHERE TagDBID     = Tags.DBID)
 		      AND NOT EXISTS (SELECT 1 FROM MediaTitleProperties WHERE TypeTagDBID = Tags.DBID)
-		      AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`)
+		      AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM DirectoryProperties  WHERE TypeTagDBID = Tags.DBID)`)
 	if err != nil {
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
@@ -455,7 +468,8 @@ func sqlCleanMediaOrphans(ctx context.Context, db *sql.DB) (int64, error) {
 		  AND NOT EXISTS (SELECT 1 FROM MediaTags            WHERE TagDBID     = Tags.DBID)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTitleTags       WHERE TagDBID     = Tags.DBID)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTitleProperties WHERE TypeTagDBID = Tags.DBID)
-		  AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`,
+		  AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)
+		  AND NOT EXISTS (SELECT 1 FROM DirectoryProperties  WHERE TypeTagDBID = Tags.DBID)`,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to clean up orphaned tags: %w", err)

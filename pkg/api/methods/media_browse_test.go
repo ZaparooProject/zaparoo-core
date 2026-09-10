@@ -1582,11 +1582,13 @@ func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T
 	}
 
 	tests := []struct {
-		name          string
-		aliasHasCover bool
+		name              string
+		aliasHasCover     bool
+		directoryHasCover bool
 	}{
-		{name: "HasCover true propagates", aliasHasCover: true},
-		{name: "HasCover false propagates", aliasHasCover: false},
+		{name: "alias cover propagates", aliasHasCover: true},
+		{name: "no cover stays false"},
+		{name: "directory cover survives alias enrichment", directoryHasCover: true},
 	}
 
 	for _, tt := range tests {
@@ -1615,8 +1617,9 @@ func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T
 				Platform: mockPlatform,
 			}
 			result, err := buildBrowseResponse(env, path,
-				[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
-				nil, defaultMaxResults, 0, 0, nil, false, systems)
+				[]database.BrowseDirectoryResult{{
+					Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}, HasCover: tt.directoryHasCover,
+				}}, nil, defaultMaxResults, 0, 0, nil, false, systems)
 			require.NoError(t, err)
 			browseResults, ok := result.(models.BrowseResults)
 			require.True(t, ok)
@@ -1624,7 +1627,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T
 			entry := browseResults.Entries[0]
 			assert.Equal(t, "directory", entry.Type)
 			assert.Equal(t, row.DBID, entry.MediaID)
-			assert.Equal(t, tt.aliasHasCover, entry.HasCover)
+			assert.Equal(t, tt.aliasHasCover || tt.directoryHasCover, entry.HasCover)
 			mockMediaDB.AssertExpectations(t)
 			mockPlatform.AssertExpectations(t)
 		})

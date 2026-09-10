@@ -319,6 +319,29 @@ func TestArtworkDirCandidates_ContainsExpectedESDirs(t *testing.T) {
 	assert.Contains(t, ArtworkDirCandidates[string(tags.TagPropertyImageTitleshot)], "titlescreens")
 }
 
+func TestDirectoryArtworkFallbackNames_MirrorsThenFallsBackFlat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	names := DirectoryArtworkFallbackNames(filepath.Join(root, "RPGs", "Cool Game"), root)
+
+	require.NotEmpty(t, names)
+	assert.Equal(t, filepath.Join("RPGs", "Cool Game.png"), names[0])
+	assert.Contains(t, names, "Cool Game.png")
+	assert.Empty(t, DirectoryArtworkFallbackNames(root, root), "system root is not its own child directory")
+}
+
+func TestDirectoryArtworkFallbackNames_StripsAdditionalDiscExtensions(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, ext := range []string{".img", ".pbp"} {
+		names := DirectoryArtworkFallbackNames(filepath.Join(root, "Cool Game"+ext), root)
+		assert.Contains(t, names, "Cool Game"+ext+".png")
+		assert.Contains(t, names, "Cool Game.png")
+	}
+}
+
 func TestContainerArtworkFallbackNames_FlatDiscFolder(t *testing.T) {
 	t.Parallel()
 
