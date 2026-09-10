@@ -132,6 +132,14 @@ func TestCrashCaptureSubprocess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix native-abort probe; Windows runtime execution is left to native CI")
 	}
+	// The probe is cgo (it aborts through C to exercise a native fatal path),
+	// so it cannot be built at all with cgo off. go build would fail and the
+	// require below would report it as a crash-capture failure.
+	cgo, cgoErr := exec.CommandContext(t.Context(), "go", "env", "CGO_ENABLED").Output()
+	require.NoError(t, cgoErr)
+	if strings.TrimSpace(string(cgo)) != "1" {
+		t.Skip("native-abort probe needs cgo")
+	}
 	binary := filepath.Join(t.TempDir(), "crash-probe")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./testdata/crash")
 	output, err := build.CombinedOutput()

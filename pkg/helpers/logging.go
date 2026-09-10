@@ -134,10 +134,8 @@ func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
 		if len(bytes.TrimSpace(body)) == 0 {
 			continue
 		}
-		if !capture.tail && bytes.HasPrefix(body, []byte("zaparoo-core@")) {
-			if _, rest, ok := bytes.Cut(body, []byte("\n")); ok && len(bytes.TrimSpace(rest)) == 0 {
-				continue // version header alone means no crash
-			}
+		if !capture.tail && crashCaptureHeaderOnly(body) {
+			continue
 		}
 		_, _ = captures.WriteString(label)
 		_, _ = captures.Write(body)
@@ -159,6 +157,22 @@ func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
 	}
 	_, _ = buf.Write(captures.Bytes())
 	return buf.Bytes(), nil
+}
+
+// crashCaptureHeaderOnly reports whether a crash capture holds only the version
+// header written when the file is opened, and so records no crash.
+//
+// A budget too small to reach the header's newline yields a fragment, which is
+// what the smallest bundles hand this: the fragment says nothing, but left in it
+// spends the budget the previous crash file needs. A fragment shorter than the
+// prefix does not even start with it, so both directions have to be checked.
+func crashCaptureHeaderOnly(body []byte) bool {
+	prefix := []byte(crashdump.VersionPrefix)
+	header, rest, ok := bytes.Cut(body, []byte("\n"))
+	if !ok {
+		return bytes.HasPrefix(body, prefix) || bytes.HasPrefix(prefix, body)
+	}
+	return bytes.HasPrefix(header, prefix) && len(bytes.TrimSpace(rest)) == 0
 }
 
 // readCapture bounds reads as well as output. Preserve the crash header and
