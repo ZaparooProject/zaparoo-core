@@ -758,6 +758,15 @@ func TestRunningForAutoStartToleratesStalePIDFile(t *testing.T) {
 	assert.False(t, running)
 	assert.True(t, pidRunning(process.Process.Pid), "the unrelated process must be untouched")
 	assert.FileExists(t, pidFile, "and its PID file is Start's to clear, not this call's")
+
+	// Only the recoverable conflict is tolerated. A PID file that cannot be
+	// read at all is a real fault, and reporting it as "not running" would
+	// start a second service on top of whatever the unreadable file described.
+	require.NoError(t, os.WriteFile(pidFile, []byte("not a pid"), 0o600))
+	running, err = svc.RunningForAutoStart()
+	require.Error(t, err, "an unreadable PID file must not be reported as not running")
+	assert.False(t, running)
+	assert.False(t, IsStalePIDConflict(err))
 }
 
 func TestStartRecoversLiveUnrelatedPID(t *testing.T) {
