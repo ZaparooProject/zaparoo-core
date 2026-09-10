@@ -241,8 +241,17 @@ func repairBrowseSortIndex(mediaDB *mediadb.MediaDB) {
 	if activeMediaWriteOperation(mediaDB) != database.MediaWriteOperationNone {
 		return
 	}
-	if status, err := mediaDB.GetIndexingStatus(); err == nil &&
-		(status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending) {
+	status, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		// The persisted status is the only thing that knows about an index
+		// interrupted in a previous run; HasBackgroundOperations does not see
+		// it until GenerateMediaDB registers its goroutine. Not knowing means
+		// not rebuilding, or this races the secondary-index drop of a resuming
+		// full run.
+		log.Warn().Err(err).Msg("skipping browse sort index check: indexing status unavailable")
+		return
+	}
+	if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
 		return
 	}
 	go func() {
