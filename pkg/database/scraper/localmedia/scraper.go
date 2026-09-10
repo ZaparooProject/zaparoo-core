@@ -342,20 +342,29 @@ func (s *scraperImpl) availableDirsByRoot(roots []string) map[string]map[string]
 
 func indexedDirectoryPaths(rows []database.MediaWithFullPath, roots []string) []string {
 	directories := make(map[string]struct{})
+	// The roots are fixed for the whole call, and filepath.Abs on a relative
+	// one is a getwd syscall, so resolving them per row would charge a system
+	// its row count in syscalls for an answer that never changes. An empty
+	// entry marks a root that would not resolve.
+	rootAbsolute := make([]string, len(roots))
+	for i, root := range roots {
+		if abs, err := filepath.Abs(root); err == nil {
+			rootAbsolute[i] = filepath.Clean(abs)
+		}
+	}
 	for i := range rows {
 		if rows[i].IsMissing {
 			continue
 		}
-		for _, root := range roots {
+		for rootIndex, root := range roots {
 			resolved := esmedia.ResolvePath(rows[i].Path, root)
 			if resolved == "" {
 				continue
 			}
-			rootAbs, err := filepath.Abs(root)
-			if err != nil {
+			rootAbs := rootAbsolute[rootIndex]
+			if rootAbs == "" {
 				break
 			}
-			rootAbs = filepath.Clean(rootAbs)
 			dir := filepath.Dir(resolved)
 			for dir != rootAbs && esmedia.PathWithinRoot(dir, rootAbs) {
 				if dir == "." || dir == string(filepath.Separator) {
