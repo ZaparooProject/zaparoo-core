@@ -34,6 +34,7 @@ const (
 	SchemeBottles    = "bottles"
 	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
+	SchemePopper     = "popper"
 )
 
 // Kodi URI scheme constants for Kodi media library items.
@@ -63,6 +64,7 @@ var customSchemes = []string{
 	SchemeBottles,
 	SchemeFaugus,
 	SchemeGOG,
+	SchemePopper,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,

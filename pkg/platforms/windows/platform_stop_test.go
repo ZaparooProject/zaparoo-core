@@ -66,6 +66,30 @@ func shortenStopTimeouts(t *testing.T) {
 	})
 }
 
+func TestReturnToMenuStopsActiveLauncher(t *testing.T) {
+	t.Parallel()
+	p, currentMedia := stopTestPlatform(testActiveMedia())
+	calls := 0
+	p.setLastLauncher(&platforms.Launcher{ID: "PinUPPopper", Kill: func(*config.Instance) error {
+		calls++
+		return nil
+	}})
+	require.NoError(t, p.ReturnToMenu())
+	require.Equal(t, 1, calls)
+	require.Nil(t, currentMedia())
+}
+
+func TestReturnToMenuPreservesMediaWhenStopFails(t *testing.T) {
+	t.Parallel()
+	media := testActiveMedia()
+	p, currentMedia := stopTestPlatform(media)
+	p.setLastLauncher(&platforms.Launcher{ID: "PinUPPopper", Kill: func(*config.Instance) error {
+		return errors.New("frontend refused stop")
+	}})
+	require.ErrorIs(t, p.ReturnToMenu(), platforms.ErrStopFailed)
+	require.Same(t, media, currentMedia())
+}
+
 func TestStopActiveLauncher_NothingActiveSucceeds(t *testing.T) {
 	t.Parallel()
 

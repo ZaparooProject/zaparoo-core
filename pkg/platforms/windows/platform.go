@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/pinuppopper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -48,6 +49,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/pinup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows/windowfocus"
@@ -80,6 +82,7 @@ type Platform struct {
 	completedTrackedProcess *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
+	popper                  *pinup.Integration
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
 	windowFocusCancel       context.CancelFunc
@@ -90,6 +93,7 @@ type Platform struct {
 	platformMappingsMu      syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
 	launchBoxActiveMu       syncutil.Mutex
+	popperMu                syncutil.Mutex
 }
 
 const errWindowsInvalidParameter syscall.Errno = 87
@@ -202,6 +206,14 @@ func (p *Platform) Stop() error {
 	// Stop Steam tracker
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
+	}
+
+	// Stop the PinUP Popper integration and release any table it tracks
+	p.popperMu.Lock()
+	popper := p.popper
+	p.popperMu.Unlock()
+	if popper != nil {
+		popper.Stop()
 	}
 
 	// Stop LaunchBox named pipe server
@@ -427,7 +439,8 @@ func (p *Platform) clearTrackedProcess(proc *os.Process) {
 //
 // Steam publishes the running AppID in the registry, which is independent of
 // whether Core managed to find the game's process, and is the only source
-// available once process tracking has failed.
+// available once process tracking has failed. PinUP Popper tables are checked
+// through the integration, which knows the emulator process it adopted.
 func (p *Platform) mediaStillRunning() bool {
 	if p.activeMedia == nil {
 		return false
@@ -435,6 +448,13 @@ func (p *Platform) mediaStillRunning() bool {
 	current := p.activeMedia()
 	if current == nil {
 		return false
+	}
+
+	if strings.HasPrefix(strings.ToLower(current.Path), shared.SchemePopper+"://") {
+		p.popperMu.Lock()
+		popper := p.popper
+		p.popperMu.Unlock()
+		return popper != nil && popper.EmulatorRunning()
 	}
 
 	appID, ok := steam.ExtractAppIDFromPath(current.Path)
@@ -547,9 +567,9 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	return nil
 }
 
-func (*Platform) ReturnToMenu() error {
-	// No menu concept on this platform
-	return nil
+func (p *Platform) ReturnToMenu() error {
+	// Desktop frontends return to their own menu when the active launcher stops.
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
@@ -616,7 +636,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 14
+	const staticLauncherCount = 15
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -719,6 +739,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.NewLaunchBoxLauncher(),
+		pinup.NewLauncher(p.popperIntegration()),
 	)
 
 	launchers = append(launchers, getRetroBatLaunchers()...)
@@ -746,8 +767,14 @@ func (*Platform) ManagedByPackageManager() bool {
 	return false
 }
 
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
+	scrapers := map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
+	integration := p.popperIntegration()
+	if integration.Available(cfg) == nil {
+		popper := pinuppopper.NewPlatformScraper(integration.Locate)
+		scrapers[popper.ID] = popper
+	}
+	return scrapers
 }

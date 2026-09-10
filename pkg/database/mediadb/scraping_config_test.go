@@ -30,6 +30,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestScrapingOperationQueueSurvivesReopen(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+	op := database.ScrapingOperation{
+		Version: 1, ScraperID: "local", RunID: "current", Systems: []string{"Pinball"}, FillMissing: true,
+		Pending: []database.ScrapeJob{{ScraperID: "another", RunID: "next", Systems: []string{"SNES"}}},
+	}
+	require.NoError(t, db.SetScrapingOperation(op))
+	require.NoError(t, db.SetScrapingStatus(IndexingStatusPending))
+	require.NoError(t, db.Close())
+	reopened, err := OpenMediaDB(t.Context(), db.pl)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	got, found, err := reopened.GetScrapingOperation()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, op, got)
+	status, err := reopened.GetScrapingStatus()
+	require.NoError(t, err)
+	require.Equal(t, IndexingStatusPending, status)
+	_, err = reopened.sql.Load().ExecContext(t.Context(),
+		"UPDATE DBConfig SET Value=? WHERE Name=?",
+		`{"version":99,"scraperId":"local"}`, DBConfigScrapingOperation)
+	require.NoError(t, err)
+	_, found, err = reopened.GetScrapingOperation()
+	require.True(t, found)
+	require.Error(t, err, "unknown job versions must not resume as legacy overwrite jobs")
+}
+
 func TestSetGetScrapingStatus(t *testing.T) {
 	t.Parallel()
 

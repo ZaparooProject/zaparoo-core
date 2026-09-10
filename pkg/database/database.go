@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -41,12 +42,78 @@ type Database struct {
 	MediaDB MediaDBI
 }
 
+// ScrapeJob is shared by explicit requests, index-triggered requests, and recovery.
+// RunID scopes completed-row markers to this particular request.
+type ScrapeJob struct {
+	// Scope narrows the job the same way ScrapingOperation.Scope does, so a
+	// scoped request that is queued behind another still runs scoped.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
+}
+
+// ScrapingOperation retains the legacy current-job fields while adding ordinary
+// pending jobs. Version zero is the existing standalone record format.
 type ScrapingOperation struct {
-	Scope     *ScrapeScope `json:"scope,omitempty"`
-	ScraperID string       `json:"scraperId"`
-	RunID     string       `json:"runId,omitempty"`
-	Systems   []string     `json:"systems"`
-	Force     bool         `json:"force"`
+	// Status is authoritative for versioned jobs, so queue acceptance and
+	// cancellation do not depend on a second config-key write.
+	// Scope narrows the run to one indexed item, file or subtree. A queued job
+	// carries its own, or resuming after an index would silently widen a
+	// single-file request into a whole-system scrape.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	Status      string       `json:"status,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Pending     []ScrapeJob  `json:"pending,omitempty"`
+	Version     int          `json:"version,omitempty"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
+}
+
+// Validate checks persisted job options before any scraper can execute them.
+func (o *ScrapingOperation) Validate() error {
+	if o == nil || o.Version < 0 || o.Version > 1 || o.ScraperID == "" || o.Force && o.FillMissing {
+		return errors.New("invalid scraping operation")
+	}
+	switch o.Status {
+	case "", "pending", "running", "completed", "failed", "cancelled":
+	default:
+		return errors.New("invalid scraping operation status")
+	}
+	// Bound accumulated post-index requests while preserving the existing
+	// queue if a new submission would exceed the limit.
+	if len(o.Pending) > 63 {
+		return errors.New("scrape queue exceeds 64 jobs")
+	}
+	for _, job := range o.Pending {
+		if job.ScraperID == "" || job.Force && job.FillMissing {
+			return errors.New("invalid pending scraper job")
+		}
+		if job.Scope != nil {
+			if err := job.Scope.Validate(); err != nil {
+				return fmt.Errorf("invalid pending scraper job scope: %w", err)
+			}
+		}
+	}
+	if o.Scope != nil {
+		if err := o.Scope.Validate(); err != nil {
+			return fmt.Errorf("invalid scraping operation scope: %w", err)
+		}
+	}
+	return nil
+}
+
+// IsResumable prefers the versioned job's atomic state over the legacy status key.
+func (o *ScrapingOperation) IsResumable(legacyStatus string) bool {
+	status := legacyStatus
+	if o.Version == 1 && o.Status != "" {
+		status = o.Status
+	}
+	return status == "pending" || status == "running"
 }
 
 // Structs for SQL records
@@ -731,6 +798,8 @@ type ScrapeWrite struct {
 	TitleTags  []TagInfo
 	TitleProps []MediaProperty
 	MediaProps []MediaProperty
+	// FillMissing preserves existing fields; zero retains manual scrape semantics.
+	FillMissing bool
 }
 
 // ScrapeWriteTarget pairs a scraper write payload with the existing Media and
