@@ -164,9 +164,20 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
 		}
 	}
+	// Preflight decides whether this request can start anything at all. It
+	// runs before the stop below so a request that turns out to be a details
+	// redirect never disturbs the media already playing.
+	if params.Launcher.Preflight != nil {
+		if err := params.Launcher.Preflight(params.Config, params.Path, params.Options); err != nil {
+			return fmt.Errorf("launcher %q preflight failed: %w", params.Launcher.ID, err)
+		}
+	}
 
-	// Stop any currently running launcher only after validating the replacement.
-	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
+	// Stop any currently running launcher only after validating the
+	// replacement. A details request opens an information page instead of
+	// starting anything, so it must leave the running media alone.
+	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" &&
+		!IsActionDetails(params.Options.Action) {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
 			// A confirmed stop failure means the previous media is still
 			// running. Launching anyway would leave two games going at once

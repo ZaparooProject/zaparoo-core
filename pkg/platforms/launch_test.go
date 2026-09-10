@@ -476,11 +476,16 @@ func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+// A details request opens an information page and starts nothing, so it must
+// not disturb whatever is already playing. Verified on the Windows test box:
+// scanning steam://1942280/Brotato?action=details while FTL was running killed
+// FTL and cleared ActiveMedia.
 func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	// Registered so an unexpected call is counted rather than panicking.
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
 
 	launcher := &platforms.Launcher{
 		ID:        "Steam",
@@ -512,6 +517,7 @@ func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, activeMedia, "ActiveMedia should NOT be set for details action")
+	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
 	mockPlatform.AssertExpectations(t)
 }
 
