@@ -104,11 +104,16 @@ action = %q
 	}
 }
 
+// Preflight runs before Core stops the running media, so a scan for an
+// uninstalled app opens its store page and leaves the current game alone.
+// Verified on the Windows test box: scanning steam://440 while FTL was
+// running used to kill FTL and clear ActiveMedia.
 func TestSteamPreflightDetailsDoesNotPublishActiveMedia(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	// Registered so an unexpected call is counted rather than panicking.
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
 	client := NewClientWithExecutor(Options{}, testhelpers.NewMockCommandExecutor())
 	client.fs = testhelpers.NewMemoryFS().Fs
 	launcher := NewSteamLauncher(Options{})
@@ -125,5 +130,6 @@ func TestSteamPreflightDetailsDoesNotPublishActiveMedia(t *testing.T) {
 
 	require.NoError(t, platforms.DoLaunch(params, func(string) string { return "Game" }))
 	assert.Equal(t, "details", params.Options.Action)
+	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
 	mockPlatform.AssertExpectations(t)
 }

@@ -334,6 +334,11 @@ type Launcher struct {
 	Test func(*config.Instance, string) bool
 	// Availability checks runtime dependencies. Nil means always available.
 	Availability func(*config.Instance) error
+	// Preflight runs before any running media is stopped and may adjust opts
+	// in place — notably setting Action to "details" when this path cannot
+	// actually be started. Returning an error aborts the launch and leaves
+	// the running media alone. Nil means no preflight.
+	Preflight func(*config.Instance, string, *LaunchOptions) error
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.

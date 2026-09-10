@@ -40,6 +40,14 @@ func NewSteamLauncher(opts Options) platforms.Launcher {
 		ID:       "Steam",
 		SystemID: systemdefs.SystemPC,
 		Schemes:  []string{shared.SchemeSteam},
+		// A scheme match alone would select this launcher for any steam://
+		// path, and DoLaunch stops the running game before the path reaches
+		// Launch. Rejecting an unusable app ID here keeps a malformed scan
+		// from killing whatever is already playing.
+		Test: func(_ *config.Instance, path string) bool {
+			_, err := ExtractAndValidateID(path)
+			return err == nil
+		},
 		Scanner: func(
 			_ context.Context,
 			cfg *config.Instance,
@@ -66,6 +74,7 @@ func NewSteamLauncher(opts Options) platforms.Launcher {
 
 			return results, nil
 		},
+		Preflight: client.Preflight,
 		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 			return client.Launch(cfg, path, opts)
 		},

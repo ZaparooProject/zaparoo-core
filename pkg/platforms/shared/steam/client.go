@@ -70,20 +70,7 @@ func (c *Client) Launch(cfg *config.Instance, path string, opts *platforms.Launc
 		return nil, err
 	}
 
-	action := platforms.ResolveAction(opts, cfg, &platforms.Launcher{ID: "Steam"})
-	// Official AppIDs fit in 32 bits. Larger IDs include non-Steam shortcut
-	// BPIDs, which have no app manifests and must keep their existing behavior.
-	appID, idErr := strconv.ParseUint(id, 10, 32)
-	if action == "" && idErr == nil {
-		if cfg == nil {
-			cfg = &config.Instance{}
-		}
-		installed := c.isAppInstalled(c.FindSteamDir(cfg), strconv.FormatUint(appID, 10))
-		if !installed {
-			action = "details"
-			log.Debug().Str("appID", id).Msg("Steam app installation not confirmed; opening details")
-		}
-	}
+	action := c.resolveAutomaticAction(cfg, id, platforms.ResolveAction(opts, cfg, &platforms.Launcher{ID: "Steam"}))
 
 	steamURL := BuildSteamURL(id)
 	if platforms.IsActionDetails(action) {
@@ -98,6 +85,44 @@ func (c *Client) Launch(cfg *config.Instance, path string, opts *platforms.Launc
 		opts.Action = action
 	}
 	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget
+}
+
+// resolveAutomaticAction downgrades an automatic launch to "details" when the
+// app is not installed, so Core opens the store page instead of asking Steam
+// to run something that is not there. An explicit action is honoured as given.
+func (c *Client) resolveAutomaticAction(cfg *config.Instance, id, action string) string {
+	if action != "" {
+		return action
+	}
+	// Official AppIDs fit in 32 bits. Larger IDs include non-Steam shortcut
+	// BPIDs, which have no app manifests and must keep their existing behavior.
+	appID, idErr := strconv.ParseUint(id, 10, 32)
+	if idErr != nil {
+		return action
+	}
+	if cfg == nil {
+		cfg = &config.Instance{}
+	}
+	if c.isAppInstalled(c.FindSteamDir(cfg), strconv.FormatUint(appID, 10)) {
+		return action
+	}
+	log.Debug().Str("appID", id).Msg("Steam app installation not confirmed; opening details")
+	return "details"
+}
+
+// Preflight resolves the effective action before Core stops whatever is
+// playing, so a scan for an uninstalled app opens its store page and leaves
+// the running game alone.
+func (c *Client) Preflight(cfg *config.Instance, path string, opts *platforms.LaunchOptions) error {
+	if opts == nil {
+		return nil
+	}
+	id, err := ExtractAndValidateID(path)
+	if err != nil {
+		return err
+	}
+	opts.Action = c.resolveAutomaticAction(cfg, id, opts.Action)
+	return nil
 }
 
 // IsSteamInstalled checks if Steam is installed by verifying the Steam directory exists.
