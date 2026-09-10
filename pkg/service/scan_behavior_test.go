@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,7 @@ type scanBehaviorEnv struct {
 	st          *state.State
 	cfg         *config.Instance
 	userDB      *testhelpers.MockUserDBI
+	mediaDB     *testhelpers.MockMediaDBI
 	svc         *ServiceContext
 	launchHook  *launchHook
 	historyHook *historyHook
@@ -69,6 +71,7 @@ type scanBehaviorEnv struct {
 	stopCh      chan struct{}
 	keyboardCh  chan string
 	historyCh   chan database.HistoryEntry
+	uiCh        chan models.UIStateResponse
 	romsDir     string
 }
 
@@ -234,6 +237,11 @@ mode = "unrestricted"`))
 		stopCh <- struct{}{}
 	}).Maybe()
 
+	mockPlatform.On("ReturnToMenu").Return(nil).Run(func(_ mock.Arguments) {
+		st.SetActiveMedia(nil)
+		stopCh <- struct{}{}
+	}).Maybe()
+
 	mockPlatform.On("KeyboardPress",
 		mock.AnythingOfType("string"),
 	).Return(nil).Run(func(args mock.Arguments) {
@@ -245,6 +253,13 @@ mode = "unrestricted"`))
 	mockPlatform.On("ConsoleManager").Return(platforms.NoOpConsoleManager{}).Maybe()
 
 	fakeClock := clockwork.NewFakeClock()
+	uiCh := make(chan models.UIStateResponse, 32)
+	ui := uievents.New(fakeClock, nil, func(update models.UIStateResponse) {
+		select {
+		case uiCh <- update:
+		default:
+		}
+	})
 
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token)
@@ -258,9 +273,12 @@ mode = "unrestricted"`))
 		State:               st,
 		DB:                  db,
 		Profiles:            profiles.NewService(db, st),
+		LimitsManager:       limitsManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		ConfirmQueue:        make(chan chan error),
+		UI:                  ui,
 		BackgroundWG:        &sync.WaitGroup{},
 	}
 
@@ -294,6 +312,7 @@ mode = "unrestricted"`))
 		st:          st,
 		cfg:         cfg,
 		userDB:      mockUserDB,
+		mediaDB:     mockMediaDB,
 		fs:          fs.Fs,
 		svc:         svc,
 		launchHook:  hook,
@@ -306,6 +325,7 @@ mode = "unrestricted"`))
 		stopCh:      stopCh,
 		keyboardCh:  keyboardCh,
 		historyCh:   historyCh,
+		uiCh:        uiCh,
 	}
 }
 
@@ -590,7 +610,7 @@ func TestScanBehavior_Tap_DifferentCardLaunchesDirectly(t *testing.T) {
 	}
 }
 
-func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
+func TestScanBehavior_Tap_SameCardAfterRemoveDoesNotReload(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
@@ -599,9 +619,9 @@ func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
 
 	env.sendRemoval()
 
-	// Re-tap same card — should launch again (prevToken cleared by removal).
+	// Presence deduplication resets on removal, but the resolved game is still running.
 	env.sendGameScan("game1", env.gamePath("game.rom"))
-	env.waitForLaunch(t)
+	env.expectNoLaunch(t)
 }
 
 func TestScanBehavior_Tap_CommandDoesNotInterruptGame(t *testing.T) {
@@ -1117,9 +1137,13 @@ func TestScanBehavior_Hold_TapTraitRescanNeverExits(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
 
-	for range 3 {
+	for i := range 3 {
 		env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
-		env.waitForLaunch(t)
+		if i == 0 {
+			env.waitForLaunch(t)
+		} else {
+			env.expectNoLaunch(t)
+		}
 		env.waitForActiveCard(t, "game1")
 		env.sendRemoval()
 		env.expectNoStop(t)
@@ -1331,8 +1355,8 @@ func TestScanBehavior_HoldDelayed_ReinsertionStillCancelsExit(t *testing.T) {
 	env.expectNoStop(t)
 }
 
-// A reader in tap mode never arms a timer, so a repeat tap of the same card
-// reloads the game every time even after another reader has run an exit.
+// With legacy relaunch enabled, a tap reader reloads on every tap even after
+// another reader has run a hold exit. A stale timer must not swallow a scan.
 func TestScanBehavior_Tap_RepeatTapsAfterAHoldReaderArmedATimer(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
@@ -1348,6 +1372,11 @@ scan_mode = "hold"`))
 	env.waitForSoftwareTokenUID(t, "game1")
 	env.sendRemovalOn(testReaderID)
 	env.waitForStop(t)
+
+	// Relaunch suppression is the default, so the repeat taps this asserts only
+	// reload with it turned off.
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+allow_relaunch = true`))
 
 	// Tap immediately: the previous exit's cleanup may still be in flight.
 	// From then on the tap reader must keep reloading on every tap.

@@ -47,6 +47,7 @@ type ReadersScan struct {
 	IgnoreSystem    []string        `toml:"ignore_system,omitempty"`
 	ExitDelay       float32         `toml:"exit_delay,omitempty"`
 	IgnoreOnConnect bool            `toml:"ignore_on_connect,omitempty"`
+	AllowRelaunch   bool            `toml:"allow_relaunch,omitempty"`
 	LaunchGuard     ScanLaunchGuard `toml:"launch_guard,omitempty"`
 }
 

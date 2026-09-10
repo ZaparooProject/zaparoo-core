@@ -779,6 +779,21 @@ func findLauncherIn(
 	return cache.GetLauncherByID(launcherID)
 }
 
+// HasResolvedLaunchTarget reports commands that resolve a concrete media target
+// before launching. System and platform commands do not share this path.
+func HasResolvedLaunchTarget(name string) bool {
+	switch name {
+	case zapscript.ZapScriptCmdLaunch, zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchSearch, zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchLast, zapscript.ZapScriptCmdRandom:
+		return true
+	default:
+		return false
+	}
+}
+
+var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
+
 type launchTarget struct {
 	path                  string
 	systemID              string
@@ -803,6 +818,18 @@ func getLaunchClosure(
 				applySystemDefaultLauncher(pl, env, target.systemID)
 			} else {
 				applySystemDefaultLauncherForPath(pl, env, target.path)
+			}
+		}
+
+		// Per-media overrides belong to the requested/indexed path. Normalize
+		// only afterward so a ZIP's override is not looked up on its child file.
+		// The allow list is a user-facing policy written against the requested
+		// path, so it keeps that form: normalizing first would test a MiSTer
+		// ZIP as game.zip/game.sfc here and as game.zip everywhere else.
+		allowListPath := target.path
+		if env.SkipMediaLaunch != nil {
+			if normalizer, ok := pl.(platforms.LaunchPathNormalizer); ok {
+				target.path = normalizer.NormalizeLaunchPath(target.path)
 			}
 		}
 
@@ -850,8 +877,58 @@ func getLaunchClosure(
 					Msg("selected launcher from system argument")
 			}
 		}
-		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
-			return errors.New("file not allowed: " + target.path)
+		if launcher == nil && env.SkipMediaLaunch != nil && env.SkipMediaLaunch(platforms.ResolvedLaunch{
+			Path: target.path, SystemID: target.systemID, Options: opts,
+		}) {
+			// Reuse the platform's normal launcher selection before comparing
+			// identity and defaults (notably a configured "details" action).
+			if selected, selectErr := helpers.FindLauncher(env.Cfg, pl, target.path); selectErr == nil {
+				launcher = &selected
+			}
+		}
+		if launcher != nil && env.SkipMediaLaunch != nil {
+			if resolvedAction := platforms.ResolveAction(opts, env.Cfg, launcher); resolvedAction != "" {
+				if opts == nil {
+					opts = &platforms.LaunchOptions{}
+				}
+				opts.Action = resolvedAction
+			}
+		}
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
+		}
+
+		resolved := platforms.ResolvedLaunch{
+			Path: target.path, SystemID: target.systemID, Launcher: launcher, Options: opts,
+		}
+		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
+			return errMediaLaunchSkipped
+		}
+		if env.PrepareMediaLaunch != nil {
+			proceed, prepareErr := env.PrepareMediaLaunch(resolved)
+			if prepareErr != nil {
+				return fmt.Errorf("prepare media launch: %w", prepareErr)
+			}
+			if !proceed {
+				return errMediaLaunchSkipped
+			}
+		}
+		if env.AcquireLaunch != nil {
+			release, acquireErr := env.AcquireLaunch()
+			if acquireErr != nil {
+				return fmt.Errorf("acquire launch: %w", acquireErr)
+			}
+			defer release()
+		}
+		// Confirmation and hooks can take time or launch media themselves.
+		// Judge against the current game again while holding the launch guard.
+		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
+			return errMediaLaunchSkipped
+		}
+
+		// Allowlist policy may have changed while waiting for confirmation.
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
 		}
 
 		// The outgoing media's before_exit hook. Everything that can reject this

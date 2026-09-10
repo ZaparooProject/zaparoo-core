@@ -57,5 +57,6 @@ type ServiceContext struct {
 	PlaylistQueue       chan *playlists.Playlist
 	ConfirmQueue        chan chan error
 	LaunchGuardCancel   chan struct{}
+	ResolvedLaunchGuard chan *resolvedLaunchConfirmation
 	BackgroundWG        *sync.WaitGroup
 }

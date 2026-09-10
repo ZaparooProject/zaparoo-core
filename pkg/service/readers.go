@@ -484,6 +484,9 @@ func readerManager(
 	var guardUI *uievents.Handle
 	var guardResults <-chan uievents.Result
 	var guardDelay <-chan time.Time
+	var guardContextDone <-chan struct{}
+	var stagedLaunch *resolvedLaunchConfirmation
+	var guardGeneration uint64
 	var delayExpired bool
 
 	resetGuardState := func() {
@@ -491,12 +494,17 @@ func readerManager(
 		guardUI = nil
 		guardResults = nil
 		guardDelay = nil
+		guardContextDone = nil
+		stagedLaunch = nil
 		delayExpired = false
 	}
 	completeGuard := func(outcome models.UIOutcome) error {
 		var err error
 		if guardUI != nil {
 			err = guardUI.Complete(outcome)
+		}
+		if stagedLaunch != nil {
+			stagedLaunch.result <- err == nil && outcome == models.UIOutcomeConfirmed
 		}
 		resetGuardState()
 		if err != nil {
@@ -511,7 +519,17 @@ func readerManager(
 	}
 	applyGuardResult := func(result uievents.Result) error {
 		staged := stagedToken
+		continuation := stagedLaunch
 		resetGuardState()
+		if continuation != nil {
+			confirmed := result.Resolution.Outcome == models.UIOutcomeConfirmed &&
+				svc.State.ActiveMedia() != nil
+			if confirmed && staged != nil {
+				svc.State.SetActiveCard(*staged)
+			}
+			continuation.result <- confirmed
+			return nil
+		}
 		if result.Resolution.Outcome != models.UIOutcomeConfirmed {
 			log.Info().Str("outcome", string(result.Resolution.Outcome)).
 				Msg("launch guard: staged token resolved without launch")
@@ -528,6 +546,44 @@ func readerManager(
 			return nil
 		case <-svc.State.GetContext().Done():
 			return svc.State.GetContext().Err()
+		}
+	}
+
+	stageToken := func(scan *tokens.Token, continuation *resolvedLaunchConfirmation) {
+		cancelGuard()
+		stagedToken = scan
+		stagedLaunch = continuation
+		if continuation != nil {
+			guardContextDone = continuation.ctx.Done()
+		}
+		notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
+			Type: scan.Type, UID: scan.UID, Text: scan.Text, Data: scan.Data, ScanTime: scan.ScanTime,
+		})
+		path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
+		message := scan.Text
+		if message == "" {
+			message = scan.UID
+		}
+		if svc.UI == nil {
+			log.Error().Msg("launch guard: UI event service unavailable")
+		} else {
+			timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
+			handle, openErr := svc.UI.Open(svc.State.GetContext(), &uievents.Request{
+				Kind: models.UIEventKindConfirm, Title: "Change game?", Message: message,
+				Timeout: timeout, Dismissible: true, SkipHostRenderer: true,
+			})
+			if openErr != nil {
+				log.Error().Err(openErr).Msg("launch guard: failed to open UI event")
+			} else {
+				guardUI = handle
+				guardResults = handle.Results
+			}
+		}
+		if delay := svc.Config.LaunchGuardDelay(); delay > 0 {
+			guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
+		} else {
+			delayExpired = true
 		}
 	}
 
@@ -633,6 +689,21 @@ preprocessing:
 		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("closing reader manager via context cancellation")
 			break preprocessing
+		case request := <-svc.ResolvedLaunchGuard:
+			switch {
+			case request.ctx.Err() != nil || request.token.LaunchGuardGeneration != guardGeneration:
+				request.result <- false
+			case svc.State.ActiveMedia() == nil:
+				request.result <- false
+			case !svc.Config.LaunchGuardEnabled():
+				request.result <- true
+			default:
+				stageToken(&request.token, request)
+			}
+			continue preprocessing
+		case <-guardContextDone:
+			cancelGuard()
+			continue preprocessing
 		case t := <-scanQueue:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
@@ -713,11 +784,16 @@ preprocessing:
 			}
 			log.Info().Msgf("launch guard: API confirmed staged token: %v", stagedToken)
 			confirmed := *stagedToken
+			resuming := stagedLaunch != nil
 			if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
 				result <- ErrNoStagedToken
 				continue preprocessing
 			}
 			svc.State.SetActiveCard(confirmed)
+			if resuming {
+				result <- nil
+				continue preprocessing
+			}
 			select {
 			case itq <- confirmed:
 			case <-svc.State.GetContext().Done():
@@ -736,6 +812,7 @@ preprocessing:
 			}
 			continue preprocessing
 		case <-svc.LaunchGuardCancel:
+			guardGeneration++
 			if stagedToken != nil {
 				log.Info().Msg("launch guard: media stopped, cancelling staged token")
 				cancelGuard()
@@ -832,6 +909,7 @@ preprocessing:
 				}
 				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
 				confirmed := *stagedToken
+				resuming := stagedLaunch != nil
 				if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
 					log.Info().Err(err).Msg("launch guard: re-tap lost resolution race")
 					proc.Process(scanReaderID, scan, readerError)
@@ -840,6 +918,9 @@ preprocessing:
 				// Let the preprocessor know what's on the reader now.
 				proc.Process(scanReaderID, scan, readerError)
 				svc.State.SetActiveCard(confirmed)
+				if resuming {
+					continue preprocessing
+				}
 				select {
 				case itq <- confirmed:
 				case <-svc.State.GetContext().Done():
@@ -960,6 +1041,7 @@ preprocessing:
 			}
 
 			resolveTokenProperties(svc.State.GetContext(), svc, scan, scanProperties)
+			scan.LaunchGuardGeneration = 0
 
 			// Launch guard: when enabled and media is playing, stage tokens that
 			// would disrupt the current media (launches, playlist changes, stop).
@@ -979,55 +1061,23 @@ preprocessing:
 					script, parseErr = gozapscript.NewParser(scriptText).ParseScript()
 				}
 
-				// Stage conservatively: if parsing fails we can't confirm the token
-				// is a safe utility command, so stage it. Only pass through tokens
-				// we can positively identify as non-disrupting.
-				if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
-					log.Info().Msgf("launch guard: staging token: %v", scan)
-					stagedToken = scan
-
-					notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
-						Type:     scan.Type,
-						UID:      scan.UID,
-						Text:     scan.Text,
-						Data:     scan.Data,
-						ScanTime: scan.ScanTime,
-					})
-
-					path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
-					helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
-
-					message := scan.Text
-					if message == "" {
-						message = scan.UID
-					}
-					if svc.UI == nil {
-						log.Error().Msg("launch guard: UI event service unavailable")
-					} else {
-						timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
-						handle, openErr := svc.UI.Open(svc.State.GetContext(), &uievents.Request{
-							Kind:             models.UIEventKindConfirm,
-							Title:            "Change game?",
-							Message:          message,
-							Timeout:          timeout,
-							Dismissible:      true,
-							SkipHostRenderer: true,
-						})
-						if openErr != nil {
-							log.Error().Err(openErr).Msg("launch guard: failed to open UI event")
-						} else {
-							guardUI = handle
-							guardResults = handle.Results
-						}
-					}
-
-					if delay := svc.Config.LaunchGuardDelay(); delay > 0 {
-						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
-						delayExpired = false
-					} else {
-						guardDelay = nil
-						delayExpired = true
-					}
+				// A single concrete launch can be resolved once by the worker,
+				// then confirmed only if it would actually replace the game.
+				deferGuard := false
+				if parseErr == nil && len(script.Cmds) == 1 && svc.ResolvedLaunchGuard != nil &&
+					canDeferGuardCommand(script.Cmds[0]) {
+					policyToken := *scan
+					policyToken.Traits = tokens.ResolveTraits(script.Traits)
+					deferGuard = suppressTapRelaunch(svc, &policyToken, false)
+				}
+				if deferGuard {
+					cancelGuard()
+					guardGeneration++
+					scan.LaunchGuardGeneration = guardGeneration
+				} else if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
+					guardGeneration++
+					log.Info().Msgf("launch guard: staging token: %v", tokenForLog(scan))
+					stageToken(scan, nil)
 					continue preprocessing
 				}
 			}
@@ -1103,6 +1153,8 @@ preprocessing:
 		activeRemovalHook = nil
 		log.Debug().Msg("cancelled delayed on_remove hook during reader manager shutdown")
 	}
+
+	cancelGuard()
 
 	// daemon shutdown
 	rs := svc.State.ListReaders()
