@@ -172,7 +172,7 @@ func (cache *SlugSearchCache) candidateSeedPostings(query string, entries [2]int
 // seedBlocks samples at most128 hints and retains at most8 groups. Every other
 // group is still scanned; a zero-shared-trigram match cannot be lost here.
 func (cache *SlugSearchCache) seedBlocks(
-	ctx context.Context, query string, entries [2]int,
+	ctx context.Context, query string, expansionSlack int, entries [2]int,
 ) (seeds [candidateSeedBlocks]int, count int, err error) {
 	postings := cache.candidateSeedPostings(query, entries)
 	var scores [candidateSeedBlocks]float32
@@ -184,8 +184,7 @@ func (cache *SlugSearchCache) seedBlocks(
 		position := int64(probe) * int64(len(postings)) / int64(probes)
 		entry := int(postings[position])
 		slug := cache.slugForEntry(entry)
-		if len(slug) < len(query)-matcher.FuzzyMatchMaxLengthDiff ||
-			len(slug) > len(query)+matcher.FuzzyMatchMaxLengthDiff {
+		if outsideCandidateLengthWindow(len(slug), len(query), expansionSlack) {
 			continue
 		}
 		score := candidateSimilarity(query, string(slug))
@@ -218,8 +217,9 @@ func (c *candidateCharacterBound) blockPossible(block *candidateBlock, cutoff fl
 }
 
 func (c *candidateCharacterBound) blockUpperBound(block *candidateBlock) float32 {
-	low := max(block.minLength, len(c.query)-matcher.FuzzyMatchMaxLengthDiff)
-	high := min(block.maxLength, len(c.query)+matcher.FuzzyMatchMaxLengthDiff)
+	windowLow, windowHigh := matcher.FuzzyLengthWindow(len(c.query), c.expansionSlack)
+	low := max(block.minLength, windowLow)
+	high := min(block.maxLength, windowHigh)
 	if low > high || high == 0 || c.query == "" {
 		return 0
 	}

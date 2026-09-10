@@ -85,6 +85,7 @@ func (db *MediaDB) TitleCandidates(
 	if err == nil {
 		ranker := titleRanker{
 			query: query, name: name, system: *system, limit: limit,
+			expansionSlack: slugs.AbbreviationExpansionSlack(name),
 		}
 		// Indexed exact reads avoid a system-wide cache walk and see new titles
 		// before the shared fuzzy cache refreshes. Exact results are never padded.
@@ -136,7 +137,10 @@ type titleRanker struct {
 	signature  string
 	query      SlugMetadata
 	limit      int
-	allowFuzzy bool
+	// expansionSlack allows for a slug that lost an abbreviation expansion to
+	// a typo, so the title the user meant is not pruned on length alone.
+	expansionSlack int
+	allowFuzzy     bool
 }
 
 func (r *titleRanker) exactCondition() string {
@@ -203,8 +207,8 @@ func (r *titleRanker) scanCachedFuzzy(
 				return err
 			}
 			slugBytes := cache.slugForEntry(i)
-			if len(slugBytes) < len(r.query.Slug)-matcher.FuzzyMatchMaxLengthDiff ||
-				len(slugBytes) > len(r.query.Slug)+matcher.FuzzyMatchMaxLengthDiff {
+			low, high := matcher.FuzzyLengthWindow(len(r.query.Slug), r.expansionSlack)
+			if len(slugBytes) < low || len(slugBytes) > high {
 				continue
 			}
 			slug := string(slugBytes)
@@ -243,7 +247,7 @@ func (r *titleRanker) scanCachedFuzzy(
 	count := 0
 	if prioritize && len(blocks) > candidateSeedBlocks {
 		var err error
-		seeds, count, err = cache.seedBlocks(ctx, r.query.Slug, entryRange)
+		seeds, count, err = cache.seedBlocks(ctx, r.query.Slug, r.expansionSlack, entryRange)
 		if err != nil {
 			return err
 		}
@@ -274,6 +278,7 @@ func (r *titleRanker) scanCachedFuzzy(
 // Unicode bypasses the byte bound and uses the existing rune-aware scorer.
 type candidateCharacterBound struct {
 	query           string
+	expansionSlack  int
 	letterCount     int
 	outsideCount    int
 	prefixLength    int
@@ -288,8 +293,11 @@ type candidateCharacterBound struct {
 	blockCompatible bool
 }
 
-func newCandidateCharacterBound(query string) *candidateCharacterBound {
-	bound := &candidateCharacterBound{query: query, ascii: len(query) <= 65535, blockCompatible: true}
+func newCandidateCharacterBound(query string, expansionSlack int) *candidateCharacterBound {
+	bound := &candidateCharacterBound{
+		query: query, expansionSlack: expansionSlack,
+		ascii: len(query) <= 65535, blockCompatible: true,
+	}
 	if !bound.ascii {
 		return bound
 	}
@@ -321,7 +329,7 @@ func newCandidateCharacterBound(query string) *candidateCharacterBound {
 
 func (r *titleRanker) characterBound() *candidateCharacterBound {
 	if r.characters == nil {
-		r.characters = newCandidateCharacterBound(r.query.Slug)
+		r.characters = newCandidateCharacterBound(r.query.Slug, r.expansionSlack)
 	}
 	return r.characters
 }
@@ -459,8 +467,7 @@ func (r *titleRanker) consider(id int64, name, slug, secondary string) {
 		item.candidate.MatchType, item.candidate.Confidence = "secondary", 0.92
 	default:
 		if !r.allowFuzzy || len(r.query.Slug) < matcher.MinSlugLengthForFuzzy ||
-			len(slug) < len(r.query.Slug)-matcher.FuzzyMatchMaxLengthDiff ||
-			len(slug) > len(r.query.Slug)+matcher.FuzzyMatchMaxLengthDiff {
+			outsideCandidateLengthWindow(len(slug), len(r.query.Slug), r.expansionSlack) {
 			return
 		}
 		possibleSignature, possible := r.characterBound().check(slug, r.fuzzyCutoff())
@@ -547,4 +554,11 @@ func compareRankedTitle(a, b rankedTitle) int { //nolint:gocritic // slices.Sort
 		return order
 	}
 	return cmp.Compare(a.id, b.id)
+}
+
+// outsideCandidateLengthWindow reports whether a candidate slug is too far from
+// the query's length to be worth scoring.
+func outsideCandidateLengthWindow(candidateLength, queryLength, expansionSlack int) bool {
+	low, high := matcher.FuzzyLengthWindow(queryLength, expansionSlack)
+	return candidateLength < low || candidateLength > high
 }

@@ -537,7 +537,7 @@ func TestTitleCandidateSeedTraversalPreservesEligibility(t *testing.T) {
 	cache := db.slugSearchCache.Load()
 	query := "Library Adventuer 001234"
 	metadata := GenerateSlugWithMetadata(slugs.MediaTypeGame, query)
-	seeds, count, err := cache.seedBlocks(t.Context(), metadata.Slug, cache.systemRanges[1])
+	seeds, count, err := cache.seedBlocks(t.Context(), metadata.Slug, 0, cache.systemRanges[1])
 	require.NoError(t, err)
 	require.Positive(t, count)
 	require.LessOrEqual(t, count, candidateSeedBlocks)
@@ -564,7 +564,7 @@ func TestTitleCandidateBlockBounds(t *testing.T) {
 	t.Parallel()
 	cache, _ := buildBenchSweepCache(1, 1000)
 	require.NotEmpty(t, cache.candidateBlocks)
-	query := newCandidateCharacterBound("zzzzzzzzzzzzzzzzzzzzzz")
+	query := newCandidateCharacterBound("zzzzzzzzzzzzzzzzzzzzzz", 0)
 	for _, block := range cache.candidateBlocks[1] {
 		assert.False(t, query.blockPossible(&block, matcher.FuzzyMatchMinSimilarity))
 	}
@@ -576,7 +576,7 @@ func TestTitleCandidateBlockBounds(t *testing.T) {
 	}, map[int64]string{1: "NES"})
 	block, ok := buildCandidateBlock(cache, 0, 2)
 	require.True(t, ok)
-	assert.False(t, newCandidateCharacterBound("libraryadventuer001234").blockPossible(&block, 0.98))
+	assert.False(t, newCandidateCharacterBound("libraryadventuer001234", 0).blockPossible(&block, 0.98))
 	assert.Equal(t, byte(len("libraryadventure5500")), block.prefixLength)
 
 	// Mandatory repeats also consume unmatched positions when the query has
@@ -587,7 +587,7 @@ func TestTitleCandidateBlockBounds(t *testing.T) {
 	}, map[int64]string{1: "NES"})
 	block, ok = buildCandidateBlock(cache, 0, 2)
 	require.True(t, ok)
-	assert.False(t, newCandidateCharacterBound("libraryadventuer001234").blockPossible(&block, 0.98))
+	assert.False(t, newCandidateCharacterBound("libraryadventuer001234", 0).blockPossible(&block, 0.98))
 
 	// Token-order evidence can qualify even when its Jaro score does not.
 	cache = &SlugSearchCache{
@@ -595,7 +595,7 @@ func TestTitleCandidateBlockBounds(t *testing.T) {
 	}
 	block, ok = buildCandidateBlock(cache, 0, 1)
 	require.True(t, ok)
-	assert.True(t, newCandidateCharacterBound("crystalspacequest").blockPossible(&block, 1))
+	assert.True(t, newCandidateCharacterBound("crystalspacequest", 0).blockPossible(&block, 1))
 	cache.slugOffsets[1] = 999
 	_, ok = buildCandidateBlock(cache, 0, 1)
 	assert.False(t, ok, "malformed cache offsets cannot panic during derived-index construction")
@@ -604,7 +604,7 @@ func TestTitleCandidateBlockBounds(t *testing.T) {
 	block, ok = buildCandidateBlock(cache, 0, 1)
 	require.True(t, ok)
 	assert.True(t, block.unbounded, "byte counter overflow must disable character pruning")
-	assert.True(t, newCandidateCharacterBound(strings.Repeat("a", 256)).blockPossible(&block, 1))
+	assert.True(t, newCandidateCharacterBound(strings.Repeat("a", 256), 0).blockPossible(&block, 1))
 }
 
 func FuzzTitleCandidateSimilarityBound(f *testing.F) {
@@ -629,7 +629,7 @@ func FuzzTitleCandidateSimilarityBound(f *testing.F) {
 		if len(a) <= 32 && len(b) <= 32 {
 			assert.LessOrEqual(t, candidateDistanceLowerBound(a, b), edlib.DamerauLevenshteinDistance(a, b))
 		}
-		bound := newCandidateCharacterBound(a)
+		bound := newCandidateCharacterBound(a, 0)
 		same, possible := bound.check(b, cutoff)
 		if edlib.JaroWinklerSimilarity(a, b) >= cutoff && cutoff > 0 {
 			assert.True(t, possible, "upper bound dropped a qualifying match")
@@ -660,7 +660,7 @@ func FuzzTitleCandidateSimilarityBound(f *testing.F) {
 			assert.Equal(t, sameCandidateLetters(a, b), same, "signature nomination must preserve byte multisets")
 		}
 		for _, length := range []int{0, len(b) / 2, len(b)} {
-			prefixed := newCandidateCharacterBound(a)
+			prefixed := newCandidateCharacterBound(a, 0)
 			prefixed.setPrefix([]byte(b[:length]))
 			prefixSame, prefixPossible := prefixed.check(b, cutoff)
 			assert.Equal(t, same, prefixSame, "shared-prefix consumption changed anagram evidence")
@@ -729,4 +729,35 @@ func TestTitleCandidatesDatabaseErrorsAreNotNoMatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, got)
 	assert.NotErrorIs(t, err, sql.ErrNoRows)
+}
+
+// Slug normalisation expands abbreviations, so "Super Mario Bros." is stored as
+// "supermariobrothers" (18) while the typo "Super Mario Bross" stays
+// "supermariobross" (15). A flat two-character length window discarded the
+// obvious answer unscored and returned four unrelated "Super Mario ..." titles
+// that happened to share the query's length, which is the opposite of what a
+// typo lookup is for. A typo earlier in the string kept the expansion and so
+// always worked, which is why this hid.
+func TestTitleCandidatesTypoDefeatingAnAbbreviation(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+
+	const target = "Super Mario Bros."
+	require.Len(t, GenerateSlugWithMetadata(slugs.MediaTypeGame, target).Slug, 18,
+		"fixture depends on the abbreviation expanding; if it stops, retune this case")
+	require.Len(t, GenerateSlugWithMetadata(slugs.MediaTypeGame, "Super Mario Bross").Slug, 15,
+		"the typo must not expand, or there is no length gap to test")
+
+	seedCandidateTitles(t, db, "NES", target,
+		"Super Mario Turbo", "Super Mario USA", "Super Mario World", "Super Mario Jr.")
+	require.NoError(t, db.RebuildSlugSearchCache())
+
+	for _, query := range []string{"Super Mario Bross", "Super Mario Bros2"} {
+		got, err := db.TitleCandidates(context.Background(), "NES", query, 5)
+		require.NoError(t, err)
+		require.NotEmpty(t, got, "%q returned nothing", query)
+		assert.Equal(t, target, got[0].Name,
+			"%q must rank the title it is a typo of first, not a same-length neighbour", query)
+	}
 }
