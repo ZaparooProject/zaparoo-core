@@ -20,7 +20,12 @@
 package assets
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
+	"io"
+	"io/fs"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +33,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAppEmbedCompressedOnly(t *testing.T) {
+	t.Parallel()
+	err := fs.WalkDir(App, ".", func(name string, entry fs.DirEntry, err error) error {
+		require.NoError(t, err)
+		if entry.IsDir() || name == "_app/packed/placeholder" {
+			return nil
+		}
+		require.True(t, strings.HasPrefix(name, "_app/packed/dist/"), "unexpected embedded file: %s", name)
+		require.True(t, strings.HasSuffix(name, ".gz"), "raw embedded file: %s", name)
+		data, readErr := App.ReadFile(name)
+		require.NoError(t, readErr)
+		reader, gzipErr := gzip.NewReader(bytes.NewReader(data))
+		require.NoError(t, gzipErr)
+		//nolint:gosec // Verify checksums of build-time embedded assets, not network input.
+		_, copyErr := io.Copy(io.Discard, reader)
+		require.NoError(t, copyErr, "invalid compressed asset: %s", name)
+		require.NoError(t, reader.Close())
+		return nil
+	})
+	require.NoError(t, err)
+}
 
 func resetSystemMetadataCache(t *testing.T) {
 	t.Helper()

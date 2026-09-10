@@ -28,6 +28,7 @@ Taskfile.yml
 .task/
 
 /pkg/assets/_app/dist
+/pkg/assets/_app/packed/dist
 
 /bin
 /_bin
