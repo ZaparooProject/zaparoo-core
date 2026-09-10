@@ -48,8 +48,11 @@ func browseBucketKeyExpr(column string) string {
 		" ELSE '" + browseNameSymbolBucket + "' END"
 }
 
-// BrowseNameFirstChar returns the indexed first-character bucket used by
-// media.browse letter filters.
+// BrowseNameFirstChar folds a name into the canonical browse bucket key
+// ("A".."Z", "0-9", "#"). It is the Go twin of browseBucketKeyExpr, which the
+// media.browse.index facet groups by while the letter filter selects with
+// browseBucketExpr, so all three must stay in lockstep or the facet and the
+// filter would disagree about which bucket a title belongs to.
 func BrowseNameFirstChar(name string) string {
 	if name == "" {
 		return browseNameSymbolBucket

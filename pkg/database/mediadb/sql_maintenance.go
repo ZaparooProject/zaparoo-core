@@ -22,7 +22,9 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -32,6 +34,58 @@ func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to analyze database: %w", err)
 	}
+	return nil
+}
+
+// sqlTruthfulMissingIndexStat rewrites the media_missing_idx row of
+// sqlite_stat1 after an approximate statistics refresh.
+//
+// IsMissing is 0 for every row of a settled library, so the index has a single
+// distinct value. PRAGMA optimize samples about 2,000 rows per index
+// (analyzeApproximateMask, bit 0x10) and the sample never leaves that one
+// value, so the row it stores reads "<rows> 2001". The planner takes that as
+// "IsMissing = ? matches about 2,001 rows" against a library of hundreds of
+// thousands, treats the predicate as selective, and drives whole-library
+// scans through the index. On the MiSTer test device that was the plan for a
+// broad name-sorted media.search: every present Media row read and sorted for
+// a 25-row page, 29 s against a 30 s request deadline (#1460 audit). The same
+// row came off the #1279 device (seedAnalysisLimitedStats in the overlay plan
+// tests), where the browse overlay was given planner hints to survive it; this
+// corrects the statistic itself so every statement sees a truthful row.
+//
+// A full ANALYZE writes the truthful figure, which for a single-valued column
+// is the row count itself: the first field of the row the approximate pass
+// already stored. Copying it into the second field tells the planner what a
+// full ANALYZE would, that the index cannot narrow IsMissing = 0. The
+// IsMissing = 1 maintenance queries still take the index; they never had a
+// cheaper alternative. Any trailing fields ("sz=", "noskipscan") are kept.
+func sqlTruthfulMissingIndexStat(ctx context.Context, db sqlQueryable) error {
+	const where = ` WHERE tbl = 'Media' AND idx = 'media_missing_idx'`
+	var stat string
+	err := db.QueryRowContext(ctx, `SELECT stat FROM sqlite_stat1`+where).Scan(&stat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return fmt.Errorf("failed to read media_missing_idx statistics: %w", err)
+	}
+	fields := strings.Fields(stat)
+	if len(fields) < 2 || fields[0] == fields[1] {
+		return nil
+	}
+	fields[1] = fields[0]
+	if _, err = db.ExecContext(ctx, `UPDATE sqlite_stat1 SET stat = ?`+where,
+		strings.Join(fields, " ")); err != nil {
+		return fmt.Errorf("failed to rewrite media_missing_idx statistics: %w", err)
+	}
+	if _, err = db.ExecContext(ctx, "ANALYZE sqlite_schema"); err != nil {
+		return fmt.Errorf("failed to reload planner statistics: %w", err)
+	}
+	log.Debug().Str("was", stat).Str("now", strings.Join(fields, " ")).
+		Msg("rewrote media_missing_idx planner statistics")
 	return nil
 }
 

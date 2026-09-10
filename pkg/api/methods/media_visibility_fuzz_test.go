@@ -21,6 +21,7 @@ package methods
 
 import (
 	"encoding/base64"
+	"reflect"
 	"testing"
 )
 
@@ -49,7 +50,10 @@ func FuzzBrowseVisibilityCursor(f *testing.F) {
 		}
 		before.IncludeHidden, after.IncludeHidden = nil, nil
 		before.PreferencesRevision, after.PreferencesRevision = "", ""
-		if before != after {
+		// DeepEqual rather than ==: the cursor also carries the resolved
+		// merged-root scope, and a stamp that dropped it would send the next
+		// page back to rediscovering its routes.
+		if !reflect.DeepEqual(before, after) {
 			t.Fatal("cursor pagination fields changed")
 		}
 	})
