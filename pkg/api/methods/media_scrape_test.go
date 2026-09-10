@@ -1774,7 +1774,11 @@ func TestScrapeQueueKeepsScopeAcrossTheQueue(t *testing.T) {
 	ClearScrapingStatus()
 	t.Cleanup(ClearScrapingStatus)
 	db := testhelpers.NewMockMediaDBI()
-	scope := &database.ScrapeScope{SystemID: "SNES", Path: "/roms/SNES/game.sfc", MediaID: 7}
+	// Scope validation requires a path that is absolute on this OS; a Unix
+	// path is relative on Windows.
+	scopePath, err := database.CanonicalScrapePath(browseTestAbsPath("roms", "SNES", "game.sfc"), false)
+	require.NoError(t, err)
+	scope := &database.ScrapeScope{SystemID: "SNES", Path: scopePath, MediaID: 7}
 	running := database.ScrapingOperation{
 		Version: 1, Status: mediadb.IndexingStatusPending,
 		ScraperID: "manual", RunID: "retained", Systems: []string{"SNES"}, Scope: scope,
