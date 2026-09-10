@@ -38,7 +38,9 @@ const (
 	CurrentFile    = "core.crash.log"
 	PreviousFile   = "core.crash.previous.log"
 	MaxReportBytes = 64 * 1024
-	versionPrefix  = "zaparoo-core@"
+	// VersionPrefix opens every capture file. A body carrying only this, or a
+	// truncated piece of it, records no crash.
+	VersionPrefix = "zaparoo-core@"
 )
 
 // Report is a bounded view of the retained file, not a replacement for it.
@@ -67,6 +69,17 @@ func Start(dir, version string) (*Report, error) {
 		return report, fmt.Errorf("registering crash output: %w", err)
 	}
 	return report, nil
+}
+
+// Stop releases the runtime's copy of the crash file descriptor.
+//
+// The service never calls this: capture is meant to outlive shutdown, so the
+// descriptor is held until the process exits. A test binary is the exception.
+// It starts the service repeatedly against t.TempDir() directories, and a
+// retained handle stops Windows removing the directory, which fails the test
+// during cleanup rather than in anything it asserted.
+func Stop() {
+	_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
 }
 
 func prepare(fs afero.Fs, dir, version string) (afero.File, *Report, error) {
@@ -100,7 +113,7 @@ func prepare(fs afero.Fs, dir, version string) (afero.File, *Report, error) {
 		return nil, report, fmt.Errorf("opening crash capture: %w", err)
 	}
 	// Version is persisted before a crash: next boot may run a different binary.
-	if _, writeErr := f.WriteString(versionPrefix + version + "\n"); writeErr != nil {
+	if _, writeErr := f.WriteString(VersionPrefix + version + "\n"); writeErr != nil {
 		_ = f.Close()
 		return nil, report, fmt.Errorf("writing crash version: %w", writeErr)
 	}
@@ -133,8 +146,8 @@ func readPrevious(fs afero.Fs, path string) (*Report, error) {
 		return nil, fmt.Errorf("reading previous crash: %w", err)
 	}
 	version := ""
-	if header, rest, ok := bytes.Cut(data, []byte("\n")); ok && bytes.HasPrefix(header, []byte(versionPrefix)) {
-		version = strings.TrimPrefix(string(header), versionPrefix)
+	if header, rest, ok := bytes.Cut(data, []byte("\n")); ok && bytes.HasPrefix(header, []byte(VersionPrefix)) {
+		version = strings.TrimPrefix(string(header), VersionPrefix)
 		data = rest
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
