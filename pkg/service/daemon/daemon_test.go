@@ -723,6 +723,43 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 	assert.False(t, IsStalePIDConflict(errors.New("some other failure")))
 }
 
+// The platform wrappers all call this before auto-starting. Running reports a
+// reused PID as an error, and returning that from here left the service
+// unstartable from the only entry point most users have, because Start (which
+// clears it) was never reached.
+func TestRunningForAutoStartToleratesStalePIDFile(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+
+	// No PID file at all: plainly not running, no error.
+	running, err := svc.RunningForAutoStart()
+	require.NoError(t, err)
+	assert.False(t, running)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	// Running still reports the conflict, so callers that must not touch an
+	// unrelated process keep seeing it.
+	_, runningErr := svc.Running()
+	require.Error(t, runningErr)
+	assert.True(t, IsStalePIDConflict(runningErr))
+
+	// The auto-start path sees "not running" and leaves it to Start.
+	running, err = svc.RunningForAutoStart()
+	require.NoError(t, err, "a reused PID must not stop the wrapper auto-starting")
+	assert.False(t, running)
+	assert.True(t, pidRunning(process.Process.Pid), "the unrelated process must be untouched")
+	assert.FileExists(t, pidFile, "and its PID file is Start's to clear, not this call's")
+}
+
 func TestStartRecoversLiveUnrelatedPID(t *testing.T) {
 	requireLinuxProc(t, "service PID identity checks")
 

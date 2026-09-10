@@ -242,6 +242,22 @@ func IsStalePIDConflict(err error) bool {
 	return errors.As(err, &conflict)
 }
 
+// RunningForAutoStart reports whether the service is already running, for a
+// caller that will start it if not.
+//
+// It differs from Running in one way: a stale PID file left by a reused PID is
+// reported as not running rather than as an error, because Start clears that
+// under the start gate. Every platform wrapper checks this before auto-starting,
+// and returning the error there left the service unstartable from the only
+// entry point most users have. Any other error still stands.
+func (s *Service) RunningForAutoStart() (bool, error) {
+	running, err := s.Running()
+	if err != nil && !IsStalePIDConflict(err) {
+		return false, err
+	}
+	return running, nil
+}
+
 // Running returns true if the service is running.
 func (s *Service) Running() (bool, error) {
 	pid, err := s.Pid()
