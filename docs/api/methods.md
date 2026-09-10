@@ -576,7 +576,7 @@ None.
 
 Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -771,7 +771,9 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
-A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it holds one media file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and holds no media in subdirectories. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
+Plain directories may also have artwork imported by the `media-folder` scraper. This does not make them launchable or hide their children; it only sets `hasCover` and lets clients request the image with the directory's `(system, path)`.
 
 A directory holding media for more than one system also stays plain, because its `fileCount` is the sum across those systems and the rule is applied one system at a time. A page spanning several systems is resolved per system when `systems` names them; without a `systems` filter such a page is left unresolved, since browsing a media root lists one directory per installed system and resolving all of them is disproportionate to that page's cost.
 
@@ -822,7 +824,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
-| hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
+| hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 
 ##### Browse pagination object
 
@@ -2102,19 +2104,19 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 **Access:** All clients.
 
-Return the best matching image for one indexed media row. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
+Return the best matching image for one indexed media row or indexed directory. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
-`media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
+For path requests, `media.image` preserves exact-media behavior first, then checks path-keyed directory properties, then tries existing launcher-relative and singleton media fallbacks. Within media results it checks each requested image type against media-level properties before title-level properties. Directory properties follow the same requested type order. If a stored media file path no longer exists, the stale property is removed and lookup continues; stale directory paths remain until the next completed `media-folder` snapshot.
 
 #### Parameters
 
-An object identifying the media row by `mediaId` or `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+An object identifying a media row by `mediaId` or identifying media/directory content by `(system, path)`. Canonical indexed paths are preferred. Directory artwork requires the directory's exact indexed path. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
-| path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
+| path       | string   | No       | Canonical indexed media or directory path. Required when `mediaId` is omitted. |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 | maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
 | delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |

@@ -1598,7 +1598,7 @@ func (m *MockMediaDBI) IndexedSystems() ([]string, error) {
 func (m *MockMediaDBI) SystemMediaCounts(
 	ctx context.Context,
 	tags []zapscript.TagFilter,
-	_ ...bool,
+	_ bool,
 ) ([]database.SystemMediaCount, error) {
 	args := m.Called(ctx, tags)
 	if counts, ok := args.Get(0).([]database.SystemMediaCount); ok {
@@ -3000,7 +3000,7 @@ func (m *MockMediaDBI) BrowseSystemRootCandidates(
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(
-	ctx context.Context, rootDirs []string, _ ...bool,
+	ctx context.Context, rootDirs []string, _ bool,
 ) (map[string]*int, error) {
 	args := m.Called(ctx, rootDirs)
 	if results, ok := args.Get(0).(map[string]*int); ok {
@@ -3223,6 +3223,29 @@ func (m *MockMediaDBI) UpsertMediaProperties(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) ReplaceDirectoryProperties(
+	ctx context.Context, systemDBID int64, props []database.DirectoryProperty,
+) (bool, error) {
+	if !m.hasExpectedCall("ReplaceDirectoryProperties") {
+		return false, nil
+	}
+	args := m.Called(ctx, systemDBID, props)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) GetDirectoryProperties(
+	ctx context.Context, systemDBID int64, path string,
+) ([]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetDirectoryProperties") {
+		return nil, nil
+	}
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func (m *MockMediaDBI) ApplyScrapeResult(

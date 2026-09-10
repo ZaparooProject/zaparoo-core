@@ -246,9 +246,14 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 			return &tr.NameMap[i]
 		}
 
-		_, err := systemdefs.LookupSystem(name)
+		// The name map deliberately carries alternate core names such as RA_GBC
+		// and the LLAPI and DB9 variants, which are CORENAME values rather than
+		// system IDs. Validating the core name rejected every one of them, so
+		// the mapped system is what has to resolve.
+		_, err := systemdefs.LookupSystem(mapping.System)
 		if err != nil {
-			log.Error().Msgf("error getting system: %s", err)
+			log.Error().Err(err).Str("core", name).Str("system", mapping.System).
+				Msg("tracker: name map entry does not resolve to a known system")
 			continue
 		}
 
@@ -548,6 +553,9 @@ func (tr *Tracker) loadGame() {
 	tr.loadGameLocked()
 }
 
+// loadGameLocked resolves the current ACTIVEGAME value to a game and publishes
+// it as the active media, skipping the publish when it names the game already
+// active. Callers hold tr.mu.
 func (tr *Tracker) loadGameLocked() {
 	activeGame, err := tr.activeGame()
 	switch {
@@ -581,6 +589,10 @@ func (tr *Tracker) loadGameLocked() {
 			}
 		} else {
 			path = ResolvePath(mgl.File.Path)
+			// The MGL is only a wrapper; identify the game by the file it
+			// loads so an MGL-observed launch dedupes against the same game
+			// seen by its direct path.
+			filename = filepath.Base(path)
 			log.Info().Msgf("mgl path: %s", path)
 		}
 	}

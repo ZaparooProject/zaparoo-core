@@ -165,7 +165,10 @@ func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error)
 		if indexErr != nil {
 			return nil, fmt.Errorf("error building root contents browse index: %w", indexErr)
 		}
-		return buildBrowseIndexResponse(result, browseRootViewContents)
+		return buildBrowseIndexResponse(result, &browseCursorScope{
+			RootView: browseRootViewContents,
+			Sources:  sources,
+		})
 	}
 
 	prefix, err := resolveBrowseIndexPrefix(&env, *params.Path)
@@ -186,7 +189,7 @@ func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error)
 		return nil, fmt.Errorf("error building browse index: %w", err)
 	}
 
-	return buildBrowseIndexResponse(result)
+	return buildBrowseIndexResponse(result, nil)
 }
 
 // resolveBrowseIndexPrefix validates the requested path and returns the DB path
@@ -229,7 +232,7 @@ func emptyBrowseIndex() models.BrowseIndexResults {
 
 func buildBrowseIndexResponse(
 	result database.BrowseIndexResult,
-	rootViews ...string,
+	scope *browseCursorScope,
 ) (any, error) {
 	groups := make([]models.BrowseIndexGroup, 0, len(result.Buckets))
 	for i := range result.Buckets {
@@ -237,7 +240,7 @@ func buildBrowseIndexResponse(
 		var cursor string
 		if !bucket.AtStart {
 			encoded, err := encodeBrowseCursorWithMode(
-				bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles, rootViews...,
+				bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles, scope,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("failed to encode browse index cursor: %w", err)

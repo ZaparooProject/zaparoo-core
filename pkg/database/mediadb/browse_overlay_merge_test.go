@@ -462,6 +462,75 @@ func TestBrowseOverlayMerge_FilenameSortPaging(t *testing.T) {
 	}
 }
 
+// TestBrowseOverlayMerge_TiedNameSortPaging pages a merged root whose titles
+// repeat, so runs of rows with equal sort values straddle page boundaries in
+// both routes at once.
+//
+// Each route seeks with the keyset predicate from browseOverlayCursorCondition,
+// a bound on the ordered expression plus a tie-break rather than the row-value
+// comparison it replaced (see browseCursorCondition for why). Ties are what
+// separate a correct rewrite from a wrong one: the branch either repeats a run
+// forever or steps over its tail when a page ends inside it.
+func TestBrowseOverlayMerge_TiedNameSortPaging(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 2)
+	defer cleanup()
+
+	const titles = 30
+	for i := range titles {
+		name := fmt.Sprintf("Tied Game %02d", i%10)
+		f.insert(name, f.roots[0]+fmt.Sprintf("first-%02d.nes", i))
+	}
+	for i := range titles {
+		name := fmt.Sprintf("Tied Game %02d", i%10)
+		f.insert(name, f.roots[1]+fmt.Sprintf("second-%02d.nes", i))
+	}
+	f.commit(t, true)
+
+	total, err := f.mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		Overlay: f.overlay(),
+		Systems: []systemdefs.System{f.system},
+	})
+	require.NoError(t, err)
+
+	for _, limit := range []int{1, 3, 6, 7} {
+		var (
+			cursor *database.BrowseCursor
+			names  []string
+		)
+		seen := make(map[string]struct{})
+		for range total + 2 {
+			rows, pageErr := f.mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+				Overlay: f.overlay(),
+				Systems: []systemdefs.System{f.system},
+				Cursor:  cursor,
+				Sort:    "name-asc",
+				Limit:   limit,
+			})
+			require.NoError(t, pageErr)
+			if len(rows) == 0 {
+				break
+			}
+			for i := range rows {
+				_, dup := seen[rows[i].Path]
+				require.False(t, dup, "paged twice at limit %d: %s", limit, rows[i].Path)
+				seen[rows[i].Path] = struct{}{}
+				names = append(names, rows[i].Name)
+			}
+			last := rows[len(rows)-1]
+			cursor = &database.BrowseCursor{
+				SortValue: last.SortValue,
+				SortMode:  last.SortMode,
+				LastID:    last.MediaID,
+			}
+		}
+		assert.Len(t, seen, total, "paging at limit %d must enumerate exactly the counted rows", limit)
+		assert.True(t, slices.IsSorted(names), "pages must arrive in name order at limit %d", limit)
+	}
+}
+
 // TestBrowseOverlayMerge_CountMatchesEnumeration is the invariant that catches a
 // merge rule applied by one statement and not the other: media.browse shows the
 // count as the total beside the rows it pages through, so they have to agree on

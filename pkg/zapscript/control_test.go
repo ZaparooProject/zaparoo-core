@@ -25,11 +25,63 @@ import (
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRunControlScript_ExecutePolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, blocked := range []bool{false, true} {
+		name := "without allowlist"
+		if blocked {
+			name = "explicitly blocked"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Instance{}
+			if blocked {
+				require.NoError(t, cfg.LoadTOML(`[zapscript]
+block_commands = ["execute"]`))
+			}
+			// Expand to malformed shell quoting to reach command validation
+			// without launching a process.
+			exprEnv := &gozapscript.ArgExprEnv{Device: gozapscript.ExprEnvDevice{Hostname: "'"}}
+			err := RunControlScript(
+				t.Context(), mocks.NewMockPlatform(), cfg, nil, "**execute:[[device.hostname]]", exprEnv,
+			)
+			if blocked {
+				require.ErrorIs(t, err, ErrCommandBlocked)
+			} else {
+				require.ErrorContains(t, err, "failed to parse execute command")
+			}
+		})
+	}
+}
+
+func TestRunControlScript_ZapLinkCannotExecute(t *testing.T) {
+	t.Parallel()
+
+	const linkURL = "https://zaplink.example.com/control"
+	userDB := &testhelpers.MockUserDBI{}
+	userDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	userDB.On("GetZapLinkCache", linkURL).Return("**execute:[[device.hostname]]", nil)
+	userDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	db := &database.Database{UserDB: userDB}
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
+	exprEnv := &gozapscript.ArgExprEnv{Device: gozapscript.ExprEnvDevice{Hostname: "'"}}
+	err := RunControlScript(t.Context(), mocks.NewMockPlatform(), cfg, db, "**echo:"+linkURL, exprEnv)
+	require.ErrorIs(t, err, ErrRemoteSource)
+	userDB.AssertExpectations(t)
+}
 
 func TestRunControlScript_SingleCommand(t *testing.T) {
 	t.Parallel()

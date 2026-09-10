@@ -301,6 +301,14 @@ type MediaProperty struct {
 	BlobSize    int64
 }
 
+// DirectoryProperty is one file-backed property attached to a stable
+// (SystemDBID, Path) directory identity in MediaDB.
+type DirectoryProperty struct {
+	Path    string
+	TypeTag string
+	Text    string
+}
+
 // MediaBlob is a row from the MediaBlobs content-addressed store.
 // Data is identified by the hex-encoded SHA-256 of its framed content type and bytes.
 type MediaBlob struct {
@@ -405,6 +413,7 @@ type BrowseDirectoryResult struct {
 	Path      string
 	SystemIDs []string
 	FileCount int
+	HasCover  bool
 }
 
 // SingletonContainerAlias is the resolved launch media for a child directory
@@ -458,11 +467,15 @@ type BrowseDirCountOptions struct {
 // SortValue/SortMode/LastID. TotalFiles and TotalDirs carry the first-page
 // counts so cursor pages do not rerun the count queries.
 type BrowseCursor struct {
-	SortValue  string
-	SortMode   string
-	Phase      string
-	DirName    string
-	RootView   string
+	SortValue string
+	SortMode  string
+	Phase     string
+	DirName   string
+	RootView  string
+	// Sources is the merged system root's resolved routes, carried forward from
+	// the page that discovered them so later pages do not rediscover the scope.
+	// Empty for an ordinary path browse, whose scope is the path itself.
+	Sources    []BrowseSource
 	LastID     int64
 	TotalFiles int
 	TotalDirs  int
@@ -1137,7 +1150,7 @@ type MediaDBI interface {
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
-	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden ...bool) (map[string]*int, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
 	BrowseSystemRootCandidates(
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
@@ -1148,7 +1161,7 @@ type MediaDBI interface {
 
 	IndexedSystems() ([]string, error)
 	SystemMediaCounts(
-		ctx context.Context, tags []zapscript.TagFilter, excludeHidden ...bool,
+		ctx context.Context, tags []zapscript.TagFilter, excludeHidden bool,
 	) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
@@ -1294,6 +1307,12 @@ type MediaDBI interface {
 	// UpsertMediaProperties upserts properties into MediaProperties.
 	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
 	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// ReplaceDirectoryProperties atomically replaces the complete file-backed
+	// property snapshot for one system. It reports whether stored rows changed.
+	ReplaceDirectoryProperties(ctx context.Context, systemDBID int64, props []DirectoryProperty) (bool, error)
+	// GetDirectoryProperties returns properties for one canonical directory path.
+	GetDirectoryProperties(ctx context.Context, systemDBID int64, path string) ([]MediaProperty, error)
 
 	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
 	// writes the sentinel tag last.

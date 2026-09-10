@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -1050,10 +1051,65 @@ func loadRawMediaImageSinglePath(
 	maxBytes int64,
 ) (*rawMediaImage, error) {
 	db := env.Database.MediaDB
+	system, err := db.FindSystemBySystemID(ref.System)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, models.ClientErrf("system not found: %s", ref.System)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve system: %w", err)
+	}
+
+	// Preserve exact media behavior ahead of directory lookup. Relative and
+	// singleton media fallbacks run only after exact directory properties.
+	media, err := db.FindMediaBySystemAndPath(env.Context, system.DBID, ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find media: %w", err)
+	}
+	if media != nil {
+		row, rowErr := getMediaFullRow(env, media.DBID, ref.System, ref.Path)
+		if rowErr != nil {
+			return nil, rowErr
+		}
+		return loadRawMediaImageRow(env, row, prefs, maxBytes)
+	}
+
+	directoryProps, err := db.GetDirectoryProperties(env.Context, system.DBID, ref.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get directory properties: %w", err)
+	}
+	if len(directoryProps) > 0 {
+		directoryRow := &database.MediaFullRow{
+			Path: ref.Path,
+			System: database.System{
+				DBID: system.DBID, SystemID: system.SystemID, Name: system.Name,
+			},
+		}
+		raw, directoryErr := selectRawMediaImageFromSources(
+			env.Context, afero.NewOsFs(), db, directoryRow, nil, directoryProps, prefs, maxBytes,
+		)
+		if directoryErr == nil {
+			return raw, nil
+		}
+		var notFoundErr *mediaImageNotFoundError
+		if !errors.As(directoryErr, &notFoundErr) {
+			return nil, directoryErr
+		}
+	}
+
 	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
 	if err != nil {
 		return nil, err
 	}
+	return loadRawMediaImageRow(env, row, prefs, maxBytes)
+}
+
+func loadRawMediaImageRow(
+	env *requests.RequestEnv,
+	row *database.MediaFullRow,
+	prefs []string,
+	maxBytes int64,
+) (*rawMediaImage, error) {
+	db := env.Database.MediaDB
 	mediaPropSources, err := mediaImagePropSources(env, row)
 	if err != nil {
 		return nil, err

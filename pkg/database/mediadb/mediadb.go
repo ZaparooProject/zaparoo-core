@@ -593,6 +593,13 @@ func (db *MediaDB) Open() error {
 	}
 
 	registerCoverAvailabilityCacheOwner(sqlInstance, db)
+
+	// A library indexed before AnalyzeApproximate corrected this row still
+	// carries the sampled figure. Fix it on open so the first search after an
+	// upgrade gets the right plan instead of waiting for the next index run.
+	if err = sqlTruthfulMissingIndexStat(db.ctx, sqlInstance); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics on open")
+	}
 	return nil
 }
 
@@ -1011,6 +1018,13 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	if err != nil {
 		return fmt.Errorf("failed to run pragma optimize: %w", err)
 	}
+	// The sampled pass misreports the single-valued IsMissing index; see
+	// sqlTruthfulMissingIndexStat for the plan that cost. The refresh itself
+	// succeeded, so a failed touch-up is logged rather than returned: the next
+	// refresh or open repeats it.
+	if err := sqlTruthfulMissingIndexStat(db.ctx, sqlDB); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics")
+	}
 	// Warn rather than debug when it was not a no-op: the whole point of this
 	// telemetry is that a multi-second planner refresh is invisible otherwise.
 	logEvent := log.Debug()
@@ -1092,6 +1106,15 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID)",
 	},
 	{
+		name: "directoryproperties_path_system_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS directoryproperties_path_system_idx " +
+			"ON DirectoryProperties(Path, SystemDBID, TypeTagDBID)",
+	},
+	{
+		name: "directoryproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS directoryproperties_typetag_idx ON DirectoryProperties(TypeTagDBID)",
+	},
+	{
 		name: "idx_systemtagscache_type_tag",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
 	},
@@ -1117,6 +1140,13 @@ var secondaryIndexes = []secondaryIndex{
 		ddl: "CREATE INDEX IF NOT EXISTS " + browseSortIndexName +
 			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
 		replaceWhenEnsured: true,
+	},
+	{
+		// Serves media.search's name ordering, which is NOCASE on
+		// MediaTitles.Name; see searchSortExpr and the migration that adds it.
+		name: "mediatitles_name_sort_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS mediatitles_name_sort_idx " +
+			"ON MediaTitles(Name COLLATE NOCASE, DBID)",
 	},
 }
 
@@ -1215,6 +1245,65 @@ func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit replacement index %s: %w", idx.name, err)
 	}
+	return nil
+}
+
+// EnsureBrowseSortIndex brings the secondary indexes browse and search read up
+// to the definitions those queries need, without waiting for an indexing run.
+//
+// The base migration creates the index without the ZAPAROO_TITLE_V1 collation
+// and only CreateSecondaryIndexes replaces it, which runs at the end of a media
+// index and nowhere else. A device that upgrades and does not reindex therefore
+// browses against an index whose ordering disagrees with every browse query, so
+// the planner cannot use it for the ORDER BY at all: it falls back to
+// idx_media_parentdir_system plus a temp b-tree and reads and sorts the whole
+// folder for each page. On a folder of several thousand files that is the
+// difference between a page costing a page and a page costing the folder
+// (#1460).
+//
+// The same reasoning covers an index that is merely absent: the search title
+// sort index was added after these databases were built, and creating it in a
+// migration cost 17.7s of startup on the MiSTer test device with nothing on
+// screen to explain the pause. Both cases are what CreateSecondaryIndexes
+// already resolves — it replaces an index whose definition has moved on and
+// creates any that are missing — so this only decides *when* that runs.
+//
+// Deliberately off the startup path: it is minutes of work on a large library
+// on SD. Skipped while indexing or optimization owns the database, because
+// CreateSecondaryIndexes runs at the end of that work anyway.
+func (db *MediaDB) EnsureBrowseSortIndex() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	if db.HasBackgroundOperations() {
+		log.Debug().Msg("skipping browse index check while background work owns the database")
+		return nil
+	}
+
+	stale, err := db.missingSecondaryIndexes()
+	if err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(stale))
+	for i := range stale {
+		names[i] = stale[i].name
+	}
+	log.Info().Strs("indexes", names).
+		Msg("browse indexes are missing or predate their collation, building them so browsing and search stay fast")
+	// Tracked only around the build: taken any earlier and the
+	// HasBackgroundOperations check above would see this call's own tracking.
+	db.TrackBackgroundOperation()
+	defer db.BackgroundOperationDone()
+	started := time.Now()
+	if err := db.CreateSecondaryIndexes(); err != nil {
+		return fmt.Errorf("building browse indexes: %w", err)
+	}
+	log.Info().Strs("indexes", names).Dur("elapsed", time.Since(started)).
+		Msg("browse indexes built")
 	return nil
 }
 
@@ -2924,10 +3013,37 @@ var (
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
 	started time.Time
-	conn    *sql.Conn
+	conn    browseConn
 	op      string
 	wait    time.Duration
 	routes  int
+}
+
+// browseConn is the connection a browse runs its statements on, carrying the
+// pool it was taken from.
+//
+// The per-database browse caches (prefix policy, utility tags, image property
+// tags, cover availability) are keyed on the handle a statement runs against
+// and are cleared with the pool handle. A bare *sql.Conn cannot serve as that
+// key: sql.DB.Conn allocates a new one for every acquisition, so each page
+// filed its entry under a connection released microseconds later, every page
+// re-ran the detection the cache exists to avoid, and the clear functions never
+// matched anything. cacheHandle resolves a browse connection back to its pool.
+type browseConn struct {
+	*sql.Conn
+	pool *sql.DB
+}
+
+func (c browseConn) cacheHandle() sqlQueryable { return c.pool }
+
+// cacheHandle returns the handle a per-database cache should be keyed on: the
+// pool behind a browse connection, or the handle itself for callers that
+// already hold a pool or a transaction.
+func cacheHandle(db sqlQueryable) sqlQueryable {
+	if h, ok := db.(interface{ cacheHandle() sqlQueryable }); ok {
+		return h.cacheHandle()
+	}
+	return db
 }
 
 // beginBrowse acquires the request's connection. The caller must always call
@@ -2943,7 +3059,13 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
-	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
+	return &browseCall{
+		conn:    browseConn{Conn: conn, pool: sqlDB},
+		op:      op,
+		routes:  routes,
+		started: started,
+		wait:    wait,
+	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {
@@ -3120,7 +3242,7 @@ func (db *MediaDB) BrowseVirtualSchemes(
 // under each root. A nil *int means the count is not yet available (cache not
 // populated). A non-nil *int is the actual count (which may be 0).
 func (db *MediaDB) BrowseRootCounts(
-	ctx context.Context, rootDirs []string, excludeHidden ...bool,
+	ctx context.Context, rootDirs []string, excludeHidden bool,
 ) (map[string]*int, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
@@ -3130,7 +3252,7 @@ func (db *MediaDB) BrowseRootCounts(
 		return nil, err
 	}
 	defer call.finish(db)
-	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden...)
+	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -3773,21 +3895,44 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) SystemMediaCounts(
 	ctx context.Context,
 	tagFilters []zapscript.TagFilter,
-	excludeHidden ...bool,
+	excludeHidden bool,
 ) ([]database.SystemMediaCount, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	var visibilityErr error
-	tagFilters, visibilityErr = discoveryTags(
-		ctx, db.sql.Load(), tagFilters, len(excludeHidden) > 0 && excludeHidden[0],
-	)
-	if visibilityErr != nil {
-		return nil, visibilityErr
-	}
 	if len(tagFilters) > 0 {
-		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
+		if visibilityErr != nil {
+			return nil, visibilityErr
+		}
+		return sqlSystemMediaCounts(ctx, db.sql.Load(), scoped)
 	}
+	// The untagged totals are cached per index generation and shared with random
+	// weighting, so subtract hidden media from them rather than re-aggregating
+	// Media behind a NOT filter.
+	hidden, err := loadHiddenMedia(ctx, db.sql.Load(), excludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := db.cachedSystemMediaCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if hidden.empty() {
+		return counts, nil
+	}
+	visible := counts[:0]
+	for i := range counts {
+		counts[i].Count -= hidden.countForSystem(counts[i].SystemID)
+		if counts[i].Count <= 0 {
+			continue
+		}
+		visible = append(visible, counts[i])
+	}
+	return visible, nil
+}
+
+func (db *MediaDB) cachedSystemMediaCounts(ctx context.Context) ([]database.SystemMediaCount, error) {
 	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
 		cached.generation == db.systemMediaCountsGen.Load() {
 		return slices.Clone(cached.counts), nil
@@ -3829,9 +3974,17 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 		return result, ErrNullSQL
 	}
 
+	// Weighting reads the caller's own tags with visibility asked for
+	// separately, so an untagged random keeps the cached per-system totals
+	// instead of re-aggregating Media behind the injected NOT filter.
+	weightTags := query.Tags
+	// A required user:hidden or user:favorite filter is an explicit ask for
+	// those entries, the same exception browse and search make. Without it a
+	// random over hidden media would be a query that cannot match.
+	excludeHidden := discoveryExcludesHidden(query.Tags)
 	scoped := *query
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, true)
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, excludeHidden)
 	if visibilityErr != nil {
 		return result, visibilityErr
 	}
@@ -3841,7 +3994,7 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	// broad system scopes before random row selection touches the Media table.
 	if query.PathPrefix == "" && query.PathGlob == "" && len(query.Systems) > 1 {
 		started := time.Now()
-		counts, err := db.SystemMediaCounts(ctx, query.Tags)
+		counts, err := db.SystemMediaCounts(ctx, weightTags, excludeHidden)
 		if err != nil {
 			return result, fmt.Errorf("failed to get system media counts for random selection: %w", err)
 		}

@@ -146,6 +146,41 @@ func TestResolveTitle_PromotesDiscToPlaylist(t *testing.T) {
 	assert.Equal(t, discDir+"B_064.m3u", result.Result.Path)
 }
 
+func TestResolveTitle_PromotesAdditionalDiscImageExtensions(t *testing.T) {
+	for _, ext := range []string{".img", ".pbp"} {
+		t.Run(ext, func(t *testing.T) {
+			mockMediaDB := helpers.NewMockMediaDBI()
+			cfg := newPromotionTestConfig(t)
+			selectedPath := discDir + "B_064 (Disc 002)" + ext
+			targetPath := discDir + "B_064 (Disc 001)" + ext
+
+			setupCacheMiss(mockMediaDB)
+			mockMediaDB.On("SearchMediaBySlug",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+			).Return([]database.SearchResultWithCursor{{
+				SystemID: "PSX",
+				Name:     "B_064",
+				Path:     selectedPath,
+				MediaID:  7,
+			}}, nil)
+			setupContainerPromotion(mockMediaDB, 42, targetPath, nil)
+			setupCacheWrite(mockMediaDB)
+
+			result, err := ResolveTitle(context.Background(), &ResolveParams{
+				SystemID:  "PSX",
+				GameName:  "B_064",
+				MediaDB:   mockMediaDB,
+				Cfg:       cfg,
+				MediaType: slugs.MediaTypeGame,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, targetPath, result.Result.Path)
+		})
+	}
+}
+
 // TestResolveTitle_PromotesCueToPlaylist proves a .cue is inside the gate: it is
 // a container target for its own tracks but a companion of an enclosing .m3u.
 func TestResolveTitle_PromotesCueToPlaylist(t *testing.T) {

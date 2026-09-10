@@ -3373,7 +3373,7 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
 		"ChildDirDBID = ? AND SystemDBID = ?", romsID, nesSystem.DBID))
 
-	rootCounts, err := mediaDB.BrowseRootCounts(ctx, []string{"/"})
+	rootCounts, err := mediaDB.BrowseRootCounts(ctx, []string{"/"}, false)
 	require.NoError(t, err)
 	require.NotNil(t, rootCounts["/"])
 	assert.Equal(t, 2, *rootCounts["/"])

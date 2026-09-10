@@ -79,7 +79,7 @@ func TestHiddenVirtualSchemesAndWeightedRandom(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, snes, 1)
 	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
-	_, err = mediaDB.SystemMediaCounts(ctx, nil)
+	_, err = mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	for _, id := range []int64{ids[0], ids[2], snes[0].DBID} {
 		require.NoError(t, mediaDB.UpdateMediaTags(ctx, id, nil, []database.MediaTagRef{{Type: "user", Tag: "hidden"}}))
@@ -123,7 +123,7 @@ func TestMediaVisibilityDiscoveryAndRecovery(t *testing.T) {
 	}
 	ids := addTestMediaPaths(t, mediaDB, paths...)
 	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
-	_, err := mediaDB.SystemMediaCounts(ctx, nil)
+	_, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	_, err = mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}})
 	require.NoError(t, err)
@@ -280,4 +280,128 @@ func TestMediaVisibilityDiscoveryAndRecovery(t *testing.T) {
 	_, err = HandleMediaBrowse(withParams(&env, fmt.Sprintf(`{"path":%q,"cursor":%q}`,
 		root, *intermediate.Pagination.NextCursor)))
 	require.ErrorContains(t, err, "visibility changed")
+}
+
+// A search cursor is only valid for the visibility it was taken under. Both a
+// mode change and a preference edit move the result set, so replaying a stale
+// cursor would skip or repeat rows rather than continue the list.
+func TestSearchCursorRejectedAfterVisibilityChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	ids := addTestMediaPaths(t, mediaDB,
+		filepath.Join(root, "Alpha.nes"),
+		filepath.Join(root, "Beta.nes"),
+		filepath.Join(root, "Gamma.nes"),
+	)
+	env := requests.RequestEnv{
+		Context:  ctx,
+		Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+	}
+
+	search := func(params string) models.SearchResults {
+		t.Helper()
+		result, err := HandleMediaSearch(withParams(&env, params))
+		require.NoError(t, err)
+		response, ok := result.(models.SearchResults)
+		require.True(t, ok)
+		return response
+	}
+
+	first := search(`{"maxResults":1}`)
+	require.Len(t, first.Results, 1)
+	require.NotNil(t, first.Pagination)
+	require.NotNil(t, first.Pagination.NextCursor)
+	cursor := *first.Pagination.NextCursor
+
+	// The same mode continues normally.
+	next := search(fmt.Sprintf(`{"maxResults":1,"cursor":%q}`, cursor))
+	require.Len(t, next.Results, 1)
+	assert.NotEqual(t, first.Results[0].MediaID, next.Results[0].MediaID)
+
+	// Switching mode mid-list must not silently reshape the page.
+	_, err := HandleMediaSearch(withParams(&env,
+		fmt.Sprintf(`{"maxResults":1,"cursor":%q,"includeHidden":true}`, cursor)))
+	require.ErrorContains(t, err, "visibility changed")
+
+	_, err = HandleMediaTagsUpdate(withParams(&env,
+		fmt.Sprintf(`{"mediaId":%d,"add":["user:hidden"]}`, ids[0])))
+	require.NoError(t, err)
+	_, err = HandleMediaSearch(withParams(&env, fmt.Sprintf(`{"maxResults":1,"cursor":%q}`, cursor)))
+	require.ErrorContains(t, err, "visibility changed")
+
+	// A fresh search still pages, and the hidden row is gone from it.
+	restarted := search(`{"maxResults":10}`)
+	assert.Len(t, restarted.Results, 2)
+	for _, result := range restarted.Results {
+		assert.NotEqual(t, ids[0], result.MediaID)
+	}
+}
+
+// A directory that collapses to one launch target is promoted to that media
+// entry. When the target itself is hidden the directory stays a plain
+// directory, so hiding a game cannot promote it back into discovery.
+func TestBuildBrowseResponse_HiddenSingletonStaysDirectory(t *testing.T) {
+	t.Parallel()
+
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirName := "Game.zip"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	alias := []database.SingletonContainerAlias{{
+		ChildDir: dirPath + "/",
+		Row: database.MediaFullRow{
+			Media: database.Media{
+				DBID:      20,
+				Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.nes")),
+				ParentDir: dirPath + "/",
+			},
+			Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+			System: nesSystem,
+		},
+		Tags:          []database.TagInfo{{Type: "user", Tag: "hidden"}},
+		ZapScriptTags: []database.TagInfo{},
+	}}
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Maybe()
+	// A rejected alias never reaches ZapScript construction, so the root lookup
+	// it would need is optional here.
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"roms"}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
+		Return(alias, nil).Once()
+
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{{
+		ID: "NES", SystemID: "NES", Folders: []string{"NES"},
+	}})
+	env := &requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+		ExcludeHidden: true,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
+	assert.Zero(t, entry.MediaID, "a hidden launch target must not be promoted")
+	assert.Nil(t, entry.ZapScript)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
