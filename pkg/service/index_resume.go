@@ -28,7 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/internal/cancellation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -917,7 +916,11 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 			})
 		}, pauser, lease)
 		if runErr != nil {
-			cancellation.LogFailure(runErr, "optimization auto-resume failed")
+			if database.IsOptimizationCanceled(runErr) {
+				log.Debug().Err(runErr).Msg("optimization auto-resume canceled")
+			} else {
+				log.Error().Err(runErr).Msg("optimization auto-resume failed")
+			}
 		}
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)

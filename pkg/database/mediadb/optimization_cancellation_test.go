@@ -78,6 +78,29 @@ func TestOptimizationCancellationPreservesCheckpoint(t *testing.T) {
 	}
 }
 
+func TestOptimizationFailureLogging(t *testing.T) {
+	for _, tc := range []struct {
+		err   error
+		name  string
+		level string
+	}{
+		{err: context.Canceled, name: "canceled", level: "debug"},
+		{err: context.DeadlineExceeded, name: "deadline", level: "error"},
+		{err: errors.New("context canceled"), name: "text", level: "error"},
+		{err: errors.Join(context.Canceled, errors.New("disk failure")), name: "mixed", level: "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			old, level := log.Logger, zerolog.GlobalLevel()
+			log.Logger = zerolog.New(&output)
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = old; zerolog.SetGlobalLevel(level) })
+			logOptimizationFailure(tc.err, "optimization stopped")
+			assert.Contains(t, output.String(), `"level":"`+tc.level+`"`)
+		})
+	}
+}
+
 func TestOptimizationRetryCancellationPreservesFailure(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -35,7 +35,6 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
-	"github.com/ZaparooProject/zaparoo-core/v2/internal/cancellation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -564,7 +563,11 @@ func startPostIndexOptimization(
 	go func() {
 		defer mediaDB.BackgroundOperationDone()
 		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
-			cancellation.LogFailure(err, "post-index background optimization failed")
+			if database.IsOptimizationCanceled(err) {
+				log.Debug().Err(err).Msg("post-index background optimization canceled")
+			} else {
+				log.Error().Err(err).Msg("post-index background optimization failed")
+			}
 		}
 	}()
 	return nil

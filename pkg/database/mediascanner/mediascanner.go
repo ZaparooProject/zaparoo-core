@@ -1681,6 +1681,12 @@ func NewNamesIndex(
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
 					continue
 				}
+				// Only the platform's exact unavailable result is expected. A joined
+				// failure must remain reportable; keep scanIncomplete set above.
+				if scanErr == platforms.ErrScannerUnavailable { //nolint:errorlint // Do not hide joined I/O failures.
+					log.Warn().Err(scanErr).Msgf("skipping %s scanner: optional installation unavailable", l.ID)
+					continue
+				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
