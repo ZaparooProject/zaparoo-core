@@ -169,10 +169,12 @@ func resolveSystems(ids []string, fuzzy bool) ([]systemdefs.System, error) {
 const sortedSearchCursorVersion = 2
 
 type cursorData struct {
-	SortValue string `json:"sortValue,omitempty"`
-	Sort      string `json:"sort,omitempty"`
-	Version   int    `json:"version,omitempty"`
-	LastID    int64  `json:"lastId"`
+	IncludeHidden       *bool  `json:"includeHidden,omitempty"`
+	SortValue           string `json:"sortValue,omitempty"`
+	Sort                string `json:"sort,omitempty"`
+	PreferencesRevision string `json:"preferencesRevision,omitempty"`
+	Version             int    `json:"version,omitempty"`
+	LastID              int64  `json:"lastId"`
 }
 
 func encodeMediaSearchCursorData(data cursorData) (string, error) {
@@ -187,7 +189,20 @@ func encodeCursor(lastID int64) (string, error) {
 	return encodeMediaSearchCursorData(cursorData{LastID: lastID})
 }
 
-func encodeSortedSearchCursor(result *database.SearchResultWithCursor, sortOrder string) (string, error) {
+// encodeSearchCursor stamps the visibility a search page ran under. History
+// pagination uses encodeCursor instead: history keeps hidden entries, so its
+// result set does not move when a preference changes.
+func encodeSearchCursor(lastID int64, visibility searchVisibility) (string, error) {
+	return encodeMediaSearchCursorData(cursorData{
+		LastID:              lastID,
+		IncludeHidden:       &visibility.IncludeHidden,
+		PreferencesRevision: visibility.Revision,
+	})
+}
+
+func encodeSortedSearchCursor(
+	result *database.SearchResultWithCursor, sortOrder string, visibility searchVisibility,
+) (string, error) {
 	sortValue := result.SortValue
 	if sortValue == "" {
 		if strings.HasPrefix(sortOrder, "filename-") {
@@ -197,10 +212,12 @@ func encodeSortedSearchCursor(result *database.SearchResultWithCursor, sortOrder
 		}
 	}
 	return encodeMediaSearchCursorData(cursorData{
-		Version:   sortedSearchCursorVersion,
-		Sort:      sortOrder,
-		SortValue: sortValue,
-		LastID:    result.MediaID,
+		Version:             sortedSearchCursorVersion,
+		Sort:                sortOrder,
+		SortValue:           sortValue,
+		LastID:              result.MediaID,
+		IncludeHidden:       &visibility.IncludeHidden,
+		PreferencesRevision: visibility.Revision,
 	})
 }
 
@@ -1078,16 +1095,24 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, resolveErr
 	}
 
+	visibility, err := validateSearchVisibility(
+		&env, cursorStr, !filters.IncludesHidden(tagFilters, params.IncludeHidden),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	searchFilters := database.SearchFilters{
-		Systems:    systems,
-		PathPrefix: pathPrefix,
-		Query:      query,
-		Sort:       sortOrder,
-		Tags:       tagFilters, // Will be empty if no tags provided
-		Letter:     validatedLetter,
-		Cursor:     cursor,
-		SortCursor: sortCursor,
-		Limit:      limit,
+		ExcludeHidden: !visibility.IncludeHidden,
+		Systems:       systems,
+		PathPrefix:    pathPrefix,
+		Query:         query,
+		Sort:          sortOrder,
+		Tags:          tagFilters, // Will be empty if no tags provided
+		Letter:        validatedLetter,
+		Cursor:        cursor,
+		SortCursor:    sortCursor,
+		Limit:         limit,
 	}
 
 	searchStarted := time.Now()
@@ -1193,9 +1218,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			var cursorStr string
 			var err error
 			if sortOrder == "" {
-				cursorStr, err = encodeCursor(lastResult.MediaID)
+				cursorStr, err = encodeSearchCursor(lastResult.MediaID, visibility)
 			} else {
-				cursorStr, err = encodeSortedSearchCursor(&lastResult, sortOrder)
+				cursorStr, err = encodeSortedSearchCursor(&lastResult, sortOrder, visibility)
 			}
 			if err != nil {
 				log.Error().Err(err).Msg("failed to encode next cursor")

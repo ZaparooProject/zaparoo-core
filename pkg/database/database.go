@@ -158,6 +158,10 @@ type Profile struct {
 // ProfileID of the device's active profile.
 const DeviceStateKeyActiveProfile = "active_profile_id"
 
+// DeviceStateKeyMediaPreferencesRevision invalidates browse cursor totals when
+// durable media preferences change. The counter survives unhide and rebuild.
+const DeviceStateKeyMediaPreferencesRevision = "media_preferences_revision"
+
 // DeviceStateKeyMediaHistoryIdentitySweep is the DeviceState key recording
 // the last completed media history identity backfill sweep, as
 // "<policy version>:<media LastGeneratedAt unix>". A matching value means no
@@ -224,12 +228,12 @@ type MediaFullRow struct {
 }
 
 // MediaUserData is the source-of-truth record for user-authored data about a
-// single media path: whether it is a favourite and any per-game launcher
+// single media path: favourite/hidden preferences and any per-game launcher
 // override. It lives in UserDB (durable, power-loss safe) and is materialized
 // into media.db's MediaTags/MediaProperties projection both on edit and on
 // reindex. Keyed by (SystemID, Path) because a Media row's DBID is not stable
-// across a full media.db rebuild. A row with IsFavorite false and an empty
-// LauncherOverride carries no user intent and should be deleted rather than kept.
+// across a full media.db rebuild. A row with neither favourite nor hidden
+// intent and an empty LauncherOverride should be deleted rather than kept.
 type MediaUserData struct {
 	SystemID         string
 	Path             string
@@ -244,6 +248,7 @@ type MediaUserData struct {
 	CreatedAt  int64
 	UpdatedAt  int64
 	IsFavorite bool
+	IsHidden   bool
 }
 
 // MediaPathID identifies a Media row and its title by system ID and path, used
@@ -438,18 +443,20 @@ type SingletonAliasCandidate struct {
 // within a parent, so Name alone is a stable keyset). Limit caps the number of
 // directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	AfterName  string
-	Systems    []systemdefs.System
-	Limit      int
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	AfterName     string
+	Systems       []systemdefs.System
+	Limit         int
+	ExcludeHidden bool
 }
 
 // BrowseDirCountOptions contains parameters for the BrowseDirCount query.
 type BrowseDirCountOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Systems    []systemdefs.System
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseCursor holds the keyset pagination state for browse queries.
@@ -488,34 +495,37 @@ type BrowseOverlay struct {
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
 type BrowseFilesOptions struct {
-	Cursor     *BrowseCursor
-	Letter     *string
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Sort       string
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
-	Limit      int
+	Cursor        *BrowseCursor
+	Letter        *string
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Sort          string
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	Limit         int
+	ExcludeHidden bool
 }
 
 // BrowseFileCountOptions contains parameters for the BrowseFileCount query.
 type BrowseFileCountOptions struct {
-	Letter     *string
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
+	Letter        *string
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	ExcludeHidden bool
 }
 
 // BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
 // mirrors the scoping fields of BrowseFilesOptions so the index describes the
 // exact list a media.browse call would return.
 type BrowseIndexOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Sort       string
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Sort          string
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	ExcludeHidden bool
 }
 
 // BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
@@ -558,14 +568,16 @@ type BrowseVirtualScheme struct {
 
 // BrowseVirtualSchemesOptions contains parameters for BrowseVirtualSchemes.
 type BrowseVirtualSchemesOptions struct {
-	Systems []systemdefs.System
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseRouteCountsOptions contains candidate route paths to resolve against
 // indexed media for system-scoped browse root discovery.
 type BrowseRouteCountsOptions struct {
-	Systems []systemdefs.System
-	Routes  []string
+	Systems       []systemdefs.System
+	Routes        []string
+	ExcludeHidden bool
 }
 
 // BrowseRouteCount represents a populated browse route and its media count.
@@ -584,8 +596,9 @@ type BrowseRouteCount struct {
 // to build `media.browse({systems:[...], path:""})` candidates in two
 // queries against the BrowseDirCounts cache.
 type BrowseSystemRootCandidatesOptions struct {
-	Roots   []string
-	Systems []systemdefs.System
+	Roots         []string
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseSystemRootCandidates is the cache-backed result of resolving a list of
@@ -790,6 +803,8 @@ type SearchFilters struct {
 	Systems    []systemdefs.System   `json:"systems,omitempty"`
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 	Limit      int                   `json:"limit"`
+	// ExcludeHidden is set only for discovery, never explicit launch resolution.
+	ExcludeHidden bool `json:"-"`
 }
 
 // ScanStagedTag is one tag derived from a scanned file, staged for set-based
@@ -939,6 +954,7 @@ type UserDBI interface {
 	GetEnabledMappings() ([]Mapping, error)
 	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
+	SetMediaUserHidden(systemID, path string, hidden bool) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
 	SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error
 	UpsertMediaUserData(data *MediaUserData) error
@@ -1133,7 +1149,7 @@ type MediaDBI interface {
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
-	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
 	BrowseSystemRootCandidates(
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
@@ -1143,7 +1159,9 @@ type MediaDBI interface {
 	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
-	SystemMediaCounts(ctx context.Context, tags []zapscript.TagFilter) ([]SystemMediaCount, error)
+	SystemMediaCounts(
+		ctx context.Context, tags []zapscript.TagFilter, excludeHidden bool,
+	) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
@@ -1201,6 +1219,7 @@ type MediaDBI interface {
 	// GetExistingMediaUserData returns user-authored data (favourites, launcher
 	// overrides) already stored in media.db, for the one-time UserDB backfill.
 	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
+	MediaPreferencesRevision(ctx context.Context) (string, error)
 
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)

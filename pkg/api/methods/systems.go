@@ -56,12 +56,13 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		tagged = len(tagFilters) > 0
 	}
 
+	excludeHidden := !filters.IncludesHidden(tagFilters, params.IncludeHidden)
 	countsStarted := time.Now()
 	mediaCounts := make(map[string]int)
 	mediaCountsAvailable := false
 	var indexed []string
 	if tagged {
-		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, tagFilters)
+		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, tagFilters, excludeHidden)
 		if err != nil {
 			return nil, fmt.Errorf("error getting tagged system media counts: %w", err)
 		}
@@ -75,7 +76,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		}
 		mediaCountsAvailable = true
 	} else {
-		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, nil)
+		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, nil, excludeHidden)
 		if err == nil {
 			indexed = make([]string, 0, len(counts))
 			for _, count := range counts {

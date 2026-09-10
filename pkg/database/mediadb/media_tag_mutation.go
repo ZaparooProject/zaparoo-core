@@ -163,6 +163,12 @@ func (db *MediaDB) applyMediaTagMutations(
 		return "", false, fmt.Errorf("invalidate slug cache after tag update: %w", err)
 	}
 
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO DBConfig(Name, Value) VALUES (?, '1')
+		ON CONFLICT(Name) DO UPDATE SET Value = CAST(DBConfig.Value AS INTEGER) + 1
+	`, database.DeviceStateKeyMediaPreferencesRevision); err != nil {
+		return "", false, fmt.Errorf("advance media projection revision: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return "", false, fmt.Errorf("commit media tag transaction: %w", err)
 	}

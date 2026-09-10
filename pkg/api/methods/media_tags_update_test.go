@@ -112,7 +112,7 @@ func TestHandleMediaTagsUpdate_RejectsUnsupportedTags(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only user:favorite can be mutated")
+	assert.Contains(t, err.Error(), "only user:favorite and user:hidden can be mutated")
 	mockDB.AssertExpectations(t)
 }
 

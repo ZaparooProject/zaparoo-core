@@ -72,7 +72,7 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 		Tag:  "rpg",
 	}}))
 
-	allCounts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	allCounts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{
 		{SystemID: "NES", Count: 2},
@@ -82,7 +82,7 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 	favoriteCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{{
 		Type:  "user",
 		Value: "favorite",
-	}})
+	}}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{
 		{SystemID: "NES", Count: 1},
@@ -92,21 +92,21 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 	titleCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{{
 		Type:  "genre",
 		Value: "rpg",
-	}})
+	}}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, titleCounts)
 
 	combinedCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{
 		{Type: "genre", Value: "rpg"},
 		{Type: "user", Value: "favorite"},
-	})
+	}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, combinedCounts)
 
 	orCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{
 		{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorOR},
 		{Type: "user", Value: "favorite", Operator: zapscript.TagOperatorOR},
-	})
+	}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{
 		{SystemID: "NES", Count: 2},
@@ -115,20 +115,20 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 
 	notFavoriteCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{{
 		Type: "user", Value: "favorite", Operator: zapscript.TagOperatorNOT,
-	}})
+	}}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, notFavoriteCounts)
 
 	notRPGCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{{
 		Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorNOT,
-	}})
+	}}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "SNES", Count: 1}}, notRPGCounts)
 
 	multipleNotCounts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{
 		{Type: "user", Value: "favorite", Operator: zapscript.TagOperatorNOT},
 		{Type: "genre", Value: "rpg", Operator: zapscript.TagOperatorNOT},
-	})
+	}, false)
 	require.NoError(t, err)
 	assert.Empty(t, multipleNotCounts)
 }
@@ -158,7 +158,7 @@ func TestSystemMediaCounts_UsesDisjointBrowseCacheCounts(t *testing.T) {
 	insertSystemMedia(t, mediaDB, snes, "Virtual", "test://virtual-snes")
 
 	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
-	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{
 		{SystemID: "NES", Count: 4},
@@ -178,7 +178,7 @@ func TestSystemMediaCounts_FallsBackWhenBrowseCacheUnavailable(t *testing.T) {
 	)
 	insertSystemMedia(t, mediaDB, system, "Other Root", filepath.Join("games", "other.nes"))
 
-	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, counts)
 }
@@ -193,17 +193,17 @@ func TestSystemMediaCounts_CacheIsIsolatedAndInvalidated(t *testing.T) {
 	system := insertSystemWithMedia(
 		t, mediaDB, "NES", "Game One", filepath.Join("roms", "nes", "game-one.nes"),
 	)
-	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, counts)
 
 	counts[0].Count = 99
-	cached, err := mediaDB.SystemMediaCounts(ctx, nil)
+	cached, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, cached)
 
 	insertSystemMedia(t, mediaDB, system, "Game Two", filepath.Join("roms", "nes", "game-two.nes"))
-	refreshed, err := mediaDB.SystemMediaCounts(ctx, nil)
+	refreshed, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, refreshed)
 }
@@ -214,12 +214,12 @@ func TestSystemMediaCounts_CacheInvalidatedOnRecreate(t *testing.T) {
 	ctx := context.Background()
 
 	insertSystemWithMedia(t, mediaDB, "NES", "Game", filepath.Join("roms", "nes", "game.nes"))
-	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, counts)
 
 	require.NoError(t, mediaDB.Recreate(false))
-	counts, err = mediaDB.SystemMediaCounts(ctx, nil)
+	counts, err = mediaDB.SystemMediaCounts(ctx, nil, false)
 	require.NoError(t, err)
 	assert.Empty(t, counts)
 }
@@ -318,7 +318,7 @@ func TestSystemMediaCounts_ExcludesMissingMedia(t *testing.T) {
 	counts, err := mediaDB.SystemMediaCounts(ctx, []zapscript.TagFilter{{
 		Type:  "user",
 		Value: "favorite",
-	}})
+	}}, false)
 	require.NoError(t, err)
 	assert.Empty(t, counts)
 }
