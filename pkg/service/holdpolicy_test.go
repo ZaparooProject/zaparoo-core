@@ -429,7 +429,7 @@ func TestRunTokenZapScriptDoesNotResolveTraits(t *testing.T) {
 	}, playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}, nil, false)
 	require.NoError(t, err)
 
-	softwareToken := <-svc.LaunchSoftwareQueue
+	softwareToken := (<-svc.LaunchSoftwareQueue).token
 	require.NotNil(t, softwareToken)
 	assert.True(t, softwareToken.Traits.IsEmpty(),
 		"running a script must not resolve traits onto the token running it")

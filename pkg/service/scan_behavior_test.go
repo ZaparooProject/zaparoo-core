@@ -128,6 +128,17 @@ func setupScanBehavior(
 	exitDelay float32,
 ) *scanBehaviorEnv {
 	t.Helper()
+	// Buffer updates so launch goroutines can finish during shutdown.
+	return setupScanBehaviorWithSoftwareQueue(t, scanMode, exitDelay, make(chan softwareTokenUpdate, 10))
+}
+
+func setupScanBehaviorWithSoftwareQueue(
+	t *testing.T,
+	scanMode string,
+	exitDelay float32,
+	lsq chan softwareTokenUpdate,
+) *scanBehaviorEnv {
+	t.Helper()
 
 	tmpDir := t.TempDir()
 	romsDir := filepath.Join(tmpDir, "roms")
@@ -250,11 +261,8 @@ mode = "unrestricted"`))
 		}
 	})
 
-	// lsq is buffered so goroutines spawned by processTokenQueue and timedExit
-	// can complete their sends after context cancellation.
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token)
-	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
 	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, nil, mockPlayer)
@@ -1364,15 +1372,13 @@ scan_mode = "hold"`))
 	env.waitForSoftwareTokenUID(t, "game1")
 	env.sendRemovalOn(testReaderID)
 	env.waitForStop(t)
-	// StopActiveLauncher is observed before timedExit queues its final owner
-	// clear. Wait for that clear so it cannot erase the next tap's owner.
-	require.Eventually(t, func() bool {
-		return env.st.GetSoftwareToken() == nil
-	}, behaviorTimeout, time.Millisecond, "hold-reader exit cleanup did not finish")
 
+	// Relaunch suppression is the default, so the repeat taps this asserts only
+	// reload with it turned off.
 	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
 allow_relaunch = true`))
 
+	// Tap immediately: the previous exit's cleanup may still be in flight.
 	// From then on the tap reader must keep reloading on every tap.
 	for range 2 {
 		env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))
