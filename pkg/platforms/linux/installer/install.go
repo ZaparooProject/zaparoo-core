@@ -20,7 +20,6 @@
 package installer
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -28,7 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"text/template"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
@@ -67,6 +66,12 @@ const (
 	modprobePath = "/etc/modprobe.d/blacklist-zaparoo.conf"
 	udevPath     = "/etc/udev/rules.d/60-zaparoo.rules"
 )
+
+// renderExecPath substitutes the sole placeholder in the embedded installer files.
+// Literal replacement preserves path bytes without reflective template method lookup.
+func renderExecPath(content, execPath string) []byte {
+	return []byte(strings.ReplaceAll(content, "{{.ExecPath}}", execPath))
+}
 
 // InstallApplication installs application files (binary, application launcher entry, icon).
 // Does not install systemd service or desktop shortcut. Must NOT be run as root.
@@ -142,25 +147,11 @@ func doInstallApplication(cmd command.Executor, fs afero.Fs, binaryPath string) 
 		return fmt.Errorf("error creating applications directory: %w", err)
 	}
 
-	// Template the desktop file with the installed binary path
-	type DesktopData struct {
-		ExecPath string
-	}
-	data := DesktopData{ExecPath: destBinary}
-
-	tmpl, tmplErr := template.New("desktop").Parse(desktopFile)
-	if tmplErr != nil {
-		return fmt.Errorf("failed to parse desktop template: %w", tmplErr)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute desktop template: %w", err)
-	}
+	desktopContent := renderExecPath(desktopFile, destBinary)
 
 	desktopPath := filepath.Join(desktopDir, "zaparoo.desktop")
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := afero.WriteFile(fs, desktopPath, buf.Bytes(), 0o644); err != nil {
+	if err := afero.WriteFile(fs, desktopPath, desktopContent, 0o644); err != nil {
 		return fmt.Errorf("error writing desktop file: %w", err)
 	}
 
@@ -224,23 +215,7 @@ func doInstallService(cmd command.Executor) error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	// Create template data
-	type ServiceData struct {
-		ExecPath string
-	}
-	data := ServiceData{ExecPath: execPath}
-
-	// Parse service file as template
-	tmpl, err := template.New("service").Parse(systemdServiceFile)
-	if err != nil {
-		return fmt.Errorf("failed to parse service template: %w", err)
-	}
-
-	// Execute template
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute service template: %w", err)
-	}
+	serviceContent := renderExecPath(systemdServiceFile, execPath)
 
 	// Install systemd user service
 	systemdDir := filepath.Join(xdg.ConfigHome, "systemd", "user")
@@ -250,7 +225,7 @@ func doInstallService(cmd command.Executor) error {
 
 	servicePath := filepath.Join(systemdDir, "zaparoo.service")
 	//nolint:gosec // Service file needs to be readable by systemd
-	if err := os.WriteFile(servicePath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(servicePath, serviceContent, 0o644); err != nil {
 		return fmt.Errorf("error writing systemd service file: %w", err)
 	}
 
@@ -281,23 +256,7 @@ func InstallDesktop() error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	// Create template data
-	type DesktopData struct {
-		ExecPath string
-	}
-	data := DesktopData{ExecPath: execPath}
-
-	// Parse desktop file as template
-	tmpl, err := template.New("desktop").Parse(desktopFile)
-	if err != nil {
-		return fmt.Errorf("failed to parse desktop template: %w", err)
-	}
-
-	// Execute template
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute desktop template: %w", err)
-	}
+	desktopContent := renderExecPath(desktopFile, execPath)
 
 	// Install desktop shortcut to ~/Desktop
 	desktopPath := filepath.Join(xdg.Home, "Desktop", "zaparoo.desktop")
@@ -309,7 +268,7 @@ func InstallDesktop() error {
 	}
 
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := os.WriteFile(desktopPath, buf.Bytes(), 0o755); err != nil {
+	if err := os.WriteFile(desktopPath, desktopContent, 0o755); err != nil {
 		return fmt.Errorf("error writing desktop shortcut: %w", err)
 	}
 
