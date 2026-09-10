@@ -39,6 +39,14 @@ func NewLauncher(i *Integration) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleExternal,
 		SkipFilesystemScan: true,
 		Availability:       i.Available,
+		// A scheme match alone would select this launcher for any popper://
+		// path, and DoLaunch stops the running table before handing the path
+		// over. Rejecting an unlaunchable ID here keeps selection from
+		// reaching that point, so a bad scan leaves the current table alone.
+		Test: func(_ *config.Instance, path string) bool {
+			_, err := ParseTablePath(path)
+			return err == nil
+		},
 		Scanner: func(
 			ctx context.Context, cfg *config.Instance, systemID string, results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {

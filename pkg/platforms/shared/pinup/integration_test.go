@@ -33,7 +33,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -655,4 +657,32 @@ func TestNewLauncher(t *testing.T) {
 	proc, err := launcher.Launch(nil, "steam://1/x", nil)
 	require.Error(t, err)
 	assert.Nil(t, proc)
+}
+
+// Selection must reject a popper:// path whose game ID cannot be launched.
+// DoLaunch stops whatever is running as soon as a launcher is chosen, so a
+// launcher that accepts the path and only fails inside Launch has already
+// killed the player's table by the time the error is produced.
+func TestLauncherSelectionRejectsUnlaunchablePaths(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	launcher := NewLauncher(h.integ)
+	pl := mocks.NewMockPlatform()
+
+	for _, path := range []string{
+		"popper://1/Leprechaun King",
+		"popper://2/Retroflair%20-%20BAM%20Edition",
+	} {
+		assert.True(t, helpers.PathIsLauncher(nil, pl, &launcher, path), path)
+	}
+
+	for _, path := range []string{
+		"popper://abc/Leprechaun King",
+		"popper://0/Leprechaun King",
+		"popper://-1/Leprechaun King",
+		"popper://",
+		"popper://999999999999/x",
+	} {
+		assert.False(t, helpers.PathIsLauncher(nil, pl, &launcher, path), path)
+	}
 }
