@@ -4,10 +4,12 @@ package mister
 
 import (
 	"encoding/xml"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
@@ -227,4 +229,98 @@ func TestDVDAndNGPCRBFResolution(t *testing.T) {
 			assert.False(t, ok, "missing hybrid must not be mistaken for installed FPGA DVD")
 		})
 	}
+}
+
+// An install carrying only an alternate implementation of a system's core must
+// still be able to launch that system. The Kitrinx NGPC core is the case this
+// was found on, on hardware: media launches already prefer it, but
+// launch.system resolved the system's own core definition (the Jotego
+// _Arcade/JTNGPC RBF), found it absent, and reported that the system had no
+// core at all while a working one sat installed.
+func TestLaunchSystemFallsBackToAnInstalledAltCore(t *testing.T) {
+	// Not parallel: withRBFCache swaps the global cache the launch path reads.
+	ngpcPath := filepath.Join(misterconfig.SDRootDir, "_Console", "NGPC_20260824.rbf")
+	cache := withRBFCache(t, []cores.RBFInfo{{
+		Path:      ngpcPath,
+		Filename:  "NGPC_20260824.rbf",
+		ShortName: "NGPC",
+		MglName:   filepath.Join("_Console", "NGPC"),
+	}})
+	cache.RegisterAltCore(kitrinxNGPCCore.LauncherID, kitrinxNGPCCore.RBF)
+
+	cfg := &config.Instance{}
+	// Only the alternate is installed, which is the whole point of the case:
+	// the system's own core must be unresolvable for the fallback to matter.
+	system, err := cores.LookupCore(systemdefs.SystemNeoGeoPocketColor)
+	require.NoError(t, err)
+	_, err = cache.Resolve(cfg, system)
+	require.Error(t, err, "fixture must not carry the system's own core")
+
+	launchErr := errors.New("no /dev/MiSTer_cmd")
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return launchErr
+	}}
+
+	err = p.LaunchSystem(cfg, systemdefs.SystemNeoGeoPocketColor)
+	require.ErrorIs(t, err, launchErr, "the installed alternate core must be taken to the load step")
+	assert.Equal(t, ngpcPath, captured.Path)
+}
+
+// The fallback must only ever offer a core that is genuinely installed under
+// the alternate launcher's own name. Here the system's own core is present and
+// the alternate is not, so nothing may be substituted: launching the bare
+// _Arcade/JTNGPC RBF directly would skip the generated MGL the arcade set needs.
+func TestLaunchSystemDoesNotSubstituteTheSystemsOwnCoreForAnAlt(t *testing.T) {
+	// Not parallel: withRBFCache swaps the global cache the launch path reads.
+	cache := withRBFCache(t, []cores.RBFInfo{{
+		Path:      filepath.Join(misterconfig.SDRootDir, "_Arcade", "JTNGPC_20260824.rbf"),
+		Filename:  "JTNGPC_20260824.rbf",
+		ShortName: "JTNGPC",
+		MglName:   filepath.Join("_Arcade", "JTNGPC"),
+	}})
+	cache.RegisterAltCore(kitrinxNGPCCore.LauncherID, kitrinxNGPCCore.RBF)
+
+	cfg := &config.Instance{}
+	// The alternate is not installed; only the system's own core is.
+	_, alt := cache.ResolveLauncherStrict(cfg, kitrinxNGPCCore.LauncherID, systemdefs.SystemNeoGeoPocketColor)
+	require.False(t, alt, "fixture must not carry the alternate core")
+
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return nil
+	}}
+
+	// The MGL route fails off-device at the command interface, which is the
+	// same shape as any launch failure that is not "the core is missing".
+	err := p.LaunchSystem(cfg, systemdefs.SystemNeoGeoPocketColor)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+	assert.Empty(t, captured.Path, "no core may be loaded directly when the alternate is absent")
+}
+
+// A system with nothing installed must still report that, rather than being
+// fed some other system's core by the fallback.
+func TestLaunchSystemWithoutAnyCoreStillFails(t *testing.T) {
+	// Not parallel: withRBFCache swaps the global cache the launch path reads.
+	cache := withRBFCache(t, []cores.RBFInfo{{
+		Path:      filepath.Join(misterconfig.SDRootDir, "_Console", "NGPC_20260824.rbf"),
+		Filename:  "NGPC_20260824.rbf",
+		ShortName: "NGPC",
+		MglName:   filepath.Join("_Console", "NGPC"),
+	}})
+	cache.RegisterAltCore(kitrinxNGPCCore.LauncherID, kitrinxNGPCCore.RBF)
+
+	var launched bool
+	p := &Platform{launchCoreAtRBF: func(cores.RBFInfo) error {
+		launched = true
+		return nil
+	}}
+
+	err := p.LaunchSystem(&config.Instance{}, systemdefs.SystemGameboy)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+	assert.False(t, launched, "an unrelated installed core must not be launched")
 }
