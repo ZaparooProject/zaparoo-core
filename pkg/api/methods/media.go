@@ -732,85 +732,92 @@ func startMediaDBGeneration(
 		// most once per throttled notification until it flips.
 		dbHasData := mediaDBHasUsableData(db.MediaDB)
 
-		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
-			var desc string
-			switch {
-			case status.Phase == mediascanner.PhaseDiscovering:
-				desc = "Finding media folders"
-			case status.Phase == mediascanner.PhaseInitializing:
-				desc = "Initializing database"
-			case status.Phase == mediascanner.PhaseCreatingIndexes:
-				desc = "Creating indexes"
-			case status.Phase == mediascanner.PhaseBuildingCaches:
-				desc = "Building search caches"
-			case status.Step == status.Total:
-				desc = "Writing database"
-			default:
-				system, err := systemdefs.GetSystem(status.SystemID)
-				if err != nil {
-					desc = status.SystemID
-				} else {
-					md, err := assets.GetSystemMetadata(system.ID)
+		availableScrapers := pl.Scrapers(cfg)
+		var indexedSources []mediascanner.IndexedSource
+		sourceOptions := mediascanner.IndexSourceOptions{
+			LauncherIDs: scrapeSourceLaunchers(availableScrapers),
+			Completed:   func(sources []mediascanner.IndexedSource) { indexedSources = sources },
+		}
+		total, err := mediascanner.NewNamesIndexWithSources(
+			indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
+				var desc string
+				switch {
+				case status.Phase == mediascanner.PhaseDiscovering:
+					desc = "Finding media folders"
+				case status.Phase == mediascanner.PhaseInitializing:
+					desc = "Initializing database"
+				case status.Phase == mediascanner.PhaseCreatingIndexes:
+					desc = "Creating indexes"
+				case status.Phase == mediascanner.PhaseBuildingCaches:
+					desc = "Building search caches"
+				case status.Step == status.Total:
+					desc = "Writing database"
+				default:
+					system, err := systemdefs.GetSystem(status.SystemID)
 					if err != nil {
-						desc = system.ID
+						desc = status.SystemID
 					} else {
-						desc = md.Name
+						md, err := assets.GetSystemMetadata(system.ID)
+						if err != nil {
+							desc = system.ID
+						} else {
+							desc = md.Name
+						}
 					}
 				}
-			}
 
-			// Once cancellation is requested the scanner may fire one more status
-			// update before it observes the cancelled context. Skip it so the
-			// running flag isn't resurrected after cancel() cleared it.
-			if indexCtx.Err() != nil {
-				return
-			}
+				// Once cancellation is requested the scanner may fire one more status
+				// update before it observes the cancelled context. Skip it so the
+				// running flag isn't resurrected after cancel() cleared it.
+				if indexCtx.Err() != nil {
+					return
+				}
 
-			// Always update in-memory status for polling clients.
-			statusInstance.set(indexingStatusVals{
-				indexing:    true,
-				totalSteps:  status.Total,
-				currentStep: status.Step,
-				currentDesc: desc,
-				totalFiles:  status.Files,
-			})
+				// Always update in-memory status for polling clients.
+				statusInstance.set(indexingStatusVals{
+					indexing:    true,
+					totalSteps:  status.Total,
+					currentStep: status.Step,
+					currentDesc: desc,
+					totalFiles:  status.Files,
+				})
 
-			// Throttle duplicate WebSocket push notifications to prevent
-			// channel overflow, but always send visible progress changes so
-			// notification-only clients don't show the previous system while
-			// the next system is doing long-running work.
-			if !notifState.shouldSend(status, time.Now(), notifThrottleInterval) {
-				return
-			}
+				// Throttle duplicate WebSocket push notifications to prevent
+				// channel overflow, but always send visible progress changes so
+				// notification-only clients don't show the previous system while
+				// the next system is doing long-running work.
+				if !notifState.shouldSend(status, time.Now(), notifThrottleInterval) {
+					return
+				}
 
-			if !dbHasData {
-				dbHasData = mediaDBHasUsableData(db.MediaDB)
-			}
-			// Step increments as each system starts, so Step-1 systems have
-			// committed; Total includes the final "Writing database" step.
-			systemsCompleted := max(status.Step-1, 0)
-			systemsTotal := max(status.Total-1, 0)
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:             dbHasData,
-				Indexing:           true,
-				Paused:             pauser != nil && pauser.IsPaused(),
-				Throttled:          pauser != nil && pauser.IsThrottled(),
-				TotalSteps:         &status.Total,
-				CurrentStep:        &status.Step,
-				CurrentStepDisplay: &desc,
-				TotalFiles:         &status.Files,
-				SystemsCompleted:   &systemsCompleted,
-				SystemsTotal:       &systemsTotal,
-			})
+				if !dbHasData {
+					dbHasData = mediaDBHasUsableData(db.MediaDB)
+				}
+				// Step increments as each system starts, so Step-1 systems have
+				// committed; Total includes the final "Writing database" step.
+				systemsCompleted := max(status.Step-1, 0)
+				systemsTotal := max(status.Total-1, 0)
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:             dbHasData,
+					Indexing:           true,
+					Paused:             pauser != nil && pauser.IsPaused(),
+					Throttled:          pauser != nil && pauser.IsThrottled(),
+					TotalSteps:         &status.Total,
+					CurrentStep:        &status.Step,
+					CurrentStepDisplay: &desc,
+					TotalFiles:         &status.Files,
+					SystemsCompleted:   &systemsCompleted,
+					SystemsTotal:       &systemsTotal,
+				})
 
-			log.Debug().Msgf("indexing status: %v", indexingStatusVals{
-				indexing:    true,
-				totalSteps:  status.Total,
-				currentStep: status.Step,
-				currentDesc: desc,
-				totalFiles:  status.Files,
-			})
-		}, pauser)
+				log.Debug().Msgf("indexing status: %v", indexingStatusVals{
+					indexing:    true,
+					totalSteps:  status.Total,
+					currentStep: status.Step,
+					currentDesc: desc,
+					totalFiles:  status.Files,
+				})
+			}, pauser, &sourceOptions)
 		if err != nil {
 			// Corruption transitions directly into recovery. Do not publish a
 			// stopped state between failed indexing and the recovery watcher.
@@ -843,6 +850,12 @@ func startMediaDBGeneration(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		if indexCtx.Err() == nil {
+			jobs := scrapeJobsForSources(availableScrapers, indexedSources)
+			if queueErr := enqueueScrapeJobs(db.MediaDB, jobs); queueErr != nil {
+				log.Error().Err(queueErr).Msg("failed to queue post-index scraping")
+			}
+		}
 		// A completed index (whether a fresh run or a resumed one) clears the
 		// consecutive resume-attempt counter immediately, rather than waiting for
 		// the next boot to observe a clean status. Otherwise interruptions from an

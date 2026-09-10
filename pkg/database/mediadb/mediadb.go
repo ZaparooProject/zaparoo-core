@@ -1775,13 +1775,14 @@ func (db *MediaDB) GetScrapingStatus() (string, error) {
 	return sqlGetScrapingStatus(db.ctx, sqlDB)
 }
 
+//nolint:gocritic // Preserve the existing MediaDBI value-parameter contract.
 func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetScrapingOperation(db.ctx, db.conn(), operation)
+	return sqlSetScrapingOperation(db.ctx, db.conn(), &operation)
 }
 
 func (db *MediaDB) GetScrapingOperation() (database.ScrapingOperation, bool, error) {

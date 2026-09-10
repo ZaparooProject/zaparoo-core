@@ -875,6 +875,58 @@ func TestClearScrapeRunMarkers_MissingRunIsNoop(t *testing.T) {
 	require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "test", "missing-run"))
 }
 
+func TestApplyScrapeFillMissingPreservesExistingValues(t *testing.T) {
+	t.Parallel()
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupScraperTestDB(t)
+			defer cleanup()
+			_, err := db.sql.Load().ExecContext(t.Context(),
+				"INSERT INTO Tags (TypeDBID, Tag) VALUES (3, 'image-screenshot')")
+			require.NoError(t, err)
+			initial := &database.ScrapeWrite{
+				Sentinel:   database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags:  []database.TagInfo{{Type: "developer", Tag: "original", Label: "Original"}},
+				TitleProps: []database.MediaProperty{{TypeTag: "property:description", Text: "Keep description"}},
+				MediaProps: []database.MediaProperty{{TypeTag: "property:image-boxart", Text: "keep.png"}},
+			}
+			require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, initial))
+			fill := &database.ScrapeWrite{
+				FillMissing: true, Sentinel: initial.Sentinel,
+				TitleTags:  []database.TagInfo{{Type: "developer", Tag: "replacement"}, {Type: "genre", Tag: "puzzle"}},
+				TitleProps: []database.MediaProperty{{TypeTag: "property:description", Text: "Replace description"}},
+				MediaProps: []database.MediaProperty{
+					{TypeTag: "property:image-boxart", Text: "replace.png"},
+					{TypeTag: "property:image-screenshot", Text: "new.png"},
+				},
+			}
+			if batch {
+				require.NoError(t, db.ApplyScrapeResults(t.Context(), []database.ScrapeWriteTarget{
+					{MediaDBID: 1, MediaTitleDBID: 1, Write: fill},
+				}))
+			} else {
+				require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, fill))
+			}
+			var description, image, screenshot, developer string
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaTitleProperties WHERE MediaTitleDBID=1 AND TypeTagDBID=1").Scan(&description))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaProperties WHERE MediaDBID=1 AND TypeTagDBID=2").Scan(&image))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				`SELECT p.Text FROM MediaProperties p JOIN Tags t ON p.TypeTagDBID=t.DBID
+				 WHERE p.MediaDBID=1 AND t.Tag='image-screenshot'`).Scan(&screenshot))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				`SELECT t.Tag FROM MediaTitleTags mt JOIN Tags t ON mt.TagDBID=t.DBID
+				 WHERE mt.MediaTitleDBID=1 AND t.TypeDBID=2`).Scan(&developer))
+			require.Equal(t, "Keep description", description)
+			require.Equal(t, "keep.png", image)
+			require.Equal(t, "new.png", screenshot)
+			require.Equal(t, "original", developer)
+		})
+	}
+}
+
 func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

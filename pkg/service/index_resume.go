@@ -618,6 +618,12 @@ func retryDurableMediaWriteOperations(
 		return
 	}
 	pending := claimMediaWriteRetries()
+	// Indexing can accept versioned jobs while optimization owns the next
+	// phase. Discover that ordinary work here without a separate auto worker.
+	if operation, found, err := db.MediaDB.GetScrapingOperation(); err == nil && found &&
+		operation.Version == 1 && operation.IsResumable("") {
+		pending |= mediaWriteRetryScraping
+	}
 	if pending&mediaWriteRetryIndexing != 0 {
 		if checkAndResumeIndexing(pl, cfg, db, st, indexPauser) {
 			deferMediaWriteRetry(pending &^ mediaWriteRetryIndexing)
@@ -792,10 +798,6 @@ func checkAndResumeScraping(
 		log.Debug().Err(err).Msg("failed to get scraping status during startup check")
 		return
 	}
-	if status != mediadb.IndexingStatusRunning && status != mediadb.IndexingStatusPending {
-		log.Debug().Msgf("scraping status is '%s', no auto-resume needed", status)
-		return
-	}
 	if activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
 		deferMediaWriteRetry(mediaWriteRetryScraping)
 		return
@@ -807,6 +809,9 @@ func checkAndResumeScraping(
 		return
 	}
 	if !found || operation.ScraperID == "" {
+		if status != mediadb.IndexingStatusRunning && status != mediadb.IndexingStatusPending {
+			return
+		}
 		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
 		invalidateInterruptedScrapeThumbnails(nil)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
@@ -815,7 +820,22 @@ func checkAndResumeScraping(
 		return
 	}
 
-	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok {
+	if !operation.IsResumable(status) {
+		return
+	}
+	if operation.Version == 1 {
+		optimization, statusErr := db.MediaDB.GetOptimizationStatus()
+		if statusErr != nil {
+			log.Warn().Err(statusErr).Msg("cannot check optimization before queued scraping")
+			return
+		}
+		if optimization == mediadb.IndexingStatusPending || optimization == mediadb.IndexingStatusRunning {
+			deferMediaWriteRetry(mediaWriteRetryScraping | mediaWriteRetryOptimization)
+			return
+		}
+	}
+
+	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok && len(operation.Pending) == 0 && operation.Version == 0 {
 		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
 		invalidateInterruptedScrapeThumbnails(operation.Systems)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
@@ -844,12 +864,8 @@ func checkAndResumeScraping(
 				Msg("media scraping auto-resume deferred; media database write operation active")
 			return
 		}
-		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
-			log.Warn().Err(setErr).Msg("failed to persist scraping auto-resume failure status")
-		}
-		if clearErr := db.MediaDB.ClearScrapingOperation(); clearErr != nil {
-			log.Warn().Err(clearErr).Msg("failed to clear scraping operation after auto-resume failure")
-		}
+		// The starter owns persistence while holding the write lease. A failed
+		// recovery attempt must not delete jobs accepted after that lease ended.
 		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")
 	}
 }

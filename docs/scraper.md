@@ -7,6 +7,7 @@ Current scraper implementations:
 - `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
+- `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
 ## Code Layout
 
@@ -16,6 +17,7 @@ Current scraper implementations:
 | `pkg/database/scraper/gamelistxml/` | EmulationStation `gamelist.xml` scraper loop, matcher, mapper, and companion-entry handling |
 | `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
 | `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
+| `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
@@ -35,7 +37,25 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 `media.scrape` looks up the requested `scraperId` from `env.Platform.Scrapers(env.Config)`, rejects the request if media indexing or another scrape is active, creates an app-scoped cancelable context, starts the scraper in the background, tracks it as a MediaDB background operation, and publishes `media.scraping` notifications.
 
-`media.scrape.status` returns the latest in-memory status snapshot plus a fresh scraped-count query. `media.scrape.cancel` cancels the active scrape context. `media.scrape.resume` resumes the shared scrape pauser. Scraping and indexing are mutually exclusive.
+`media.scrape.status` returns the latest in-memory status snapshot plus a fresh scraped-count query. `media.scrape.cancel` durably cancels current and queued scrape work, including jobs waiting for optimization. A persistence failure is returned as an error, not acknowledged as successful cancellation. `media.scrape.resume` resumes the shared scrape pauser. Scraping and indexing are mutually exclusive.
+
+### Ordinary Jobs After Indexing
+
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. Only PinUP Popper currently opts in; MiSTer scrapers remain manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+
+The sequence is **index → existing optimization → ordinary scraping**. Successful indexing persists eligible jobs before its final notification. The existing service recovery watcher starts them after optimization releases its write lease; there is no separate automatic-job worker. All jobs use the same scrape pauser, gameplay throttling, progress notifications and executor.
+
+The config-backed operation record holds one current job and an ordered pending list, bounded to 64 total jobs. Identical pending scopes/policies are deduplicated. A new manual request receives a conflict rather than overwriting pending work. Versioned records carry authoritative status; legacy records are readable and upgraded when resumed. Unknown versions fail closed.
+
+Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
+
+Indexing is only a trigger, not a durable parent workflow: use `media.scrape.cancel` after indexing finishes, not `media.generate.cancel`. A crash between successful indexing and queue persistence can require another index or manual request. Once accepted into the queue, a job survives restart.
+
+### Fill-Missing Policy
+
+Index-triggered jobs only fill missing metadata. A property is missing when no row of that type exists—not when its text is empty or its artwork file has disappeared. Existing exclusive tag values remain; additive tags may gain values. Nothing is automatically replaced or deleted.
+
+These checks and inserts share the existing single/batch scrape transaction. Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
 
 ## Run Loop
 
@@ -60,9 +80,9 @@ For each system, the normal loop:
 
 The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
 
-Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed when the operation reaches a terminal state.
+Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed after durable completion/advancement or cancellation. Unfinished and failed work retains its markers; a completed job's markers are not cleared before its durable queue position changes.
 
-Per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
+In the gamelist loop, per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Popper instead treats write failures as fatal so partially committed fill-missing work cannot be reported as successfully completed. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
 
 ## Tags And Properties
 
@@ -377,3 +397,25 @@ go test ./pkg/database/scraper/...
 go test ./pkg/database/mediadb/ -run 'Scrape|Property|Blob|Sentinel|MediaImage'
 go test ./pkg/api/methods/ -run 'Scrape|MediaImage|MediaMeta'
 ```
+
+## PinUP Popper Behavior
+
+The PinUP Popper launcher indexes tables as `popper://<GameID>/<name>` virtual paths, so the scraper needs no name matching: it reads the Popper library once, resolves each `Pinball` media row's GameID to its `Games` row and emulator, and writes the result. Rows already carrying `scraper.pinup-popper:scraped` are left out unless the scrape is forced; rows whose GameID no longer exists in Popper are counted as skipped. Images are looked up as `<Emulators.DirMedia>\<screen>\<GameName>.<png|jpg|jpeg>`, falling back to `POPMedia\<EmuName>` when the emulator has no media directory. Videos, audio and the remaining screens are not imported.
+
+| Popper field | Destination | Notes |
+|---|---|---|
+| `GameYear` | `MediaTitleTags: year` | Exclusive, when greater than zero |
+| `Manufact` | `MediaTitleTags: developer` | Exclusive, company-name normalized |
+| `NumPlayers` | `MediaTitleTags: players` | Exclusive, when greater than zero |
+| `GameType`, `Category`, `GameTheme` | `MediaTitleTags: genre` | Additive, one tag per non-empty field |
+| `Notes` | `MediaTitleProperties: description` | Whitespace collapsed |
+| `Wheel` image | `MediaProperties: image-wheel` | |
+| `PlayField` image | `MediaProperties: image-screenshot` | |
+| `BackGlass` image | `MediaProperties: image-marquee` | The backglass is the pinball counterpart of a marquee |
+| `GameInfo` image | `MediaProperties: image-image` | Flyer or info card |
+
+### Frontend Ownership Boundary
+
+Popper uses one application-local `pinup.Integration` object for launch attempts, process observations and worker shutdown. Windows supplies that object through existing `Launcher.Scanner`, `Launch`, `Kill`, availability and startup/shutdown hooks. Registration does not start Popper or polling workers. This is the pattern for later frontend integrations: keep mutable state local and connect existing callbacks, rather than requiring a shared lifecycle framework.
+
+Table stop uses Popper's frontend exit command and bounded observation/retries, including its loading period. Core does not take ownership of a foreign emulator process for generic child reaping or tree killing. Popper does not provide a session-fenced stop token: an external frontend replacement can race an unconditional exit request. Local attempt guards prevent stale Core retries/publications but cannot make that frontend protocol globally atomic.

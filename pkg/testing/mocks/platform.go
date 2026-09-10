@@ -273,13 +273,19 @@ func (m *MockPlatform) ManagedByPackageManager() bool {
 	return args.Bool(0)
 }
 
-// Scrapers returns the scrapers registered on this platform
+// Scrapers defaults to no registered scrapers. Index fixtures opt in explicitly;
+// existing platform fixtures do not implicitly request post-index work.
 func (m *MockPlatform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
-	args := m.Called(cfg)
-	if scrapers, ok := args.Get(0).(map[string]platforms.Scraper); ok {
-		return scrapers
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "Scrapers" {
+			args := m.Called(cfg)
+			if scrapers, ok := args.Get(0).(map[string]platforms.Scraper); ok {
+				return scrapers
+			}
+			return nil
+		}
 	}
-	return map[string]platforms.Scraper{}
+	return nil
 }
 
 // Helper methods for testing
