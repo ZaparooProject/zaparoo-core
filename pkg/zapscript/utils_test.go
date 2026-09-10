@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -239,30 +240,44 @@ allow_execute = [".*"]`))
 	require.Error(t, err, "execute should fail with no args")
 }
 
-// TestCmdExecute_SourceControlRequiresAllowList verifies that commands from
-// SourceControl are subject to the execute allowlist (no bypass).
-func TestCmdExecute_SourceControlRequiresAllowList(t *testing.T) {
+func TestCmdExecute_SourcePolicy(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	// No allowlist set — all commands should be blocked
-
-	cmd := zapscript.Command{
-		Name: "execute",
-		Args: []string{"echo hello"},
+	tests := []struct {
+		wantErr error
+		source  string
+		unsafe  bool
+	}{
+		{source: tokens.SourceControl},
+		{source: tokens.SourceControl, unsafe: true, wantErr: ErrRemoteSource},
+		{source: tokens.SourceAPI, wantErr: ErrExecuteNotAllowed},
+		{source: tokens.SourceReader, wantErr: ErrExecuteNotAllowed},
+		{source: tokens.SourcePlaylist, wantErr: ErrExecuteNotAllowed},
+		{source: tokens.SourceHook, wantErr: ErrExecuteNotAllowed},
+		{source: tokens.SourceGMC, wantErr: ErrExecuteNotAllowed},
+		{source: tokens.SourceRemote, wantErr: ErrExecuteNotAllowed},
+		{source: "", wantErr: ErrExecuteNotAllowed},
 	}
 
-	env := platforms.CmdEnv{
-		Cmd:    cmd,
-		Cfg:    cfg,
-		Source: tokens.SourceControl,
-		Unsafe: false,
+	for _, tt := range tests {
+		t.Run(tt.source+"/unsafe="+strconv.FormatBool(tt.unsafe), func(t *testing.T) {
+			t.Parallel()
+
+			// Invalid shell quoting reaches command validation only if allowed,
+			// without spawning a process or depending on an installed executable.
+			_, err := cmdExecute(nil, platforms.CmdEnv{
+				Cmd:    zapscript.Command{Name: "execute", Args: []string{"'"}},
+				Cfg:    &config.Instance{},
+				Source: tt.source,
+				Unsafe: tt.unsafe,
+			})
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.ErrorContains(t, err, "failed to parse execute command")
+			}
+		})
 	}
-
-	_, err := cmdExecute(nil, env)
-
-	require.Error(t, err, "SourceControl commands should be checked against allowlist")
-	assert.Contains(t, err.Error(), "not allowed")
 }
 
 // TestCmdExecute_SourceControlAllowedWhenInList verifies SourceControl commands

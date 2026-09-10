@@ -32,7 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -41,8 +41,8 @@ import (
 const maxBufferSize = 8192 // 8KB limit (QR Code v40 max: ~7KB numeric, ~4.3KB alphanumeric)
 
 type Reader struct {
-	port        testutils.SerialPort
-	portFactory testutils.SerialPortFactory
+	port        serialport.SerialPort
+	portFactory serialport.SerialPortFactory
 	cfg         *config.Instance
 	device      config.ReadersConnect
 	path        string
@@ -53,7 +53,7 @@ type Reader struct {
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
 		cfg:         cfg,
-		portFactory: testutils.DefaultSerialPortFactory,
+		portFactory: serialport.DefaultSerialPortFactory,
 	}
 }
 
