@@ -85,5 +85,11 @@ type MatchResult struct {
 type ScrapeSystem struct {
 	ID       string
 	ROMPaths []string
-	DBID     int64
+	// Extensions is the union of file extensions the platform's launchers index
+	// for this system, lower-cased and dot-prefixed. It is empty when the set
+	// cannot be stated exactly, which happens when a launcher accepts files
+	// through a Test function instead of an extension list. Consumers must treat
+	// an empty slice as "unknown", never as "indexes nothing".
+	Extensions []string
+	DBID       int64
 }

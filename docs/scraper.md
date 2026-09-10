@@ -113,7 +113,7 @@ Path handling for `<game><path>` stays strict:
 | `~/...` | Resolved under the current user's home directory, then rejected unless still under the system ROM root |
 | Absolute path | Cleaned and rejected unless under the system ROM root |
 
-Asset path handling for artwork/video/manual uses the same root-bound behavior by default. On MiSTer and MiSTeX only, absolute or `~/...` asset paths may also resolve under platform root directories from `RootDirs(cfg)`, covering SD, USB, CIFS, network, and configured index roots. This applies only to file-backed asset fields; game paths remain bound to the ROM root. Path traversal outside the ROM root or approved platform roots is rejected.
+Asset path handling for artwork/video/manual uses the same root-bound behavior by default. On MiSTer and MiSTeX only, absolute or `~/...` asset paths may also resolve under platform root directories from `RootDirs(cfg)`, covering SD, USB, CIFS, network, and configured index roots. This applies only to file-backed asset fields; game paths remain bound to the ROM root. Path traversal outside the ROM root or approved platform roots is rejected. The MiSTer arcade set-name fallback below can also interpret a ROM path as an identity without accessing that path; it does not broaden asset access.
 
 Zip-as-directory paths are supported for matching XML entries such as `./Japan/Game.zip` to indexed media stored under that zip path, while nested artwork paths such as `./media/images/Japan/Game.png` remain resolved as asset paths.
 
@@ -176,6 +176,56 @@ For each indexed system, the scraper also checks `<custom_path>/<system ID>/game
 Custom gamelists enrich existing indexed records; they do not create systems, titles, or media rows. For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
+
+## MiSTer Arcade Gamelists
+
+MiSTer indexes launchable `.mra` descriptors under `_Arcade`, not MAME ROM ZIPs. A gamelist authored by Skraper against `pacman.zip` therefore cannot identify `Pac-Man (Midway).mra` by its filesystem path alone.
+
+On MiSTer and MiSTeX, the `gamelist.xml` scraper can bridge these identities using the `<setname>` stored inside each indexed MRA:
+
+- A `<game><path>` ending in `.zip` or `.7z`, or containing a bare set name, supplies the set-name key. Keys are case-insensitive; they contain letters, digits, underscores, or hyphens, up to 128 characters.
+- The matching MRA must be live and uniquely identified within the system currently being scraped. Already-scraped MRAs still count when checking uniqueness; force and resume cannot make a duplicate set appear unique.
+- Multiple MRAs with the same set name are skipped, including alternate-core variants and duplicates sharing one title. Use an exact MRA path to choose a variant instead of relying on ROM-set matching.
+- Entries that name the row directly take precedence: an indexed path, or a slug match the entry's own path confirms. A set name outranks a record that only guessed the row from its title, in either XML order, because arcade clone sets routinely share one display name. Unknown set names retain existing slug matching. A known ambiguous set does not fall back to guessing by title.
+- A unique match receives title metadata and media-level artwork. Artwork filename fallback uses the source set name in any supported artwork extension, such as `media/images/pacman.png` or `media/images/pacman.jpg`, rather than the MRA's display filename.
+
+### Exporting A Scraper Bundle
+
+To keep metadata outside `_Arcade`, export or copy the gamelist and its referenced images together into a custom bundle:
+
+```text
+/media/fat/metadata/
+└── Arcade/
+    ├── gamelist.xml
+    └── images/
+        └── pacman.png
+```
+
+```toml
+[scraper.gamelist_xml]
+custom_path = "/media/fat/metadata"
+```
+
+Example `Arcade/gamelist.xml`:
+
+```xml
+<gameList>
+  <game>
+    <path>./pacman.zip</path>
+    <name>Pac-Man</name>
+    <desc>Metadata exported by your scraper.</desc>
+    <image>./images/pacman.png</image>
+  </game>
+</gameList>
+```
+
+Index the MRAs first, then run `gamelist.xml` for `Arcade`. For a granular arcade system such as `CPS1`, use a `CPS1` bundle directory and scrape that indexed system; those systems are classified out of `_Arcade` rather than scanned from a folder of their own, so an installed bundle is what makes them scrapable at all. Existing arcade classification determines system membership; the scraper neither creates MRA entries nor guesses membership from catalog titles.
+
+A gamelist in `_Arcade` also supports these ROM/set-name references. Core does **not** automatically discover `games/mame/gamelist.xml` or arbitrary nested gamelists: put the bundle in the configured layout above, or place a gamelist in a configured ROM root.
+
+Regular set-name entries may retain absolute or sibling ROM ZIP paths from the scraper machine, including Windows paths. Core extracts only the basename identity; it never opens or launches those source ZIP paths. Image, video, and manual references keep the existing asset-root restrictions. Custom images must exist at scrape time. Relative Companion ZIP child references also support unique set-name matching; existing Companion path validation and parent metadata behavior remain unchanged.
+
+Unreadable or malformed MRA descriptors, and those repeating `<setname>` in their header, are not identity sources. Only the descriptor header up to its first `<rom>` element is read, so the embedded ROM payload of a large MRA costs nothing and does not disqualify it. No MRA, ROM archive, or launcher configuration is rewritten. AmigaVision `games.txt` and `demos.txt` integration is separate from arcade matching.
 
 ## MiSTer Installed Docs Databases
 

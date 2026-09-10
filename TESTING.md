@@ -481,6 +481,7 @@ func TestTokenProcessing(t *testing.T) {
 - **[Time-Based Testing](pkg/testing/TIME_TESTING.md)** - Deterministic time testing with clockwork (fake clocks, tickers, timeouts)
 - **[Fuzz Testing](pkg/testing/FUZZ_TESTING.md)** - Native Go fuzzing for discovering edge cases in parsing and validation
 - **[Property-Based Testing](pkg/testing/PROPERTY_TESTING.md)** - Rapid property-based testing for verifying code invariants
+- **[MiSTer VM Integration Rig](scripts/mister-vm/README.md)** - Headless ARM VM running an unmodified MiSTer build against stock userspace; opt-in, not part of `task test`
 
 ## Best Practices
 

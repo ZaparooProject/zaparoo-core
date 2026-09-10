@@ -1339,6 +1339,11 @@ scan_mode = "hold"`))
 	env.waitForSoftwareTokenUID(t, "game1")
 	env.sendRemovalOn(testReaderID)
 	env.waitForStop(t)
+	// StopActiveLauncher is observed before timedExit queues its final owner
+	// clear. Wait for that clear so it cannot erase the next tap's owner.
+	require.Eventually(t, func() bool {
+		return env.st.GetSoftwareToken() == nil
+	}, behaviorTimeout, time.Millisecond, "hold-reader exit cleanup did not finish")
 
 	// From then on the tap reader must keep reloading on every tap.
 	for range 2 {
