@@ -1081,6 +1081,10 @@ func TestScanBehavior_Hold_DiscControlCardPreservesMedia(t *testing.T) {
 			media := env.st.ActiveMedia()
 			media.LauncherID = "disc-test"
 			env.st.SetActiveMedia(media)
+			// Snapshot by value. ActiveMedia can hand back the very pointer
+			// stored here, and comparing that with itself holds however the
+			// struct was rewritten in the meantime.
+			expectedMedia := *media
 			gen, active := env.st.ActiveMediaReadyGeneration()
 			require.True(t, active)
 			env.st.MarkActiveMediaReady(gen)
@@ -1093,7 +1097,9 @@ func TestScanBehavior_Hold_DiscControlCardPreservesMedia(t *testing.T) {
 			env.sendRemoval()
 			env.expectNoStop(t)
 			env.waitForSoftwareTokenUID(t, "game1")
-			assert.Equal(t, media, env.st.ActiveMedia())
+			current := env.st.ActiveMedia()
+			require.NotNil(t, current, "disc control cleared active media")
+			assert.Equal(t, expectedMedia, *current)
 			select {
 			case <-env.launchCh:
 				t.Fatal("disc control relaunched media")
