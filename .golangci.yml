@@ -2,6 +2,9 @@ version: "2"
 
 run:
   go: "1.27"
+  build-tags:
+    - validator_novalidatefn
+    - expr_static_methods
 
 linters:
   exclusions:
