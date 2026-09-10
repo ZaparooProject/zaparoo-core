@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -173,6 +174,32 @@ func TestBrowseFilesQueryPlan_CursorPageSeeksAfterIndexing(t *testing.T) {
 
 	require.Contains(t, browseSortIndexDDL(t, mediaDB), browseTitleCollationName)
 	assertCursorPageSeeks(t, cursorPagePlan(t, mediaDB, seedFlatFolderLibrary(t, mediaDB)))
+}
+
+// Every other plan test here builds its statement with no tags, so none of them
+// sees the statement an install with a hidden item actually runs: media
+// visibility appends a NOT filter to every browse, and it lands in the same
+// WHERE the cursor seek depends on. Without this the seek could be lost the
+// moment a user hides anything and every plan test would still pass.
+func TestBrowseFilesQueryPlan_CursorPageSeeksWithVisibilityFilter(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	parentDir := seedFlatFolderLibrary(t, mediaDB)
+
+	opts := &database.BrowseFilesOptions{
+		PathPrefix:    parentDir,
+		Limit:         7,
+		Sort:          "name-asc",
+		Cursor:        &database.BrowseCursor{SortValue: "Browse Game 03000", LastID: 3000},
+		Tags:          filters.ExcludeHidden(nil),
+		ExcludeHidden: true,
+	}
+	require.NotEmpty(t, opts.Tags, "the visibility filter must actually be present")
+	query, args := browseFilesQuery(opts, "name-asc",
+		browsePrefixTagPlan(context.Background(), mediaDB.sql.Load(), parentDir, nil, opts.Tags))
+	assertCursorPageSeeks(t, explainPlan(t, mediaDB, query, args...))
 }
 
 // TestBrowseSortIndexRepair_MakesCursorPagesSeek covers the state the existing
