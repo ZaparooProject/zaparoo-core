@@ -30,6 +30,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -714,25 +715,151 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 	assert.Contains(t, runningErr.Error(), "does not match the Zaparoo service binary")
 	assert.True(t, pidRunning(process.Process.Pid))
 	assert.FileExists(t, pidFile)
+	// The platform wrappers auto-start on this error instead of aborting, so
+	// Start can clear the stale file. Without this the recovery is unreachable
+	// from the only entry point users have.
+	assert.True(t, IsStalePIDConflict(runningErr))
+	assert.False(t, IsStalePIDConflict(nil))
+	assert.False(t, IsStalePIDConflict(errors.New("some other failure")))
 }
 
-func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
+// The platform wrappers all call this before auto-starting. Running reports a
+// reused PID as an error, and returning that from here left the service
+// unstartable from the only entry point most users have, because Start (which
+// clears it) was never reached.
+func TestRunningForAutoStartToleratesStalePIDFile(t *testing.T) {
 	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
-	settings := svc.pl.Settings()
-	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+
+	// No PID file at all: plainly not running, no error.
+	running, err := svc.RunningForAutoStart()
+	require.NoError(t, err)
+	assert.False(t, running)
 
 	process := exec.CommandContext(context.Background(), "sleep", "1000")
 	require.NoError(t, process.Start())
-	t.Cleanup(func() { _ = process.Process.Kill() })
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
 	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
 
-	err := svc.Start()
+	// Running still reports the conflict, so callers that must not touch an
+	// unrelated process keep seeing it.
+	_, runningErr := svc.Running()
+	require.Error(t, runningErr)
+	assert.True(t, IsStalePIDConflict(runningErr))
+
+	// The auto-start path sees "not running" and leaves it to Start.
+	running, err = svc.RunningForAutoStart()
+	require.NoError(t, err, "a reused PID must not stop the wrapper auto-starting")
+	assert.False(t, running)
+	assert.True(t, pidRunning(process.Process.Pid), "the unrelated process must be untouched")
+	assert.FileExists(t, pidFile, "and its PID file is Start's to clear, not this call's")
+
+	// Only the recoverable conflict is tolerated. A PID file that cannot be
+	// read at all is a real fault, and reporting it as "not running" would
+	// start a second service on top of whatever the unreadable file described.
+	require.NoError(t, os.WriteFile(pidFile, []byte("not a pid"), 0o600))
+	running, err = svc.RunningForAutoStart()
+	require.Error(t, err, "an unreadable PID file must not be reported as not running")
+	assert.False(t, running)
+	assert.False(t, IsStalePIDConflict(err))
+}
+
+func TestStartRecoversLiveUnrelatedPID(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && pid != process.Process.Pid {
+			require.NoError(t, svc.Stop())
+		}
+	})
+
+	// Competing ensures must recover the stale file and publish only one PID.
+	const racers = 4
+	results := make(chan error, racers)
+	for range racers {
+		go func() { results <- svc.Start() }()
+	}
+	for range racers {
+		require.NoError(t, <-results)
+	}
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.NotEqual(t, process.Process.Pid, pid)
+	assert.True(t, requireServiceRunning(t, svc))
+	assert.True(t, pidRunning(process.Process.Pid), "unrelated process must not be signaled")
+
+	// An idempotent ensure after recovery must retain the same service.
+	require.NoError(t, svc.Start())
+	nextPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, pid, nextPID)
+}
+
+func TestServiceScriptIdentityRejectsDataArguments(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	service := filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh")
+	assert.True(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00"+service+"\x00-service\x00exec\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/busybox", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/tail", []byte("tail\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00-c\x00"+service+"\x00"), dataDir))
+	assert.False(t, serviceScriptIdentity("/bin/sh", []byte("sh\x00-s\x00"+service+"\x00"), dataDir))
+	// A data argument after the script is not identity either.
+	assert.False(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00/opt/other.sh\x00"+service+"\x00"), dataDir))
+}
+
+// The kernel puts a shebang option at argv[1] and the script after it, so an
+// interpreter list that only reads argv[1] reports a live service as foreign
+// and lets Start remove its PID file and start a second one.
+func TestServiceScriptIdentityAcceptsShebangOptionAndBusyboxShells(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	service := filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh")
+
+	// "#!/bin/sh -e" => argv = [sh, -e, <script>, ...]
+	assert.True(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00-e\x00"+service+"\x00-service\x00exec\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity(
+		"/bin/sh", []byte("sh\x00--\x00"+service+"\x00"), dataDir))
+	// Buildroot images resolve /bin/sh to a standalone applet, not to busybox.
+	assert.True(t, serviceScriptIdentity("/bin/ash", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/ksh", []byte("sh\x00"+service+"\x00"), dataDir))
+	assert.True(t, serviceScriptIdentity("/bin/zsh", []byte("sh\x00"+service+"\x00"), dataDir))
+	// An unrelated interpreter still cannot vouch for the path.
+	assert.False(t, serviceScriptIdentity("/usr/bin/python3", []byte("python3\x00"+service+"\x00"), dataDir))
+	// An empty cmdline (kernel thread) must not be identity.
+	assert.False(t, serviceScriptIdentity("/bin/sh", nil, dataDir))
+}
+
+func TestUnavailableProcessIdentityIsNotPIDConflict(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	matches, err := newTestService(t).serviceProcessIdentity(-1)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
-	assert.True(t, pidRunning(process.Process.Pid))
-	assert.FileExists(t, pidFile)
+	assert.False(t, matches)
+	var conflict *servicePIDMismatchError
+	assert.NotErrorAs(t, err, &conflict, "unknown identity must not authorize PID-file removal")
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {

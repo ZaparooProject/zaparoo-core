@@ -172,7 +172,7 @@ func run() error {
 		_, _ = fmt.Println("Added Zaparoo to MiSTeX startup.")
 	}
 
-	running, runningErr := svc.Running()
+	running, runningErr := svc.RunningForAutoStart()
 	if runningErr != nil {
 		return fmt.Errorf("error checking service status: %w", runningErr)
 	}

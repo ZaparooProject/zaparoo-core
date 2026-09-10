@@ -218,11 +218,44 @@ func validatePIDFileInfo(info os.FileInfo) error {
 	return nil
 }
 
-func servicePIDConflictError(pid int) error {
-	return fmt.Errorf(
+type servicePIDMismatchError struct {
+	pid int
+}
+
+func (e *servicePIDMismatchError) Error() string {
+	return fmt.Sprintf(
 		"service PID file points to live process %d that does not match the Zaparoo service binary",
-		pid,
+		e.pid,
 	)
+}
+
+func servicePIDConflictError(pid int) error {
+	return &servicePIDMismatchError{pid: pid}
+}
+
+// IsStalePIDConflict reports whether err is the PID-file conflict that Start
+// clears under the start gate. Callers that auto-start the service must treat
+// it as "not running" and let Start recover it, otherwise a reused PID leaves
+// the service unstartable from the wrapper.
+func IsStalePIDConflict(err error) bool {
+	var conflict *servicePIDMismatchError
+	return errors.As(err, &conflict)
+}
+
+// RunningForAutoStart reports whether the service is already running, for a
+// caller that will start it if not.
+//
+// It differs from Running in one way: a stale PID file left by a reused PID is
+// reported as not running rather than as an error, because Start clears that
+// under the start gate. Every platform wrapper checks this before auto-starting,
+// and returning the error there left the service unstartable from the only
+// entry point most users have. Any other error still stands.
+func (s *Service) RunningForAutoStart() (bool, error) {
+	running, err := s.Running()
+	if err != nil && !IsStalePIDConflict(err) {
+		return false, err
+	}
+	return running, nil
 }
 
 // Running returns true if the service is running.
@@ -237,7 +270,11 @@ func (s *Service) Running() (bool, error) {
 	}
 
 	if pidRunning(pid) {
-		if s.pidMatchesService(pid) {
+		matches, identityErr := s.serviceProcessIdentity(pid)
+		if identityErr != nil {
+			return false, fmt.Errorf("error identifying service PID %d: %w", pid, identityErr)
+		}
+		if matches {
 			return true, nil
 		}
 		log.Warn().
@@ -1089,6 +1126,23 @@ func (s *Service) Start() error {
 	defer release()
 
 	running, err := s.Running()
+	var conflict *servicePIDMismatchError
+	if errors.As(err, &conflict) {
+		// Only Start may recover a confirmed foreign PID, under the same gate
+		// that protects PID publication. Never signal the unrelated process.
+		pid, pidErr := s.Pid()
+		if pidErr != nil {
+			return pidErr
+		}
+		if pid != conflict.pid {
+			return errors.New("service PID changed during start")
+		}
+		if removeErr := s.removePidFile(); removeErr != nil {
+			return removeErr
+		}
+		log.Warn().Int("pid", pid).Msg("removed stale service PID file without signaling unrelated process")
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -1283,25 +1337,56 @@ func pidIsZombie(pid int) bool {
 }
 
 func (s *Service) pidMatchesService(pid int) bool {
+	matches, _ := s.serviceProcessIdentity(pid)
+	return matches
+}
+
+// Unknown identity must not be treated as a confirmed PID reuse: removing its
+// PID file could let Start create a second service when procfs is inaccessible.
+func (s *Service) serviceProcessIdentity(pid int) (bool, error) {
 	if runtime.GOOS != "linux" {
-		return true
+		return true, nil
 	}
 
 	dataDir := helpers.DataDir(s.pl)
-	exePath, err := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
-	if err == nil && pathLooksLikeServiceBinary(exePath, dataDir) {
-		return true
+	exePath, exeErr := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
+	exePath = strings.TrimSuffix(exePath, " (deleted)")
+	if exeErr == nil && pathLooksLikeServiceBinary(exePath, dataDir) {
+		return true, nil
 	}
 
 	cmdlinePath := filepath.Join(procDir(), strconv.Itoa(pid), "cmdline")
 	cmdline, err := os.ReadFile(cmdlinePath) //nolint:gosec // reads process status for service management
 	if err != nil {
+		return false, fmt.Errorf("reading process command line: %w", err)
+	}
+	if exeErr != nil {
+		return false, fmt.Errorf("reading process executable: %w", exeErr)
+	}
+	return serviceScriptIdentity(exePath, cmdline, dataDir), nil
+}
+
+func serviceScriptIdentity(exePath string, cmdline []byte, dataDir string) bool {
+	// A data argument to cat/tail/etc. is not service identity, so only a known
+	// interpreter can vouch for a shell-backed cache.
+	switch filepath.Base(exePath) {
+	case "sh", "bash", "dash", "ash", "busybox", "ksh", "zsh":
+	default:
 		return false
 	}
-	for _, arg := range strings.Split(string(cmdline), "\x00") {
-		if pathLooksLikeServiceBinary(arg, dataDir) {
-			return true
+	// The kernel places the script after any shebang option, so the interpreted
+	// script is the first argument that is not a flag. Misreading it as foreign
+	// would let Start delete a live service's PID file and start a second one.
+	for _, arg := range strings.Split(string(cmdline), "\x00")[1:] {
+		if arg == "-c" || arg == "-s" {
+			// The program text comes from the next argument or stdin, so a
+			// matching path after this point is data rather than the script.
+			return false
 		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return pathLooksLikeServiceBinary(arg, dataDir)
 	}
 	return false
 }
