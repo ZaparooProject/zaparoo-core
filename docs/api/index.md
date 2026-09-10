@@ -292,6 +292,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.history.latest            | Return latest media play history entries.                                             | All clients |
 | media.history.top               | Return most-played media ranked by play time.                                         | All clients |
 | media.lookup                    | Resolve game name and system to indexed media.                                        | All clients |
+| media.lookup.candidates         | Return up to five ranked canonical titles in one system.                              | All clients |
 | media.meta                      | Return metadata for indexed media.                                                    | All clients |
 | media.image                     | Return best matching image for indexed media.                                         | All clients |
 | scrapers                        | List available metadata scrapers.                                                     | All clients |

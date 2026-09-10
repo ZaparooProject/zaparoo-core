@@ -76,6 +76,11 @@ func sendNotification(ns chan<- models.Notification, method string, payload any)
 	}
 }
 
+// MediaVisibility asks clients to refresh discovery and hidden indicators.
+func MediaVisibility(ns chan<- models.Notification) {
+	sendNotification(ns, models.NotificationMediaVisibility, nil)
+}
+
 func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }

@@ -71,4 +71,7 @@ type RequestEnv struct {
 	// APIKeyAuthenticated is true when static API-key middleware authenticated
 	// this non-paired request. It grants admin authority, not localhost access.
 	APIKeyAuthenticated bool
+	// ExcludeHidden is the normalized browse preference for this request only.
+	// It is not authorization and never applies to explicit launch resolution.
+	ExcludeHidden bool
 }

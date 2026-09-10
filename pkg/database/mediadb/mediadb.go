@@ -194,6 +194,7 @@ type MediaDB struct {
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	dbPath                  string
+	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
 	backgroundOpsCount      atomic.Int64
 	vacuumRetryDelay        time.Duration
@@ -296,6 +297,7 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 		clearImagePropertyTagCache()
 		db.utilityTagCacheDirty = false
 	}
+	db.slugCacheState.mu.Lock()
 	switch {
 	case scope.PreserveSlugSearchCache:
 		// An indexing run publishes each system's new entries as it commits
@@ -320,6 +322,15 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	default:
 		db.slugSearchCache.Store(nil)
 	}
+
+	if scope.PreserveSlugSearchCache {
+		// A recovery scan already in flight must not publish across a commit,
+		// even though indexing deliberately keeps last-good coverage in place.
+		db.slugCacheState.generation++
+	} else {
+		db.slugCacheInvalidatedLocked()
+	}
+	db.slugCacheState.mu.Unlock()
 
 	// MediaCountCache: always nuke everything (queries are too complex to selectively invalidate)
 	if err := db.InvalidateCountCache(); err != nil {
@@ -467,8 +478,11 @@ func shouldCheckpointAfterCommit(mode database.WALCheckpointMode) bool {
 }
 
 func (db *MediaDB) DropSlugSearchCacheForSystems(systemIDs []string) {
+	db.slugCacheState.mu.Lock()
+	defer db.slugCacheState.mu.Unlock()
 	if cache := db.slugSearchCache.Load(); cache != nil {
 		db.slugSearchCache.Store(cache.withoutSystems(systemIDs))
+		db.slugCacheInvalidatedLocked()
 	}
 }
 
@@ -548,7 +562,7 @@ func (db *MediaDB) Open() error {
 	// happen to equal baseMaxOpenConns: an idle cap below the open cap lets the
 	// pool recycle connections and lose their pragmas. See SetIndexingConnBoost.
 	sqlInstance.SetMaxIdleConns(baseMaxOpenConns)
-	db.sql.Store(sqlInstance)
+	db.resetSlugCacheSource(sqlInstance)
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
 			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
@@ -579,6 +593,13 @@ func (db *MediaDB) Open() error {
 	}
 
 	registerCoverAvailabilityCacheOwner(sqlInstance, db)
+
+	// A library indexed before AnalyzeApproximate corrected this row still
+	// carries the sampled figure. Fix it on open so the first search after an
+	// upgrade gets the right plan instead of waiting for the next index run.
+	if err = sqlTruthfulMissingIndexStat(db.ctx, sqlInstance); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics on open")
+	}
 	return nil
 }
 
@@ -997,6 +1018,13 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	if err != nil {
 		return fmt.Errorf("failed to run pragma optimize: %w", err)
 	}
+	// The sampled pass misreports the single-valued IsMissing index; see
+	// sqlTruthfulMissingIndexStat for the plan that cost. The refresh itself
+	// succeeded, so a failed touch-up is logged rather than returned: the next
+	// refresh or open repeats it.
+	if err := sqlTruthfulMissingIndexStat(db.ctx, sqlDB); err != nil {
+		log.Warn().Err(err).Msg("failed to correct media_missing_idx planner statistics")
+	}
 	// Warn rather than debug when it was not a no-op: the whole point of this
 	// telemetry is that a multi-second planner refresh is invisible otherwise.
 	logEvent := log.Debug()
@@ -1113,6 +1141,13 @@ var secondaryIndexes = []secondaryIndex{
 			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
 		replaceWhenEnsured: true,
 	},
+	{
+		// Serves media.search's name ordering, which is NOCASE on
+		// MediaTitles.Name; see searchSortExpr and the migration that adds it.
+		name: "mediatitles_name_sort_idx",
+		ddl: "CREATE INDEX IF NOT EXISTS mediatitles_name_sort_idx " +
+			"ON MediaTitles(Name COLLATE NOCASE, DBID)",
+	},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -1210,6 +1245,65 @@ func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit replacement index %s: %w", idx.name, err)
 	}
+	return nil
+}
+
+// EnsureBrowseSortIndex brings the secondary indexes browse and search read up
+// to the definitions those queries need, without waiting for an indexing run.
+//
+// The base migration creates the index without the ZAPAROO_TITLE_V1 collation
+// and only CreateSecondaryIndexes replaces it, which runs at the end of a media
+// index and nowhere else. A device that upgrades and does not reindex therefore
+// browses against an index whose ordering disagrees with every browse query, so
+// the planner cannot use it for the ORDER BY at all: it falls back to
+// idx_media_parentdir_system plus a temp b-tree and reads and sorts the whole
+// folder for each page. On a folder of several thousand files that is the
+// difference between a page costing a page and a page costing the folder
+// (#1460).
+//
+// The same reasoning covers an index that is merely absent: the search title
+// sort index was added after these databases were built, and creating it in a
+// migration cost 17.7s of startup on the MiSTer test device with nothing on
+// screen to explain the pause. Both cases are what CreateSecondaryIndexes
+// already resolves — it replaces an index whose definition has moved on and
+// creates any that are missing — so this only decides *when* that runs.
+//
+// Deliberately off the startup path: it is minutes of work on a large library
+// on SD. Skipped while indexing or optimization owns the database, because
+// CreateSecondaryIndexes runs at the end of that work anyway.
+func (db *MediaDB) EnsureBrowseSortIndex() error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	if db.hasBackgroundWrites() {
+		log.Debug().Msg("skipping browse index check while background work owns the database")
+		return nil
+	}
+
+	stale, err := db.missingSecondaryIndexes()
+	if err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(stale))
+	for i := range stale {
+		names[i] = stale[i].name
+	}
+	log.Info().Strs("indexes", names).
+		Msg("browse indexes are missing or predate their collation, building them so browsing and search stay fast")
+	// Tracked only around the build: taken any earlier and the
+	// HasBackgroundOperations check above would see this call's own tracking.
+	db.TrackBackgroundOperation()
+	defer db.BackgroundOperationDone()
+	started := time.Now()
+	if err := db.CreateSecondaryIndexes(); err != nil {
+		return fmt.Errorf("building browse indexes: %w", err)
+	}
+	log.Info().Strs("indexes", names).Dur("elapsed", time.Since(started)).
+		Msg("browse indexes built")
 	return nil
 }
 
@@ -1644,7 +1738,10 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// same generation value, so leaving generation-zero files behind can make stale
 	// title candidates look valid even though their SQL rows no longer exist.
 	db.inMemoryTagCache.Store(nil)
+	db.slugCacheState.mu.Lock()
 	db.slugSearchCache.Store(nil)
+	db.slugCacheState.generation++
+	db.slugCacheState.mu.Unlock()
 	cacheErr := errors.Join(
 		removePersistedCacheFile(db.tagCachePath(), tagCacheKind),
 		removePersistedCacheFile(db.slugSearchCachePath(), slugSearchCacheKind),
@@ -2023,6 +2120,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 }
 
 func (db *MediaDB) Close() error {
+	db.stopSlugCacheRecovery(true)
 	sqlDB := db.sql.Load()
 	if sqlDB == nil {
 		return nil
@@ -2085,7 +2183,8 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
 // This method should only be used in tests to set up in-memory databases.
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
-	db.sql.Store(sqlDB)
+	db.stopSlugCacheRecovery(true)
+	db.resetSlugCacheSource(sqlDB)
 	clearUtilityTagCache()
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
@@ -2915,10 +3014,37 @@ var (
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
 	started time.Time
-	conn    *sql.Conn
+	conn    browseConn
 	op      string
 	wait    time.Duration
 	routes  int
+}
+
+// browseConn is the connection a browse runs its statements on, carrying the
+// pool it was taken from.
+//
+// The per-database browse caches (prefix policy, utility tags, image property
+// tags, cover availability) are keyed on the handle a statement runs against
+// and are cleared with the pool handle. A bare *sql.Conn cannot serve as that
+// key: sql.DB.Conn allocates a new one for every acquisition, so each page
+// filed its entry under a connection released microseconds later, every page
+// re-ran the detection the cache exists to avoid, and the clear functions never
+// matched anything. cacheHandle resolves a browse connection back to its pool.
+type browseConn struct {
+	*sql.Conn
+	pool *sql.DB
+}
+
+func (c browseConn) cacheHandle() sqlQueryable { return c.pool }
+
+// cacheHandle returns the handle a per-database cache should be keyed on: the
+// pool behind a browse connection, or the handle itself for callers that
+// already hold a pool or a transaction.
+func cacheHandle(db sqlQueryable) sqlQueryable {
+	if h, ok := db.(interface{ cacheHandle() sqlQueryable }); ok {
+		return h.cacheHandle()
+	}
+	return db
 }
 
 // beginBrowse acquires the request's connection. The caller must always call
@@ -2934,7 +3060,13 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
-	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
+	return &browseCall{
+		conn:    browseConn{Conn: conn, pool: sqlDB},
+		op:      op,
+		routes:  routes,
+		started: started,
+		wait:    wait,
+	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {
@@ -2968,6 +3100,7 @@ func (c *browseCall) finish(db *MediaDB) {
 	event.Msg("browse call timing")
 }
 
+//nolint:gocritic // Value options preserve the browse contract.
 func (db *MediaDB) BrowseDirectories(
 	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
@@ -2998,7 +3131,12 @@ func (db *MediaDB) BrowseFiles(
 		return nil, err
 	}
 	defer call.finish(db)
-	results, err := sqlBrowseFiles(ctx, call.conn, opts)
+	scoped := *opts
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	results, err := sqlBrowseFiles(ctx, call.conn, &scoped)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -3039,6 +3177,10 @@ func (db *MediaDB) BrowseFileCount(
 		return 0, err
 	}
 	defer call.finish(db)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return 0, err
+	}
 	return sqlBrowseFileCount(ctx, call.conn, opts)
 }
 
@@ -3080,6 +3222,10 @@ func (db *MediaDB) BrowseIndex(
 		return database.BrowseIndexResult{}, err
 	}
 	defer call.finish(db)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	if err != nil {
+		return database.BrowseIndexResult{}, err
+	}
 	return sqlBrowseIndex(ctx, call.conn, &opts)
 }
 
@@ -3097,7 +3243,7 @@ func (db *MediaDB) BrowseVirtualSchemes(
 // under each root. A nil *int means the count is not yet available (cache not
 // populated). A non-nil *int is the actual count (which may be 0).
 func (db *MediaDB) BrowseRootCounts(
-	ctx context.Context, rootDirs []string,
+	ctx context.Context, rootDirs []string, excludeHidden bool,
 ) (map[string]*int, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
@@ -3107,7 +3253,7 @@ func (db *MediaDB) BrowseRootCounts(
 		return nil, err
 	}
 	defer call.finish(db)
-	return sqlBrowseRootCounts(ctx, call.conn, rootDirs)
+	return sqlBrowseRootCounts(ctx, call.conn, rootDirs, excludeHidden)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -3233,6 +3379,14 @@ func (db *MediaDB) SearchMediaWithFilters(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
+
+	scoped := *filters
+	var visibilityErr error
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden)
+	if visibilityErr != nil {
+		return nil, visibilityErr
+	}
+	filters = &scoped
 
 	qWords := strings.Fields(filters.Query)
 	if len(qWords) == 0 || len(filters.Systems) == 0 {
@@ -3742,13 +3896,44 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) SystemMediaCounts(
 	ctx context.Context,
 	tagFilters []zapscript.TagFilter,
+	excludeHidden bool,
 ) ([]database.SystemMediaCount, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 	if len(tagFilters) > 0 {
-		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
+		if visibilityErr != nil {
+			return nil, visibilityErr
+		}
+		return sqlSystemMediaCounts(ctx, db.sql.Load(), scoped)
 	}
+	// The untagged totals are cached per index generation and shared with random
+	// weighting, so subtract hidden media from them rather than re-aggregating
+	// Media behind a NOT filter.
+	hidden, err := loadHiddenMedia(ctx, db.sql.Load(), excludeHidden)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := db.cachedSystemMediaCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if hidden.empty() {
+		return counts, nil
+	}
+	visible := counts[:0]
+	for i := range counts {
+		counts[i].Count -= hidden.countForSystem(counts[i].SystemID)
+		if counts[i].Count <= 0 {
+			continue
+		}
+		visible = append(visible, counts[i])
+	}
+	return visible, nil
+}
+
+func (db *MediaDB) cachedSystemMediaCounts(ctx context.Context) ([]database.SystemMediaCount, error) {
 	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
 		cached.generation == db.systemMediaCountsGen.Load() {
 		return slices.Clone(cached.counts), nil
@@ -3790,11 +3975,27 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 		return result, ErrNullSQL
 	}
 
+	// Weighting reads the caller's own tags with visibility asked for
+	// separately, so an untagged random keeps the cached per-system totals
+	// instead of re-aggregating Media behind the injected NOT filter.
+	weightTags := query.Tags
+	// A required user:hidden or user:favorite filter is an explicit ask for
+	// those entries, the same exception browse and search make. Without it a
+	// random over hidden media would be a query that cannot match.
+	excludeHidden := discoveryExcludesHidden(query.Tags)
+	scoped := *query
+	var visibilityErr error
+	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, excludeHidden)
+	if visibilityErr != nil {
+		return result, visibilityErr
+	}
+	query = &scoped
+
 	// Per-system counts preserve uniform media-row weighting while narrowing
 	// broad system scopes before random row selection touches the Media table.
 	if query.PathPrefix == "" && query.PathGlob == "" && len(query.Systems) > 1 {
 		started := time.Now()
-		counts, err := db.SystemMediaCounts(ctx, query.Tags)
+		counts, err := db.SystemMediaCounts(ctx, weightTags, excludeHidden)
 		if err != nil {
 			return result, fmt.Errorf("failed to get system media counts for random selection: %w", err)
 		}
@@ -4784,6 +4985,7 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 // This should be called before closing the database to ensure clean shutdown.
 func (db *MediaDB) WaitForBackgroundOperations() {
 	db.backgroundOps.Wait()
+	db.waitForSlugCacheRecovery()
 }
 
 // SetIndexingConnBoost widens the connection pool while an index runs (the
@@ -4825,6 +5027,7 @@ func (db *MediaDB) SetIndexingConnBoost(active bool) {
 // BeginRecovery prevents new background operations from registering, then waits
 // for operations already registered to drain. EndRecovery must follow it.
 func (db *MediaDB) BeginRecovery() {
+	db.stopSlugCacheRecovery(false)
 	db.backgroundOpsMu.Lock()
 	db.backgroundOps.Wait()
 }
@@ -4832,6 +5035,10 @@ func (db *MediaDB) BeginRecovery() {
 // EndRecovery allows background operations to register after recovery completes.
 func (db *MediaDB) EndRecovery() {
 	db.backgroundOpsMu.Unlock()
+	db.slugCacheState.mu.Lock()
+	db.slugCacheState.paused = false
+	db.startSlugCacheRecoveryLocked()
+	db.slugCacheState.mu.Unlock()
 }
 
 // TrackBackgroundOperation increments the background operations counter.
@@ -4847,6 +5054,21 @@ func (db *MediaDB) TrackBackgroundOperation() {
 // HasBackgroundOperations reports whether this process currently owns media database
 // background work. Persisted running statuses cannot answer this after a crash.
 func (db *MediaDB) HasBackgroundOperations() bool {
+	db.slugCacheState.mu.Lock()
+	recovering := db.slugCacheState.worker != nil
+	db.slugCacheState.mu.Unlock()
+	return recovering || db.backgroundOpsCount.Load() > 0
+}
+
+// hasBackgroundWrites reports whether a media write operation owns the database.
+// The browse index repair has to stand back for one of those, because a full
+// index run drops the secondary indexes to keep bulk inserts fast and recreates
+// them at the end. It must not stand back for the slug cache rebuild, which is
+// a read-only in-memory pass that touches no index and starts at the same
+// moment the repair does: counting it would leave the repair silently skipping
+// every startup, and browsing large folders slow, for the one reason the repair
+// exists.
+func (db *MediaDB) hasBackgroundWrites() bool {
 	return db.backgroundOpsCount.Load() > 0
 }
 

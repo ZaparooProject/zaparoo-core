@@ -574,9 +574,9 @@ None.
 
 **Access:** All clients.
 
-Query the media database and return all matching indexed media.
+Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -586,6 +586,7 @@ An object:
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
+| includeHidden | boolean | No | Include hidden entries for recovery/management. Defaults to `false`; available to all clients. Repeat on subsequent pages. |
 | pathPrefix | string   | No       | Recursively restrict results beneath a filesystem directory or virtual route. Matching respects path boundaries, so `/roms/SNES` does not include `/roms/SNES2`; `%` and `_` are literal path characters. |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
@@ -776,7 +777,9 @@ Plain directories may also have artwork imported by the `media-folder` scraper. 
 
 A directory holding media for more than one system also stays plain, because its `fileCount` is the sum across those systems and the rule is applied one system at a time. A page spanning several systems is resolved per system when `systems` names them; without a `systems` filter such a page is left unresolved, since browsing a media root lists one directory per installed system and resolving all of them is disproportionate to that page's cost.
 
-Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+Tags filter direct media files in the current path. Directories remain visible for navigation with tag-unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+
+Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required `user:favorite` or `user:hidden` filters also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -787,6 +790,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| includeHidden | boolean | No | Include hidden media and its contribution to directory/root counts. Defaults to `false`. Repeat with cursor requests. |
 | rootView   | string | No       | Pathless system-root presentation: `routes` (default) returns separate populated routes; `contents` returns one-level immediate contents and requires exactly one system. Ignored when `path` is non-empty. Repeat with cursor requests. |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
 | cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, tags, letter, and sort parameters. |
@@ -1015,6 +1019,7 @@ All parameters are optional.
 | path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
 | systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| includeHidden | boolean | No | Match the visibility mode of `media.browse`. Defaults to `false`. |
 | tags        | string[] | No       | Filter indexed media by tags, using the same syntax and operators as `media.browse`.               |
 | sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
 
@@ -1158,7 +1163,11 @@ have finite vocabularies per system and are always returned in full without trun
 
 Add or remove user tags for an indexed media item.
 
-The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
+Mutable tags are `user:favorite` and `user:hidden`. Both are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the other.
+
+Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
+
+Both flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer either flag; the old path's preference remains stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
 
 #### Parameters
 
@@ -1167,8 +1176,8 @@ The initial mutable tag is `user:favorite`. It appears in normal media tag resul
 | mediaId | number   | No       | Media DBID to update. Cannot be mixed with system/path.   |
 | system  | string   | No       | System ID for path-based lookup. Required when using path. |
 | path    | string   | No       | Media path for path-based lookup. Required with system.    |
-| add     | string[] | No       | Tags to add. Currently only `user:favorite` is mutable.    |
-| remove  | string[] | No       | Tags to remove. Currently only `user:favorite` is mutable. |
+| add     | string[] | No       | Tags to add: `user:favorite` and/or `user:hidden`. |
+| remove  | string[] | No       | Tags to remove: `user:favorite` and/or `user:hidden`. |
 
 Either `mediaId` or `system` plus `path` is required. At least one of `add` or `remove` is required. Search operators (`+`, `-`, `~`) are not valid in mutation requests.
 
@@ -1718,6 +1727,62 @@ Optionally, an object:
   }
 }
 ```
+
+### media.lookup.candidates
+
+Returns up to five ranked canonical title candidates for an approximate name in **one system**. This is title discovery, not media selection: pass a selected candidate's `systemId` and `name` to `media.lookup` for file selection and enrichment.
+
+**Parameters**
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| system | string | Yes | One canonical system ID; never a list or an all-systems search. |
+| name | string | Yes | Approximate title, 1–256 Unicode characters. Whitespace-only names and names that normalize to an empty slug are rejected. |
+| fuzzySystem | boolean | No | Resolve system names/aliases instead of requiring a canonical ID. Default `false`, matching `media.lookup`. |
+| maxResults | integer | No | Maximum number of candidates, 1–5. Default `5`; out-of-range values are rejected. |
+
+**Result**
+
+`{"candidates": [...]}`; an empty array means no eligible title met the match threshold. Database failures and canceled requests remain errors, not empty results.
+
+Each candidate contains only:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| systemId | string | Canonical system ID. |
+| name | string | Canonical indexed title, deduplicated within the system. |
+| rank | integer | One-based rank; results are ordered by rank. |
+| matchType | string | Stable coarse enum: `exact`, `secondary`, or `fuzzy`. |
+| confidence | number | Advisory ranking evidence, not a probability or a stable client threshold contract. |
+
+Exact normalized primary-title evidence ranks before exact secondary-title evidence. If any eligible primary or secondary exact matches exist, only those matches are returned: results are never padded with fuzzy matches to reach `maxResults`. Fuzzy matching runs only when neither exact class produces an eligible result, and reuses title normalization and the existing length/word-count prefilter, token-order matching, and typo threshold. Within an evidence class, ranking uses confidence, edit-distance tie-breaking for fuzzy matches, then canonical name and an internal identity tie-breaker. Internal algorithm names are not API enums. These candidates need not reproduce the launch resolver's prefix, progressive-trimming, tag preference, or media-selection fallbacks.
+
+A title is eligible only if at least one indexed media entry is present and not user-hidden. Hidden/missing variants do not suppress another eligible variant. Hidden state is always excluded; there is no `includeHidden` override. Authorization matches ordinary media discovery; this method grants no launch or profile-management authority. Results never contain paths, media IDs, tags, artwork, or ZapScript, and requests neither launch nor update history or lookup/resolution caches.
+
+Results describe the **current MediaDB incarnation**, not a durable catalog snapshot. A request pins one database connection and fails with a retryable error if a fresh-start rebuild replaces that database before the final generation check. Cached IDs from a discarded database are not used against its replacement. Ordinary indexing and hide/unhide changes may become visible between read statements; exact matches are read directly from indexed SQL without waiting for a shared slug cache refresh, while fuzzy discovery can lag behind ordinary indexing until that refresh. The later `media.lookup` resolves against its own then-current state, so candidates do not reserve a file or guarantee later availability.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.lookup.candidates",
+  "params": {"system": "NES", "name": "Metriod"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "candidates": [
+      {"systemId": "NES", "name": "Metroid", "rank": 1, "matchType": "fuzzy", "confidence": 0.96}
+    ]
+  }
+}
+```
+
+The example confidence is illustrative; clients should present ordered candidates, not hard-code score cutoffs.
 
 ### media.lookup
 
@@ -2627,6 +2692,7 @@ Set `tags` to return only systems containing matching non-missing media. Tagged 
 
 | Key  | Type     | Required | Description                                                                                     |
 | :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required favorites/hidden tag filters also include hidden entries. |
 | all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 | tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 

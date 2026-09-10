@@ -174,6 +174,21 @@ type MediaLaunchAccess struct {
 	Release        func()
 }
 
+// LaunchPathNormalizer resolves platform-specific launch aliases before comparing
+// a requested target with active media. It must not start or stop media.
+type LaunchPathNormalizer interface {
+	NormalizeLaunchPath(string) string
+}
+
+// ResolvedLaunch identifies the target after script and launcher resolution.
+// A nil Launcher leaves launcher selection to the platform.
+type ResolvedLaunch struct {
+	Launcher *Launcher
+	Options  *LaunchOptions
+	Path     string
+	SystemID string
+}
+
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
@@ -184,6 +199,9 @@ type CmdEnv struct {
 	ServiceCtx         context.Context
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (MediaLaunchAccess, error)
+	SkipMediaLaunch    func(ResolvedLaunch) bool
+	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
+	AcquireLaunch      func() (func(), error)
 	// BeforeExit runs the outgoing media's before_exit script. The launch path
 	// calls it once the replacement has been resolved but before it takes the
 	// media launch gate, so a launch that never happens cannot fire it and the

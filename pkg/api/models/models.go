@@ -34,6 +34,7 @@ const (
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationMediaScraping        = "media.scraping"
+	NotificationMediaVisibility      = "media.visibility"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
@@ -119,6 +120,7 @@ const (
 	MethodMediaHistoryLatest          = "media.history.latest"
 	MethodMediaHistoryTop             = "media.history.top"
 	MethodMediaLookup                 = "media.lookup"
+	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
 	MethodScrapers                    = "scrapers"

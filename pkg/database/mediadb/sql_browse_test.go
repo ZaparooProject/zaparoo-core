@@ -482,7 +482,7 @@ func TestSqlBrowseVirtualSchemesFromCache_ReturnsEmptyWithoutMediaFallback(t *te
 
 	expectBrowseCacheReady(mock)
 	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
-		WithArgs("").
+		WithArgs("/").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 	mock.ExpectQuery("SELECT d.Path, SUM").
 		WithArgs(int64(1), "SNES").
@@ -504,7 +504,7 @@ func TestSqlBrowseVirtualSchemesFromCache_ReturnsEmptyWhenRootMissing(t *testing
 
 	expectBrowseCacheReady(mock)
 	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
-		WithArgs("").
+		WithArgs("/").
 		WillReturnError(sql.ErrNoRows)
 
 	results, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
@@ -810,7 +810,7 @@ func TestSqlBrowseRootCountsFromCache_ReturnsZeroForMissingRoot(t *testing.T) {
 		WithArgs(browseTestDir("roms", "NES")).
 		WillReturnError(sql.ErrNoRows)
 
-	counts, err := sqlBrowseRootCounts(context.Background(), db, []string{snesRoot, nesRoot})
+	counts, err := sqlBrowseRootCounts(context.Background(), db, []string{snesRoot, nesRoot}, false)
 	require.NoError(t, err)
 	require.NotNil(t, counts[snesRoot])
 	assert.Equal(t, 10, *counts[snesRoot])
@@ -878,6 +878,11 @@ func TestFetchAndAttachUtilityTags_NoFavorites(t *testing.T) {
 		ExpectQuery().
 		WillReturnRows(tagRows)
 
+	// This fixture predates user:hidden; its utility lookup finds no tag type.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
+
 	// MediaTags query returns no rows — neither entry has any utility tag.
 	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
 		WithArgs(int64(10), int64(11), int64(42)).
@@ -911,6 +916,10 @@ func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
 	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
 		ExpectQuery().
 		WillReturnRows(tagRows)
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
 
 	// Only media ID 20 has the favorite utility tag.
 	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
@@ -1580,7 +1589,7 @@ func TestBrowseOverlayFiles_FirstRootWinsByFilesystemName(t *testing.T) {
 		Overlay: &database.BrowseOverlay{Sources: sources},
 		Systems: []systemdefs.System{*nesSystem},
 		Limit:   1,
-	})
+	}, nil)
 	require.NoError(t, err)
 	require.Len(t, firstDirPage, 1)
 	assert.Equal(t, "Folder", firstDirPage[0].Name)

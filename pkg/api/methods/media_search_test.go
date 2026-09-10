@@ -90,7 +90,7 @@ func TestSortedSearchCursorEncodeDecode(t *testing.T) {
 	encoded, err := encodeSortedSearchCursor(&database.SearchResultWithCursor{
 		SortValue: "Bravo",
 		MediaID:   42,
-	}, "name-asc")
+	}, "name-asc", searchVisibility{})
 	require.NoError(t, err)
 
 	legacy, sorted, err := decodeMediaSearchCursor(encoded, "name-asc")
@@ -178,7 +178,7 @@ func TestDecodeCursor_InvalidInputs(t *testing.T) {
 
 func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -382,7 +382,7 @@ func TestHandleMediaSearch_WithExplicitSort(t *testing.T) {
 
 func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -492,7 +492,7 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 
 func TestHandleMediaTags_Success(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -554,7 +554,7 @@ func TestHandleMediaTags_Success(t *testing.T) {
 
 func TestHandleMediaTags_NoParams(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -603,7 +603,7 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 
 func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
@@ -647,7 +647,7 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 
 func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -707,7 +707,7 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 
 func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -780,7 +780,7 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 
 func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 	// Setup mocks
-	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 

@@ -78,10 +78,13 @@ type trigramDelta map[uint32][]uint32
 // publishes a compact cache. All fields are immutable after publication via
 // the atomic pointer; writers build a new struct (sharing arrays) and swap.
 type SlugSearchCache struct {
-	systemDBIDToID map[int64]string
-	systemIDToDBID map[string]int64
-	systemRanges   map[int64][2]int
-	coveredSystems map[string]struct{}
+	// source binds title IDs to their database incarnation; never persisted.
+	source          *sql.DB
+	candidateBlocks map[int64][]candidateBlock
+	systemDBIDToID  map[int64]string
+	systemIDToDBID  map[string]int64
+	systemRanges    map[int64][2]int
+	coveredSystems  map[string]struct{}
 	// droppedSystems are systems withoutSystems removed, as opposed to ones
 	// that never had rows. Their data still exists in SQL, so a search naming
 	// one must fall back rather than read this cache and report nothing.
@@ -206,7 +209,7 @@ func (c *SlugSearchCache) Size() int {
 		len(c.slugOffsets)*4 + len(c.secSlugOffsets)*4 +
 		len(c.titleDBIDs)*8 + len(c.systemDBIDs)*8 +
 		len(c.trigramOffsets)*4 + len(c.trigramPostings)*4 +
-		len(c.trigramCapped)
+		len(c.trigramCapped) + c.candidateBlocksSize()
 }
 
 // ---------- Build ----------
@@ -242,6 +245,7 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 	defer func() { _ = titleRows.Close() }()
 
 	cache := &SlugSearchCache{
+		source:         db,
 		slugData:       make([]byte, 0, 1<<20),
 		slugOffsets:    make([]uint32, 0, 1<<16),
 		secSlugData:    make([]byte, 0, 1<<18),
@@ -303,6 +307,7 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs []string) (*SlugSearchCache, error) {
 	coverage := normalizeCacheSystemIDs(systemIDs)
 	cache := &SlugSearchCache{
+		source:         db,
 		slugData:       make([]byte, 0, 1<<18),
 		slugOffsets:    make([]uint32, 0, 1<<14),
 		secSlugData:    make([]byte, 0, 1<<16),
@@ -442,6 +447,7 @@ func finalizeCacheEntries(cache *SlugSearchCache, withTrigramIndex bool) {
 	cache.trigramOffsets = nil
 	cache.trigramPostings = nil
 	cache.trigramCapped = nil
+	cache.candidateBlocks = nil
 
 	if cache.entryCount == 0 {
 		cache.systemRanges = make(map[int64][2]int)
@@ -465,6 +471,7 @@ func finalizeCacheEntries(cache *SlugSearchCache, withTrigramIndex bool) {
 
 	sortCacheBySystem(cache)
 	cache.systemRanges = buildSystemRanges(cache.systemDBIDs, cache.entryCount)
+	cache.buildCandidateBlocks()
 	if withTrigramIndex {
 		buildTrigramIndex(cache)
 	}
@@ -596,6 +603,8 @@ func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 	}
 
 	trimmed := &SlugSearchCache{
+		source:          c.source,
+		candidateBlocks: c.candidateBlocks,
 		slugData:        c.slugData,
 		slugOffsets:     c.slugOffsets,
 		secSlugData:     c.secSlugData,
@@ -680,7 +689,7 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 	if replacement == nil {
 		return base
 	}
-	if replacement.complete || base == nil {
+	if replacement.complete || base == nil || base.source != replacement.source {
 		// The fragment becomes the published cache, so it needs its own CSR
 		// index; every other path folds it into a delta layer instead.
 		ensureTrigramIndex(replacement)
@@ -699,6 +708,8 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 	}
 
 	merged := &SlugSearchCache{
+		source:              base.source,
+		candidateBlocks:     mergeCandidateBlocks(base, replacement),
 		slugData:            base.slugData,
 		slugOffsets:         base.slugOffsets,
 		secSlugData:         base.secSlugData,
@@ -1634,11 +1645,16 @@ func (c *SlugSearchCache) TrigramIndexSize() int {
 
 // RebuildSlugSearchCache builds or rebuilds the in-memory slug search cache.
 func (db *MediaDB) RebuildSlugSearchCache() error {
-	cache, err := buildSlugSearchCache(db.ctx, db.sql.Load())
+	db.slugCacheState.buildMu.Lock()
+	defer db.slugCacheState.buildMu.Unlock()
+	source, generation := db.slugCacheBuildSnapshot()
+	cache, err := buildSlugSearchCache(db.ctx, source)
 	if err != nil {
 		return fmt.Errorf("failed to build slug search cache: %w", err)
 	}
-	db.slugSearchCache.Store(cache)
+	if err := db.publishSlugCache(db.ctx, source, generation, cache); err != nil {
+		return fmt.Errorf("failed to publish slug search cache: %w", err)
+	}
 	log.Info().
 		Int("entries", cache.entryCount).
 		Int("systems", len(cache.systemRanges)).
@@ -1671,14 +1687,19 @@ func (db *MediaDB) CanServeSystemsFromSlugCacheForTesting(systemIDs []string) bo
 }
 
 func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
-	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql.Load(), systemIDs)
+	db.slugCacheState.buildMu.Lock()
+	defer db.slugCacheState.buildMu.Unlock()
+	source, generation := db.slugCacheBuildSnapshot()
+	fragment, err := buildSlugSearchCacheForSystems(ctx, source, systemIDs)
 	if err != nil {
 		return fmt.Errorf("failed to build selective slug search cache: %w", err)
 	}
 
 	current := db.slugSearchCache.Load()
 	refreshed := mergeSlugSearchCaches(current, fragment)
-	db.slugSearchCache.Store(refreshed)
+	if err := db.publishSlugCache(ctx, source, generation, refreshed); err != nil {
+		return fmt.Errorf("failed to publish selective slug search cache: %w", err)
+	}
 
 	log.Info().
 		Int("entries", refreshed.entryCount).

@@ -82,7 +82,7 @@ func benchmarkFrontendPrerequisiteQueries(b *testing.B, rows int) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+				counts, err := mediaDB.SystemMediaCounts(ctx, nil, false)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -98,7 +98,7 @@ func benchmarkFrontendPrerequisiteQueries(b *testing.B, rows int) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					counts, err := mediaDB.SystemMediaCounts(ctx, testCase.tags)
+					counts, err := mediaDB.SystemMediaCounts(ctx, testCase.tags, false)
 					if err != nil {
 						b.Fatal(err)
 					}

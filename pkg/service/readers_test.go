@@ -671,14 +671,14 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
 
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -746,13 +746,13 @@ scan_mode = "hold"
 	svc := &ServiceContext{
 		Platform: mockPlatform, Config: cfg, State: st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 
 	// The reader goes away while the delay is still running.
 	st.RemoveReader(readerID)
@@ -817,7 +817,7 @@ func newTimedExitStopFixture(t *testing.T, stopErr error) *timedExitStopFixture 
 	svc := &ServiceContext{
 		Platform: mockPlatform, Config: cfg, State: st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 
@@ -832,7 +832,7 @@ func TestTimedExit_ClearsQueuesAfterStop(t *testing.T) {
 	fx := newTimedExitStopFixture(t, nil)
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner)
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner, 7)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -842,8 +842,10 @@ func TestTimedExit_ClearsQueuesAfterStop(t *testing.T) {
 		t.Fatal("exit did not clear the playlist")
 	}
 	select {
-	case tok := <-fx.svc.LaunchSoftwareQueue:
-		assert.Nil(t, tok, "a nil token ends the software launch")
+	case update := <-fx.svc.LaunchSoftwareQueue:
+		assert.Nil(t, update.token, "a nil token ends the software launch")
+		assert.Equal(t, uint64(7), update.ownerGeneration)
+		assert.Equal(t, exitGeneration.Load(), update.exitGeneration)
 	case <-time.After(2 * time.Second):
 		t.Fatal("exit did not clear the launch queue")
 	}
@@ -858,7 +860,7 @@ func TestTimedExit_KeepsMediaWhenStopFails(t *testing.T) {
 	fx := newTimedExitStopFixture(t, platforms.ErrStopFailed)
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner)
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner, 0)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -943,14 +945,14 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
 
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -1030,14 +1032,14 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
 
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -1089,7 +1091,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 		}).
 		Return(nil).Once()
 
-	launchQueue := make(chan *tokens.Token)
+	launchQueue := make(chan softwareTokenUpdate)
 	svc := &ServiceContext{
 		Platform:            mockPlatform,
 		Config:              cfg,
@@ -1099,7 +1101,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 	clock := clockwork.NewFakeClock()
 
 	var exitGeneration atomic.Uint64
-	exitTimer := timedExit(svc, clock, nil, &exitGeneration, &owner)
+	exitTimer := timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	require.NotNil(t, exitTimer)
 	clock.Advance(time.Millisecond)
 
