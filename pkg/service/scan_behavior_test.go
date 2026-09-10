@@ -495,6 +495,25 @@ func (env *scanBehaviorEnv) waitForActiveCard(t *testing.T, uid string) {
 	}
 }
 
+// waitForCardRemoved polls until readerManager has processed a removal and
+// cleared the active card. sendRemoval only queues the scan, so a test that
+// re-taps straight afterwards is racing the removal that is supposed to have
+// reset the reader's state.
+func (env *scanBehaviorEnv) waitForCardRemoved(t *testing.T) {
+	t.Helper()
+	deadline := time.After(behaviorTimeout)
+	for {
+		if env.st.GetActiveCard().UID == "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for the active card to clear after removal")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // waitForTimerStopped polls until the exit timer has been stopped, verified by
 // the fake clock having no remaining waiters.
 func (env *scanBehaviorEnv) waitForTimerStopped(t *testing.T) {
@@ -590,6 +609,10 @@ func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
 	env.waitForLaunch(t)
 
 	env.sendRemoval()
+	// The relaunch depends on the removal having cleared the previous token, and
+	// sendRemoval only queues it. Without this the re-tap can reach the loop
+	// while the card is still active and be dropped as a repeat.
+	env.waitForCardRemoved(t)
 
 	// Re-tap same card — should launch again (prevToken cleared by removal).
 	env.sendGameScan("game1", env.gamePath("game.rom"))
