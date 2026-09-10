@@ -487,6 +487,10 @@ type MediaLookupMatch struct {
 	Confidence         float64            `json:"confidence"`
 }
 
+type MediaLookupCandidatesResponse struct {
+	Candidates []database.TitleCandidate `json:"candidates"`
+}
+
 type MediaLookupResponse struct {
 	Match *MediaLookupMatch `json:"match"`
 }

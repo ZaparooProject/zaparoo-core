@@ -1121,6 +1121,7 @@ type MediaDBI interface {
 	SearchMediaBySlugIn(
 		ctx context.Context, systemID string, slugs []string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
+	TitleCandidates(ctx context.Context, systemID, name string, limit int) ([]TitleCandidate, error)
 	GetTitlesWithPreFilter(
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 	) ([]MediaTitle, error)

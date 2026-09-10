@@ -396,6 +396,13 @@ type MediaScrapeParams struct {
 	Force     bool     `json:"force"`
 }
 
+type MediaLookupCandidatesParams struct {
+	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
+	MaxResults  *int   `json:"maxResults,omitempty" validate:"omitempty,min=1,max=5"`
+	Name        string `json:"name" validate:"required,min=1,max=256"`
+	System      string `json:"system" validate:"required,min=1,max=256"`
+}
+
 type MediaLookupParams struct {
 	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
 	Name        string `json:"name" validate:"required,min=1"`

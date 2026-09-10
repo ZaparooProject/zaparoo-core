@@ -1429,6 +1429,20 @@ func (m *MockMediaDBI) SearchMediaBySlugIn(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) TitleCandidates(
+	ctx context.Context, systemID, name string, limit int,
+) ([]database.TitleCandidate, error) {
+	args := m.Called(ctx, systemID, name, limit)
+	var results []database.TitleCandidate
+	if value, ok := args.Get(0).([]database.TitleCandidate); ok {
+		results = value
+	}
+	if err := args.Error(1); err != nil {
+		return results, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return results, nil
+}
+
 func (m *MockMediaDBI) GetTitlesWithPreFilter(
 	ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 ) ([]database.MediaTitle, error) {

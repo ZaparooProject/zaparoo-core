@@ -120,6 +120,7 @@ const (
 	MethodMediaHistoryLatest          = "media.history.latest"
 	MethodMediaHistoryTop             = "media.history.top"
 	MethodMediaLookup                 = "media.lookup"
+	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
 	MethodScrapers                    = "scrapers"

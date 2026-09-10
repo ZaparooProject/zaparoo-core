@@ -2783,6 +2783,9 @@ func TestMediaDB_RefreshSlugSearchCacheForSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 
+	// This test exercises index-owned selective refresh, not idle recovery.
+	require.NoError(t, mediaDB.SetIndexingSystems([]string{nesSystem.ID}))
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
 	err = mediaDB.TruncateSystems([]string{nesSystem.ID})
 	require.NoError(t, err)
 
@@ -2870,8 +2873,15 @@ func TestMediaDB_IndexingInvalidationPreservesSlugSearchCacheWhenRequested_Integ
 	require.NotNil(t, mediaDB.slugSearchCache.Load())
 	assert.True(t, mediaDB.slugSearchCache.Load().CanServeSystems([]string{nesSystem.ID}))
 
-	mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
-	assert.Nil(t, mediaDB.slugSearchCache.Load())
+	func() {
+		// Observe immediate eviction before the asynchronous replacement runs.
+		mediaDB.slugCacheState.buildMu.Lock()
+		defer mediaDB.slugCacheState.buildMu.Unlock()
+		mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
+		assert.Nil(t, mediaDB.slugSearchCache.Load())
+	}()
+	mediaDB.WaitForBackgroundOperations()
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
 }
 
 func TestMediaDB_UpdateLastGenerated_FullIndexClearsSlugSearchCache_Integration(t *testing.T) {
@@ -2953,6 +2963,8 @@ func TestMediaDB_DropSlugSearchCacheForSystems_RemovesOnlyTouchedSystems_Integra
 	insertGame(snesSystem, "The Legend of Zelda", filepath.Join("roms", "snes", "zelda.sfc"))
 	require.NoError(t, mediaDB.RebuildSlugSearchCache())
 
+	// Indexing owns restoration; inspect the dropped coverage until refresh.
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
 	mediaDB.DropSlugSearchCacheForSystems([]string{nesSystem.ID})
 	cache := mediaDB.slugSearchCache.Load()
 	require.NotNil(t, cache)

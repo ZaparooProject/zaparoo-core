@@ -434,9 +434,9 @@ func TestCleanMediaOrphans_AllowedWhenIndexingCompleted(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCleanMediaOrphans_InvalidatesCaches verifies that after a successful
-// cleanup the in-memory slug search and tag caches are cleared.
-func TestCleanMediaOrphans_InvalidatesCaches(t *testing.T) {
+// Cleanup must evict stale snapshots and restore slug coverage without another
+// index or process restart. Tag-cache invalidation remains unchanged.
+func TestCleanMediaOrphans_RecoversSlugCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -444,14 +444,22 @@ func TestCleanMediaOrphans_InvalidatesCaches(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	// Seed both in-memory caches with a non-nil sentinel to confirm clearing.
-	db.slugSearchCache.Store(&SlugSearchCache{})
+	require.NoError(t, db.RebuildSlugSearchCache())
+	old := db.slugSearchCache.Load()
+	require.Equal(t, 3, old.entryCount)
 	db.inMemoryTagCache.Store(&tagCache{})
 
-	_, err := db.CleanMediaOrphans(context.Background())
+	deleted, err := db.CleanMediaOrphans(context.Background())
 	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted)
+	db.WaitForBackgroundOperations()
 
-	assert.Nil(t, db.slugSearchCache.Load(), "slug search cache must be cleared after cleanup")
+	cache := db.slugSearchCache.Load()
+	require.NotNil(t, cache, "cleanup must restore slug coverage without another request")
+	require.NotSame(t, old, cache)
+	assert.True(t, cache.complete)
+	assert.Equal(t, []int64{2, 3}, cache.titleDBIDs,
+		"deleted title must disappear; surviving and pre-existing orphan titles remain")
 	assert.Nil(t, db.inMemoryTagCache.Load(), "tag cache must be cleared after cleanup")
 }
 
