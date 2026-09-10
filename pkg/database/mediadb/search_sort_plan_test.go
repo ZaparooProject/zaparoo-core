@@ -23,6 +23,7 @@ import (
 	"context"
 	"testing"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
@@ -99,4 +100,50 @@ func assertNameSortReadsIndexOrder(t *testing.T, plan string) {
 	assert.NotContains(t, plan, "USE TEMP B-TREE FOR ORDER BY",
 		"a name-sorted search page must read the ordering from the index, not sort the "+
 			"whole matched set:\n%s", plan)
+}
+
+// The system filter looks redundant when every system is requested, and it is
+// dropped for a tag-only browse because the tag subquery constrains Media to a
+// handful of rowids instead. A NOT tag does the opposite: it excludes rows and
+// selects nothing, so dropping the filter for it hands an ordinary search the
+// 705ms-to-1182ms regression the comment on skipSystemFilter records. Media
+// visibility appends exactly such a tag to every search once anything is
+// hidden, so this is the difference between a fast search and a slow one for
+// every user who hides a single item.
+func TestSearchSkipsSystemFilterOnlyForSelectingTags(t *testing.T) {
+	t.Parallel()
+
+	all := systemdefs.AllSystems()
+	const sortOrder = "name-asc"
+
+	build := func(t *testing.T, tags []zapscript.TagFilter) searchFilteredStatement {
+		t.Helper()
+		stmt, err := searchFilteredQuery(all, nil, nil, "", tags, nil,
+			nil, nil, sortOrder, 25, false)
+		require.NoError(t, err)
+		return stmt
+	}
+
+	positive := build(t, []zapscript.TagFilter{
+		{Type: "user", Value: "favorite", Operator: zapscript.TagOperatorAND},
+	})
+	assert.True(t, positive.skipSystemFilter,
+		"a selecting tag constrains Media directly, so the system filter is redundant")
+
+	negated := build(t, []zapscript.TagFilter{
+		{Type: "user", Value: "hidden", Operator: zapscript.TagOperatorNOT},
+	})
+	assert.False(t, negated.skipSystemFilter,
+		"a NOT tag selects nothing, so the system filter still has to constrain the join")
+
+	mixed := build(t, []zapscript.TagFilter{
+		{Type: "user", Value: "hidden", Operator: zapscript.TagOperatorNOT},
+		{Type: "user", Value: "favorite", Operator: zapscript.TagOperatorAND},
+	})
+	assert.True(t, mixed.skipSystemFilter,
+		"a visibility exclusion must not disable the favorites fast path")
+
+	none := build(t, nil)
+	assert.False(t, none.skipSystemFilter,
+		"an untagged search keeps the filter, which is the behaviour this protects")
 }

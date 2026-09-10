@@ -1055,8 +1055,21 @@ func searchFilteredQuery(
 	// per page, because without the system filter the planner reads titles it
 	// would otherwise have skipped. The redundant-looking clause is still
 	// earning its place for a sorted search.
+	//
+	// Only a positive tag gives that IN-list. A NOT tag excludes rows instead of
+	// selecting them, so it constrains nothing and the join has to be driven the
+	// ordinary way; counting it here would drop the system filter from a plain
+	// search. Media visibility appends exactly such a tag to every search once
+	// anything is hidden, which would otherwise hand every user the 705ms-to-
+	// 1182ms regression measured above.
+	selectingTags := 0
+	for i := range tags {
+		if tags[i].Operator != zapscript.TagOperatorNOT {
+			selectingTags++
+		}
+	}
 	skipSystemFilter := requestedAllSystems(systems) && (pathPrefix != "" ||
-		(len(variantGroups) == 0 && !includeName && len(tags) > 0))
+		(len(variantGroups) == 0 && !includeName && selectingTags > 0))
 
 	// Build system ID args
 	args := make([]any, 0)
