@@ -67,6 +67,10 @@ type Token struct {
 	// resolving their own.
 	Traits Traits
 	Unsafe bool
+	// LaunchGuardGeneration is assigned by the reader manager when confirmation
+	// should resume a resolved launch instead of re-running text. Zero keeps
+	// whole-token confirmation; the generation rejects stale resolutions.
+	LaunchGuardGeneration uint64
 	// Completion, when non-nil, receives the terminal result of processing
 	// this token exactly once. Only callers that wait on execution set it.
 	Completion *Completion

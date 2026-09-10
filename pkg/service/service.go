@@ -428,7 +428,7 @@ func startService(
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
-	lsq := make(chan *tokens.Token)       // launch software queue
+	lsq := make(chan softwareTokenUpdate) // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
 	lgcq := make(chan struct{}, 1)        // launch guard cancellation queue
@@ -530,6 +530,7 @@ func startService(
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		LaunchGuardCancel:   lgcq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)

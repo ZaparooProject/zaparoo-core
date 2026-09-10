@@ -75,7 +75,7 @@ func setupPlaylistTestEnv(t *testing.T) *ServiceContext {
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 10),
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
 }
@@ -187,7 +187,7 @@ func TestRunTokenZapScript_ReturnsWhenPlaylistClearBlockedByShutdown(t *testing.
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 10),
 	}
 
 	plq := make(chan *playlists.Playlist)
@@ -253,7 +253,7 @@ func TestRunTokenZapScript_ReturnsWhenSoftwareTokenBlockedByExecutionContext(t *
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
 	mockReader.On("ReaderID").Return(readerID).Maybe()
 	svc.State.SetReader(mockReader)
-	svc.LaunchSoftwareQueue = make(chan *tokens.Token)
+	svc.LaunchSoftwareQueue = make(chan softwareTokenUpdate)
 
 	path := filepath.Join(t.TempDir(), "game.rom")
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
@@ -748,7 +748,7 @@ func TestRunTokenZapScript_PrimaryPlaylistLaunchPublishesPhysicalOwner(t *testin
 	}, nil, false)
 	require.NoError(t, err)
 
-	softwareToken := <-svc.LaunchSoftwareQueue
+	softwareToken := (<-svc.LaunchSoftwareQueue).token
 	require.NotNil(t, softwareToken)
 	assert.True(t, helpers.TokensEqual(owner, softwareToken))
 	assert.Equal(t, owner.ReaderID, softwareToken.ReaderID)
@@ -883,7 +883,7 @@ func TestRunTokenZapScript_PlaylistLaunchCarriesCardScanMode(t *testing.T) {
 	}, nil, false)
 	require.NoError(t, err)
 
-	softwareToken := <-svc.LaunchSoftwareQueue
+	softwareToken := (<-svc.LaunchSoftwareQueue).token
 	require.NotNil(t, softwareToken)
 	assert.Equal(t, config.ScanModeTap, softwareToken.Traits.ScanMode())
 }
@@ -934,7 +934,7 @@ func TestRunTokenZapScript_PlaylistItemTraitDoesNotOverrideCardScanMode(t *testi
 	}, nil, false)
 	require.NoError(t, err)
 
-	softwareToken := <-svc.LaunchSoftwareQueue
+	softwareToken := (<-svc.LaunchSoftwareQueue).token
 	require.NotNil(t, softwareToken)
 	assert.Equal(t, config.ScanModeTap, softwareToken.Traits.ScanMode(),
 		"playlist item traits must not replace the card's policy")

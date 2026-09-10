@@ -91,10 +91,12 @@ func TestCheckInZip_SingleFileZip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, zipWriter.Close())
 
-	// Should return path to the single file inside zip
-	result := checkInZip(zipPath)
+	// Suppression and the platform launch must see the same contained file.
+	pl := &Platform{}
+	result := pl.NormalizeLaunchPath(zipPath)
 	expected := filepath.Join(zipPath, "somefile.rom")
 	assert.Equal(t, expected, result)
+	assert.Equal(t, result, pl.NormalizeLaunchPath(result), "normalization is idempotent")
 }
 
 func TestCheckInZip_MatchingFilename(t *testing.T) {
