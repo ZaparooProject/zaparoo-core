@@ -46,6 +46,11 @@ Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-
 - Do not add dependencies, platforms, readers, launchers, or public API surface without discussion.
 - `mister/` is a nested Go module published for standalone MiSTer tools. Core builds it from the tree through a `replace` in the root `go.mod`, so a catalog change lands on the same commit; never re-pin it to a published version. Its tests and lint run as separate steps because `./...` does not reach into it, and it is released by its own `mister/vX.Y.Z` tag rather than by a Core release. See `mister/README.md`.
 
+## Documentation
+
+- Do not create new documentation files unless explicitly requested. Feature work does not authorize new files in `docs/` or elsewhere.
+- Update existing documentation only when necessary to keep it accurate. Keep implementation summaries and verification results in the response, not new documents.
+
 ## High-risk areas
 
 - Authentication and authorization: `pkg/api/middleware/`, `pkg/config/auth.go`, client pairing, encryption, and profile permissions.

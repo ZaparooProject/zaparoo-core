@@ -27,12 +27,34 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/mister/catalog"
 )
 
+func TestDVDPlayerDefinition(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("DVDPlayer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if core.RBF != "_Other/DVD" || core.SetName != "DVD" {
+		t.Fatalf("unexpected DVD core: %+v", core)
+	}
+	params, err := catalog.PathToMGLDef(core, "Movie.ISO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.Method != "s" || params.Index != 0 || params.Delay != 2 {
+		t.Fatalf("unexpected DVD mount parameters: %+v", params)
+	}
+	if _, err := catalog.PathToMGLDef(core, "Movie.mkv"); err == nil {
+		t.Fatal("DVD core must not accept general video files")
+	}
+}
+
 func TestCatalogDefinitions(t *testing.T) {
 	t.Parallel()
 
 	all := catalog.All()
-	if len(all) != 118 {
-		t.Fatalf("expected 118 systems, got %d", len(all))
+	if len(all) != 120 {
+		t.Fatalf("expected 120 systems, got %d", len(all))
 	}
 	if all[0].ID != "3DO" {
 		t.Fatalf("catalog is not sorted: first ID %q", all[0].ID)

@@ -703,6 +703,43 @@ preference = ["Unstable", "LLAPI"]
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestNGPCLegacyLauncherPreferences(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, toml, explicit string }{
+		{
+			name: "system default",
+			toml: `[[systems.default]]
+system = "NeoGeoPocketColor"
+launcher = "NeoGeoPocketColor"`,
+		},
+		{
+			name: "global preference",
+			toml: `[launchers]
+preference = ["NeoGeoPocketColor"]`,
+		},
+		{name: "explicit tag", explicit: "NeoGeoPocketColor"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Instance{}
+			require.NoError(t, cfg.LoadTOML(tc.toml))
+			pl := mocks.NewMockPlatform()
+			if tc.explicit == "" {
+				pl.On("Launchers", cfg).Once().Return([]platforms.Launcher{
+					{ID: "KitrinxNeoGeoPocketColor", SystemID: "NeoGeoPocketColor"},
+					{ID: "NeoGeoPocketColor", SystemID: "NeoGeoPocketColor"},
+				})
+			}
+			env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+			if tc.explicit != "" {
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, tc.explicit)
+			}
+			assert.Equal(t, "NeoGeoPocketColor", applySystemDefaultLauncher(pl, &env, "NeoGeoPocketColor"))
+			pl.AssertExpectations(t)
+		})
+	}
+}
+
 func TestApplySystemDefaultLauncher_SystemDefaultBeatsGlobalPreference(t *testing.T) {
 	t.Parallel()
 
