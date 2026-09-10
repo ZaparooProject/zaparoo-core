@@ -1162,6 +1162,15 @@ func TestScrapeQueueCancellationFencesAdvancement(t *testing.T) {
 	db.AssertNumberOfCalls(t, "SetScrapingOperation", 1)
 }
 
+// scrapeObservation records what a scraper saw on the queue worker, so the
+// assertions can run on the test goroutine where FailNow is legal.
+type scrapeObservation struct {
+	pauser      *syncutil.Pauser
+	tracked     bool
+	fillMissing bool
+	force       bool
+}
+
 func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	ClearScrapingStatus()
 	statusInstance.clear()
@@ -1176,8 +1185,12 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
 	db.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	db.On("ClearScrapingOperation").Return(nil).Once()
+	// require calls FailNow, which is Goexit, and these callbacks run on the
+	// queue worker. Killing that goroutine hangs the queue instead of failing
+	// the test, so record what was seen and assert it after the queue finishes.
+	storedWhenRetiring := -1
 	db.On("ClearScrapeRunMarkers", assertmock.Anything, "first", "one").Run(func(assertmock.Arguments) {
-		require.Len(t, stored, 2, "next job must be durable before retiring previous markers")
+		storedWhenRetiring = len(stored)
 	}).Return(nil).Once()
 	db.On("ClearScrapeRunMarkers", assertmock.Anything, "second", "two").Return(nil).Once()
 	db.On("WALCheckpoint").Return(nil).Twice()
@@ -1187,16 +1200,17 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(finished) }).Return().Once()
 	db.On("GetScrapedMediaCount", assertmock.Anything, assertmock.Anything).Return(0, nil)
 	var calls []string
+	var observed []scrapeObservation
 	scrapers := make(map[string]platforms.Scraper)
 	for _, id := range []string{"first", "second"} {
 		scrapers[id] = platforms.Scraper{ID: id, SupportsFillMissing: true, Scrape: func(
 			_ context.Context, _ *config.Instance, _ platforms.Platform, _ afero.Fs, _ *database.Database,
 			opts scraper.ScrapeOptions, _ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
-			require.True(t, tracked, "startup must be registered before the scraper accesses the database")
-			require.Same(t, pauser, opts.Pauser)
-			require.True(t, opts.FillMissing)
-			require.False(t, opts.Force)
+			observed = append(observed, scrapeObservation{
+				tracked: tracked, pauser: opts.Pauser,
+				fillMissing: opts.FillMissing, force: opts.Force,
+			})
 			calls = append(calls, id)
 			ch <- scraper.ScrapeUpdate{Done: true}
 			close(ch)
@@ -1220,6 +1234,16 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 		t.Fatal("scraper queue did not finish")
 	}
 	require.Equal(t, []string{"first", "second"}, calls)
+	require.Equal(t, 2, storedWhenRetiring,
+		"next job must be durable before retiring previous markers")
+	require.Len(t, observed, 2)
+	for i := range observed {
+		require.True(t, observed[i].tracked,
+			"startup must be registered before the scraper accesses the database")
+		require.Same(t, pauser, observed[i].pauser)
+		require.True(t, observed[i].fillMissing)
+		require.False(t, observed[i].force)
+	}
 	require.Len(t, stored, 2)
 	require.Equal(t, "second", stored[1].ScraperID)
 	require.Equal(t, "two", stored[1].RunID)
@@ -1241,9 +1265,11 @@ func TestScrapeQueueContinuesPastUnavailableJob(t *testing.T) {
 	db.On("GetScrapingOperation").Return(op, true, nil).Once()
 	var positions []string
 	db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
-		stored, ok := args.Get(0).(database.ScrapingOperation)
-		require.True(t, ok)
-		positions = append(positions, stored.ScraperID)
+		// Not require: this runs on the queue worker, where FailNow would kill
+		// the goroutine and hang the queue rather than fail the test.
+		if stored, ok := args.Get(0).(database.ScrapingOperation); ok {
+			positions = append(positions, stored.ScraperID)
+		}
 	}).Return(nil).Times(3)
 	db.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	db.On("SetScrapingStatus", mediadb.IndexingStatusPending).Return(nil).Twice()
@@ -1276,10 +1302,12 @@ func TestMediaScrapeShutdownRetainsResumableWork(t *testing.T) {
 			t.Cleanup(ClearScrapingStatus)
 			db := testhelpers.NewMockMediaDBI()
 			var stored database.ScrapingOperation
+			// The scraper below runs on its own goroutine, so this callback can
+			// too, and require there is Goexit rather than a failure.
 			db.On("SetScrapingOperation", assertmock.Anything).Run(func(args assertmock.Arguments) {
-				var ok bool
-				stored, ok = args.Get(0).(database.ScrapingOperation)
-				require.True(t, ok)
+				if operation, ok := args.Get(0).(database.ScrapingOperation); ok {
+					stored = operation
+				}
 			}).Return(nil).Once()
 			var terminal string
 			db.On("SetScrapingStatus", assertmock.Anything).Run(func(args assertmock.Arguments) {
