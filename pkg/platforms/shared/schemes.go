@@ -19,7 +19,12 @@
 
 package shared
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+)
 
 // Custom URI scheme constants for Zaparoo virtual paths.
 // These schemes are used to create virtual paths for media that doesn't have
@@ -115,4 +120,20 @@ func IsStandardSchemeForDecoding(scheme string) bool {
 // Returns true for Zaparoo custom schemes and standard web schemes (http/https)
 func ShouldDecodeURIScheme(scheme string) bool {
 	return IsCustomScheme(scheme) || IsStandardSchemeForDecoding(scheme)
+}
+
+// SchemeIDTest builds a Launcher.Test that accepts only paths carrying a
+// usable ID for this scheme.
+//
+// A launcher that declares Schemes and no Test is selected for anything with
+// the right prefix, and DoLaunch stops the running media as soon as a launcher
+// is chosen. Without this, a malformed path takes down whatever is playing and
+// only then fails inside Launch. Every scheme launcher whose Launch parses an
+// ID out of the path wants this; those that hand the whole path to an external
+// opener (the browser launchers) reject nothing and so need nothing.
+func SchemeIDTest(scheme string) func(*config.Instance, string) bool {
+	return func(_ *config.Instance, path string) bool {
+		id, err := virtualpath.ExtractSchemeID(path, scheme)
+		return err == nil && id != ""
+	}
 }

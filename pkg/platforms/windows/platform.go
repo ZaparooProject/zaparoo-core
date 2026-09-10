@@ -653,6 +653,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{shared.SchemeFlashpoint},
+			Test:     shared.SchemeIDTest(shared.SchemeFlashpoint),
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				// Handle native Flashpoint URL format: flashpoint://run/123
 				// Normalize to standard virtual path format: flashpoint://123

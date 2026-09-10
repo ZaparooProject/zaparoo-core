@@ -24,12 +24,10 @@ package steam
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,7 +35,7 @@ import (
 func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	// Check for user-configured Steam install directory first
 	if def := cfg.LookupLauncherDefaults("Steam", nil); def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
+		if _, err := c.fs.Stat(def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
 			return def.InstallDir
 		}
@@ -49,7 +47,7 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	// where Steam is. It covers the per-user HKCU install as well as the
 	// machine-wide HKLM keys.
 	for _, installPath := range registrySteamPaths() {
-		if _, statErr := os.Stat(installPath); statErr == nil {
+		if _, statErr := c.fs.Stat(installPath); statErr == nil {
 			log.Debug().Msgf("found Steam installation via registry: %s", installPath)
 			return installPath
 		}
@@ -59,35 +57,14 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	return c.opts.FallbackPath
 }
 
-// Launch launches a Steam game on Windows using the start command.
-func (c *Client) Launch(
-	_ *config.Instance, path string, launchOpts *platforms.LaunchOptions,
-) (*os.Process, error) {
-	id, err := ExtractAndValidateID(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get action from opts (already resolved by DoLaunch from advargs or config)
-	action := ""
-	if launchOpts != nil {
-		action = launchOpts.Action
-	}
-
-	// Build the appropriate Steam URL based on the action
-	var steamURL string
-	if platforms.IsActionDetails(action) {
-		steamURL = BuildSteamDetailsURL(id)
-	} else {
-		steamURL = BuildSteamURL(id)
-	}
-
+// openURL uses the Windows URL handler without flashing a console window.
+func (c *Client) openURL(steamURL string) error {
 	// On Windows, we use "cmd /c start <url>" to open Steam URLs
 	// HideWindow prevents a console window from flashing on screen
 	cmdOpts := command.StartOptions{HideWindow: true}
-	err = c.cmd.StartWithOptions(context.Background(), cmdOpts, helpers.ComSpec(), "/c", "start", steamURL)
+	err := c.cmd.StartWithOptions(context.Background(), cmdOpts, helpers.ComSpec(), "/c", "start", steamURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start Steam: %w", err)
+		return fmt.Errorf("failed to start Steam: %w", err)
 	}
-	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget
+	return nil
 }

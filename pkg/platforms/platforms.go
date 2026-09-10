@@ -306,8 +306,11 @@ type LaunchOptions struct {
 	// available output dimensions. It does not change physical display mode.
 	RenderScale *int
 	// Action specifies the launch action. Common values:
-	// - "" or "run": Default behavior (launch/play the media)
+	// - "": Automatic behavior (may open details if media is not installed)
+	// - "run": Explicitly launch/play the media
 	// - "details": Show media details/info page instead of launching
+	// Launchers may update Action to reflect a successful automatic redirect;
+	// Core uses the effective action when deciding whether to publish ActiveMedia.
 	Action string
 	// RenderResolution is the preferred fixed internal rendering size in
 	// WIDTHxHEIGHT form. It is mutually exclusive with RenderScale.
@@ -335,89 +338,32 @@ type LaunchCommand struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	// Kill function provides custom termination logic for the launcher.
-	// If defined, this function is called instead of signal-based termination
-	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
-	// such as keyboard shortcuts, IPC commands, or other non-signal mechanisms.
-	// Example: ScummVM uses keyboard input (Ctrl+q) to avoid VT lock issues.
-	Kill func(*config.Instance) error
-	// Optional function to perform custom media scanning. Takes the list of
-	// results from the standard scan, if any, and returns the final list.
-	Scanner func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
-	// Test function returns true if file looks supported by this launcher.
-	// It's checked after all standard extension and folder checks.
-	Test func(*config.Instance, string) bool
-	// Availability checks runtime dependencies. Nil means always available.
-	Availability func(*config.Instance) error
-	// Launch function, takes a direct as possible path/ID media file.
-	// Returns process handle for tracked processes, nil for fire-and-forget.
-	// The opts parameter is optional and may be nil.
-	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
-	// BuildLaunchCommand optionally describes the same launch as an executable
-	// and argv for platform runtimes that must own the launched process tree.
-	BuildLaunchCommand func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
-	// WaitForReady optionally blocks until launched media is ready for controls
-	// or raw input. If nil, platform-level readiness is used, then immediate ready.
-	WaitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
-	// Controls maps control action identifiers to control actions that execute
-	// on active media (e.g., save state, load state, open menu).
-	Controls map[string]Control
-	// AvailabilityReason is populated by LauncherCache when runtime dependencies are missing.
-	AvailabilityReason string
-	// UsesRunningInstance identifies which running application instance this launcher
-	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
-	// its own process. When non-empty, platforms should not kill the running app if both
-	// current and new launchers share the same instance identifier. Example: All Kodi
-	// launchers use "kodi" to indicate they send JSON-RPC commands to the same running
-	// Kodi instance rather than launching separate processes.
-	UsesRunningInstance string
-	// Unique ID of the launcher, visible to user.
-	ID string
-	// System associated with this launcher.
-	SystemID string
-	// Groups this launcher belongs to. Used for configuration lookup - when a config
-	// entry's launcher field matches a group name, it applies to all launchers in that
-	// group. Example: ["Kodi", "KodiTV"] means this launcher matches config entries for
-	// both "Kodi" and "KodiTV".
-	Groups []string
-	// Extensions to match for files during a standard scan.
-	Extensions []string
-	// ScanExcludes are case-insensitive slash-normalized glob patterns that
-	// prevent matched files from being indexed. Patterns without a slash match
-	// the base filename; patterns with a slash can match any path suffix. They
-	// only affect media scanning; direct path launches can still match the launcher.
-	ScanExcludes []string
-	// ScanDirectoryExcludes are case-insensitive slash-normalized glob patterns
-	// relative to this launcher's Folders. Matching directories are not traversed.
-	// Patterns without a slash match a directory basename; patterns with a slash
-	// can match any relative path suffix. Direct path launches remain unaffected.
-	ScanDirectoryExcludes []string
-	// Folders to scan for files, relative to the root folders of the platform.
-	Folders []string
-	// Accepted schemes for URI-style launches.
-	Schemes []string
-	// Lifecycle determines how the launcher process is managed.
-	Lifecycle LauncherLifecycle
-	// If true, all resolved paths must be in the allow list before they
-	// can be launched.
-	AllowListOnly bool
-	// SkipFilesystemScan prevents the mediascanner from walking this launcher's
-	// folders during indexing. The launcher's Scanner (if any) still runs.
-	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
-	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
-	SkipFilesystemScan bool
-	// ScanSkipInternalSymlinks skips symlinks whose target resolves inside this
-	// launcher's Folders during media scanning. The target is indexed under its
-	// own path, so the alias would only duplicate it. Applies to symlinked files
-	// and directories. Direct path launches remain unaffected.
+	Controls                 map[string]Control
+	Scanner                  func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Test                     func(*config.Instance, string) bool
+	Availability             func(*config.Instance) error
+	Preflight                func(*config.Instance, string, *LaunchOptions) error
+	Kill                     func(*config.Instance) error
+	Launch                   func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	BuildLaunchCommand       func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
+	WaitForReady             func(context.Context, *config.Instance, *models.ActiveMedia) error
+	ID                       string
+	SystemID                 string
+	UsesRunningInstance      string
+	AvailabilityReason       string
+	Folders                  []string
+	Groups                   []string
+	Extensions               []string
+	ScanExcludes             []string
+	ScanDirectoryExcludes    []string
+	Schemes                  []string
+	Lifecycle                LauncherLifecycle
+	SupportsDetails          bool
+	AllowListOnly            bool
+	SkipFilesystemScan       bool
 	ScanSkipInternalSymlinks bool
-	// ScanOnly marks a launcher that contributes media directories to its
-	// system but cannot launch anything itself. Launch selection resolves it
-	// to a launchable launcher for the same system, so media found only in a
-	// user-configured directory still starts on the system's real launcher.
-	ScanOnly bool
-	// Available is populated by LauncherCache.
-	Available bool
+	ScanOnly                 bool
+	Available                bool
 }
 
 type BackupPattern struct {

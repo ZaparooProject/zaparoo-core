@@ -70,6 +70,7 @@ func buildFaugusLauncher(options faugusOptions) platforms.Launcher {
 
 	return platforms.Launcher{
 		ID: "Faugus", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeFaugus},
+		Test:      shared.SchemeIDTest(shared.SchemeFaugus),
 		Lifecycle: platforms.LifecycleBlocking,
 		Availability: func(*config.Instance) error {
 			_, err := resolve()

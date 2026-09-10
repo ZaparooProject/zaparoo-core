@@ -1307,6 +1307,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:      "LaunchBox",
 		Schemes: []string{shared.SchemeLaunchBox},
+		Test:    shared.SchemeIDTest(shared.SchemeLaunchBox),
 		// LaunchBox owns the game process and reports its lifecycle over the
 		// pipe, so ActiveMedia comes from MediaStarted rather than from the
 		// launch command being accepted.
