@@ -23,13 +23,17 @@ package windows
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,7 +141,7 @@ func TestHyperHqPlatformMapping(t *testing.T) {
 		{systemdefs.SystemGameboy, "Nintendo Game Boy", true},
 		{systemdefs.SystemGBA, "Nintendo Game Boy Advance", true},
 		{systemdefs.SystemNintendo64, "Nintendo 64", true},
-		{systemdefs.SystemPC, "Windows", true},
+		{systemdefs.SystemWindows, "Microsoft Windows", true},
 		{"nonexistent-system", "", false},
 	}
 
@@ -255,7 +259,26 @@ func TestHyperHqPipeServerLaunchGameNotConnected(t *testing.T) {
 	t.Parallel()
 
 	server := NewHyperHqPipeServer()
-	err := server.LaunchGame("test-id")
+	err := server.LaunchGame(context.Background(), "test-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+
+	// A command that never went out must not stay registered as in flight,
+	// or every later launch would be refused as a duplicate.
+	err = server.LaunchGame(context.Background(), "test-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestHyperHqPipeServerStopGameNotConnected(t *testing.T) {
+	t.Parallel()
+
+	server := NewHyperHqPipeServer()
+	err := server.StopGame(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+
+	err = server.StopGame(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
@@ -300,7 +323,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"arc-1": systemdefs.SystemArcade},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemArcade: {{ReferenceID: "arc-1"}},
+				systemdefs.SystemArcade: {{Name: "Arcade", ReferenceID: "arc-1"}},
 			},
 		},
 		{
@@ -318,7 +341,7 @@ func TestBuildHqMappings(t *testing.T) {
 				"nes-99":  systemdefs.SystemNES,
 			},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemNES: {{ID: "sys-nes", ReferenceID: "nes-99"}},
+				systemdefs.SystemNES: {{ID: "sys-nes", Name: "My NES Collection", ReferenceID: "nes-99"}},
 			},
 		},
 		{
@@ -328,7 +351,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"nes-99": systemdefs.SystemNES},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemNES: {{ReferenceID: "nes-99"}},
+				systemdefs.SystemNES: {{Name: "My NES Collection", ReferenceID: "nes-99"}},
 			},
 		},
 		{
@@ -342,7 +365,10 @@ func TestBuildHqMappings(t *testing.T) {
 				"snes-r": systemdefs.SystemSNES,
 			},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemSNES: {{ReferenceID: "snes-h"}, {ReferenceID: "snes-r"}},
+				systemdefs.SystemSNES: {
+					{Name: "SNES Hacks", ReferenceID: "snes-h"},
+					{Name: "SNES Romhacks", ReferenceID: "snes-r"},
+				},
 			},
 		},
 		{
@@ -352,7 +378,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"arc-2": systemdefs.SystemArcade},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemArcade: {{ReferenceID: "arc-2"}},
+				systemdefs.SystemArcade: {{Name: "Arcade", ReferenceID: "arc-2"}},
 			},
 		},
 		{
@@ -362,7 +388,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"arc-3": systemdefs.SystemArcade},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemArcade: {{ReferenceID: "arc-3"}},
+				systemdefs.SystemArcade: {{Name: "My Arcade", ReferenceID: "arc-3"}},
 			},
 		},
 		{
@@ -372,7 +398,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"nes-short": systemdefs.SystemNES},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemNES: {{ReferenceID: "nes-short"}},
+				systemdefs.SystemNES: {{Name: "NES", ReferenceID: "nes-short"}},
 			},
 		},
 		{
@@ -382,7 +408,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{systemdefs.SystemNES: systemdefs.SystemNES},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemNES: {{ReferenceID: systemdefs.SystemNES}},
+				systemdefs.SystemNES: {{Name: "Nintendo", ReferenceID: systemdefs.SystemNES}},
 			},
 		},
 		{
@@ -392,7 +418,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"pcecd": systemdefs.SystemTurboGrafx16CD},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemTurboGrafx16CD: {{ReferenceID: "pcecd"}},
+				systemdefs.SystemTurboGrafx16CD: {{Name: "PC Engine CD", ReferenceID: "pcecd"}},
 			},
 		},
 		{
@@ -402,7 +428,7 @@ func TestBuildHqMappings(t *testing.T) {
 			},
 			expectedKeyToSys: map[string]string{"x-1": systemdefs.SystemCustom},
 			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
-				systemdefs.SystemCustom: {{ReferenceID: "x-1"}},
+				systemdefs.SystemCustom: {{Name: "Made Up", ReferenceID: "x-1"}},
 			},
 		},
 	}
@@ -459,6 +485,16 @@ func TestHyperHqLauncherFields(t *testing.T) {
 	assert.True(t, launcher.SkipFilesystemScan)
 	assert.NotNil(t, launcher.Scanner)
 	assert.NotNil(t, launcher.Launch)
+	assert.Equal(t, platforms.LifecycleExternal, launcher.Lifecycle)
+
+	require.NotNil(t, launcher.Test)
+	assert.True(t, launcher.Test(nil, "hyperhq://abc-123/Galaga"))
+	assert.False(t, launcher.Test(nil, "hyperhq:///Galaga"))
+
+	require.NotNil(t, launcher.Kill)
+	err := launcher.Kill(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
 }
 
 func TestHyperHqScannerBufferHandlesLargeResponses(t *testing.T) {
@@ -496,4 +532,174 @@ func TestHyperHqScannerBufferHandlesLargeResponses(t *testing.T) {
 	err = json.Unmarshal(scanner.Bytes(), &parsed)
 	require.NoError(t, err)
 	assert.Len(t, parsed.Games, numGames)
+}
+
+// connectFakeHqBridge attaches one end of an in-memory pipe to the server as
+// if the bridge had connected, and returns a reader for the commands Core
+// sends to it.
+func connectFakeHqBridge(t *testing.T, server *HyperHqPipeServer) *bufio.Reader {
+	t.Helper()
+
+	coreEnd, bridgeEnd := net.Pipe()
+	t.Cleanup(func() {
+		assert.NoError(t, coreEnd.Close())
+		assert.NoError(t, bridgeEnd.Close())
+	})
+
+	server.connMu.Lock()
+	server.conn = coreEnd
+	server.writer = bufio.NewWriter(coreEnd)
+	server.connMu.Unlock()
+
+	return bufio.NewReader(bridgeEnd)
+}
+
+func readHqCommand(t *testing.T, r *bufio.Reader) hqCommand {
+	t.Helper()
+
+	line, err := r.ReadBytes('\n')
+	require.NoError(t, err)
+	var cmd hqCommand
+	require.NoError(t, json.Unmarshal(line, &cmd))
+	return cmd
+}
+
+func sendHqEvent(t *testing.T, server *HyperHqPipeServer, event *hqEvent) {
+	t.Helper()
+
+	data, err := json.Marshal(event)
+	require.NoError(t, err)
+	server.handleEvent(string(data))
+}
+
+func waitHqErr(t *testing.T, errCh <-chan error) error {
+	t.Helper()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("HyperHQ command did not return")
+		return nil
+	}
+}
+
+func TestHyperHqPipeServerLaunchGameWaitsForResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		result  string
+		wantErr string
+	}{
+		{name: "accepted"},
+		{name: "rejected", result: "select game: frontend busy", wantErr: "frontend busy"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := NewHyperHqPipeServer()
+			bridge := connectFakeHqBridge(t, server)
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- server.LaunchGame(context.Background(), "g-1") }()
+
+			cmd := readHqCommand(t, bridge)
+			assert.Equal(t, "Launch", cmd.Command)
+			assert.Equal(t, "g-1", cmd.ID)
+			require.NotEmpty(t, cmd.RequestID)
+
+			sendHqEvent(t, server, &hqEvent{
+				Event:     "LaunchResult",
+				RequestID: cmd.RequestID,
+				ID:        "g-1",
+				Error:     tt.result,
+			})
+
+			err := waitHqErr(t, errCh)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestHyperHqPipeServerStopGameIgnoresStaleAndDuplicateResults(t *testing.T) {
+	t.Parallel()
+
+	server := NewHyperHqPipeServer()
+	bridge := connectFakeHqBridge(t, server)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.StopGame(context.Background()) }()
+
+	cmd := readHqCommand(t, bridge)
+	assert.Equal(t, "Stop", cmd.Command)
+	require.NotEmpty(t, cmd.RequestID)
+
+	// A result for an earlier request that timed out must not answer this one.
+	sendHqEvent(t, server, &hqEvent{Event: "StopResult", RequestID: "stale", WasRunning: true})
+	sendHqEvent(t, server, &hqEvent{Event: "StopResult", RequestID: cmd.RequestID, WasRunning: true, Stopped: true})
+	// A repeated result must be dropped without blocking the pipe reader.
+	sendHqEvent(t, server, &hqEvent{Event: "StopResult", RequestID: cmd.RequestID, WasRunning: true})
+
+	require.NoError(t, waitHqErr(t, errCh))
+}
+
+func TestHqStopOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		wantErr string
+		result  hqEvent
+	}{
+		{name: "stopped", result: hqEvent{WasRunning: true, Stopped: true}},
+		{name: "nothing running", result: hqEvent{}},
+		{name: "still running", result: hqEvent{WasRunning: true}, wantErr: "still running"},
+		{
+			name:    "bridge error",
+			result:  hqEvent{WasRunning: true, Error: "stop game: timeout"},
+			wantErr: "stop game: timeout",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := hqStopOutcome(&tt.result)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestHyperHqPipeServerIgnoresStaleExit(t *testing.T) {
+	t.Parallel()
+
+	server := NewHyperHqPipeServer()
+	var exited []string
+	server.SetGameExitedHandler(func(id, _ string) {
+		exited = append(exited, id)
+	})
+
+	sendHqEvent(t, server, &hqEvent{Event: "MediaStarted", ID: "a"})
+	sendHqEvent(t, server, &hqEvent{Event: "MediaStarted", ID: "b"})
+
+	// The close for the first game arrives after the second has started.
+	sendHqEvent(t, server, &hqEvent{Event: "MediaStopped", ID: "a"})
+	assert.Empty(t, exited)
+
+	sendHqEvent(t, server, &hqEvent{Event: "MediaStopped", ID: "b"})
+	assert.Equal(t, []string{"b"}, exited)
 }

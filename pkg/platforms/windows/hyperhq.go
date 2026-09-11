@@ -31,6 +31,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,15 @@ const (
 	// hyperHqScannerMaxBuffer is the maximum buffer size for reading from the HyperHQ pipe.
 	// Must be large enough to handle JSON responses for systems with thousands of games.
 	hyperHqScannerMaxBuffer = 16 * 1024 * 1024 // 16MB
+
+	// hyperHqLaunchTimeout bounds waiting for the bridge to move the wheel
+	// and have HyperHQ accept the launch. It sits above the bridge's own
+	// limits for both steps so the bridge's answer arrives first.
+	hyperHqLaunchTimeout = 20 * time.Second
+
+	// hyperHqStopTimeout bounds waiting for HyperHQ to stop a game. It sits
+	// above the bridge's stop limit and inside windowsStopBudget.
+	hyperHqStopTimeout = 12 * time.Second
 )
 
 // HyperHQ wire-protocol types. PascalCase to match the bridge plugin's serialiser.
@@ -60,15 +70,20 @@ const (
 type hqEvent struct {
 	Event             string `json:"Event"`
 	ID                string `json:"Id,omitempty"`
+	RequestID         string `json:"RequestId,omitempty"`
 	Title             string `json:"Title,omitempty"`
 	Platform          string `json:"Platform,omitempty"`
 	SystemReferenceID string `json:"SystemReferenceId,omitempty"`
+	Error             string `json:"Error,omitempty"`
+	WasRunning        bool   `json:"WasRunning,omitempty"`
+	Stopped           bool   `json:"Stopped,omitempty"`
 }
 
 //nolint:tagliatelle // JSON tags must match HyperHQ plugin structure (PascalCase)
 type hqCommand struct {
 	Command           string `json:"Command"`
 	ID                string `json:"Id,omitempty"`
+	RequestID         string `json:"RequestId,omitempty"`
 	SystemID          string `json:"SystemId,omitempty"`
 	SystemName        string `json:"SystemName,omitempty"`
 	SystemReferenceID string `json:"SystemReferenceId,omitempty"`
@@ -326,6 +341,14 @@ type pendingHqGamesRequest struct {
 	queryKey string
 }
 
+// pendingHqResult is a Launch or Stop command waiting for the bridge to
+// report its outcome. The request id stops a result that arrives after its
+// caller gave up from being taken as the answer to a later command.
+type pendingHqResult struct {
+	response  chan hqEvent
+	requestID string
+}
+
 // HyperHqPipeServer manages named pipe communication with the HyperHQ bridge plugin.
 type HyperHqPipeServer struct {
 	ctx               context.Context
@@ -337,8 +360,14 @@ type HyperHqPipeServer struct {
 	cancel            context.CancelFunc
 	writer            *bufio.Writer
 	pendingGamesReq   pendingHqGamesRequest
+	pendingLaunch     pendingHqResult
+	pendingStop       pendingHqResult
+	activeGameID      string
+	nextRequestID     uint64
 	connMu            syncutil.Mutex
 	pendingGamesReqMu syncutil.Mutex
+	pendingResultMu   syncutil.Mutex
+	activeGameMu      syncutil.Mutex
 }
 
 // NewHyperHqPipeServer creates a new named pipe server for the HyperHQ bridge.
@@ -508,31 +537,154 @@ func (s *HyperHqPipeServer) RequestGamesForSystemSync(
 	}
 }
 
-// LaunchGame sends a launch command to the HyperHQ plugin.
-func (s *HyperHqPipeServer) LaunchGame(gameID string) error {
+// LaunchGame asks the bridge to move the HyperSpin wheel to a game and then
+// launch it, and waits for the bridge to report whether HyperHQ accepted
+// both steps. The game itself is reported running by the MediaStarted event.
+func (s *HyperHqPipeServer) LaunchGame(ctx context.Context, gameID string) error {
+	result, err := s.awaitResult(ctx, &s.pendingLaunch, &hqCommand{Command: "Launch", ID: gameID}, hyperHqLaunchTimeout)
+	if err != nil {
+		return err
+	}
+	if result.Error != "" {
+		return fmt.Errorf("HyperHQ launch failed: %s", result.Error)
+	}
+	return nil
+}
+
+// StopGame asks HyperHQ to stop the running HyperSpin game and waits for the
+// outcome. Going through HyperHQ lets HyperSpin run its own exit handling for
+// the emulator rather than Core killing a process it never started.
+func (s *HyperHqPipeServer) StopGame(ctx context.Context) error {
+	result, err := s.awaitResult(ctx, &s.pendingStop, &hqCommand{Command: "Stop"}, hyperHqStopTimeout)
+	if err != nil {
+		return err
+	}
+	return hqStopOutcome(&result)
+}
+
+// hqStopOutcome turns a StopResult into a Kill result. HyperHQ reports
+// success without doing anything when no game is running, which counts as
+// stopped; a game it reports still running does not.
+func hqStopOutcome(result *hqEvent) error {
+	switch {
+	case result.Error != "":
+		return fmt.Errorf("HyperHQ stop failed: %s", result.Error)
+	case result.Stopped, !result.WasRunning:
+		return nil
+	default:
+		return errors.New("HyperHQ reported the game still running")
+	}
+}
+
+// awaitResult sends cmd to the bridge and waits for the result event it
+// triggers. Only one command per slot may be outstanding.
+func (s *HyperHqPipeServer) awaitResult(
+	ctx context.Context,
+	slot *pendingHqResult,
+	cmd *hqCommand,
+	timeout time.Duration,
+) (hqEvent, error) {
+	respChan := make(chan hqEvent, 1)
+
+	s.pendingResultMu.Lock()
+	if slot.response != nil {
+		s.pendingResultMu.Unlock()
+		return hqEvent{}, fmt.Errorf("HyperHQ %s already in flight", cmd.Command)
+	}
+	s.nextRequestID++
+	cmd.RequestID = strconv.FormatUint(s.nextRequestID, 10)
+	*slot = pendingHqResult{requestID: cmd.RequestID, response: respChan}
+	s.pendingResultMu.Unlock()
+
+	defer func() {
+		s.pendingResultMu.Lock()
+		*slot = pendingHqResult{}
+		s.pendingResultMu.Unlock()
+	}()
+
+	if err := s.sendCommand(cmd); err != nil {
+		return hqEvent{}, err
+	}
+	log.Debug().Msgf("sent HyperHQ %s command: id=%q requestId=%s", cmd.Command, cmd.ID, cmd.RequestID)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-respChan:
+		return result, nil
+	case <-timer.C:
+		return hqEvent{}, fmt.Errorf("timeout waiting for HyperHQ %s result", cmd.Command)
+	case <-ctx.Done():
+		return hqEvent{}, fmt.Errorf("HyperHQ %s cancelled: %w", cmd.Command, ctx.Err())
+	case <-s.ctx.Done():
+		return hqEvent{}, fmt.Errorf("HyperHQ %s cancelled: %w", cmd.Command, s.ctx.Err())
+	}
+}
+
+// deliverResult hands a Launch or Stop outcome to the command waiting for it.
+//
+// It runs on the pipe reader goroutine, so the send must never block: a
+// bridge that reported an outcome twice would otherwise wedge every later
+// event behind it. Results for a request nobody is waiting on are dropped.
+func (s *HyperHqPipeServer) deliverResult(slot *pendingHqResult, result *hqEvent) {
+	s.pendingResultMu.Lock()
+	defer s.pendingResultMu.Unlock()
+
+	if slot.response == nil || slot.requestID != result.RequestID {
+		log.Debug().Msgf("dropping stale HyperHQ %s for request %q", result.Event, result.RequestID)
+		return
+	}
+
+	select {
+	case slot.response <- *result:
+	default:
+	}
+}
+
+// sendCommand writes one command line to the bridge. The connection check and
+// the write share one hold of connMu so a disconnect in between cannot leave a
+// nil writer to dereference.
+func (s *HyperHqPipeServer) sendCommand(cmd *hqCommand) error {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s command: %w", cmd.Command, err)
+	}
+
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 
 	if s.writer == nil {
 		return errors.New("HyperHQ plugin not connected")
 	}
-
-	cmd := hqCommand{Command: "Launch", ID: gameID}
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to marshal launch command: %w", err)
-	}
-
 	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
-		return fmt.Errorf("failed to write launch command: %w", err)
+		return fmt.Errorf("failed to write %s command: %w", cmd.Command, err)
 	}
-
 	if err := s.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush launch command: %w", err)
+		return fmt.Errorf("failed to flush %s command: %w", cmd.Command, err)
 	}
-
-	log.Debug().Msgf("sent launch command for game ID: %s", gameID)
 	return nil
+}
+
+// setActiveGame records the game HyperHQ last reported starting.
+func (s *HyperHqPipeServer) setActiveGame(id string) {
+	s.activeGameMu.Lock()
+	s.activeGameID = id
+	s.activeGameMu.Unlock()
+}
+
+// endActiveGame clears the active game when id still owns it. A close for an
+// earlier game must not clear a newer one; a close without an id cannot be
+// attributed, so it is taken as the active game's.
+func (s *HyperHqPipeServer) endActiveGame(id string) bool {
+	s.activeGameMu.Lock()
+	defer s.activeGameMu.Unlock()
+
+	if id != "" && s.activeGameID != id {
+		return false
+	}
+	s.activeGameID = ""
+	return true
 }
 
 // IsConnected returns true if the HyperHQ plugin is connected.
@@ -676,15 +828,26 @@ func (s *HyperHqPipeServer) handleEvent(data string) {
 	switch event.Event {
 	case "MediaStarted":
 		log.Info().Msgf("HyperHQ game started: %s (ID: %s)", event.Title, event.ID)
+		s.setActiveGame(event.ID)
 		if s.onGameStarted != nil {
 			s.onGameStarted(event.ID, event.Title, event.Platform, event.SystemReferenceID)
 		}
 
 	case "MediaStopped":
 		log.Info().Msgf("HyperHQ game stopped: %s (ID: %s)", event.Title, event.ID)
+		if !s.endActiveGame(event.ID) {
+			log.Debug().Msgf("ignoring stale HyperHQ exit for: %s", event.ID)
+			return
+		}
 		if s.onGameExited != nil {
 			s.onGameExited(event.ID, event.Title)
 		}
+
+	case "LaunchResult":
+		s.deliverResult(&s.pendingLaunch, &event)
+
+	case "StopResult":
+		s.deliverResult(&s.pendingStop, &event)
 
 	case "Systems":
 		var systemsEvent hqSystemsEvent
@@ -854,6 +1017,13 @@ func (p *Platform) initHyperHqPipe(cfg *config.Instance) {
 		)
 
 		p.setActiveMedia(activeMedia)
+
+		// A game started from the HyperSpin wheel never went through
+		// LaunchMedia, which is the only other place the launcher is
+		// recorded. Without it, stopping falls through to clearing active
+		// media while the game keeps running.
+		launcher := p.NewHyperHqLauncher()
+		p.setLastLauncher(&launcher)
 	})
 
 	pipe.SetGameExitedHandler(func(_, title string) {
@@ -905,13 +1075,33 @@ func (p *Platform) initHyperHqPipe(cfg *config.Instance) {
 	log.Info().Msg("HyperHQ named pipe server initialized")
 }
 
+// stopHyperHqGame asks HyperHQ to end the running game. HyperHQ stops
+// whatever HyperSpin is running, so this also covers games started from the
+// wheel rather than through Core. Returning an error lets StopActiveLauncher
+// report that the game is still running.
+func (p *Platform) stopHyperHqGame(_ *config.Instance) error {
+	p.hyperHqPipeLock.Lock()
+	pipe := p.hyperHqPipe
+	p.hyperHqPipeLock.Unlock()
+
+	if pipe == nil || !pipe.IsConnected() {
+		return errors.New("HyperHQ plugin not connected")
+	}
+	return pipe.StopGame(context.Background())
+}
+
 // NewHyperHqLauncher creates the HyperHQ launcher.
 func (p *Platform) NewHyperHqLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "HyperHQ",
 		Schemes:            []string{shared.SchemeHyperHq},
+		Test:               shared.SchemeIDTest(shared.SchemeHyperHq),
 		SkipFilesystemScan: true,
-		Lifecycle:          platforms.LifecycleFireAndForget,
+		// HyperHQ owns the game process and reports its lifecycle through the
+		// bridge, so ActiveMedia comes from MediaStarted rather than from the
+		// launch command being accepted.
+		Lifecycle: platforms.LifecycleExternal,
+		Kill:      p.stopHyperHqGame,
 		Scanner: func(
 			ctx context.Context,
 			_ *config.Instance,
@@ -975,8 +1165,8 @@ func (p *Platform) NewHyperHqLauncher() platforms.Launcher {
 				return nil, errors.New("HyperHQ plugin not connected")
 			}
 
-			if err := pipe.LaunchGame(id); err != nil {
-				return nil, fmt.Errorf("failed to send launch command to HyperHQ: %w", err)
+			if err := pipe.LaunchGame(context.Background(), id); err != nil {
+				return nil, fmt.Errorf("failed to launch HyperHQ game %s: %w", id, err)
 			}
 
 			return nil, nil //nolint:nilnil // HyperHQ launches don't return a process handle

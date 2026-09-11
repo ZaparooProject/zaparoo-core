@@ -28,6 +28,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 
 type fakeSocket struct {
 	emitErr          error
+	onEmit           func(event string, args []any)
 	connectListener  func()
 	errorListener    func(any)
 	disconnectListen func(any)
@@ -49,7 +51,92 @@ type fakeEmit struct {
 
 func (f *fakeSocket) Emit(event string, args ...any) error {
 	f.emits = append(f.emits, fakeEmit{event: event, args: args})
+	if f.onEmit != nil {
+		f.onEmit(event, args)
+	}
 	return f.emitErr
+}
+
+// respondByMethod answers requestData emits the way HyperHQ would, by routing
+// a dataResponse for the request back through the bridge. Methods without a
+// reply get none, which is how a fire-and-forget call can look.
+func respondByMethod(b *bridge, replies map[string]map[string]any) func(string, []any) {
+	return func(event string, args []any) {
+		if event != "requestData" || len(args) == 0 {
+			return
+		}
+		req, ok := args[0].(hqRequestData)
+		if !ok {
+			return
+		}
+		reply, ok := replies[req.Method]
+		if !ok {
+			return
+		}
+		resp := map[string]any{"requestId": req.RequestID}
+		for k, v := range reply {
+			resp[k] = v
+		}
+		b.handleDataResponse(resp)
+	}
+}
+
+func requestedData(t *testing.T, emits []fakeEmit) []hqRequestData {
+	t.Helper()
+	var reqs []hqRequestData
+	for _, e := range emits {
+		if e.event != "requestData" {
+			continue
+		}
+		req, ok := e.args[0].(hqRequestData)
+		if !ok {
+			t.Fatalf("requestData arg type = %T, want hqRequestData", e.args[0])
+		}
+		reqs = append(reqs, req)
+	}
+	return reqs
+}
+
+func requestedMethods(t *testing.T, emits []fakeEmit) []string {
+	t.Helper()
+	reqs := requestedData(t, emits)
+	methods := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		methods = append(methods, req.Method)
+	}
+	return methods
+}
+
+func newAuthenticatedBridge(sock *fakeSocket) *bridge {
+	return &bridge{
+		ctx:          context.Background(),
+		socket:       sock,
+		sessionToken: "token",
+		pendingData:  make(map[string]chan hqDataResponse),
+	}
+}
+
+type recordingPipeWriter struct {
+	events chan *pipeEvent
+}
+
+func newRecordingPipeWriter() *recordingPipeWriter {
+	return &recordingPipeWriter{events: make(chan *pipeEvent, 4)}
+}
+
+func (w *recordingPipeWriter) writePipeEvent(evt *pipeEvent) {
+	w.events <- evt
+}
+
+func (w *recordingPipeWriter) next(t *testing.T) *pipeEvent {
+	t.Helper()
+	select {
+	case evt := <-w.events:
+		return evt
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pipe event written")
+		return nil
+	}
 }
 
 func (f *fakeSocket) OnEvent(event string, listener func(any)) {
@@ -95,18 +182,32 @@ type manifestCommunication struct {
 	SocketIO  manifestCommunicationSocketIO `json:"socketio"`
 }
 
+type manifestCapability struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+type manifestPermission struct {
+	Type        string `json:"type"`
+	Scope       string `json:"scope"`
+	Description string `json:"description"`
+}
+
 type pluginManifest struct {
-	Type          string                `json:"type"`
+	License       string                `json:"license"`
 	Name          string                `json:"name"`
 	Description   string                `json:"description"`
 	Author        string                `json:"author"`
 	Homepage      string                `json:"homepage"`
 	Repository    string                `json:"repository"`
-	License       string                `json:"license"`
 	Executable    string                `json:"executable"`
-	SocketIO      manifestSocketIO      `json:"socketio"`
+	Type          string                `json:"type"`
+	Capabilities  []manifestCapability  `json:"capabilities"`
 	Keywords      []string              `json:"keywords"`
 	Platforms     []string              `json:"platforms"`
+	SocketIO      manifestSocketIO      `json:"socketio"`
+	Permissions   []manifestPermission  `json:"permissions"`
 	Communication manifestCommunication `json:"communication"`
 }
 
@@ -144,6 +245,25 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 	if !manifest.SocketIO.Enabled || manifest.SocketIO.Namespace != "/" {
 		t.Fatalf("manifest socketio = %+v, want enabled namespace /", manifest.SocketIO)
 	}
+
+	// HyperHQ validates capabilities as objects; a bare string list fails
+	// to unmarshal above.
+	if len(manifest.Capabilities) == 0 {
+		t.Fatal("manifest capabilities empty, want capability objects")
+	}
+	for _, c := range manifest.Capabilities {
+		if c.Name == "" || c.Description == "" {
+			t.Fatalf("manifest capability = %+v, want name and description", c)
+		}
+	}
+	if manifest.Permissions == nil {
+		t.Fatal("manifest permissions missing, want an array")
+	}
+	for _, p := range manifest.Permissions {
+		if p.Type == "" || p.Scope == "" || p.Description == "" {
+			t.Fatalf("manifest permission = %+v, want type, scope and description", p)
+		}
+	}
 }
 
 func TestPluginManifestPresentation(t *testing.T) {
@@ -165,8 +285,14 @@ func TestPluginManifestPresentation(t *testing.T) {
 	if manifest.Description != "HyperHQ integration plugin for Zaparoo" {
 		t.Fatalf("manifest description = %q, want HyperHQ integration plugin for Zaparoo", manifest.Description)
 	}
-	if manifest.Author != "The Zaparoo Project Contributors" || manifest.Repository == "" || manifest.Homepage == "" {
+	if manifest.Author != "The Zaparoo Project Contributors" || manifest.Homepage == "" {
 		t.Fatalf("manifest metadata missing: %+v", manifest)
+	}
+	// HyperHQ checks the repository's GitHub releases for plugin updates.
+	// zaparoo-core's releases carry Core versions, not the plugin's, so every
+	// user would be told an update is available.
+	if manifest.Repository != "" {
+		t.Fatalf("manifest repository = %q, want none", manifest.Repository)
 	}
 	if len(manifest.Platforms) != 1 || manifest.Platforms[0] != "windows" {
 		t.Fatalf("manifest platforms = %v, want windows", manifest.Platforms)
@@ -386,6 +512,193 @@ func TestHandleLifecycleRequestEmitsResponseAndCancelsShutdown(t *testing.T) {
 	case <-ctx.Done():
 	default:
 		t.Fatal("shutdown request did not cancel bridge context")
+	}
+}
+
+func TestLaunchGameSelectsGameBeforeLaunching(t *testing.T) {
+	fake := &fakeSocket{}
+	b := newAuthenticatedBridge(fake)
+	fake.onEmit = respondByMethod(b, map[string]map[string]any{
+		navigateMethod: {"success": true, "data": map[string]any{"success": true, "gameId": "g-1"}},
+		launchMethod:   {"success": true},
+	})
+	w := newRecordingPipeWriter()
+
+	b.launchGame(w, "7", "g-1")
+
+	if got := requestedMethods(t, fake.emits); !slices.Equal(got, []string{navigateMethod, launchMethod}) {
+		t.Fatalf("requested methods = %v, want %s then %s", got, navigateMethod, launchMethod)
+	}
+	for _, req := range requestedData(t, fake.emits) {
+		if req.Params["gameId"] != "g-1" {
+			t.Fatalf("%s params = %v, want gameId g-1", req.Method, req.Params)
+		}
+	}
+	evt := w.next(t)
+	if evt.Event != "LaunchResult" || evt.RequestID != "7" || evt.ID != "g-1" || evt.Error != "" {
+		t.Fatalf("launch result = %+v, want LaunchResult for request 7 with no error", evt)
+	}
+}
+
+func TestLaunchGameDoesNotLaunchWhenSelectionFails(t *testing.T) {
+	tests := []struct {
+		reply   map[string]any
+		name    string
+		wantErr string
+	}{
+		{
+			name:    "request rejected",
+			reply:   map[string]any{"success": false, "error": "frontend busy"},
+			wantErr: "frontend busy",
+		},
+		{
+			name: "data reports failure",
+			reply: map[string]any{
+				"success": true,
+				"data":    map[string]any{"success": false, "error": "game not found"},
+			},
+			wantErr: "game not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeSocket{}
+			b := newAuthenticatedBridge(fake)
+			fake.onEmit = respondByMethod(b, map[string]map[string]any{navigateMethod: tt.reply})
+			w := newRecordingPipeWriter()
+
+			b.launchGame(w, "8", "g-1")
+
+			if got := requestedMethods(t, fake.emits); !slices.Equal(got, []string{navigateMethod}) {
+				t.Fatalf("requested methods = %v, want only %s", got, navigateMethod)
+			}
+			evt := w.next(t)
+			if evt.Event != "LaunchResult" || evt.RequestID != "8" || !strings.Contains(evt.Error, tt.wantErr) {
+				t.Fatalf("launch result = %+v, want LaunchResult error containing %q", evt, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLaunchGameReportsLaunchRejection(t *testing.T) {
+	fake := &fakeSocket{}
+	b := newAuthenticatedBridge(fake)
+	fake.onEmit = respondByMethod(b, map[string]map[string]any{
+		navigateMethod: {"success": true},
+		launchMethod:   {"success": false, "error": "unknown game"},
+	})
+	w := newRecordingPipeWriter()
+
+	b.launchGame(w, "9", "g-1")
+
+	evt := w.next(t)
+	if !strings.Contains(evt.Error, "unknown game") {
+		t.Fatalf("launch result = %+v, want error containing unknown game", evt)
+	}
+}
+
+func TestStopGameReportsOutcome(t *testing.T) {
+	tests := []struct {
+		reply          map[string]any
+		name           string
+		wantErr        string
+		wantWasRunning bool
+		wantStopped    bool
+	}{
+		{
+			name: "stopped",
+			reply: map[string]any{"success": true, "data": map[string]any{
+				"success": true, "wasRunning": true, "stopped": true, "message": "Game stopped",
+			}},
+			wantWasRunning: true,
+			wantStopped:    true,
+		},
+		{
+			name: "nothing running",
+			reply: map[string]any{"success": true, "data": map[string]any{
+				"success": true, "wasRunning": false, "stopped": false,
+			}},
+		},
+		{
+			name: "termination failed",
+			reply: map[string]any{"success": true, "data": map[string]any{
+				"success": false, "wasRunning": true, "stopped": false, "message": "could not terminate",
+			}},
+			wantWasRunning: true,
+			wantErr:        "could not terminate",
+		},
+		{
+			name:    "request rejected",
+			reply:   map[string]any{"success": false, "error": "unknown method: stopGame"},
+			wantErr: "unknown method",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeSocket{}
+			b := newAuthenticatedBridge(fake)
+			fake.onEmit = respondByMethod(b, map[string]map[string]any{stopMethod: tt.reply})
+			w := newRecordingPipeWriter()
+
+			b.stopGame(w, "3")
+
+			reqs := requestedData(t, fake.emits)
+			if len(reqs) != 1 || reqs[0].Method != stopMethod {
+				t.Fatalf("requests = %+v, want one %s", reqs, stopMethod)
+			}
+			// stopGame takes no arguments, but HyperHQ's documented call
+			// still carries an empty params object.
+			//nolint:gosec // the request's sessionToken is the test bridge's placeholder
+			encoded, err := json.Marshal(reqs[0])
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			if !strings.Contains(string(encoded), `"params":{}`) {
+				t.Fatalf("request = %s, want empty params object", encoded)
+			}
+
+			evt := w.next(t)
+			if evt.Event != "StopResult" || evt.RequestID != "3" {
+				t.Fatalf("stop result = %+v, want StopResult for request 3", evt)
+			}
+			if evt.WasRunning != tt.wantWasRunning || evt.Stopped != tt.wantStopped {
+				t.Fatalf("stop result = %+v, want wasRunning=%t stopped=%t",
+					evt, tt.wantWasRunning, tt.wantStopped)
+			}
+			if tt.wantErr == "" && evt.Error != "" {
+				t.Fatalf("stop result error = %q, want none", evt.Error)
+			}
+			if !strings.Contains(evt.Error, tt.wantErr) {
+				t.Fatalf("stop result error = %q, want it to contain %q", evt.Error, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHandlePipeCommandRoutesLaunchAndStop(t *testing.T) {
+	fake := &fakeSocket{}
+	b := newAuthenticatedBridge(fake)
+	fake.onEmit = respondByMethod(b, map[string]map[string]any{
+		navigateMethod: {"success": true},
+		launchMethod:   {"success": true},
+		stopMethod: {"success": true, "data": map[string]any{
+			"success": true, "wasRunning": true, "stopped": true,
+		}},
+	})
+	w := newRecordingPipeWriter()
+
+	b.handlePipeCommand(w, `{"Command":"Launch","Id":"g-1","RequestId":"1"}`)
+	evt := w.next(t)
+	if evt.Event != "LaunchResult" || evt.RequestID != "1" || evt.Error != "" {
+		t.Fatalf("launch result = %+v, want LaunchResult for request 1", evt)
+	}
+
+	b.handlePipeCommand(w, `{"Command":"Stop","RequestId":"2"}`)
+	evt = w.next(t)
+	if evt.Event != "StopResult" || evt.RequestID != "2" || !evt.Stopped {
+		t.Fatalf("stop result = %+v, want stopped StopResult for request 2", evt)
 	}
 }
 

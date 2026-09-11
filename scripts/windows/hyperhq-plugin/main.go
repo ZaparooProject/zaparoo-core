@@ -21,8 +21,8 @@
 // executable as a plugin and exposes a Socket.IO endpoint on loopback; the
 // plugin connects to that endpoint, authenticates, and forwards game events to
 // Zaparoo Core via a named pipe. Commands flow the other way: Zaparoo Core
-// requests system/game lists and game launches over the pipe, and this bridge
-// translates them into HyperHQ Socket.IO requestData calls.
+// requests system/game lists, game launches and game stops over the pipe, and
+// this bridge translates them into HyperHQ Socket.IO requestData calls.
 //
 // HyperHQ wire protocol (per https://docs.hyperai.io/docs/plugins/):
 //   - authenticate {pluginId, challenge} -> authenticated {success, sessionToken}
@@ -30,6 +30,7 @@
 //   - subscribeEvents [event names] -> eventsSubscribed {events}
 //   - request {id, method, data} -> emit plugin:response {id, type, data, sessionToken}
 //   - emit requestData {method, params, requestId, sessionToken} -> dataResponse {requestId, success, data?, error?}
+//     for getSystems, getGamesForSystem, navigateToGame, launchGame and stopGame
 //   - hyperHqEvent {type, data, timestamp} carries gameLaunched / gameClosed / ...
 package main
 
@@ -67,6 +68,19 @@ const (
 	launchAckTimeout   = 5 * time.Second
 	gameListMethod     = "getGamesForSystem"
 	gameListParamKey   = "systemId"
+	navigateMethod     = "navigateToGame"
+	launchMethod       = "launchGame"
+	stopMethod         = "stopGame"
+
+	// navigateTimeout bounds moving the wheel. HyperHQ allows a blocking
+	// call 30s, but selecting a game is immediate when it works, so a
+	// frontend that has not answered by now fails the launch instead of
+	// leaving the scan hanging.
+	navigateTimeout = 10 * time.Second
+
+	// stopTimeout stays below Core's wait for StopResult so Core hears the
+	// outcome, including a timeout, instead of giving up on its own.
+	stopTimeout = 10 * time.Second
 )
 
 // HyperHQ event types carried on the hyperHqEvent envelope.
@@ -90,6 +104,7 @@ const (
 type pipeEvent struct {
 	Event             string         `json:"Event"`
 	ID                string         `json:"Id,omitempty"`
+	RequestID         string         `json:"RequestId,omitempty"`
 	Title             string         `json:"Title,omitempty"`
 	Platform          string         `json:"Platform,omitempty"`
 	SystemID          string         `json:"SystemId,omitempty"`
@@ -98,12 +113,15 @@ type pipeEvent struct {
 	Error             string         `json:"Error,omitempty"`
 	Systems           []hqSystemInfo `json:"Systems,omitempty"`
 	Games             []hqGameInfo   `json:"Games,omitempty"`
+	WasRunning        bool           `json:"WasRunning,omitempty"`
+	Stopped           bool           `json:"Stopped,omitempty"`
 }
 
 //nolint:tagliatelle // PascalCase tags must match the Zaparoo Core pipe peer.
 type pipeCommand struct {
 	Command           string `json:"Command"`
 	ID                string `json:"Id,omitempty"`
+	RequestID         string `json:"RequestId,omitempty"`
 	SystemID          string `json:"SystemId,omitempty"`
 	SystemName        string `json:"SystemName,omitempty"`
 	SystemReferenceID string `json:"SystemReferenceId,omitempty"`
@@ -171,7 +189,7 @@ type hqPluginResponse struct {
 
 // hqRequestData is the envelope plugins send to call HyperHQ data methods.
 type hqRequestData struct {
-	Params       map[string]any `json:"params,omitempty"`
+	Params       map[string]any `json:"params"`
 	Method       string         `json:"method"`
 	RequestID    string         `json:"requestId"`
 	SessionToken string         `json:"sessionToken"`
@@ -234,6 +252,27 @@ type hqSystemsData struct {
 
 type hqGamesData struct {
 	Games []hqRawGame `json:"games"`
+}
+
+// hqNavigateResult is the data of a navigateToGame dataResponse. Success is a
+// pointer so a reply that leaves it out is not read as a failure.
+type hqNavigateResult struct {
+	Success  *bool  `json:"success"`
+	Error    string `json:"error"`
+	Message  string `json:"message"`
+	GameID   string `json:"gameId"`
+	GameName string `json:"gameName"`
+	SystemID string `json:"systemId"`
+}
+
+// hqStopResult is the data of a stopGame dataResponse. HyperHQ reports
+// success with wasRunning false when no game was running.
+type hqStopResult struct {
+	Success    *bool  `json:"success"`
+	Error      string `json:"error"`
+	Message    string `json:"message"`
+	WasRunning bool   `json:"wasRunning"`
+	Stopped    bool   `json:"stopped"`
 }
 
 type gameRequestVariant struct {
@@ -805,7 +844,9 @@ func (b *bridge) handlePipeCommand(writer pipeEventWriter, line string) {
 		target := systemQueryTarget{ID: cmd.SystemID, Name: cmd.SystemName, ReferenceID: cmd.SystemReferenceID}
 		go b.pushGames(writer, target)
 	case "Launch":
-		go b.launchGame(cmd.ID)
+		go b.launchGame(writer, cmd.RequestID, cmd.ID)
+	case "Stop":
+		go b.stopGame(writer, cmd.RequestID)
 	default:
 		log.Printf("unknown pipe command: %s", cmd.Command)
 	}
@@ -873,26 +914,98 @@ func (b *bridge) pushGames(writer pipeEventWriter, target systemQueryTarget) {
 	})
 }
 
-// launchGame is fire-and-forget: HyperHQ acknowledges via the next
-// gameLaunched event, not via the immediate dataResponse. We still emit
-// through requestData (with a short waiter) so that errors like an unknown
-// gameId surface in logs.
-func (b *bridge) launchGame(id string) {
+// launchGame moves the HyperSpin wheel to the game, launches it, and reports
+// the outcome to Core as a LaunchResult.
+//
+// Navigation is a blocking HyperHQ call, so its answer decides the launch.
+// HyperSpin refuses to select a game it does not have or while it is busy
+// launching or running another one, and launching regardless would start a
+// game the wheel does not show, or none at all.
+//
+// launchGame itself is fire-and-forget: HyperHQ confirms the game started
+// through the next gameLaunched event. The short wait on its dataResponse
+// only catches an outright rejection; a missing reply is not a failure.
+func (b *bridge) launchGame(writer pipeEventWriter, requestID, id string) {
+	result := &pipeEvent{Event: "LaunchResult", RequestID: requestID, ID: id}
+	defer writer.writePipeEvent(result)
+
 	if id == "" {
-		log.Print("launchGame called with empty id")
+		result.Error = "missing game id"
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(b.ctx, launchAckTimeout)
-	defer cancel()
+	navCtx, navCancel := context.WithTimeout(b.ctx, navigateTimeout)
+	defer navCancel()
+	raw, err := b.requestDataCtx(navCtx, navigateMethod, map[string]any{"gameId": id})
+	if err == nil {
+		err = checkNavigateResult(raw)
+	}
+	if err != nil {
+		log.Printf("%s(%s) failed: %v", navigateMethod, id, err)
+		result.Error = "select game: " + err.Error()
+		return
+	}
 
-	if _, err := b.requestDataCtx(ctx, "launchGame", map[string]any{"gameId": id}); err != nil {
-		// Timeout here is expected — HyperHQ doesn't always send a synchronous
-		// dataResponse for launchGame. Only log non-timeout failures.
-		if !errors.Is(err, context.DeadlineExceeded) {
-			log.Printf("launchGame(%s) failed: %v", id, err)
+	ackCtx, ackCancel := context.WithTimeout(b.ctx, launchAckTimeout)
+	defer ackCancel()
+	if _, err := b.requestDataCtx(ackCtx, launchMethod, map[string]any{"gameId": id}); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) {
+		log.Printf("%s(%s) failed: %v", launchMethod, id, err)
+		result.Error = "launch game: " + err.Error()
+	}
+}
+
+// checkNavigateResult reports a navigateToGame reply whose data says the
+// wheel did not move.
+func checkNavigateResult(raw json.RawMessage) error {
+	var data hqNavigateResult
+	if err := unmarshalIfPresent(raw, &data); err != nil {
+		return fmt.Errorf("decode %s response: %w", navigateMethod, err)
+	}
+	if data.Success != nil && !*data.Success {
+		return errors.New(firstNonEmpty(data.Error, data.Message, "HyperSpin did not select the game"))
+	}
+	log.Printf("HyperHQ selected game: id=%s name=%q systemId=%s", data.GameID, data.GameName, data.SystemID)
+	return nil
+}
+
+// stopGame asks HyperHQ to stop the running HyperSpin game and reports the
+// outcome to Core as a StopResult. HyperHQ answers success with wasRunning
+// false when nothing was running, which Core must tell apart from a stop
+// that failed, so both flags are passed through.
+func (b *bridge) stopGame(writer pipeEventWriter, requestID string) {
+	result := &pipeEvent{Event: "StopResult", RequestID: requestID}
+	defer writer.writePipeEvent(result)
+
+	ctx, cancel := context.WithTimeout(b.ctx, stopTimeout)
+	defer cancel()
+	raw, err := b.requestDataCtx(ctx, stopMethod, nil)
+	if err != nil {
+		log.Printf("%s failed: %v", stopMethod, err)
+		result.Error = "stop game: " + err.Error()
+		return
+	}
+
+	var data hqStopResult
+	if err := unmarshalIfPresent(raw, &data); err != nil {
+		result.Error = fmt.Sprintf("decode %s response: %v", stopMethod, err)
+		return
+	}
+	result.WasRunning = data.WasRunning
+	result.Stopped = data.Stopped
+	if data.Success != nil && !*data.Success {
+		result.Error = firstNonEmpty(data.Error, data.Message, "HyperHQ could not stop the game")
+	}
+	log.Printf("HyperHQ stopGame: wasRunning=%t stopped=%t error=%q", result.WasRunning, result.Stopped, result.Error)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
 		}
 	}
+	return ""
 }
 
 // requestSystems / requestGames issue HyperHQ's `requestData` envelope and
@@ -1038,6 +1151,12 @@ func (b *bridge) requestDataCtx(
 	b.sessionMu.RUnlock()
 	if token == "" {
 		return nil, errors.New("no session token (not authenticated)")
+	}
+
+	// Every documented requestData call carries a params object, empty for
+	// methods such as getSystems and stopGame that take no arguments.
+	if params == nil {
+		params = map[string]any{}
 	}
 
 	requestID := newRequestID()
