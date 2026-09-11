@@ -7,10 +7,13 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	syswindows "golang.org/x/sys/windows"
@@ -48,7 +51,11 @@ func TestAcquireSingleInstance_Success(t *testing.T) {
 }
 
 func TestAcquireSingleInstance_AlreadyExistsClosesDuplicateHandle(t *testing.T) {
-	t.Parallel()
+	var output bytes.Buffer
+	oldLogger, oldLevel := log.Logger, zerolog.GlobalLevel()
+	log.Logger = zerolog.New(&output)
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = oldLogger; zerolog.SetGlobalLevel(oldLevel) })
 
 	closeCalls := 0
 	ops := singleInstanceOps{
@@ -69,10 +76,17 @@ func TestAcquireSingleInstance_AlreadyExistsClosesDuplicateHandle(t *testing.T) 
 	assert.True(t, running)
 	assert.Nil(t, instance)
 	assert.Equal(t, 1, closeCalls)
+	assert.Contains(t, output.String(), `"level":"warn"`)
+	assert.Contains(t, output.String(), "core is already running")
+	assert.NotContains(t, output.String(), `"level":"error"`)
 }
 
 func TestAcquireSingleInstance_CreationFailureAllowsStartup(t *testing.T) {
-	t.Parallel()
+	var output bytes.Buffer
+	oldLogger, oldLevel := log.Logger, zerolog.GlobalLevel()
+	log.Logger = zerolog.New(&output)
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = oldLogger; zerolog.SetGlobalLevel(oldLevel) })
 
 	createErr := errors.New("create failed")
 	closeCalls := 0
@@ -93,6 +107,8 @@ func TestAcquireSingleInstance_CreationFailureAllowsStartup(t *testing.T) {
 	assert.False(t, running)
 	assert.Nil(t, instance)
 	assert.Zero(t, closeCalls)
+	assert.Contains(t, output.String(), `"level":"error"`)
+	assert.Contains(t, output.String(), "error creating single-instance mutex")
 }
 
 func TestRestartAfterReleasing_ReleasesSingletonBeforeRestart(t *testing.T) {
