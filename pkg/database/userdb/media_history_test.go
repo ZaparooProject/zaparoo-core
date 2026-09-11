@@ -21,14 +21,19 @@ package userdb
 
 import (
 	"context"
+	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -439,6 +444,53 @@ func TestSqlCloseMediaHistory_DatabaseError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCloseMediaHistory_MarksCorruption(t *testing.T) {
+	t.Parallel()
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	endTime := time.Now()
+	mock.ExpectPrepare(`UPDATE MediaHistory SET EndTime.*WHERE DBID`).
+		ExpectExec().
+		WithArgs(endTime.Unix(), 600, 600, sqlmock.AnyArg(), endTime.Unix(), int64(42)).
+		WillReturnError(errors.New("database disk image is malformed"))
+
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir})
+	dbPath := filepath.Join(dataDir, config.UserDbFile)
+	db := &UserDB{ctx: t.Context(), pl: pl}
+	db.sql.Store(sqlDB)
+
+	err = db.CloseMediaHistory(42, endTime, 600)
+	require.Error(t, err)
+	_, markerErr := os.Stat(database.CorruptMarkerPath(dbPath))
+	require.NoError(t, markerErr)
+	pl.AssertExpectations(t)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCloseMediaHistory_DoesNotMarkOrdinaryError(t *testing.T) {
+	t.Parallel()
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	endTime := time.Now()
+	mock.ExpectPrepare(`UPDATE MediaHistory SET EndTime.*WHERE DBID`).
+		ExpectExec().
+		WithArgs(endTime.Unix(), 600, 600, sqlmock.AnyArg(), endTime.Unix(), int64(42)).
+		WillReturnError(errors.New("storage unavailable"))
+
+	db := &UserDB{ctx: t.Context()}
+	db.sql.Store(sqlDB)
+
+	err = db.CloseMediaHistory(42, endTime, 600)
+	require.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlGetMediaHistory_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -583,6 +635,47 @@ func TestSqlGetLatestMediaHistory_DatabaseError(t *testing.T) {
 	assert.False(t, found)
 	assert.Empty(t, entry)
 	assert.Contains(t, err.Error(), "failed to prepare latest media history query statement")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetLatestMediaHistory_MarksCorruption(t *testing.T) {
+	t.Parallel()
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
+		WillReturnError(errors.New("file is not a database"))
+
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir})
+	dbPath := filepath.Join(dataDir, config.UserDbFile)
+	db := &UserDB{ctx: t.Context(), pl: pl}
+	db.sql.Store(sqlDB)
+
+	_, _, err = db.GetLatestMediaHistory()
+	require.Error(t, err)
+	_, markerErr := os.Stat(database.CorruptMarkerPath(dbPath))
+	require.NoError(t, markerErr)
+	pl.AssertExpectations(t)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetLatestMediaHistory_DoesNotMarkOrdinaryError(t *testing.T) {
+	t.Parallel()
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
+		WillReturnError(errors.New("storage unavailable"))
+
+	db := &UserDB{ctx: t.Context()}
+	db.sql.Store(sqlDB)
+
+	_, _, err = db.GetLatestMediaHistory()
+	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

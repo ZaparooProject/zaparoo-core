@@ -74,7 +74,11 @@ func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int)
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseMediaHistory(db.ctx, db.sql.Load(), dbid, endTime, playTime)
+	err := sqlCloseMediaHistory(db.ctx, db.sql.Load(), dbid, endTime, playTime)
+	if database.IsCorruptionError(err) {
+		db.NoteCorruption(err)
+	}
+	return err
 }
 
 // GetMediaHistory retrieves media history entries with pagination and optional system filtering.
@@ -101,7 +105,11 @@ func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, err
 	if db.sql.Load() == nil {
 		return database.MediaHistoryEntry{}, false, ErrNullSQL
 	}
-	return sqlGetLatestMediaHistory(db.ctx, db.sql.Load())
+	entry, found, err := sqlGetLatestMediaHistory(db.ctx, db.sql.Load())
+	if database.IsCorruptionError(err) {
+		db.NoteCorruption(err)
+	}
+	return entry, found, err
 }
 
 // GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
