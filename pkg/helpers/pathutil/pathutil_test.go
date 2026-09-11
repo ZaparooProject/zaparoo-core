@@ -20,11 +20,52 @@
 package pathutil
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestWriteFileAtomicPreservesSymlink(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows privileges")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "config-link")
+	target := filepath.Join(dir, "real-config")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Base(target), link))
+	require.NoError(t, WriteFileAtomic(afero.NewOsFs(), link, []byte("new"), 0o600))
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
+	got, err := afero.ReadFile(afero.NewOsFs(), target)
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got))
+	require.NoError(t, os.Remove(target))
+	require.NoError(t, WriteFileAtomic(afero.NewOsFs(), link, []byte("recreated"), 0o600))
+	got, err = afero.ReadFile(afero.NewOsFs(), target)
+	require.NoError(t, err)
+	assert.Equal(t, "recreated", string(got))
+}
+
+func TestWriteFileAtomicRejectsSymlinkLoop(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows privileges")
+	}
+	path := filepath.Join(t.TempDir(), "loop")
+	require.NoError(t, os.Symlink("loop", path))
+	require.ErrorContains(t, WriteFileAtomic(afero.NewOsFs(), path, []byte("new"), 0o600), "too many")
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
+}
 
 func TestCanonicalMediaPath(t *testing.T) {
 	t.Parallel()

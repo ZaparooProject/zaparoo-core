@@ -486,8 +486,8 @@ func TestSettingsAuthClaim_SurfacesConsentResetSaveFailure(t *testing.T) {
 	t.Cleanup(st.StopService)
 
 	cfgPath := filepath.Join(configDir, config.CfgFile)
-	require.NoError(t, os.Chmod(cfgPath, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+	require.NoError(t, os.Rename(cfgPath, cfgPath+".saved"))
+	require.NoError(t, os.Mkdir(cfgPath, 0o700))
 
 	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
 		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
@@ -868,8 +868,7 @@ func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
 // regardless (safe for the rest of this process's life), but if the write
 // never succeeds and the device restarts, a silently-logged failure would
 // mean the old consent state loads back from disk. Requires a real
-// filesystem so the config file's permission bits can be used to force the
-// write to fail deterministically.
+// filesystem with a directory at the destination to force replacement failure.
 func TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission bits are not enforced for root")
@@ -892,8 +891,8 @@ func TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure(t *testing.T) {
 	require.True(t, cfg.RemoteControlEnabled())
 
 	cfgPath := filepath.Join(configDir, config.CfgFile)
-	require.NoError(t, os.Chmod(cfgPath, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+	require.NoError(t, os.Rename(cfgPath, cfgPath+".saved"))
+	require.NoError(t, os.Mkdir(cfgPath, 0o700))
 
 	env := requests.RequestEnv{
 		Context: context.Background(), Config: cfg, Platform: mockPlatform, IsLocal: true,
