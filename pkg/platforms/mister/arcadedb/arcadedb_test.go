@@ -47,7 +47,7 @@ func TestParseGitHubContentsResponse_Forbidden(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
 	assert.Contains(t, err.Error(), "forbidden, probably rate limited")
-	assert.Contains(t, err.Error(), "API rate limit exceeded")
+	assert.NotContains(t, err.Error(), "API rate limit exceeded")
 }
 
 func TestParseGitHubContentsResponse_NotFound(t *testing.T) {
@@ -60,6 +60,7 @@ func TestParseGitHubContentsResponse_NotFound(t *testing.T) {
 	assert.Nil(t, contents)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "404")
+	assert.NotContains(t, err.Error(), "Not Found")
 }
 
 func TestParseGitHubContentsResponse_ServerError(t *testing.T) {
@@ -72,18 +73,18 @@ func TestParseGitHubContentsResponse_ServerError(t *testing.T) {
 	assert.Nil(t, contents)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
+	assert.NotContains(t, err.Error(), "Internal Server Error")
 }
 
-func TestParseGitHubContentsResponse_TruncatesLongBody(t *testing.T) {
+func TestParseGitHubContentsResponse_OmitsLongBody(t *testing.T) {
 	t.Parallel()
 
-	longBody := strings.Repeat("x", 300)
+	longBody := strings.Repeat("private response content", 20)
 
 	_, err := parseGitHubContentsResponse(http.StatusBadRequest, []byte(longBody))
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "...")
-	assert.Less(t, len(err.Error()), 300)
+	assert.EqualError(t, err, "GitHub API returned 400")
 }
 
 func TestParseGitHubContentsResponse_InvalidJSON(t *testing.T) {

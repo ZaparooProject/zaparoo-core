@@ -89,16 +89,10 @@ type ArcadeDbEntry struct {
 
 func parseGitHubContentsResponse(statusCode int, body []byte) ([]GithubContentsItem, error) {
 	if statusCode != http.StatusOK {
-		bodyPreview := string(body)
-		if len(bodyPreview) > 200 {
-			bodyPreview = bodyPreview[:200] + "..."
-		}
 		if statusCode == http.StatusForbidden {
-			return nil, fmt.Errorf(
-				"GitHub API returned %d (forbidden, probably rate limited): %s",
-				statusCode, bodyPreview)
+			return nil, fmt.Errorf("GitHub API returned %d (forbidden, probably rate limited)", statusCode)
 		}
-		return nil, fmt.Errorf("GitHub API returned %d: %s", statusCode, bodyPreview)
+		return nil, fmt.Errorf("GitHub API returned %d", statusCode)
 	}
 
 	var contents []GithubContentsItem
