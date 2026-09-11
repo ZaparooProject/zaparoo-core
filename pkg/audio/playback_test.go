@@ -423,11 +423,17 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 }
 
 // TestStreamingSource_PrefetchFillsRingWithoutTickerPacing verifies the prefetch
-// goroutine fills the entire ring in a burst rather than one chunk per 100 ms
-// tick. Per-tick pacing capped decode at 1x realtime, so the ring never built a
+// goroutine fills the entire ring in a burst rather than one chunk per tick.
+// Per-tick pacing capped decode at 1x realtime, so the ring never built a
 // cushion and CPU contention produced period-sized dropouts (crackle) on slow
-// ARM devices. Filling the 4 s ring takes 40 chunks: burst-filling completes in
-// well under 2 s, while per-tick pacing needs at least 4 s.
+// ARM devices.
+//
+// The tick is stretched to an hour so the assertion is structural rather than
+// timed: filling the 4 s ring takes 40 chunks, and only a goroutine that keeps
+// decoding until the ring is full can get there before the first wake-up. A
+// return to one chunk per tick fails here however fast the machine is, and the
+// deadline below is only a hang guard — measuring the fill instead made this
+// test a race against real decode work on a loaded CI runner (#1379).
 func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
 	t.Parallel()
 
@@ -437,12 +443,13 @@ func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
 
 	s, err := newStreamingSource(path, 1.0, resampleQuality)
 	require.NoError(t, err)
+	s.tickInterval = time.Hour
 	s.startPrefetch()
 	t.Cleanup(s.stopAndDeregister)
 
 	require.Eventually(t, func() bool {
 		return s.bufferedFrames() == len(s.ring)
-	}, 2*time.Second, 5*time.Millisecond, "prefetch should burst-fill the full ring")
+	}, 30*time.Second, 5*time.Millisecond, "prefetch should burst-fill the full ring")
 }
 
 func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
@@ -455,9 +462,12 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 	require.NoError(t, err)
 	s.startPrefetch()
 	t.Cleanup(s.stopAndDeregister)
+	// A full ring is this test's starting position, not its subject, so the
+	// deadline is a hang guard: real decode and resample work on a shared CI
+	// runner is not something to race (#1379).
 	require.Eventually(t, func() bool {
 		return s.bufferedFrames() == len(s.ring)
-	}, 2*time.Second, 5*time.Millisecond)
+	}, 30*time.Second, 5*time.Millisecond)
 
 	buf := make([][2]float64, 2048)
 	deadline := time.Now().Add(5 * time.Second)

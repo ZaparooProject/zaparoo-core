@@ -51,17 +51,24 @@ func newWALTestDB(t *testing.T) walTestDB {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, sqlDB.Close())
-	})
-
 	mediaDB := &MediaDB{
 		ctx:    ctx,
 		dbPath: dbPath,
 		clock:  clockwork.NewRealClock(),
 	}
+	// Close through MediaDB rather than the *sql.DB: it rolls back an open
+	// transaction first, and a transaction still holds its connection out of
+	// the pool, so sql.DB.Close() alone reports success while the file stays
+	// open. On Windows the t.TempDir removal that runs next then fails, hiding
+	// whatever actually failed the test behind a cleanup error. Registered
+	// before the handle is stored because Close is a no-op until then, and
+	// cleanups run last-registered-first.
+	t.Cleanup(func() {
+		require.NoError(t, mediaDB.Close())
+	})
+
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
+	require.NoError(t, err)
 	mediaDB.sql.Store(sqlDB)
 	require.NoError(t, mediaDB.Allocate())
 

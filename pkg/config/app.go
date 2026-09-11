@@ -34,10 +34,12 @@ func IsDevelopmentVersion() bool {
 }
 
 const (
-	AppName              = "zaparoo"
-	MediaDbFile          = "media.db"
-	UserDbFile           = "user.db"
-	LogFile              = "core.log"
+	AppName     = "zaparoo"
+	MediaDbFile = "media.db"
+	UserDbFile  = "user.db"
+	LogFile     = "core.log"
+	// StderrFile holds panics and runtime fatal errors, which never reach zerolog.
+	StderrFile           = "core.stderr.log"
 	PidFile              = "core.pid"
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"
@@ -56,7 +58,21 @@ const (
 	MediaDir             = "media"
 	CacheDir             = "cache"
 	LogUploadURL         = "https://logs.zaparoo.org/"
-	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
+	// LogUploadMaxBytes is the largest request logs.zaparoo.org accepts, and
+	// it is a decimal megabyte rather than a mebibyte. The limit applies to
+	// the whole request body, not the file part, so a bundle sent at exactly
+	// this size comes back 413 once multipart framing is added around it.
+	// Measured against the service: a 999,912 byte body is accepted and a
+	// 1,000,112 byte body is rejected.
+	LogUploadMaxBytes = 1_000_000
+	// LogUploadEnvelopeReserve is headroom for that framing. The boundary and
+	// part headers come to about 200 bytes; this is deliberately generous.
+	LogUploadEnvelopeReserve = 4 * 1024
+	// LogBundleMaxBytes is what a log bundle destined for upload may occupy.
+	// Both the TUI upload and the download API budget against this, because
+	// what the API hands back is what a client uploads.
+	LogBundleMaxBytes = LogUploadMaxBytes - LogUploadEnvelopeReserve
+	MinFreeDiskBytes  = 500 * 1024 * 1024 // 500 MB
 
 	// VersionFlagName is the flag that prints VersionLine and exits. The
 	// self-update probe passes it to a binary it has just downloaded, so the

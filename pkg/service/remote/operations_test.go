@@ -27,6 +27,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,6 +40,22 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func newNoRequestTestManager(t *testing.T) *manager {
+	t.Helper()
+	m := newHTTPTestManager(t, "https://online.example")
+	m.httpClient = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected remote operation request to %s", request.URL.Path)
+		return nil, errors.New("unexpected remote operation request")
+	})}
+	return m
+}
 
 func TestOperationAcceptExecuteReportLifecycle(t *testing.T) {
 	var acceptedCalls, resultCalls int
@@ -330,6 +347,55 @@ func TestFinishOperationGivesUpAfterPersistRetriesExhausted(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
+func TestOperationRejectsRedeliveryWithChangedDeadline(t *testing.T) {
+	m := newNoRequestTestManager(t)
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+	params := json.RawMessage(`{"message":"same"}`)
+	digest := sha256.Sum256(params)
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_deadline_conflict", OperationID: "op_deadline_conflict", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Minute), State: "terminal", ResultStatus: "succeeded",
+		Result: json.RawMessage(`{"message":"same"}`),
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, false, nil).Once()
+
+	m.handleOperation(context.Background(), &operationEnvelope{
+		CommandID: "cmd_deadline_conflict", OperationID: "op_deadline_conflict", OperationType: "echo",
+		ProtocolVersion: 1, Params: params, DeadlineAt: stored.DeadlineAt.Add(time.Minute),
+		Origin: operationOrigin{Kind: "first_party"},
+	}, false)
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "MarkRemoteCommandResultReported", mock.Anything)
+}
+
+func TestOperationCannotExtendRecordedDeadline(t *testing.T) {
+	m := newNoRequestTestManager(t)
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+	params := json.RawMessage(`{"message":"late"}`)
+	digest := sha256.Sum256(params)
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_recorded_deadline", OperationID: "op_recorded_deadline", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(-time.Minute), State: "recorded",
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, false, nil).Once()
+
+	m.handleOperation(context.Background(), &operationEnvelope{
+		CommandID: "cmd_recorded_deadline", OperationID: "op_recorded_deadline", OperationType: "echo",
+		ProtocolVersion: 1, Params: params, DeadlineAt: time.Now().UTC().Add(time.Minute),
+		Origin: operationOrigin{Kind: "first_party"},
+	}, false)
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "TransitionRemoteCommand", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestOperationReplaysStoredResultWithoutAcceptance(t *testing.T) {
 	var resultCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -498,6 +564,23 @@ func TestValidateEnvelope(t *testing.T) {
 			wantErr: "invalid remote command identifier",
 		},
 		{
+			name:    "command id contains control character",
+			mutate:  func(e *operationEnvelope) { e.CommandID = "cmd\n1" },
+			wantErr: "invalid remote command identifier",
+		},
+		{
+			name:    "operation id contains invalid UTF-8",
+			mutate:  func(e *operationEnvelope) { e.OperationID = string([]byte{0xff}) },
+			wantErr: "invalid remote operation identifier",
+		},
+		{
+			name: "operation type is oversized",
+			mutate: func(e *operationEnvelope) {
+				e.OperationType = strings.Repeat("x", remoteOperationTypeMaxLength+1)
+			},
+			wantErr: "invalid remote operation type",
+		},
+		{
 			name:    "unsupported protocol version",
 			mutate:  func(e *operationEnvelope) { e.ProtocolVersion = protocolVersion + 1 },
 			wantErr: "unsupported protocol version",
@@ -516,6 +599,29 @@ func TestValidateEnvelope(t *testing.T) {
 			name:    "api_key origin missing key name",
 			mutate:  func(e *operationEnvelope) { e.Origin = operationOrigin{Kind: "api_key"} },
 			wantErr: "API-key origin missing key name",
+		},
+		{
+			name: "api_key origin contains terminal controls",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{Kind: "api_key", KeyName: "owner\n\x1b[31m"}
+			},
+			wantErr: "invalid remote operation origin key name",
+		},
+		{
+			name: "api_key origin contains bidi override",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{Kind: "api_key", KeyName: "owner\u202eexe"}
+			},
+			wantErr: "invalid remote operation origin key name",
+		},
+		{
+			name: "api_key origin name is oversized",
+			mutate: func(e *operationEnvelope) {
+				e.Origin = operationOrigin{
+					Kind: "api_key", KeyName: strings.Repeat("k", remoteOriginKeyNameMaxLength+1),
+				}
+			},
+			wantErr: "invalid remote operation origin key name",
 		},
 	}
 
@@ -646,8 +752,9 @@ func TestOperationEchoAndUnknownType(t *testing.T) {
 
 // TestOperationDispatchesMethodBackedOperationThroughAllowlist is an
 // end-to-end check that a method-backed operation_type reaches the shared
-// API registry with a non-admin role, scoped params, and the exact
-// camelCase result shape — not a bespoke adapter.
+// API registry with a non-admin role and scoped params, and that its
+// response comes back in the snake_case wire shape — not the model's own
+// camelCase.
 func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) {
 	var sawRole string
 	m := &manager{deps: Deps{Methods: fakeMethodResolver{
@@ -656,7 +763,9 @@ func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) 
 			var params models.SystemsParams
 			require.NoError(t, json.Unmarshal(env.Params, &params))
 			require.True(t, params.All)
-			return models.SystemsResponse{Systems: []models.System{{ID: "SNES"}}}, nil
+			return models.SystemsResponse{
+				Systems: []models.System{{ID: "SNES", ZapScript: "**launch.system:SNES"}},
+			}, nil
 		},
 	}}}
 
@@ -664,8 +773,44 @@ func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) 
 		OperationType: "systems", Params: json.RawMessage(`{"all":true}`),
 	})
 	assert.Equal(t, "succeeded", result.Status)
-	assert.JSONEq(t, `{"systems":[{"id":"SNES"}]}`, string(result.Result))
+	assert.JSONEq(t, `{"systems":[{"id":"SNES","zap_script":"**launch.system:SNES"}]}`, string(result.Result))
 	assert.Equal(t, "remote", sawRole)
+}
+
+// TestOperationTranslatesSearchParamsAndResult pins the casing contract end
+// to end for a query verb: the API delivers snake_case params, the Core
+// method receives camelCase params, and the method's camelCase response is
+// reported to the API as snake_case.
+func TestOperationTranslatesSearchParamsAndResult(t *testing.T) {
+	var sawParams map[string]json.RawMessage
+	m := &manager{deps: Deps{Methods: fakeMethodResolver{
+		"media.search": func(env requests.RequestEnv) (any, error) {
+			require.NoError(t, json.Unmarshal(env.Params, &sawParams))
+			return models.SearchResults{Total: 1, Results: []models.SearchResultMedia{{
+				Name: "Sonic", Path: "/roms/Genesis/Sonic.md", ZapScript: "**launch:/roms/Genesis/Sonic.md",
+				HasCover: true, System: models.System{ID: "Genesis"},
+			}}}, nil
+		},
+	}}}
+
+	result := m.executeOperation(context.Background(), &operationEnvelope{
+		OperationType: "media.search",
+		Params:        json.RawMessage(`{"query":"sonic","max_results":5,"fuzzy_system":true}`),
+	})
+	require.Equal(t, "succeeded", result.Status, result.ErrorCode)
+	assert.Contains(t, sawParams, "maxResults")
+	assert.Contains(t, sawParams, "fuzzySystem")
+	assert.NotContains(t, sawParams, "max_results")
+	assert.JSONEq(t, `{"total":1,"results":[{
+		"name":"Sonic","path":"/roms/Genesis/Sonic.md","zap_script":"**launch:/roms/Genesis/Sonic.md",
+		"has_cover":true,"system":{"id":"Genesis"},"tags":null
+	}]}`, string(result.Result))
+
+	rejected := m.executeOperation(context.Background(), &operationEnvelope{
+		OperationType: "media.search", Params: json.RawMessage(`{"query":"sonic","maxResults":5}`),
+	})
+	assert.Equal(t, "failed", rejected.Status)
+	assert.Equal(t, "bad_params", rejected.ErrorCode, "camelCase params are not the wire contract")
 }
 
 // TestOperationRejectsUnscopedLaunchersParams verifies the bad_params gate

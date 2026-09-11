@@ -116,9 +116,12 @@ type Deps struct {
 }
 
 type manager struct {
-	deps          Deps
-	httpClient    *http.Client
-	execute       func(context.Context, *operationEnvelope) operationResult
+	deps       Deps
+	httpClient *http.Client
+	execute    func(context.Context, *operationEnvelope) operationResult
+	// markUnlinked overrides how a rejected credential is recorded; nil uses
+	// the backup manager. Tests inject a fake to observe the decision.
+	markUnlinked  func()
 	executionSlot chan struct{}
 	resultMu      syncutil.Mutex
 }
@@ -159,6 +162,11 @@ func (m *manager) run(ctx context.Context) {
 					log.Warn().Err(err).Msg("remote operations capability withdrawal failed")
 				}
 			}
+			if enabled {
+				m.setStatus(state.RemoteStateUnlinked, "")
+			} else {
+				m.setStatus(state.RemoteStateDisabled, "")
+			}
 			advertised = false
 			replayed = false
 			lastReplay = time.Time{}
@@ -167,19 +175,27 @@ func (m *manager) run(ctx context.Context) {
 		}
 
 		if !advertised {
+			m.setStatus(state.RemoteStateConnecting, "")
 			if err := m.sendCapabilityHeartbeat(ctx); err != nil {
 				if isUnauthorized(err) {
-					m.markUnlinkedIfSharedEndpoint()
+					if m.supersededRejection(err) {
+						log.Debug().Msg("ignoring unauthorized heartbeat for a superseded remote credential")
+						continue
+					}
+					m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
+					m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
 					m.sleepWhileEligible(ctx, time.Minute, true)
 					continue
 				}
 				log.Warn().Err(err).Msg("remote operations capability heartbeat failed")
+				m.setStatus(state.RemoteStateError, errorCodeOf(err))
 				m.sleepWhileEligible(ctx, m.jitter(backoff), true)
 				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 			advertised = true
 			backoff = minBackoff
+			m.setStatus(state.RemoteStateWaiting, "")
 		}
 		now := time.Now()
 		if resultsReplayDue(replayed, lastReplay, now) {
@@ -199,13 +215,28 @@ func (m *manager) run(ctx context.Context) {
 			var httpErr *httpError
 			switch {
 			case isUnauthorized(err):
-				m.markUnlinkedIfSharedEndpoint()
 				advertised = false
+				if m.supersededRejection(err) {
+					log.Debug().Msg("ignoring unauthorized poll for a superseded remote credential")
+					break
+				}
+				m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
+				m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
 				m.sleepWhileEligible(ctx, time.Minute, true)
 			case errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound:
+				// The server answers 404 both when the feature is dark and
+				// when this device isn't the account's remote slot; the
+				// retry is the same long back-off either way, but the owner
+				// needs to be told which one it is.
+				if httpErr.code == errorCodeRemoteSlotRequired {
+					m.setStatus(state.RemoteStateNotRemoteDevice, httpErr.code)
+				} else {
+					m.setStatus(state.RemoteStateUnavailable, httpErr.code)
+				}
 				m.sleepWhileEligible(ctx, longRetry, true)
 			case errors.As(err, &httpErr) && (httpErr.status == http.StatusTooManyRequests ||
 				httpErr.status == http.StatusServiceUnavailable):
+				m.setStatus(state.RemoteStateError, errorCodeOf(err))
 				delay := httpErr.retryAfter
 				if delay <= 0 {
 					delay = maxBackoff
@@ -213,12 +244,14 @@ func (m *manager) run(ctx context.Context) {
 				m.sleepWhileEligible(ctx, delay, true)
 			default:
 				log.Warn().Err(err).Dur("retry_in", backoff).Msg("remote operations wait failed")
+				m.setStatus(state.RemoteStateError, errorCodeOf(err))
 				m.sleepWhileEligible(ctx, m.jitter(backoff), true)
 				backoff = min(backoff*2, maxBackoff)
 			}
 			continue
 		}
 		backoff = minBackoff
+		m.setStatus(state.RemoteStateWaiting, "")
 		if !hasWork {
 			continue
 		}
@@ -282,14 +315,67 @@ func (m *manager) sendCapabilityHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-func (m *manager) markUnlinkedIfSharedEndpoint() {
+// supersededRejection reports whether a 401 answers a bearer that a re-link
+// has already replaced. The server's verdict is about the old token, so it
+// must not be shown to the owner as a rejection, and it must not hold the new
+// credential behind the rejection back-off.
+func (m *manager) supersededRejection(err error) bool {
+	rejected := rejectedBearer(err)
+	return rejected != "" && rejected != m.deviceBearer()
+}
+
+// markUnlinkedIfSharedEndpoint records a rejected device credential as an
+// unlinked account, when remote control shares the backup service's
+// endpoint (and so its credential). rejected is the bearer the server
+// refused: a 401 for a credential that a re-link has since replaced is a
+// late answer about the old token, not a verdict on the new one, so it is
+// ignored rather than flagging the fresh link as unlinked.
+func (m *manager) markUnlinkedIfSharedEndpoint(rejected string) {
+	if rejected != "" && rejected != m.deviceBearer() {
+		log.Debug().Msg("ignoring unauthorized response for superseded remote credential")
+		return
+	}
 	if !sameEndpoint(
 		m.deps.Config.RemoteControlBaseURL(), m.deps.Config.BackupRemoteBaseURL(),
 	) {
 		return
 	}
+	if m.markUnlinked != nil {
+		m.markUnlinked()
+		return
+	}
 	backup.NewManager(m.deps.Config, m.deps.Platform, m.deps.DB).
 		WithCoordinator(m.deps.State.BackupCoordinator()).MarkRemoteUnlinked()
+}
+
+// errorCodeRemoteSlotRequired is the Online API's error code for a poll
+// from a device that is not the account's designated remote device.
+const errorCodeRemoteSlotRequired = "remote_slot_required"
+
+// setStatus records the poller's observation on the shared service state
+// for the owner-facing remote status; a nil State (tests) is a no-op.
+func (m *manager) setStatus(remoteState, errorCode string) {
+	if m.deps.State == nil {
+		return
+	}
+	m.deps.State.SetRemoteStatus(remoteState, errorCode)
+}
+
+// errorCodeOf returns the server's error code for an HTTP failure, the HTTP
+// status when the body carried none, or a short local code for a transport
+// failure, so the owner-facing status always has something to show.
+func errorCodeOf(err error) string {
+	var httpErr *httpError
+	if errors.As(err, &httpErr) {
+		if httpErr.code != "" {
+			return httpErr.code
+		}
+		return "http_" + strconv.Itoa(httpErr.status)
+	}
+	if errors.Is(err, errUnauthorized) {
+		return "unauthorized"
+	}
+	return "unreachable"
 }
 
 func isUnauthorized(err error) bool {
@@ -379,7 +465,7 @@ func (m *manager) waitOnce(
 	case http.StatusNoContent:
 		return envelope, false, nil
 	case http.StatusUnauthorized:
-		return envelope, false, errUnauthorized
+		return envelope, false, &unauthorizedError{httpErr: decodeHTTPError(resp), bearer: bearer}
 	default:
 		return envelope, false, decodeHTTPError(resp)
 	}

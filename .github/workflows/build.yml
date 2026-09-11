@@ -49,8 +49,32 @@ jobs:
       contents: read
       packages: write
 
-  create-release:
+  # A tag builds, signs and publishes on its own; nothing here used to look at
+  # whether the commit passed its tests, and v2.17.1 shipped on a commit whose
+  # Windows job was failing. Run them here so a release cannot outrun them.
+  # Skipped for test_build, which publishes nothing: build-check.yml only asks
+  # whether every target still compiles, and main has already tested the code.
+  # Declared per job because the workflow-level block above grants contents:
+  # write, which this needs none of.
+  lint-and-test:
     if: ${{ !inputs.test_build }}
+    uses: ./.github/workflows/lint-and-test.yml
+    with:
+      release_gate: true
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: read
+      # lint-and-test.yml declares this at workflow level for its SARIF
+      # upload. The gate skips that upload, but a caller must still grant
+      # every permission the called workflow declares or the run fails at
+      # startup before any job exists, which is how the first v2.17.2 tag
+      # build ended.
+      security-events: write
+
+  create-release:
+    needs: lint-and-test
+    if: ${{ !cancelled() && !inputs.test_build && needs.lint-and-test.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -84,8 +108,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [create-release, ensure-zigcc]
-    if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
+    needs: [create-release, ensure-zigcc, lint-and-test]
+    # 'skipped' is the test_build case, where the gate does not run at all.
+    if: >-
+      ${{ !cancelled() && needs.ensure-zigcc.result == 'success'
+      && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') }}
     permissions:
       contents: write # Needed for uploading release assets
       packages: read # Needed for pulling Docker images from ghcr.io
@@ -523,7 +550,7 @@ jobs:
             --pattern "zaparoo-*-setup.exe"
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           format: spdx-json
           output-file: _release/sbom.spdx.json

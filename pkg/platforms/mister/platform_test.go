@@ -469,6 +469,22 @@ func TestLauncherRuntime_AltCoreResolved(t *testing.T) {
 	assert.Equal(t, "PSX2XCPU", runtime.MisterCore.Name)
 }
 
+func TestLauncherRuntime_RetroAchievementsReportsActiveCoreName(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_RA_Cores/Cores/SNES.rbf", Filename: "SNES.rbf",
+			ShortName: "SNES", MglName: "_RA_Cores/Cores/SNES",
+		},
+	})
+	cache.RegisterAltCore("RASNES", "_RA_Cores/Cores/SNES")
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "RASNES", SystemID: "SNES"})
+
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "RA_SNES", runtime.MisterCore.Name)
+}
+
 func TestLauncherRuntime_MissingCore(t *testing.T) {
 	withRBFCache(t, nil)
 
@@ -764,7 +780,7 @@ func TestScriptRunMode(t *testing.T) {
 func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 	t.Parallel()
 
-	if scriptIsActive() {
+	if scriptIsActive(context.Background()) {
 		t.Skip("MiSTer script already active")
 	}
 

@@ -6,6 +6,12 @@ on:
     branches:
       - main
   workflow_call:
+    inputs:
+      release_gate:
+        description: "Run as a release build's test gate: the reports below belong to branches, not releases, so skip them"
+        required: false
+        type: boolean
+        default: false
 
 # Cancel in-progress runs when new commits are pushed
 concurrency:
@@ -19,8 +25,8 @@ permissions:
   security-events: write
 
 env:
-  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
-  GOLANGCI_LINT_VERSION: v2.12.2
+  # Pinned so CI, cross-lint and the pre-push hook all agree on one version.
+  GOLANGCI_LINT_VERSION: v2.13.2
 
 jobs:
   actionlint:
@@ -41,16 +47,68 @@ jobs:
       - name: Run actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
+  c-sanitizers:
+    name: Linux C sanitizers
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Native archives are rebuilt from this checkout; reuse already published
+      # tooling so PR validation does not depend on publishing the new image.
+      - name: Pull release toolchain
+        run: |
+          docker pull ghcr.io/zaparooproject/zigcc:1.5.0
+          docker tag ghcr.io/zaparooproject/zigcc:1.5.0 zaparoo/zigcc
+      - name: Build sanitized native libraries and run release tests
+        run: task linux:test-sanitized-amd64
+
   ci:
     name: CI
-    timeout-minutes: 15
+    # Windows takes 12 to 13 minutes here even with its Go build cache warm, so
+    # a 15 minute cap left almost no headroom: once that cache was evicted the
+    # job compiled from scratch, hit the limit while still linking, and died
+    # before the post step that saves a new one. That made the timeout
+    # self-sustaining, because every following run also started cold. 30 gives a
+    # cold run room to finish and repopulate the cache.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
+      # A release gate runs Linux on ubuntu-latest, not Ubicloud. SignPath
+      # refuses to sign an artifact if any job upstream of it ran on a runner
+      # outside the "GitHub Actions" group, and since build.yml's build job
+      # depends on this workflow, the v2.17.2 signing request was rejected
+      # for this job alone. Everything else here already uses GitHub-hosted
+      # runners; Cross Lint is PR-only.
       matrix:
         include: >-
           ${{
             github.event_name == 'pull_request'
               && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
+              || inputs.release_gate
+              && fromJSON('[
+                   {"os":"ubuntu","runner":"ubuntu-latest"},
+                   {"os":"macos","runner":"macos-latest"},
+                   {"os":"windows","runner":"windows-latest"}
+                 ]')
               || fromJSON('[
                    {"os":"ubuntu","runner":"ubicloud-standard-4"},
                    {"os":"macos","runner":"macos-latest"},
@@ -109,6 +167,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gomod-
 
+      # Only the module cache is persisted, so every Windows run compiled the
+      # module from scratch: cgo plus a -race test binary per package, at
+      # GOMAXPROCS 2. That put the first test result seven minutes in and left
+      # the job still linking when the timeout killed it. This cache is keyed by
+      # commit and restored by prefix, so a run starts from the nearest previous
+      # build rather than from nothing.
+      - name: Cache Go build cache (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: D:\go-cache
+          key: ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-${{ hashFiles('go.mod', 'go.sum') }}-
+            ${{ runner.os }}-gobuild-
+
       - name: Download Go modules (Windows)
         if: matrix.os == 'windows'
         shell: msys2 {0}
@@ -118,12 +192,17 @@ jobs:
         if: matrix.os != 'windows'
         run: go mod download
 
-      - name: Cache APT packages (Ubuntu)
+      # These two are the only native libraries a Linux build needs: libnfc for
+      # the clausecker/nfc binding and libpcsclite for the scard binding. They
+      # pull six packages between them, so installing them outright is as quick
+      # as restoring a cache and cannot go stale.
+      - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu'
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
-          version: 1.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libnfc-dev \
+            libpcsclite-dev
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -165,22 +244,32 @@ jobs:
           exit "$status"
 
       - name: Upload govulncheck SARIF
-        if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        # Not on a release gate: code scanning rejects an upload for a tag ref,
+        # which would fail the job and block the release over a report nobody
+        # asked this run for. github.event_name cannot express this — inside a
+        # reusable workflow it still reads as the caller's event.
+        if: matrix.os == 'ubuntu' && !cancelled() && !inputs.release_gate && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
+
+      - name: Verify Expr method profile
+        if: matrix.os == 'ubuntu'
+        run: |
+          go run ./scripts/expr-method-profile
+          go test -race -tags=expr_static_methods github.com/expr-lang/expr/internal/staticmethod github.com/ZaparooProject/go-zapscript/...
 
       - name: Run full tests (Windows)
         if: matrix.os == 'windows'
         shell: msys2 {0}
         env:
           GOMAXPROCS: 2
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Run full tests (Unix)
         if: matrix.os != 'windows'
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -tags=validator_novalidatefn,expr_static_methods -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload rapid failure artifacts
         if: failure()
@@ -192,10 +281,12 @@ jobs:
 
       - name: Run deadlock detection tests
         if: matrix.os == 'ubuntu'
-        run: go test -tags=deadlock -race -count=1 ./...
+        run: go test -tags=deadlock,validator_novalidatefn,expr_static_methods -race -count=1 ./...
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu' && !startsWith(github.ref, 'refs/tags/')
+        # Coverage is tracked per branch, so a release gate's run has nothing to
+        # report against.
+        if: matrix.os == 'ubuntu' && !inputs.release_gate
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -239,7 +330,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libasound2-dev \
             libnfc-dev \
             libpcsclite-dev
 
@@ -440,13 +530,17 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [actionlint, ci, cross-lint, native-pr-tests]
+    needs: [actionlint, c-sanitizers, ci, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
         run: |
           if [ "${{ needs.actionlint.result }}" != "success" ]; then
             echo "CI failed: actionlint=${{ needs.actionlint.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.c-sanitizers.result }}" != "success" ]; then
+            echo "CI failed: c-sanitizers=${{ needs.c-sanitizers.result }}"
             exit 1
           fi
           if [ "${{ needs.ci.result }}" != "success" ]; then

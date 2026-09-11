@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -317,7 +318,7 @@ func TestHandleActiveMedia_WithMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
 		Return([]database.TagInfo{}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 
 	env := requests.RequestEnv{
@@ -364,7 +365,7 @@ func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
 		Return([]database.TagInfo{}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
 	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()

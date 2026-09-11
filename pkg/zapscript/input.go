@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -92,14 +93,54 @@ func isKeyInList(key string, list []string) bool {
 
 // checkInputKey returns an error if the key is not permitted under the current
 // input config. Precedence: allow list → block list → mode check.
+//
+// Control tokens are unwrapped to the key they act on before any check, so
+// wrapping a key in a press, release, or hold macro cannot slip it past the
+// lists or the mode.
 func checkInputKey(cfg *config.Instance, platformID, key string) error {
+	key, named := inputmacro.KeyForToken(key)
+	if !named {
+		// Delay tokens carry a duration rather than a key.
+		return nil
+	}
+
+	settled, err := checkInputKeyLists(cfg, platformID, key)
+	if err != nil {
+		return err
+	}
+	if settled {
+		return nil
+	}
+
+	return checkInputKeyMode(cfg, platformID, key)
+}
+
+// CheckAPIInputKey applies the allow and block lists to a key arriving over the
+// API. It deliberately skips the mode check that checkInputKey ends with:
+// desktop platforms default to combos mode, which rejects plain characters, and
+// the API carries the app's on-screen keyboard where typing text is the point.
+//
+// Both lists are the same [zapscript.input] allow and block config the
+// ZapScript path uses, so clearing one clears it everywhere.
+func CheckAPIInputKey(cfg *config.Instance, platformID, key string) error {
+	key, named := inputmacro.KeyForToken(key)
+	if !named {
+		return nil
+	}
+	_, err := checkInputKeyLists(cfg, platformID, key)
+	return err
+}
+
+// checkInputKeyLists applies the allow list then the block list. A matched
+// allow list entry settles the question and no further check should run.
+func checkInputKeyLists(cfg *config.Instance, platformID, key string) (settled bool, err error) {
 	// 1. Strict allow mode — overrides everything
 	allowList := cfg.InputAllowList()
 	if len(allowList) > 0 {
 		if !isKeyInList(key, allowList) {
-			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+			return false, fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
 		}
-		return nil
+		return true, nil
 	}
 
 	// 2. Block list check — nil means not configured (use defaults),
@@ -109,9 +150,13 @@ func checkInputKey(cfg *config.Instance, platformID, key string) error {
 		blockList = defaultDesktopBlockList
 	}
 	if isKeyInList(key, blockList) {
-		return fmt.Errorf("%w: %s", ErrInputBlocked, key)
+		return false, fmt.Errorf("%w: %s", ErrInputBlocked, key)
 	}
 
+	return false, nil
+}
+
+func checkInputKeyMode(cfg *config.Instance, platformID, key string) error {
 	// 3. Mode check
 	mode := cfg.InputMode(defaultInputMode(platformID))
 	switch mode {

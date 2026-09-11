@@ -207,7 +207,7 @@ func TestLaunchNativeAudio_ReturnsNilProcess(t *testing.T) {
 
 func TestNativeAudioControl_NilPlayback(t *testing.T) {
 	t.Parallel()
-	fn := nativeAudioControl(nil, ControlTogglePause)
+	fn := nativeAudioControl(nil, nil, nil, ControlTogglePause)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
@@ -216,7 +216,7 @@ func TestNativeAudioControl_NilPlayback(t *testing.T) {
 func TestNativeAudioControl_BadSlot(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlPause)
+	fn := nativeAudioControl(fp, nil, nil, ControlPause)
 	err := fn(context.Background(), nil, ControlParams{
 		Args: map[string]string{string(gozapscript.KeySlot): "badslot"},
 	})
@@ -227,7 +227,7 @@ func TestNativeAudioControl_BadSlot(t *testing.T) {
 func TestNativeAudioControl_EmptySlotDefaultsPrimary(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlPause)
+	fn := nativeAudioControl(fp, nil, nil, ControlPause)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.NoError(t, err)
 	assert.Equal(t, mediaslot.Primary, fp.lastSlot)
@@ -236,7 +236,7 @@ func TestNativeAudioControl_EmptySlotDefaultsPrimary(t *testing.T) {
 func TestNativeAudioControl_TogglePause(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{toggleErr: errors.New("toggle err")}
-	fn := nativeAudioControl(fp, ControlTogglePause)
+	fn := nativeAudioControl(fp, nil, nil, ControlTogglePause)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Equal(t, "toggle", fp.lastCall)
@@ -246,7 +246,7 @@ func TestNativeAudioControl_TogglePause(t *testing.T) {
 func TestNativeAudioControl_Pause(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{pauseErr: errors.New("pause err")}
-	fn := nativeAudioControl(fp, ControlPause)
+	fn := nativeAudioControl(fp, nil, nil, ControlPause)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Equal(t, "pause", fp.lastCall)
@@ -255,7 +255,7 @@ func TestNativeAudioControl_Pause(t *testing.T) {
 func TestNativeAudioControl_Resume(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{resumeErr: errors.New("resume err")}
-	fn := nativeAudioControl(fp, ControlResume)
+	fn := nativeAudioControl(fp, nil, nil, ControlResume)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Equal(t, "resume", fp.lastCall)
@@ -264,16 +264,138 @@ func TestNativeAudioControl_Resume(t *testing.T) {
 func TestNativeAudioControl_Stop(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{stopErr: errors.New("stop err")}
-	fn := nativeAudioControl(fp, ControlStop)
+	fn := nativeAudioControl(fp, nil, nil, ControlStop)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Equal(t, "stop", fp.lastCall)
 }
 
+func TestNativeAudioControl_StopPrimaryRunsThroughHook(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	stoppedInsideHook := false
+	fn := nativeAudioControl(fp, nil, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		assert.Empty(t, fp.lastCall, "playback must not be stopped before the hook runs")
+		err := stop()
+		stoppedInsideHook = fp.lastCall == "stop"
+		return err
+	}, ControlStop)
+	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, hookCalls, "a primary stop must run through the hook")
+	assert.True(t, stoppedInsideHook, "the hook owns the stop so it can gate it")
+	assert.Equal(t, mediaslot.Primary, fp.lastSlot)
+}
+
+func TestNativeAudioControl_StopHookReceivesControlContext(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "control")
+	var seen context.Context
+	fn := nativeAudioControl(fp, nil, func(ctx context.Context, stop func() error) error {
+		seen = ctx
+		return stop()
+	}, ControlStop)
+	require.NoError(t, fn(ctx, nil, ControlParams{Args: map[string]string{}}))
+	require.NotNil(t, seen)
+	assert.Equal(t, "control", seen.Value(ctxKey{}))
+}
+
+func TestNativeAudioControl_StopBackgroundClearsBackgroundMedia(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	var published []*models.ActiveMedia
+	fn := nativeAudioControl(fp,
+		func(m *models.ActiveMedia) { published = append(published, m) },
+		func(_ context.Context, stop func() error) error {
+			hookCalls++
+			return stop()
+		}, ControlStop)
+	err := fn(context.Background(), nil, ControlParams{
+		Args: map[string]string{string(gozapscript.KeySlot): mediaslot.Background},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "stop", fp.lastCall)
+	assert.Equal(t, mediaslot.Background, fp.lastSlot)
+	assert.Equal(t, 0, hookCalls, "a background stop must not touch primary media")
+	require.Len(t, published, 1, "a background stop clears the background media set on launch")
+	assert.Nil(t, published[0])
+}
+
+func TestNativeAudioControl_StopBackgroundErrorKeepsBackgroundMedia(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{stopErr: errors.New("stop err")}
+	published := 0
+	fn := nativeAudioControl(fp, func(*models.ActiveMedia) { published++ }, nil, ControlStop)
+	err := fn(context.Background(), nil, ControlParams{
+		Args: map[string]string{string(gozapscript.KeySlot): mediaslot.Background},
+	})
+	require.Error(t, err)
+	assert.Equal(t, 0, published, "a failed background stop must not clear background media")
+}
+
+func TestNativeAudioControl_StopErrorReachesHook(t *testing.T) {
+	t.Parallel()
+	stopErr := errors.New("stop err")
+	fp := &fakePlayback{stopErr: stopErr}
+	var hookErr error
+	fn := nativeAudioControl(fp, nil, func(_ context.Context, stop func() error) error {
+		hookErr = stop()
+		return hookErr
+	}, ControlStop)
+	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
+	require.ErrorIs(t, err, stopErr)
+	require.ErrorIs(t, hookErr, stopErr, "the hook must see the failure so it can leave media alone")
+}
+
+func TestNativeAudioControl_StopHookErrorSkipsStop(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	gateErr := errors.New("gate err")
+	fn := nativeAudioControl(fp, nil, func(context.Context, func() error) error {
+		return gateErr
+	}, ControlStop)
+	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
+	require.ErrorIs(t, err, gateErr)
+	assert.Empty(t, fp.lastCall, "a hook that never runs the stop must leave playback alone")
+}
+
+func TestNativeAudioControl_PauseSkipsStopHook(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	fn := nativeAudioControl(fp, nil, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		return stop()
+	}, ControlPause)
+	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, hookCalls)
+	assert.Equal(t, "pause", fp.lastCall)
+}
+
+func TestNativeAudioControl_StopNilHooksAreSafe(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	fn := nativeAudioControl(fp, nil, nil, ControlStop)
+	for _, slot := range []string{mediaslot.Primary, mediaslot.Background} {
+		err := fn(context.Background(), nil, ControlParams{
+			Args: map[string]string{string(gozapscript.KeySlot): slot},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "stop", fp.lastCall)
+		assert.Equal(t, slot, fp.lastSlot)
+	}
+}
+
 func TestNativeAudioControl_FastForward_Default(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlFastForward)
+	fn := nativeAudioControl(fp, nil, nil, ControlFastForward)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.NoError(t, err)
 	assert.Equal(t, "seek", fp.lastCall)
@@ -283,7 +405,7 @@ func TestNativeAudioControl_FastForward_Default(t *testing.T) {
 func TestNativeAudioControl_Rewind_Default(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlRewind)
+	fn := nativeAudioControl(fp, nil, nil, ControlRewind)
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.NoError(t, err)
 	assert.Equal(t, "seek", fp.lastCall)
@@ -293,7 +415,7 @@ func TestNativeAudioControl_Rewind_Default(t *testing.T) {
 func TestNativeAudioControl_FastForward_Custom(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlFastForward)
+	fn := nativeAudioControl(fp, nil, nil, ControlFastForward)
 	err := fn(context.Background(), nil, ControlParams{
 		Args: map[string]string{"seconds": "5"},
 	})
@@ -304,7 +426,7 @@ func TestNativeAudioControl_FastForward_Custom(t *testing.T) {
 func TestNativeAudioControl_Rewind_Custom(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, ControlRewind)
+	fn := nativeAudioControl(fp, nil, nil, ControlRewind)
 	err := fn(context.Background(), nil, ControlParams{
 		Args: map[string]string{"seconds": "5"},
 	})
@@ -315,7 +437,7 @@ func TestNativeAudioControl_Rewind_Custom(t *testing.T) {
 func TestNativeAudioControl_Unsupported(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	fn := nativeAudioControl(fp, "fly")
+	fn := nativeAudioControl(fp, nil, nil, "fly")
 	err := fn(context.Background(), nil, ControlParams{Args: map[string]string{}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported native audio control")
@@ -401,7 +523,7 @@ func TestAudioDisplayName(t *testing.T) {
 func TestNativeAudioLauncher_Fields(t *testing.T) {
 	t.Parallel()
 	fp := &fakePlayback{}
-	l := NativeAudioLauncher(fp, nil)
+	l := NativeAudioLauncher(fp, nil, nil)
 
 	assert.Equal(t, NativeAudioLauncherID, l.ID)
 	assert.Equal(t, "Audio", l.SystemID)
@@ -422,4 +544,46 @@ func TestNativeAudioLauncher_Fields(t *testing.T) {
 		assert.True(t, ok, "missing control: %s", key)
 		assert.NotNil(t, ctrl.Func, "nil Func for control: %s", key)
 	}
+}
+
+// TestNativeAudioLauncher_StopControlRunsThroughHook checks the factory wires the
+// stop hook to stop and nothing else. Native audio has no OS process, so without it
+// an explicit stop leaves the daemon reporting the track as still playing.
+func TestNativeAudioLauncher_StopControlRunsThroughHook(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	hookCalls := 0
+	l := NativeAudioLauncher(fp, nil, func(_ context.Context, stop func() error) error {
+		hookCalls++
+		return stop()
+	})
+
+	err := l.Controls[ControlPause].Func(context.Background(), nil, ControlParams{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, hookCalls)
+
+	err = l.Controls[ControlStop].Func(context.Background(), nil, ControlParams{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, hookCalls)
+	assert.Equal(t, "stop", fp.lastCall)
+}
+
+// TestNativeAudioLauncher_BackgroundStopClearsBackgroundMedia pins the state the
+// launcher owns: it publishes background media on launch, so its stop control is
+// what clears it, for the API and the ZapScript control paths alike.
+func TestNativeAudioLauncher_BackgroundStopClearsBackgroundMedia(t *testing.T) {
+	t.Parallel()
+	fp := &fakePlayback{}
+	var current *models.ActiveMedia
+	l := NativeAudioLauncher(fp, func(m *models.ActiveMedia) { current = m }, nil)
+
+	_, err := l.Launch(nil, "/music/track.mp3", &LaunchOptions{Slot: mediaslot.Background})
+	require.NoError(t, err)
+	require.NotNil(t, current)
+
+	err = l.Controls[ControlStop].Func(context.Background(), nil, ControlParams{
+		Args: map[string]string{string(gozapscript.KeySlot): mediaslot.Background},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, current)
 }

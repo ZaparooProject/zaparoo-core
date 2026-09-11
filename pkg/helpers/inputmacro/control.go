@@ -66,3 +66,43 @@ func ClassifyControl(token string) Control {
 		return Control{}
 	}
 }
+
+// SplitHold separates a hold token's value into the key name and its optional
+// duration ("esc:500" -> "esc", "500").
+func SplitHold(value string) (name, duration string) {
+	if idx := strings.LastIndex(value, ":"); idx != -1 {
+		return value[:idx], value[idx+1:]
+	}
+	return value, ""
+}
+
+// KeyForToken returns the key or button name a token acts on, in the braced
+// form the key tables and config allow/block lists use. Control tokens are
+// unwrapped so the key they act on is what gets validated — otherwise
+// "{press:super}" would slip past a "{super}" block list entry. Delay tokens
+// carry a duration rather than a key and report false.
+func KeyForToken(token string) (key string, ok bool) {
+	control := ClassifyControl(token)
+	switch control.Action {
+	case ActionNone:
+		return token, true
+	case ActionDelay:
+		return "", false
+	case ActionPress, ActionRelease:
+		return braceMultiRune(control.Value), true
+	case ActionHold:
+		name, _ := SplitHold(control.Value)
+		return braceMultiRune(name), true
+	default:
+		return token, true
+	}
+}
+
+// braceMultiRune adds braces to multi-character key names, which is how they
+// appear in the key tables and config lists. Single characters stay bare.
+func braceMultiRune(name string) string {
+	if len([]rune(name)) > 1 {
+		return "{" + name + "}"
+	}
+	return name
+}

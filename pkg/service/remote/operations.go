@@ -32,6 +32,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -59,6 +61,12 @@ type waitEnvelope struct {
 	Operation *operationEnvelope `json:"operation,omitempty"`
 	Type      string             `json:"type"`
 }
+
+const (
+	remoteIdentifierMaxLength    = 128
+	remoteOperationTypeMaxLength = 64
+	remoteOriginKeyNameMaxLength = 128
+)
 
 //nolint:tagliatelle // Wire shape follows remote Online API contract.
 type acceptedResponse struct {
@@ -107,7 +115,7 @@ func (m *manager) handleOperation(
 	}
 	if stored.ParamsDigest != candidate.ParamsDigest || stored.OperationID != candidate.OperationID ||
 		stored.OperationType != candidate.OperationType || stored.ProtocolVersion != candidate.ProtocolVersion ||
-		!bytes.Equal(stored.Origin, candidate.Origin) {
+		!stored.DeadlineAt.Equal(candidate.DeadlineAt) || !bytes.Equal(stored.Origin, candidate.Origin) {
 		log.Error().Str("command_id", operation.CommandID).
 			Msg("remote command ID reused with conflicting payload")
 		return
@@ -138,7 +146,7 @@ func (m *manager) handleOperation(
 			}
 		}
 	}
-	if !time.Now().Before(operation.DeadlineAt) {
+	if !time.Now().Before(stored.DeadlineAt) {
 		_, _ = m.deps.DB.UserDB.TransitionRemoteCommand(operation.CommandID, stored.State, "expired", nil)
 		return
 	}
@@ -186,7 +194,7 @@ func (m *manager) handleOperation(
 		log.Error().Err(err).Str("command_id", operation.CommandID).Msg("start remote command execution")
 		return
 	}
-	executionDeadline := operation.DeadlineAt
+	executionDeadline := stored.DeadlineAt
 	if stored.ExecutionExpiresAt != nil && stored.ExecutionExpiresAt.Before(executionDeadline) {
 		executionDeadline = *stored.ExecutionExpiresAt
 	}
@@ -196,7 +204,12 @@ func (m *manager) handleOperation(
 	if m.execute != nil {
 		execute = m.execute
 	}
-	result := execute(executionCtx, operation)
+	// The claimed row is authoritative after identity validation. Keep the
+	// stored deadline attached to execution so later code cannot accidentally
+	// trust a redelivery field instead.
+	effectiveOperation := *operation
+	effectiveOperation.DeadlineAt = stored.DeadlineAt
+	result := execute(executionCtx, &effectiveOperation)
 	m.finishOperation(ctx, operation.CommandID, "executing", result)
 }
 
@@ -204,8 +217,15 @@ func validateEnvelope(operation *operationEnvelope) error {
 	if operation.CommandID == "" || operation.OperationID == "" || operation.OperationType == "" {
 		return errors.New("missing remote operation identifier or type")
 	}
-	if strings.ContainsAny(operation.CommandID, "/\\") {
+	if !validEnvelopeText(operation.CommandID, remoteIdentifierMaxLength) ||
+		strings.ContainsAny(operation.CommandID, "/\\") {
 		return errors.New("invalid remote command identifier")
+	}
+	if !validEnvelopeText(operation.OperationID, remoteIdentifierMaxLength) {
+		return errors.New("invalid remote operation identifier")
+	}
+	if !validEnvelopeText(operation.OperationType, remoteOperationTypeMaxLength) {
+		return errors.New("invalid remote operation type")
 	}
 	if operation.ProtocolVersion != protocolVersion {
 		return fmt.Errorf("unsupported protocol version %d", operation.ProtocolVersion)
@@ -219,7 +239,23 @@ func validateEnvelope(operation *operationEnvelope) error {
 	if operation.Origin.Kind == "api_key" && operation.Origin.KeyName == "" {
 		return errors.New("API-key origin missing key name")
 	}
+	if operation.Origin.KeyName != "" &&
+		!validEnvelopeText(operation.Origin.KeyName, remoteOriginKeyNameMaxLength) {
+		return errors.New("invalid remote operation origin key name")
+	}
 	return nil
+}
+
+func validEnvelopeText(value string, maxLength int) bool {
+	if len(value) > maxLength || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *manager) postAccepted(
@@ -371,7 +407,8 @@ func (m *manager) postResult(
 
 // executeOperation dispatches an operation against operationAllowlist —
 // deny-by-default: an operation_type with no entry is refused before
-// anything else runs. See allowlist.go for the table and dispatch.go for
+// anything else runs. See allowlist.go for the table, wire.go for the
+// params translation every entry goes through first, and dispatch.go for
 // runMethod, which handles every method-backed entry generically.
 func (m *manager) executeOperation(
 	ctx context.Context, operation *operationEnvelope,
@@ -380,20 +417,21 @@ func (m *manager) executeOperation(
 	if !ok {
 		return failResult("unknown_type")
 	}
-	if err := spec.params(operation.Params); err != nil {
+	params, err := spec.translate(operation.Params)
+	if err != nil {
 		return failResult("bad_params")
 	}
 	if spec.local != nil {
-		return spec.local(m, ctx, operation.OperationType, operation.Params)
+		return spec.local(m, ctx, operation.OperationType, params)
 	}
-	return m.runMethod(ctx, spec, operation.Params)
+	return m.runMethod(ctx, spec, params)
 }
 
 // executeEcho is the "echo" operation's local handler: a fixed round-trip
 // with no side effects, used to verify the remote operations path end to
 // end without touching device state.
 func (*manager) executeEcho(_ context.Context, _ string, raw json.RawMessage) operationResult {
-	var params echoParams
+	var params wireEchoParams
 	if err := decodeParams(raw, &params); err != nil {
 		return failResult("bad_params")
 	}

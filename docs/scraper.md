@@ -4,9 +4,10 @@ The scraper subsystem enriches existing MediaDB records with metadata from exter
 
 Current scraper implementations:
 
-- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
-- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
+- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
+- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
+- `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
 ## Code Layout
 
@@ -16,6 +17,7 @@ Current scraper implementations:
 | `pkg/database/scraper/gamelistxml/` | EmulationStation `gamelist.xml` scraper loop, matcher, mapper, and companion-entry handling |
 | `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
 | `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
+| `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
@@ -35,7 +37,37 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 `media.scrape` looks up the requested `scraperId` from `env.Platform.Scrapers(env.Config)`, rejects the request if media indexing or another scrape is active, creates an app-scoped cancelable context, starts the scraper in the background, tracks it as a MediaDB background operation, and publishes `media.scraping` notifications.
 
-`media.scrape.status` returns the latest in-memory status snapshot plus a fresh scraped-count query. `media.scrape.cancel` cancels the active scrape context. `media.scrape.resume` resumes the shared scrape pauser. Scraping and indexing are mutually exclusive.
+`media.scrape.status` returns the latest in-memory status snapshot plus a fresh scraped-count query. `media.scrape.cancel` durably cancels current and queued scrape work, including jobs waiting for optimization. A persistence failure is returned as an error, not acknowledged as successful cancellation. `media.scrape.resume` resumes the shared scrape pauser. Scraping and indexing are mutually exclusive.
+
+### Ordinary Jobs After Indexing
+
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. Only PinUP Popper currently opts in; MiSTer scrapers remain manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+
+The sequence is **index → existing optimization → ordinary scraping**. Successful indexing persists eligible jobs before its final notification. The existing service recovery watcher starts them after optimization releases its write lease; there is no separate automatic-job worker. All jobs use the same scrape pauser, gameplay throttling, progress notifications and executor.
+
+The config-backed operation record holds one current job and an ordered pending list, bounded to 64 total jobs. Identical pending scopes/policies are deduplicated. A new manual request receives a conflict rather than overwriting pending work. Versioned records carry authoritative status; legacy records are readable and upgraded when resumed. Unknown versions fail closed.
+
+Orderly shutdown drains source execution but retains unfinished jobs and run markers. Restart resumes those options and skips committed row work. Advancement is persisted before the previous job's markers are removed. Ordinary source failures allow unrelated pending jobs to continue; persistence failures stop advancement, and database corruption uses existing recovery. A failed final job is not retried indefinitely by the watcher.
+
+Indexing is only a trigger, not a durable parent workflow: use `media.scrape.cancel` after indexing finishes, not `media.generate.cancel`. A crash between successful indexing and queue persistence can require another index or manual request. Once accepted into the queue, a job survives restart.
+
+### Fill-Missing Policy
+
+Index-triggered jobs only fill missing metadata. A property is missing when no row of that type exists—not when its text is empty or its artwork file has disappeared. Existing exclusive tag values remain; additive tags may gain values. Nothing is automatically replaced or deleted.
+
+These checks and inserts share the existing single/batch scrape transaction. Fill-missing runs reconsider rows carrying a permanent scraper sentinel, so later indexes can fill newly available fields. Per-run markers still skip committed work within a resumed job. Popper orders targets by media path to make shared-title fills deterministic. Manual non-force and force write policies remain unchanged.
+
+## Scoped Runs
+
+`media.scrape` accepts an optional [scope](./api/methods.md#scope): a media ID, an exact system/file path, or a system-bound directory subtree. Existing `systems` requests retain their behavior.
+
+The handler resolves scope while holding the media-write lease and persists `database.ScrapeScope` with the operation. An item pins its ID, system, and canonical path; a subtree pins its system and lexical directory boundary. Restart recovery validates the stored scope and never substitutes an entire system. These additive fields live in the existing `DBConfig` operation JSON, not a new database table.
+
+`GetScrapeMedia` and `GetScopedScrapeMediaIDs` query only selected media, titles, and sentinel/run markers. `ScrapeOptions.SystemIDs()` makes the normalized scope authoritative. All three scrapers propagate it to their selection queries and restrict force cleanup to selected media and their titles. Shared title updates remain visible on sibling ROMs.
+
+Scoped gamelist matching requires a selected path, a verified container/CD reference, or a Companion `.slug` title reference. It does not use unrestricted slug-only or basename-only fallback, which could make an unrelated source record appear unambiguous after narrowing the index. Container resolution consults full directory context without loading every system row, so selecting one file does not invent a single-game folder.
+
+Scoped progress counts selected media rather than source records. The shared scoped writer validates target identities and deduplicates writes. Source XML/docs files may still require parsing, but selection does not load whole-system media/title lists. Library-wide `totalScraped` status counts are unchanged.
 
 ## Run Loop
 
@@ -60,9 +92,9 @@ For each system, the normal loop:
 
 The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
 
-Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed when the operation reaches a terminal state.
+Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed after durable completion/advancement or cancellation. Unfinished and failed work retains its markers; a completed job's markers are not cleared before its durable queue position changes.
 
-Per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
+In the gamelist loop, per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Popper instead treats write failures as fatal so partially committed fill-missing work cannot be reported as successfully completed. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
 
 ## Tags And Properties
 
@@ -101,7 +133,7 @@ Path handling for `<game><path>` stays strict:
 | `~/...` | Resolved under the current user's home directory, then rejected unless still under the system ROM root |
 | Absolute path | Cleaned and rejected unless under the system ROM root |
 
-Asset path handling for artwork/video/manual uses the same root-bound behavior by default. On MiSTer and MiSTeX only, absolute or `~/...` asset paths may also resolve under platform root directories from `RootDirs(cfg)`, covering SD, USB, CIFS, network, and configured index roots. This applies only to file-backed asset fields; game paths remain bound to the ROM root. Path traversal outside the ROM root or approved platform roots is rejected.
+Asset path handling for artwork/video/manual uses the same root-bound behavior by default. On MiSTer and MiSTeX only, absolute or `~/...` asset paths may also resolve under platform root directories from `RootDirs(cfg)`, covering SD, USB, CIFS, network, and configured index roots. This applies only to file-backed asset fields; game paths remain bound to the ROM root. Path traversal outside the ROM root or approved platform roots is rejected. The MiSTer arcade set-name fallback below can also interpret a ROM path as an identity without accessing that path; it does not broaden asset access.
 
 Zip-as-directory paths are supported for matching XML entries such as `./Japan/Game.zip` to indexed media stored under that zip path, while nested artwork paths such as `./media/images/Japan/Game.png` remain resolved as asset paths.
 
@@ -138,6 +170,26 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
 
+### Directory Entries
+
+Both `<folder>` entries and `<game>` entries whose `<path>` resolves to a directory are matched to the single media row that directory collapses to, using the same rule browse uses to show a disc folder as one game. A directory qualifies when it has no nested media and its direct contents are one file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive `MediaTitleDBID`. Supported shared-title disc extensions are `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title IDs or other extensions remain ambiguous.
+
+This covers the two common EmulationStation layouts for multi-disc games: a `<folder>` entry describing a per-game folder, and the ES-DE convention of naming that folder with a ROM extension so it reads as one game and gets an ordinary `<game>` entry.
+
+`<folder>` entries carry a smaller field set than games: `name`, `desc`, `image`, `thumbnail`, `video`, and `marquee`. They are processed after that file's `<game>` entries, so a real game entry pointing at the same media row always wins. Folders that do not collapse are skipped, because there is no row to carry their metadata; ordinary collections stay plain browseable directories.
+
+A directory entry only ever resolves through the container rule, whichever kind it is, so use a `<folder>` entry only for a directory that collapses. A `<game>` entry naming a directory that holds media in subdirectories no longer matches the single row underneath it, because resolving a directory by scanning for indexed paths beneath it is only unambiguous until an earlier entry has claimed one of them, and switching it to a `<folder>` entry does not help: that is skipped for the same reason. For any directory that does not collapse, point the `<game>` entry at the media file itself.
+
+Artwork for a directory entry is looked up under the directory's own name, matching where EmulationStation stores art for a folder it shows as one game. Only a disc extension (`.cue`, `.m3u`, `.chd`, `.iso`, `.bin`, `.img`, `.pbp`) is stripped from that name before the search; any other dot is treated as part of the folder name, so a folder called `Sonic 3.0` does not pick up `Sonic 3`'s artwork.
+
+## media-folder Directory Artwork
+
+For every present indexed media row, `media-folder` considers each ancestor directory below its system ROM root. It searches the usual artwork categories under `<systemRoot>/media/`, first at the mirrored ROM-relative location and then by flat directory basename. For example, directory `RPGs/Final Fantasy VII` checks `media/boxart/RPGs/Final Fantasy VII.png` before `media/boxart/Final Fantasy VII.png`. System root itself is excluded.
+
+Folder artwork does not change browse structure. Arbitrary collections remain `type: "directory"`; only existing container rules add launch metadata. `media.browse` reports `hasCover: true` when a directory image property exists for one of that entry's systems, and `media.image` accepts the directory's `(system, path)` to return it.
+
+Directory properties are collected in memory for one system and committed as a complete snapshot only after all its directories finish. Cancellation or failure before replacement preserves that system's previous snapshot. A completed empty snapshot removes stale directory rows. Rebuilding `BrowseDirs` does not affect these properties because they are keyed by stable system DBID and canonical path rather than browse-cache DBID.
+
 By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
 
 An additional metadata bundle can be configured independently of ROM storage:
@@ -152,6 +204,56 @@ For each indexed system, the scraper also checks `<custom_path>/<system ID>/game
 Custom gamelists enrich existing indexed records; they do not create systems, titles, or media rows. For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
+
+## MiSTer Arcade Gamelists
+
+MiSTer indexes launchable `.mra` descriptors under `_Arcade`, not MAME ROM ZIPs. A gamelist authored by Skraper against `pacman.zip` therefore cannot identify `Pac-Man (Midway).mra` by its filesystem path alone.
+
+On MiSTer and MiSTeX, the `gamelist.xml` scraper can bridge these identities using the `<setname>` stored inside each indexed MRA:
+
+- A `<game><path>` ending in `.zip` or `.7z`, or containing a bare set name, supplies the set-name key. Keys are case-insensitive; they contain letters, digits, underscores, or hyphens, up to 128 characters.
+- The matching MRA must be live and uniquely identified within the system currently being scraped. Already-scraped MRAs still count when checking uniqueness; force and resume cannot make a duplicate set appear unique.
+- Multiple MRAs with the same set name are skipped, including alternate-core variants and duplicates sharing one title. Use an exact MRA path to choose a variant instead of relying on ROM-set matching.
+- Entries that name the row directly take precedence: an indexed path, or a slug match the entry's own path confirms. A set name outranks a record that only guessed the row from its title, in either XML order, because arcade clone sets routinely share one display name. Unknown set names retain existing slug matching. A known ambiguous set does not fall back to guessing by title.
+- A unique match receives title metadata and media-level artwork. Artwork filename fallback uses the source set name in any supported artwork extension, such as `media/images/pacman.png` or `media/images/pacman.jpg`, rather than the MRA's display filename.
+
+### Exporting A Scraper Bundle
+
+To keep metadata outside `_Arcade`, export or copy the gamelist and its referenced images together into a custom bundle:
+
+```text
+/media/fat/metadata/
+└── Arcade/
+    ├── gamelist.xml
+    └── images/
+        └── pacman.png
+```
+
+```toml
+[scraper.gamelist_xml]
+custom_path = "/media/fat/metadata"
+```
+
+Example `Arcade/gamelist.xml`:
+
+```xml
+<gameList>
+  <game>
+    <path>./pacman.zip</path>
+    <name>Pac-Man</name>
+    <desc>Metadata exported by your scraper.</desc>
+    <image>./images/pacman.png</image>
+  </game>
+</gameList>
+```
+
+Index the MRAs first, then run `gamelist.xml` for `Arcade`. For a granular arcade system such as `CPS1`, use a `CPS1` bundle directory and scrape that indexed system; those systems are classified out of `_Arcade` rather than scanned from a folder of their own, so an installed bundle is what makes them scrapable at all. Existing arcade classification determines system membership; the scraper neither creates MRA entries nor guesses membership from catalog titles.
+
+A gamelist in `_Arcade` also supports these ROM/set-name references. Core does **not** automatically discover `games/mame/gamelist.xml` or arbitrary nested gamelists: put the bundle in the configured layout above, or place a gamelist in a configured ROM root.
+
+Regular set-name entries may retain absolute or sibling ROM ZIP paths from the scraper machine, including Windows paths. Core extracts only the basename identity; it never opens or launches those source ZIP paths. Image, video, and manual references keep the existing asset-root restrictions. Custom images must exist at scrape time. Relative Companion ZIP child references also support unique set-name matching; existing Companion path validation and parent metadata behavior remain unchanged.
+
+Unreadable or malformed MRA descriptors, and those repeating `<setname>` in their header, are not identity sources. Only the descriptor header up to its first `<rom>` element is read, so the embedded ROM payload of a large MRA costs nothing and does not disqualify it. No MRA, ROM archive, or launcher configuration is rewritten. AmigaVision `games.txt` and `demos.txt` integration is separate from arcade matching.
 
 ## MiSTer Installed Docs Databases
 
@@ -174,11 +276,11 @@ Game manuals can be selected through Update All's **Game Manuals (EN)** settings
 
 ### Discovery
 
-Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots. It recognizes content by installed format rather than repository name:
+Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots, and also probes `/media/usb6` and `/media/usb7`, which artwork packs may be installed to but MiSTer's games-folder list does not reach. It recognizes content by installed format rather than repository name, following the [MiSTer Artwork Pack format](https://github.com/chipster6502/MiSTer_artwork_pack/blob/main/PACK_FORMAT.md):
 
-- Artwork: `docs/<system>/Artwork/index.tsv` plus image files in the same directory.
-- Optional title metadata: `gameinfo.tsv` beside the artwork index.
-- Optional description: `synopsis_en.tsv` beside the artwork index.
+- Artwork: `docs/<System>/Artwork/` holding one `<key>.jpg` per game, normally with an `index.tsv` beside them that maps every known dump to its key. `<System>` is the MiSTer `games/` folder name. A directory with images and no index still resolves games filed under their exact key.
+- Optional title metadata: `gameinfo.tsv` beside the images. Games it lists without an image still receive their metadata.
+- Optional description: `synopsis_<lang>.tsv` beside the images. Which languages a pack ships varies per system, so Core reads whichever files exist and picks the first match from `media.default_langs`, then English, then the first available language.
 - Manuals: direct PDF files in a child directory whose name contains `manual`, for example `docs/SNES/Manuals/` or `docs/NES/Famicom Disk System Manuals/`.
 
 This format-based discovery means future compatible databases need no Core update. Run `mister-docs` again after Downloader installs or updates content. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art/manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
@@ -187,7 +289,14 @@ Metadata files are treated as untrusted input. Core bounds their size and record
 
 ### Matching And Fields
 
-`index.tsv` maps ROM or MRA basenames to canonical artwork keys. Core prefers an exact media basename match. When no exact media match exists, a unique title-slug match may receive title-level artwork; ambiguous matches are skipped. CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O.
+`index.tsv` maps catalogued dump names to artwork keys: No-Intro names for cartridges, Redump names for CD systems, and MAME parent setnames for arcade. Core resolves each pack entry to installed media in the pack format's order, stopping at the first hit:
+
+1. The catalogued name as a media basename, at media scope.
+2. For arcade, the `<setname>` inside each installed `.mra`, at media scope. MRA filenames are titles, so the setname is the only handle an arcade key has; Core reads it from the MRA only for systems that have an arcade artwork source.
+3. A media basename whose trailing parenthesised tag is itself a pack key, such as `Shock Troopers (set 1) (shocktro)`, at media scope.
+4. A unique bare-title match, at title scope. This step is skipped when the stripped title is not unique among the pack's keys or among the library's titles, and it is only available to index rows: images the index does not mention resolve by exact name alone.
+
+CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O; the pack format treats that step as optional.
 
 | Source | Destination |
 |---|---|
@@ -196,10 +305,12 @@ Metadata files are treated as untrusted input. Core bounds their size and record
 | `gameinfo.tsv` genre | title tag `genre` |
 | `gameinfo.tsv` developer | title tag `developer` |
 | `gameinfo.tsv` players | title tag `players` using highest numeric value |
-| `synopsis_en.tsv` synopsis | title property `property:description` |
+| `synopsis_<lang>.tsv` synopsis | title property `property:description` |
 | Manual PDF | title property `property:manual` |
 
-Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
+Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately.
+
+Base-system sources enrich their variants, such as SNES MSU-1, Genesis MSU, and the granular arcade systems. On top of that, Core applies the pack format's shared-catalogue rules: Game Boy and Game Boy Color each fall back to the other, Super Game Boy reads both, and FDS falls back to NES but never the reverse. Systems the pack catalogues separately do not fill each other's gaps, so SG-1000 never receives ColecoVision art and Neo Geo Pocket Color never receives Neo Geo Pocket art, even though the general system fallbacks allow it.
 
 If multiple docs roots provide the same property, MiSTer root order decides which source wins. As with other scrapers, running a different scraper later may replace exclusive tags or same-type properties.
 
@@ -287,9 +398,9 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
-`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. On platforms that treat zips as directories, a `system`/`path` request for a folder or zip-as-directory container resolves only when its direct contents collapse to one logical launch target.
+`media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data. A `system`/`path` request for a directory resolves only when its direct contents collapse to one logical launch target, which also covers zip containers on platforms that treat zips as directories.
 
-`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On zip-as-directory platforms, logical container aliases are checked as media-level fallbacks, so artwork attached to a direct single-game target or its container can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
+`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. On platforms that treat zips as directories, zip container aliases are checked as media-level fallbacks, so artwork attached to a direct single-game target or its zip can be found from either path. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
 
 ## Useful Focused Tests
 
@@ -298,3 +409,25 @@ go test ./pkg/database/scraper/...
 go test ./pkg/database/mediadb/ -run 'Scrape|Property|Blob|Sentinel|MediaImage'
 go test ./pkg/api/methods/ -run 'Scrape|MediaImage|MediaMeta'
 ```
+
+## PinUP Popper Behavior
+
+The PinUP Popper launcher indexes tables as `popper://<GameID>/<name>` virtual paths, so the scraper needs no name matching: it reads the Popper library once, resolves each `Pinball` media row's GameID to its `Games` row and emulator, and writes the result. Rows already carrying `scraper.pinup-popper:scraped` are left out unless the scrape is forced; rows whose GameID no longer exists in Popper are counted as skipped. Images are looked up as `<Emulators.DirMedia>\<screen>\<GameName>.<png|jpg|jpeg>`, falling back to `POPMedia\<EmuName>` when the emulator has no media directory. Videos, audio and the remaining screens are not imported.
+
+| Popper field | Destination | Notes |
+|---|---|---|
+| `GameYear` | `MediaTitleTags: year` | Exclusive, when greater than zero |
+| `Manufact` | `MediaTitleTags: developer` | Exclusive, company-name normalized |
+| `NumPlayers` | `MediaTitleTags: players` | Exclusive, when greater than zero |
+| `GameType`, `Category`, `GameTheme` | `MediaTitleTags: genre` | Additive, one tag per non-empty field |
+| `Notes` | `MediaTitleProperties: description` | Whitespace collapsed |
+| `Wheel` image | `MediaProperties: image-wheel` | |
+| `PlayField` image | `MediaProperties: image-screenshot` | |
+| `BackGlass` image | `MediaProperties: image-marquee` | The backglass is the pinball counterpart of a marquee |
+| `GameInfo` image | `MediaProperties: image-image` | Flyer or info card |
+
+### Frontend Ownership Boundary
+
+Popper uses one application-local `pinup.Integration` object for launch attempts, process observations and worker shutdown. Windows supplies that object through existing `Launcher.Scanner`, `Launch`, `Kill`, availability and startup/shutdown hooks. Registration does not start Popper or polling workers. This is the pattern for later frontend integrations: keep mutable state local and connect existing callbacks, rather than requiring a shared lifecycle framework.
+
+Table stop uses Popper's frontend exit command and bounded observation/retries, including its loading period. Core does not take ownership of a foreign emulator process for generic child reaping or tree killing. Popper does not provide a session-fenced stop token: an external frontend replacement can race an unconditional exit request. Local attempt guards prevent stale Core retries/publications but cannot make that frontend protocol globally atomic.

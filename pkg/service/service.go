@@ -30,6 +30,8 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -208,19 +210,48 @@ type drainCallbackRegistrar interface {
 	SetDrainCallback(slot string, fn func(natural bool))
 }
 
+// clearNativeAudioPrimaryMedia clears active media once native audio has stopped
+// on the primary slot. Another launcher may have taken over active media while the
+// track was still playing (e.g. a game started outside Zaparoo); only clear it if
+// native audio still owns it. The ownership check and the clear are one atomic
+// step, so a lifecycle tracker publishing another launcher's media in between
+// is left alone.
+func clearNativeAudioPrimaryMedia(svc *ServiceContext) {
+	svc.State.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		return media != nil && media.LauncherID == platforms.NativeAudioLauncherID
+	})
+}
+
+// stopNativeAudioPrimaryMedia runs an explicit stop of native audio on the
+// primary slot and clears the active media it owned. Native audio has no OS
+// process, so no platform tracker notices the stop, and the drain callback only
+// fires for tracks that end on their own. The media stop gate is held across
+// both steps: launches publish active media under the read side of that gate,
+// so a track launched while this runs cannot have its state wiped by a stop
+// that was meant for its predecessor.
+func stopNativeAudioPrimaryMedia(ctx context.Context, svc *ServiceContext, stop func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	release, err := svc.State.AcquireMediaStop(ctx)
+	if err != nil {
+		return fmt.Errorf("wait for in-flight media launch: %w", err)
+	}
+	defer release()
+
+	if err := stop(); err != nil {
+		return err
+	}
+	clearNativeAudioPrimaryMedia(svc)
+	return nil
+}
+
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
 	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
 		if !natural {
 			return
 		}
-		// Another launcher may have taken over active media while the track was
-		// still playing (e.g. a game started outside Zaparoo); only clear it if
-		// native audio still owns it.
-		media := svc.State.ActiveMedia()
-		if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
-			return
-		}
-		svc.State.SetActiveMedia(nil)
+		clearNativeAudioPrimaryMedia(svc)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
 		if !natural {
@@ -356,6 +387,14 @@ func startService(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (*StartResult, error) {
+	// CLI and widget processes never enter here, so they cannot rotate the
+	// running service's crash file. Capture must precede native initialization.
+	previousCrash, crashErr := crashdump.Start(helpers.DataDir(pl), config.AppVersion)
+	if crashErr != nil {
+		log.Warn().Err(crashErr).Msg("could not initialize persistent crash capture")
+	}
+	telemetry.ReportCrash(previousCrash)
+
 	// A config file created outside Core can lack a device ID. The service
 	// daemon owns device identity (TUI/CLI processes only read it), so
 	// mint and persist one before anything reads it. Save generates a
@@ -399,7 +438,7 @@ func startService(
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
-	lsq := make(chan *tokens.Token)       // launch software queue
+	lsq := make(chan softwareTokenUpdate) // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
 	lgcq := make(chan struct{}, 1)        // launch guard cancellation queue
@@ -442,7 +481,7 @@ func startService(
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
 	if mediaDBReset != nil {
-		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost)
+		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost, mediaDBReset.corrupt)
 	}
 
 	// Initialize profiles and restore the persisted active profile before
@@ -458,6 +497,7 @@ func startService(
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
+	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
@@ -500,6 +540,7 @@ func startService(
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		LaunchGuardCancel:   lgcq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
@@ -512,6 +553,10 @@ func startService(
 				logHookError(hookErr, "on_media_start")
 			}
 		}
+	})
+
+	st.SetBeforeExitHook(func() {
+		runBeforeExitHook(svc)
 	})
 
 	// Resume background music when a game quits, but only if we auto-paused it.
@@ -543,7 +588,13 @@ func startService(
 	launcherCacheStarted := time.Now()
 	helpers.GlobalLauncherCache.Initialize(
 		pl, cfg,
-		platforms.NativeAudioLauncher(playbackManager, st.SetBackgroundMedia),
+		platforms.NativeAudioLauncher(
+			playbackManager,
+			st.SetBackgroundMedia,
+			func(ctx context.Context, stop func() error) error {
+				return stopNativeAudioPrimaryMedia(ctx, svc, stop)
+			},
+		),
 	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 

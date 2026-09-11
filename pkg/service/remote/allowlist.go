@@ -17,18 +17,14 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-//nolint:revive // custom validation tags (letter, etc.) are unknown to revive
 package remote
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 )
 
 // opSpec describes one allowlisted remote operation type. operationAllowlist
@@ -36,88 +32,20 @@ import (
 // can do on this device: an operation_type absent from it is refused with
 // "unknown_type" before anything else runs.
 type opSpec struct {
-	params func(json.RawMessage) error
+	// translate validates the operation's snake_case wire params and
+	// returns the params the target expects: camelCase method params for a
+	// method-backed entry, the validated wire params for a local one. It is
+	// the only path params take into execution, so every entry must set it.
+	translate func(json.RawMessage) (json.RawMessage, error)
+	// encode converts a method's response into its snake_case wire shape
+	// before the result cap is applied. Required for method-backed entries;
+	// see wire.go for the field lists.
+	encode func(any) (any, error)
 	shrink func(json.RawMessage) (json.RawMessage, bool)
 	local  func(m *manager, ctx context.Context, operationType string, raw json.RawMessage) operationResult
 	method string
 	role   permissions.Role
 	limit  int
-}
-
-//nolint:tagliatelle // Matches models.SearchParams' tags exactly so raw params forward unchanged.
-type remoteSearchParams struct {
-	Query       *string   `json:"query"`
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=100"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-}
-
-//nolint:tagliatelle // Matches models.BrowseParams' tags exactly so raw params forward unchanged.
-type remoteBrowseParams struct {
-	Path        *string   `json:"path,omitempty"`
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=100"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-}
-
-//nolint:tagliatelle // Matches models.SystemsParams' tags exactly so raw params forward unchanged.
-type remoteSystemsParams struct {
-	All bool `json:"all,omitempty"`
-}
-
-//nolint:tagliatelle // Matches models.LaunchersParams' tags exactly so raw params forward unchanged.
-type remoteLaunchersParams struct {
-	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-}
-
-type echoParams struct {
-	Message string `json:"message" validate:"max=256"`
-}
-
-//nolint:tagliatelle // Wire shape follows remote Online API contract; matched independently in command.go.
-type commandParams struct {
-	Value string `json:"value"`
-}
-
-// strictParams decodes raw into T with unknown fields and trailing JSON
-// rejected, then validates it against T's `validate` tags. The decoded
-// value is discarded — it exists only to gate what raw is allowed to
-// contain before runMethod forwards raw itself to the target API method.
-func strictParams[T any](raw json.RawMessage) error {
-	var params T
-	if err := decodeParams(raw, &params); err != nil {
-		return err
-	}
-	if err := validation.DefaultValidator.Validate(&params); err != nil {
-		return fmt.Errorf("validate remote operation params: %w", err)
-	}
-	return nil
-}
-
-// launchersParams applies strictParams' checks plus the one launchers-
-// specific rule: a systems filter is required. The unfiltered launchers
-// list has no shrink path and can exceed queryLimit on platforms with many
-// launchers (250+ on MiSTer), so remote callers must always scope the call.
-func launchersParams(raw json.RawMessage) error {
-	var params remoteLaunchersParams
-	if err := decodeParams(raw, &params); err != nil {
-		return err
-	}
-	if err := validation.DefaultValidator.Validate(&params); err != nil {
-		return fmt.Errorf("validate remote operation params: %w", err)
-	}
-	if params.Systems == nil || len(*params.Systems) == 0 {
-		return errors.New("systems filter is required")
-	}
-	return nil
 }
 
 // operationAllowlist maps a remote operation_type to how this device
@@ -127,39 +55,39 @@ func launchersParams(raw json.RawMessage) error {
 //nolint:gochecknoglobals // immutable allowlist; the single source of truth for what a remote operation can do
 var operationAllowlist = map[string]opSpec{
 	"echo": {
-		local: (*manager).executeEcho, params: strictParams[echoParams], limit: resultLimit,
+		local: (*manager).executeEcho, translate: translateEchoParams, limit: resultLimit,
 	},
 	"stop": {
 		method: models.MethodStop, role: permissions.RoleRemote,
-		params: requireEmptyParams, limit: resultLimit,
+		translate: translateNoParams, encode: encodeEmptyResult, limit: resultLimit,
 	},
 	"systems": {
 		method: models.MethodSystems, role: permissions.RoleRemote,
-		params: strictParams[remoteSystemsParams], limit: queryLimit,
+		translate: translateSystemsParams, encode: encodeSystemsResponse, limit: queryLimit,
 	},
 	"launchers": {
 		method: models.MethodLaunchers, role: permissions.RoleRemote,
-		params: launchersParams, limit: queryLimit,
+		translate: translateLaunchersParams, encode: encodeLaunchersResponse, limit: queryLimit,
 	},
 	"version": {
 		method: models.MethodVersion, role: permissions.RoleRemote,
-		params: requireEmptyParams, limit: resultLimit,
+		translate: translateNoParams, encode: encodeVersionResponse, limit: resultLimit,
 	},
 	"media.search": {
 		method: models.MethodMediaSearch, role: permissions.RoleRemote,
-		params: strictParams[remoteSearchParams], shrink: shrinkPage, limit: queryLimit,
+		translate: translateSearchParams, encode: encodeSearchResults, shrink: shrinkPage, limit: queryLimit,
 	},
 	"media.browse": {
 		method: models.MethodMediaBrowse, role: permissions.RoleRemote,
-		params: strictParams[remoteBrowseParams], shrink: shrinkPage, limit: queryLimit,
+		translate: translateBrowseParams, encode: encodeBrowseResults, shrink: shrinkPage, limit: queryLimit,
 	},
 	"launch": {
-		local: (*manager).executeCommand, params: strictParams[commandParams], limit: resultLimit,
+		local: (*manager).executeCommand, translate: translateCommandParams, limit: resultLimit,
 	},
 	"launch.system": {
-		local: (*manager).executeCommand, params: strictParams[commandParams], limit: resultLimit,
+		local: (*manager).executeCommand, translate: translateCommandParams, limit: resultLimit,
 	},
 	"mister.script": {
-		local: (*manager).executeCommand, params: strictParams[commandParams], limit: resultLimit,
+		local: (*manager).executeCommand, translate: translateCommandParams, limit: resultLimit,
 	},
 }

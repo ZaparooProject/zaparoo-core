@@ -110,6 +110,24 @@ func TestHandleGenerateMedia_RejectsRebuildWithSystemsFilter(t *testing.T) {
 	assert.False(t, IsIndexing(), "a rejected request must not claim the indexing slot")
 }
 
+func TestHandleGenerateMedia_GenerationFailureReturnsNoResult(t *testing.T) {
+	// Not parallel: shares the global statusInstance.
+	ClearIndexingStatus()
+	// Occupy the indexing slot so starting generation fails after every
+	// param check has passed.
+	SetIndexingForTest()
+	t.Cleanup(ClearIndexingStatus)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	env := newRebuildTestEnv(t, mockMediaDB, "")
+
+	result, err := HandleGenerateMedia(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "indexing already in progress")
+	assert.Nil(t, result, "a failed request must carry only the error, never a void success")
+	mockMediaDB.AssertNotCalled(t, "Recreate", mock.Anything)
+}
+
 func TestHandleGenerateMedia_RebuildRecreatesDatabaseBeforeIndexing(t *testing.T) {
 	// Not parallel: shares the global statusInstance.
 	ClearIndexingStatus()

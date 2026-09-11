@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +145,44 @@ func TestHandleRunWaitsForCompletionThenSucceeds(t *testing.T) {
 	o := waitRun(t, out)
 	require.NoError(t, o.err)
 	assert.Equal(t, NoContent{}, o.result)
+}
+
+// Over-long text is rejected before it reaches the redaction in the debug
+// log or the token queue, so neither the API goroutine nor the service worker
+// ever parses it.
+func TestHandleRunRejectsOversizedScript(t *testing.T) {
+	t.Parallel()
+
+	oversized := "**launch:" + strings.Repeat("A", zapscript.MaxScriptLength)
+
+	t.Run("object params", func(t *testing.T) {
+		t.Parallel()
+		env := newRunTestEnv(t)
+		o := waitRun(t, startRun(env.requestEnv(context.Background(), oversized)))
+
+		require.ErrorIs(t, o.err, zapscript.ErrScriptTooLong)
+		select {
+		case tok := <-env.queue:
+			t.Fatalf("run queued an over-long token: %d bytes", len(tok.Text))
+		default:
+		}
+	})
+
+	t.Run("bare string params", func(t *testing.T) {
+		t.Parallel()
+		env := newRunTestEnv(t)
+		reqEnv := env.requestEnv(context.Background(), "")
+		reqEnv.Params = []byte(fmt.Sprintf("%q", oversized))
+
+		o := waitRun(t, startRun(reqEnv))
+
+		require.ErrorIs(t, o.err, zapscript.ErrScriptTooLong)
+		select {
+		case tok := <-env.queue:
+			t.Fatalf("run queued an over-long token: %d bytes", len(tok.Text))
+		default:
+		}
+	})
 }
 
 func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {

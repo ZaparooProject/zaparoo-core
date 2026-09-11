@@ -101,9 +101,16 @@ func newFlatpakChecker() func(string) bool {
 func Launchers(cfg *config.Instance, options Options, existing []platforms.Launcher) []platforms.Launcher {
 	options.normalize()
 	result := make([]platforms.Launcher, 0, 64)
-	seenIDs := make([]string, len(existing), len(existing)+64)
+	seenIDs := make([]string, 0, len(existing)+64)
 	for i := range existing {
-		seenIDs[i] = existing[i].ID
+		// A launcher that cannot start anything must not displace one that
+		// can. A scan-only custom launcher only widens a system's media
+		// directories, so suppressing the real launcher for its ID would
+		// leave that system indexed and unlaunchable.
+		if existing[i].ScanOnly {
+			continue
+		}
+		seenIDs = append(seenIDs, existing[i].ID)
 	}
 	appendUnique := func(items ...platforms.Launcher) {
 		for i := range items {

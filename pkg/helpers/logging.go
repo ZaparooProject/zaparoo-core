@@ -20,11 +20,13 @@
 package helpers
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -92,6 +94,143 @@ func LogWriter() io.Writer {
 	defer logMu.RUnlock()
 
 	return logWriter
+}
+
+// ReadLogBundle includes persistent crash evidence and captured stderr with
+// the log. Crash files get budget first, then stderr, then routine logs.
+// maxBytes of zero or less means no limit.
+func ReadLogBundle(pl platforms.Platform, maxBytes int) ([]byte, error) {
+	logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
+	//nolint:gosec // Path is derived from platform settings and a fixed filename.
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read log file: %w", err)
+	}
+
+	unlimited := maxBytes <= 0
+	remaining := maxBytes
+	var captures bytes.Buffer
+	for _, capture := range []struct {
+		dir  string
+		name string
+		tail bool
+	}{
+		{DataDir(pl), crashdump.CurrentFile, false},
+		{DataDir(pl), crashdump.PreviousFile, false},
+		{pl.Settings().LogDir, config.StderrFile, true},
+	} {
+		if capture.dir == "" {
+			continue
+		}
+		label := fmt.Sprintf("\n===== %s =====\n", capture.name)
+		budget := remaining - len(label) - 1 // reserve the log's final newline
+		if !unlimited && budget <= 0 {
+			continue
+		}
+		if unlimited {
+			budget = 0
+		}
+		body := readCapture(filepath.Join(capture.dir, capture.name), budget, capture.tail)
+		if len(bytes.TrimSpace(body)) == 0 {
+			continue
+		}
+		if !capture.tail && crashCaptureHeaderOnly(body) {
+			continue
+		}
+		_, _ = captures.WriteString(label)
+		_, _ = captures.Write(body)
+		remaining -= len(label) + len(body)
+	}
+	if !unlimited {
+		if captures.Len() > 0 {
+			remaining--
+		}
+		data = trimLines(data, remaining)
+	}
+	if captures.Len() == 0 {
+		return data, nil
+	}
+	var buf bytes.Buffer
+	_, _ = buf.Write(data)
+	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+		_ = buf.WriteByte('\n')
+	}
+	_, _ = buf.Write(captures.Bytes())
+	return buf.Bytes(), nil
+}
+
+// crashCaptureHeaderOnly reports whether a crash capture holds only the version
+// header written when the file is opened, and so records no crash.
+//
+// A budget too small to reach the header's newline yields a fragment, which is
+// what the smallest bundles hand this: the fragment says nothing, but left in it
+// spends the budget the previous crash file needs. A fragment shorter than the
+// prefix does not even start with it, so both directions have to be checked.
+func crashCaptureHeaderOnly(body []byte) bool {
+	prefix := []byte(crashdump.VersionPrefix)
+	header, rest, ok := bytes.Cut(body, []byte("\n"))
+	if !ok {
+		return bytes.HasPrefix(body, prefix) || bytes.HasPrefix(prefix, body)
+	}
+	return bytes.HasPrefix(header, prefix) && len(bytes.TrimSpace(rest)) == 0
+}
+
+// readCapture bounds reads as well as output. Preserve the crash header and
+// first stack, but keep the newest entries of append-only stderr capture.
+func readCapture(path string, maxBytes int, tail bool) []byte {
+	//nolint:gosec // Path is a platform directory plus a fixed capture filename.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	var reader io.Reader = f
+	if maxBytes > 0 {
+		if tail && info.Size() > int64(maxBytes) {
+			if _, seekErr := f.Seek(-int64(maxBytes), io.SeekEnd); seekErr != nil {
+				return nil
+			}
+		}
+		reader = io.LimitReader(f, int64(maxBytes))
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// trimLines drops whole lines from the start of data until it fits maxBytes,
+// and says how much it dropped. A non-positive budget keeps nothing.
+//
+// Cutting mid-line would leave a broken JSON entry that readers and parsers
+// trip over, so a budget that lands inside a single line keeps none of it.
+func trimLines(data []byte, maxBytes int) []byte {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if len(data) <= maxBytes {
+		return data
+	}
+
+	notice := fmt.Sprintf("... %d earlier bytes trimmed to fit the upload limit ...\n",
+		len(data)-maxBytes)
+	if len(notice) > maxBytes {
+		// Too small to even say what happened, let alone carry content.
+		return nil
+	}
+
+	tail := data[len(data)-(maxBytes-len(notice)):]
+	idx := bytes.IndexByte(tail, '\n')
+	if idx < 0 || idx+1 >= len(tail) {
+		// The budget lands inside one line; keeping any of it emits a fragment.
+		return []byte(notice)
+	}
+	return append([]byte(notice), tail[idx+1:]...)
 }
 
 // CloseLogging closes the active file logger so tests and shutdown paths can

@@ -101,14 +101,11 @@ func (w *RegistryWatcher) watchLoop(key registry.Key) {
 	// Wait on both registry event and stop event
 	handles := []windows.Handle{regEvent, w.stopEvent}
 
-	// Read initial value
-	lastAppID := readAppID(key)
-	if w.onChange != nil && lastAppID != 0 {
-		w.onChange(lastAppID)
-	}
-
-	for {
-		// Register for notification on value changes
+	// arm registers for the next value change. It must be called before the
+	// value is read: a notification only fires once, so a change landing
+	// between the read and the next arm would otherwise go unseen and leave
+	// the tracker stuck on a stale AppID.
+	arm := func() bool {
 		err := windows.RegNotifyChangeKeyValue(
 			windows.Handle(key),
 			false,                              // don't watch subtree
@@ -118,9 +115,22 @@ func (w *RegistryWatcher) watchLoop(key registry.Key) {
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("RegNotifyChangeKeyValue failed")
-			return
+			return false
 		}
+		return true
+	}
 
+	if !arm() {
+		return
+	}
+
+	// Read initial value
+	lastAppID := readAppID(key)
+	if w.onChange != nil && lastAppID != 0 {
+		w.onChange(lastAppID)
+	}
+
+	for {
 		// Wait for EITHER registry change OR stop signal (instant response)
 		result, err := windows.WaitForMultipleObjects(handles, false, windows.INFINITE)
 		if err != nil {
@@ -130,6 +140,9 @@ func (w *RegistryWatcher) watchLoop(key registry.Key) {
 
 		switch result {
 		case windows.WAIT_OBJECT_0: // Registry changed
+			if !arm() {
+				return
+			}
 			appID := readAppID(key)
 			if appID != lastAppID {
 				lastAppID = appID

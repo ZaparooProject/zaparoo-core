@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -127,7 +128,10 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 			PlayTime:   60,
 		},
 	}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath, missingPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{
+		pathutil.CanonicalMediaPath(mediaPath),
+		pathutil.CanonicalMediaPath(missingPath),
+	}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 
 	env := requests.RequestEnv{
@@ -168,7 +172,10 @@ func TestHandleMediaHistory_IncludesCoverStatus(t *testing.T) {
 			{DBID: 2, SystemID: "NES", MediaPath: coveredPath, MediaName: "Covered", StartTime: now},
 			{DBID: 1, SystemID: "NES", MediaPath: uncoveredPath, MediaName: "Uncovered", StartTime: now},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{coveredPath, uncoveredPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{
+		pathutil.CanonicalMediaPath(coveredPath),
+		pathutil.CanonicalMediaPath(uncoveredPath),
+	}).
 		Return([]database.MediaPathID{
 			{SystemID: "NES", Path: coveredPath, DBID: 20, MediaTitleDBID: 200},
 			{SystemID: "NES", Path: uncoveredPath, DBID: 10, MediaTitleDBID: 100},
@@ -222,7 +229,7 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 		{
 			name: "media identity lookup",
 			setup: func(_ *testing.T, mockMediaDB *helpers.MockMediaDBI) {
-				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 					Return(nil, errors.New("identity lookup failed"))
 				mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).
 					Return(map[int64][]database.TagInfo{}, nil).Maybe()
@@ -235,7 +242,7 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 			expectTagLookup: true,
 			setup: func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) {
 				t.Helper()
-				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 					Return([]database.MediaPathID{{
 						SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420,
 					}}, nil)
@@ -252,7 +259,7 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 			expectTagLookup: true,
 			setup: func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) {
 				t.Helper()
-				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 					Return([]database.MediaPathID{{
 						SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420,
 					}}, nil)
@@ -300,7 +307,7 @@ func TestMediaResponseMediaIDs_BoundsSlowLookup(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mediaPath := filepath.Join(string(filepath.Separator), "games", "slow.nes")
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Run(func(args mock.Arguments) {
 			ctx, ok := args.Get(0).(context.Context)
 			require.True(t, ok)
@@ -647,7 +654,10 @@ func TestHandleMediaHistory_IncludesTags(t *testing.T) {
 			{DBID: 2, SystemID: "NES", MediaPath: taggedPath, MediaName: "Tagged", StartTime: now},
 			{DBID: 1, SystemID: "NES", MediaPath: untaggedPath, MediaName: "Untagged", StartTime: now},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{taggedPath, untaggedPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{
+		pathutil.CanonicalMediaPath(taggedPath),
+		pathutil.CanonicalMediaPath(untaggedPath),
+	}).
 		Return([]database.MediaPathID{
 			{SystemID: "NES", Path: taggedPath, DBID: 20, MediaTitleDBID: 200},
 			{SystemID: "NES", Path: untaggedPath, DBID: 10, MediaTitleDBID: 100},
@@ -690,7 +700,10 @@ func TestHandleMediaHistory_UnresolvedMediaOmitsTags(t *testing.T) {
 			{DBID: 2, SystemID: "NES", MediaPath: resolvedPath, MediaName: "Resolved", StartTime: now},
 			{DBID: 1, SystemID: "NES", MediaPath: missingPath, MediaName: "Missing", StartTime: now},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{resolvedPath, missingPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{
+		pathutil.CanonicalMediaPath(resolvedPath),
+		pathutil.CanonicalMediaPath(missingPath),
+	}).
 		Return([]database.MediaPathID{
 			{SystemID: "NES", Path: resolvedPath, DBID: 20, MediaTitleDBID: 200},
 		}, nil)
@@ -728,7 +741,7 @@ func TestHandleMediaHistory_NoResolvedMediaSkipsTagLookup(t *testing.T) {
 		Return([]database.MediaHistoryEntry{
 			{DBID: 1, SystemID: "NES", MediaPath: mediaPath, MediaName: "Missing", StartTime: time.Now()},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{}, nil)
 	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).
 		Return(map[int64][]database.TagInfo{}, nil).Maybe()
@@ -759,7 +772,7 @@ func TestHandleMediaHistory_CoverFailureDoesNotAffectTags(t *testing.T) {
 		Return([]database.MediaHistoryEntry{
 			{DBID: 1, SystemID: "NES", MediaPath: mediaPath, MediaName: "History", StartTime: time.Now()},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420}}, nil)
 	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, refs).
 		Return(nil, errors.New("cover lookup failed"))
@@ -795,7 +808,7 @@ func TestHandleMediaHistory_RepeatedMediaRowsShareOneRef(t *testing.T) {
 			{DBID: 2, SystemID: "NES", MediaPath: mediaPath, MediaName: "Repeat", StartTime: now.Add(-time.Hour)},
 			{DBID: 1, SystemID: "NES", MediaPath: mediaPath, MediaName: "Repeat", StartTime: now.Add(-2 * time.Hour)},
 		}, nil)
-	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(mediaPath)}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420}}, nil).
 		Once()
 	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, []database.MediaRef{{MediaDBID: 42, MediaTitleDBID: 420}}).

@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -86,6 +88,39 @@ func refreshFailedProbes() {
 		} else if !info.ModTime().Equal(entry.deviceModTime) {
 			delete(failedProbePaths, path)
 		}
+	}
+}
+
+// recordFailedProbes marks ports whose probe got no PN532 answer, so later
+// ticks skip them until the device file changes. A port detection reported
+// anyway or one already connected is left alone. The device file's ModTime is
+// stored so a device swap at the same path (the file is recreated with a new
+// ModTime on replug) is noticed.
+func recordFailedProbes(
+	probes []detection.ProbeResult,
+	devices []detection.DeviceInfo,
+	connected map[string]bool,
+) {
+	detected := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		detected[device.Path] = true
+	}
+
+	probeStateMu.Lock()
+	defer probeStateMu.Unlock()
+	for _, probe := range probes {
+		if probe.Found || detected[probe.Path] || connected[probe.Path] {
+			continue
+		}
+		if _, alreadyFailed := failedProbePaths[probe.Path]; alreadyFailed {
+			continue
+		}
+		info, err := os.Stat(probe.Path)
+		if err != nil {
+			continue
+		}
+		failedProbePaths[probe.Path] = failedProbeEntry{deviceModTime: info.ModTime()}
+		log.Debug().Str("path", probe.Path).Msg("PN532: marking port as failed probe")
 	}
 }
 
@@ -296,6 +331,7 @@ type Reader struct {
 	sessionFactory            SessionFactory
 	deviceInfo                config.ReadersConnect
 	name                      string
+	identity                  readers.USBReaderID
 	wg                        sync.WaitGroup
 	mutex                     syncutil.RWMutex
 	writeMutex                syncutil.Mutex
@@ -337,7 +373,7 @@ func (*Reader) IDs() []string {
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
-	if !helpers.Contains(r.IDs(), device.Driver) {
+	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -348,14 +384,14 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	var transport pn532.Transport
 	var err error
 
-	// Manual device specification
-	// Extract transport type from driver (e.g., "pn532_uart" or "pn532uart" -> "uart")
-	transportType := strings.TrimPrefix(device.Driver, "pn532_")
-	if transportType == device.Driver {
-		// No underscore variant, try stripping just "pn532" prefix
-		transportType = strings.TrimPrefix(device.Driver, "pn532")
-	}
-	if transportType == "" || transportType == device.Driver {
+	// Manual device specification. The transport is the part of the driver ID
+	// after the "pn532" prefix, read from the normalized form so every spelling
+	// the driver accepts names the same transport: "pn532_i2c", "pn532i2c" and
+	// "PN532_I2C" are all i2c. Reading the raw string would silently fall back
+	// to uart for any spelling it did not expect.
+	normalizedDriver := readers.NormalizeDriverID(device.Driver)
+	transportType := strings.TrimPrefix(normalizedDriver, "pn532")
+	if transportType == "" || transportType == normalizedDriver {
 		transportType = "uart"
 	}
 
@@ -532,7 +568,9 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
 	if token.Text != "" {
-		log.Debug().Msgf("NDEF text: %s", token.Text)
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("NDEF text: %s", zapscript.ForLog(token.Text))
+		}
 	}
 
 	iq <- readers.Scan{
@@ -588,6 +626,10 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+// detectAll is detection.DetectAll, indirected so tests can drive Detect
+// without enumerating the host's hardware.
+var detectAll = detection.DetectAll
+
 func (*Reader) Detect(connected []string) string {
 	// Extract device paths from connected list (format: "transport:path")
 	ignorePaths := make([]string, 0, len(connected))
@@ -613,18 +655,36 @@ func (*Reader) Detect(connected []string) string {
 	}
 	probeStateMu.Unlock()
 
-	// TODO: The error branches for detection.DetectAll and helpers.GetSerialDeviceList
-	// are not unit-tested because both functions depend on hardware enumeration
-	// which is not injectable. Consider extracting a DeviceDetector interface to
-	// allow mock-based testing.
+	// TODO: The error branches for detection.DetectAll are not unit-tested
+	// because it depends on hardware enumeration which is not injectable.
+	// Consider extracting a DeviceDetector interface to allow mock-based testing.
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
-	// Try to detect PN532 devices
+	// go-pn532 reports each port it probes, so the failed-probe bookkeeping
+	// below works from what detection actually tried instead of a second
+	// enumeration of the serial ports on every tick. Detectors probe in
+	// parallel and can still report after a timed-out DetectAll returns, so
+	// the results are collected under a lock and copied once it has.
+	var probesMu syncutil.Mutex
+	var probes []detection.ProbeResult
 	opts := newDetectionOptions(ignorePaths)
+	opts.OnProbe = func(result detection.ProbeResult) {
+		probesMu.Lock()
+		probes = append(probes, result)
+		probesMu.Unlock()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
-	devices, err := detection.DetectAll(ctx, &opts)
+	devices, err := detectAll(ctx, &opts)
+	probesMu.Lock()
+	probed := slices.Clone(probes)
+	probesMu.Unlock()
+	logDetectionSummary(probed, ignorePaths, devices, err)
+	// Recorded before the error check: DetectAll reports ErrNoDevicesFound
+	// whenever every probe went unanswered, which is exactly when the
+	// unanswered ports need recording, or they are probed again every tick.
+	recordFailedProbes(probed, devices, connectedPathSet)
 	if err != nil {
 		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
@@ -641,37 +701,6 @@ func (*Reader) Detect(connected []string) string {
 				Str("name", d.Name).
 				Msg("PN532 detection found device")
 		}
-	}
-
-	// Track which enumerated ports were NOT detected as PN532 devices.
-	// Store the device file's ModTime so we can detect device swaps at
-	// the same path (the file is recreated with a new ModTime on replug).
-	// DetectAll currently does not expose candidate paths it tried; see
-	// https://github.com/ZaparooProject/go-pn532/issues/94. Until then,
-	// enumerate serial ports here to infer failed probe paths.
-	currentPorts, enumErr := helpers.GetSerialDeviceList()
-	if enumErr == nil {
-		detectedPaths := make(map[string]bool, len(devices))
-		for _, device := range devices {
-			detectedPaths[device.Path] = true
-		}
-		probeStateMu.Lock()
-		for _, port := range currentPorts {
-			if !detectedPaths[port] && !connectedPathSet[port] {
-				if _, alreadyFailed := failedProbePaths[port]; !alreadyFailed {
-					info, statErr := os.Stat(port)
-					if statErr == nil {
-						failedProbePaths[port] = failedProbeEntry{
-							deviceModTime: info.ModTime(),
-						}
-						log.Debug().
-							Str("path", port).
-							Msg("PN532: marking port as failed probe")
-					}
-				}
-			}
-		}
-		probeStateMu.Unlock()
 	}
 
 	if len(devices) == 0 {
@@ -709,8 +738,79 @@ func (*Reader) Detect(connected []string) string {
 	return ""
 }
 
+// Detection summary state. This is package level because SupportedReaders
+// builds a fresh Reader for every auto-detect tick, so nothing kept on the
+// instance survives into the next one.
+var (
+	detectSummaryMu   syncutil.Mutex
+	lastDetectSummary string
+)
+
+// logDetectionSummary reports the state of PN532 auto-detect once per change.
+//
+// A user log of a reader that auto-detect never found had nothing in it to work
+// from: the ports detection probed, the paths it had been told to skip, and
+// what the probe returned were all trace-level or absent, so "the reader was
+// never probed" and "the reader was probed and did not answer" looked
+// identical. This logs at info, because someone reporting a reader that is not
+// detected has no reason to have enabled debug logging first, and only when the
+// picture changes, so the 1 Hz tick still costs a handful of lines per session.
+func logDetectionSummary(
+	probes []detection.ProbeResult,
+	ignored []string,
+	devices []detection.DeviceInfo,
+	detectErr error,
+) {
+	// Sorted: ignored is built from map iteration, and probes arrive in the
+	// order detectors finished, so an unsorted summary would report a change
+	// on ticks where nothing actually changed.
+	probed := make([]string, 0, len(probes))
+	for _, probe := range probes {
+		probed = append(probed, probe.Transport+":"+probe.Path)
+	}
+	slices.Sort(probed)
+	sortedIgnored := slices.Clone(ignored)
+	slices.Sort(sortedIgnored)
+
+	detected := make([]string, 0, len(devices))
+	for _, d := range devices {
+		detected = append(detected, d.Transport+":"+d.Path)
+	}
+	slices.Sort(detected)
+
+	summary := fmt.Sprintf("probed:%s ignored:%s detected:%s err:%v",
+		strings.Join(probed, ","),
+		strings.Join(sortedIgnored, ","),
+		strings.Join(detected, ","),
+		detectErr)
+
+	detectSummaryMu.Lock()
+	changed := summary != lastDetectSummary
+	lastDetectSummary = summary
+	detectSummaryMu.Unlock()
+	if !changed {
+		return
+	}
+
+	event := log.Info().Strs("probed", probed)
+	if len(sortedIgnored) > 0 {
+		event = event.Strs("ignored", sortedIgnored)
+	}
+	if len(detected) > 0 {
+		event = event.Strs("detected", detected)
+	}
+	if detectErr != nil && !isExpectedDetectionMiss(detectErr) {
+		event = event.Err(detectErr)
+	}
+	event.Msg("PN532 auto-detect")
+}
+
+// isExpectedDetectionMiss reports whether a detection error is the normal
+// "nothing there" answer. A timeout is not: go-pn532 bounds each port's probe
+// on its own, so the pass only runs out of time when something on the bus has
+// parked a probe in the kernel, and that is worth reporting.
 func isExpectedDetectionMiss(err error) bool {
-	return errors.Is(err, detection.ErrNoDevicesFound) || errors.Is(err, detection.ErrDetectionTimeout)
+	return errors.Is(err, detection.ErrNoDevicesFound)
 }
 
 // defaultDetectionTransports limits PN532 auto-detect to transports safe for
@@ -743,11 +843,11 @@ func (r *Reader) ReaderID() string {
 }
 
 func (r *Reader) readerIDLocked() string {
-	stablePath := helpers.GetUSBTopologyPath(r.deviceInfo.Path)
-	if stablePath == "" {
-		stablePath = r.deviceInfo.ConnectionString()
-	}
-	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
+	return r.identity.ID(
+		r.Metadata().ID,
+		helpers.GetUSBTopologyPath(r.deviceInfo.Path),
+		r.deviceInfo.ConnectionString(),
+	)
 }
 
 func (r *Reader) Connected() bool {
@@ -867,7 +967,9 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			}
 
 			log.Info().Msg("successfully wrote text to PN532 tag")
-			log.Debug().Msgf("wrote NDEF text: %s", text)
+			if e := log.Debug(); e.Enabled() {
+				e.Msgf("wrote NDEF text: %s", zapscript.ForLog(text))
+			}
 
 			// Create result token with UID from the tag
 			tagType := tag.Type()

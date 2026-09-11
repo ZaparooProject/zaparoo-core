@@ -181,3 +181,38 @@ func TestGenerateReaderID_EmptyInputs(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 	})
 }
+
+func TestUSBReaderID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps the port after the device node disappears", func(t *testing.T) {
+		t.Parallel()
+		var id USBReaderID
+
+		connected := id.ID("pn532", "1-2.3", "pn532_uart:/dev/ttyACM0")
+		unplugged := id.ID("pn532", "", "pn532_uart:/dev/ttyACM0")
+
+		assert.Equal(t, GenerateReaderID("pn532", "1-2.3"), connected)
+		assert.Equal(t, connected, unplugged)
+	})
+
+	t.Run("uses the fallback until a port is resolved", func(t *testing.T) {
+		t.Parallel()
+		var id USBReaderID
+
+		assert.Equal(t, GenerateReaderID("pn532", "pn532_uart:/dev/ttyS0"),
+			id.ID("pn532", "", "pn532_uart:/dev/ttyS0"))
+		assert.Equal(t, GenerateReaderID("pn532", "1-4"),
+			id.ID("pn532", "1-4", "pn532_uart:/dev/ttyS0"))
+	})
+
+	t.Run("ignores the fallback once a port is known", func(t *testing.T) {
+		t.Parallel()
+		var id USBReaderID
+
+		first := id.ID("simpleserial", "1-2", "simpleserial:/dev/ttyUSB0")
+		later := id.ID("simpleserial", "", "simpleserial:/dev/ttyUSB1")
+
+		assert.Equal(t, first, later)
+	})
+}

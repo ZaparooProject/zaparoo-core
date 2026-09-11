@@ -153,6 +153,10 @@ Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for co
 
 ## Media
 
+### media.visibility
+
+An indexed media item's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing `media.browse`, `media.browse.index` and `media.search` cursors, all of which stop being valid. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
+
 ### media.started
 
 New media was started on server.
@@ -299,7 +303,7 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | total     | number  | Yes      | Total source records for the current system, or 0 before known.   |
 | matched   | number  | Yes      | Number of records matched to existing media rows.                 |
 | skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
-| totalScraped | number | Yes   | Number of media records already marked scraped.                   |
+| totalScraped | number | Yes   | Number of media records already marked scraped, across the scraper/library rather than the current scope. |
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
 | paused    | boolean | Yes      | True when the active scrape is paused.                            |

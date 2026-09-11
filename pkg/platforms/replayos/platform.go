@@ -86,7 +86,7 @@ type Platform struct {
 	lastKnownCore  string
 	procPath       string
 	storagePaths   []string
-	shared.LinuxInput
+	shared.InputManager
 	trackerMu        syncutil.RWMutex
 	keyboardRealMode bool
 }
@@ -313,7 +313,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	})
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return helpers.CombineLaunchers(cfg, p, launchers)
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

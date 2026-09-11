@@ -40,11 +40,15 @@ import (
 const NativeAudioLauncherID = "native-audio"
 
 // NativeAudioLauncher returns the launcher that plays audio files in-process via the
-// shared malgo output device. Both playback and the background-media state setter are
-// injected so the launcher carries no package-level globals.
+// shared malgo output device. Playback and the media state hooks are injected so the
+// launcher carries no package-level globals. stopPrimaryMedia wraps an explicit stop
+// of the primary slot: native audio has no OS process, so no platform tracker notices
+// the stop and the drain callback only fires for tracks that end on their own, which
+// leaves the service to run the stop it is handed and clear the active media around it.
 func NativeAudioLauncher(
 	playback audio.PlaybackManager,
 	setBackgroundMedia func(*models.ActiveMedia),
+	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
 ) Launcher {
 	return Launcher{
 		ID:       NativeAudioLauncherID,
@@ -60,12 +64,12 @@ func NativeAudioLauncher(
 			return launchNativeAudio(playback, setBackgroundMedia, cfg, path, opts)
 		},
 		Controls: map[string]Control{
-			ControlTogglePause: {Func: nativeAudioControl(playback, ControlTogglePause)},
-			ControlPause:       {Func: nativeAudioControl(playback, ControlPause)},
-			ControlResume:      {Func: nativeAudioControl(playback, ControlResume)},
-			ControlStop:        {Func: nativeAudioControl(playback, ControlStop)},
-			ControlFastForward: {Func: nativeAudioControl(playback, ControlFastForward)},
-			ControlRewind:      {Func: nativeAudioControl(playback, ControlRewind)},
+			ControlTogglePause: {Func: nativeAudioControl(playback, nil, nil, ControlTogglePause)},
+			ControlPause:       {Func: nativeAudioControl(playback, nil, nil, ControlPause)},
+			ControlResume:      {Func: nativeAudioControl(playback, nil, nil, ControlResume)},
+			ControlStop:        {Func: nativeAudioControl(playback, setBackgroundMedia, stopPrimaryMedia, ControlStop)},
+			ControlFastForward: {Func: nativeAudioControl(playback, nil, nil, ControlFastForward)},
+			ControlRewind:      {Func: nativeAudioControl(playback, nil, nil, ControlRewind)},
 		},
 	}
 }
@@ -110,8 +114,13 @@ func launchNativeAudio(
 	return nil, nil //nolint:nilnil // native audio has no OS process to return
 }
 
-func nativeAudioControl(playback audio.PlaybackManager, action string) ControlFunc {
-	return func(_ context.Context, _ *config.Instance, params ControlParams) error {
+func nativeAudioControl(
+	playback audio.PlaybackManager,
+	setBackgroundMedia func(*models.ActiveMedia),
+	stopPrimaryMedia func(ctx context.Context, stop func() error) error,
+	action string,
+) ControlFunc {
+	return func(ctx context.Context, _ *config.Instance, params ControlParams) error {
 		if playback == nil {
 			return errors.New("native audio playback is not initialized")
 		}
@@ -132,7 +141,27 @@ func nativeAudioControl(playback audio.PlaybackManager, action string) ControlFu
 		case ControlResume:
 			return playback.Resume(slot)
 		case ControlStop:
-			return playback.Stop(slot)
+			stop := func() error {
+				if stopErr := playback.Stop(slot); stopErr != nil {
+					return fmt.Errorf("stop native audio: %w", stopErr)
+				}
+				return nil
+			}
+			if slot == mediaslot.Background {
+				if err := stop(); err != nil {
+					return err
+				}
+				// Launching set the background media, so stopping clears it. The
+				// background playlist is service state and stays with the caller.
+				if setBackgroundMedia != nil {
+					setBackgroundMedia(nil)
+				}
+				return nil
+			}
+			if stopPrimaryMedia == nil {
+				return stop()
+			}
+			return stopPrimaryMedia(ctx, stop)
 		case ControlFastForward:
 			return playback.Seek(slot, controlSeekDuration(params.Args, 10*time.Second))
 		case ControlRewind:

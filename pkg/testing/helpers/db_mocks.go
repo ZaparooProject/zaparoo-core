@@ -251,6 +251,13 @@ func (m *MockUserDBI) SetMediaUserFavorite(systemID, path string, favorite bool)
 	return nil
 }
 
+func (m *MockUserDBI) SetMediaUserHidden(systemID, path string, hidden bool) error {
+	if err := m.Called(systemID, path, hidden).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user hidden failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
 	args := m.Called(systemID, path, launcherID)
 	if err := args.Error(0); err != nil {
@@ -1422,6 +1429,20 @@ func (m *MockMediaDBI) SearchMediaBySlugIn(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) TitleCandidates(
+	ctx context.Context, systemID, name string, limit int,
+) ([]database.TitleCandidate, error) {
+	args := m.Called(ctx, systemID, name, limit)
+	var results []database.TitleCandidate
+	if value, ok := args.Get(0).([]database.TitleCandidate); ok {
+		results = value
+	}
+	if err := args.Error(1); err != nil {
+		return results, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return results, nil
+}
+
 func (m *MockMediaDBI) GetTitlesWithPreFilter(
 	ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 ) ([]database.MediaTitle, error) {
@@ -1577,6 +1598,7 @@ func (m *MockMediaDBI) IndexedSystems() ([]string, error) {
 func (m *MockMediaDBI) SystemMediaCounts(
 	ctx context.Context,
 	tags []zapscript.TagFilter,
+	_ bool,
 ) ([]database.SystemMediaCount, error) {
 	args := m.Called(ctx, tags)
 	if counts, ok := args.Get(0).([]database.SystemMediaCount); ok {
@@ -2154,6 +2176,7 @@ func (m *MockMediaDBI) GetScrapingStatus() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+//nolint:gocritic // Implements the existing MediaDBI value-parameter contract.
 func (m *MockMediaDBI) SetScrapingOperation(operation database.ScrapingOperation) error {
 	if !m.hasExpectation("SetScrapingOperation") {
 		return nil
@@ -2269,6 +2292,14 @@ func (m *MockMediaDBI) GetAllSystems() ([]database.System, error) {
 	return []database.System{}, nil
 }
 
+func (m *MockMediaDBI) MediaPreferencesRevision(ctx context.Context) (string, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return "", fmt.Errorf("mock media preferences revision failed: %w", err)
+	}
+	return args.String(0), nil
+}
+
 func (m *MockMediaDBI) GetExistingMediaUserData(ctx context.Context) ([]database.MediaUserData, error) {
 	args := m.Called(ctx)
 	if data, ok := args.Get(0).([]database.MediaUserData); ok {
@@ -2308,6 +2339,34 @@ func (m *MockMediaDBI) GetTitlesBySystemID(systemID string) ([]database.TitleWit
 }
 
 // GetMediaBySystemID mock method for per-system lazy loading during resume
+func (m *MockMediaDBI) GetScrapeMedia(
+	ctx context.Context, scope database.ScrapeScope,
+) ([]database.MediaFullRow, error) {
+	args := m.Called(ctx, scope)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock scoped media: %w", err)
+	}
+	rows, ok := args.Get(0).([]database.MediaFullRow)
+	if !ok {
+		return nil, nil //nolint:nilnil // Mock nil represents no matching rows.
+	}
+	return rows, nil
+}
+
+func (m *MockMediaDBI) GetScopedScrapeMediaIDs(
+	ctx context.Context, scope database.ScrapeScope, scraperID, runID string,
+) (map[int64]struct{}, error) {
+	args := m.Called(ctx, scope, scraperID, runID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock scoped markers: %w", err)
+	}
+	ids, ok := args.Get(0).(map[int64]struct{})
+	if !ok {
+		return nil, nil //nolint:nilnil // Mock nil represents no matching markers.
+	}
+	return ids, nil
+}
+
 func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
 	// Try to get mock expectations, but don't fail if none are set
 	if len(m.ExpectedCalls) > 0 {
@@ -2668,6 +2727,7 @@ func NewMockUserDBI() *MockUserDBI {
 	// projection. Default to an empty list so tests exercising NewNamesIndex
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	return m
 }
 
@@ -2709,6 +2769,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("LoadCachedSlugSearchCache").Return(false, nil).Maybe()
 	mockMediaDB.On("IndexGeneration").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("MediaPreferencesRevision", mock.Anything).Return("", nil).Maybe()
 	mockMediaDB.On("BumpIndexGeneration").Return(int64(1), nil).Maybe()
 	mockMediaDB.On("GetIndexResumeAttempts").Return(0, nil).Maybe()
 	mockMediaDB.On("IncrementIndexResumeAttempts").Return(1, nil).Maybe()
@@ -2817,6 +2878,7 @@ func SystemMatcher() any {
 
 // Browse methods
 
+//nolint:gocritic // Match the value-options MediaDBI contract.
 func (m *MockMediaDBI) BrowseDirectories(
 	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
@@ -2967,7 +3029,7 @@ func (m *MockMediaDBI) BrowseSystemRootCandidates(
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(
-	ctx context.Context, rootDirs []string,
+	ctx context.Context, rootDirs []string, _ bool,
 ) (map[string]*int, error) {
 	args := m.Called(ctx, rootDirs)
 	if results, ok := args.Get(0).(map[string]*int); ok {
@@ -3040,6 +3102,19 @@ func (m *MockMediaDBI) FindMediaIDsByPaths(
 	}
 	args := m.Called(ctx, paths)
 	if result, ok := args.Get(0).([]database.MediaPathID); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindSingleContainerLaunchMediaBySystemID(
+	ctx context.Context, systemID, containerPath string,
+) (*database.Media, error) {
+	if !m.hasExpectedCall("FindSingleContainerLaunchMediaBySystemID") {
+		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise aliasing
+	}
+	args := m.Called(ctx, systemID, containerPath)
+	if result, ok := args.Get(0).(*database.Media); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
@@ -3177,6 +3252,29 @@ func (m *MockMediaDBI) UpsertMediaProperties(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) ReplaceDirectoryProperties(
+	ctx context.Context, systemDBID int64, props []database.DirectoryProperty,
+) (bool, error) {
+	if !m.hasExpectedCall("ReplaceDirectoryProperties") {
+		return false, nil
+	}
+	args := m.Called(ctx, systemDBID, props)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) GetDirectoryProperties(
+	ctx context.Context, systemDBID int64, path string,
+) ([]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetDirectoryProperties") {
+		return nil, nil
+	}
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func (m *MockMediaDBI) ApplyScrapeResult(

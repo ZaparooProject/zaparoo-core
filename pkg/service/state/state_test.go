@@ -475,3 +475,98 @@ func TestLockOrder_RestoreThenLaunchThenPublish(t *testing.T) {
 	releaseGate()
 	releaseRestore()
 }
+
+func TestClearActiveMediaIf_ClearsWhenConditionHolds(t *testing.T) {
+	t.Parallel()
+	st, notifications := NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	defer st.StopService()
+
+	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "track.mp3", "Track", "native-audio"))
+	<-notifications // started
+
+	var seen *models.ActiveMedia
+	cleared := st.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		seen = media
+		return media != nil && media.LauncherID == "native-audio"
+	})
+
+	assert.True(t, cleared)
+	assert.Nil(t, st.ActiveMedia())
+	require.NotNil(t, seen, "the condition must see the media it is deciding about")
+	assert.Equal(t, "Track", seen.Name)
+	select {
+	case n := <-notifications:
+		assert.Equal(t, models.NotificationStopped, n.Method)
+	default:
+		t.Fatal("clearing active media must announce the stop")
+	}
+}
+
+func TestClearActiveMediaIf_KeepsMediaWhenConditionFails(t *testing.T) {
+	t.Parallel()
+	st, notifications := NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	defer st.StopService()
+
+	st.SetActiveMedia(models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "emulator"))
+	<-notifications // started
+	gen, _ := st.ActiveMediaReadyGeneration()
+
+	cleared := st.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		return media != nil && media.LauncherID == "native-audio"
+	})
+
+	assert.False(t, cleared)
+	require.NotNil(t, st.ActiveMedia())
+	assert.Equal(t, "Game", st.ActiveMedia().Name)
+	current, _ := st.ActiveMediaReadyGeneration()
+	assert.Equal(t, gen, current, "a vetoed clear must not move the media generation")
+	select {
+	case n := <-notifications:
+		t.Fatalf("a vetoed clear must not notify, got %s", n.Method)
+	default:
+	}
+}
+
+func TestClearActiveMediaIf_NoMediaIsNoOp(t *testing.T) {
+	t.Parallel()
+	st, notifications := NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	defer st.StopService()
+
+	calls := 0
+	cleared := st.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		calls++
+		assert.Nil(t, media)
+		return true
+	})
+
+	assert.False(t, cleared)
+	assert.Equal(t, 1, calls)
+	select {
+	case n := <-notifications:
+		t.Fatalf("nothing to clear must not notify, got %s", n.Method)
+	default:
+	}
+}
+
+// TestClearActiveMediaIf_ConditionSeesConcurrentPublication is the race the
+// conditional clear exists for: a publication that lands after a caller decided
+// to clear must be judged on its own, not wiped by a decision about its
+// predecessor.
+func TestClearActiveMediaIf_ConditionSeesConcurrentPublication(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	defer st.StopService()
+
+	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "track.mp3", "Track", "native-audio"))
+	// Simulate the stale read-then-clear: the decision was made against the
+	// audio track, then a game took over before the clear ran.
+	st.SetActiveMedia(models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "emulator"))
+
+	cleared := st.ClearActiveMediaIf(func(media *models.ActiveMedia) bool {
+		return media != nil && media.LauncherID == "native-audio"
+	})
+
+	assert.False(t, cleared)
+	require.NotNil(t, st.ActiveMedia())
+	assert.Equal(t, "Game", st.ActiveMedia().Name)
+}

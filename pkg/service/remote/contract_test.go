@@ -17,13 +17,13 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// These goldens are the Zaparoo Online remote-operations contract: since
-// deleting wire.go, an allowlisted operation's result is the exact camelCase
-// shape pkg/api/models already documents publicly, with no second mirror to
-// keep in sync by hand. Changing one of these shapes is a coordinated,
-// deliberate contract change with the Online server, not a side effect of
-// an unrelated local model edit — that is what a failing test here should
-// prompt: update this golden AND the server together.
+// These goldens are the Zaparoo Online remote-operations result contract:
+// the snake_case shape each allowlisted query verb reports, produced by the
+// explicit per-response encoders in wire.go from Core's camelCase models.
+// Changing one of these shapes is a coordinated, deliberate contract change
+// with the Online server, not a side effect of an unrelated local model
+// edit — that is what a failing test here should prompt: update this golden
+// AND the server (protocol doc §13.1, devicesim) together.
 
 package remote
 
@@ -37,9 +37,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func mustMarshal(t *testing.T, value any) string {
+func mustEncode(t *testing.T, encode func(any) (any, error), value any) string {
 	t.Helper()
-	encoded, err := json.Marshal(value)
+	wire, err := encode(value)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(wire)
 	require.NoError(t, err)
 	return string(encoded)
 }
@@ -61,10 +63,10 @@ func TestContract_SystemsResponse(t *testing.T) {
 	assert.JSONEq(t, `{
 		"systems": [{
 			"id": "SNES", "name": "Super Nintendo", "category": "Console",
-			"releaseDate": "1990-11-21", "manufacturer": "Nintendo", "mediaCount": 842,
-			"zapScript": "**launch.system:SNES"
+			"release_date": "1990-11-21", "manufacturer": "Nintendo", "media_count": 842,
+			"zap_script": "**launch.system:SNES"
 		}]
-	}`, mustMarshal(t, response))
+	}`, mustEncode(t, encodeSystemsResponse, response))
 }
 
 func TestContract_LaunchersResponse(t *testing.T) {
@@ -80,19 +82,24 @@ func TestContract_LaunchersResponse(t *testing.T) {
 					Name: "3DO", File: "3DO_20250101.rbf", MGLPath: "_Console (Dual SDRAM)/3DO",
 				},
 			},
+		}, {
+			ID: "Missing", SystemID: "3DO", Available: false, AvailabilityReason: "core not installed: 3DO",
 		}},
 	}
 
 	assert.JSONEq(t, `{
 		"launchers": [{
-			"id": "DualRAM3DO", "systemId": "3DO", "systemName": "3DO",
+			"id": "DualRAM3DO", "system_id": "3DO", "system_name": "3DO",
 			"groups": ["libretro"], "available": true, "default": true,
 			"backend": "mister_core",
-			"misterCore": {
-				"name": "3DO", "file": "3DO_20250101.rbf", "mglPath": "_Console (Dual SDRAM)/3DO"
+			"mister_core": {
+				"name": "3DO", "file": "3DO_20250101.rbf", "mgl_path": "_Console (Dual SDRAM)/3DO"
 			}
+		}, {
+			"id": "Missing", "system_id": "3DO", "available": false,
+			"availability_reason": "core not installed: 3DO"
 		}]
-	}`, mustMarshal(t, response))
+	}`, mustEncode(t, encodeLaunchersResponse, &response))
 }
 
 func TestContract_SearchResults(t *testing.T) {
@@ -119,17 +126,17 @@ func TestContract_SearchResults(t *testing.T) {
 
 	assert.JSONEq(t, `{
 		"total": 1,
-		"pagination": {"nextCursor": "cursor-1", "hasNextPage": true, "pageSize": 1},
+		"pagination": {"next_cursor": "cursor-1", "has_next_page": true, "page_size": 1},
 		"results": [{
 			"name": "Chrono Trigger", "path": "/roms/SNES/Chrono Trigger.sfc",
-			"zapScript": "**launch:/roms/SNES/Chrono Trigger.sfc",
-			"relativePath": "SNES/Chrono Trigger.sfc",
-			"mediaId": 42, "hasCover": true,
+			"zap_script": "**launch:/roms/SNES/Chrono Trigger.sfc",
+			"relative_path": "SNES/Chrono Trigger.sfc",
+			"media_id": 42, "has_cover": true,
 			"system": {"id": "SNES", "name": "Super Nintendo", "category": "Console"},
 			"tags": [{"tag": "rpg", "type": "genre", "label": "RPG", "count": 3}],
-			"disambiguatingTags": [{"tag": "rev:1", "type": "revision"}]
+			"disambiguating_tags": [{"tag": "rev:1", "type": "revision"}]
 		}]
-	}`, mustMarshal(t, response))
+	}`, mustEncode(t, encodeSearchResults, response))
 }
 
 func TestContract_BrowseResults(t *testing.T) {
@@ -137,10 +144,16 @@ func TestContract_BrowseResults(t *testing.T) {
 
 	systemID := "SNES"
 	nextCursor := "cursor-2"
+	fileCount := 12
+	group := "Consoles"
+	zapScript := "**launch.system:SNES"
 	response := models.BrowseResults{
-		Path: "/roms/SNES/", TotalFiles: 1, TotalDirs: 0,
-		Pagination: &models.PaginationInfo{NextCursor: &nextCursor, HasNextPage: true, PageSize: 1},
+		Path: "/roms/SNES/", TotalFiles: 1, TotalDirs: 1,
+		Pagination: &models.PaginationInfo{NextCursor: &nextCursor, HasNextPage: true, PageSize: 2},
 		Entries: []models.BrowseEntry{{
+			Type: "dir", Name: "SNES", Path: "/roms/SNES", SystemID: &systemID,
+			SystemIDs: []string{"SNES"}, FileCount: &fileCount, Group: &group, ZapScript: &zapScript,
+		}, {
 			Type: "file", Name: "Chrono Trigger.sfc", Path: "/roms/SNES/Chrono Trigger.sfc",
 			SystemID: &systemID, MediaID: 42, HasCover: true,
 			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre"}},
@@ -148,19 +161,56 @@ func TestContract_BrowseResults(t *testing.T) {
 	}
 
 	assert.JSONEq(t, `{
-		"path": "/roms/SNES/", "totalFiles": 1, "totalDirs": 0,
-		"pagination": {"nextCursor": "cursor-2", "hasNextPage": true, "pageSize": 1},
+		"path": "/roms/SNES/", "total_files": 1, "total_dirs": 1,
+		"pagination": {"next_cursor": "cursor-2", "has_next_page": true, "page_size": 2},
 		"entries": [{
+			"type": "dir", "name": "SNES", "path": "/roms/SNES", "system_id": "SNES",
+			"system_ids": ["SNES"], "file_count": 12, "group": "Consoles",
+			"zap_script": "**launch.system:SNES", "has_cover": false
+		}, {
 			"type": "file", "name": "Chrono Trigger.sfc", "path": "/roms/SNES/Chrono Trigger.sfc",
-			"systemId": "SNES", "mediaId": 42, "hasCover": true,
+			"system_id": "SNES", "media_id": 42, "has_cover": true,
 			"tags": [{"tag": "rpg", "type": "genre"}]
 		}]
-	}`, mustMarshal(t, response))
+	}`, mustEncode(t, encodeBrowseResults, response))
 }
 
 func TestContract_VersionResponse(t *testing.T) {
 	t.Parallel()
 
 	response := models.VersionResponse{Version: "2.0.0", Platform: "mister"}
-	assert.JSONEq(t, `{"version": "2.0.0", "platform": "mister"}`, mustMarshal(t, response))
+	assert.JSONEq(t, `{"version": "2.0.0", "platform": "mister"}`, mustEncode(t, encodeVersionResponse, response))
+}
+
+// TestContract_EncodersRejectForeignResponses pins that an encoder never
+// guesses: a handler returning something other than its documented model
+// is an internal error, not a silently empty or camelCase result.
+func TestContract_EncodersRejectForeignResponses(t *testing.T) {
+	t.Parallel()
+
+	encoders := map[string]func(any) (any, error){
+		"systems":   encodeSystemsResponse,
+		"launchers": encodeLaunchersResponse,
+		"search":    encodeSearchResults,
+		"browse":    encodeBrowseResults,
+		"version":   encodeVersionResponse,
+	}
+	for name, encode := range encoders {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := encode(map[string]string{"unexpected": "shape"})
+			require.ErrorIs(t, err, errUnexpectedResponse)
+			_, err = encode(nil)
+			require.ErrorIs(t, err, errUnexpectedResponse)
+		})
+	}
+}
+
+// TestContract_EmptyResultVerbsReportEmptyObject pins that stop's wire
+// result is a bare {} whatever the method returned.
+func TestContract_EmptyResultVerbsReportEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	assert.JSONEq(t, `{}`, mustEncode(t, encodeEmptyResult, map[string]any{"leaked": true}))
+	assert.JSONEq(t, `{}`, mustEncode(t, encodeEmptyResult, nil))
 }

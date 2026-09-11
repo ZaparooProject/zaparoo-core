@@ -36,7 +36,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -51,6 +53,9 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
+	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
+	BeforeExit         func()
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager
@@ -394,6 +399,19 @@ func findFile(
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
 }
 
+// effectiveScanMode returns the scan mode that applies to the token currently
+// on a reader, so [[scan_mode]] reflects a per-reader override rather than the
+// global setting alone. Falls back to the global mode when nothing is on a
+// reader or the reader has since disconnected.
+func effectiveScanMode(cfg *config.Instance, st *state.State) string {
+	if active := st.GetActiveCard(); active.ReaderID != "" {
+		if r, ok := st.GetReader(active.ReaderID); ok && r != nil {
+			return strings.ToLower(cfg.ScanModeForReader(readers.DriverIDs(r), r.Path()))
+		}
+	}
+	return strings.ToLower(cfg.ReadersScan().Mode)
+}
+
 func GetExprEnv(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -412,7 +430,7 @@ func GetExprEnv(
 	env := zapscript.ArgExprEnv{
 		Platform: pl.ID(),
 		Version:  config.AppVersion,
-		ScanMode: strings.ToLower(cfg.ReadersScan().Mode),
+		ScanMode: effectiveScanMode(cfg, st),
 		Device: zapscript.ExprEnvDevice{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
@@ -477,6 +495,11 @@ func RunCommand(
 		}
 	}
 	if linkValue != "" {
+		// The link body is fetched from a remote server, so it is bounded on
+		// the same terms as any other untrusted script.
+		if lenErr := ValidateScriptLength(linkValue); lenErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", lenErr)
+		}
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := zapscript.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()
@@ -519,7 +542,7 @@ func RunCommand(
 		return platforms.CmdResult{}, advArgEvalErr
 	}
 
-	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs.GetWhen(); ok && !boolutil.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd.Name)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,
@@ -533,7 +556,11 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		SkipMediaLaunch:    opts.SkipMediaLaunch,
+		PrepareMediaLaunch: opts.PrepareMediaLaunch,
+		BeforeExit:         opts.BeforeExit,
 		PlaybackManager:    opts.PlaybackManager,
+		LauncherCache:      helpers.GlobalLauncherCache,
 		UI:                 opts.UI,
 		Playlist:           plsc,
 		Source:             token.Source,
@@ -561,15 +588,39 @@ func RunCommand(
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandBlocked, cmd.Name)
 	}
 
+	// A ZapLink may replace a deferred launch with a different command kind.
+	// Such commands have no resolved-target callback, but still need the
+	// preparation that the service deferred for the original launch command.
+	if opts.PrepareMediaLaunch != nil && !HasResolvedLaunchTarget(cmd.Name) {
+		proceed, prepareErr := opts.PrepareMediaLaunch(platforms.ResolvedLaunch{})
+		if prepareErr != nil {
+			return platforms.CmdResult{}, prepareErr
+		}
+		if !proceed {
+			return platforms.CmdResult{Unsafe: unsafe, NewCommands: newCmds}, nil
+		}
+	}
+
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}
-		if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
+		if opts.PrepareMediaLaunch != nil && HasResolvedLaunchTarget(cmd.Name) {
+			// Preparation may wait for confirmation or run a hook that launches
+			// its own media. Neither may hold the exclusive launch guard.
+			env.AcquireLaunch = func() (func(), error) {
+				if err := opts.LauncherManager.TryStartLaunch(); err != nil {
+					return nil, fmt.Errorf("launch guard: %w", err)
+				}
+				return opts.LauncherManager.EndLaunch, nil
+			}
+		} else {
+			if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
+			}
+			defer opts.LauncherManager.EndLaunch()
 		}
-		defer opts.LauncherManager.EndLaunch()
 		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
@@ -580,6 +631,13 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
+	if errors.Is(err, errMediaLaunchSkipped) {
+		// A resolved no-op is successful, including when wrapped by random
+		// or last-played launch handlers. Preserve metadata and chained commands.
+		log.Debug().Str("command", cmd.Name).Msg("resolved media launch skipped")
+		res.MediaChanged = false
+		err = nil
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

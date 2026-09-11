@@ -43,11 +43,13 @@ type SteamProcess struct {
 	AppID      int
 }
 
-// FindGameProcess finds the running Steam game process by appID.
+// FindGameProcess finds the running Steam game process by appID. The Steam
+// root is accepted for signature parity with the other platforms and unused
+// here, because macOS resolves the app by bundle rather than install path.
 // It first tries to find the exact executable from appinfo.vdf,
 // then falls back to searching for any process in the game's install directory.
 // Returns the process handle and PID, or nil/0 if not found.
-func FindGameProcess(appID int) (*os.Process, int, error) {
+func FindGameProcess(_ string, appID int) (*os.Process, int, error) {
 	// Try exact executable lookup first (from appinfo.vdf)
 	if proc, pid, found := findByExactExecutable(appID); found {
 		return proc, pid, nil

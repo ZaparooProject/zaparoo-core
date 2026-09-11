@@ -27,9 +27,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -258,4 +260,102 @@ func TestHandleInputGamepad_PlatformError(t *testing.T) {
 	_, err := HandleInputGamepad(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "virtual gamepad is disabled")
+}
+
+// memberEnv builds a request env for a paired member on a remote connection,
+// which is the case the input lists are meant to constrain.
+func memberEnv(pl *mocks.MockPlatform, cfg *config.Instance, params json.RawMessage) requests.RequestEnv {
+	return requests.RequestEnv{
+		Platform:   pl,
+		PlatformID: platformids.Windows,
+		ClientRole: "member",
+		Config:     cfg,
+		Params:     params,
+	}
+}
+
+func TestHandleInputKeyboard_BlockListAppliesToMembers(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("KeyboardPress", mock.Anything).Return(nil)
+
+	// These all resolve to real keys, so a pass here cannot be an unknown-key
+	// error wearing a block list's clothes.
+	blocked := []string{
+		`{"keys":"{alt+f4}"}`,
+		`{"keys":"{ctrl+alt+delete}"}`,
+		`{"keys":"{ctrl+alt+t}"}`,
+		`{"keys":"{press:ctrl+alt+delete}"}`,
+	}
+	for _, params := range blocked {
+		_, err := HandleInputKeyboard(memberEnv(pl, nil, json.RawMessage(params)))
+		require.Error(t, err, "params %s should be blocked", params)
+		require.ErrorIs(t, err, zapscript.ErrInputBlocked, "params %s", params)
+	}
+	pl.AssertNotCalled(t, "KeyboardPress", "{alt+f4}")
+	pl.AssertNotCalled(t, "KeyboardPress", "{ctrl+alt+delete}")
+}
+
+// The app's remote keyboard sends plain characters, so the mode check must not
+// reach the API even though Windows defaults to combos mode.
+func TestHandleInputKeyboard_MembersMayStillType(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("KeyboardPress", mock.Anything).Return(nil)
+
+	_, err := HandleInputKeyboard(memberEnv(pl, nil, json.RawMessage(`{"keys":"hello"}`)))
+	require.NoError(t, err)
+	pl.AssertCalled(t, "KeyboardPress", "h")
+}
+
+func TestHandleInputKeyboard_BlockListExemptsAdminAndLocal(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("KeyboardPress", mock.Anything).Return(nil)
+	params := json.RawMessage(`{"keys":"{alt+f4}"}`)
+
+	_, err := HandleInputKeyboard(requests.RequestEnv{
+		Platform: pl, PlatformID: platformids.Windows, ClientRole: "admin", Params: params,
+	})
+	require.NoError(t, err)
+
+	_, err = HandleInputKeyboard(requests.RequestEnv{
+		Platform: pl, IsLocal: true, Params: params,
+	})
+	require.NoError(t, err)
+}
+
+func TestHandleInputKeyboard_ClearedBlockListLetsMembersThrough(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("KeyboardPress", mock.Anything).Return(nil)
+
+	values := config.BaseDefaults
+	values.ZapScript.Input.Block = []string{}
+	cfg, err := config.NewConfig(t.TempDir(), values)
+	require.NoError(t, err)
+
+	_, err = HandleInputKeyboard(memberEnv(pl, cfg, json.RawMessage(`{"keys":"{alt+f4}"}`)))
+	require.NoError(t, err)
+	pl.AssertCalled(t, "KeyboardPress", "{alt+f4}")
+}
+
+func TestHandleInputGamepad_BlockListDoesNotBlockButtons(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("GamepadPress", mock.Anything).Return(nil)
+
+	_, err := HandleInputGamepad(memberEnv(pl, nil, json.RawMessage(`{"buttons":"{start}"}`)))
+	require.NoError(t, err)
+	pl.AssertCalled(t, "GamepadPress", "{start}")
 }

@@ -224,7 +224,8 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodMediaActive: true, models.MethodMediaActiveUpdate: true,
 	models.MethodMediaCleanOrphans: true, models.MethodMediaHistory: true,
 	models.MethodMediaHistoryLatest: true, models.MethodMediaHistoryTop: true,
-	models.MethodMediaLookup: true, models.MethodMediaMeta: true, models.MethodMediaImage: true,
+	models.MethodMediaLookup: true, models.MethodMediaLookupCandidates: true,
+	models.MethodMediaMeta: true, models.MethodMediaImage: true,
 	models.MethodScrapers: true, models.MethodMediaScrape: true,
 	models.MethodMediaScrapeStatus: true, models.MethodMediaScrapeCancel: true,
 	models.MethodMediaScrapeResume: true, models.MethodMediaControl: true,
@@ -341,33 +342,34 @@ func NewMethodMap() *MethodMap {
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
 		// media
-		models.MethodMedia:               methods.HandleMedia,
-		models.MethodMediaGenerate:       methods.HandleGenerateMedia,
-		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
-		models.MethodMediaGenerateResume: methods.HandleMediaGenerateResume,
-		models.MethodMediaIndex:          methods.HandleGenerateMedia,
-		models.MethodMediaSearch:         methods.HandleMediaSearch,
-		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
-		models.MethodMediaBrowseIndex:    methods.HandleMediaBrowseIndex,
-		models.MethodMediaTags:           methods.HandleMediaTags,
-		models.MethodMediaTagsUpdate:     methods.HandleMediaTagsUpdate,
-		models.MethodMediaMetaUpdate:     methods.HandleMediaMetaUpdate,
-		models.MethodMediaActive:         methods.HandleActiveMedia,
-		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
-		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
-		models.MethodMediaHistory:        methods.HandleMediaHistory,
-		models.MethodMediaHistoryLatest:  methods.HandleMediaHistoryLatest,
-		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
-		models.MethodMediaLookup:         methods.HandleMediaLookup,
-		models.MethodMediaMeta:           methods.HandleMediaMeta,
-		models.MethodMediaImage:          methods.HandleMediaImage,
-		models.MethodScrapers:            methods.HandleScrapers,
-		models.MethodMediaScrape:         methods.HandleMediaScrape,
-		models.MethodMediaScrapeStatus:   methods.HandleMediaScrapeStatus,
-		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
-		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
-		models.MethodMediaControl:        methods.HandleMediaControl,
-		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
+		models.MethodMedia:                 methods.HandleMedia,
+		models.MethodMediaGenerate:         methods.HandleGenerateMedia,
+		models.MethodMediaGenerateCancel:   methods.HandleMediaGenerateCancel,
+		models.MethodMediaGenerateResume:   methods.HandleMediaGenerateResume,
+		models.MethodMediaIndex:            methods.HandleGenerateMedia,
+		models.MethodMediaSearch:           methods.HandleMediaSearch,
+		models.MethodMediaBrowse:           methods.HandleMediaBrowse,
+		models.MethodMediaBrowseIndex:      methods.HandleMediaBrowseIndex,
+		models.MethodMediaTags:             methods.HandleMediaTags,
+		models.MethodMediaTagsUpdate:       methods.HandleMediaTagsUpdate,
+		models.MethodMediaMetaUpdate:       methods.HandleMediaMetaUpdate,
+		models.MethodMediaActive:           methods.HandleActiveMedia,
+		models.MethodMediaActiveUpdate:     methods.HandleUpdateActiveMedia,
+		models.MethodMediaCleanOrphans:     methods.HandleMediaCleanOrphans,
+		models.MethodMediaHistory:          methods.HandleMediaHistory,
+		models.MethodMediaHistoryLatest:    methods.HandleMediaHistoryLatest,
+		models.MethodMediaHistoryTop:       methods.HandleMediaHistoryTop,
+		models.MethodMediaLookup:           methods.HandleMediaLookup,
+		models.MethodMediaLookupCandidates: methods.HandleMediaLookupCandidates,
+		models.MethodMediaMeta:             methods.HandleMediaMeta,
+		models.MethodMediaImage:            methods.HandleMediaImage,
+		models.MethodScrapers:              methods.HandleScrapers,
+		models.MethodMediaScrape:           methods.HandleMediaScrape,
+		models.MethodMediaScrapeStatus:     methods.HandleMediaScrapeStatus,
+		models.MethodMediaScrapeCancel:     methods.HandleMediaScrapeCancel,
+		models.MethodMediaScrapeResume:     methods.HandleMediaScrapeResume,
+		models.MethodMediaControl:          methods.HandleMediaControl,
+		models.MethodMediaTitleParse:       methods.HandleMediaTitleParse,
 		// settings
 		models.MethodSettings:                    methods.HandleSettings,
 		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
@@ -399,7 +401,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMappingsReload: methods.HandleReloadMappings,
 		// readers
 		models.MethodReaders: func(env requests.RequestEnv) (any, error) {
-			return methods.HandleReaders(env.State.ListReaders())
+			return methods.HandleReaders(env.Config, env.State, env.State.ListReaders())
 		},
 		models.MethodReadersWrite: func(env requests.RequestEnv) (any, error) {
 			ls := env.State.GetLastScanned()
@@ -511,6 +513,33 @@ func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handle
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 		})
 	}
+}
+
+// mountWebSocketRoutes registers the WebSocket upgrade routes on r behind
+// rateLimit. The group carries no request timeout: the upgrade handler
+// returns only when the connection closes, and chi's Timeout middleware
+// writes a 504 header on return whenever its deadline has passed, which on
+// a hijacked connection is discarded by net/http with a warning on stderr.
+// Per-message deadlines are applied in handleWSMessage instead.
+func mountWebSocketRoutes(
+	r chi.Router,
+	rateLimit func(http.Handler) http.Handler,
+	handle func(w http.ResponseWriter, r *http.Request, version string),
+) {
+	r.Group(func(r chi.Router) {
+		r.Use(rateLimit)
+		r.Use(middleware.NoCache)
+
+		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "latest")
+		})
+		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0")
+		})
+		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0.1")
+		})
+	})
 }
 
 // apiMethodManagesRestoreAccess lists methods that coordinate with the
@@ -711,9 +740,20 @@ var mimeFallbacks = map[string]string{
 // Unknown paths fall back to index.html for client-side routing.
 func fsCustom404(root http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
 		upath := r.URL.Path
+		assetPath := strings.TrimPrefix(upath, "/")
+		if assetPath == "" {
+			serveIndex(w, r, root)
+			return
+		}
+		// Confine request-derived names before passing them to any filesystem.
+		if !filepath.IsLocal(assetPath) {
+			http.NotFound(w, r)
+			return
+		}
 
-		f, err := root.Open(upath)
+		f, err := root.Open(assetPath + ".gz")
 		if err != nil {
 			if os.IsNotExist(err) {
 				serveIndex(w, r, root)
@@ -745,13 +785,16 @@ func fsCustom404(root http.FileSystem) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
-		http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
+		if upath == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		serveCompressedAppContent(w, r, upath, stat, f)
 	})
 }
 
 // serveIndex serves the SPA index.html for client-side routing.
 func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
-	index, err := root.Open("index.html")
+	index, err := root.Open("index.html.gz")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening index.html")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -769,22 +812,22 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
+	serveCompressedAppContent(w, r, "index.html", stat, index)
 }
 
 const errMsgAppNotFound = "Zaparoo App files not found. " +
-	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
+	"Copy the built zaparoo-app files to pkg/assets/_app/dist/ and run task app:compress before building."
 
 // handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
-	appFs, err := fs.Sub(assets.App, "_app/dist")
+	appFs, err := fs.Sub(assets.App, "_app/packed/dist")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening app dist")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
 	}
 
-	if _, err := appFs.Open("index.html"); err != nil {
+	if _, err := fs.Stat(appFs, "index.html.gz"); err != nil {
 		log.Error().Msg("zaparoo-app files not found in embedded filesystem")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
@@ -906,9 +949,9 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 // publishes for it: responders derive the host record from the OS hostname, so
 // a device called "mister" answers to "mister.local" regardless of what
 // instance name Core advertises over DNS-SD. Hostnames that are already fully
-// qualified contribute their short label too, because avahi publishes the short
-// name under ".local" while the bundled responder appends the suffix to the
-// whole name. Results are deduplicated case-insensitively.
+// qualified contribute their short label too, because both avahi and the
+// bundled responder publish the short name under ".local". Results are
+// deduplicated case-insensitively.
 func localHostNames(hostname string) []string {
 	hostname = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
 	if hostname == "" {
@@ -1077,6 +1120,9 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 // On any send-side encryption failure (counter exhaustion, AEAD setup
 // error, write failure) the session is closed: a desynced session
 // cannot recover and keeping it open hides the bug from the client.
+//
+// A session whose transport mode is not settled yet never reaches here: the
+// caller queues for it instead, so the notification survives the wait.
 func writeNotificationFrame(
 	writeFn func([]byte) error,
 	cs *apimiddleware.ClientSession,
@@ -1097,6 +1143,18 @@ func writeNotificationFrame(
 
 func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	cs := getClientSession(s)
+	if cs == nil && getWebSocketAuthState(s) == webSocketAuthUnsettled {
+		// Transport mode still unknown: hold the notification rather than
+		// guess. It is flushed or discarded once the client's first frame
+		// arrives, or flushed when the settle grace expires.
+		if queue := getNotificationQueue(s); queue != nil && queue.enqueue(plaintext) {
+			return
+		}
+		// The queue refused it, so the session settled between the read above
+		// and the enqueue. Re-read the encryption session or an upgrade that
+		// landed in that window would be written with a stale nil and dropped.
+		cs = getClientSession(s)
+	}
 	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
 		logWSWriteError(err, "broadcasting notification")
 		closeMelodySession(s)
@@ -1491,7 +1549,7 @@ func decryptIncomingFrame(
 			return nil, nil, false
 		}
 		setClientSession(session, newSession)
-		setWebSocketAuthState(session, webSocketAuthEncrypted)
+		settleWebSocketTransport(session, webSocketAuthEncrypted, false)
 		return pt, newSession, true
 	}
 
@@ -1506,6 +1564,9 @@ func decryptIncomingFrame(
 		closeMelodySession(session)
 		return nil, nil, false
 	}
+	// The client spoke plaintext, so the transport mode is now settled and
+	// anything queued while it was unknown can be released in the clear.
+	settleWebSocketTransport(session, webSocketAuthPlaintext, false)
 	return msg, nil, true
 }
 
@@ -1980,9 +2041,11 @@ func StartWithReady(
 	// run the normal session close path.
 	session.HandleConnect(func(s *melody.Session) {
 		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
+		startWebSocketSettleGrace(s, webSocketSettleGrace)
 	})
 	session.HandleDisconnect(func(s *melody.Session) {
 		stopWebSocketAuthDeadline(s)
+		stopWebSocketSettleGrace(s)
 		closeWSDispatcher(s)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {
@@ -2051,12 +2114,20 @@ func StartWithReady(
 				return
 			}
 		}
-		authState := webSocketAuthPlaintext
+		// The transport mode is not known until the client's first frame: an
+		// encryption setting of false means encryption is optional, not absent,
+		// so a paired client can still negotiate an encrypted session. Starting
+		// as plaintext would let notifications broadcast in that window go out
+		// in the clear to a client that has already switched to encrypted, so
+		// they are queued instead until the first frame settles the mode or
+		// the settle grace runs out.
+		authState := webSocketAuthUnsettled
 		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
 			authState = webSocketAuthPending
 		}
 		err := session.HandleRequestWithKeys(w, r, map[string]any{
-			melodySessionAuthStateKey: authState,
+			melodySessionAuthStateKey:  authState,
+			melodySessionNotifQueueKey: &wsNotificationQueue{},
 		})
 		if err != nil {
 			log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
@@ -2066,21 +2137,7 @@ func StartWithReady(
 	// WebSocket routes — open to remote clients regardless of AllowedIPs.
 	// Encryption (when enabled) or API key auth (when disabled) is the
 	// security mechanism here.
-	r.Group(func(r chi.Router) {
-		r.Use(apiRateLimitMiddleware)
-		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
-
-		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "latest")
-		})
-		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0")
-		})
-		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0.1")
-		})
-	})
+	mountWebSocketRoutes(r, apiRateLimitMiddleware, wsHandler)
 
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.

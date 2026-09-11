@@ -183,25 +183,37 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackMiss(t *testing.T
 	mockDB.AssertExpectations(t)
 }
 
-func TestResolveMediaBySystemAndPath_SingletonContainerFallbackDisabled(t *testing.T) {
+// Directory containers resolve on every platform, not only where zips browse as
+// directories, so a disc folder can be addressed by its folder path.
+func TestResolveMediaBySystemAndPath_SingletonContainerFallbackWithoutZipsAsDirs(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	pl := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
-	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
-	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Game.zip"))
+	system := database.System{DBID: 10, SystemID: "PSX", Name: "Sony PlayStation"}
+	containerPath := filepath.ToSlash(filepath.Join("roms", "PSX", "Cool Game"))
+	childPath := filepath.ToSlash(filepath.Join(containerPath, "Cool Game.cue"))
+	media := database.Media{DBID: 20, Path: childPath, ParentDir: containerPath + "/"}
+	row := &database.MediaFullRow{
+		Media:  media,
+		Title:  database.MediaTitle{DBID: 30, Name: "Cool Game"},
+		System: system,
+	}
 
 	pl.On("Settings").Return(platforms.Settings{ZipsAsDirs: false})
-	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindSystemBySystemID", "PSX").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath).
+		Return(&media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, media.DBID).Return(row, nil)
 
 	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
-	_, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "media not found")
-	mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath)
+	result, err := resolveMediaBySystemAndPath(&env, "PSX", containerPath)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, childPath, result.Path)
 	mockDB.AssertExpectations(t)
 }
 

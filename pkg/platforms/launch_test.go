@@ -476,16 +476,22 @@ func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+// A details request opens an information page and starts nothing, so it must
+// not disturb whatever is already playing. Verified on the Windows test box:
+// scanning steam://1942280/Brotato?action=details while FTL was running killed
+// FTL and cleared ActiveMedia.
 func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	// Registered so an unexpected call is counted rather than panicking.
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
 
 	launcher := &platforms.Launcher{
-		ID:        "Steam",
-		SystemID:  "pc",
-		Lifecycle: platforms.LifecycleFireAndForget,
+		ID:              "Steam",
+		SystemID:        "pc",
+		Lifecycle:       platforms.LifecycleFireAndForget,
+		SupportsDetails: true,
 		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 			// Fire-and-forget launcher returns no process handle
 			var noProcess *os.Process
@@ -512,6 +518,7 @@ func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, activeMedia, "ActiveMedia should NOT be set for details action")
+	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -973,4 +980,111 @@ func TestKeyboardControls_PropagatesKeyboardPressError(t *testing.T) {
 	err := ctrl.Func(context.Background(), &config.Instance{}, platforms.ControlParams{})
 	require.ErrorIs(t, err, keyErr)
 	pl.AssertExpectations(t)
+}
+
+func TestDoLaunch_AbortsWhenPreemptedMediaStillRunning(t *testing.T) {
+	t.Parallel()
+
+	// The previous media could not be stopped, so starting a replacement would
+	// leave two games running with Core tracking only the second.
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).
+		Return(platforms.ErrStopFailed).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "Steam",
+		SystemID: "PC",
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           "steam://1942280/Brotato",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "Brotato" })
+
+	require.ErrorIs(t, err, platforms.ErrStopFailed)
+	assert.False(t, launchCalled, "replacement must not launch over running media")
+	assert.Nil(t, activeMedia)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_ProceedsWhenNothingWasRunning(t *testing.T) {
+	t.Parallel()
+
+	// A generic stop error means "nothing to stop", not a confirmed failure,
+	// so the launch must still go ahead.
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).
+		Return(errors.New("no active launcher")).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "Steam",
+		SystemID: "PC",
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           "steam://1942280/Brotato",
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "Brotato" }))
+	assert.True(t, launchCalled)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A launcher with no details concept — every MiSTer launcher, for one — used to
+// receive a details request as an ordinary launch: it loaded the media and
+// DoLaunch merely skipped publishing it as active, so the media played while
+// Core reported nothing running. The request is refused instead.
+func TestDoLaunch_DetailsRefusedWhenLauncherCannotShowThem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	// Registered so an unexpected call is counted rather than panicking.
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
+
+	launched := false
+	launcher := &platforms.Launcher{
+		ID:        "MisterNES",
+		SystemID:  "NES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launched = true
+			return nil, nil //nolint:nilnil // Mirrors a fire-and-forget launcher.
+		},
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) { t.Error("must not publish active media") },
+		Launcher:       launcher,
+		Path:           "/media/fat/games/NES/game.nes",
+		Options:        &platforms.LaunchOptions{Action: "details"},
+	}
+
+	err := platforms.DoLaunch(params, func(string) string { return "game" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot show details")
+	assert.False(t, launched, "the media must not be launched for a details request")
+	mockPlatform.AssertNumberOfCalls(t, "StopActiveLauncher", 0)
 }

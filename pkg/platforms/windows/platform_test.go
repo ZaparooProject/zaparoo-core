@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -146,7 +147,8 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			p.setLastLauncher(&launcher)
 
 			if tt.hasTrackedProcess {
-				cmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+				//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+				cmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "timeout", "/T", "10")
 				err := cmd.Start()
 				require.NoError(t, err)
 				defer func() {
@@ -168,7 +170,8 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 func TestSetTrackedProcess_FocusesLaunchedProcess(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	cmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "timeout", "/T", "10")
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
@@ -195,9 +198,11 @@ func TestSetTrackedProcess_FocusesLaunchedProcess(t *testing.T) {
 func TestSetTrackedProcess_CancelsPreviousFocus(t *testing.T) {
 	t.Parallel()
 
-	oldCmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	oldCmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "timeout", "/T", "10")
 	require.NoError(t, oldCmd.Start())
-	newCmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	newCmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "timeout", "/T", "10")
 	require.NoError(t, newCmd.Start())
 	t.Cleanup(func() {
 		_ = oldCmd.Process.Kill()
@@ -245,7 +250,8 @@ func TestSetTrackedProcess_CancelsPreviousFocus(t *testing.T) {
 func TestWaitTrackedProcess_ClearsCompletedProcess(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(context.Background(), "cmd", "/C", "exit", "0")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	cmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "exit", "0")
 	require.NoError(t, cmd.Start())
 
 	mediaCleared := false
@@ -270,9 +276,11 @@ func TestWaitTrackedProcess_ClearsCompletedProcess(t *testing.T) {
 func TestClearTrackedProcessMedia_DoesNotClearReplacement(t *testing.T) {
 	t.Parallel()
 
-	oldCmd := exec.CommandContext(context.Background(), "cmd", "/C", "exit", "0")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	oldCmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "exit", "0")
 	require.NoError(t, oldCmd.Start())
-	newCmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	//nolint:gosec // Fixed command; ComSpec resolves the shell by absolute path.
+	newCmd := exec.CommandContext(context.Background(), corehelpers.ComSpec(), "/C", "timeout", "/T", "10")
 	require.NoError(t, newCmd.Start())
 	t.Cleanup(func() {
 		_ = newCmd.Process.Kill()

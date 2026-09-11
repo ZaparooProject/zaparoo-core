@@ -36,8 +36,9 @@ import (
 const remoteDefaultMaxResults = 100
 
 // runMethod dispatches an allowlisted, method-backed operation through the
-// shared API registry, shrinking a paginated result and retrying once if it
-// exceeds spec.limit, per spec.shrink.
+// shared API registry with its already-translated (camelCase) params,
+// converts the response to its wire shape via spec.encode, and shrinks a
+// paginated result and retries if it exceeds spec.limit, per spec.shrink.
 func (m *manager) runMethod(ctx context.Context, spec opSpec, raw json.RawMessage) operationResult {
 	handler, ok := m.deps.Methods.GetMethod(spec.method)
 	if !ok {
@@ -55,7 +56,17 @@ func (m *manager) runMethod(ctx context.Context, spec opSpec, raw json.RawMessag
 		if err != nil {
 			return classifyHandlerError(err)
 		}
-		encoded, marshalErr := json.Marshal(response)
+		wire := response
+		if spec.encode != nil {
+			encodedResponse, encodeErr := spec.encode(response)
+			if encodeErr != nil {
+				log.Error().Err(encodeErr).Str("method", spec.method).
+					Msg("failed to convert remote operation result to wire shape")
+				return failResult("internal_error")
+			}
+			wire = encodedResponse
+		}
+		encoded, marshalErr := json.Marshal(wire)
 		if marshalErr != nil {
 			log.Error().Err(marshalErr).Str("method", spec.method).
 				Msg("failed to encode remote operation result")

@@ -49,14 +49,14 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.LinuxInput // Embedded for keyboard/gamepad support
-	tr                *tracker.Tracker
-	stopTr            func() error
-	activeMedia       func() *models.ActiveMedia
-	setActiveMedia    func(*models.ActiveMedia)
-	trackedProcess    *os.Process
-	arcadeCardLaunch  arcadeCardLaunchCache
-	processMu         syncutil.RWMutex
+	shared.InputManager // Embedded for keyboard/gamepad support
+	tr                  *tracker.Tracker
+	stopTr              func() error
+	activeMedia         func() *models.ActiveMedia
+	setActiveMedia      func(*models.ActiveMedia)
+	trackedProcess      *os.Process
+	arcadeCardLaunch    arcadeCardLaunchCache
+	processMu           syncutil.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -382,7 +382,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := mister.CreateLaunchers(p)
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	return helpers.CombineLaunchers(cfg, p, ls)
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

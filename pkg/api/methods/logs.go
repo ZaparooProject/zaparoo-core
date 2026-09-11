@@ -22,24 +22,22 @@ package methods
 import (
 	"encoding/base64"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
 func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received logs download request")
 
-	logFilePath := filepath.Join(env.Platform.Settings().LogDir, config.LogFile)
-
-	//nolint:gosec // Safe: reads log files from controlled application directories
-	data, err := os.ReadFile(logFilePath)
+	// Carries the captured stderr with the log: a crash that kills the service
+	// exists only there, and this is the path a user's uploaded log comes from.
+	data, err := helpers.ReadLogBundle(env.Platform, config.LogBundleMaxBytes)
 	if err != nil {
-		log.Error().Err(err).Str("path", logFilePath).Msg("failed to read log file")
+		log.Error().Err(err).Msg("failed to read log file")
 		return nil, fmt.Errorf("failed to read log file: %w", err)
 	}
 

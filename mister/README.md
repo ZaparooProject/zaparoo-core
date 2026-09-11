@@ -15,10 +15,10 @@ Core builds this module straight from the working tree. The root `go.mod`
 carries a `replace` pointing at `./mister`, so a change here takes effect in
 Core on the same commit and there is no pin to bump.
 
-The `require` line in the root `go.mod` is a placeholder. The `replace` means it
-is never fetched during a Core build; it exists so the module is named. Point it
-at a real `mister/vX.Y.Z` once one is tagged, for anyone who imports Core as a
-library and also compiles `pkg/platforms/mister`.
+The `require` line in the root `go.mod` names the last tagged version. The
+`replace` means it is never fetched during a Core build; it is what anyone
+importing Core as a library resolves if they also compile
+`pkg/platforms/mister`. Move it whenever a new tag is cut.
 
 Without the `replace` this drifts silently: Core would compile whatever version
 the proxy last served while `task test` runs this module's own tests against the

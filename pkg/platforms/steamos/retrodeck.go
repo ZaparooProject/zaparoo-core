@@ -136,9 +136,10 @@ func createRetroDECKLauncher(
 				return false
 			}
 
-			// Skip directories and .txt files
+			// Skip directories and .txt files. Test receives the path with
+			// its original case, so the extension check has to fold it.
 			ext := filepath.Ext(path)
-			if ext == "" || ext == ".txt" {
+			if ext == "" || strings.EqualFold(ext, ".txt") {
 				return false
 			}
 

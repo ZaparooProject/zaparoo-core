@@ -487,6 +487,10 @@ type MediaLookupMatch struct {
 	Confidence         float64            `json:"confidence"`
 }
 
+type MediaLookupCandidatesResponse struct {
+	Candidates []database.TitleCandidate `json:"candidates"`
+}
+
 type MediaLookupResponse struct {
 	Match *MediaLookupMatch `json:"match"`
 }
@@ -720,7 +724,18 @@ type RemoteActivityEntry struct {
 	ErrorCode     string `json:"errorCode,omitempty"`
 }
 
+// RemoteStatusInfo is the remote operations poller's last observation:
+// why the device is or isn't currently reachable for remote commands.
+// State is one of unknown, disabled, unlinked, connecting, waiting,
+// not_remote_device, unavailable, credential_rejected, or error.
+type RemoteStatusInfo struct {
+	State         string `json:"state"`
+	LastContactAt string `json:"lastContactAt,omitempty"`
+	LastErrorCode string `json:"lastErrorCode,omitempty"`
+}
+
 type RemoteActivityResponse struct {
+	Status  RemoteStatusInfo      `json:"status"`
 	Entries []RemoteActivityEntry `json:"entries"`
 }
 
@@ -729,12 +744,15 @@ type ReaderInfo struct {
 	ReaderID     string   `json:"readerId"`
 	Driver       string   `json:"driver"`
 	Info         string   `json:"info"`
+	ScanMode     string   `json:"scanMode"`
 	Capabilities []string `json:"capabilities"`
 	Connected    bool     `json:"connected"`
 }
 
 type ReadersResponse struct {
-	Readers []ReaderInfo `json:"readers"`
+	HoldOwnerReaderID string       `json:"holdOwnerReaderId,omitempty"`
+	HoldScanMode      string       `json:"holdScanMode,omitempty"`
+	Readers           []ReaderInfo `json:"readers"`
 }
 
 type InboxMessage struct {

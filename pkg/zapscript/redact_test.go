@@ -22,6 +22,7 @@ package zapscript
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -185,4 +186,205 @@ func TestRedactScript_OutputStaysParseable(t *testing.T) {
 				"redaction should be idempotent")
 		})
 	}
+}
+
+// The pre-check is what keeps redaction off the parser for ordinary tokens,
+// so it has to recognise every spelling that can reach a credential.
+func TestMayCarryCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "profile card", text: "**profile:" + testSwitchID, want: true},
+		{name: "uppercase profile card", text: "**PROFILE:" + testSwitchID, want: true},
+		{name: "mixed case profile card", text: "**PrOfIlE:" + testSwitchID, want: true},
+		{name: "profile clear", text: "**profile.clear", want: true},
+		{
+			name: "extension card",
+			text: "**playtime.extend:15m?profile=" + testSwitchID,
+			want: true,
+		},
+		{
+			name: "uppercase extension card",
+			text: "**PLAYTIME.EXTEND:15m?PROFILE=" + testSwitchID,
+			want: true,
+		},
+		{
+			name: "credential in a chain",
+			text: "**launch:/games/snes/mario.sfc||**profile:" + testSwitchID,
+			want: true,
+		},
+		{name: "plain launch", text: "**launch:/games/snes/mario.sfc", want: false},
+		{name: "media title", text: "@SNES/Super Mario World", want: false},
+		{name: "plain text", text: "just some text", want: false},
+		{name: "empty", text: "", want: false},
+		{name: "already redacted script", text: redactedScript, want: false},
+		{
+			name: "playtime command that carries no credential",
+			text: "**playtime.pause",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, mayCarryCredential(tt.text))
+		})
+	}
+}
+
+// Every command scriptCredentials can pull a credential out of must be named
+// in credentialCommands, or the pre-check would skip the parse that would
+// have found it.
+func TestCredentialCommands_CoverScriptCredentials(t *testing.T) {
+	t.Parallel()
+
+	bearers := []string{
+		"**profile:" + testSwitchID,
+		"**playtime.extend:15m?profile=" + testSwitchID,
+	}
+
+	for _, text := range bearers {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			require.True(t, mayCarryCredential(text),
+				"a script this carries a credential must not skip the parse")
+			assert.NotContains(t, RedactScript(text), testSwitchID)
+		})
+	}
+}
+
+// Malformed text that cannot name a credential-bearing command is left
+// readable. The parse is skipped, so nothing about it can be shown to be
+// sensitive, and blanking it would only lose diagnostic value.
+func TestRedactScript_KeepsMalformedTextWithoutCredentialCommand(t *testing.T) {
+	t.Parallel()
+
+	malformed := `**launch:"unterminated`
+
+	assert.Equal(t, malformed, RedactScript(malformed))
+	assert.False(t, HasSensitiveScript(malformed))
+}
+
+// A long unrelated argument must not stop a credential elsewhere in the same
+// script from being removed.
+func TestRedactToken_RemovesCredentialAlongsideLongText(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("A", 4000)
+	text := "**launch:" + long + "||**profile:" + testSwitchID
+
+	gotText, gotData := RedactToken(text, "deadbeef")
+
+	assert.NotContains(t, gotText, testSwitchID)
+	assert.Contains(t, gotText, long, "unrelated content should survive")
+	assert.Empty(t, gotData, "the raw payload of a sensitive token is dropped")
+}
+
+// RedactToken keeps the payload of a token that carries no credential.
+func TestRedactToken_KeepsDataForOrdinaryToken(t *testing.T) {
+	t.Parallel()
+
+	text := "**launch:/games/snes/mario.sfc"
+
+	gotText, gotData := RedactToken(text, "deadbeef")
+
+	assert.Equal(t, text, gotText)
+	assert.Equal(t, "deadbeef", gotData)
+}
+
+// An advanced argument key reaches the command decoder case-insensitively, so
+// `?PROFILE=` authorizes an extension exactly as `?profile=` does. Redaction
+// has to fold case the same way, or a working extension card writes its
+// credential to the log and to history in the clear.
+func TestRedactScript_RemovesCredentialFromMixedCaseAdvArg(t *testing.T) {
+	t.Parallel()
+
+	spellings := []string{"profile", "PROFILE", "Profile", "pRoFiLe"}
+
+	for _, key := range spellings {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			text := "**playtime.extend:15m?" + key + "=" + testSwitchID
+
+			got := RedactScript(text)
+			assert.NotContains(t, got, testSwitchID, "the credential must not survive")
+			assert.Contains(t, got, "15m", "non-sensitive content should stay readable")
+
+			gotText, gotData := RedactToken(text, "deadbeef")
+			assert.NotContains(t, gotText, testSwitchID)
+			assert.Empty(t, gotData, "the raw payload of a sensitive token is dropped")
+
+			assert.True(t, HasSensitiveScript(text))
+		})
+	}
+}
+
+// A script can spell the key more than one way at once, and every value is a
+// usable credential, so every one has to go.
+func TestRedactScript_RemovesEveryCaseVariantOfTheProfileArg(t *testing.T) {
+	t.Parallel()
+
+	second := "sw-0000ffff"
+	text := "**playtime.extend:15m?profile=" + testSwitchID + "&PROFILE=" + second
+
+	got := RedactScript(text)
+
+	assert.NotContains(t, got, testSwitchID)
+	assert.NotContains(t, got, second)
+}
+
+// ForLog is what a reader driver calls on text nothing has bounded yet, so it
+// has to both redact and cap. A script within the limit is untouched beyond
+// redaction; a longer one is cut, and its real size reported.
+func TestForLog(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ordinary text is unchanged", func(t *testing.T) {
+		t.Parallel()
+		text := "**launch:/games/snes/mario.sfc"
+		assert.Equal(t, text, ForLog(text))
+	})
+
+	t.Run("credential is redacted", func(t *testing.T) {
+		t.Parallel()
+		got := ForLog("**profile:" + testSwitchID)
+		assert.NotContains(t, got, testSwitchID)
+		assert.Contains(t, got, RedactedPlaceholder)
+	})
+
+	t.Run("text at the limit is not truncated", func(t *testing.T) {
+		t.Parallel()
+		text := "**echo:" + strings.Repeat("A", MaxScriptLength-len("**echo:"))
+		require.Len(t, text, MaxScriptLength)
+		assert.Equal(t, text, ForLog(text))
+	})
+
+	t.Run("longer text is cut and its size reported", func(t *testing.T) {
+		t.Parallel()
+		text := "**echo:" + strings.Repeat("A", 300000)
+		got := ForLog(text)
+		assert.Less(t, len(got), MaxScriptLength+64, "a log line must not carry the whole payload")
+		assert.Contains(t, got, "(300007 bytes)")
+	})
+
+	t.Run("a cut never splits a rune", func(t *testing.T) {
+		t.Parallel()
+		// Three-byte runes do not divide evenly into the limit, so the cut
+		// lands mid-rune unless it is moved back to a boundary.
+		text := "**echo:" + strings.Repeat("あ", 4000)
+		got := ForLog(text)
+		assert.True(t, utf8.ValidString(got), "log text must stay valid UTF-8")
+	})
+
+	t.Run("a credential inside the kept portion still goes", func(t *testing.T) {
+		t.Parallel()
+		text := "**profile:" + testSwitchID + "||**echo:" + strings.Repeat("A", 300000)
+		assert.NotContains(t, ForLog(text), testSwitchID)
+	})
 }

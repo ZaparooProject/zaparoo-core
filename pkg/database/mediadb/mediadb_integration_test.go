@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -186,26 +187,82 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
-// The browse sort index orders SortName with a collation this binary registers
-// on its connections rather than storing in the file, so a build without it
-// cannot prepare any statement against Media. Introducing the index through a
-// migration is what moves the schema version past older builds, so going back
-// to one raises ErrSchemaAhead and startup rebuilds the media database instead
-// of failing on a schema it cannot parse. CreateSecondaryIndexes only runs at
-// the end of an indexing run, so an index present on a freshly migrated
-// database can only have come from a migration.
-func TestMigrations_CreateBrowseSortIndexWithItsCollation(t *testing.T) {
+// browseSortCollationPrevVersion is the migration immediately before
+// 20260830140000_browse_sort_collation.sql, the point a downgrade past the
+// collation must reach.
+const browseSortCollationPrevVersion int64 = 20260825120000
+
+// The browse sort collation must carry a schema version bump: without one, a
+// build that lacks ZAPAROO_TITLE_V1 opens the database happily and then fails
+// on the first prepare against Media, and the rebuild that exists for an
+// unreadable schema never fires.
+//
+// The migration must do that and nothing else. Rebuilding the index there ran
+// it over every media row while the service was starting, with nothing on
+// screen to say why — 2m14s on a 229k-item library, and libraries get much
+// bigger. CreateSecondaryIndexes owns that work, at the end of an indexing run.
+func TestMigrations_BrowseSortCollationBumpsVersionWithoutTableWork(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
+	ctx := context.Background()
 
 	require.NoError(t, mediaDB.MigrateUp())
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+
+	var marker string
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = 'BrowseSortCollation'",
+	).Scan(&marker), "the version-bearing migration must have applied")
+	assert.Equal(t, strings.ToLower(browseTitleCollationName), marker)
 
 	var indexSQL string
-	require.NoError(t, mediaDB.UnsafeGetSQLDb().QueryRowContext(context.Background(),
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
 		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
-	).Scan(&indexSQL), "browse sort index must exist on a freshly migrated database")
+	).Scan(&indexSQL))
+	assert.NotContains(t, indexSQL, browseTitleCollationName,
+		"migrating must not rebuild the index; that belongs to CreateSecondaryIndexes")
+
+	// And the index does become collated, at the point that owns it.
+	require.NoError(t, mediaDB.CreateSecondaryIndexes())
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
+	).Scan(&indexSQL))
 	assert.Contains(t, indexSQL, browseTitleCollationName,
-		"the index must carry the collation whose absence breaks older builds")
+		"an indexing run replaces it with the collated form")
+
+	// An explicit downgrade must restore the legacy index before lowering the
+	// schema version. Otherwise a build without the custom collation accepts the
+	// version but cannot prepare statements against Media.
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	// DownTo the version before the collation migration, not a bare Down:
+	// Down reverts whatever migration happens to be last, so any migration
+	// added afterwards would silently stop this from testing the downgrade it
+	// is named for.
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", browseSortCollationPrevVersion))
+
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
+	).Scan(&indexSQL))
+	assert.NotContains(t, indexSQL, browseTitleCollationName)
+
+	var markerCount int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DBConfig WHERE Name = 'BrowseSortCollation'",
+	).Scan(&markerCount))
+	assert.Zero(t, markerCount)
+
+	dbPath := mediaDB.GetDBPath()
+	require.NoError(t, mediaDB.Close())
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, legacyDB.Close()) }()
+	stmt, err := legacyDB.PrepareContext(ctx, "SELECT DBID FROM Media LIMIT 1")
+	require.NoError(t, err, "legacy connection must prepare Media statements after downgrade")
+	defer func() { require.NoError(t, stmt.Close()) }()
+	var mediaDBID int64
+	err = stmt.QueryRowContext(ctx).Scan(&mediaDBID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
@@ -2726,6 +2783,9 @@ func TestMediaDB_RefreshSlugSearchCacheForSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 
+	// This test exercises index-owned selective refresh, not idle recovery.
+	require.NoError(t, mediaDB.SetIndexingSystems([]string{nesSystem.ID}))
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
 	err = mediaDB.TruncateSystems([]string{nesSystem.ID})
 	require.NoError(t, err)
 
@@ -2813,8 +2873,15 @@ func TestMediaDB_IndexingInvalidationPreservesSlugSearchCacheWhenRequested_Integ
 	require.NotNil(t, mediaDB.slugSearchCache.Load())
 	assert.True(t, mediaDB.slugSearchCache.Load().CanServeSystems([]string{nesSystem.ID}))
 
-	mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
-	assert.Nil(t, mediaDB.slugSearchCache.Load())
+	func() {
+		// Observe immediate eviction before the asynchronous replacement runs.
+		mediaDB.slugCacheState.buildMu.Lock()
+		defer mediaDB.slugCacheState.buildMu.Unlock()
+		mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
+		assert.Nil(t, mediaDB.slugSearchCache.Load())
+	}()
+	mediaDB.WaitForBackgroundOperations()
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
 }
 
 func TestMediaDB_UpdateLastGenerated_FullIndexClearsSlugSearchCache_Integration(t *testing.T) {
@@ -2896,6 +2963,8 @@ func TestMediaDB_DropSlugSearchCacheForSystems_RemovesOnlyTouchedSystems_Integra
 	insertGame(snesSystem, "The Legend of Zelda", filepath.Join("roms", "snes", "zelda.sfc"))
 	require.NoError(t, mediaDB.RebuildSlugSearchCache())
 
+	// Indexing owns restoration; inspect the dropped coverage until refresh.
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
 	mediaDB.DropSlugSearchCacheForSystems([]string{nesSystem.ID})
 	cache := mediaDB.slugSearchCache.Load()
 	require.NotNil(t, cache)
@@ -3304,7 +3373,7 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
 		"ChildDirDBID = ? AND SystemDBID = ?", romsID, nesSystem.DBID))
 
-	rootCounts, err := mediaDB.BrowseRootCounts(ctx, []string{"/"})
+	rootCounts, err := mediaDB.BrowseRootCounts(ctx, []string{"/"}, false)
 	require.NoError(t, err)
 	require.NotNil(t, rootCounts["/"])
 	assert.Equal(t, 2, *rootCounts["/"])
@@ -4718,4 +4787,46 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 	require.NoError(t, err)
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "Contra", nextPage[0].Name)
+}
+
+// slugResolutionPurgeVersion is 20260902160000_purge_stale_slug_resolutions,
+// which retires cache entries written before title resolution learned to
+// promote a match to its container's launch target.
+const slugResolutionPurgeVersion = 20260902160000
+
+// TestMigrations_PurgesSlugResolutionsCachedBeforeContainerPromotion covers the
+// upgrade path a reindex would otherwise be needed for: a cache entry naming a
+// disc folder's companion file keeps launching that file, because a cache hit
+// returns without consulting the container rule.
+func TestMigrations_PurgesSlugResolutionsCachedBeforeContainerPromotion(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.MigrateUp())
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	// Roll back to just before the purge so it can be observed running.
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", slugResolutionPurgeVersion-1))
+
+	// The cache row keys a real media row, so seed the companion file a
+	// pre-promotion resolution would have landed on.
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (900, 'PSX', 'PSX');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (900, 900, 'b064', 'B_064');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir)
+		VALUES (900, 900, 900, '/roms/PSX/B_064/B_064 (Track 001).bin', '/roms/PSX/B_064/');
+		INSERT INTO SlugResolutionCache
+			(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
+		VALUES ('PSX:b064:', 'PSX', 'b064', '[]', 900, 'strategy_exact_match', 0);
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, goose.Up(sqlDB, "migrations"))
+
+	var remaining int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM SlugResolutionCache").Scan(&remaining))
+	assert.Zero(t, remaining, "entries cached before container promotion must not survive the upgrade")
 }

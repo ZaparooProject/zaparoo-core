@@ -34,6 +34,7 @@ const (
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationMediaScraping        = "media.scraping"
+	NotificationMediaVisibility      = "media.visibility"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
@@ -119,6 +120,7 @@ const (
 	MethodMediaHistoryLatest          = "media.history.latest"
 	MethodMediaHistoryTop             = "media.history.top"
 	MethodMediaLookup                 = "media.lookup"
+	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
 	MethodScrapers                    = "scrapers"
@@ -251,6 +253,10 @@ type ErrorObject struct {
 	Code    int    `json:"code"`
 }
 
+// ResponseObject carries a method's successful result. Result has no
+// omitempty because JSON-RPC 2.0 §5 requires the key on success, so a method
+// with nothing to return sends "result": null. Void handlers express that with
+// methods.NoContent, which marshals itself as null.
 type ResponseObject struct {
 	Result  any          `json:"result"`
 	Error   *ErrorObject `json:"error,omitempty"`

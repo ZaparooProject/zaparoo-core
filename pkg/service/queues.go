@@ -104,6 +104,8 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, zapscript.ErrRemoteSource) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
 		errors.Is(err, state.ErrLaunchBlockedByHook) ||
+		errors.Is(err, state.ErrLaunchRequiresProfile) ||
+		errors.Is(err, playtime.ErrLimitReached) ||
 		errors.Is(err, systemdefs.ErrUnknownSystem) ||
 		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
@@ -133,6 +135,9 @@ func runTokenZapScriptWithContext(
 	exprEnv *gozapscript.ArgExprEnv,
 	inHookContext bool,
 ) error {
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
 	if !svc.State.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
 		return state.ErrRunZapScriptDisabled
@@ -143,7 +148,14 @@ func runTokenZapScriptWithContext(
 	if len(cmds) == 0 {
 		mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
 		if hasMapping {
-			log.Info().Msgf("found mapping: %s", mappedValue)
+			// An override replaces the text whose length was already checked,
+			// and a config or platform mapping never passed through the API's
+			// check at all, so the substituted script is bounded here too.
+			if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+				return fmt.Errorf("mapping override rejected: %w", lenErr)
+			}
+			redacted, _ := zapscript.RedactToken(mappedValue, "")
+			log.Info().Msgf("found mapping: %s", redacted)
 			token.Text = mappedValue
 		}
 
@@ -153,6 +165,11 @@ func runTokenZapScriptWithContext(
 			return fmt.Errorf("failed to parse script: %w: %w", zapscript.ErrInvalidScript, err)
 		}
 		cmds = script.Cmds
+		// script.Traits is deliberately dropped here. Traits are resolved once,
+		// where the token entered the system, so running a script cannot change
+		// the traits of the token running it. Tokens that reach here without
+		// going through that step, such as playlist tracks and hook scripts,
+		// inherit from the token they came from instead.
 	}
 
 	log.Info().Msgf("running script (%d cmds)", len(cmds))
@@ -174,11 +191,18 @@ func runTokenZapScriptWithContext(
 	}
 
 	for i := 0; i < len(cmds); i++ {
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
 		cmd := cmds[i]
 
-		// Run before_media_start hook; errors block the launch.
-		beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
-		if shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
+		deferLaunch := (suppressTapRelaunch(svc, &originToken, inHookContext) ||
+			originToken.LaunchGuardGeneration != 0) && zapscript.HasResolvedLaunchTarget(cmd.Name)
+		beforeMediaStart := func() error {
+			beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
+			if !shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
+				return nil
+			}
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
 				Active:     currentPrimary,
@@ -195,6 +219,32 @@ func runTokenZapScriptWithContext(
 			hookErr := runTokenZapScriptWithContext(runCtx, svc, hookToken, hookPlsc, &hookEnv, true)
 			if hookErrorBlocks(hookErr) {
 				return fmt.Errorf("%w: %w", state.ErrLaunchBlockedByHook, hookErr)
+			}
+			return nil
+		}
+		if !deferLaunch {
+			if hookErr := beforeMediaStart(); hookErr != nil {
+				return hookErr
+			}
+		}
+
+		// The outgoing media's before_exit hook for commands that stop media
+		// outright. After before_media_start so a hook that blocks the launch
+		// also suppresses the exit, and before any lock on the launch path is
+		// taken so the script is free to run its own ZapScript. Launch commands
+		// run it from the launch path instead, once the launch is known to be
+		// going ahead. Failures never abort the launch or stop.
+		if shouldRunBeforeExitHook(inHookContext, cmd) {
+			outgoingGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+			svc.State.RunBeforeExitHook()
+			// A before_exit script can launch media of its own. Running the
+			// stop now would kill what the hook just started instead of what
+			// the token asked to stop, so skip the command entirely.
+			if commandStopsPrimaryMedia(cmd) &&
+				svc.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+				log.Info().Str("command", cmd.Name).
+					Msg("before_exit replaced the outgoing media, skipping stop")
+				continue
 			}
 		}
 
@@ -219,11 +269,42 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
-		if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, currentPlaylist); stopErr != nil {
-			return stopErr
+		preparePlayback := func() error {
+			if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, currentPlaylist); stopErr != nil {
+				return stopErr
+			}
+			return pauseBackgroundForPrimaryLaunch(svc, cmd, currentPlaylist)
 		}
-		if pauseErr := pauseBackgroundForPrimaryLaunch(svc, cmd, currentPlaylist); pauseErr != nil {
-			return pauseErr
+		var skipLaunch func(platforms.ResolvedLaunch) bool
+		var prepareLaunch func(platforms.ResolvedLaunch) (bool, error)
+		if deferLaunch {
+			skipLaunch = func(target platforms.ResolvedLaunch) bool {
+				return suppressTapRelaunch(svc, &originToken, inHookContext) &&
+					launchMatchesActive(svc.State.ActiveMedia(), target)
+			}
+			prepareLaunch = func(target platforms.ResolvedLaunch) (bool, error) {
+				if originToken.LaunchGuardGeneration != 0 {
+					proceed, guardErr := confirmResolvedLaunch(runCtx, svc, &originToken)
+					if guardErr != nil || !proceed {
+						return false, guardErr
+					}
+					if admissionErr := recheckConfirmedLaunch(svc, cmd.Name); admissionErr != nil {
+						return false, admissionErr
+					}
+				}
+				if skipLaunch(target) {
+					return false, nil
+				}
+				if hookErr := beforeMediaStart(); hookErr != nil {
+					return false, hookErr
+				}
+				if skipLaunch(target) {
+					return false, nil
+				}
+				return true, preparePlayback()
+			}
+		} else if prepareErr := preparePlayback(); prepareErr != nil {
+			return prepareErr
 		}
 
 		result, err := zapscript.RunCommand(
@@ -244,6 +325,9 @@ func runTokenZapScriptWithContext(
 			zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
 				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
+				SkipMediaLaunch:    skipLaunch,
+				PrepareMediaLaunch: prepareLaunch,
+				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
 				},
@@ -264,6 +348,13 @@ func runTokenZapScriptWithContext(
 			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
 			select {
 			case plsc.Queue <- nil:
+			case <-runCtx.Done():
+				select {
+				case <-svc.State.GetContext().Done():
+					return errors.New("service shutting down")
+				default:
+					return runCtx.Err()
+				}
 			case <-svc.State.GetContext().Done():
 				return errors.New("service shutting down")
 			}
@@ -280,7 +371,14 @@ func runTokenZapScriptWithContext(
 					softwareToken := *holdToken
 					log.Debug().Msg("media changed, updating hold owner")
 					select {
-					case svc.LaunchSoftwareQueue <- &softwareToken:
+					case svc.LaunchSoftwareQueue <- softwareTokenUpdate{token: &softwareToken}:
+					case <-runCtx.Done():
+						select {
+						case <-svc.State.GetContext().Done():
+							return errors.New("service shutting down")
+						default:
+							return runCtx.Err()
+						}
 					case <-svc.State.GetContext().Done():
 						return errors.New("service shutting down")
 					}
@@ -722,6 +820,22 @@ var (
 	errLaunchPanicked = errors.New("token launch panicked")
 )
 
+// rejectOversizedToken drops a token whose script exceeds the length bound.
+//
+// This is the one point every source converges on — readers, the API, REST and
+// the GMC proxy all reach the worker through the same channel — so bounding
+// here covers the sources that have no validation of their own. It runs before
+// the token is logged, redacted or stored, because each of those parses the
+// text. Nothing is written to history: an over-long script is rejected, not
+// recorded, matching the empty-token case above it.
+func rejectOversizedToken(t *tokens.Token, err error) {
+	log.Warn().Err(err).
+		Str("source", t.Source).
+		Int("length", len(t.Text)).
+		Msg("rejecting token, script exceeds maximum length")
+	t.Completion.Complete(err)
+}
+
 func processTokenQueue(
 	svc *ServiceContext,
 	itq <-chan tokens.Token,
@@ -758,6 +872,11 @@ func handleQueuedToken(
 		return
 	}
 
+	if lenErr := zapscript.ValidateScriptLength(t.Text); lenErr != nil {
+		rejectOversizedToken(&t, lenErr)
+		return
+	}
+
 	log.Info().Msgf("processing token: %v", tokenForLog(&t))
 
 	if err := svc.Platform.ScanHook(&t); err != nil {
@@ -791,6 +910,14 @@ func handleQueuedToken(
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
 	scriptText := t.Text
 	if hasMapping {
+		// The token's own text was bounded above, but the override that
+		// replaces it was not: a config or platform mapping never reaches the
+		// API's check. Reject before the parse below, and before history is
+		// written, exactly as an over-long token is.
+		if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
+			rejectOversizedToken(&t, lenErr)
+			return
+		}
 		scriptText = mappedValue
 	}
 
@@ -799,6 +926,17 @@ func handleQueuedToken(
 	if parseErr != nil {
 		log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 		// Continue anyway - the error will be caught in runTokenZapScript
+	}
+
+	// The one place a token's traits are settled. Every token carrying script
+	// text passes through here, and everything downstream reads this set
+	// rather than deriving its own, so a token's traits cannot change once it
+	// starts running.
+	if parseErr == nil {
+		t.Traits = tokens.ResolveTraits(script.Traits)
+		if !t.Traits.IsEmpty() {
+			log.Info().Strs("traits", t.Traits.Names()).Msg("token declares traits")
+		}
 	}
 
 	if parseErr != nil || shouldPlayScanSuccessSound(&script) {

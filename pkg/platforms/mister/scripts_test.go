@@ -5,10 +5,12 @@ package mister
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -23,11 +25,15 @@ func restoreScriptTestHooks(t *testing.T) {
 	oldRunChvt := runScriptChvt
 	oldWriteLauncher := writeScriptLauncher
 	oldStartCommand := startScriptCommand
+	oldRunHiddenCommand := runHiddenScriptCommand
+	oldKillHiddenProcessGroup := killHiddenScriptProcessGroup
 	t.Cleanup(func() {
 		getScriptConsoleManager = oldGetConsoleManager
 		runScriptChvt = oldRunChvt
 		writeScriptLauncher = oldWriteLauncher
 		startScriptCommand = oldStartCommand
+		runHiddenScriptCommand = oldRunHiddenCommand
+		killHiddenScriptProcessGroup = oldKillHiddenProcessGroup
 	})
 }
 
@@ -41,6 +47,49 @@ func newTestScript(t *testing.T, name string) string {
 
 func newTestScriptPlatform() *Platform {
 	return &Platform{activeMedia: func() *models.ActiveMedia { return nil }}
+}
+
+func TestRunScriptContext_CancelsHiddenScriptWithExecutionContext(t *testing.T) {
+	restoreScriptTestHooks(t)
+
+	started := make(chan struct{})
+	killed := make(chan int, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runHiddenScriptCommand = func(cmd *exec.Cmd) error {
+		cmd.Process = &os.Process{Pid: 1364}
+		close(started)
+		<-ctx.Done()
+		if err := cmd.Cancel(); err != nil {
+			return fmt.Errorf("cancel hidden command: %w", err)
+		}
+		return ctx.Err()
+	}
+	killHiddenScriptProcessGroup = func(pid int) error {
+		killed <- pid
+		return nil
+	}
+	script := newTestScript(t, "slow.sh")
+	result := make(chan error, 1)
+	go func() {
+		result <- runScriptContext(ctx, nil, script, "", true)
+	}()
+
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("hidden command runner did not start")
+	}
+	err := <-result
+
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case pid := <-killed:
+		assert.Equal(t, 1364, pid)
+	case <-time.After(time.Second):
+		t.Fatal("hidden script process group was not canceled")
+	}
 }
 
 func TestRunScript_WidgetUsesFrontendTTYAndCleansUpSetupFailure(t *testing.T) {

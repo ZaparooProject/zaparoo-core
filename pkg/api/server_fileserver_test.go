@@ -29,6 +29,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFsCustom404RejectsNonLocalPaths(t *testing.T) {
+	t.Parallel()
+
+	root := http.FS(compressAppTestFS(t, fstest.MapFS{
+		"index.html": {Data: []byte("SPA")},
+		"secret":     {Data: []byte("not a traversal target")},
+	}))
+	for _, target := range []string{"/..", "/../secret", "/assets/../../secret", "/%2e%2e/secret", "//secret"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+			fsCustom404(root).ServeHTTP(recorder, request)
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "not a traversal target")
+		})
+	}
+}
+
 func TestFsCustom404(t *testing.T) {
 	t.Parallel()
 
@@ -43,7 +62,7 @@ func TestFsCustom404(t *testing.T) {
 		"assets/font.woff2": {Data: []byte("WOFF2 binary data")},
 	}
 
-	handler := fsCustom404(http.FS(mockFS))
+	handler := fsCustom404(http.FS(compressAppTestFS(t, mockFS)))
 
 	tests := []struct {
 		name                 string
@@ -175,7 +194,7 @@ func TestFsCustom404_MissingIndex(t *testing.T) {
 		"other.txt": {Data: []byte("not index")},
 	}
 
-	handler := fsCustom404(http.FS(mockFS))
+	handler := fsCustom404(http.FS(compressAppTestFS(t, mockFS)))
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/unknown", http.NoBody)

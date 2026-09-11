@@ -50,7 +50,18 @@ import (
 // ErrNotAllowed is returned when a run request is not allowed.
 var ErrNotAllowed = errors.New("not allowed")
 
+// NoContent is the success value for methods that return nothing. It marshals
+// as JSON null so a void method's response carries "result": null, which is
+// what the API docs publish and what these methods sent before this sentinel
+// replaced a bare nil result.
 type NoContent struct{}
+
+// MarshalJSON must keep a value receiver: handlers return NoContent{} as an
+// any, and encoding/json only finds a pointer-receiver marshaller on an
+// addressable value.
+func (NoContent) MarshalJSON() ([]byte, error) {
+	return []byte("null"), nil
+}
 
 // runParamsForLog returns a copy of run params with any bearer credential in
 // the ZapScript removed, so a profile card run through the API cannot leave
@@ -86,7 +97,17 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
-		log.Debug().Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		// Bound the text before anything parses it, including the redaction
+		// below.
+		if params.Text != nil {
+			if lenErr := zapscript.ValidateScriptLength(*params.Text); lenErr != nil {
+				return nil, scriptTooLongErr(lenErr)
+			}
+		}
+
+		if e := log.Debug(); e.Enabled() {
+			e.Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
+		}
 
 		if params.Type != nil {
 			t.Type = *params.Type
@@ -127,6 +148,10 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 
 		if text == "" {
 			return nil, models.ClientErr(validation.ErrMissingParams)
+		}
+
+		if lenErr := zapscript.ValidateScriptLength(text); lenErr != nil {
+			return nil, scriptTooLongErr(lenErr)
 		}
 
 		t.Text = norm.NFC.String(text)
@@ -196,6 +221,14 @@ func runContextError(env *requests.RequestEnv, ctxErr error) error {
 	}
 }
 
+// scriptTooLongErr categorizes the length rejection as an invalid script.
+// Every other reason a script will not run reports that category, and reusing
+// it means a client already branching on the category handles this without a
+// change; the message says which limit was exceeded.
+func scriptTooLongErr(err error) error {
+	return models.CategorizedErr(models.ErrorCategoryInvalidScript, err.Error(), err)
+}
+
 // runError maps a terminal execution error onto a stable category with a
 // message that carries no filesystem paths or token contents. The cause is
 // kept for logging and errors.Is.
@@ -213,6 +246,10 @@ func runError(err error) error {
 	case errors.Is(err, state.ErrRunZapScriptDisabled):
 		return models.CategorizedErr(models.ErrorCategoryDisabled,
 			"ZapScript execution is disabled", err)
+	case errors.Is(err, zapscript.ErrScriptTooLong):
+		// The queue's backstop rejects a token the API bound never saw, such
+		// as one whose mapping override replaced its text.
+		return scriptTooLongErr(err)
 	case errors.Is(err, zapscript.ErrInvalidScript),
 		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, systemdefs.ErrUnknownSystem),
@@ -268,6 +305,13 @@ func HandleRunRest(
 			}
 		}
 
+		// IsRunAllowed parses the text, so bound it first.
+		if err := zapscript.ValidateScriptLength(text); err != nil {
+			log.Warn().Err(err).Msg("rejecting over-long REST run request")
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
 			log.Warn().Msg("REST run not allowed")
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
@@ -316,6 +360,12 @@ func waitForCurrentMediaReady(ctx context.Context, st *state.State) error {
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
 
+	// Deliberately before the media stop gate: a before_exit script may launch
+	// media, which takes the read side of the same gate that AcquireMediaStop
+	// holds exclusively. Firing this after the line below deadlocks.
+	outgoingGen, hadMedia := env.State.ActiveMediaReadyGeneration()
+	env.State.RunBeforeExitHook()
+
 	release, err := env.State.AcquireMediaStop(env.Context)
 	if err != nil {
 		return nil, fmt.Errorf("wait for in-flight media launch: %w", err)
@@ -326,8 +376,15 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 		return nil, err
 	}
 
-	// TODO: return an error when nothing is active, requires StopActiveLauncher
-	// to report whether anything was actually stopped
+	// A before_exit script can launch media of its own. Stopping now would
+	// kill what the hook just started instead of what the caller asked to stop.
+	if env.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+		log.Info().Msg("before_exit replaced the outgoing media, leaving it running")
+		return NoContent{}, nil
+	}
+
+	// StopActiveLauncher reports a failure only when the media is known to
+	// still be running; "nothing was active" is still a success.
 	if err := env.Platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
 	}

@@ -24,6 +24,8 @@ import "testing"
 func FuzzParseGameListXML(f *testing.F) {
 	f.Add([]byte(`<gameList><game><name>Game</name><path>./game.rom</path></game></gameList>`))
 	f.Add([]byte(`<gameList><folder><name>Folder</name><path>./folder</path></folder></gameList>`))
+	f.Add([]byte(`<gameList><game><path>../GAMEBOY/Game.gbc</path><box2d>./box.png</box2d></game></gameList>`))
+	f.Add([]byte(`<gameList><game><boxart2d>./cover.png</boxart2d><box2d>./alias.png</box2d></game></gameList>`))
 	f.Add([]byte(`<gameList>`))
 	f.Add([]byte(`not xml`))
 

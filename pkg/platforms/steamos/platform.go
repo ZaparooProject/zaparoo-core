@@ -429,9 +429,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	integrationOpts := p.emulationOptions(&retroArchOpts)
 	ls = append(ls, linuxemu.Launchers(cfg, integrationOpts, existing)...)
 
-	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
-	allLaunchers = append(allLaunchers, custom...)
-	allLaunchers = append(allLaunchers, ls...)
+	allLaunchers := helpers.CombineParsedLaunchers(custom, ls)
 	if p.steamRuntime != nil && p.steamRuntime.Available() && steamOSGameMode.IsGamingMode() {
 		for i := range allLaunchers {
 			p.wrapSteamRuntime(&allLaunchers[i])

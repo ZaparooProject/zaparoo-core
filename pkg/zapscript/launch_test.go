@@ -703,6 +703,43 @@ preference = ["Unstable", "LLAPI"]
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestNGPCLegacyLauncherPreferences(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, toml, explicit string }{
+		{
+			name: "system default",
+			toml: `[[systems.default]]
+system = "NeoGeoPocketColor"
+launcher = "NeoGeoPocketColor"`,
+		},
+		{
+			name: "global preference",
+			toml: `[launchers]
+preference = ["NeoGeoPocketColor"]`,
+		},
+		{name: "explicit tag", explicit: "NeoGeoPocketColor"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Instance{}
+			require.NoError(t, cfg.LoadTOML(tc.toml))
+			pl := mocks.NewMockPlatform()
+			if tc.explicit == "" {
+				pl.On("Launchers", cfg).Once().Return([]platforms.Launcher{
+					{ID: "KitrinxNeoGeoPocketColor", SystemID: "NeoGeoPocketColor"},
+					{ID: "NeoGeoPocketColor", SystemID: "NeoGeoPocketColor"},
+				})
+			}
+			env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+			if tc.explicit != "" {
+				env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, tc.explicit)
+			}
+			assert.Equal(t, "NeoGeoPocketColor", applySystemDefaultLauncher(pl, &env, "NeoGeoPocketColor"))
+			pl.AssertExpectations(t)
+		})
+	}
+}
+
 func TestApplySystemDefaultLauncher_SystemDefaultBeatsGlobalPreference(t *testing.T) {
 	t.Parallel()
 
@@ -751,6 +788,134 @@ func TestLaunchClosurePreservesExplicitLauncher(t *testing.T) {
 	launch := getLaunchClosure(mockPlatform, &env, true)
 	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
 	mockPlatform.AssertExpectations(t)
+}
+
+type normalizedLaunchPlatform struct {
+	*mocks.MockPlatform
+	path string
+}
+
+func (p *normalizedLaunchPlatform) NormalizeLaunchPath(string) string {
+	return p.path
+}
+
+func TestLaunchClosureSkipsNormalizedTargetBeforeEffects(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	path := filepath.Join(t.TempDir(), "game.zip", "game.sfc")
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES"}
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: path}
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			assert.Equal(t, path, target.Path)
+			assert.Equal(t, launcher.ID, target.Launcher.ID)
+			return true
+		},
+		PrepareMediaLaunch: func(platforms.ResolvedLaunch) (bool, error) {
+			t.Fatal("a no-op must not prepare playback or prompt")
+			return false, nil
+		},
+		BeforeExit: func() { t.Fatal("a no-op must not run before_exit") },
+		AcquireLaunch: func() (func(), error) {
+			t.Fatal("a no-op must not acquire the launch guard")
+			return func() {}, nil
+		},
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.ErrorIs(t, launch(launchTarget{path: filepath.Dir(path)}), errMediaLaunchSkipped)
+	pl.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestLaunchClosurePreservesArchiveMediaOverride(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	archive := filepath.Join(root, "game.zip")
+	path := filepath.Join(archive, "game.sfc")
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: path}
+	pl.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	pl.On("RootDirs", cfg).Return([]string{root}).Maybe()
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "Default", SystemID: "SNES", Folders: []string{root}, Extensions: []string{".zip"}},
+		{ID: "Override", SystemID: "SNES"},
+	})
+	mediaDB := helpers.NewMockMediaDBI()
+	mediaDB.On("FindSystemBySystemID", "SNES").
+		Return(database.System{DBID: 10, SystemID: "SNES"}, nil).Once()
+	mediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), archive).
+		Return(&database.Media{DBID: 123, Path: archive}, nil).Once()
+	mediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{TypeTag: launcherOverridePropertyTypeTag(), Text: "Override"}}, nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg, Database: &database.Database{MediaDB: mediaDB},
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			assert.Equal(t, path, target.Path)
+			require.NotNil(t, target.Launcher)
+			assert.Equal(t, "Override", target.Launcher.ID)
+			return true
+		},
+	}
+	launch := getLaunchClosure(pl, &env, false)
+	require.ErrorIs(t, launch(launchTarget{path: archive, resolveMediaByPath: true}), errMediaLaunchSkipped)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestLaunchClosureResolvesDefaultActionBeforeSuppression(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[[launchers.default]]
+launcher = "SNES"
+action = "details"`))
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES"}
+	path := filepath.Join(t.TempDir(), "game.sfc")
+	pl := mocks.NewMockPlatform()
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	pl.On("LaunchMedia", cfg, path, mock.Anything, (*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Action == "details"
+		})).Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		SkipMediaLaunch: func(target platforms.ResolvedLaunch) bool {
+			return target.Options == nil || target.Options.Action != "details"
+		},
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.NoError(t, launch(launchTarget{path: path}))
+	pl.AssertExpectations(t)
+}
+
+// The allow list is user policy written against the requested path. Normalizing
+// before the check tested a MiSTer ZIP as game.zip/game.sfc in tap mode and as
+// game.zip everywhere else, so the same allow_file entry decided differently
+// depending on scan mode.
+func TestLaunchClosureChecksAllowListOnRequestedPath(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML("[launchers]\nallow_file = ['.*\\.zip']"))
+	root := t.TempDir()
+	archive := filepath.Join(root, "game.zip")
+	child := filepath.Join(archive, "game.sfc")
+	launcher := platforms.Launcher{ID: "SNES", SystemID: "SNES", AllowListOnly: true}
+	pl := &normalizedLaunchPlatform{MockPlatform: mocks.NewMockPlatform(), path: child}
+	pl.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+	pl.On("LaunchMedia", cfg, child, mock.Anything, (*database.Database)(nil), mock.Anything).
+		Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{"launcher": launcher.ID})},
+		// Non-nil so the path is normalized, but never suppressing, so the
+		// launch runs through both allow-list checks.
+		SkipMediaLaunch: func(platforms.ResolvedLaunch) bool { return false },
+	}
+	launch := getLaunchClosure(pl, &env, true)
+	require.NoError(t, launch(launchTarget{path: archive}))
+	pl.AssertExpectations(t)
 }
 
 func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
@@ -1170,6 +1335,92 @@ func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
 
 	assert.False(t, found)
 	assert.Empty(t, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestInferLauncherForSystemPath_SkipsScanOnly covers a custom launcher that
+// only widens a system's media directories. It shares the stock launcher's
+// extension, so counting it as a candidate would make every launch for that
+// system ambiguous.
+func TestInferLauncherForSystemPath_SkipsScanOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{
+			ID: "Famicom", SystemID: systemdefs.SystemNES,
+			Folders:    []string{filepath.Join("games", "famicom")},
+			Extensions: []string{".nes"}, ScanOnly: true,
+		},
+		{
+			ID: systemdefs.SystemNES, SystemID: systemdefs.SystemNES,
+			Folders: []string{"NES"}, Extensions: []string{".nes"},
+		},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "famicom", "Rockman 4.nes"),
+		systemdefs.SystemNES,
+	)
+
+	assert.True(t, found)
+	assert.Equal(t, systemdefs.SystemNES, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestCmdLaunch_ExplicitScanOnlyLauncherDelegates covers naming a scan-only
+// launcher in the launcher argument. It cannot start anything itself, so the
+// launch has to go to the system's real launcher rather than being refused.
+func TestCmdLaunch_ExplicitScanOnlyLauncherDelegates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+	mediaPath := filepath.Join(tmpDir, "Rockman 4.nes")
+	require.NoError(t, os.WriteFile(mediaPath, []byte("test"), 0o600))
+
+	cfg := &config.Instance{}
+	scanOnly := platforms.Launcher{
+		ID: "Famicom", SystemID: systemdefs.SystemNES,
+		Folders: []string{tmpDir}, Extensions: []string{".nes"}, ScanOnly: true,
+	}
+	systemLauncher := platforms.Launcher{
+		ID: systemdefs.SystemNES, SystemID: systemdefs.SystemNES,
+		Folders: []string{"NES"}, Extensions: []string{".nes"},
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil //nolint:nilnil // test stub
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{scanOnly, systemLauncher})
+	mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+	mockPlatform.On(
+		"LaunchMedia", cfg, mediaPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == systemdefs.SystemNES
+		}),
+		(*database.Database)(nil), (*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	originalCache := pathhelpers.GlobalLauncherCache
+	testCache := &pathhelpers.LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	pathhelpers.GlobalLauncherCache = testCache
+	defer func() { pathhelpers.GlobalLauncherCache = originalCache }()
+
+	reader := zapscript.NewParser(mediaPath + "?launcher=Famicom")
+	script, err := reader.ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 1)
+
+	env := platforms.CmdEnv{Cmd: script.Cmds[0], Cfg: cfg}
+	result, err := cmdLaunchWithFS(afero.NewMemMapFs(), mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
 	mockPlatform.AssertExpectations(t)
 }
 

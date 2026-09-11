@@ -29,6 +29,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1297,4 +1298,86 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(eventData), &obj))
 	assert.Equal(t, "2.0", obj.JSONRPC)
 	assert.Equal(t, "tokens.staged", obj.Method)
+}
+
+// A notification listener connects and never sends a frame: that is exactly
+// what pkg/api/client's WaitNotification does, and the CLI's -read and -pair
+// waits and both TUI listeners are built on it. Holding such a session at
+// "transport mode unknown" forever would starve it, so the settle grace has to
+// release it as plaintext.
+//
+// The deadline is the shortest budget any of those listeners gives a
+// connection: the TUI's generate-database screen reconnects every 2s, so a
+// settle grace that does not clear 2s leaves that screen showing nothing.
+func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(
+			platform, cfg, st, tokenQueue, nil, db,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		<-serverErr
+	}()
+	require.NoError(t, <-ready)
+	port := waitForServerReady(t, cfg)
+
+	conn := dialWS(t, fmt.Sprintf("ws://127.0.0.1:%d/api/v0", port))
+	defer func() { _ = conn.Close() }()
+
+	// Broadcast repeatedly: the first notifications land while the session is
+	// still unsettled and have to survive the wait, and the later ones cover
+	// the settled steady state.
+	//
+	// The broadcaster is joined rather than only signalled. Parking it in
+	// time.Sleep left it running after the test returned, and whether goleak
+	// saw it came down to which woke first: it passed on Linux and failed on
+	// Windows, where the coarser timer lost that race.
+	stop := make(chan struct{})
+	var broadcasting sync.WaitGroup
+	broadcasting.Add(1)
+	defer func() {
+		close(stop)
+		broadcasting.Wait()
+	}()
+	go func() {
+		defer broadcasting.Done()
+		payload, _ := json.Marshal(map[string]string{"uid": "silent-listener"})
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				select {
+				case st.Notifications <- models.Notification{Method: "tokens.added", Params: payload}:
+				case <-stop:
+					return
+				}
+			}
+		}
+	}()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err, "a listener that never sends a frame must still get notifications")
+
+	var obj models.NotificationObject
+	require.NoError(t, json.Unmarshal(msg, &obj))
+	assert.Equal(t, "tokens.added", obj.Method)
 }

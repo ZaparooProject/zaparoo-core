@@ -1211,6 +1211,48 @@
         }
       ]
     },
+    "CommodoreCDTV": {
+      "id": "CommodoreCDTV",
+      "setName": "CDTV",
+      "rbf": "_Computer/Minimig",
+      "folders": [
+        "CDTV",
+        "AmigaCDTV",
+        "CommodoreCDTV"
+      ],
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso",
+        ".mgl"
+      ]
+    },
+    "DVDPlayer": {
+      "id": "DVDPlayer",
+      "setName": "DVD",
+      "rbf": "_Other/DVD",
+      "folders": [
+        "DVD",
+        "DVD-Player"
+      ],
+      "extensions": [
+        ".iso",
+        ".mgl"
+      ],
+      "slots": [
+        {
+          "mgl": {
+            "method": "s",
+            "delay": 2,
+            "index": 0
+          },
+          "label": "DVD image",
+          "extensions": [
+            ".iso"
+          ]
+        }
+      ]
+    },
     "EDSAC": {
       "id": "EDSAC",
       "rbf": "_Computer/EDSAC",

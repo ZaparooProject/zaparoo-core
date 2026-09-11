@@ -24,6 +24,7 @@ package mister
 import (
 	"archive/zip"
 	"context"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
@@ -89,10 +91,12 @@ func TestCheckInZip_SingleFileZip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, zipWriter.Close())
 
-	// Should return path to the single file inside zip
-	result := checkInZip(zipPath)
+	// Suppression and the platform launch must see the same contained file.
+	pl := &Platform{}
+	result := pl.NormalizeLaunchPath(zipPath)
 	expected := filepath.Join(zipPath, "somefile.rom")
 	assert.Equal(t, expected, result)
+	assert.Equal(t, result, pl.NormalizeLaunchPath(result), "normalization is idempotent")
 }
 
 func TestCheckInZip_MatchingFilename(t *testing.T) {
@@ -892,6 +896,73 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 			got, ok := retroAchievementsSetName(launcherID)
 			require.True(t, ok)
 			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestGameboyLaunchMGLPaths(t *testing.T) {
+	t.Parallel()
+	byID := make(map[string]platforms.Launcher)
+	for _, launcher := range CreateLaunchers(NewPlatform()) {
+		byID[launcher.ID] = launcher
+	}
+	for _, tc := range []struct {
+		id, system, extension, setName string
+		ra, sameDir                    bool
+	}{
+		{id: "Gameboy", system: "Gameboy", extension: ".gb"},
+		{id: "GameboyColor", system: "GameboyColor", extension: ".gbc", setName: "GBC"},
+		{id: "RAGameboy", system: "Gameboy", extension: ".gb", setName: "RA_Gameboy", ra: true, sameDir: true},
+		{id: "RAGameboyColor", system: "GameboyColor", extension: ".gbc", setName: "RA_GBC", ra: true},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			launcher, ok := byID[tc.id]
+			require.True(t, ok)
+			assert.Equal(t, tc.system, launcher.SystemID)
+			require.NotNil(t, launcher.Launch)
+			base, err := cores.GetCore(tc.system)
+			require.NoError(t, err)
+			core := *base
+			if tc.ra {
+				setName, found := retroAchievementsSetName(tc.id)
+				require.True(t, found)
+				require.NoError(t, configureAltCoreWithDefaultSetName(
+					&core, tc.id, "_RA_Cores/Cores/Gameboy", setName, tc.sameDir, nil,
+				))
+			}
+			folders := []string{"GAMEBOY"}
+			if tc.system == "GameboyColor" {
+				folders = append(folders, "GBC")
+			}
+			for _, folder := range folders {
+				assert.Contains(t, byID[tc.system].Folders, folder)
+				assert.Contains(t, byID[tc.system].Extensions, tc.extension)
+				rom := filepath.Join(string(filepath.Separator), "media", "fat", "games", folder, "Game"+tc.extension)
+				document, genErr := mgls.GenerateMgl(&core, core.RBF, rom, "")
+				require.NoError(t, genErr)
+				type setNameElement struct {
+					Name    string `xml:",chardata"`
+					SameDir string `xml:"same_dir,attr"`
+				}
+				type fileElement struct {
+					Path  string `xml:"path,attr"`
+					Index int    `xml:"index,attr"`
+				}
+				var decoded struct {
+					SetName setNameElement `xml:"setname"`
+					File    fileElement    `xml:"file"`
+				}
+				require.NoError(t, xml.Unmarshal([]byte(document), &decoded))
+				assert.Equal(t, "../../../../.."+rom, decoded.File.Path)
+				assert.Equal(t, 1, decoded.File.Index)
+				assert.Equal(t, tc.setName, decoded.SetName.Name)
+				if tc.sameDir {
+					assert.Equal(t, "1", decoded.SetName.SameDir)
+				} else {
+					assert.Empty(t, decoded.SetName.SameDir)
+				}
+			}
 		})
 	}
 }

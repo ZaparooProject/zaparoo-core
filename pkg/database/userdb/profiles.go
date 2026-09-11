@@ -150,6 +150,12 @@ func sqlGetProfile(ctx context.Context, db *sql.DB, column, value string) (*data
 	p, err := scanProfile(row.Scan)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// A switch ID is the bearer credential on a profile card, and
+			// this error is logged, so name the column that missed without
+			// quoting what was looked up.
+			if column == "SwitchID" {
+				return nil, fmt.Errorf("%w: no profile for the given %s", ErrProfileNotFound, column)
+			}
 			return nil, fmt.Errorf("%w: %s=%s", ErrProfileNotFound, column, value)
 		}
 		return nil, fmt.Errorf("failed to scan profile row: %w", err)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	syswindows "golang.org/x/sys/windows"
@@ -134,4 +135,13 @@ func TestRestartAfterReleasing_DoesNotRestartWhenReleaseFails(t *testing.T) {
 	require.ErrorIs(t, err, releaseErr)
 	assert.False(t, restarted)
 	assert.NotZero(t, instance.handle)
+}
+
+func TestWindowsDefaults(t *testing.T) {
+	t.Parallel()
+
+	defaults := windowsDefaults()
+	require.NotNil(t, defaults.Service.Encryption)
+	assert.True(t, *defaults.Service.Encryption)
+	assert.Nil(t, config.BaseDefaults.Service.Encryption, "must not mutate shared platform defaults")
 }

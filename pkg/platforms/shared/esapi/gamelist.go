@@ -175,6 +175,24 @@ type Game struct {
 	KidGame             bool     `xml:"kidgame,omitempty"`
 }
 
+// UnmarshalXML accepts the ZapScraper box2d alias while keeping boxart2d as
+// the canonical field and serialized tag. An explicit canonical value wins.
+func (g *Game) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	type GameXML Game
+	var decoded struct {
+		Box2D string `xml:"box2d"`
+		GameXML
+	}
+	if err := d.DecodeElement(&decoded, &start); err != nil {
+		return fmt.Errorf("decode gamelist game: %w", err)
+	}
+	if decoded.Boxart2D == "" {
+		decoded.Boxart2D = decoded.Box2D
+	}
+	*g = Game(decoded.GameXML)
+	return nil
+}
+
 // Folder represents a <folder> entry in the gamelist. Folders support a
 // smaller set of metadata than games. Most path-based media fields follow
 // the same fork differences as in Game — see Game field comments.

@@ -103,7 +103,7 @@ func TestFrontendPrerequisiteQueryPlansUseExistingIndexes(t *testing.T) {
 			Tags:       favorite,
 			Limit:      100,
 		}
-		whereClause, args := browseFilesBaseCondition(opts)
+		whereClause, args := browseFilesBaseCondition(opts, browseTagPlan{})
 		args = append(args, opts.Limit)
 		plan := randomQueryPlan(t, mediaDB.sql.Load(), `
 			SELECT m.DBID

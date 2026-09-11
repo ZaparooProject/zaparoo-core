@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -41,11 +42,78 @@ type Database struct {
 	MediaDB MediaDBI
 }
 
+// ScrapeJob is shared by explicit requests, index-triggered requests, and recovery.
+// RunID scopes completed-row markers to this particular request.
+type ScrapeJob struct {
+	// Scope narrows the job the same way ScrapingOperation.Scope does, so a
+	// scoped request that is queued behind another still runs scoped.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
+}
+
+// ScrapingOperation retains the legacy current-job fields while adding ordinary
+// pending jobs. Version zero is the existing standalone record format.
 type ScrapingOperation struct {
-	ScraperID string   `json:"scraperId"`
-	RunID     string   `json:"runId,omitempty"`
-	Systems   []string `json:"systems"`
-	Force     bool     `json:"force"`
+	// Status is authoritative for versioned jobs, so queue acceptance and
+	// cancellation do not depend on a second config-key write.
+	// Scope narrows the run to one indexed item, file or subtree. A queued job
+	// carries its own, or resuming after an index would silently widen a
+	// single-file request into a whole-system scrape.
+	Scope       *ScrapeScope `json:"scope,omitempty"`
+	Status      string       `json:"status,omitempty"`
+	ScraperID   string       `json:"scraperId"`
+	RunID       string       `json:"runId,omitempty"`
+	Systems     []string     `json:"systems"`
+	Pending     []ScrapeJob  `json:"pending,omitempty"`
+	Version     int          `json:"version,omitempty"`
+	Force       bool         `json:"force"`
+	FillMissing bool         `json:"fillMissing,omitempty"`
+}
+
+// Validate checks persisted job options before any scraper can execute them.
+func (o *ScrapingOperation) Validate() error {
+	if o == nil || o.Version < 0 || o.Version > 1 || o.ScraperID == "" || o.Force && o.FillMissing {
+		return errors.New("invalid scraping operation")
+	}
+	switch o.Status {
+	case "", "pending", "running", "completed", "failed", "cancelled":
+	default:
+		return errors.New("invalid scraping operation status")
+	}
+	// Bound accumulated post-index requests while preserving the existing
+	// queue if a new submission would exceed the limit.
+	if len(o.Pending) > 63 {
+		return errors.New("scrape queue exceeds 64 jobs")
+	}
+	for _, job := range o.Pending {
+		if job.ScraperID == "" || job.Force && job.FillMissing {
+			return errors.New("invalid pending scraper job")
+		}
+		if job.Scope != nil {
+			if err := job.Scope.Validate(); err != nil {
+				return fmt.Errorf("invalid pending scraper job scope: %w", err)
+			}
+		}
+	}
+	if o.Scope != nil {
+		if err := o.Scope.Validate(); err != nil {
+			return fmt.Errorf("invalid scraping operation scope: %w", err)
+		}
+	}
+	return nil
+}
+
+// IsResumable prefers the versioned job's atomic state over the legacy status key.
+func (o *ScrapingOperation) IsResumable(legacyStatus string) bool {
+	status := legacyStatus
+	if o.Version == 1 && o.Status != "" {
+		status = o.Status
+	}
+	return status == "pending" || status == "running"
 }
 
 // Structs for SQL records
@@ -158,6 +226,10 @@ type Profile struct {
 // ProfileID of the device's active profile.
 const DeviceStateKeyActiveProfile = "active_profile_id"
 
+// DeviceStateKeyMediaPreferencesRevision invalidates browse cursor totals when
+// durable media preferences change. The counter survives unhide and rebuild.
+const DeviceStateKeyMediaPreferencesRevision = "media_preferences_revision"
+
 // DeviceStateKeyMediaHistoryIdentitySweep is the DeviceState key recording
 // the last completed media history identity backfill sweep, as
 // "<policy version>:<media LastGeneratedAt unix>". A matching value means no
@@ -224,12 +296,12 @@ type MediaFullRow struct {
 }
 
 // MediaUserData is the source-of-truth record for user-authored data about a
-// single media path: whether it is a favourite and any per-game launcher
+// single media path: favourite/hidden preferences and any per-game launcher
 // override. It lives in UserDB (durable, power-loss safe) and is materialized
 // into media.db's MediaTags/MediaProperties projection both on edit and on
 // reindex. Keyed by (SystemID, Path) because a Media row's DBID is not stable
-// across a full media.db rebuild. A row with IsFavorite false and an empty
-// LauncherOverride carries no user intent and should be deleted rather than kept.
+// across a full media.db rebuild. A row with neither favourite nor hidden
+// intent and an empty LauncherOverride should be deleted rather than kept.
 type MediaUserData struct {
 	SystemID         string
 	Path             string
@@ -244,6 +316,7 @@ type MediaUserData struct {
 	CreatedAt  int64
 	UpdatedAt  int64
 	IsFavorite bool
+	IsHidden   bool
 }
 
 // MediaPathID identifies a Media row and its title by system ID and path, used
@@ -294,6 +367,14 @@ type MediaProperty struct {
 	Binary      []byte
 	TypeTagDBID int64
 	BlobSize    int64
+}
+
+// DirectoryProperty is one file-backed property attached to a stable
+// (SystemDBID, Path) directory identity in MediaDB.
+type DirectoryProperty struct {
+	Path    string
+	TypeTag string
+	Text    string
 }
 
 // MediaBlob is a row from the MediaBlobs content-addressed store.
@@ -400,6 +481,7 @@ type BrowseDirectoryResult struct {
 	Path      string
 	SystemIDs []string
 	FileCount int
+	HasCover  bool
 }
 
 // SingletonContainerAlias is the resolved launch media for a child directory
@@ -429,18 +511,20 @@ type SingletonAliasCandidate struct {
 // within a parent, so Name alone is a stable keyset). Limit caps the number of
 // directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	AfterName  string
-	Systems    []systemdefs.System
-	Limit      int
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	AfterName     string
+	Systems       []systemdefs.System
+	Limit         int
+	ExcludeHidden bool
 }
 
 // BrowseDirCountOptions contains parameters for the BrowseDirCount query.
 type BrowseDirCountOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Systems    []systemdefs.System
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseCursor holds the keyset pagination state for browse queries.
@@ -451,11 +535,15 @@ type BrowseDirCountOptions struct {
 // SortValue/SortMode/LastID. TotalFiles and TotalDirs carry the first-page
 // counts so cursor pages do not rerun the count queries.
 type BrowseCursor struct {
-	SortValue  string
-	SortMode   string
-	Phase      string
-	DirName    string
-	RootView   string
+	SortValue string
+	SortMode  string
+	Phase     string
+	DirName   string
+	RootView  string
+	// Sources is the merged system root's resolved routes, carried forward from
+	// the page that discovered them so later pages do not rediscover the scope.
+	// Empty for an ordinary path browse, whose scope is the path itself.
+	Sources    []BrowseSource
 	LastID     int64
 	TotalFiles int
 	TotalDirs  int
@@ -475,34 +563,37 @@ type BrowseOverlay struct {
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
 type BrowseFilesOptions struct {
-	Cursor     *BrowseCursor
-	Letter     *string
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Sort       string
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
-	Limit      int
+	Cursor        *BrowseCursor
+	Letter        *string
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Sort          string
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	Limit         int
+	ExcludeHidden bool
 }
 
 // BrowseFileCountOptions contains parameters for the BrowseFileCount query.
 type BrowseFileCountOptions struct {
-	Letter     *string
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
+	Letter        *string
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	ExcludeHidden bool
 }
 
 // BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
 // mirrors the scoping fields of BrowseFilesOptions so the index describes the
 // exact list a media.browse call would return.
 type BrowseIndexOptions struct {
-	PathPrefix string
-	Overlay    *BrowseOverlay
-	Sort       string
-	Systems    []systemdefs.System
-	Tags       []zapscript.TagFilter
+	PathPrefix    string
+	Overlay       *BrowseOverlay
+	Sort          string
+	Systems       []systemdefs.System
+	Tags          []zapscript.TagFilter
+	ExcludeHidden bool
 }
 
 // BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
@@ -545,14 +636,16 @@ type BrowseVirtualScheme struct {
 
 // BrowseVirtualSchemesOptions contains parameters for BrowseVirtualSchemes.
 type BrowseVirtualSchemesOptions struct {
-	Systems []systemdefs.System
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseRouteCountsOptions contains candidate route paths to resolve against
 // indexed media for system-scoped browse root discovery.
 type BrowseRouteCountsOptions struct {
-	Systems []systemdefs.System
-	Routes  []string
+	Systems       []systemdefs.System
+	Routes        []string
+	ExcludeHidden bool
 }
 
 // BrowseRouteCount represents a populated browse route and its media count.
@@ -571,8 +664,9 @@ type BrowseRouteCount struct {
 // to build `media.browse({systems:[...], path:""})` candidates in two
 // queries against the BrowseDirCounts cache.
 type BrowseSystemRootCandidatesOptions struct {
-	Roots   []string
-	Systems []systemdefs.System
+	Roots         []string
+	Systems       []systemdefs.System
+	ExcludeHidden bool
 }
 
 // BrowseSystemRootCandidates is the cache-backed result of resolving a list of
@@ -730,6 +824,8 @@ type ScrapeWrite struct {
 	TitleTags  []TagInfo
 	TitleProps []MediaProperty
 	MediaProps []MediaProperty
+	// FillMissing preserves existing fields; zero retains manual scrape semantics.
+	FillMissing bool
 }
 
 // ScrapeWriteTarget pairs a scraper write payload with the existing Media and
@@ -777,6 +873,8 @@ type SearchFilters struct {
 	Systems    []systemdefs.System   `json:"systems,omitempty"`
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 	Limit      int                   `json:"limit"`
+	// ExcludeHidden is set only for discovery, never explicit launch resolution.
+	ExcludeHidden bool `json:"-"`
 }
 
 // ScanStagedTag is one tag derived from a scanned file, staged for set-based
@@ -926,6 +1024,7 @@ type UserDBI interface {
 	GetEnabledMappings() ([]Mapping, error)
 	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
+	SetMediaUserHidden(systemID, path string, hidden bool) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
 	SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error
 	UpsertMediaUserData(data *MediaUserData) error
@@ -1092,6 +1191,7 @@ type MediaDBI interface {
 	SearchMediaBySlugIn(
 		ctx context.Context, systemID string, slugs []string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
+	TitleCandidates(ctx context.Context, systemID, name string, limit int) ([]TitleCandidate, error)
 	GetTitlesWithPreFilter(
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 	) ([]MediaTitle, error)
@@ -1120,7 +1220,7 @@ type MediaDBI interface {
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
-	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string, excludeHidden bool) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
 	BrowseSystemRootCandidates(
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
@@ -1130,7 +1230,9 @@ type MediaDBI interface {
 	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
-	SystemMediaCounts(ctx context.Context, tags []zapscript.TagFilter) ([]SystemMediaCount, error)
+	SystemMediaCounts(
+		ctx context.Context, tags []zapscript.TagFilter, excludeHidden bool,
+	) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
@@ -1188,10 +1290,15 @@ type MediaDBI interface {
 	// GetExistingMediaUserData returns user-authored data (favourites, launcher
 	// overrides) already stored in media.db, for the one-time UserDB backfill.
 	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
+	MediaPreferencesRevision(ctx context.Context) (string, error)
 
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	// GetScrapeMedia selects present indexed media and their titles within an exact resolved scope.
+	GetScrapeMedia(ctx context.Context, scope ScrapeScope) ([]MediaFullRow, error)
+	// GetScopedScrapeMediaIDs selects sentinel or force-run markers without loading an entire system.
+	GetScopedScrapeMediaIDs(ctx context.Context, scope ScrapeScope, scraperID, runID string) (map[int64]struct{}, error)
 
 	// Scraper support methods
 
@@ -1206,6 +1313,10 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// FindSingleContainerLaunchMediaBySystemID is FindSingleContainerLaunchMedia
+	// keyed by system ID, for callers that address a system by name rather than
+	// by row.
+	FindSingleContainerLaunchMediaBySystemID(ctx context.Context, systemID, containerPath string) (*Media, error)
 	// ResolveSingletonContainerAliases resolves the given candidate child
 	// directories for systemDBID in a single batch query, returning one
 	// SingletonContainerAlias per candidate that collapses to a single launch
@@ -1270,6 +1381,12 @@ type MediaDBI interface {
 	// UpsertMediaProperties upserts properties into MediaProperties.
 	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
 	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// ReplaceDirectoryProperties atomically replaces the complete file-backed
+	// property snapshot for one system. It reports whether stored rows changed.
+	ReplaceDirectoryProperties(ctx context.Context, systemDBID int64, props []DirectoryProperty) (bool, error)
+	// GetDirectoryProperties returns properties for one canonical directory path.
+	GetDirectoryProperties(ctx context.Context, systemDBID int64, path string) ([]MediaProperty, error)
 
 	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
 	// writes the sentinel tag last.

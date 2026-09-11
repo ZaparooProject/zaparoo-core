@@ -670,3 +670,62 @@ func TestPlaylistNeedsUpdate(t *testing.T) {
 		assert.True(t, result, "ForceRelaunch must defeat same-state dedup")
 	})
 }
+
+func TestShouldRunBeforeExitHook(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		cmdName       string
+		slot          string
+		inHookContext bool
+		want          bool
+	}{
+		{name: "stop", cmdName: gozapscript.ZapScriptCmdStop, want: true},
+		{name: "playlist.stop", cmdName: gozapscript.ZapScriptCmdPlaylistStop, want: true},
+
+		// mister.mgl forwards straight to the platform, so the launch path
+		// never sees it and this is its only chance to fire.
+		{name: "mister.mgl", cmdName: gozapscript.ZapScriptCmdMisterMGL, want: true},
+
+		// Launch commands fire the hook from inside the launch path instead,
+		// once the target and launcher resolve. Firing here would run a user's
+		// exit script for a launch that is then rejected and never exits
+		// anything.
+		{name: "launch", cmdName: gozapscript.ZapScriptCmdLaunch, want: false},
+		{name: "launch.system", cmdName: gozapscript.ZapScriptCmdLaunchSystem, want: false},
+		{name: "launch.random", cmdName: gozapscript.ZapScriptCmdLaunchRandom, want: false},
+		{name: "launch.search", cmdName: gozapscript.ZapScriptCmdLaunchSearch, want: false},
+		{name: "launch.title", cmdName: gozapscript.ZapScriptCmdLaunchTitle, want: false},
+		{name: "launch.last", cmdName: gozapscript.ZapScriptCmdLaunchLast, want: false},
+		{name: "random alias", cmdName: gozapscript.ZapScriptCmdRandom, want: false},
+		{name: "system alias", cmdName: gozapscript.ZapScriptCmdSystem, want: false},
+
+		// Navigation queues a playlist update whose resulting launch command
+		// comes back through this same check, so firing here would double up.
+		{name: "playlist.next", cmdName: gozapscript.ZapScriptCmdPlaylistNext, want: false},
+		{name: "playlist.previous", cmdName: gozapscript.ZapScriptCmdPlaylistPrevious, want: false},
+		{name: "playlist.play", cmdName: gozapscript.ZapScriptCmdPlaylistPlay, want: false},
+		{name: "playlist.pause", cmdName: gozapscript.ZapScriptCmdPlaylistPause, want: false},
+		{name: "playlist.load", cmdName: gozapscript.ZapScriptCmdPlaylistLoad, want: false},
+		{name: "echo", cmdName: gozapscript.ZapScriptCmdEcho, want: false},
+		{name: "delay", cmdName: gozapscript.ZapScriptCmdDelay, want: false},
+
+		{name: "background mgl", cmdName: gozapscript.ZapScriptCmdMisterMGL, slot: mediaslot.Background, want: false},
+		{name: "background stop", cmdName: gozapscript.ZapScriptCmdStop, slot: mediaslot.Background, want: false},
+
+		{name: "in hook context mgl", cmdName: gozapscript.ZapScriptCmdMisterMGL, inHookContext: true, want: false},
+		{name: "in hook context stop", cmdName: gozapscript.ZapScriptCmdStop, inHookContext: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := gozapscript.Command{Name: tt.cmdName}
+			if tt.slot != "" {
+				cmd.AdvArgs = testSlotAdvArgs(tt.slot)
+			}
+			assert.Equal(t, tt.want, shouldRunBeforeExitHook(tt.inHookContext, cmd))
+		})
+	}
+}

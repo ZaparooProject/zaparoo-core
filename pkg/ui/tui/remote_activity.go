@@ -22,7 +22,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/rivo/tview"
@@ -70,7 +72,8 @@ func renderRemoteActivityPage(
 	list.SetSelectedFocusOnly(true)
 	for i := range entries {
 		entry := &entries[i]
-		mainText := fmt.Sprintf("%s  %s", formatRemoteActivityTime(entry.CreatedAt), entry.OperationType)
+		mainText := fmt.Sprintf(
+			"%s  %s", formatRemoteActivityTime(entry.CreatedAt), safeRemoteActivityText(entry.OperationType))
 		secondary := formatRemoteActivitySecondary(entry)
 		detail := formatRemoteActivityDetail(entry)
 		list.AddItem(mainText, secondary, 0, func() {
@@ -94,18 +97,32 @@ func renderRemoteActivityPage(
 func formatRemoteActivityTime(raw string) string {
 	parsed, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return raw
+		return safeRemoteActivityText(raw)
 	}
 	return parsed.UTC().Format("2 Jan 15:04")
+}
+
+func safeRemoteActivityText(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	var clean strings.Builder
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			_, _ = clean.WriteRune('\uFFFD')
+		} else {
+			_, _ = clean.WriteRune(r)
+		}
+	}
+	return tview.Escape(clean.String())
 }
 
 // formatRemoteActivityOrigin renders who issued the operation: the account
 // itself, or a named API key.
 func formatRemoteActivityOrigin(entry *models.RemoteActivityEntry) string {
+	originKind := safeRemoteActivityText(entry.OriginKind)
 	if entry.OriginKeyName != "" {
-		return entry.OriginKind + " (" + entry.OriginKeyName + ")"
+		return originKind + " (" + safeRemoteActivityText(entry.OriginKeyName) + ")"
 	}
-	return entry.OriginKind
+	return originKind
 }
 
 // formatRemoteActivitySecondary renders the list row's secondary line:
@@ -115,25 +132,25 @@ func formatRemoteActivitySecondary(entry *models.RemoteActivityEntry) string {
 	if outcome == "" {
 		outcome = entry.State
 	}
-	secondary := formatRemoteActivityOrigin(entry) + ", " + outcome
+	secondary := formatRemoteActivityOrigin(entry) + ", " + safeRemoteActivityText(outcome)
 	if entry.ErrorCode != "" {
-		secondary += ": " + entry.ErrorCode
+		secondary += ": " + safeRemoteActivityText(entry.ErrorCode)
 	}
 	return secondary
 }
 
 // formatRemoteActivityDetail renders the full detail modal body for one entry.
 func formatRemoteActivityDetail(entry *models.RemoteActivityEntry) string {
-	detail := "Operation: " + entry.OperationType +
+	detail := "Operation: " + safeRemoteActivityText(entry.OperationType) +
 		"\nFrom: " + formatRemoteActivityOrigin(entry) +
 		"\nWhen: " + formatRemoteActivityTime(entry.CreatedAt)
 	outcome := entry.Status
 	if outcome == "" {
 		outcome = entry.State
 	}
-	detail += "\nOutcome: " + outcome
+	detail += "\nOutcome: " + safeRemoteActivityText(outcome)
 	if entry.ErrorCode != "" {
-		detail += "\nError: " + entry.ErrorCode
+		detail += "\nError: " + safeRemoteActivityText(entry.ErrorCode)
 	}
 	return detail
 }

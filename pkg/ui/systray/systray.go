@@ -32,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/nixinwang/dialog"
 	"github.com/rs/zerolog/log"
 	"golang.design/x/clipboard"
 )
@@ -154,7 +153,8 @@ func systrayOnReady(
 						"© %d Zaparoo Contributors\n" +
 						"License: GPLv3\n\n" +
 						"www.zaparoo.org"
-					dialog.Message(msg, config.AppVersion, time.Now().Year()).Title("About Zaparoo Core").Info()
+					nativeDialog("About Zaparoo Core",
+						fmt.Sprintf(msg, config.AppVersion, time.Now().Year()))
 				case <-mQuit.ClickedCh:
 					systray.Quit()
 				}

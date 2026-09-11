@@ -566,6 +566,7 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 					ID:          "mock-reader",
 					Description: "Mock Reader for Testing",
 				})
+				mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 
 				if tt.hasRemovable {
 					mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
@@ -629,6 +630,7 @@ mode = "unrestricted"`))
 	mockReader.On("ReaderID").Return(readerID)
 	mockReader.On("Path").Return("test-reader")
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	mockReader.On("Connected").Return(true)
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
@@ -642,7 +644,7 @@ mode = "unrestricted"`))
 		ScanTime: time.Now(),
 	}
 	st.SetSoftwareToken(&owner)
-	st.SetActiveMedia(models.NewActiveMedia("test-launcher", "NES", "game.nes", "Game", "test-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
 
 	replacement := tokens.Token{
 		UID:      "replacement-card",
@@ -669,13 +671,14 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
+	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
 
 	clock := clockwork.NewFakeClock()
 	var exitGeneration atomic.Uint64
-	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	clock.Advance(time.Millisecond)
 
 	select {
@@ -687,6 +690,362 @@ mode = "unrestricted"`))
 	case <-stopCalled:
 		t.Fatal("stale hold owner stopped active media after before_exit hook")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// A reader configured to hold on a globally tap device arms the exit timer.
+// If that reader disconnects before exit_delay expires, re-resolving the policy
+// used to find no reader, fall back to the global tap, and return without
+// stopping anything — the game stayed running forever.
+func TestTimedExit_KeepsHoldPolicyWhenOwnerReaderDisconnects(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeTap)
+	require.NoError(t, cfg.LoadTOML(`
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB0"
+scan_mode = "hold"
+`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "test-launcher", SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("/dev/ttyUSB0")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
+	mockReader.On("IDs").Return([]string{"pn532"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	mockReader.On("Close").Return(nil).Maybe()
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID: "game-card", Text: "game.nes",
+		Source: tokens.SourceReader, ReaderID: readerID, ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform: mockPlatform, Config: cfg, State: st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
+
+	// The reader goes away while the delay is still running.
+	st.RemoveReader(readerID)
+	clock.Advance(time.Second)
+
+	select {
+	case <-stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a disconnected hold reader must not downgrade to the global tap mode")
+	}
+}
+
+// timedExitStopFixture is a hold-mode reader holding a running game, wired so
+// the exit timer reaches StopActiveLauncher and reports what it did next.
+type timedExitStopFixture struct {
+	svc        *ServiceContext
+	st         *state.State
+	stopCalled chan struct{}
+	owner      tokens.Token
+}
+
+func newTimedExitStopFixture(t *testing.T, stopErr error) *timedExitStopFixture {
+	t.Helper()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "test-launcher", SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(stopErr).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID: "game-card", Text: "game.nes",
+		Source: tokens.SourceReader, ReaderID: readerID, ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform: mockPlatform, Config: cfg, State: st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	return &timedExitStopFixture{svc: svc, st: st, stopCalled: stopCalled, owner: owner}
+}
+
+// A stop that succeeded tells the rest of the service the media ended: the
+// playlist and the launch queue are both cleared.
+func TestTimedExit_ClearsQueuesAfterStop(t *testing.T) {
+	t.Parallel()
+
+	fx := newTimedExitStopFixture(t, nil)
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner, 7)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case pls := <-fx.svc.PlaylistQueue:
+		assert.Nil(t, pls, "a nil update clears the active playlist")
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit did not clear the playlist")
+	}
+	select {
+	case update := <-fx.svc.LaunchSoftwareQueue:
+		assert.Nil(t, update.token, "a nil token ends the software launch")
+		assert.Equal(t, uint64(7), update.ownerGeneration)
+		assert.Equal(t, exitGeneration.Load(), update.exitGeneration)
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit did not clear the launch queue")
+	}
+}
+
+// A stop the platform could not carry out leaves the game running, so the
+// exit must not tell the rest of the service otherwise: no queue clears, and
+// the active media stays as it is.
+func TestTimedExit_KeepsMediaWhenStopFails(t *testing.T) {
+	t.Parallel()
+
+	fx := newTimedExitStopFixture(t, platforms.ErrStopFailed)
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(fx.svc, clock, nil, &exitGeneration, &fx.owner, 0)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-fx.stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit timer did not try to stop the launcher")
+	}
+
+	select {
+	case <-fx.svc.PlaylistQueue:
+		t.Fatal("a stop that left the game running must not clear the playlist")
+	case <-fx.svc.LaunchSoftwareQueue:
+		t.Fatal("a stop that left the game running must not clear the launch queue")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.NotNil(t, fx.st.ActiveMedia(), "the game is still running, so its media stays")
+}
+
+// A before_exit script may launch media of its own. Hook-launched media carries
+// no reader ID, so it never moves the hold owner the exit revalidates; without
+// an active-media check the exit stops the media the hook just started.
+func TestTimedExit_DoesNotStopMediaLaunchedByBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+	cfg.SetSystemDefaults([]config.SystemsDefault{{
+		System:     "NES",
+		BeforeExit: "**input.keyboard:{f2}",
+	}})
+	require.NoError(t, cfg.LoadTOML(`[zapscript.input]
+mode = "unrestricted"`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID:       "test-launcher",
+		SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID:      "game-card",
+		Text:     "game.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	hookRan := make(chan struct{})
+	mockPlatform.On("KeyboardPress", "{f2}").Run(func(_ mock.Arguments) {
+		// The hook launches its own media; the hold owner is untouched.
+		st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "farewell.nes", "Farewell", "test-launcher"))
+		close(hookRan)
+	}).Return(nil).Once()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-hookRan:
+	case <-time.After(time.Second):
+		t.Fatal("before_exit hook did not run")
+	}
+	// The unguarded path reaches StopActiveLauncher a little over 100ms after
+	// the hook returns, so the window has to outlast that to mean anything.
+	select {
+	case <-stopCalled:
+		t.Fatal("exit stopped the media before_exit launched")
+	case <-time.After(time.Second):
+	}
+}
+
+// A system on the hold-mode ignore list never auto-exits, so there is nothing
+// for before_exit to run before.
+func TestTimedExit_IgnoredSystemSkipsBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+	cfg.SetSystemDefaults([]config.SystemsDefault{{
+		System:     "NES",
+		BeforeExit: "**input.keyboard:{f2}",
+	}})
+	require.NoError(t, cfg.LoadTOML(`[readers.scan]
+ignore_system = ["NES"]
+
+[zapscript.input]
+mode = "unrestricted"`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID:       "test-launcher",
+		SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("IDs").Return([]string{"mock-reader"}).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID:      "game-card",
+		Text:     "game.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	hookRan := make(chan struct{}, 1)
+	mockPlatform.On("KeyboardPress", mock.Anything).Run(func(_ mock.Arguments) {
+		hookRan <- struct{}{}
+	}).Return(nil).Maybe()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Maybe()
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-hookRan:
+		t.Fatal("before_exit ran for a system excluded from hold-mode exits")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -710,6 +1069,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 		ID:          "mock-reader",
 		Description: "Mock Reader for Testing",
 	})
+	mockReader.On("IDs").Return([]string{"mock-reader"})
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	st.SetReader(mockReader)
 
@@ -731,7 +1091,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 		}).
 		Return(nil).Once()
 
-	launchQueue := make(chan *tokens.Token)
+	launchQueue := make(chan softwareTokenUpdate)
 	svc := &ServiceContext{
 		Platform:            mockPlatform,
 		Config:              cfg,
@@ -741,7 +1101,7 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 	clock := clockwork.NewFakeClock()
 
 	var exitGeneration atomic.Uint64
-	exitTimer := timedExit(svc, clock, nil, &exitGeneration, &owner)
+	exitTimer := timedExit(svc, clock, nil, &exitGeneration, &owner, 0)
 	require.NotNil(t, exitTimer)
 	clock.Advance(time.Millisecond)
 
@@ -832,12 +1192,16 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			proc := &scanPreprocessor{prevToken: tt.initialPrev}
-			action := proc.Process(tt.scan, tt.readerError)
+			const readerID = "reader-a"
+			proc := &scanPreprocessor{}
+			if tt.initialPrev != nil {
+				proc.prevTokens = map[string]*tokens.Token{readerID: tt.initialPrev}
+			}
+			action := proc.Process(readerID, tt.scan, tt.readerError)
 
 			assert.Equal(t, tt.wantAction, action, "unexpected action")
-			assert.Equal(t, tt.expectedPrev, proc.PrevToken(),
-				"prevToken should match expected value after Process")
+			assert.Equal(t, tt.expectedPrev, proc.PrevToken(readerID),
+				"tracked token should match expected value after Process")
 		})
 	}
 }
@@ -916,21 +1280,22 @@ func TestReaderErrorRecovery_FullSequence(t *testing.T) {
 		Text: "**launch.system:snes",
 	}
 
+	const readerID = "reader-a"
 	proc := &scanPreprocessor{}
 
 	// 1. Initial card scan — should pass through
-	action := proc.Process(card, false)
+	action := proc.Process(readerID, card, false)
 	assert.Equal(t, scanNewToken, action, "first scan should not be duplicate")
-	assert.Equal(t, card, proc.PrevToken())
+	assert.Equal(t, card, proc.PrevToken(readerID))
 
-	// 2. Reader error (USB controller hotplug) — prevToken preserved
-	action = proc.Process(nil, true)
+	// 2. Reader error (USB controller hotplug) — tracked token preserved
+	action = proc.Process(readerID, nil, true)
 	assert.Equal(t, scanReaderErrorRemoval, action)
-	assert.Equal(t, card, proc.PrevToken(),
-		"prevToken must be preserved through reader error")
+	assert.Equal(t, card, proc.PrevToken(readerID),
+		"tracked token must be preserved through reader error")
 
 	// 3. Reader reconnects, same card detected — should be caught as duplicate
-	action = proc.Process(card, false)
+	action = proc.Process(readerID, card, false)
 	assert.Equal(t, scanSkipDuplicate, action,
 		"re-scan of same card after reader error recovery must be detected as duplicate")
 }
@@ -1021,4 +1386,48 @@ on_scan = "**echo:on_scan ran"`))
 
 	tok := env.expectToken(t)
 	assert.Equal(t, "token-a", tok.UID, "scan must still reach the token queue when ZapScript is disabled")
+}
+
+func TestResolveAutoDetector_EnablingAtRuntimeCreatesDetector(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: the detector used to be built once before the loop
+	// started, so turning readers.auto_detect on through the API did nothing
+	// until Core restarted while turning it off took effect immediately.
+	// See #1400.
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(false)
+	clock := clockwork.NewFakeClock()
+
+	var detector *AutoDetector
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.Nil(t, detector, "auto-detect off must not build a detector")
+
+	cfg.SetAutoDetect(true)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.NotNil(t, detector, "enabling auto-detect must take effect without a restart")
+
+	same := resolveAutoDetector(cfg, detector, clock)
+	assert.Same(t, detector, same, "a steady setting must keep the same detector")
+}
+
+func TestResolveAutoDetector_DisablingDropsDetectorState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(true)
+	clock := clockwork.NewFakeClock()
+
+	detector := resolveAutoDetector(cfg, nil, clock)
+	require.NotNil(t, detector)
+	detector.setFailed("/dev/ttyUSB0")
+
+	cfg.SetAutoDetect(false)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.Nil(t, detector)
+
+	cfg.SetAutoDetect(true)
+	detector = resolveAutoDetector(cfg, detector, clock)
+	require.NotNil(t, detector)
+	assert.Empty(t, detector.suppressedPaths(), "re-enabling must not inherit stale failure state")
 }

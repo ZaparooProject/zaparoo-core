@@ -100,10 +100,13 @@ func (db *MediaDB) slugSearchCachePath() string {
 // errors. A valid selective cache is still installed so its covered systems
 // remain searchable while the complete cache is built.
 func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
+	db.slugCacheState.buildMu.Lock()
+	defer db.slugCacheState.buildMu.Unlock()
 	path := db.slugSearchCachePath()
 	if path == "" {
 		return false, nil
 	}
+	source, generation := db.slugCacheBuildSnapshot()
 	gen, err := db.IndexGeneration()
 	if err != nil {
 		return false, fmt.Errorf("failed to read index generation: %w", err)
@@ -123,7 +126,11 @@ func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
 	if stored.EntryCount == 0 {
 		return false, nil
 	}
+	if source != db.sql.Load() || db.recreating.Load() {
+		return false, nil
+	}
 	cache := &SlugSearchCache{
+		source:          source,
 		systemDBIDToID:  stored.SystemDBIDToID,
 		systemIDToDBID:  stored.SystemIDToDBID,
 		systemRanges:    stored.SystemRanges,
@@ -140,7 +147,13 @@ func (db *MediaDB) LoadCachedSlugSearchCache() (bool, error) {
 		entryCount:      stored.EntryCount,
 		complete:        stored.Complete,
 	}
-	db.slugSearchCache.Store(cache)
+	cache.buildCandidateBlocks()
+	if source != db.sql.Load() || db.recreating.Load() {
+		return false, nil
+	}
+	if err := db.publishSlugCache(db.ctx, source, generation, cache); err != nil {
+		return false, nil
+	}
 	log.Info().
 		Int("entries", cache.entryCount).
 		Int("systems", len(cache.systemRanges)).

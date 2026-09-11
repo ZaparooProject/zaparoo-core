@@ -22,6 +22,7 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -39,7 +41,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
+	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -55,9 +60,11 @@ type scanBehaviorEnv struct {
 	st          *state.State
 	cfg         *config.Instance
 	userDB      *testhelpers.MockUserDBI
+	mediaDB     *testhelpers.MockMediaDBI
 	svc         *ServiceContext
 	launchHook  *launchHook
 	historyHook *historyHook
+	fs          afero.Fs
 	scanQueue   chan readers.Scan
 	itq         chan tokens.Token
 	clock       *clockwork.FakeClock
@@ -65,6 +72,7 @@ type scanBehaviorEnv struct {
 	stopCh      chan struct{}
 	keyboardCh  chan string
 	historyCh   chan database.HistoryEntry
+	uiCh        chan models.UIStateResponse
 	romsDir     string
 }
 
@@ -119,6 +127,17 @@ func setupScanBehavior(
 	t *testing.T,
 	scanMode string,
 	exitDelay float32,
+) *scanBehaviorEnv {
+	t.Helper()
+	// Buffer updates so launch goroutines can finish during shutdown.
+	return setupScanBehaviorWithSoftwareQueue(t, scanMode, exitDelay, make(chan softwareTokenUpdate, 10))
+}
+
+func setupScanBehaviorWithSoftwareQueue(
+	t *testing.T,
+	scanMode string,
+	exitDelay float32,
+	lsq chan softwareTokenUpdate,
 ) *scanBehaviorEnv {
 	t.Helper()
 
@@ -219,6 +238,11 @@ mode = "unrestricted"`))
 		stopCh <- struct{}{}
 	}).Maybe()
 
+	mockPlatform.On("ReturnToMenu").Return(nil).Run(func(_ mock.Arguments) {
+		st.SetActiveMedia(nil)
+		stopCh <- struct{}{}
+	}).Maybe()
+
 	mockPlatform.On("KeyboardPress",
 		mock.AnythingOfType("string"),
 	).Return(nil).Run(func(args mock.Arguments) {
@@ -230,12 +254,16 @@ mode = "unrestricted"`))
 	mockPlatform.On("ConsoleManager").Return(platforms.NoOpConsoleManager{}).Maybe()
 
 	fakeClock := clockwork.NewFakeClock()
+	uiCh := make(chan models.UIStateResponse, 32)
+	ui := uievents.New(fakeClock, nil, func(update models.UIStateResponse) {
+		select {
+		case uiCh <- update:
+		default:
+		}
+	})
 
-	// lsq is buffered so goroutines spawned by processTokenQueue and timedExit
-	// can complete their sends after context cancellation.
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token)
-	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
 	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, nil, mockPlayer)
@@ -246,8 +274,12 @@ mode = "unrestricted"`))
 		State:               st,
 		DB:                  db,
 		Profiles:            profiles.NewService(db, st),
+		LimitsManager:       limitsManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
+		ConfirmQueue:        make(chan chan error),
+		UI:                  ui,
 		BackgroundWG:        &sync.WaitGroup{},
 	}
 
@@ -281,6 +313,8 @@ mode = "unrestricted"`))
 		st:          st,
 		cfg:         cfg,
 		userDB:      mockUserDB,
+		mediaDB:     mockMediaDB,
+		fs:          fs.Fs,
 		svc:         svc,
 		launchHook:  hook,
 		historyHook: histHook,
@@ -292,6 +326,7 @@ mode = "unrestricted"`))
 		stopCh:      stopCh,
 		keyboardCh:  keyboardCh,
 		historyCh:   historyCh,
+		uiCh:        uiCh,
 	}
 }
 
@@ -304,7 +339,8 @@ func (env *scanBehaviorEnv) gamePath(name string) string {
 
 func (env *scanBehaviorEnv) sendGameScan(uid, path string) {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
 		Token: &tokens.Token{
 			UID:      uid,
 			Text:     path,
@@ -317,7 +353,8 @@ func (env *scanBehaviorEnv) sendGameScan(uid, path string) {
 
 func (env *scanBehaviorEnv) sendCommandScan(uid, cmd string) {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
 		Token: &tokens.Token{
 			UID:      uid,
 			Text:     cmd,
@@ -328,10 +365,69 @@ func (env *scanBehaviorEnv) sendCommandScan(uid, cmd string) {
 	}
 }
 
+// sendTraitScan scans a card whose ZapScript carries scan-mode traits ahead of
+// the rest of the script, e.g. "#tap||/roms/game.rom".
+func (env *scanBehaviorEnv) sendTraitScan(uid, traits, script string) {
+	env.sendCommandScan(uid, traits+"||"+script)
+}
+
+// sendRemoval reports that the reader no longer sees a token. Every real
+// driver labels its scans, removals included, so the harness does too.
 func (env *scanBehaviorEnv) sendRemoval() {
 	env.scanQueue <- readers.Scan{
-		Source: testReaderSrc,
-		Token:  nil,
+		Source:   testReaderSrc,
+		ReaderID: testReaderID,
+		Token:    nil,
+	}
+}
+
+// --- Second reader ---
+//
+// A device can have more than one reader, which is the whole point of a
+// per-reader scan mode. These drive a second, independently addressed reader.
+
+const (
+	testReader2ID   = "test-reader-removable-2"
+	testReader2Path = "/dev/mock-device-2"
+)
+
+// addSecondReader registers another removable reader, on its own path so
+// per-reader configuration can tell the two apart.
+func (env *scanBehaviorEnv) addSecondReader(t *testing.T) {
+	t.Helper()
+	r := mocks.NewMockReader()
+	r.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	r.On("IDs").Return([]string{"mock:"}).Maybe()
+	r.On("Connected").Return(true).Maybe()
+	r.On("Path").Return(testReader2Path).Maybe()
+	r.On("Info").Return("Mock Removable Reader 2").Maybe()
+	r.On("Capabilities").Return([]readers.Capability{
+		readers.CapabilityRemovable,
+	}).Maybe()
+	r.On("ReaderID").Return(testReader2ID).Maybe()
+	r.On("OnMediaChange", mock.Anything).Return(nil).Maybe()
+	env.st.SetReader(r)
+}
+
+func (env *scanBehaviorEnv) sendScanOn(readerID, uid, text string) {
+	env.scanQueue <- readers.Scan{
+		Source:   testReaderSrc,
+		ReaderID: readerID,
+		Token: &tokens.Token{
+			UID:      uid,
+			Text:     text,
+			ScanTime: time.Now(),
+			Source:   tokens.SourceReader,
+			ReaderID: readerID,
+		},
+	}
+}
+
+func (env *scanBehaviorEnv) sendRemovalOn(readerID string) {
+	env.scanQueue <- readers.Scan{
+		Source:   testReaderSrc,
+		ReaderID: readerID,
+		Token:    nil,
 	}
 }
 
@@ -428,6 +524,25 @@ func (env *scanBehaviorEnv) waitForActiveCard(t *testing.T, uid string) {
 	}
 }
 
+// waitForCardRemoved polls until readerManager has processed a removal and
+// cleared the active card. sendRemoval only queues the scan, so a test that
+// re-taps straight afterwards is racing the removal that is supposed to have
+// reset the reader's state.
+func (env *scanBehaviorEnv) waitForCardRemoved(t *testing.T) {
+	t.Helper()
+	deadline := time.After(behaviorTimeout)
+	for {
+		if env.st.GetActiveCard().UID == "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for the active card to clear after removal")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // waitForTimerStopped polls until the exit timer has been stopped, verified by
 // the fake clock having no remaining waiters.
 func (env *scanBehaviorEnv) waitForTimerStopped(t *testing.T) {
@@ -515,7 +630,7 @@ func TestScanBehavior_Tap_DifferentCardLaunchesDirectly(t *testing.T) {
 	}
 }
 
-func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
+func TestScanBehavior_Tap_SameCardAfterRemoveDoesNotReload(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
@@ -523,10 +638,14 @@ func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
 	env.waitForLaunch(t)
 
 	env.sendRemoval()
+	// The relaunch depends on the removal having cleared the previous token, and
+	// sendRemoval only queues it. Without this the re-tap can reach the loop
+	// while the card is still active and be dropped as a repeat.
+	env.waitForCardRemoved(t)
 
-	// Re-tap same card — should launch again (prevToken cleared by removal).
+	// Presence deduplication resets on removal, but the resolved game is still running.
 	env.sendGameScan("game1", env.gamePath("game.rom"))
-	env.waitForLaunch(t)
+	env.expectNoLaunch(t)
 }
 
 func TestScanBehavior_Tap_CommandDoesNotInterruptGame(t *testing.T) {
@@ -860,4 +979,506 @@ func TestScanBehavior_HoldDelayed_ManualExitDuringCountdownCancels(t *testing.T)
 	env.simulateManualExit()
 	env.clock.Advance(10 * time.Second)
 	env.expectNoStop(t)
+}
+
+// ============================================================================
+// Per-token scan mode override (#tap / #hold traits)
+// ============================================================================
+
+// A #tap card opts out of hold mode: removing it leaves the game running even
+// though the device is globally in hold mode.
+func TestScanBehavior_Hold_TapTraitRemovalDoesNotCloseGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
+// The override rides on the token that owns hold-mode exit, so the launch is
+// still tracked; it simply never exits.
+func TestScanBehavior_Hold_TapTraitRecordsTapPolicyOnOwner(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	owner := env.st.GetSoftwareToken()
+	require.NotNil(t, owner)
+	assert.Equal(t, config.ScanModeTap, owner.Traits.ScanMode())
+}
+
+// Regression: a #tap launch must take ownership away from the card that owned
+// the previous game, or removing that older card would stop media it never
+// launched.
+func TestScanBehavior_Hold_TapTraitLaunchClearsPreviousOwner(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("holdCard", env.gamePath("gameA.rom"))
+	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "holdCard")
+
+	env.sendRemoval()
+	env.waitForStop(t)
+
+	env.sendTraitScan("tapCard", "#tap", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "tapCard")
+
+	// Removing the tap card must not stop the game it launched.
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
+// Regression: swapping a live hold owner for a #tap card must move ownership
+// to the new card. Leaving the older card as the owner would let its later
+// removal stop media it never launched.
+func TestScanBehavior_Hold_TapTraitLaunchReplacesLiveOwner(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("holdCard", env.gamePath("gameA.rom"))
+	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "holdCard")
+
+	// No removal in between, so the replacement launch takes ownership from a
+	// hold owner that is still live.
+	env.sendTraitScan("tapCard", "#tap", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "tapCard")
+
+	owner := env.st.GetSoftwareToken()
+	require.NotNil(t, owner)
+	assert.Equal(t, config.ScanModeTap, owner.Traits.ScanMode())
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
+// A #hold card opts in to hold mode on a device that is globally tap.
+func TestScanBehavior_Tap_HoldTraitRemovalClosesGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+
+	env.sendTraitScan("game1", "#hold", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_Tap_HoldTraitRemovalClosesGameAfterDelay(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 5)
+
+	env.sendTraitScan("game1", "#hold", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+
+	env.clock.Advance(5 * time.Second)
+	env.waitForStop(t)
+}
+
+// Traits that contradict each other are ignored, so the card behaves exactly
+// like one carrying no override at all.
+func TestScanBehavior_Hold_ConflictingTraitsInheritGlobalMode(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendTraitScan("game1", "#tap #hold", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	owner := env.st.GetSoftwareToken()
+	require.NotNil(t, owner)
+	assert.Empty(t, owner.Traits.ScanMode())
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_Hold_DiscControlCardPreservesMedia(t *testing.T) {
+	// Not parallel: control dispatch uses the global launcher cache.
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+	for _, action := range []string{
+		platforms.ControlToggleTray, platforms.ControlNext, platforms.ControlPrevious,
+	} {
+		t.Run(action, func(t *testing.T) {
+			controlled := make(chan struct{}, 1)
+			helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{{
+				ID: "disc-test",
+				Controls: map[string]platforms.Control{action: {
+					Func: func(context.Context, *config.Instance, platforms.ControlParams) error {
+						controlled <- struct{}{}
+						return nil
+					},
+				}},
+			}})
+			env := setupScanBehavior(t, config.ScanModeHold, 0)
+			env.sendGameScan("game1", env.gamePath("game.m3u"))
+			env.waitForLaunch(t)
+			env.waitForSoftwareTokenUID(t, "game1")
+			media := env.st.ActiveMedia()
+			media.LauncherID = "disc-test"
+			env.st.SetActiveMedia(media)
+			// Snapshot by value. ActiveMedia can hand back the very pointer
+			// stored here, and comparing that with itself holds however the
+			// struct was rewritten in the meantime.
+			expectedMedia := *media
+			gen, active := env.st.ActiveMediaReadyGeneration()
+			require.True(t, active)
+			env.st.MarkActiveMediaReady(gen)
+			env.sendTraitScan("disc", "#tap", "**control:"+action)
+			select {
+			case <-controlled:
+			case <-time.After(behaviorTimeout):
+				t.Fatal("disc control was not dispatched")
+			}
+			env.sendRemoval()
+			env.expectNoStop(t)
+			env.waitForSoftwareTokenUID(t, "game1")
+			current := env.st.ActiveMedia()
+			require.NotNil(t, current, "disc control cleared active media")
+			assert.Equal(t, expectedMedia, *current)
+			select {
+			case <-env.launchCh:
+				t.Fatal("disc control relaunched media")
+			default:
+			}
+			env.sendGameScan("game1", env.gamePath("game.m3u"))
+			env.waitForActiveCard(t, "game1")
+			env.sendRemoval()
+			env.waitForStop(t)
+		})
+	}
+}
+
+// A #tap card that only runs a control command changes nothing: the card that
+// launched the running game keeps hold ownership, and its own removal still
+// exits.
+func TestScanBehavior_Hold_TapTraitControlCardPreservesHoldOwner(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendTraitScan("keyboard", "#tap", "**input.keyboard:{f2}")
+	env.waitForKeyboard(t)
+	env.sendRemoval()
+
+	env.expectNoStop(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+// The on_remove hook belongs to hold-mode removal, so a card that opted out of
+// hold mode must not fire it.
+func TestScanBehavior_Hold_TapTraitSkipsOnRemoveHook(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = "**input.keyboard:{f9}"`))
+
+	env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("on_remove hook ran for a tap-overridden token, pressed %q", key)
+	case <-time.After(noEventWait):
+	}
+}
+
+// Rescanning the same #tap card repeatedly must not accumulate state that
+// later resurrects it as a hold owner.
+func TestScanBehavior_Hold_TapTraitRescanNeverExits(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	for i := range 3 {
+		env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
+		if i == 0 {
+			env.waitForLaunch(t)
+		} else {
+			env.expectNoLaunch(t)
+		}
+		env.waitForActiveCard(t, "game1")
+		env.sendRemoval()
+		env.expectNoStop(t)
+	}
+
+	owner := env.st.GetSoftwareToken()
+	require.NotNil(t, owner)
+	assert.Equal(t, config.ScanModeTap, owner.Traits.ScanMode())
+}
+
+// ============================================================================
+// Per-reader scan mode (readers.drivers / readers.connect)
+// ============================================================================
+
+// The mock reader in this harness reports driver "mock-reader" on path
+// "/dev/mock-device", which is what the per-reader config below keys off.
+func TestScanBehavior_PerReader_TapDriverInHoldGlobal(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.drivers.mock-reader]
+scan_mode = "tap"`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
+func TestScanBehavior_PerReader_HoldDriverInTapGlobal(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.drivers.mock-reader]
+scan_mode = "hold"`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_PerReader_ConnectEntryOverridesDriver(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.drivers.mock-reader]
+scan_mode = "tap"
+
+[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device"
+scan_mode = "hold"`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
+// A token trait outranks the reader's configured mode.
+func TestScanBehavior_PerReader_TokenTraitBeatsReaderConfig(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.drivers.mock-reader]
+scan_mode = "hold"`))
+
+	env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
+// ============================================================================
+// Two readers at once
+//
+// Scans were tracked in a single slot shared by every reader, so one reader's
+// activity decided what another reader's removal meant. These pin the two ways
+// that went wrong, both of which left hold-mode media running forever.
+// ============================================================================
+
+// A removal is the removal of what was on the reader that reported it, not of
+// whatever was scanned last anywhere.
+func TestScanBehavior_TwoReaders_RemovalAttributedToItsOwnReader(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	env.addSecondReader(t)
+
+	// The game card owns hold-mode exit, scanned on reader one.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// A command card is then put on reader two and left there.
+	env.sendScanOn(testReader2ID, "cmd1", "**input.keyboard:a")
+	env.waitForKeyboard(t)
+
+	// Lifting the game card from reader one must exit: it is that card being
+	// removed, not the command card that happened to be scanned more recently.
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// One reader's removal must not make another reader's removal look like a
+// repeat of it.
+func TestScanBehavior_TwoReaders_SecondRemovalIsNotADuplicate(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	env.addSecondReader(t)
+
+	env.sendScanOn(testReaderID, "game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// A command card is tapped on reader two and taken away again.
+	env.sendScanOn(testReader2ID, "cmd1", "**input.keyboard:a")
+	env.waitForKeyboard(t)
+	env.sendRemovalOn(testReader2ID)
+
+	// Reader one's own removal still has to register.
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// A per-reader mode only applies to its own reader, and each reader's removal
+// is judged by that reader's mode.
+func TestScanBehavior_TwoReaders_HoldAndTapSideBySide(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	env.addSecondReader(t)
+	require.NoError(t, env.cfg.LoadTOML(`[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device"
+scan_mode = "hold"
+
+[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device-2"
+scan_mode = "tap"`))
+
+	// The tap reader launches and keeps running when its card is lifted.
+	env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game2")
+	env.sendRemovalOn(testReader2ID)
+	env.expectNoStop(t)
+
+	// The hold reader launches and exits when its card is lifted.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("hold.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+}
+
+// ============================================================================
+// A dead exit timer is not a pending exit
+//
+// The hold owner stays recorded long after its countdown is over, so treating
+// "a timer object exists" as "an exit is pending" swallowed later scans of
+// that card with nothing logged.
+// ============================================================================
+
+// The timer fired but decided against exiting, because the media had already
+// stopped. Scanning the same card again must launch it.
+func TestScanBehavior_Hold_RescanAfterTimerFoundNoMedia(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	// The game exits by itself, then the card is lifted: the countdown runs,
+	// finds nothing to close, and leaves the card recorded as the hold owner.
+	env.simulateManualExit()
+	env.sendRemoval()
+	env.waitForActiveCard(t, "")
+
+	// Putting the same card back must start the game again.
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+}
+
+// Reinsertion during a real countdown still cancels the exit rather than
+// relaunching, which is what the dead-timer check must not break.
+func TestScanBehavior_HoldDelayed_ReinsertionStillCancelsExit(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 5)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendRemoval()
+	env.waitForActiveCard(t, "")
+
+	// Back on the reader before the countdown ends: no exit, no relaunch.
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+	env.expectNoLaunch(t)
+
+	env.clock.Advance(10 * time.Second)
+	env.expectNoStop(t)
+}
+
+// With legacy relaunch enabled, a tap reader reloads on every tap even after
+// another reader has run a hold exit. A stale timer must not swallow a scan.
+func TestScanBehavior_Tap_RepeatTapsAfterAHoldReaderArmedATimer(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	env.addSecondReader(t)
+	require.NoError(t, env.cfg.LoadTOML(`[[readers.connect]]
+driver = "mock-reader"
+path = "/dev/mock-device"
+scan_mode = "hold"`))
+
+	// The hold reader launches and its removal arms and runs an exit.
+	env.sendScanOn(testReaderID, "game1", env.gamePath("hold.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	env.sendRemovalOn(testReaderID)
+	env.waitForStop(t)
+
+	// Relaunch suppression is the default, so the repeat taps this asserts only
+	// reload with it turned off.
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+allow_relaunch = true`))
+
+	// Tap immediately: the previous exit's cleanup may still be in flight.
+	// From then on the tap reader must keep reloading on every tap.
+	for range 2 {
+		env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))
+		env.waitForLaunch(t)
+		env.waitForSoftwareTokenUID(t, "game2")
+		env.sendRemovalOn(testReader2ID)
+		env.expectNoStop(t)
+	}
+}
+
+// addConfigMapping installs a mapping through a mappings TOML file, which is
+// the source that never passes through the API's validation.
+func (env *scanBehaviorEnv) addConfigMapping(t *testing.T, pattern, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	toml := "[[mappings.entry]]\ntoken_key = \"value\"\nmatch_pattern = " +
+		strconv.Quote(pattern) + "\nzapscript = " + strconv.Quote(script) + "\n"
+	require.NoError(t, env.fs.MkdirAll(dir, 0o750))
+	require.NoError(t, afero.WriteFile(env.fs, filepath.Join(dir, "test.toml"), []byte(toml), 0o600))
+	require.NoError(t, env.cfg.LoadMappings(dir))
 }

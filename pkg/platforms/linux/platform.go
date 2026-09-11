@@ -185,7 +185,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	emuOpts := p.emulationOptions()
 	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
 	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
-	return append(custom, ls...)
+	return helpers.CombineParsedLaunchers(custom, ls)
 }
 
 func (p *Platform) emulationOptions() linuxemu.Options {

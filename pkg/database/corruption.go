@@ -124,7 +124,8 @@ func NoteCorruption(dbPath string, err error, now time.Time) bool {
 // the forensic copy could not be made. dbLabel names the database in the log
 // line (e.g. "media", "user").
 func PreserveCorruptFile(path, dbLabel string) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	} else if err != nil {
 		log.Warn().Err(err).Str("db", dbLabel).Str("path", path).Msg("failed to stat corrupt database file")
@@ -134,7 +135,15 @@ func PreserveCorruptFile(path, dbLabel string) {
 	_ = os.Remove(backup)
 	if err := os.Rename(path, backup); err != nil {
 		log.Warn().Err(err).Str("db", dbLabel).Str("path", path).Msg("failed to preserve corrupt database file")
+		return
 	}
+	// Logged at warn with the rest of the recovery trail: this is the file a
+	// corruption report needs, and the line is how its author finds it.
+	log.Warn().
+		Str("db", dbLabel).
+		Str("path", backup).
+		Int64("bytes", info.Size()).
+		Msg("preserved corrupt database file for post-mortem")
 }
 
 // RemoveSidecars deletes the -wal and -shm sidecar files for dbPath. A stale WAL

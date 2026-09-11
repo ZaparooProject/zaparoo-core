@@ -42,9 +42,34 @@ type framebufferMode struct {
 	divisor int
 }
 
+var hybridDVDCore = cores.Core{
+	ID:         systemdefs.SystemDVDPlayer,
+	LauncherID: "HybridDVDPlayer",
+	RBF:        "DVD_Player",
+	SetName:    "DVD-Player",
+	Slots: []cores.Slot{{
+		Label: "DVD image",
+		Exts:  []string{".iso"},
+		Mgl:   &cores.MGLParams{Method: "f", Delay: 2, Index: 0},
+	}},
+}
+
+var kitrinxNGPCCore = cores.Core{
+	ID:         systemdefs.SystemNeoGeoPocketColor,
+	LauncherID: "KitrinxNeoGeoPocketColor",
+	RBF:        "_Console/NGPC",
+	SetName:    "NGPC",
+	Slots: []cores.Slot{{
+		Label: "ROM",
+		Exts:  []string{".ngp", ".ngc", ".npc"},
+		Mgl:   &cores.MGLParams{Method: "f", Delay: 2, Index: 1},
+	}},
+}
+
 var mglIndexingSkippedLaunchers = map[string]struct{}{
-	"GenericVideo": {},
-	"ScummVM":      {},
+	"GenericVideo":             {},
+	"ScummVM":                  {},
+	"KitrinxNeoGeoPocketColor": {},
 }
 
 var misterDefaultScanExcludes = []string{
@@ -653,27 +678,53 @@ func launchAltCoreWithDefaultSetName(
 	setNameSameDir bool,
 	fallbackRBFPaths ...string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefinition(&cores.Core{
+		ID: systemID, LauncherID: launcherID, RBF: rbfPath,
+		SetName: setName, SetNameSameDir: setNameSameDir,
+	}, fallbackRBFPaths...)
+}
+
+func configureAltCoreDefinition(core, definition *cores.Core, opts *platforms.LaunchOptions) error {
+	// Alternate implementations can use a different file-transfer protocol or
+	// accept extensions the primary core does not support.
+	if definition.Slots != nil {
+		core.Slots = definition.Slots
+	}
+	return configureAltCoreWithDefaultSetName(
+		core, definition.LauncherID, definition.RBF, definition.SetName, definition.SetNameSameDir, opts,
+	)
+}
+
+func launchAltCoreWithDefinition(
+	definition *cores.Core,
+	fallbackRBFPaths ...string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	// Register alt core during launcher creation.
 	rbfPaths := make([]string, 0, 1+len(fallbackRBFPaths))
-	rbfPaths = append(rbfPaths, rbfPath)
+	rbfPaths = append(rbfPaths, definition.RBF)
 	rbfPaths = append(rbfPaths, fallbackRBFPaths...)
-	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPaths...)
+	cores.GlobalRBFCache.RegisterAltCore(definition.LauncherID, rbfPaths...)
 
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		s, err := cores.GetCore(systemID)
+		s, err := cores.GetCore(definition.ID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
+			return nil, fmt.Errorf("failed to get system %s: %w", definition.ID, err)
 		}
 		path = checkInZip(path)
 
 		sn := *s
-		if setNameErr := configureAltCoreWithDefaultSetName(
-			&sn, launcherID, rbfPath, setName, setNameSameDir, opts,
-		); setNameErr != nil {
+		if setNameErr := configureAltCoreDefinition(&sn, definition, opts); setNameErr != nil {
 			return nil, setNameErr
 		}
 
-		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching alt core: %v", sn)
+		// A different media protocol cannot safely fall back to the primary RBF.
+		if definition.Slots != nil {
+			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, definition.LauncherID, definition.ID); !ok {
+				return nil, fmt.Errorf("alternate core not installed: %s", definition.LauncherID)
+			}
+		}
+
+		log.Debug().Str("rbf", sn.RBF).Str("launcher", definition.LauncherID).Msgf("launching alt core: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -1093,6 +1144,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		ID:                 "ScummVM",
 		SystemID:           systemdefs.SystemScummVM,
 		Schemes:            []string{shared.SchemeScummVM},
+		Test:               shared.SchemeIDTest(shared.SchemeScummVM),
 		SkipFilesystemScan: true,
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
@@ -1165,6 +1217,27 @@ func launcherHasExtension(launcher *platforms.Launcher, extension string) bool {
 		}
 	}
 	return false
+}
+
+// Prefer the installed stable implementation without changing either launcher's
+// identity. Explicit launcher selections and their setnames remain untouched.
+func prioritizeNGPCCore(cfg *config.Instance, launchers []platforms.Launcher) []platforms.Launcher {
+	kitrinx, jotego := -1, -1
+	for i := range launchers {
+		switch launchers[i].ID {
+		case kitrinxNGPCCore.LauncherID:
+			kitrinx = i
+		case systemdefs.SystemNeoGeoPocketColor:
+			jotego = i
+		}
+	}
+	if kitrinx >= 0 && jotego >= 0 {
+		_, installed := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, kitrinxNGPCCore.LauncherID, kitrinxNGPCCore.ID)
+		if (installed && kitrinx > jotego) || (!installed && jotego > kitrinx) {
+			launchers[kitrinx], launchers[jotego] = launchers[jotego], launchers[kitrinx]
+		}
+	}
+	return launchers
 }
 
 // CreateLaunchers creates all standard MiSTer launchers for the given platform.
@@ -1668,6 +1741,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"NGP"},
 			Extensions: []string{".ngp"},
 			Launch:     launch(pl, systemdefs.SystemNeoGeoPocket),
+		},
+		{
+			ID:         kitrinxNGPCCore.LauncherID,
+			SystemID:   systemdefs.SystemNeoGeoPocketColor,
+			Folders:    []string{"NGPC"},
+			Extensions: []string{".ngc", ".npc"},
+			Launch:     launchAltCoreWithDefinition(&kitrinxNGPCCore),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoPocketColor,
@@ -2493,6 +2573,21 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGroovy),
 		},
 		{
+			ID:       systemdefs.SystemCommodoreCDTV,
+			SystemID: systemdefs.SystemCommodoreCDTV,
+			Launch:   launch(pl, systemdefs.SystemCommodoreCDTV),
+		},
+		{
+			ID:       systemdefs.SystemDVDPlayer,
+			SystemID: systemdefs.SystemDVDPlayer,
+			Launch:   launch(pl, systemdefs.SystemDVDPlayer),
+		},
+		{
+			ID:       hybridDVDCore.LauncherID,
+			SystemID: systemdefs.SystemDVDPlayer,
+			Launch:   launchAltCoreWithDefinition(&hybridDVDCore, "_Other/DVD_Player"),
+		},
+		{
 			ID:         "Generic",
 			Extensions: []string{".mgl", ".rbf", ".mra"},
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
@@ -2515,7 +2610,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 	all = append(all, launchers...)
 	all = append(all, unstable...)
 
-	return applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
+	return prioritizeNGPCCore(nil, applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
 		applyAltCoreLauncherGroups(all),
-	)))
+	))))
 }

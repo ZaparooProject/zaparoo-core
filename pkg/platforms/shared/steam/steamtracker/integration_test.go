@@ -108,7 +108,12 @@ func TestPlatformIntegrationGameIsActive(t *testing.T) {
 func TestPlatformIntegrationTracksSteamReaperForStop(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "sleep", "30")
 	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		// Wait releases the goroutine CommandContext starts to watch the
+		// context; without it that goroutine outlives the test.
+		_ = cmd.Wait()
+	})
 
 	base := linuxbase.NewBase(platformids.SteamOS)
 	integration := &PlatformIntegration{
@@ -128,7 +133,12 @@ func TestPlatformIntegrationTracksSteamReaperForStop(t *testing.T) {
 func TestPlatformIntegrationForgetsReaperAfterNormalExit(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "sleep", "30")
 	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		// Wait releases the goroutine CommandContext starts to watch the
+		// context; without it that goroutine outlives the test.
+		_ = cmd.Wait()
+	})
 
 	base := linuxbase.NewBase(platformids.SteamOS)
 	integration := &PlatformIntegration{

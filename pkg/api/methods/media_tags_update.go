@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
@@ -79,12 +80,25 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	row := resolved[0].Row
 	resolveDuration := time.Since(resolveStarted)
 
-	// Write the durable truth (UserDB) before the MediaDB projection. Since
-	// user:favorite is the only mutable tag, any add wins over a simultaneous
-	// remove. A failed projection remains repairable by the next reindex.
-	favorite := len(add) > 0
-	if udErr := setMediaUserFavorite(&env, row.System.SystemID, row.Path, favorite); udErr != nil {
-		return nil, udErr
+	// Record changed preferences before their disposable projection. Adds win
+	// over removes, matching UpdateMediaTags; unrelated flags stay intact.
+	changes := make(map[string]bool)
+	for _, tag := range remove {
+		changes[tag.Tag] = false
+	}
+	for _, tag := range add {
+		changes[tag.Tag] = true
+	}
+	if favorite, changed := changes[string(tags.TagUserFavorite)]; changed {
+		if udErr := setMediaUserFavorite(&env, row.System.SystemID, row.Path, favorite); udErr != nil {
+			return nil, udErr
+		}
+	}
+	if hidden, changed := changes[string(tags.TagUserHidden)]; changed {
+		if udErr := env.Database.UserDB.SetMediaUserHidden(row.System.SystemID, row.Path, hidden); udErr != nil {
+			return nil, fmt.Errorf("failed to set media user hidden: %w", udErr)
+		}
+		snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
 	}
 
 	updateStarted := time.Now()
@@ -94,6 +108,9 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		return nil, fmt.Errorf("failed to update media tag projection: %w", updateErr)
 	}
 	updateDuration := time.Since(updateStarted)
+	if _, changed := changes[string(tags.TagUserHidden)]; changed && env.State != nil {
+		notifications.MediaVisibility(env.State.Notifications)
+	}
 
 	fetchStarted := time.Now()
 	fileTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
@@ -137,8 +154,9 @@ func parseMutableUserTags(rawTags []string) ([]database.MediaTagRef, error) {
 	}
 	refs := make([]database.MediaTagRef, 0, len(parsed))
 	for _, tag := range parsed {
-		if tag.Type != string(tags.TagTypeUser) || tag.Value != string(tags.TagUserFavorite) {
-			return nil, fmt.Errorf("only %s:%s can be mutated", tags.TagTypeUser, tags.TagUserFavorite)
+		if tag.Type != string(tags.TagTypeUser) ||
+			(tag.Value != string(tags.TagUserFavorite) && tag.Value != string(tags.TagUserHidden)) {
+			return nil, errors.New("only user:favorite and user:hidden can be mutated")
 		}
 		refs = append(refs, database.MediaTagRef{Type: tag.Type, Tag: tag.Value})
 	}

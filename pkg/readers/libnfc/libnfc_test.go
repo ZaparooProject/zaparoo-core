@@ -100,7 +100,11 @@ func TestMetadata(t *testing.T) {
 		assert.Equal(t, "libnfcacr122", metadata.ID)
 		assert.Equal(t, "LibNFC ACR122 USB NFC reader", metadata.Description)
 		assert.True(t, metadata.DefaultEnabled)
-		assert.True(t, metadata.DefaultAutoDetect)
+		// Auto-detect stays off by default: Detect enumerates the USB bus
+		// through libusb, and doing that on the 1 Hz tick while the bus changes
+		// aborted the process on ARM with a misaligned libusb_context access.
+		assert.False(t, metadata.DefaultAutoDetect,
+			"ACR122 auto-detect must stay opt-in; enabling it enumerates libusb every second on every device")
 	})
 
 	t.Run("legacy uart mode", func(t *testing.T) {

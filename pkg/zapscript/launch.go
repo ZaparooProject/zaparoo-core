@@ -313,6 +313,9 @@ func inferLauncherForSystemPath(
 	launchers := pl.Launchers(env.Cfg)
 	match := -1
 	for i := range launchers {
+		if launchers[i].ScanOnly {
+			continue
+		}
 		if !strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
@@ -776,6 +779,21 @@ func findLauncherIn(
 	return cache.GetLauncherByID(launcherID)
 }
 
+// HasResolvedLaunchTarget reports commands that resolve a concrete media target
+// before launching. System and platform commands do not share this path.
+func HasResolvedLaunchTarget(name string) bool {
+	switch name {
+	case zapscript.ZapScriptCmdLaunch, zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchSearch, zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchLast, zapscript.ZapScriptCmdRandom:
+		return true
+	default:
+		return false
+	}
+}
+
+var errMediaLaunchSkipped = errors.New("resolved media launch skipped")
+
 type launchTarget struct {
 	path                  string
 	systemID              string
@@ -800,6 +818,18 @@ func getLaunchClosure(
 				applySystemDefaultLauncher(pl, env, target.systemID)
 			} else {
 				applySystemDefaultLauncherForPath(pl, env, target.path)
+			}
+		}
+
+		// Per-media overrides belong to the requested/indexed path. Normalize
+		// only afterward so a ZIP's override is not looked up on its child file.
+		// The allow list is a user-facing policy written against the requested
+		// path, so it keeps that form: normalizing first would test a MiSTer
+		// ZIP as game.zip/game.sfc here and as game.zip everywhere else.
+		allowListPath := target.path
+		if env.SkipMediaLaunch != nil {
+			if normalizer, ok := pl.(platforms.LaunchPathNormalizer); ok {
+				target.path = normalizer.NormalizeLaunchPath(target.path)
 			}
 		}
 
@@ -828,7 +858,15 @@ func getLaunchClosure(
 			if launcher == nil {
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
-			log.Info().Msgf("launching with launcher: %s", launcherID)
+			// Naming a scan-only launcher is asking for the media it
+			// contributes, so honour it with the launcher that can start it
+			// rather than refusing a launcher the user configured themselves.
+			resolved, resolveErr := helpers.ResolveLaunchableLauncher(launcher, target.path)
+			if resolveErr != nil {
+				return fmt.Errorf("resolving launcher %s: %w", launcherID, resolveErr)
+			}
+			launcher = &resolved
+			log.Info().Msgf("launching with launcher: %s", launcher.ID)
 		} else if target.guideLauncherBySystem {
 			inferred, found := inferLauncherForSystemPath(pl, env, target.path, target.systemID)
 			if found {
@@ -839,8 +877,66 @@ func getLaunchClosure(
 					Msg("selected launcher from system argument")
 			}
 		}
-		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
-			return errors.New("file not allowed: " + target.path)
+		if launcher == nil && env.SkipMediaLaunch != nil && env.SkipMediaLaunch(platforms.ResolvedLaunch{
+			Path: target.path, SystemID: target.systemID, Options: opts,
+		}) {
+			// Reuse the platform's normal launcher selection before comparing
+			// identity and defaults (notably a configured "details" action).
+			if selected, selectErr := helpers.FindLauncher(env.Cfg, pl, target.path); selectErr == nil {
+				launcher = &selected
+			}
+		}
+		if launcher != nil && env.SkipMediaLaunch != nil {
+			if resolvedAction := platforms.ResolveAction(opts, env.Cfg, launcher); resolvedAction != "" {
+				if opts == nil {
+					opts = &platforms.LaunchOptions{}
+				}
+				opts.Action = resolvedAction
+			}
+		}
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
+		}
+
+		resolved := platforms.ResolvedLaunch{
+			Path: target.path, SystemID: target.systemID, Launcher: launcher, Options: opts,
+		}
+		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
+			return errMediaLaunchSkipped
+		}
+		if env.PrepareMediaLaunch != nil {
+			proceed, prepareErr := env.PrepareMediaLaunch(resolved)
+			if prepareErr != nil {
+				return fmt.Errorf("prepare media launch: %w", prepareErr)
+			}
+			if !proceed {
+				return errMediaLaunchSkipped
+			}
+		}
+		if env.AcquireLaunch != nil {
+			release, acquireErr := env.AcquireLaunch()
+			if acquireErr != nil {
+				return fmt.Errorf("acquire launch: %w", acquireErr)
+			}
+			defer release()
+		}
+		// Confirmation and hooks can take time or launch media themselves.
+		// Judge against the current game again while holding the launch guard.
+		if env.SkipMediaLaunch != nil && env.SkipMediaLaunch(resolved) {
+			return errMediaLaunchSkipped
+		}
+
+		// Allowlist policy may have changed while waiting for confirmation.
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(allowListPath) {
+			return errors.New("file not allowed: " + allowListPath)
+		}
+
+		// The outgoing media's before_exit hook. Everything that can reject this
+		// launch without disturbing what is running has now run, so the hook
+		// cannot fire for a launch that never happens. It is still outside the
+		// media launch gate below, which the hook's own ZapScript needs to take.
+		if env.BeforeExit != nil && normalizedSlot == mediaslot.Primary {
+			env.BeforeExit()
 		}
 
 		launchAccess := platforms.MediaLaunchAccess{Release: func() {}}
@@ -1108,11 +1204,8 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
-		return platforms.CmdResult{
-				MediaChanged: true,
-			}, launch(launchTarget{
-				path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
-			})
+		target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
+		return platforms.CmdResult{MediaChanged: true}, launch(target)
 	}
 
 	ps := strings.SplitN(query, "/", 2)
@@ -1158,11 +1251,8 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
 	}
 
-	return platforms.CmdResult{
-			MediaChanged: true,
-		}, launch(launchTarget{
-			path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
-		})
+	target := launchTarget{path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID}
+	return platforms.CmdResult{MediaChanged: true}, launch(target)
 }
 
 // getUniqueRecentMedia returns the Nth most recently played unique game from

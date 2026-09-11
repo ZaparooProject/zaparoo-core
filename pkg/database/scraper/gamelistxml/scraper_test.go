@@ -30,7 +30,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
@@ -263,6 +265,7 @@ func TestMimeFromExt_PNG(t *testing.T) { assert.Equal(t, "image/png", mimeFromEx
 func TestMimeFromExt_JPG(t *testing.T) { assert.Equal(t, "image/jpeg", mimeFromExt("art.jpg")) }
 func TestMimeFromExt_MP4(t *testing.T) { assert.Equal(t, "video/mp4", mimeFromExt("clip.mp4")) }
 func TestMimeFromExt_PDF(t *testing.T) { assert.Equal(t, "application/pdf", mimeFromExt("manual.pdf")) }
+
 func TestMimeFromExt_Unknown(t *testing.T) {
 	assert.Equal(t, "application/octet-stream", mimeFromExt("file.xyz"))
 }
@@ -306,6 +309,7 @@ func mediaByPath(rows ...database.Media) loadRecordIndexes {
 			indexes.MediaByFilename[filenameKey] = append(indexes.MediaByFilename[filenameKey], row)
 		}
 	}
+	indexes.Containers = container.NewIndex(rows)
 	return indexes
 }
 
@@ -1131,6 +1135,34 @@ func TestLoadRecords_DarksoftFolderAmbiguousChildrenSkipped(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, records)
+}
+
+func TestLoadRecords_AmbiguousFolderStaysUnmatchedAfterChildConsumed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	setDir := filepath.Join(root, "2020bb")
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	// The child entry is consumed first, which used to leave exactly one row
+	// under ./2020bb and make the ambiguous directory look like a container.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./2020bb/2020bb.xml</path><name>2020bb XML</name></game>
+  <game><path>./2020bb</path><name>2020 Super Baseball</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 71, MediaTitleDBID: 81, Path: filepath.Join(setDir, "2020bb.xml")},
+			database.Media{DBID: 72, MediaTitleDBID: 82, Path: filepath.Join(setDir, "2020bb.mra")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "2020bb XML", records[0].Game.Name)
+	assert.Equal(t, int64(71), records[0].MatchedMediaDBID)
 }
 
 func TestLoadRecords_ZipAsDirAmbiguousChildrenSkipped(t *testing.T) {
@@ -2878,6 +2910,77 @@ func TestResolveCompanionSlugConflicts(t *testing.T) {
 	assert.Equal(t, 1, nonSlug, "non-slug child untouched")
 }
 
+// A ZaparooCompanion PSX gamelist lists "crashbandicootwarped.slug" under both
+// "Crash Bandicoot" (19282) and the correct "Crash Bandicoot 3 - Warped" (19262),
+// because the US title omits the series number. The wrong parent used to win on a
+// prefix match while the correct one scored 0, so Crash 3 inherited Crash 1's box
+// art and description.
+func TestResolveCompanionSlugConflicts_SeriesNumberOmittedFromChild(t *testing.T) {
+	t.Parallel()
+	parents := []companionParent{
+		{GameID: "19282", Game: esapi.Game{Name: "Crash Bandicoot"}},
+		{GameID: "19262", Game: esapi.Game{Name: "Crash Bandicoot 3 - Warped"}},
+		{GameID: "19270", Game: esapi.Game{Name: "Crash Bandicoot 2 - Cortex Strikes Back"}},
+	}
+	child := func(stem, parent string) companionChild {
+		return companionChild{ResolvedPath: filepath.Join(t.TempDir(), stem+".slug"), ParentGameID: parent}
+	}
+	children := []companionChild{
+		child("crashbandicootwarped", "19282"),
+		child("crashbandicootwarped", "19262"),
+		// The same gamelist also lists "crashbandicoot2.slug" under both 19282 and
+		// 19270; that one already resolved correctly on a prefix match and must stay
+		// correct.
+		child("crashbandicoot2", "19282"),
+		child("crashbandicoot2", "19270"),
+	}
+
+	var stats companionStats
+	got := resolveCompanionSlugConflicts("PSX", parents, children, &stats)
+
+	parentFor := func(stem string) []string {
+		var ids []string
+		for _, c := range got {
+			if s, ok := companionSlugStem(c.ResolvedPath); ok && s == stem {
+				ids = append(ids, c.ParentGameID)
+			}
+		}
+		return ids
+	}
+	assert.Equal(t, []string{"19262"}, parentFor("crashbandicootwarped"),
+		"parent carrying the series number wins over an unrelated prefix match")
+	assert.Equal(t, []string{"19270"}, parentFor("crashbandicoot2"),
+		"a number the child carries must not be stripped away to match a shorter parent")
+}
+
+func TestCompanionParentNameScore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		childSlug  string
+		parentName string
+		want       int
+	}{
+		{"exact match", "crashbandicoot", "Crash Bandicoot", 3},
+		{"parent adds series number", "crashbandicootwarped", "Crash Bandicoot 3 - Warped", 2},
+		{"parent adds subtitle", "crashbandicoot2", "Crash Bandicoot 2 - Cortex Strikes Back", 1},
+		{"child adds subtitle", "megamanx", "Megaman", 1},
+		{"child adds series number", "crashbandicoot2", "Crash Bandicoot", 0},
+		{"unrelated", "crashbandicootwarped", "Some Unrelated Game", 0},
+		{"empty child", "", "Crash Bandicoot", 0},
+		{"empty parent", "crashbandicoot", "", 0},
+		// Digits are never stripped from the child, so distinct series entries stay
+		// distinct rather than both collapsing onto a numberless parent.
+		{"different series entries", "finalfantasy4", "Final Fantasy 6", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := companionParentNameScore(slugs.MediaTypeGame, tc.childSlug, tc.parentName)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestProcessCompanionEntries_RewritesAlreadyScraped(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -3262,6 +3365,22 @@ func TestProcessCompanionEntries_ThrottlesBatchProgress(t *testing.T) {
 	})
 }
 
+const (
+	// companionPauseObservationWindow is how long the worker is watched for
+	// while paused. It only has to be long enough for the goroutine to reach
+	// Pauser.Wait, and a slow machine makes the assertion safer rather than
+	// flakier, because the thing being proven is that nothing happens.
+	companionPauseObservationWindow = 150 * time.Millisecond
+	// companionResumeBudget bounds the wait for the worker to finish once it is
+	// resumed. It is deliberately far larger than the work needs: the property
+	// under test is that Resume unblocks the loop at all, and a budget tight
+	// enough to also measure how fast two children are written turns scheduling
+	// latency into a test failure. At 2s this failed on a loaded machine with
+	// the pauser behaving correctly. The bound exists only so a worker that
+	// never resumes fails instead of hanging the suite.
+	companionResumeBudget = 60 * time.Second
+)
+
 func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -3292,7 +3411,7 @@ func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	select {
 	case <-done:
 		require.FailNow(t, "processCompanionEntries did not block on a paused pauser before processing children")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(companionPauseObservationWindow):
 	}
 	require.Empty(t, mockDB.batches, "companion writes must not run while indexing is paused")
 
@@ -3301,7 +3420,7 @@ func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
 	select {
 	case stats := <-done:
 		assertCompanionCounts(t, &stats, 2, 2, 0)
-	case <-time.After(2 * time.Second):
+	case <-time.After(companionResumeBudget):
 		require.FailNow(t, "processCompanionEntries did not resume after pauser.Resume()")
 	}
 	require.Len(t, mockDB.batches, 1)
@@ -4139,4 +4258,142 @@ func TestScrapeLoop_CompanionSkipsAlreadyScrapedMedia(t *testing.T) {
 	assert.Equal(t, 1, done.Skipped)
 	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything)
 	mockDB.AssertExpectations(t)
+}
+
+// EmulationStation writes <folder> entries for a per-game disc folder. Core has
+// no folder row to hold that metadata, so it lands on the media the folder
+// launches. Reported in issue #1263.
+func TestLoadRecords_FolderEntryMatchesContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <folder>
+    <path>./Cool Game</path>
+    <name>Cool Game</name>
+    <desc>A game on two discs.</desc>
+    <image>./media/covers/Cool Game.png</image>
+  </folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.cue")},
+			database.Media{DBID: 12, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID, "the cue sheet is the folder's launch target")
+	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+	assert.Equal(t, "A game on two discs.", records[0].Game.Desc)
+	assert.Equal(t, "./media/covers/Cool Game.png", records[0].Game.Image)
+}
+
+func TestLoadRecords_FolderEntrySkippedWhenContainerIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	collection := filepath.Join(root, "RPGs")
+	require.NoError(t, os.MkdirAll(collection, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <folder><path>./RPGs</path><name>RPGs</name><desc>My favourites.</desc></folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(collection, "One.chd")},
+			database.Media{DBID: 12, MediaTitleDBID: 23, Path: filepath.Join(collection, "Two.chd")},
+		),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, records, "an ordinary collection has no row to carry folder metadata")
+}
+
+// ES-DE names a disc folder with a ROM extension so it reads as one game, and
+// writes an ordinary <game> entry whose path is that directory.
+func TestLoadRecords_GameEntryWithDirectoryPathResolvesContainer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game.cue")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Cool Game.cue</path><name>Cool Game</name><desc>Boxed.</desc></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 31, MediaTitleDBID: 41, Path: filepath.Join(gameDir, "Disc 1.cue")},
+			database.Media{DBID: 32, MediaTitleDBID: 41, Path: filepath.Join(gameDir, "Disc 1.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(31), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchPathOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe, "media-level artwork must survive a container match")
+}
+
+func TestLoadRecords_GameEntryWinsOverFolderEntryForSameTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Cool Game/Cool Game.cue</path><name>Cool Game</name><desc>From the game entry.</desc></game>
+  <folder><path>./Cool Game</path><name>Cool Game</name><desc>From the folder entry.</desc></folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.cue")},
+			database.Media{DBID: 12, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "From the game entry.", records[0].Game.Desc)
+}
+
+func TestMapToDB_FolderEntryFindsFolderNamedArtwork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	coverDir := filepath.Join(root, "media", "covers")
+	require.NoError(t, os.MkdirAll(coverDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(coverDir, "Cool Game.png"), []byte("cover"), 0o600))
+
+	folder := esapi.Folder{Path: "./Cool Game", Name: "Cool Game", Desc: "Two discs."}
+	record := &GamelistRecord{
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{esmedia.StatMediaDirs(root)},
+		Game:            folderAsGame(&folder),
+		MatchKind:       gamelistMatchPathOnly,
+	}
+
+	mapped := (&GamelistXMLScraper{}).MapToDB(record)
+
+	desc, ok := propertyByType(mapped.TitleProps, tags.PropertyTypeTag(tags.TagPropertyDescription))
+	require.True(t, ok)
+	assert.Equal(t, "Two discs.", desc.Text)
+	boxart, ok := propertyByType(mapped.MediaProps, tags.PropertyTypeTag(tags.TagPropertyImageBoxart))
+	require.True(t, ok, "folder artwork is named after the folder, which is the entry path stem")
+	assert.Equal(t, filepath.ToSlash(filepath.Join(coverDir, "Cool Game.png")), boxart.Text)
 }
