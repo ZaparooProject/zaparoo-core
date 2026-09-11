@@ -44,6 +44,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWebsocketHandshakeStatus(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{401, 403, 429, 500} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("X-Private", "secret-header")
+				http.Error(w, "secret-body", status)
+			}))
+			defer server.Close()
+			cfg := testConfigWithPort(t, parseServerPort(t, server))
+			calls := map[string]func() error{
+				"request": func() error {
+					_, err := LocalClient(t.Context(), cfg, "settings", "{}")
+					return err
+				},
+				"notification": func() error {
+					_, err := WaitNotification(t.Context(), time.Second, cfg, "test")
+					return err
+				},
+				"notifications": func() error {
+					_, _, err := WaitNotifications(t.Context(), time.Second, cfg, "test")
+					return err
+				},
+			}
+			for name, call := range calls {
+				t.Run(name, func(t *testing.T) {
+					err := call()
+					require.ErrorIs(t, err, websocket.ErrBadHandshake)
+					assert.EqualError(t, err, "failed to dial websocket (HTTP status "+strconv.Itoa(status)+
+						"): websocket: bad handshake")
+				})
+			}
+		})
+	}
+}
+
+func TestWebsocketDialErrorWithoutHandshakeResponse(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("transport failure")
+	for _, response := range []*http.Response{nil, {StatusCode: 403}} {
+		err := websocketDialError(cause, response)
+		require.ErrorIs(t, err, cause)
+		require.EqualError(t, err, "failed to dial websocket: transport failure")
+	}
+	err := websocketDialError(websocket.ErrBadHandshake, nil)
+	require.ErrorIs(t, err, websocket.ErrBadHandshake)
+	assert.EqualError(t, err, "failed to dial websocket: websocket: bad handshake")
+}
+
 // testConfigWithPort creates a minimal config with the given port for testing.
 func testConfigWithPort(t *testing.T, port int) *config.Instance {
 	t.Helper()

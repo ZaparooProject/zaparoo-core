@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -45,6 +46,15 @@ var (
 )
 
 const APIPath = "/api/v0.1"
+
+// HTTP status distinguishes rejected upgrades without exposing response bodies
+// or headers, which may contain credentials or private server details.
+func websocketDialError(err error, response *http.Response) error {
+	if response != nil && errors.Is(err, websocket.ErrBadHandshake) {
+		return fmt.Errorf("failed to dial websocket (HTTP status %d): %w", response.StatusCode, err)
+	}
+	return fmt.Errorf("failed to dial websocket: %w", err)
+}
 
 // isExpectedWebsocketClose reports whether a websocket read error is an expected
 // disconnect (the connection closed, the peer went away, or an abnormal closure
@@ -148,9 +158,9 @@ func LocalClient(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
+	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", websocketDialError(err, response)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -279,9 +289,9 @@ func WaitNotification(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", websocketDialError(err, response)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -466,9 +476,9 @@ func waitNotificationsWithClock(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", "", websocketDialError(err, response)
 	}
 	connectionClosed := false
 	closeConnection := func() {
