@@ -113,6 +113,49 @@ func TestOperationAcceptExecuteReportLifecycle(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
+func TestOperationAcceptanceCASLossDoesNotExecute(t *testing.T) {
+	acceptedExpiry := time.Now().UTC().Add(time.Minute)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/device/operations/cmd_raced/accepted" {
+			t.Errorf("acceptance CAS loss made unexpected request to %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"execution_expires_at":"` + acceptedExpiry.Format(time.RFC3339Nano) + `"}`))
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.execute = func(context.Context, *operationEnvelope) operationResult {
+		t.Error("acceptance CAS loss executed command")
+		return operationResult{}
+	}
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+	params := json.RawMessage(`{"message":"raced"}`)
+	digest := sha256.Sum256(params)
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_raced", OperationID: "op_raced", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Minute), State: "recorded",
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, true, nil).Once()
+	userDB.On("TransitionRemoteCommand", "cmd_raced", "recorded", "accepted", mock.Anything).
+		Return(false, nil).Once()
+
+	m.handleOperation(context.Background(), &operationEnvelope{
+		CommandID: "cmd_raced", OperationID: "op_raced", OperationType: "echo",
+		ProtocolVersion: 1, Params: params, DeadlineAt: stored.DeadlineAt,
+		Origin: operationOrigin{Kind: "first_party"},
+	}, false)
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "TransitionRemoteCommand", "cmd_raced", "accepted", "executing", mock.Anything)
+	userDB.AssertNotCalled(t, "StoreRemoteCommandResult", mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestOperationReportsAfterExecutionDeadline(t *testing.T) {
 	var resultCalls int
 	acceptedExpiry := time.Now().UTC().Add(250 * time.Millisecond)

@@ -163,9 +163,14 @@ func (m *manager) handleOperation(
 		}
 		changed, transitionErr := m.deps.DB.UserDB.TransitionRemoteCommand(
 			operation.CommandID, "recorded", "accepted", &accepted.ExecutionExpiresAt)
-		if transitionErr != nil || !changed {
+		if transitionErr != nil {
 			log.Error().Err(transitionErr).Str("command_id", operation.CommandID).
 				Msg("persist remote command acceptance")
+			return
+		}
+		if !changed {
+			log.Debug().Str("command_id", operation.CommandID).
+				Msg("remote command acceptance was already transitioned")
 			return
 		}
 		stored.State = "accepted"
