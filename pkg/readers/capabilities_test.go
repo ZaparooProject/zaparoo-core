@@ -319,7 +319,7 @@ func TestSelectWriterPreferred(t *testing.T) {
 
 		_, err := readers.SelectWriterPreferred(rs, nil)
 
-		require.Error(t, err)
+		require.ErrorIs(t, err, readers.ErrNoWritableReader)
 		assert.Contains(t, err.Error(), "no readers with write capability")
 	})
 
@@ -328,7 +328,7 @@ func TestSelectWriterPreferred(t *testing.T) {
 
 		_, err := readers.SelectWriterPreferred([]readers.Reader{}, nil)
 
-		require.Error(t, err)
+		require.ErrorIs(t, err, readers.ErrNoWritableReader)
 		assert.Contains(t, err.Error(), "no readers with write capability")
 	})
 

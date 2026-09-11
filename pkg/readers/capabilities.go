@@ -21,6 +21,9 @@ package readers
 
 import "errors"
 
+// ErrNoWritableReader means automatic selection found no write-capable reader.
+var ErrNoWritableReader = errors.New("no readers with write capability connected")
+
 // CapabilityProvider is an interface for types that can report their
 // capabilities. This allows capability checking without requiring the
 // full Reader interface.
@@ -79,7 +82,7 @@ func SelectWriterStrict(rs []Reader, readerID string) (Reader, error) {
 func SelectWriterPreferred(rs []Reader, preferredIDs []string) (Reader, error) {
 	writeCapable := FilterByCapability(rs, CapabilityWrite)
 	if len(writeCapable) == 0 {
-		return nil, errors.New("no readers with write capability connected")
+		return nil, ErrNoWritableReader
 	}
 
 	for _, id := range preferredIDs {

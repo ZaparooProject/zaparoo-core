@@ -96,8 +96,10 @@ func TestHandleReaderWrite(t *testing.T) {
 
 		_, err := methods.HandleReaderWrite(params, []readers.Reader{}, nil, nil)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to select writer")
+		require.ErrorIs(t, err, readers.ErrNoWritableReader)
+		require.EqualError(t, err, "failed to select writer: no readers with write capability connected")
+		var quietErr *models.QuietClientError
+		require.ErrorAs(t, err, &quietErr)
 	})
 
 	t.Run("strict mode - reader not found", func(t *testing.T) {
@@ -112,6 +114,8 @@ func TestHandleReaderWrite(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to select writer")
 		assert.Contains(t, err.Error(), "not found")
+		var quietErr *models.QuietClientError
+		assert.NotErrorAs(t, err, &quietErr)
 	})
 
 	t.Run("strict mode - reader not connected", func(t *testing.T) {
