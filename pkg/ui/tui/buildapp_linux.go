@@ -22,6 +22,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -34,10 +35,10 @@ func tryRunApp(
 	app *tview.Application,
 	builder func() (*tview.Application, error),
 ) error {
-	if err := app.Run(); err != nil {
+	if runErr := app.Run(); runErr != nil {
 		appTty2, err := builder()
 		if err != nil {
-			return err
+			return errors.Join(runErr, err)
 		}
 
 		ttyPath := "/dev/tty2"
@@ -48,18 +49,18 @@ func tryRunApp(
 
 		tty, err := tcell.NewDevTtyFromDev(ttyPath)
 		if err != nil {
-			return fmt.Errorf("failed to create tty from device %s: %w", ttyPath, err)
+			return errors.Join(runErr, fmt.Errorf("failed to create tty from device %s: %w", ttyPath, err))
 		}
 
 		screen, err := tcell.NewTerminfoScreenFromTty(tty)
 		if err != nil {
-			return fmt.Errorf("failed to create screen from tty: %w", err)
+			return errors.Join(runErr, fmt.Errorf("failed to create screen from tty: %w", err))
 		}
 
 		appTty2.SetScreen(screen)
 
 		if err := appTty2.Run(); err != nil {
-			return fmt.Errorf("failed to run TUI application: %w", err)
+			return errors.Join(runErr, fmt.Errorf("failed to run TUI application: %w", err))
 		}
 	}
 	return nil
