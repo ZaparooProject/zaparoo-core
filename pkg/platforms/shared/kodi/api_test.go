@@ -116,6 +116,41 @@ func TestClient_APIRequest(t *testing.T) {
 		assert.Contains(t, err.Error(), "Method not found")
 	})
 
+	t.Run("non-success HTTP status", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("private upstream response"))
+		}))
+		defer server.Close()
+
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL + "/jsonrpc")
+		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected HTTP status from kodi api: 503")
+		assert.NotContains(t, err.Error(), "private upstream response")
+	})
+
+	t.Run("malformed JSON includes safe response metadata", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("Malformed private response"))
+		}))
+		defer server.Close()
+
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL + "/jsonrpc")
+		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 200, content type text/plain")
+		assert.NotContains(t, err.Error(), "Malformed private response")
+	})
+
 	t.Run("HTTP error", func(t *testing.T) {
 		t.Parallel()
 		client := kodi.NewClient(nil)
