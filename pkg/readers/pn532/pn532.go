@@ -298,6 +298,7 @@ type Reader struct {
 	sessionFactory            SessionFactory
 	deviceInfo                config.ReadersConnect
 	name                      string
+	identity                  readers.USBReaderID
 	wg                        sync.WaitGroup
 	mutex                     syncutil.RWMutex
 	writeMutex                syncutil.Mutex
@@ -824,11 +825,11 @@ func (r *Reader) ReaderID() string {
 }
 
 func (r *Reader) readerIDLocked() string {
-	stablePath := helpers.GetUSBTopologyPath(r.deviceInfo.Path)
-	if stablePath == "" {
-		stablePath = r.deviceInfo.ConnectionString()
-	}
-	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
+	return r.identity.ID(
+		r.Metadata().ID,
+		helpers.GetUSBTopologyPath(r.deviceInfo.Path),
+		r.deviceInfo.ConnectionString(),
+	)
 }
 
 func (r *Reader) Connected() bool {

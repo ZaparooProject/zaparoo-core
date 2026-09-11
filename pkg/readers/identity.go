@@ -24,6 +24,8 @@ import (
 	"encoding/base32"
 	"fmt"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // GenerateReaderID creates a deterministic reader ID from driver name and a
@@ -51,4 +53,37 @@ func GenerateReaderID(driverName, stablePath string) string {
 	encoded = strings.ToLower(encoded)
 
 	return fmt.Sprintf("%s-%s", normalizedDriver, encoded)
+}
+
+// USBReaderID holds the ID of a reader whose device is a USB serial port.
+//
+// The ID comes from the USB port the device is plugged into, so it survives
+// re-enumeration (ttyACM0 coming back as ttyACM1). The port can only be looked
+// up while the device node exists: once the device is unplugged the lookup
+// fails and a fresh derivation falls back to the device path, which is a
+// different ID. The service stores a reader under the ID it reported when it
+// connected and prunes it by the ID it reports after disconnecting, so a
+// changed ID left the reader listed and pruned on every tick. The port is
+// therefore kept once resolved.
+type USBReaderID struct {
+	port string
+	mu   syncutil.Mutex
+}
+
+// ID returns the reader ID for driverID. port is the device's USB port as
+// currently resolved, or "" when it cannot be determined; fallback identifies
+// the reader when no port has ever been resolved.
+func (u *USBReaderID) ID(driverID, port, fallback string) string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if port != "" {
+		u.port = port
+	}
+
+	stablePath := u.port
+	if stablePath == "" {
+		stablePath = fallback
+	}
+	return GenerateReaderID(driverID, stablePath)
 }
