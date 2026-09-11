@@ -150,6 +150,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/treyturner">
+                    <img src="https://avatars.githubusercontent.com/u/1878152?v=4" width="100;" alt="treyturner"/>
+                    <br />
+                    <sub><b>Trey Turner</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/jmf866">
                     <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>
                     <br />
