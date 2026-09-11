@@ -802,9 +802,10 @@ func (b *bridge) servePipeOnce() error {
 		b.pipeMu.Unlock()
 	}()
 
-	// On every (re)connect, push the current systems list so Zaparoo Core can
-	// refresh its mapping. Best-effort: if HyperHQ isn't ready we log and move on.
-	go b.pushSystems(session)
+	// Core sends GetSystems as soon as it accepts the connection, so the
+	// bridge does not push the list unasked. Both doing it sent HyperHQ two
+	// getSystems requests at once, and it answered only one; the other sat
+	// until the 30s timeout.
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), pipeBufferMax)
