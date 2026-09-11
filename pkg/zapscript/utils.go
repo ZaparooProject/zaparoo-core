@@ -182,14 +182,11 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		stderrStr := strings.TrimSpace(stderr.String())
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")
-			return platforms.CmdResult{},
-				fmt.Errorf("failed to execute command '%s': %w (stderr: %s)", tokenArgs[0], err, stderrStr)
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return platforms.CmdResult{},
-				fmt.Errorf("execute command '%s' timed out after %v", tokenArgs[0], ExecuteTimeout)
+			return platforms.CmdResult{}, fmt.Errorf("execute command timed out after %v", ExecuteTimeout)
 		}
-		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", tokenArgs[0], err)
+		return platforms.CmdResult{}, fmt.Errorf("failed to execute command: %w", err)
 	}
 	return platforms.CmdResult{}, nil
 }
