@@ -39,6 +39,7 @@ const (
 	SchemeBottles    = "bottles"
 	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
+	SchemeHyperHq    = "hyperhq"
 	SchemePopper     = "popper"
 )
 
@@ -69,6 +70,7 @@ var customSchemes = []string{
 	SchemeBottles,
 	SchemeFaugus,
 	SchemeGOG,
+	SchemeHyperHq,
 	SchemePopper,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,

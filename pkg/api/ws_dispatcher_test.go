@@ -43,6 +43,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type countingRequestTracker struct {
+	count int
+}
+
+func (t *countingRequestTracker) RequestStarted() { t.count++ }
+
+func (t *countingRequestTracker) RequestEnded() { t.count-- }
+
+func (t *countingRequestTracker) inFlight() int { return t.count }
+
 func indexRPCID(ids []models.RPCID, target models.RPCID) int {
 	for i, id := range ids {
 		if id.Equal(target) {
@@ -327,8 +337,6 @@ func TestWebSocketBusyResponseUsesEncryptedSession(t *testing.T) {
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
-	t.Parallel()
-
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodConfirm, func(env requests.RequestEnv) (any, error) {
@@ -420,8 +428,6 @@ func TestWebSocketRunLaneDoesNotBlockHighLane(t *testing.T) {
 }
 
 func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.T) {
-	t.Parallel()
-
 	txStarted := make(chan struct{})
 	releaseTx := make(chan struct{})
 	metaStarted := make(chan struct{}, 1)
@@ -564,8 +570,6 @@ func TestMediaDBLockModeForAPIMethod(t *testing.T) {
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
-	t.Parallel()
-
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.notify", func(requests.RequestEnv) (any, error) {
 		return map[string]string{"ok": "true"}, nil
@@ -668,8 +672,6 @@ func TestWebSocketRunJobStartsMethodTimeoutAtExecution(t *testing.T) {
 }
 
 func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(t.Context())
 	d := &wsSessionDispatcher{
 		ctx:       ctx,
@@ -734,13 +736,3 @@ func TestWSDispatcherStartInitializesInputDone(t *testing.T) {
 	require.NotNil(t, d.inputDone)
 	d.close()
 }
-
-type countingRequestTracker struct {
-	count int
-}
-
-func (t *countingRequestTracker) RequestStarted() { t.count++ }
-
-func (t *countingRequestTracker) RequestEnded() { t.count-- }
-
-func (t *countingRequestTracker) inFlight() int { return t.count }
