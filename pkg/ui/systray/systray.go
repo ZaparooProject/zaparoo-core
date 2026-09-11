@@ -132,7 +132,7 @@ func systrayOnReady(
 				case <-mReloadConfig.ClickedCh:
 					err := reloadCore(cfg, client.LocalClient)
 					if err != nil {
-						log.Error().Err(err).Msg("failed to reload config")
+						log.Warn().Err(err).Msg("failed to reload config")
 						notify("Error reloading Core config.")
 					} else {
 						log.Info().Msg("reloaded config")
