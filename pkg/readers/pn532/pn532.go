@@ -626,6 +626,10 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+// detectAll is detection.DetectAll, indirected so tests can drive Detect
+// without enumerating the host's hardware.
+var detectAll = detection.DetectAll
+
 func (*Reader) Detect(connected []string) string {
 	// Extract device paths from connected list (format: "transport:path")
 	ignorePaths := make([]string, 0, len(connected))
@@ -672,11 +676,15 @@ func (*Reader) Detect(connected []string) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
-	devices, err := detection.DetectAll(ctx, &opts)
+	devices, err := detectAll(ctx, &opts)
 	probesMu.Lock()
 	probed := slices.Clone(probes)
 	probesMu.Unlock()
 	logDetectionSummary(probed, ignorePaths, devices, err)
+	// Recorded before the error check: DetectAll reports ErrNoDevicesFound
+	// whenever every probe went unanswered, which is exactly when the
+	// unanswered ports need recording, or they are probed again every tick.
+	recordFailedProbes(probed, devices, connectedPathSet)
 	if err != nil {
 		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
@@ -694,8 +702,6 @@ func (*Reader) Detect(connected []string) string {
 				Msg("PN532 detection found device")
 		}
 	}
-
-	recordFailedProbes(probed, devices, connectedPathSet)
 
 	if len(devices) == 0 {
 		return ""

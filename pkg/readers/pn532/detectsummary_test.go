@@ -23,6 +23,7 @@
 package pn532
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -182,4 +183,28 @@ func TestRecordFailedProbes(t *testing.T) {
 	defer probeStateMu.RUnlock()
 	assert.Len(t, failedProbePaths, 1)
 	assert.Contains(t, failedProbePaths, paths["failed"])
+}
+
+func TestDetect_RecordsFailedProbesWhenNothingIsFound(t *testing.T) {
+	// DetectAll reports "no devices" whenever every probe went unanswered,
+	// which is exactly when the unanswered ports need recording. Returning
+	// before the bookkeeping left them to be probed again on every tick.
+	resetFailedProbes(t)
+	resetDetectSummary(t)
+
+	port := filepath.Join(t.TempDir(), "ttyUSB0")
+	require.NoError(t, os.WriteFile(port, nil, 0o600))
+
+	orig := detectAll
+	t.Cleanup(func() { detectAll = orig })
+	detectAll = func(_ context.Context, opts *detection.Options) ([]detection.DeviceInfo, error) {
+		opts.ReportProbe(detection.ProbeResult{Transport: detection.TransportUART, Path: port})
+		return nil, detection.ErrNoDevicesFound
+	}
+
+	assert.Empty(t, (&Reader{}).Detect(nil))
+
+	probeStateMu.RLock()
+	defer probeStateMu.RUnlock()
+	assert.Contains(t, failedProbePaths, port, "an unanswered probe must be recorded even when nothing was found")
 }
