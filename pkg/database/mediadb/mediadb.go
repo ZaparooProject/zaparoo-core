@@ -1607,7 +1607,9 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 		return fmt.Errorf("failed to remove corrupt media database: %w", err)
 	}
 
-	database.RemoveSidecars(db.dbPath)
+	if err := database.RemoveSidecars(db.dbPath); err != nil {
+		return fmt.Errorf("failed to remove corrupt media database sidecars: %w", err)
+	}
 
 	if err := db.Open(); err != nil {
 		return fmt.Errorf("failed to reopen media database after recreate: %w", err)

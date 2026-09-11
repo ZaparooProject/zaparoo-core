@@ -535,7 +535,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		}
 	}
 
-	database.RemoveSidecarsFS(fs, dbPath)
+	_ = database.RemoveSidecarsFS(fs, dbPath)
 	if err = renameDatabaseFile(fs, tmpPath, dbPath); err != nil {
 		if originalPreserved {
 			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
@@ -814,7 +814,7 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		return database.RestoreInfo{RestoredFrom: backup}, nil
 	}
 
-	database.RemoveSidecars(db.GetDBPath())
+	_ = database.RemoveSidecars(db.GetDBPath())
 	if err = db.Open(); err != nil {
 		return database.RestoreInfo{}, fmt.Errorf(
 			"failed to create fresh user database after corruption: %w", err,
