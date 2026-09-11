@@ -20,14 +20,63 @@
 package mediadb
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
+	zapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
+	"github.com/jonboulle/clockwork"
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestSystemsQueriesMarkCorruption(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"indexed", "counts", "tagged"} {
+		for _, cause := range []error{
+			sqlite3.Error{Code: sqlite3.ErrCorrupt},
+			sqlite3.Error{Code: sqlite3.ErrNotADB},
+			sqlite3.Error{Code: sqlite3.ErrIoErr},
+			context.Canceled,
+		} {
+			t.Run(method+"/"+cause.Error(), func(t *testing.T) {
+				t.Parallel()
+				conn, mock, err := testsqlmock.NewSQLMock()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = conn.Close() })
+				db := &MediaDB{
+					ctx: t.Context(), dbPath: filepath.Join(t.TempDir(), "media.db"),
+					clock: clockwork.NewFakeClock(),
+				}
+				db.sql.Store(conn)
+				if method != "tagged" {
+					mock.ExpectQuery("SELECT Value FROM DBConfig").WillReturnError(sql.ErrNoRows)
+				}
+				if method == "indexed" {
+					mock.ExpectPrepare("SELECT s.SystemID").WillReturnError(cause)
+					_, err = db.IndexedSystems()
+				} else {
+					mock.ExpectQuery("SELECT Systems.SystemID").WillReturnError(cause)
+					var tags []zapscript.TagFilter
+					if method == "tagged" {
+						tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+					}
+					_, err = db.SystemMediaCounts(t.Context(), tags)
+				}
+				require.ErrorIs(t, err, cause)
+				assert.Equal(t, database.IsCorruptionError(cause), database.IsMarkedCorrupt(db.dbPath))
+				assert.Nil(t, db.systemMediaCountsCache.Load())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	}
+}
 
 func TestIsCorruptionError(t *testing.T) {
 	t.Parallel()

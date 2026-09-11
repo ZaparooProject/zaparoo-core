@@ -3776,7 +3776,11 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	if db.sql.Load() == nil {
 		return systems, ErrNullSQL
 	}
-	return sqlIndexedSystems(db.ctx, db.sql.Load())
+	systems, err := sqlIndexedSystems(db.ctx, db.sql.Load())
+	if database.IsCorruptionError(err) {
+		db.NoteCorruption(err)
+	}
+	return systems, err
 }
 
 func (db *MediaDB) SystemMediaCounts(
@@ -3787,7 +3791,11 @@ func (db *MediaDB) SystemMediaCounts(
 		return nil, ErrNullSQL
 	}
 	if len(tagFilters) > 0 {
-		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+		counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+		if database.IsCorruptionError(err) {
+			db.NoteCorruption(err)
+		}
+		return counts, err
 	}
 	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
 		cached.generation == db.systemMediaCountsGen.Load() {
@@ -3797,6 +3805,9 @@ func (db *MediaDB) SystemMediaCounts(
 	generation := db.systemMediaCountsGen.Load()
 	counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), nil)
 	if err != nil {
+		if database.IsCorruptionError(err) {
+			db.NoteCorruption(err)
+		}
 		return nil, err
 	}
 	if generation == db.systemMediaCountsGen.Load() {
