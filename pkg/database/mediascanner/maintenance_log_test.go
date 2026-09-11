@@ -26,12 +26,56 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
 // Global zerolog state is mutated to capture output; must not be parallel.
+func TestLogPostCorruptionStateError(t *testing.T) {
+	prevGlobalLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevGlobalLevel) })
+
+	tests := []struct {
+		err           error
+		name          string
+		expectedLevel string
+	}{
+		{
+			name:          "corrupt database logs at debug",
+			err:           sqlite3.Error{Code: sqlite3.ErrCorrupt},
+			expectedLevel: "debug",
+		},
+		{
+			name:          "wrapped not-a-database logs at debug",
+			err:           fmt.Errorf("set status: %w", sqlite3.Error{Code: sqlite3.ErrNotADB}),
+			expectedLevel: "debug",
+		},
+		{
+			name:          "storage failure logs at error",
+			err:           errors.New("disk write failed"),
+			expectedLevel: "error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prevLogger := log.Logger
+			log.Logger = zerolog.New(&buf).Level(zerolog.TraceLevel)
+			t.Cleanup(func() { log.Logger = prevLogger })
+
+			logPostCorruptionStateError(tt.err, "failed post-corruption state write")
+
+			output := buf.String()
+			assert.Contains(t, output, `"level":"`+tt.expectedLevel+`"`)
+			assert.Contains(t, output, "failed post-corruption state write")
+		})
+	}
+}
+
 func TestLogMaintenanceError(t *testing.T) {
 	prevGlobalLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.TraceLevel)

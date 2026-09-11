@@ -254,11 +254,19 @@ func noteIndexingCorruption(db database.MediaDBI, reason string) {
 		Msg("media database integrity check after corruption detected during indexing")
 	db.MarkCorrupt(reason)
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+		logPostCorruptionStateError(setErr, "failed to mark media database as corrupt")
 	}
 	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+		logPostCorruptionStateError(setErr, "failed to clear last indexed system after corrupt database detection")
 	}
+}
+
+func logPostCorruptionStateError(err error, msg string) {
+	if isSQLiteDatabaseCorrupt(err) {
+		log.Debug().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
 }
 
 func finalizeIndexingError(db database.MediaDBI, err error) {
