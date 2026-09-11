@@ -91,6 +91,39 @@ func refreshFailedProbes() {
 	}
 }
 
+// recordFailedProbes marks ports whose probe got no PN532 answer, so later
+// ticks skip them until the device file changes. A port detection reported
+// anyway or one already connected is left alone. The device file's ModTime is
+// stored so a device swap at the same path (the file is recreated with a new
+// ModTime on replug) is noticed.
+func recordFailedProbes(
+	probes []detection.ProbeResult,
+	devices []detection.DeviceInfo,
+	connected map[string]bool,
+) {
+	detected := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		detected[device.Path] = true
+	}
+
+	probeStateMu.Lock()
+	defer probeStateMu.Unlock()
+	for _, probe := range probes {
+		if probe.Found || detected[probe.Path] || connected[probe.Path] {
+			continue
+		}
+		if _, alreadyFailed := failedProbePaths[probe.Path]; alreadyFailed {
+			continue
+		}
+		info, err := os.Stat(probe.Path)
+		if err != nil {
+			continue
+		}
+		failedProbePaths[probe.Path] = failedProbeEntry{deviceModTime: info.ModTime()}
+		log.Debug().Str("path", probe.Path).Msg("PN532: marking port as failed probe")
+	}
+}
+
 // ClearFailedProbe removes the failed probe entry for a single path.
 // Called when a reader disconnects so its port is re-probed on next cycle.
 func ClearFailedProbe(path string) {
@@ -618,26 +651,32 @@ func (*Reader) Detect(connected []string) string {
 	}
 	probeStateMu.Unlock()
 
-	// TODO: The error branches for detection.DetectAll and helpers.GetSerialDeviceList
-	// are not unit-tested because both functions depend on hardware enumeration
-	// which is not injectable. Consider extracting a DeviceDetector interface to
-	// allow mock-based testing.
+	// TODO: The error branches for detection.DetectAll are not unit-tested
+	// because it depends on hardware enumeration which is not injectable.
+	// Consider extracting a DeviceDetector interface to allow mock-based testing.
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
-	// Enumerate before probing rather than after. The port list is needed for
-	// the failed-probe bookkeeping below either way, and reading it up front
-	// means the detection summary can report what was on the bus even when the
-	// probe found nothing at all. DetectAll does not expose the candidates it
-	// tried; see https://github.com/ZaparooProject/go-pn532/issues/94.
-	currentPorts, enumErr := helpers.GetSerialDeviceList()
-
-	// Try to detect PN532 devices
+	// go-pn532 reports each port it probes, so the failed-probe bookkeeping
+	// below works from what detection actually tried instead of a second
+	// enumeration of the serial ports on every tick. Detectors probe in
+	// parallel and can still report after a timed-out DetectAll returns, so
+	// the results are collected under a lock and copied once it has.
+	var probesMu syncutil.Mutex
+	var probes []detection.ProbeResult
 	opts := newDetectionOptions(ignorePaths)
+	opts.OnProbe = func(result detection.ProbeResult) {
+		probesMu.Lock()
+		probes = append(probes, result)
+		probesMu.Unlock()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
-	logDetectionSummary(currentPorts, ignorePaths, devices, enumErr, err)
+	probesMu.Lock()
+	probed := slices.Clone(probes)
+	probesMu.Unlock()
+	logDetectionSummary(probed, ignorePaths, devices, err)
 	if err != nil {
 		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
@@ -656,32 +695,7 @@ func (*Reader) Detect(connected []string) string {
 		}
 	}
 
-	// Track which enumerated ports were NOT detected as PN532 devices.
-	// Store the device file's ModTime so we can detect device swaps at
-	// the same path (the file is recreated with a new ModTime on replug).
-	if enumErr == nil {
-		detectedPaths := make(map[string]bool, len(devices))
-		for _, device := range devices {
-			detectedPaths[device.Path] = true
-		}
-		probeStateMu.Lock()
-		for _, port := range currentPorts {
-			if !detectedPaths[port] && !connectedPathSet[port] {
-				if _, alreadyFailed := failedProbePaths[port]; !alreadyFailed {
-					info, statErr := os.Stat(port)
-					if statErr == nil {
-						failedProbePaths[port] = failedProbeEntry{
-							deviceModTime: info.ModTime(),
-						}
-						log.Debug().
-							Str("path", port).
-							Msg("PN532: marking port as failed probe")
-					}
-				}
-			}
-		}
-		probeStateMu.Unlock()
-	}
+	recordFailedProbes(probed, devices, connectedPathSet)
 
 	if len(devices) == 0 {
 		return ""
@@ -729,22 +743,26 @@ var (
 // logDetectionSummary reports the state of PN532 auto-detect once per change.
 //
 // A user log of a reader that auto-detect never found had nothing in it to work
-// from: the ports Core enumerated, the paths it had been told to skip, and what
-// the probe returned were all trace-level or absent, so "the reader was never
-// enumerated" and "the reader was enumerated and did not answer" looked
+// from: the ports detection probed, the paths it had been told to skip, and
+// what the probe returned were all trace-level or absent, so "the reader was
+// never probed" and "the reader was probed and did not answer" looked
 // identical. This logs at info, because someone reporting a reader that is not
 // detected has no reason to have enabled debug logging first, and only when the
 // picture changes, so the 1 Hz tick still costs a handful of lines per session.
 func logDetectionSummary(
-	ports, ignored []string,
+	probes []detection.ProbeResult,
+	ignored []string,
 	devices []detection.DeviceInfo,
-	enumErr, detectErr error,
+	detectErr error,
 ) {
-	// Sorted copies: ignored is built from map iteration, and the enumerated
-	// ports arrive in directory order, so an unsorted summary would report a
-	// change on ticks where nothing actually changed.
-	sortedPorts := slices.Clone(ports)
-	slices.Sort(sortedPorts)
+	// Sorted: ignored is built from map iteration, and probes arrive in the
+	// order detectors finished, so an unsorted summary would report a change
+	// on ticks where nothing actually changed.
+	probed := make([]string, 0, len(probes))
+	for _, probe := range probes {
+		probed = append(probed, probe.Transport+":"+probe.Path)
+	}
+	slices.Sort(probed)
 	sortedIgnored := slices.Clone(ignored)
 	slices.Sort(sortedIgnored)
 
@@ -754,11 +772,10 @@ func logDetectionSummary(
 	}
 	slices.Sort(detected)
 
-	summary := fmt.Sprintf("ports:%s ignored:%s detected:%s enum_err:%v err:%v",
-		strings.Join(sortedPorts, ","),
+	summary := fmt.Sprintf("probed:%s ignored:%s detected:%s err:%v",
+		strings.Join(probed, ","),
 		strings.Join(sortedIgnored, ","),
 		strings.Join(detected, ","),
-		enumErr,
 		detectErr)
 
 	detectSummaryMu.Lock()
@@ -769,12 +786,7 @@ func logDetectionSummary(
 		return
 	}
 
-	event := log.Info().Strs("ports", sortedPorts)
-	if enumErr != nil {
-		// Without this an enumeration failure is indistinguishable from a bus
-		// with no serial ports on it: both report an empty port list.
-		event = event.AnErr("enumeration_error", enumErr)
-	}
+	event := log.Info().Strs("probed", probed)
 	if len(sortedIgnored) > 0 {
 		event = event.Strs("ignored", sortedIgnored)
 	}
