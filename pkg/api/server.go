@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -590,7 +591,7 @@ func handleRequest(
 		var clientErr *models.ClientError
 		if contextFailure {
 			logAPIContextFailure(env.Context, err, req.Method)
-		} else if errors.As(err, &quietErr) {
+		} else if errors.As(err, &quietErr) || isValidationClientError(err) {
 			log.Debug().Err(err).Str("method", req.Method).Msg("client error")
 		} else if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
@@ -602,6 +603,14 @@ func handleRequest(
 		return nil, &rpcError
 	}
 	return resp, nil
+}
+
+func isValidationClientError(err error) bool {
+	if errors.Is(err, validation.ErrInvalidParams) || errors.Is(err, validation.ErrMissingParams) {
+		return true
+	}
+	var validationErr *validation.Error
+	return errors.As(err, &validationErr)
 }
 
 func logWebSocketTransportTiming(
