@@ -50,6 +50,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
+	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -1450,7 +1451,11 @@ func (db *MediaDB) SetIndexingStatus(status string) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingStatus(db.ctx, db.conn(), status)
+	operation := db.ActiveMediaWriteOperation()
+	inTransaction := db.tx != nil
+	started := time.Now()
+	err := sqlSetIndexingStatus(db.ctx, db.conn(), status)
+	return indexingStateLockError(err, "status", operation, inTransaction, time.Since(started))
 }
 
 func (db *MediaDB) GetIndexingStatus() (string, error) {
@@ -1769,7 +1774,24 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
+	operation := db.ActiveMediaWriteOperation()
+	inTransaction := db.tx != nil
+	started := time.Now()
+	err := sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
+	return indexingStateLockError(err, "systems", operation, inTransaction, time.Since(started))
+}
+
+// Capture only bounded state observations; none identifies the competing writer.
+func indexingStateLockError(
+	err error, field string, operation database.MediaWriteOperation, inTransaction bool, duration time.Duration,
+) error {
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked) {
+		return err
+	}
+	return fmt.Errorf("indexing %s write [sqlite_code=%d sqlite_extended_code=%d "+
+		"operation=%s transaction=%t sql_ms=%d]: %w",
+		field, int(sqliteErr.Code), int(sqliteErr.ExtendedCode), operation, inTransaction, duration.Milliseconds(), err)
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {

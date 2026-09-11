@@ -20,15 +20,143 @@
 package mediadb
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIndexingSystemsLockError(t *testing.T) {
+	t.Parallel()
+	for _, code := range []sqlite3.ErrNo{sqlite3.ErrBusy, sqlite3.ErrLocked} {
+		cause := sqlite3.Error{Code: code, ExtendedCode: code.Extend(2)}
+		original := fmt.Errorf("failed to set indexing systems: %w", cause)
+		err := indexingStateLockError(
+			original, "systems", database.MediaWriteOperationIndexing, true, 25*time.Millisecond,
+		)
+		require.ErrorIs(t, err, original)
+		var got sqlite3.Error
+		require.ErrorAs(t, err, &got)
+		assert.Equal(t, cause.Code, got.Code)
+		assert.Equal(t, cause.ExtendedCode, got.ExtendedCode)
+		assert.Contains(t, err.Error(), fmt.Sprintf("sqlite_code=%d sqlite_extended_code=%d", code, code.Extend(2)))
+		assert.Contains(t, err.Error(), "operation=indexing transaction=true sql_ms=25")
+		assert.Less(t, len(err.Error()), 300)
+	}
+	for _, original := range []error{
+		nil, errors.New("database is locked"), sqlite3.Error{Code: sqlite3.ErrIoErr},
+	} {
+		got := indexingStateLockError(original, "status", database.MediaWriteOperationNone, false, 0)
+		assert.Equal(t, original, got)
+	}
+}
+
+func TestMediaDB_IndexingStatusUsesActiveTransaction(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	require.NoError(t, db.SetIndexingStatus(IndexingStatusPending))
+	require.NoError(t, db.BeginTransaction(false))
+	t.Cleanup(func() { _ = db.RollbackTransaction() })
+	_, err := db.tx.ExecContext(t.Context(),
+		"UPDATE DBConfig SET Value = Value WHERE Name = ?", DBConfigIndexingStatus)
+	require.NoError(t, err)
+	require.NoError(t, db.SetIndexingStatus(IndexingStatusRunning))
+	var value string
+	require.NoError(t, db.tx.QueryRowContext(t.Context(),
+		"SELECT Value FROM DBConfig WHERE Name = ?", DBConfigIndexingStatus).Scan(&value))
+	assert.Equal(t, IndexingStatusRunning, value)
+	got, err := db.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusPending, got)
+	require.NoError(t, db.RollbackTransaction())
+	got, err = db.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusPending, got)
+}
+
+func TestIndexingStatusLockErrorContext(t *testing.T) {
+	t.Parallel()
+	cause := sqlite3.Error{Code: sqlite3.ErrLocked, ExtendedCode: sqlite3.ErrLocked.Extend(1)}
+	err := indexingStateLockError(cause, "status", database.MediaWriteOperationIndexing, false, time.Second)
+	require.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "indexing status write")
+	assert.Contains(t, err.Error(), "transaction=false sql_ms=1000")
+}
+
+func TestMediaDB_IndexingSystemsUsesActiveTransaction(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, db.SetIndexingSystems([]string{"NES"}))
+	require.NoError(t, db.BeginTransaction(false))
+	t.Cleanup(func() { _ = db.RollbackTransaction() })
+	// Acquire SQLite's writer lock before exercising the setter. A pool-routed
+	// write would contend with our transaction rather than participate in it.
+	_, err := db.tx.ExecContext(t.Context(),
+		"UPDATE DBConfig SET Value = Value WHERE Name = ?", DBConfigIndexingSystems)
+	require.NoError(t, err)
+	require.NoError(t, db.SetIndexingSystems([]string{"SNES"}))
+	var value string
+	require.NoError(t, db.tx.QueryRowContext(t.Context(),
+		"SELECT Value FROM DBConfig WHERE Name = ?", DBConfigIndexingSystems).Scan(&value))
+	assert.JSONEq(t, `["SNES"]`, value)
+	// The reader pool must still see committed state, and rollback must discard
+	// the setter's change. This proves transaction identity, not just success.
+	got, err := db.GetIndexingSystems()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NES"}, got)
+	require.NoError(t, db.RollbackTransaction())
+	got, err = db.GetIndexingSystems()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NES"}, got)
+}
+
+func TestMediaDB_IndexingLeaseExcludesCompetingWriters(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, err)
+	defer lease.Release()
+	require.NoError(t, db.SetIndexingSystems([]string{"NES"}))
+
+	for _, operation := range []database.MediaWriteOperation{
+		database.MediaWriteOperationOptimization, database.MediaWriteOperationScraping,
+	} {
+		competing, acquireErr := db.AcquireMediaWrite(operation)
+		if competing != nil {
+			competing.Release()
+		}
+		require.ErrorIs(t, acquireErr, database.ErrMediaWriteConflict)
+		require.Nil(t, competing)
+	}
+	var started atomic.Bool
+	db.RunBackgroundOptimization(func(bool) { started.Store(true) }, syncutil.NewPauser())
+	assert.False(t, started.Load(), "optimization must stop at ownership check")
+	assert.Equal(t, database.MediaWriteOperationIndexing, db.ActiveMediaWriteOperation())
+	got, err := db.GetIndexingSystems()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NES"}, got)
+
+	lease.Release()
+	for _, operation := range []database.MediaWriteOperation{
+		database.MediaWriteOperationOptimization, database.MediaWriteOperationScraping,
+	} {
+		available, acquireErr := db.AcquireMediaWrite(operation)
+		require.NoError(t, acquireErr)
+		available.Release()
+	}
+}
 
 // TestMediaDB_ConcurrentTransactionAttempts_OnlyOneSucceeds tests that only one
 // transaction can be active at a time when multiple goroutines attempt to begin
