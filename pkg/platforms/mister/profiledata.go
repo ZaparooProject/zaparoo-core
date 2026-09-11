@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -456,7 +457,7 @@ func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.Prof
 		return
 	}
 	path := filepath.Join(profileDir, profileNameFile)
-	if err := afero.WriteFile(d.fs, path, []byte(ref.Name+"\n"), 0o644); err != nil {
+	if err := pathutil.WriteFileAtomic(d.fs, path, []byte(ref.Name+"\n"), 0o644); err != nil {
 		log.Warn().Err(err).Str("path", path).
 			Msg("profiles: failed to write profile name file")
 	}
