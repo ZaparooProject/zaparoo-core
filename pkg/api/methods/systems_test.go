@@ -142,6 +142,28 @@ func TestHandleSystems_CountFailureFallsBackWithoutMediaCount(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleSystems_CountContextFailureDoesNotFallback(t *testing.T) {
+	t.Parallel()
+	for _, contextErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(contextErr.Error(), func(t *testing.T) {
+			t.Parallel()
+			wrapped := errors.Join(errors.New("failed to query system media counts"), contextErr)
+			mockMediaDB := testhelpers.NewMockMediaDBI()
+			expectUntaggedSystemMediaCounts(mockMediaDB, nil, wrapped)
+
+			result, err := HandleSystems(requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{MediaDB: mockMediaDB},
+			})
+
+			assert.Nil(t, result)
+			require.ErrorIs(t, err, contextErr)
+			mockMediaDB.AssertNotCalled(t, "IndexedSystems")
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
+}
+
 func TestHandleSystems_TaggedReturnsMatchingCounts(t *testing.T) {
 	t.Parallel()
 
