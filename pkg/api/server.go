@@ -37,6 +37,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
@@ -64,6 +65,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/olahol/melody"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
@@ -110,6 +112,37 @@ var JSONRPCErrorInternalError = models.ErrorObject{
 var JSONRPCErrorServerBusy = models.ErrorObject{
 	Code:    -32000,
 	Message: "Server busy",
+}
+
+// Only pure disconnect failures are expected; joined storage or protocol errors
+// must remain reportable even when another branch is a disconnected client.
+func httpResponseWriteLogLevel(err error) zerolog.Level {
+	if isHTTPClientDisconnect(err) {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
+}
+
+func isHTTPClientDisconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isHTTPClientDisconnect(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return isHTTPClientDisconnect(wrapped.Unwrap())
+	}
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func makeJSONRPCError(code int, message string) models.ErrorObject {
@@ -1815,7 +1848,7 @@ func handlePostRequest(
 		if writeErr != nil {
 			apidiag.RecordError(env.Context, writeErr)
 			if !isAPIContextFailure(env.Context, writeErr) {
-				log.Error().Err(writeErr).Msg("failed to write response")
+				log.WithLevel(httpResponseWriteLogLevel(writeErr)).Err(writeErr).Msg("failed to write response")
 			}
 		}
 		if f, ok := w.(http.Flusher); ok {
