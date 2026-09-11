@@ -191,13 +191,7 @@ func (r *Reader) operationWorker() {
 						}()).
 						Msg("About to call displayMedia")
 
-					if operation.media == nil {
-						log.Error().
-							Str("device", r.getDevicePath()).
-							Msg("operation.media is nil, cannot process")
-						return
-					}
-
+					// Nil media is the queued clear-display request.
 					if err := r.displayMedia(operation.media); err != nil {
 						log.Error().
 							Err(err).
