@@ -64,6 +64,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -2159,6 +2160,11 @@ func StartWithReady(
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
+		}
+		if !websocket.IsWebSocketUpgrade(r) {
+			log.Debug().Str("version", version).Msg("non-websocket request rejected on websocket endpoint")
+			http.Error(w, "websocket upgrade required", http.StatusBadRequest)
+			return
 		}
 		// The transport mode is not known until the client's first frame: an
 		// encryption setting of false means encryption is optional, not absent,
