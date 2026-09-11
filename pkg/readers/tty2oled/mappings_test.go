@@ -107,6 +107,27 @@ func TestSelectPictureVariant(t *testing.T) {
 	}
 }
 
+func TestSelectPictureVariantHighBitHashes(t *testing.T) {
+	t.Parallel()
+	// These FNV hashes have their high bit set. Taking the remainder after
+	// conversion to a 32-bit int would fall back to the base picture.
+	for _, tc := range []struct {
+		name     string
+		expected string
+	}{
+		{name: "Genesis", expected: "Genesis_alt1"},
+		{name: "AO486", expected: "AO486_alt1"},
+		{name: "PSX", expected: "PSX"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if actual := selectPictureVariant(tc.name); actual != tc.expected {
+				t.Errorf("selectPictureVariant(%q) = %q, want %q", tc.name, actual, tc.expected)
+			}
+		})
+	}
+}
+
 func TestSelectPictureVariantConsistency(t *testing.T) {
 	t.Parallel()
 	// Test that the same input always returns the same output (deterministic)
