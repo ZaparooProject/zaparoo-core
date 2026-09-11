@@ -25,16 +25,19 @@ package cores
 
 import (
 	"bufio"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 type amigaVisionLaunchTarget struct {
@@ -378,12 +381,16 @@ func hookNeoGeo(_ *config.Instance, _ *Core, path string) (string, error) {
 }
 
 func hookAmigaCD32(_ *config.Instance, _ *Core, path string) (string, error) {
-	configPath := "/media/fat/config/AmigaCD32.cfg"
+	return patchAmigaCD32(afero.NewOsFs(), "/media/fat/config/AmigaCD32.cfg", path)
+}
 
-	// Check if AmigaCD32.cfg exists
-	if _, err := os.Stat(configPath); err != nil {
-		return "", fmt.Errorf("AmigaCD32.cfg not found at %s - please install AmigaVision or create configuration",
-			configPath)
+func patchAmigaCD32(fs afero.Fs, configPath, path string) (string, error) {
+	info, err := fs.Stat(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat AmigaCD32.cfg: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("AmigaCD32.cfg is not a regular file")
 	}
 
 	// Validate file extension
@@ -403,49 +410,29 @@ func hookAmigaCD32(_ *config.Instance, _ *Core, path string) (string, error) {
 		gamePath = "../" + gamePath
 	}
 
-	// Convert to hex
-	gameHex := hex.EncodeToString([]byte(gamePath))
-
-	// Pad to 108 bytes (216 hex characters)
+	const pathOffset = 3100
 	const maxPathLength = 108
-	hexLength := len(gameHex)
-	if hexLength > maxPathLength*2 {
-		return "", fmt.Errorf("CD32 path too long: %d bytes (max: %d)", hexLength/2, maxPathLength)
+	// Bound reads of a user-supplied binary configuration, including growth
+	// after Stat. Normal core configuration files are much smaller than this.
+	const maxConfigSize = 16 << 20
+	if len(gamePath) > maxPathLength {
+		return "", fmt.Errorf("CD32 path too long: %d bytes (max: %d)", len(gamePath), maxPathLength)
 	}
-
-	// Pad with zeros
-	paddingNeeded := maxPathLength*2 - hexLength
-	padding := strings.Repeat("0", paddingNeeded)
-	finalHex := gameHex + padding
-
-	// Convert hex string to bytes and write at offset 3100
-	hexBytes := make([]byte, maxPathLength)
-	for i := 0; i < len(finalHex); i += 2 {
-		var b byte
-		if _, err := fmt.Sscanf(finalHex[i:i+2], "%02x", &b); err != nil {
-			return "", fmt.Errorf("failed to parse hex string: %w", err)
-		}
-		hexBytes[i/2] = b
-	}
-
-	// Open config file for writing at specific offset
-	file, err := os.OpenFile(configPath, os.O_WRONLY, 0o600)
+	file, err := fs.Open(configPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open AmigaCD32.cfg: %w", err)
 	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			log.Error().Err(closeErr).Msg("failed to close AmigaCD32.cfg")
-		}
-	}()
-
-	// Seek to offset 3100 and write the hex-encoded path
-	if _, err := file.Seek(3100, 0); err != nil {
-		return "", fmt.Errorf("failed to seek to offset 3100: %w", err)
+	data, readErr := io.ReadAll(io.LimitReader(file, maxConfigSize+1))
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return "", fmt.Errorf("failed to read AmigaCD32.cfg: %w", err)
 	}
-
-	if _, err := file.Write(hexBytes); err != nil {
-		return "", fmt.Errorf("failed to write path to AmigaCD32.cfg: %w", err)
+	if len(data) < pathOffset+maxPathLength || len(data) > maxConfigSize {
+		return "", errors.New("AmigaCD32.cfg has invalid size")
+	}
+	clear(data[pathOffset : pathOffset+maxPathLength])
+	copy(data[pathOffset:pathOffset+maxPathLength], gamePath)
+	if err := pathutil.WriteFileAtomic(fs, configPath, data, info.Mode().Perm()); err != nil {
+		return "", fmt.Errorf("failed to update AmigaCD32.cfg: %w", err)
 	}
 
 	// Return setname override to prevent adding file tag

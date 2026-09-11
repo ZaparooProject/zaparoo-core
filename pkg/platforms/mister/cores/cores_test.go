@@ -22,6 +22,7 @@
 package cores
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -29,9 +30,59 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type rejectedCD32ReplacementFS struct{ afero.Fs }
+
+func (rejectedCD32ReplacementFS) Rename(string, string) error { return os.ErrPermission }
+
+func TestPatchAmigaCD32PreservesOtherBytes(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := "AmigaCD32.cfg"
+	original := bytes.Repeat([]byte{0x5a}, 4096)
+	require.NoError(t, afero.WriteFile(fs, path, original, 0o640))
+	result, err := patchAmigaCD32(fs, path, "/media/fat/games/test.chd")
+	require.NoError(t, err)
+	assert.Contains(t, result, "<setname>AmigaCD32</setname>")
+	got, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, original[:3100], got[:3100])
+	assert.Equal(t, original[3208:], got[3208:])
+	field := make([]byte, 108)
+	copy(field, "../fat/games/test.chd")
+	assert.Equal(t, field, got[3100:3208])
+	info, err := fs.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+
+	_, err = patchAmigaCD32(rejectedCD32ReplacementFS{fs}, path, "/media/fat/games/new.chd")
+	require.ErrorIs(t, err, os.ErrPermission)
+	after, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, got, after)
+	files, err := afero.ReadDir(fs, ".")
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+}
+
+func TestPatchAmigaCD32RejectsInvalidFile(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := "AmigaCD32.cfg"
+	_, err := patchAmigaCD32(fs, path, "game.chd")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	original := []byte("truncated")
+	require.NoError(t, afero.WriteFile(fs, path, original, 0o600))
+	_, err = patchAmigaCD32(fs, path, "game.chd")
+	require.ErrorContains(t, err, "invalid size")
+	got, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, original, got)
+}
 
 func TestHookAmiga_WritesBootFileToActiveInstall(t *testing.T) {
 	t.Parallel()
