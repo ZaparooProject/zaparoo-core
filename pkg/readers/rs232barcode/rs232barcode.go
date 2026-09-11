@@ -46,6 +46,7 @@ type Reader struct {
 	cfg         *config.Instance
 	device      config.ReadersConnect
 	path        string
+	identity    readers.USBReaderID
 	polling     bool
 	mu          syncutil.RWMutex // protects polling
 }
@@ -238,11 +239,7 @@ func (r *Reader) Path() string {
 }
 
 func (r *Reader) ReaderID() string {
-	stablePath := helpers.GetUSBTopologyPath(r.path)
-	if stablePath == "" {
-		stablePath = r.device.ConnectionString()
-	}
-	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
+	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(r.path), r.device.ConnectionString())
 }
 
 func (r *Reader) Connected() bool {

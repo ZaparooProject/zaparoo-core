@@ -45,6 +45,7 @@ type SimpleSerialReader struct {
 	lastToken   *tokens.Token
 	device      config.ReadersConnect
 	path        string
+	identity    readers.USBReaderID
 	polling     bool
 	removable   bool             // whether removal detection is supported, updated per-scan
 	mu          syncutil.RWMutex // protects polling, port, and removable
@@ -258,11 +259,7 @@ func (r *SimpleSerialReader) Path() string {
 }
 
 func (r *SimpleSerialReader) ReaderID() string {
-	stablePath := helpers.GetUSBTopologyPath(r.path)
-	if stablePath == "" {
-		stablePath = r.device.ConnectionString()
-	}
-	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
+	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(r.path), r.device.ConnectionString())
 }
 
 func (r *SimpleSerialReader) Connected() bool {
