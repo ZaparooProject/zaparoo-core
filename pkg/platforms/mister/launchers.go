@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
@@ -41,9 +42,34 @@ type framebufferMode struct {
 	divisor int
 }
 
+var hybridDVDCore = cores.Core{
+	ID:         systemdefs.SystemDVDPlayer,
+	LauncherID: "HybridDVDPlayer",
+	RBF:        "DVD_Player",
+	SetName:    "DVD-Player",
+	Slots: []cores.Slot{{
+		Label: "DVD image",
+		Exts:  []string{".iso"},
+		Mgl:   &cores.MGLParams{Method: "f", Delay: 2, Index: 0},
+	}},
+}
+
+var kitrinxNGPCCore = cores.Core{
+	ID:         systemdefs.SystemNeoGeoPocketColor,
+	LauncherID: "KitrinxNeoGeoPocketColor",
+	RBF:        "_Console/NGPC",
+	SetName:    "NGPC",
+	Slots: []cores.Slot{{
+		Label: "ROM",
+		Exts:  []string{".ngp", ".ngc", ".npc"},
+		Mgl:   &cores.MGLParams{Method: "f", Delay: 2, Index: 1},
+	}},
+}
+
 var mglIndexingSkippedLaunchers = map[string]struct{}{
-	"GenericVideo": {},
-	"ScummVM":      {},
+	"GenericVideo":             {},
+	"ScummVM":                  {},
+	"KitrinxNeoGeoPocketColor": {},
 }
 
 var misterDefaultScanExcludes = []string{
@@ -53,6 +79,26 @@ var misterDefaultScanExcludes = []string{
 	"blank.vhd",
 	"blank.zip/blank.vhd",
 	"empty_hdd.zip/boot.vhd",
+}
+
+// arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
+// Organizer script generates: its ORGDIR_DIRECTORIES category folders plus the
+// default _Organized container. They hold symlinks (or copies, with
+// NO_SYMLINKS) of MRAs that are already indexed under _Arcade. The script can
+// write the category folders straight into _Arcade instead of under
+// _Organized, so the container name alone is not enough.
+var arcadeOrganizerScanDirectoryExcludes = []string{
+	"_Organized",
+	"_1 0-9",
+	"_1 A-E",
+	"_1 F-K",
+	"_1 L-Q",
+	"_1 R-T",
+	"_1 U-Z",
+	"_2 Region",
+	"_3 Collections",
+	"_4 Video & Inputs",
+	"_5 Extra Software",
 }
 
 func checkInZip(path string) string {
@@ -464,11 +510,121 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 	}
 }
 
-func applyRetroAchievementsLauncherGroup(launchers []platforms.Launcher) []platforms.Launcher {
-	for i := range launchers {
-		if _, ok := retroAchievementsSetName(launchers[i].ID); ok {
-			launchers[i].Groups = append(launchers[i].Groups, shared.LauncherGroupRetroAchievements)
+// altCorePath is a registered alt core RBF path split for classification.
+// lowerName is precomputed because most rules need a case-insensitive check
+// and CreateLaunchers reruns on every Launchers call.
+type altCorePath struct {
+	dir       string
+	lowerName string
+}
+
+func newAltCorePath(rbfPath string) altCorePath {
+	dir, shortName := splitAltCorePath(rbfPath)
+	return altCorePath{dir: dir, lowerName: strings.ToLower(shortName)}
+}
+
+// altCoreGroupRule classifies a launcher by the RBF paths it registers with the
+// global cache. Paths are ground truth: the launcher ID is not, because IDs
+// like DB9DualRAMPSX and PWM2XPSX belong to more than one family and no prefix
+// rule can express that.
+type altCoreGroupRule struct {
+	match func(p altCorePath) bool
+	group string
+}
+
+// altCoreGroupRules is ordered. Primary families (the distribution a core came
+// from) come first so Groups[0] identifies the family; secondary attributes
+// like dual-SDRAM follow. Callers such as the browse scheme map read Groups[0].
+var altCoreGroupRules = []altCoreGroupRule{
+	{
+		group: shared.LauncherGroupRetroAchievements,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_RA_Cores/Cores") },
+	},
+	{
+		group: shared.LauncherGroupLLAPI,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_LLAPI") },
+	},
+	{
+		group: shared.LauncherGroupSinden,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "Light Gun") || dirWithin(p.dir, "_Sinden")
+		},
+	},
+	{
+		// The PWM database sorts overclocked builds into a _Turbo subfolder.
+		group: shared.LauncherGroupPWM,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_ConsolePWM") },
+	},
+	{
+		group: shared.LauncherGroupUnstable,
+		match: func(p altCorePath) bool { return strings.Contains(p.lowerName, "_unstable_") },
+	},
+	{
+		group: shared.LauncherGroupDB9,
+		match: func(p altCorePath) bool { return strings.HasSuffix(p.lowerName, "_db9") },
+	},
+	{
+		group: shared.LauncherGroupDualRAM,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "_Console (Dual SDRAM)") ||
+				strings.Contains(p.lowerName, "_dualsdram")
+		},
+	},
+}
+
+func splitAltCorePath(rbfPath string) (dir, shortName string) {
+	if idx := strings.LastIndex(rbfPath, "/"); idx >= 0 {
+		return rbfPath[:idx], rbfPath[idx+1:]
+	}
+	return "", rbfPath
+}
+
+// dirWithin reports whether dir is want or a folder inside it.
+func dirWithin(dir, want string) bool {
+	if strings.EqualFold(dir, want) {
+		return true
+	}
+	return len(dir) > len(want) && strings.EqualFold(dir[:len(want)+1], want+"/")
+}
+
+// altCoreGroups returns the config groups a launcher belongs to, derived from
+// every RBF path it registered. A launcher with no registered paths is a stock
+// core launcher and gets no group.
+func altCoreGroups(launcherID string, scratch []altCorePath) ([]string, []altCorePath) {
+	rbfPaths := cores.GlobalRBFCache.AltCorePaths(launcherID)
+	if len(rbfPaths) == 0 {
+		return nil, scratch
+	}
+
+	paths := scratch[:0]
+	for _, rbfPath := range rbfPaths {
+		paths = append(paths, newAltCorePath(rbfPath))
+	}
+
+	var groups []string
+	for _, rule := range altCoreGroupRules {
+		for _, path := range paths {
+			if rule.match(path) {
+				groups = append(groups, rule.group)
+				break
+			}
 		}
+	}
+	return groups, paths
+}
+
+// applyAltCoreLauncherGroups tags every alt core launcher with the groups its
+// registered RBF paths imply. Must run after the launcher slice is built, since
+// the launch constructors are what register those paths.
+func applyAltCoreLauncherGroups(launchers []platforms.Launcher) []platforms.Launcher {
+	var scratch []altCorePath
+	for i := range launchers {
+		var groups []string
+		groups, scratch = altCoreGroups(launchers[i].ID, scratch)
+		if len(groups) == 0 {
+			continue
+		}
+		launchers[i].Groups = append(launchers[i].Groups, groups...)
 	}
 	return launchers
 }
@@ -522,27 +678,53 @@ func launchAltCoreWithDefaultSetName(
 	setNameSameDir bool,
 	fallbackRBFPaths ...string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefinition(&cores.Core{
+		ID: systemID, LauncherID: launcherID, RBF: rbfPath,
+		SetName: setName, SetNameSameDir: setNameSameDir,
+	}, fallbackRBFPaths...)
+}
+
+func configureAltCoreDefinition(core, definition *cores.Core, opts *platforms.LaunchOptions) error {
+	// Alternate implementations can use a different file-transfer protocol or
+	// accept extensions the primary core does not support.
+	if definition.Slots != nil {
+		core.Slots = definition.Slots
+	}
+	return configureAltCoreWithDefaultSetName(
+		core, definition.LauncherID, definition.RBF, definition.SetName, definition.SetNameSameDir, opts,
+	)
+}
+
+func launchAltCoreWithDefinition(
+	definition *cores.Core,
+	fallbackRBFPaths ...string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	// Register alt core during launcher creation.
 	rbfPaths := make([]string, 0, 1+len(fallbackRBFPaths))
-	rbfPaths = append(rbfPaths, rbfPath)
+	rbfPaths = append(rbfPaths, definition.RBF)
 	rbfPaths = append(rbfPaths, fallbackRBFPaths...)
-	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPaths...)
+	cores.GlobalRBFCache.RegisterAltCore(definition.LauncherID, rbfPaths...)
 
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		s, err := cores.GetCore(systemID)
+		s, err := cores.GetCore(definition.ID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
+			return nil, fmt.Errorf("failed to get system %s: %w", definition.ID, err)
 		}
 		path = checkInZip(path)
 
 		sn := *s
-		if setNameErr := configureAltCoreWithDefaultSetName(
-			&sn, launcherID, rbfPath, setName, setNameSameDir, opts,
-		); setNameErr != nil {
+		if setNameErr := configureAltCoreDefinition(&sn, definition, opts); setNameErr != nil {
 			return nil, setNameErr
 		}
 
-		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching alt core: %v", sn)
+		// A different media protocol cannot safely fall back to the primary RBF.
+		if definition.Slots != nil {
+			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, definition.LauncherID, definition.ID); !ok {
+				return nil, fmt.Errorf("alternate core not installed: %s", definition.LauncherID)
+			}
+		}
+
+		log.Debug().Str("rbf", sn.RBF).Str("launcher", definition.LauncherID).Msgf("launching alt core: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -962,6 +1144,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		ID:                 "ScummVM",
 		SystemID:           systemdefs.SystemScummVM,
 		Schemes:            []string{shared.SchemeScummVM},
+		Test:               shared.SchemeIDTest(shared.SchemeScummVM),
 		SkipFilesystemScan: true,
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
@@ -996,6 +1179,18 @@ func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
 	return launchers
 }
 
+func applyCatalogScanMetadata(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		definition, err := catalog.Get(launchers[i].ID)
+		if err != nil {
+			continue
+		}
+		launchers[i].Folders = definition.Folders
+		launchers[i].Extensions = definition.Extensions
+	}
+	return launchers
+}
+
 func applyDefaultScanExcludes(launchers []platforms.Launcher) []platforms.Launcher {
 	for i := range launchers {
 		launcher := &launchers[i]
@@ -1022,6 +1217,27 @@ func launcherHasExtension(launcher *platforms.Launcher, extension string) bool {
 		}
 	}
 	return false
+}
+
+// Prefer the installed stable implementation without changing either launcher's
+// identity. Explicit launcher selections and their setnames remain untouched.
+func prioritizeNGPCCore(cfg *config.Instance, launchers []platforms.Launcher) []platforms.Launcher {
+	kitrinx, jotego := -1, -1
+	for i := range launchers {
+		switch launchers[i].ID {
+		case kitrinxNGPCCore.LauncherID:
+			kitrinx = i
+		case systemdefs.SystemNeoGeoPocketColor:
+			jotego = i
+		}
+	}
+	if kitrinx >= 0 && jotego >= 0 {
+		_, installed := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, kitrinxNGPCCore.LauncherID, kitrinxNGPCCore.ID)
+		if (installed && kitrinx > jotego) || (!installed && jotego > kitrinx) {
+			launchers[kitrinx], launchers[jotego] = launchers[jotego], launchers[kitrinx]
+		}
+	}
+	return launchers
 }
 
 // CreateLaunchers creates all standard MiSTer launchers for the given platform.
@@ -1525,6 +1741,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"NGP"},
 			Extensions: []string{".ngp"},
 			Launch:     launch(pl, systemdefs.SystemNeoGeoPocket),
+		},
+		{
+			ID:         kitrinxNGPCCore.LauncherID,
+			SystemID:   systemdefs.SystemNeoGeoPocketColor,
+			Folders:    []string{"NGPC"},
+			Extensions: []string{".ngc", ".npc"},
+			Launch:     launchAltCoreWithDefinition(&kitrinxNGPCCore),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoPocketColor,
@@ -2285,12 +2508,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 		// Other
 		{
-			ID:                    systemdefs.SystemArcade,
-			SystemID:              systemdefs.SystemArcade,
-			Folders:               []string{"_Arcade"},
-			Extensions:            []string{".mra", ".mgl"},
-			ScanDirectoryExcludes: []string{"_Organized"},
-			Launch:                launchArcade(pl, systemdefs.SystemArcade),
+			ID:                       systemdefs.SystemArcade,
+			SystemID:                 systemdefs.SystemArcade,
+			Folders:                  []string{"_Arcade"},
+			Extensions:               []string{".mra", ".mgl"},
+			ScanDirectoryExcludes:    arcadeOrganizerScanDirectoryExcludes,
+			ScanSkipInternalSymlinks: true,
+			Launch:                   launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,
@@ -2349,6 +2573,21 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGroovy),
 		},
 		{
+			ID:       systemdefs.SystemCommodoreCDTV,
+			SystemID: systemdefs.SystemCommodoreCDTV,
+			Launch:   launch(pl, systemdefs.SystemCommodoreCDTV),
+		},
+		{
+			ID:       systemdefs.SystemDVDPlayer,
+			SystemID: systemdefs.SystemDVDPlayer,
+			Launch:   launch(pl, systemdefs.SystemDVDPlayer),
+		},
+		{
+			ID:       hybridDVDCore.LauncherID,
+			SystemID: systemdefs.SystemDVDPlayer,
+			Launch:   launchAltCoreWithDefinition(&hybridDVDCore, "_Other/DVD_Player"),
+		},
+		{
 			ID:         "Generic",
 			Extensions: []string{".mgl", ".rbf", ".mra"},
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
@@ -2366,5 +2605,12 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 	}
 
-	return applyDefaultScanExcludes(enableMGLIndexing(applyRetroAchievementsLauncherGroup(launchers)))
+	unstable := createUnstableLaunchers()
+	all := make([]platforms.Launcher, 0, len(launchers)+len(unstable))
+	all = append(all, launchers...)
+	all = append(all, unstable...)
+
+	return prioritizeNGPCCore(nil, applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
+		applyAltCoreLauncherGroups(all),
+	))))
 }

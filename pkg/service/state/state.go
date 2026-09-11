@@ -48,15 +48,15 @@ import (
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
 type PendingLaunchOverride struct {
+	Source     tokens.Token
 	CreatedAt  time.Time
 	LauncherID string
-	Source     tokens.Token
 }
 
 type PendingWrite struct {
+	Source    tokens.Token
 	CreatedAt time.Time
 	Payload   string
-	Source    tokens.Token
 }
 
 type readerWriteState struct {
@@ -66,12 +66,12 @@ type readerWriteState struct {
 }
 
 type State struct {
+	activeToken           tokens.Token
+	lastScanned           tokens.Token
 	platform              platforms.Platform
 	ctx                   context.Context
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
+	softwareToken         *tokens.Token
+	ctxCancelFunc         context.CancelFunc
 	readers               map[string]readers.Reader
 	readerWrites          map[string]*readerWriteState
 	Notifications         chan<- models.Notification
@@ -84,18 +84,22 @@ type State struct {
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
-	softwareToken         *tokens.Token
-	ctxCancelFunc         context.CancelFunc
+	beforeExitHook        func()
+	pendingLaunchOverride *PendingLaunchOverride
+	pendingWrite          *PendingWrite
 	backupCoordinator     *backupcoordinator.Coordinator
+	launcherManager       *LauncherManager
+	uiEvents              *uievents.Service
+	remoteStatus          RemoteStatus
 	bootUUID              string
-	lastScanned           tokens.Token
-	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
+	activeMediaPublishMu  syncutil.RWMutex
+	remoteStatusMu        syncutil.RWMutex
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
-	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
+	beforeExitRunning     bool
 	restartRequested      bool
 	restorePendingRestart bool
 	runZapScript          bool
@@ -311,6 +315,42 @@ func (s *State) SetOnMediaStopHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStopHook = hook
+}
+
+// SetBeforeExitHook registers the callback run just before active media is
+// stopped or replaced. Pass nil to clear it.
+func (s *State) SetBeforeExitHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeExitHook = hook
+}
+
+// RunBeforeExitHook invokes the registered before_exit callback synchronously
+// in the caller's goroutine. It is a no-op when no hook is registered or when
+// another before_exit run is already in flight: at most one before_exit script
+// runs process-wide at a time, so a script that itself stops or launches media
+// cannot re-enter this path from any goroutine.
+//
+// Callers must not hold a media gate (AcquireMediaStop, AcquireUpdateMediaGate)
+// when calling this. The hook script may launch media, which takes the read
+// side of the same gate and would deadlock against the exclusive holder.
+func (s *State) RunBeforeExitHook() {
+	s.mu.Lock()
+	hook := s.beforeExitHook
+	if hook == nil || s.beforeExitRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.beforeExitRunning = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.beforeExitRunning = false
+		s.mu.Unlock()
+	}()
+
+	hook()
 }
 
 func (s *State) BackgroundAutoPaused() bool {
@@ -786,6 +826,27 @@ func (s *State) ActiveMediaReadyGeneration() (uint64, bool) {
 	return s.activeMediaReadyGen, true
 }
 
+// ActiveMediaReplacedSince reports whether the active media changed since gen
+// was captured alongside hadMedia. It is how a caller that ran before_exit
+// tells that the hook launched or stopped media itself: stopping after that
+// would kill what the hook started rather than the media the caller set out
+// to exit. With nothing active when gen was taken, before_exit is a no-op and
+// there is nothing it could have replaced.
+//
+// The generation tracks media identity, not launches, so a before_exit script
+// that relaunches media comparing equal to the outgoing media (ActiveMedia.Equal:
+// same slot, system and slugified name) does not read as a replacement, and the
+// caller's stop goes ahead. That is correct: media with the same content is the
+// same media, so the caller is still stopping exactly what it asked to stop.
+// Only a launch of something genuinely different needs protecting from the stop.
+func (s *State) ActiveMediaReplacedSince(gen uint64, hadMedia bool) bool {
+	if !hadMedia {
+		return false
+	}
+	current, active := s.ActiveMediaReadyGeneration()
+	return !active || current != gen
+}
+
 func (s *State) WaitForActiveMediaReady(ctx context.Context, expectedGen uint64) error {
 	for {
 		s.mu.RLock()
@@ -833,6 +894,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.publishActiveMedia(media, false)
 }
 
+// ClearActiveMediaIf clears the active media when cond holds for its current
+// value, and reports whether it did. The check and the clear happen under one
+// lock, so a publication that lands between them cannot be wiped by a stop
+// that was meant for the media it replaced.
+func (s *State) ClearActiveMediaIf(cond func(*models.ActiveMedia) bool) bool {
+	return s.updateActiveMediaState(nil, cond)
+}
+
 func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld bool) {
 	if media != nil {
 		if err := s.ctx.Err(); err != nil {
@@ -868,19 +937,27 @@ func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld 
 		}
 	}
 
-	s.updateActiveMediaState(media)
+	s.updateActiveMediaState(media, nil)
 }
 
-func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
+// updateActiveMediaState applies media as the new active media and reports
+// whether the state changed. A non-nil cond is evaluated against the current
+// media under the lock and vetoes the update when it returns false.
+func (s *State) updateActiveMediaState(media *models.ActiveMedia, cond func(*models.ActiveMedia) bool) bool {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another
 	// goroutine modifies activeMedia between our read and lock acquisition
 	oldMedia := s.activeMedia
 
+	if cond != nil && !cond(oldMedia) {
+		s.mu.Unlock()
+		return false
+	}
+
 	if oldMedia == nil && media == nil {
 		s.mu.Unlock()
-		return
+		return false
 	}
 
 	// Capture hook references inside lock
@@ -911,7 +988,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if stopHook != nil {
 			stopHook()
 		}
-		return
+		return true
 	}
 
 	media.Slot = mediaslot.Primary
@@ -938,7 +1015,7 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if hook != nil {
 			go hook(media, gen)
 		}
-		return
+		return true
 	}
 
 	if !oldMedia.Equal(media) {
@@ -971,11 +1048,12 @@ func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 		if hook != nil {
 			go hook(media, gen)
 		}
-		return
+		return true
 	}
 
 	// No changes
 	s.mu.Unlock()
+	return false
 }
 
 func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {

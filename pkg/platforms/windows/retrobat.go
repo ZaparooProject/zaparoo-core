@@ -26,11 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -309,23 +306,6 @@ func killWindowsProcessTree(ctx context.Context, pid uint32, emulatorsDir string
 	return retroBatRunTaskKill(ctx, pid)
 }
 
-func runTaskKillPIDTree(ctx context.Context, pid uint32) error {
-	pidArg := strconv.FormatUint(uint64(pid), 10)
-	cmd := exec.CommandContext( //nolint:gosec // PID comes from local process enumeration.
-		ctx,
-		"taskkill.exe",
-		"/PID",
-		pidArg,
-		"/T",
-		"/F",
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("taskkill pid %d: %w: %s", pid, err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
 const retroBatLauncherPrefix = "RetroBat"
 
 func isRetroBatLauncher(launcher *platforms.Launcher) bool {
@@ -352,7 +332,7 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 			// Handles Windows slash normalization and prevents "roms" matching "roms2"
 			if helpers.PathHasPrefix(path, systemDir) {
 				// Don't match directories or .txt files
-				if filepath.Ext(path) == "" || filepath.Ext(path) == ".txt" {
+				if filepath.Ext(path) == "" || strings.EqualFold(filepath.Ext(path), ".txt") {
 					return false
 				}
 				return true

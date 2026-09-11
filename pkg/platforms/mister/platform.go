@@ -98,7 +98,7 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	shared.LinuxInput
+	shared.InputManager
 	ctx                 context.Context
 	fs                  afero.Fs
 	dbLoadTime          time.Time
@@ -745,6 +745,18 @@ func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition
 	}
 }
 
+func (p *Platform) clearTrackedActiveGame() {
+	if p.tracker != nil {
+		if err := p.tracker.ClearActiveGame(); err != nil {
+			log.Warn().Err(err).Msg("failed to clear MiSTer active-game tracker")
+		}
+		return
+	}
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.processMu.Lock()
 	p.stopIntent = intent
@@ -779,7 +791,7 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 		}
 	}
 
-	p.setActiveMedia(nil)
+	p.clearTrackedActiveGame()
 
 	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
 		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
@@ -818,6 +830,7 @@ func (p *Platform) ReturnToMenu() error {
 		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
 	}
+	p.clearTrackedActiveGame()
 
 	// Wait for menu transition to settle
 	time.Sleep(300 * time.Millisecond)
@@ -845,6 +858,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		if err := mistermain.LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
+		p.clearTrackedActiveGame()
 		return nil
 	}
 
@@ -853,11 +867,37 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mgls.LaunchCore(cfg, p, system)
-	if err != nil {
+	if err = mgls.LaunchCore(cfg, p, system); err != nil {
+		// The system's own core is not installed, but an alternate
+		// implementation of it may be. Launchers are already ordered by
+		// preference, so the first core-backed one that resolves is the one a
+		// media launch for this system would have used: an install carrying
+		// only the alternate should not be told the system has no core.
+		if launcher, ok := p.installedAltSystemLauncher(cfg, id); ok {
+			return p.LaunchSystemLauncher(cfg, id, launcher)
+		}
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
+	p.clearTrackedActiveGame()
 	return nil
+}
+
+// installedAltSystemLauncher finds an installed alternate core for a system,
+// in the launcher list's own preference order.
+func (p *Platform) installedAltSystemLauncher(
+	cfg *config.Instance, systemID string,
+) (*platforms.Launcher, bool) {
+	launchers := p.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
+		if l.SystemID != systemID || l.ID == systemID || !misterCoreBacked(l.ID, systemID) {
+			continue
+		}
+		if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, l.ID, systemID); ok {
+			return l, true
+		}
+	}
+	return nil, false
 }
 
 // LaunchSystemLauncher implements platforms.SystemLauncherSelector, loading
@@ -879,7 +919,12 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
+	p.clearTrackedActiveGame()
 	return nil
+}
+
+func (*Platform) NormalizeLaunchPath(path string) string {
+	return checkInZip(path)
 }
 
 func (p *Platform) LaunchMedia(
@@ -887,7 +932,7 @@ func (p *Platform) LaunchMedia(
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
-	path = checkInZip(path)
+	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
 
 	if launcher == nil {
@@ -1109,6 +1154,8 @@ func collectNeoGeoRomsetEntries(
 		if isZip {
 			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
 		} else if !isDirectory {
+			// Plain files such as .neo are already in the walked results;
+			// applyNeoGeoRomsetNames names those in place.
 			return nil
 		}
 
@@ -1191,6 +1238,33 @@ func filterNeoGeoGameContents(
 		filtered = append(filtered, r)
 	}
 	return filtered
+}
+
+// applyNeoGeoRomsetNames sets Name on .neo results whose filename stem
+// matches a romsets.xml entry, so a standalone mslug.neo gets the same
+// title as mslug.zip. It must run after filterNeoGeoGameContents so .neo
+// files inside romset zips and folders are already gone. NoExt is left
+// false so the extension tag is kept, and Path is never changed. Results
+// are updated in place; the return value is the number of entries named.
+func applyNeoGeoRomsetNames(results []platforms.ScanResult, romsetNames map[string]string) int {
+	named := 0
+	for i := range results {
+		if results[i].Name != "" {
+			continue
+		}
+		base := filepath.Base(results[i].Path)
+		ext := filepath.Ext(base)
+		if !strings.EqualFold(ext, ".neo") {
+			continue
+		}
+		altName, ok := romsetNames[strings.ToLower(strings.TrimSuffix(base, ext))]
+		if !ok {
+			continue
+		}
+		results[i].Name = altName
+		named++
+	}
+	return named
 }
 
 // filterNeoGeoZipToNeoOnly filters results when no romsets.xml is available.
@@ -1436,8 +1510,14 @@ func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) mo
 	}
 	runtime := models.LauncherRuntime{Backend: models.LauncherBackendMisterCore}
 	if info, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, l.ID, l.SystemID); ok {
+		coreName := info.ShortName
+		if setName, found := retroAchievementsSetName(l.ID); found {
+			coreName = setName
+		} else if l.ID == hybridDVDCore.LauncherID {
+			coreName = hybridDVDCore.SetName
+		}
 		runtime.MisterCore = &models.MisterCoreInfo{
-			Name:    info.ShortName,
+			Name:    coreName,
 			File:    info.Filename,
 			MGLPath: info.MglName,
 		}
@@ -1466,7 +1546,12 @@ func setCoreAvailability(launchers []platforms.Launcher) {
 			if systems, _ := cores.GlobalRBFCache.Count(); systems == 0 {
 				return nil
 			}
-			if _, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcherID, systemID); ok {
+			// Strict: an alt core launcher whose own RBF is missing falls
+			// back to the stock core at launch time, but reporting that as
+			// available makes every uninstalled family (LLAPI, DB9, ...) look
+			// installed and lets an ordered launchers.preference match a group
+			// the device does not have.
+			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, launcherID, systemID); ok {
 				return nil
 			}
 			return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcherID, systemID))
@@ -1489,7 +1574,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(_ *config.Instance, path string) bool {
-			if isAmigaVisionListingFile(path) || isAmigaVisionVirtualMGLPath(path) {
+			// The listing files under listings/ are this launcher's scanner
+			// input, not media. Matching them made them launch targets that
+			// could only ever fail.
+			if isAmigaVisionVirtualMGLPath(path) {
 				return true
 			}
 
@@ -1554,7 +1642,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
 		Test: func(_ *config.Instance, path string) bool {
-			if filepath.Ext(path) == ".zip" {
+			if strings.EqualFold(filepath.Ext(path), ".zip") {
 				return true
 			}
 			if filepath.Ext(path) == "" {
@@ -1578,6 +1666,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			log.Info().Msg("starting neogeo scan")
 			inputResultCount := len(results)
 			filteredResultCount := 0
+			namedResultCount := 0
 			addedResultCount := 0
 			romsetDefinitionCount := 0
 			romsetsFilename := "romsets.xml"
@@ -1636,6 +1725,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				results = filterNeoGeoZipToNeoOnly(results)
 			} else {
 				results = filterNeoGeoGameContents(results, names, neogeoPaths)
+				namedResultCount = applyNeoGeoRomsetNames(results, names)
 			}
 			if removed := resultsBeforeFilter - len(results); removed > 0 {
 				filteredResultCount = removed
@@ -1671,7 +1761,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			log.Debug().Int("roots", len(sfs)).Int("romsets", romsetDefinitionCount).
 				Int("aliases", len(names)).Int("input", inputResultCount).Int("filtered", filteredResultCount).
-				Int("added", addedResultCount).Int("results", len(results)).
+				Int("named", namedResultCount).Int("added", addedResultCount).Int("results", len(results)).
 				Msg("neogeo scan completed")
 
 			return results, nil
@@ -1686,8 +1776,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 	setCoreAvailability(ls)
 
-	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
-	return append(custom, ls...)
+	return helpers.CombineLaunchers(cfg, p, prioritizeNGPCCore(cfg, ls))
 }
 
 func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {

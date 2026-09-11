@@ -981,3 +981,44 @@ func TestTryWithoutAutoTags(t *testing.T) {
 		})
 	}
 }
+
+// A tag whose title mistypes an abbreviation has to resolve like any other
+// typo. It did not: slug normalisation expands "Bros" to "brothers", so
+// "Super Mario Bros." indexes at 18 characters while the typo "Super Mario
+// Bross" normalises to 15, and both the SQL pre-filter and the Jaro-Winkler
+// length gate are tighter than that gap. A typo earlier in the name keeps the
+// expansion, which is why only this shape failed.
+func TestTryAdvancedFuzzyMatchingRecoversMistypedAbbreviation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		gameName   = "Super Mario Bross"
+		querySlug  = "supermariobross"
+		targetSlug = "supermariobrothers"
+	)
+	require.Len(t, querySlug, 15)
+	require.Len(t, targetSlug, 18,
+		"fixture depends on the expansion; if it changes, retune this case")
+
+	var sawMaxLength int
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetTitlesWithPreFilter", mock.Anything, "NES",
+		mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+		mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+		Run(func(args mock.Arguments) { sawMaxLength = args.Int(3) }).
+		Return([]database.MediaTitle{{Slug: targetSlug}}, nil)
+	mockDB.On("SearchMediaBySlug", mock.Anything, "NES", targetSlug, []zapscript.TagFilter(nil)).
+		Return([]database.SearchResultWithCursor{
+			{SystemID: "NES", Name: "Super Mario Bros.", Path: "/smb.nes"},
+		}, nil)
+
+	result, err := TryAdvancedFuzzyMatching(
+		context.Background(), mockDB, "NES", gameName, querySlug, nil, "Game")
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1,
+		"the title the tag is a typo of must still resolve")
+	assert.Equal(t, "Super Mario Bros.", result.Results[0].Name)
+	assert.GreaterOrEqual(t, sawMaxLength, len(targetSlug),
+		"the pre-filter must reach far enough to return the expanded title at all")
+	mockDB.AssertExpectations(t)
+}

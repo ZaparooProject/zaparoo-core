@@ -24,9 +24,11 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -77,7 +79,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.Systems)
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("localmedia: resolve systems: %w", err)
 			}
@@ -170,13 +172,31 @@ func (s *scraperImpl) scrapeLoop(
 	// Lowest CPU/IO priority for the whole scrape run; the locked thread
 	// dies with this goroutine so the change never leaks.
 	bgpriority.Apply()
+	if opts.Scope != nil && len(systems) == 0 {
+		selection, err := scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+		if err != nil {
+			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+			return
+		}
+		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
+		return
+	}
 	for systemIdx, system := range systems {
 		if err := waitForScrape(ctx, opts); err != nil {
 			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 			return
 		}
 
-		mediaRows, err := s.db.GetMediaBySystemID(system.ID)
+		var mediaRows []database.MediaWithFullPath
+		var completed map[int64]struct{}
+		var err error
+		if opts.Scope != nil {
+			var selection scraper.ScopedSelection
+			selection, err = scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
+			mediaRows, completed = selection.Media, selection.Completed
+		} else {
+			mediaRows, err = s.db.GetMediaBySystemID(system.ID)
+		}
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{
 				FatalErr: fmt.Errorf("localmedia: load media for %s: %w", system.ID, err),
@@ -187,9 +207,26 @@ func (s *scraperImpl) scrapeLoop(
 
 		processed, matched, skipped := 0, 0, 0
 		availableDirs := s.availableDirsByRoot(system.ROMPaths)
+		var containers scraper.ContainerResolver = containerIndexForMedia(mediaRows)
+		if opts.Scope != nil {
+			containers, err = scraper.ScopedContainers(ctx, s.db, system.ID, mediaRows)
+			if err != nil {
+				ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+				return
+			}
+		}
+		// A scoped run loads only the media in scope, so the directories it can
+		// see are not the system's. ReplaceDirectoryProperties swaps the whole
+		// per-system snapshot, so deriving one from a scoped selection would
+		// delete every other directory's folder artwork for this system.
+		var directoryPaths []string
+		if opts.Scope == nil {
+			directoryPaths = indexedDirectoryPaths(mediaRows, system.ROMPaths)
+		}
+		total := len(mediaRows) + len(directoryPaths)
 		ch <- scraper.ScrapeUpdate{
 			SystemID:    system.ID,
-			Total:       len(mediaRows),
+			Total:       total,
 			TotalSteps:  len(systems),
 			CurrentStep: systemIdx + 1,
 		}
@@ -201,11 +238,24 @@ func (s *scraperImpl) scrapeLoop(
 				return
 			}
 
-			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs)
+			if _, done := completed[media.DBID]; done {
+				processed++
+				skipped++
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, Total: len(mediaRows),
+					Processed: processed, Matched: matched, Skipped: skipped,
+					TotalSteps: len(systems), CurrentStep: systemIdx + 1,
+				}
+				continue
+			}
+			isContainerTarget := isContainerLaunchTarget(containers, media)
+			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs, isContainerTarget)
 			staleDeleted := 0
 			if opts.Force {
 				var cleanupErr error
-				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(ctx, media, system.ROMPaths, props)
+				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(
+					ctx, media, system.ROMPaths, props,
+				)
 				if cleanupErr != nil {
 					skipped++
 					processed++
@@ -213,7 +263,7 @@ func (s *scraperImpl) scrapeLoop(
 						Err:         cleanupErr,
 						SystemID:    system.ID,
 						Processed:   processed,
-						Total:       len(mediaRows),
+						Total:       total,
 						Matched:     matched,
 						Skipped:     skipped,
 						TotalSteps:  len(systems),
@@ -244,7 +294,7 @@ func (s *scraperImpl) scrapeLoop(
 						Err:         fmt.Errorf("localmedia: write media %d: %w", media.DBID, err),
 						SystemID:    system.ID,
 						Processed:   processed,
-						Total:       len(mediaRows),
+						Total:       total,
 						Matched:     matched,
 						Skipped:     skipped,
 						TotalSteps:  len(systems),
@@ -259,12 +309,60 @@ func (s *scraperImpl) scrapeLoop(
 			ch <- scraper.ScrapeUpdate{
 				SystemID:    system.ID,
 				Processed:   processed,
-				Total:       len(mediaRows),
+				Total:       total,
 				Matched:     matched,
 				Skipped:     skipped,
 				TotalSteps:  len(systems),
 				CurrentStep: systemIdx + 1,
 			}
+		}
+
+		directoryProps := make([]database.DirectoryProperty, 0)
+		for _, directoryPath := range directoryPaths {
+			if err := waitForScrape(ctx, opts); err != nil {
+				ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
+				return
+			}
+
+			props := s.directoryPropsForPath(directoryPath, system.ROMPaths, availableDirs)
+			if len(props) == 0 {
+				skipped++
+			} else {
+				directoryProps = append(directoryProps, props...)
+				matched++
+			}
+			processed++
+			ch <- scraper.ScrapeUpdate{
+				SystemID:    system.ID,
+				Processed:   processed,
+				Total:       total,
+				Matched:     matched,
+				Skipped:     skipped,
+				TotalSteps:  len(systems),
+				CurrentStep: systemIdx + 1,
+			}
+		}
+		if err := s.replaceDirectoryPropertiesUnlessScoped(ctx, opts, system.DBID, directoryProps); err != nil {
+			ch <- scraper.ScrapeUpdate{
+				FatalErr:    fmt.Errorf("localmedia: replace directory properties for %s: %w", system.ID, err),
+				SystemID:    system.ID,
+				Processed:   processed,
+				Total:       total,
+				Matched:     matched,
+				Skipped:     skipped,
+				TotalSteps:  len(systems),
+				CurrentStep: systemIdx + 1,
+				Done:        true,
+			}
+			return
+		}
+
+		if opts.Scope != nil {
+			ch <- scraper.ScrapeUpdate{
+				SystemID: system.ID, Total: len(mediaRows), Processed: processed, Matched: matched, Skipped: skipped,
+				TotalSteps: 1, CurrentStep: 1, Done: true,
+			}
+			return
 		}
 	}
 	ch <- scraper.ScrapeUpdate{TotalSteps: len(systems), CurrentStep: len(systems), Done: true}
@@ -292,21 +390,103 @@ func (s *scraperImpl) availableDirsByRoot(roots []string) map[string]map[string]
 	return result
 }
 
+func indexedDirectoryPaths(rows []database.MediaWithFullPath, roots []string) []string {
+	directories := make(map[string]struct{})
+	// The roots are fixed for the whole call, and filepath.Abs on a relative
+	// one is a getwd syscall, so resolving them per row would charge a system
+	// its row count in syscalls for an answer that never changes. An empty
+	// entry marks a root that would not resolve.
+	rootAbsolute := make([]string, len(roots))
+	for i, root := range roots {
+		if abs, err := filepath.Abs(root); err == nil {
+			rootAbsolute[i] = filepath.Clean(abs)
+		}
+	}
+	for i := range rows {
+		if rows[i].IsMissing {
+			continue
+		}
+		for rootIndex, root := range roots {
+			resolved := esmedia.ResolvePath(rows[i].Path, root)
+			if resolved == "" {
+				continue
+			}
+			rootAbs := rootAbsolute[rootIndex]
+			if rootAbs == "" {
+				break
+			}
+			dir := filepath.Dir(resolved)
+			for dir != rootAbs && esmedia.PathWithinRoot(dir, rootAbs) {
+				if dir == "." || dir == string(filepath.Separator) {
+					break
+				}
+				directories[filepath.ToSlash(filepath.Clean(dir))] = struct{}{}
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
+			break
+		}
+	}
+
+	paths := make([]string, 0, len(directories))
+	for path := range directories {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func (s *scraperImpl) directoryPropsForPath(
+	directoryPath string,
+	roots []string,
+	availableDirs map[string]map[string]string,
+) []database.DirectoryProperty {
+	var fallbackNames []string
+	for _, root := range roots {
+		fallbackNames = esmedia.DirectoryArtworkFallbackNames(directoryPath, root)
+		if len(fallbackNames) > 0 {
+			break
+		}
+	}
+	if len(fallbackNames) == 0 {
+		return nil
+	}
+
+	orderedDirs := make([]map[string]string, 0, len(roots))
+	for _, root := range roots {
+		orderedDirs = append(orderedDirs, availableDirs[root])
+	}
+
+	props := make([]database.DirectoryProperty, 0)
+	for _, propValue := range artworkPropertyOrder {
+		file := esmedia.FindFileAcrossRootsFS(
+			s.fs,
+			fallbackNames,
+			esmedia.ArtworkDirCandidates[string(propValue)],
+			orderedDirs,
+		)
+		if file == nil {
+			continue
+		}
+		props = append(props, database.DirectoryProperty{
+			Path:    filepath.ToSlash(filepath.Clean(directoryPath)),
+			TypeTag: tags.PropertyTypeTag(propValue),
+			Text:    filepath.ToSlash(file.Path),
+		})
+	}
+	return props
+}
+
 func (s *scraperImpl) mediaPropsForPath(
 	path string,
 	roots []string,
 	availableDirs map[string]map[string]string,
+	isContainerTarget bool,
 ) []database.MediaProperty {
-	// Artwork filenames are derived from the root that actually contains the
-	// game (its home root); the same relative names are then searched under
-	// every root's media/ dir so art can live on a different drive than the rom.
-	var fallbackNames []string
-	for _, root := range roots {
-		if names := esmedia.ArtworkFallbackNames(path, root); len(names) > 0 {
-			fallbackNames = names
-			break
-		}
-	}
+	fallbackNames := artworkFallbackNames(path, roots, isContainerTarget)
 	if len(fallbackNames) == 0 {
 		return nil
 	}
@@ -337,6 +517,56 @@ func (s *scraperImpl) mediaPropsForPath(
 	return props
 }
 
+// containerIndexForMedia builds the directory-container view of a system's media
+// so artwork named after a disc folder can be matched to the file that folder
+// launches.
+func containerIndexForMedia(rows []database.MediaWithFullPath) *container.Index {
+	media := make([]database.Media, 0, len(rows))
+	for i := range rows {
+		media = append(media, database.Media{
+			DBID:           rows[i].DBID,
+			MediaTitleDBID: rows[i].MediaTitleDBID,
+			Path:           rows[i].Path,
+			ParentDir:      rows[i].ParentDir,
+			IsMissing:      rows[i].IsMissing,
+		})
+	}
+	return container.NewIndex(media)
+}
+
+func isContainerLaunchTarget(containers scraper.ContainerResolver, media *database.MediaWithFullPath) bool {
+	parent := media.ParentDir
+	if parent == "" {
+		parent = container.ParentDir(media.Path)
+	}
+	target := containers.Resolve(parent)
+	return target != nil && target.DBID == media.DBID
+}
+
+// artworkFallbackNames derives the artwork filenames to look for from the root
+// that actually contains the game (its home root); the same relative names are
+// then searched under every root's media/ dir so art can live on a different
+// drive than the rom. A file that is the single launch target of its directory
+// also answers to art named after that directory, which is how EmulationStation
+// stores art for a folder it shows as one game.
+func artworkFallbackNames(path string, roots []string, isContainerTarget bool) []string {
+	for _, root := range roots {
+		names := esmedia.ArtworkFallbackNames(path, root)
+		if len(names) == 0 {
+			continue
+		}
+		if isContainerTarget {
+			names = append(names, esmedia.ContainerArtworkFallbackNames(path, root)...)
+		}
+		return names
+	}
+	return nil
+}
+
+// deleteStaleLocalMediaProps drops properties this scraper wrote that a forced
+// rescrape no longer finds. Container-style names are always considered: a
+// directory that used to collapse to one game may since have gained nested
+// media, and its folder artwork still needs clearing.
 func (s *scraperImpl) deleteStaleLocalMediaProps(
 	ctx context.Context,
 	media *database.MediaWithFullPath,
@@ -358,7 +588,7 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 		if _, found := foundTypes[prop.TypeTag]; found {
 			continue
 		}
-		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots) {
+		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots, true) {
 			continue
 		}
 		if err := s.db.DeleteMediaProperty(ctx, media.DBID, prop.TypeTagDBID); err != nil {
@@ -370,7 +600,12 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 	return deleted, nil
 }
 
-func isLocalMediaPropForPath(prop *database.MediaProperty, mediaPath string, roots []string) bool {
+func isLocalMediaPropForPath(
+	prop *database.MediaProperty,
+	mediaPath string,
+	roots []string,
+	isContainerTarget bool,
+) bool {
 	propValue, ok := imagePropertyValue(prop.TypeTag)
 	if !ok || prop.Text == "" {
 		return false
@@ -380,15 +615,9 @@ func isLocalMediaPropForPath(prop *database.MediaProperty, mediaPath string, roo
 		return false
 	}
 
-	// Derive artwork names from the game's home root, then match the prop path
-	// against the media/ convention under any root (art may live cross-drive).
-	var fallbackNames []string
-	for _, root := range roots {
-		if names := esmedia.ArtworkFallbackNames(mediaPath, root); len(names) > 0 {
-			fallbackNames = names
-			break
-		}
-	}
+	// Match the prop path against the media/ convention under any root (art may
+	// live cross-drive), using the same names a scrape would have written.
+	fallbackNames := artworkFallbackNames(mediaPath, roots, isContainerTarget)
 	if len(fallbackNames) == 0 {
 		return false
 	}
@@ -417,4 +646,23 @@ func imagePropertyValue(typeTag string) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+// replaceDirectoryPropertiesUnlessScoped writes the system's folder-artwork
+// snapshot, and does nothing for a scoped run.
+//
+// ReplaceDirectoryProperties swaps the complete set for the system. A scoped
+// run only ever sees the directories of the media in its scope, so letting it
+// write would delete the folder artwork of every directory it did not look at.
+func (s *scraperImpl) replaceDirectoryPropertiesUnlessScoped(
+	ctx context.Context, opts scraper.ScrapeOptions, systemDBID int64,
+	props []database.DirectoryProperty,
+) error {
+	if opts.Scope != nil {
+		return nil
+	}
+	if _, err := s.db.ReplaceDirectoryProperties(ctx, systemDBID, props); err != nil {
+		return fmt.Errorf("localmedia: replace directory properties: %w", err)
+	}
+	return nil
 }

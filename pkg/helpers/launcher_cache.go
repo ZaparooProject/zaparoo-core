@@ -37,6 +37,7 @@ type LauncherCache struct {
 	availableBySystemID map[string][]platforms.Launcher
 	allLaunchers        []platforms.Launcher
 	launchableSystems   []launchables.VirtualSystem
+	extraLaunchers      []platforms.Launcher
 	mu                  syncutil.RWMutex
 }
 
@@ -46,7 +47,13 @@ var GlobalLauncherCache = &LauncherCache{}
 // Initialize builds the launcher cache from platform launchers.
 // Optional extra launchers (e.g. the native-audio launcher) are appended after
 // deduplication. This should be called once at startup after custom launchers are loaded.
+// The extras are retained so Refresh can reapply them.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
+	lc.setExtraLaunchers(extra)
+	lc.rebuild(pl, cfg, extra)
+}
+
+func (lc *LauncherCache) rebuild(pl platforms.Platform, cfg *config.Instance, extra []platforms.Launcher) {
 	launchableSystems, launchableMedia := launchables.Available(cfg, pl)
 	all := pl.Launchers(cfg)
 	all = append(all, launchables.LaunchersFor(launchableSystems, launchableMedia)...)
@@ -165,6 +172,18 @@ func (lc *LauncherCache) setLaunchableSystems(systems []launchables.VirtualSyste
 	lc.launchableSystems = append([]launchables.VirtualSystem(nil), systems...)
 }
 
+func (lc *LauncherCache) setExtraLaunchers(extra []platforms.Launcher) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.extraLaunchers = append([]platforms.Launcher(nil), extra...)
+}
+
+func (lc *LauncherCache) getExtraLaunchers() []platforms.Launcher {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+	return append([]platforms.Launcher(nil), lc.extraLaunchers...)
+}
+
 // GetLauncherByID finds a launcher by its case-insensitive unique ID.
 // Returns nil if no launcher is found or IDs differing only by case make the lookup ambiguous.
 func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
@@ -190,12 +209,14 @@ func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
 	return match
 }
 
-// Refresh rebuilds the cache with updated launcher data.
+// Refresh rebuilds the cache with updated launcher data, reapplying the extra
+// launchers registered by Initialize. Without that, a refresh would drop every
+// launcher the platform cannot build itself and break control actions for it.
 // This can be called via API to refresh the cache without restarting.
 // During refresh, concurrent GetLaunchableSystems calls may briefly see no
 // virtual systems while the cache is rebuilt; they reappear after initialization.
 func (lc *LauncherCache) Refresh(pl platforms.Platform, cfg *config.Instance) {
-	lc.Initialize(pl, cfg)
+	lc.rebuild(pl, cfg, lc.getExtraLaunchers())
 }
 
 // ToRelativePath converts an absolute media path to a relative path with the

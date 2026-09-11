@@ -469,6 +469,22 @@ func TestLauncherRuntime_AltCoreResolved(t *testing.T) {
 	assert.Equal(t, "PSX2XCPU", runtime.MisterCore.Name)
 }
 
+func TestLauncherRuntime_RetroAchievementsReportsActiveCoreName(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_RA_Cores/Cores/SNES.rbf", Filename: "SNES.rbf",
+			ShortName: "SNES", MglName: "_RA_Cores/Cores/SNES",
+		},
+	})
+	cache.RegisterAltCore("RASNES", "_RA_Cores/Cores/SNES")
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "RASNES", SystemID: "SNES"})
+
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "RA_SNES", runtime.MisterCore.Name)
+}
+
 func TestLauncherRuntime_MissingCore(t *testing.T) {
 	withRBFCache(t, nil)
 
@@ -542,6 +558,49 @@ func TestSetCoreAvailability_MissingCoreIsUnavailableWithReason(t *testing.T) {
 	err := launchers[0].Availability(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "_Console/SNES")
+}
+
+// TestSetCoreAvailability_MissingAltCoreIsUnavailable covers the rule that
+// makes an ordered launchers.preference work: a launcher for a core family the
+// device does not have must report unavailable, even though launching it would
+// silently fall back to the system's stock core.
+func TestSetCoreAvailability_MissingAltCoreIsUnavailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+
+	err := launchers[0].Availability(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_LLAPI/SNES_LLAPI")
+}
+
+// TestSetCoreAvailability_InstalledAltCoreIsAvailable is the other half: once
+// the family's core is on the card the launcher reports available.
+func TestSetCoreAvailability_InstalledAltCoreIsAvailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+		{
+			Path: "/media/fat/_LLAPI/SNES_LLAPI_20260311.rbf", Filename: "SNES_LLAPI_20260311.rbf",
+			ShortName: "SNES_LLAPI", MglName: "_LLAPI/SNES_LLAPI",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
 }
 
 func TestSetCoreAvailability_NonCoreLauncherLeftAlone(t *testing.T) {
@@ -721,7 +780,7 @@ func TestScriptRunMode(t *testing.T) {
 func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 	t.Parallel()
 
-	if scriptIsActive() {
+	if scriptIsActive(context.Background()) {
 		t.Skip("MiSTer script already active")
 	}
 

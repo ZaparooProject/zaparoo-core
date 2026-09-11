@@ -26,6 +26,7 @@ import (
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
@@ -35,11 +36,47 @@ const (
 	melodySessionEncryptionKey   = "encryption_session"
 	melodySessionAuthStateKey    = "authentication_state"
 	melodySessionAuthDeadlineKey = "authentication_deadline"
+	melodySessionNotifQueueKey   = "notification_queue"
+	melodySessionSettleTimerKey  = "settle_timer"
+)
+
+const (
+	// webSocketSettleGrace bounds how long an optional-encryption session's
+	// transport mode may stay unknown. A client that negotiates encryption
+	// sends its first frame straight after the upgrade, so this only has to
+	// cover building that frame and one round trip. A client that never
+	// speaks is a notification listener (the CLI's -read and -pair waits, the
+	// TUI's listeners) and is settled as plaintext when the grace expires,
+	// because starving it of notifications forever is worse than the window
+	// this leaves open.
+	//
+	// Nothing distinguishes the two at the upgrade, so the value is a
+	// trade-off in both directions: longer leaves more room for a slow
+	// encrypted client, shorter delivers a listener's first notifications
+	// sooner. Queueing removes the cost of waiting — a listener loses nothing,
+	// it only waits — so the ceiling is what the shortest listener tolerates.
+	// The TUI's generate-database screen reconnects every 2s
+	// (mediaManagePollInterval), so the grace has to clear its whole budget
+	// with room to spare or that screen never sees an update.
+	webSocketSettleGrace = 750 * time.Millisecond
+	// webSocketPendingNotifLimit caps what one unsettled session may hold, so
+	// a burst during the grace window cannot grow without bound. Overflow
+	// drops the newest notification, matching the broker's own best-effort
+	// delivery.
+	webSocketPendingNotifLimit = 64
 )
 
 type webSocketAuthState string
 
 const (
+	// webSocketAuthUnsettled is the initial state when encryption is optional:
+	// the client may still negotiate an encrypted session on its first frame,
+	// so the transport mode is not known yet. Unlike webSocketAuthPending it
+	// does not arm the authentication deadline, because staying quiet is
+	// legitimate for a client that is never required to authenticate; the
+	// state instead resolves to plaintext after webSocketSettleGrace.
+	// Notifications broadcast while unsettled are queued, not written.
+	webSocketAuthUnsettled webSocketAuthState = "unsettled"
 	webSocketAuthPending   webSocketAuthState = "pending"
 	webSocketAuthPlaintext webSocketAuthState = "plaintext"
 	webSocketAuthEncrypted webSocketAuthState = "encrypted"
@@ -74,6 +111,116 @@ func startWebSocketAuthDeadline(session *melody.Session, timeout time.Duration) 
 		}
 	})
 	session.Set(melodySessionAuthDeadlineKey, timer)
+}
+
+// wsNotificationQueue holds notifications broadcast to a session whose
+// transport mode is not settled yet. Writing them in the clear would desync a
+// client that has already committed to an encrypted session, and dropping them
+// would starve a listener that never sends a frame, so they are held until the
+// mode is known and then either flushed in order or discarded.
+//
+// The flush happens under the lock so a broadcast arriving mid-flush cannot
+// overtake the notifications it was queued behind.
+type wsNotificationQueue struct {
+	pending [][]byte
+	mu      syncutil.Mutex
+	settled bool
+}
+
+// enqueue holds a notification while the transport mode is unknown. It reports
+// false once the mode is settled, which is the caller's signal to write
+// normally.
+func (q *wsNotificationQueue) enqueue(plaintext []byte) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.settled {
+		return false
+	}
+	if len(q.pending) >= webSocketPendingNotifLimit {
+		log.Warn().Msg("ws: dropping notification, unsettled session queue is full")
+		return true
+	}
+	q.pending = append(q.pending, append([]byte(nil), plaintext...))
+	return true
+}
+
+func getNotificationQueue(session *melody.Session) *wsNotificationQueue {
+	value, ok := session.Get(melodySessionNotifQueueKey)
+	if !ok {
+		return nil
+	}
+	queue, ok := value.(*wsNotificationQueue)
+	if !ok {
+		return nil
+	}
+	return queue
+}
+
+// settleWebSocketTransport records the session's transport mode and releases
+// the notifications queued while it was unknown: flushed in order for a
+// plaintext session, discarded for one that turned out to be encrypted.
+//
+// The whole transition happens under the queue's lock so the settle grace
+// expiring cannot race an encrypted first frame into publishing the queue in
+// the clear, and so a broadcast arriving mid-flush cannot overtake the
+// notifications it was queued behind. onlyIfUnsettled is how the grace timer
+// stands down when the client has spoken in the meantime.
+func settleWebSocketTransport(session *melody.Session, state webSocketAuthState, onlyIfUnsettled bool) {
+	queue := getNotificationQueue(session)
+	if queue == nil {
+		if onlyIfUnsettled && getWebSocketAuthState(session) != webSocketAuthUnsettled {
+			return
+		}
+		setWebSocketAuthState(session, state)
+		stopWebSocketSettleGrace(session)
+		return
+	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if onlyIfUnsettled && queue.settled {
+		return
+	}
+	pending := queue.pending
+	queue.pending = nil
+	queue.settled = true
+	setWebSocketAuthState(session, state)
+	stopWebSocketSettleGrace(session)
+	if state != webSocketAuthPlaintext {
+		return
+	}
+	for _, plaintext := range pending {
+		if err := session.Write(plaintext); err != nil {
+			logWSWriteError(err, "flushing queued notifications")
+			return
+		}
+	}
+}
+
+// startWebSocketSettleGrace settles a silent session as plaintext once the
+// grace expires, so a client that only ever listens still gets notifications.
+func startWebSocketSettleGrace(session *melody.Session, grace time.Duration) {
+	if getWebSocketAuthState(session) != webSocketAuthUnsettled {
+		return
+	}
+	timer := time.AfterFunc(grace, func() {
+		if getWebSocketAuthState(session) != webSocketAuthUnsettled {
+			return
+		}
+		log.Debug().Msg("ws: no client frame within settle grace, treating session as plaintext")
+		settleWebSocketTransport(session, webSocketAuthPlaintext, true)
+	})
+	session.Set(melodySessionSettleTimerKey, timer)
+}
+
+func stopWebSocketSettleGrace(session *melody.Session) {
+	value, ok := session.Get(melodySessionSettleTimerKey)
+	if !ok {
+		return
+	}
+	if timer, ok := value.(*time.Timer); ok {
+		timer.Stop()
+	}
 }
 
 func stopWebSocketAuthDeadline(session *melody.Session) {

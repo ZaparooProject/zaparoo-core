@@ -225,6 +225,7 @@ func NewHeroicLauncher(opts HeroicOptions) platforms.Launcher {
 
 	return platforms.Launcher{
 		ID: "Heroic", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeHeroic},
+		Test:      shared.SchemeIDTest(shared.SchemeHeroic),
 		Lifecycle: platforms.LifecycleBlocking,
 		Availability: func(*config.Instance) error {
 			_, err := resolve()

@@ -33,6 +33,7 @@ var (
 	ErrNoActiveMedia         = errors.New("no active media")
 	ErrNoLauncher            = errors.New("no launcher associated with active media")
 	ErrNoControlCapabilities = errors.New("no control capabilities")
+	ErrNoLauncherCache       = errors.New("launcher cache not available")
 )
 
 //nolint:gocritic // single-use parameter in command handler
@@ -55,13 +56,13 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, ErrNoLauncher
 	}
 
-	var launcher *platforms.Launcher
-	for _, l := range pl.Launchers(env.Cfg) {
-		if l.ID == launcherID {
-			launcher = &l
-			break
-		}
+	// Resolve through the launcher cache, not pl.Launchers: launchers built at
+	// service startup rather than by the platform, such as native audio, only
+	// exist in the cache. The API control path resolves the same way.
+	if env.LauncherCache == nil {
+		return platforms.CmdResult{}, ErrNoLauncherCache
 	}
+	launcher := env.LauncherCache.GetLauncherByID(launcherID)
 	if launcher == nil {
 		return platforms.CmdResult{}, fmt.Errorf("launcher not found: %s", launcherID)
 	}

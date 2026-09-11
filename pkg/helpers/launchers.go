@@ -116,6 +116,10 @@ func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (plat
 		AllowListOnly: v.Restricted,
 		Lifecycle:     lifecycle,
 		Controls:      parseCustomControls(v.Controls),
+		// An entry with no backend has nothing to run. Validation only lets
+		// one through when it names a system and media dirs, so it exists to
+		// widen that system's media and defers launching to a real launcher.
+		ScanOnly: executeCmd == "" && v.Backend == "" && systemID != "",
 	}
 
 	if executeCmd != "" {
@@ -218,4 +222,54 @@ func ParseCustomLaunchers(
 			Msg("some custom launchers were skipped due to errors")
 	}
 	return launchers
+}
+
+// CombineLaunchers assembles the launcher list a platform reports from its
+// built-in launchers and the user's custom ones. Every platform returns through
+// this, so the launcher cache and the code reading pl.Launchers directly never
+// see different lists.
+func CombineLaunchers(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	builtIn []platforms.Launcher,
+) []platforms.Launcher {
+	return CombineParsedLaunchers(ParseCustomLaunchers(pl, cfg.CustomLaunchers()), builtIn)
+}
+
+// CombineParsedLaunchers is CombineLaunchers for platforms that already parsed
+// their custom launchers, because they feed them to the emulator integrations
+// as the set of IDs those must not redefine.
+func CombineParsedLaunchers(custom, builtIn []platforms.Launcher) []platforms.Launcher {
+	custom = FilterConflictingLaunchers(custom, builtIn)
+	combined := make([]platforms.Launcher, 0, len(custom)+len(builtIn))
+	combined = append(combined, custom...)
+	combined = append(combined, builtIn...)
+	return combined
+}
+
+// FilterConflictingLaunchers drops custom launchers whose ID matches a built-in
+// one. Launcher IDs are the handle for launch overrides, controls and the
+// launcher advanced argument, so a duplicate makes those resolve to whichever
+// entry happens to come first, and shadows a launcher that can actually launch
+// with one that usually cannot.
+func FilterConflictingLaunchers(custom, builtIn []platforms.Launcher) []platforms.Launcher {
+	if len(custom) == 0 || len(builtIn) == 0 {
+		return custom
+	}
+
+	taken := make(map[string]string, len(builtIn))
+	for i := range builtIn {
+		taken[strings.ToLower(builtIn[i].ID)] = builtIn[i].ID
+	}
+
+	kept := make([]platforms.Launcher, 0, len(custom))
+	for i := range custom {
+		if existing, conflict := taken[strings.ToLower(custom[i].ID)]; conflict {
+			log.Error().Str("id", custom[i].ID).Str("existingLauncher", existing).
+				Msg("ignoring custom launcher: id is already used by a built-in launcher")
+			continue
+		}
+		kept = append(kept, custom[i])
+	}
+	return kept
 }

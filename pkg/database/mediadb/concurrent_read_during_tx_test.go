@@ -46,7 +46,7 @@ func TestFindSystemBySystemID_ConcurrentDuringIndexingTransaction(t *testing.T) 
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())

@@ -19,16 +19,20 @@
 
 package titles
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
+)
 
 // reMultiSpace normalizes multiple consecutive spaces to a single space
 var reMultiSpace = regexp.MustCompile(`\s+`)
 
 const (
 	// Fuzzy matching thresholds
-	MinSlugLengthForFuzzy   = 5
-	FuzzyMatchMaxLengthDiff = 2
-	FuzzyMatchMinSimilarity = 0.85
+	MinSlugLengthForFuzzy   = matcher.MinSlugLengthForFuzzy
+	FuzzyMatchMaxLengthDiff = matcher.FuzzyMatchMaxLengthDiff
+	FuzzyMatchMinSimilarity = matcher.FuzzyMatchMinSimilarity
 
 	// Confidence thresholds for result selection
 	ConfidenceHigh       = 0.95 // Exact match with perfect/near-perfect tags - immediate return

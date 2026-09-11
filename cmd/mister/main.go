@@ -208,7 +208,7 @@ func run() error {
 	}
 
 	// try to auto-start service if it's not running already
-	running, runningErr := svc.Running()
+	running, runningErr := svc.RunningForAutoStart()
 	if runningErr != nil {
 		return fmt.Errorf("error checking service status: %w", runningErr)
 	}

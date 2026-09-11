@@ -438,6 +438,57 @@ func TestRBFCache_Resolve_RetroAchievementsAltCore(t *testing.T) {
 	assert.Equal(t, "_RA_Cores/Cores/NES", got.MglName)
 }
 
+func TestResolveLauncherStrict_MissingAltCoreDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+	cache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	// ResolveLauncher reports what a launch would actually load, which is the
+	// stock core. Strict resolution must not, or every uninstalled alt core
+	// family looks installed.
+	got, ok := cache.ResolveLauncher(nil, "LLAPISNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+
+	_, ok = cache.ResolveLauncherStrict(nil, "LLAPISNES", "SNES")
+	assert.False(t, ok)
+}
+
+func TestResolveLauncherStrict_InstalledAltCoreResolves(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+		{
+			Path:      "/media/fat/_LLAPI/SNES_LLAPI_20240101.rbf",
+			ShortName: "SNES_LLAPI", MglName: "_LLAPI/SNES_LLAPI",
+		},
+	})
+	cache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	got, ok := cache.ResolveLauncherStrict(nil, "LLAPISNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_LLAPI/SNES_LLAPI", got.MglName)
+}
+
+func TestResolveLauncherStrict_StockLauncherStillResolves(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	got, ok := cache.ResolveLauncherStrict(nil, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+}
+
 func TestRBFCache_Resolve_AltCoreFallsBackToSystemID(t *testing.T) {
 	t.Parallel()
 

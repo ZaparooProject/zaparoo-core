@@ -42,7 +42,7 @@ func TestWALCheckpointing(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := tempDir + "/test.db"
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())
@@ -181,7 +181,7 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 	ctx := context.Background()
 
 	// Create in-memory database with the same connection parameters as production
-	sqlDB, err := sql.Open("sqlite3", ":memory:"+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), ":memory:"+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())
@@ -260,7 +260,7 @@ func TestWALSizeManagement(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := tempDir + "/test.db"
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, sqlDB.Close())

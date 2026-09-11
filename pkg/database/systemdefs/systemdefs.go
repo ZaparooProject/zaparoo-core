@@ -309,6 +309,7 @@ const (
 	SystemAtomiswave          = "Atomiswave"
 	SystemArduboy             = "Arduboy"
 	SystemChip8               = "Chip8"
+	SystemCave68000           = "Cave68000"
 	SystemCPS1                = "CPS1"
 	SystemCPS2                = "CPS2"
 	SystemCPS3                = "CPS3"
@@ -1579,6 +1580,11 @@ var Systems = map[string]System{
 	SystemJ2ME: {
 		ID:    SystemJ2ME,
 		Slugs: []string{"javame", "javamobile", "mobilephone"},
+	},
+	SystemCave68000: {
+		ID:        SystemCave68000,
+		Slugs:     []string{"cave", "cave68k"},
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemCPS1: {
 		ID:        SystemCPS1,

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -80,6 +81,24 @@ func TestCommandExecuteSucceeds(t *testing.T) {
 	assert.Equal(t, "succeeded", result.Status)
 }
 
+func TestCommandAcceptsWindowsDrivePath(t *testing.T) {
+	called := false
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			called = true
+			return nil
+		},
+	}}
+
+	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"C:/Games/Sonic.md"}`))
+
+	assert.Equal(t, "succeeded", result.Status)
+	assert.True(t, called)
+}
+
 // TestCommandClassifiesRunZapScriptErrors pins how executeCommand maps every
 // RunZapScript error it recognizes to a stable remote result code; anything
 // unrecognized falls back to a generic execution_failed rather than leaking
@@ -125,6 +144,46 @@ func TestCommandClassifiesRunZapScriptErrors(t *testing.T) {
 	}
 }
 
+func TestCommandDoesNotStartAfterExecutionLeaseExpires(t *testing.T) {
+	called := false
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			called = true
+			return nil
+		},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := m.executeCommand(ctx, "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+
+	assert.False(t, called)
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "execution_timeout", result.ErrorCode)
+}
+
+func TestCommandCancelsRunningZapScriptAtExecutionDeadline(t *testing.T) {
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			ctx context.Context, _ tokens.Token, _ playlists.PlaylistController,
+			_ *gozapscript.ArgExprEnv, _ bool,
+		) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	result := m.executeCommand(ctx, "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "execution_timeout", result.ErrorCode)
+}
+
 func TestCommandExecuteRejectsMalformedParams(t *testing.T) {
 	t.Parallel()
 	m := &manager{}
@@ -164,19 +223,37 @@ func TestBuildStructuralCommandRejectsMalformedAdvancedArgs(t *testing.T) {
 }
 
 // TestCommandRejectsURLValueForAllStructuralVerbs pins that none of the
-// three remote structural verbs accept a URL-shaped value: a system ID,
-// media path, or script name is never legitimately one. This is
-// defense-in-depth alongside RunCommand skipping ZapLink resolution
-// entirely for remote-sourced tokens (pkg/zapscript/commands_test.go); it
-// gives a clean bad_params error instead of a downstream failure, and used
-// to only apply to "launch".
+// three remote structural verbs accept a value carrying any URL scheme: a
+// system ID, media path, or script name is never legitimately one, and the
+// launch command would install-fetch http(s) and smb URLs onto the device.
+// The check mirrors the Online API's own (any scheme, anywhere in the
+// value) so a bypassed API still can't reach the fetch path, and gives a
+// clean bad_params error instead of a downstream failure.
 func TestCommandRejectsURLValueForAllStructuralVerbs(t *testing.T) {
 	t.Parallel()
 	for _, operationType := range []string{"launch", "launch.system", "mister.script"} {
-		m := &manager{}
-		result := m.executeCommand(
-			context.Background(), operationType, json.RawMessage(`{"value":"https://example.com/game.zip"}`))
-		assert.Equal(t, "bad_params", result.ErrorCode, operationType)
+		for _, value := range []string{
+			"https://example.com/game.zip",
+			"smb://nas/share/game.sfc?system=SNES",
+			"FTP://example.com/game.zip",
+			"file:/media/game.sfc",
+			"mailto:user@example.com",
+			"https:opaque",
+			"Genesis/Sonic.md?launcher=x&url=http://example.com",
+		} {
+			called := false
+			m := &manager{deps: Deps{RunZapScript: func(
+				context.Context, tokens.Token, playlists.PlaylistController,
+				*gozapscript.ArgExprEnv, bool,
+			) error {
+				called = true
+				return nil
+			}}}
+			result := m.executeCommand(
+				context.Background(), operationType, json.RawMessage(`{"value":"`+value+`"}`))
+			assert.Equal(t, "bad_params", result.ErrorCode, "%s: %s", operationType, value)
+			assert.False(t, called, "%s reached RunZapScript: %s", operationType, value)
+		}
 	}
 }
 
@@ -204,8 +281,14 @@ func TestValidCommandValueRejectsZapScriptInjection(t *testing.T) {
 		assert.False(t, validCommandValue(value), value)
 	}
 	assert.True(t, validCommandValue("Genesis/Sonic.md?launcher=default"))
-	assert.True(t, isURLLaunch("https://example.com/game.zip?launcher=x"))
-	assert.False(t, isURLLaunch("Genesis/Sonic.md?launcher=x"))
+	assert.True(t, containsURLScheme("https://example.com/game.zip?launcher=x"))
+	assert.True(t, containsURLScheme("smb://nas/share/game.sfc"))
+	assert.True(t, containsURLScheme("file:/media/game.sfc"))
+	assert.True(t, containsURLScheme("mailto:user@example.com"))
+	assert.True(t, containsURLScheme("https:opaque"))
+	assert.False(t, containsURLScheme("Genesis/Sonic.md?launcher=x"))
+	assert.False(t, containsURLScheme("C:/Games/Sonic.md"), "a drive letter is not a URL scheme")
+	assert.False(t, containsURLScheme(`C:\\Games\\Sonic.md`), "a backslash drive path is not a URL scheme")
 }
 
 func FuzzBuildStructuralCommand(f *testing.F) {

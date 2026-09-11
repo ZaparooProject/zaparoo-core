@@ -109,6 +109,8 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	// Unknown must remain true in the response so clients do not suppress a
 	// valid image request merely because optional enrichment timed out.
 	coverStatusesKnown := false
+	var tagsByID map[int64][]database.TagInfo
+	tagsKnown := false
 	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
 	defer cancelEnrichment()
 
@@ -116,30 +118,12 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if enrichErr != nil {
 		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
 	} else {
-		resolvedMediaIDs := make(map[mediaPathRef]int64, len(mediaRows))
-		coverRefs := make([]database.MediaCoverRef, 0, len(mediaRows))
-		seenIDs := make(map[int64]struct{}, len(mediaRows))
-		for _, ref := range mediaRefs {
-			row := mediaRows[ref]
-			if row.DBID <= 0 {
-				continue
-			}
-			resolvedMediaIDs[ref] = row.DBID
-			if _, ok := seenIDs[row.DBID]; ok {
-				continue
-			}
-			seenIDs[row.DBID] = struct{}{}
-			coverRefs = append(coverRefs, database.MediaCoverRef{
-				MediaDBID:      row.DBID,
-				MediaTitleDBID: row.MediaTitleDBID,
-			})
-		}
-
-		mediaIDs = resolvedMediaIDs
-		if len(coverRefs) == 0 {
+		var resolvedRefs []database.MediaRef
+		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
+		if len(resolvedRefs) == 0 {
 			coverStatusesKnown = true
 		} else {
-			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, coverRefs)
+			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, resolvedRefs)
 			if coverErr != nil {
 				log.Debug().Err(coverErr).Msg("could not enrich media history cover status")
 			} else {
@@ -147,6 +131,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 				coverStatusesKnown = true
 			}
 		}
+		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
 	}
 	enrichElapsed := time.Since(enrichStarted)
 
@@ -180,11 +165,13 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			StartedAt:  startedAt,
 			EndedAt:    endedAt,
 			PlayTime:   entry.PlayTime,
+			Tags:       mediaEntryTags(tagsKnown, mediaID, tagsByID),
 		})
 	}
 
 	log.Debug().
 		Int("entries", len(responseEntries)).
+		Int("taggedMedia", len(tagsByID)).
 		Bool("distinctMedia", distinctMedia).
 		Dur("queryDuration", queryElapsed).
 		Dur("enrichDuration", enrichElapsed).

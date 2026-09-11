@@ -29,7 +29,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
-//go:embed _app
+// Raw app files stay outside the embed tree; the placeholder permits app-less builds.
+//
+//go:generate go run ../../scripts/compress-app -source _app/dist -output _app/packed/dist
+//go:embed _app/packed
 var App embed.FS
 
 // SuccessSound by Tim Wilsie (timwilsie.com).

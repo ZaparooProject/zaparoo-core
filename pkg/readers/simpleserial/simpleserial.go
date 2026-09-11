@@ -32,15 +32,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
 
 type SimpleSerialReader struct {
-	port        testutils.SerialPort
-	portFactory testutils.SerialPortFactory
+	port        serialport.SerialPort
+	portFactory serialport.SerialPortFactory
 	cfg         *config.Instance
 	lastToken   *tokens.Token
 	device      config.ReadersConnect
@@ -53,7 +53,7 @@ type SimpleSerialReader struct {
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
 		cfg:         cfg,
-		portFactory: testutils.DefaultSerialPortFactory,
+		portFactory: serialport.DefaultSerialPortFactory,
 		removable:   true, // default to removable unless explicitly set to no
 	}
 }
@@ -123,7 +123,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 }
 
 func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
-	if !helpers.Contains(r.IDs(), device.Driver) {
+	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 

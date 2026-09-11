@@ -46,14 +46,19 @@ const zapLinkHostExpiration = 30 * 24 * time.Hour
 
 const userDBBackupMaxAge = 24 * time.Hour
 
-// mediaDBSchemaReset reports that the media database was discarded because its
-// schema was newer than this build supports.
+// mediaDBSchemaReset reports that the media database was discarded, either
+// because its schema was newer than this build supports or because the file was
+// corrupt.
 type mediaDBSchemaReset struct {
 	// userDataLost is set when favorites or launcher overrides that existed only in
 	// the discarded database could not be read out of it, or could not all be written
 	// to the user database. No reindex can rebuild them and nothing else holds a copy,
 	// so the user is told rather than left to notice on their own.
 	userDataLost bool
+	// corrupt distinguishes a malformed file from a downgrade. The rebuild is the
+	// same; what the user is told is not, and "you went back a version" is actively
+	// misleading when nobody changed versions.
+	corrupt bool
 }
 
 func setupEnvironment(pl platforms.Platform) error {
@@ -125,6 +130,9 @@ func makeDatabase(
 	log.Debug().Msg("running media database migrations")
 	var reset *mediaDBSchemaReset
 	err = mediaDB.MigrateUp()
+	// Asked once, before the switch: NoteCorruption writes the marker as a side
+	// effect, so it must not be re-evaluated per branch.
+	mediaCorrupt := err != nil && (mediaDB.NoteCorruption(err) || mediaDB.IsMarkedCorrupt())
 	switch {
 	case errors.Is(err, database.ErrSchemaAhead):
 		// A newer build migrated this file and the device has since gone back to
@@ -158,6 +166,39 @@ func makeDatabase(
 		if resetErr := resetMediaDBForNewerSchema(mediaDB); resetErr != nil {
 			return db, nil, fmt.Errorf("rebuilding media database with a newer schema: %w", resetErr)
 		}
+	case mediaCorrupt:
+		// The file is malformed. There is a recovery path for corruption found
+		// once the database is open (index_resume.go), but corruption bad enough
+		// to fail the migration check never reaches it: startup returns here, and
+		// the next boot fails in exactly the same place. That leaves a device that
+		// cannot start Core at all over a file a reindex reproduces from the
+		// filesystem, which is the outcome the schema-ahead branch above exists to
+		// avoid. Rebuild for the same reason.
+		//
+		// Only genuine SQLite corruption takes this branch. NoteCorruption is what
+		// decides that, so a transient open failure still ends startup rather than
+		// discarding a database that was fine.
+		log.Warn().Err(err).Msg("media database is corrupt, rebuilding it")
+		reset = &mediaDBSchemaReset{corrupt: true}
+		// Best-effort: the rescue reads from the corrupt file, so it may well fail.
+		// A partial read is still worth having, and failure is reported rather than
+		// assumed harmless.
+		rescued, rescueErr := rescueMediaUserData(ctx, mediaDB)
+		switch {
+		case rescueErr != nil:
+			log.Error().Err(rescueErr).
+				Msg("could not read media user data out of the corrupt media database")
+			reset.userDataLost = true
+		case len(rescued) > 0:
+			if importErr := backfillMediaUserData(ctx, db, rescued); importErr != nil {
+				log.Error().Err(importErr).
+					Msg("could not import media user data rescued from the corrupt media database")
+				reset.userDataLost = true
+			}
+		}
+		if resetErr := resetMediaDBForCorruption(mediaDB); resetErr != nil {
+			return db, nil, fmt.Errorf("rebuilding corrupt media database: %w", resetErr)
+		}
 	case err != nil:
 		return db, nil, fmt.Errorf("error migrating mediadb: %w", err)
 	}
@@ -177,8 +218,47 @@ func makeDatabase(
 		log.Warn().Err(err).Msg("failed to backfill media user data into the user database")
 	}
 
+	repairBrowseSortIndex(mediaDB)
+
 	success = true
 	return db, reset, nil
+}
+
+// repairBrowseSortIndex rebuilds the browse sort index off the startup path if
+// it predates the title collation.
+//
+// It is a database this build can read and query correctly, so there is nothing
+// to keep the user waiting for; what it cannot do is serve a browse ORDER BY
+// from that index, which makes every page of a large folder read and sort the
+// whole folder. Rebuilding takes minutes on a large library on SD, so it runs in
+// the background and reports itself in the log rather than delaying startup.
+//
+// An interrupted index is left alone. It resumes shortly after this point, and a
+// full run drops the secondary indexes to keep bulk inserts fast and recreates
+// them at the end — including this one, correctly. Rebuilding here would race
+// that drop and slow the run down for no gain.
+func repairBrowseSortIndex(mediaDB *mediadb.MediaDB) {
+	if activeMediaWriteOperation(mediaDB) != database.MediaWriteOperationNone {
+		return
+	}
+	status, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		// The persisted status is the only thing that knows about an index
+		// interrupted in a previous run; HasBackgroundOperations does not see
+		// it until GenerateMediaDB registers its goroutine. Not knowing means
+		// not rebuilding, or this races the secondary-index drop of a resuming
+		// full run.
+		log.Warn().Err(err).Msg("skipping browse sort index check: indexing status unavailable")
+		return
+	}
+	if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
+		return
+	}
+	go func() {
+		if err := mediaDB.EnsureBrowseSortIndex(); err != nil {
+			log.Warn().Err(err).Msg("failed to rebuild the browse sort index; browsing large folders stays slow")
+		}
+	}()
 }
 
 // rescueMediaUserData reads the favorites and launcher overrides out of a media
@@ -216,10 +296,32 @@ func resetMediaDBForNewerSchema(mediaDB *mediadb.MediaDB) error {
 	return nil
 }
 
+// resetMediaDBForCorruption replaces a malformed media database with an empty
+// one at this build's schema, left marked pending so the startup resume check
+// reindexes it. Recreate clears the corrupt marker as part of the handoff, so
+// the next boot does not treat the fresh file as the corrupt one.
+//
+// A forensic copy is kept where the build allows it: unlike a downgrade, the
+// cause here is not known, and the file is the only evidence of what went wrong.
+func resetMediaDBForCorruption(mediaDB *mediadb.MediaDB) error {
+	log.Warn().Strs("integrity", mediaDB.IntegrityReport()).
+		Msg("media database integrity report before rebuild")
+	if err := mediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
+		return fmt.Errorf("recreating corrupt media database: %w", err)
+	}
+	// As in resetMediaDBForNewerSchema: Recreate's reopen allocates the schema,
+	// but seeding planner statistics for the reindex about to start only happens
+	// through MigrateUp.
+	if err := mediaDB.MigrateUp(); err != nil {
+		return fmt.Errorf("migrating rebuilt media database: %w", err)
+	}
+	return nil
+}
+
 // notifyMediaDBSchemaReset tells the user why their media is being indexed
 // again. makeDatabase discards the database before the inbox service exists, so
 // the message is posted from Start once it does.
-func notifyMediaDBSchemaReset(st *state.State, userDataLost bool) {
+func notifyMediaDBSchemaReset(st *state.State, userDataLost, corrupt bool) {
 	if st == nil {
 		return
 	}
@@ -228,18 +330,34 @@ func notifyMediaDBSchemaReset(st *state.State, userDataLost bool) {
 		log.Warn().Msg("inbox unavailable, cannot report media database rebuild")
 		return
 	}
+	title := "Media database was rebuilt after a version change"
 	body := "This version of Zaparoo is older than the one that last ran and could not read " +
 		"the media database it left behind. The database has been rebuilt and your media is being " +
 		"indexed again. Re-scrape your library to restore box art and metadata."
+	if corrupt {
+		// Nobody changed versions here, so the downgrade wording would send the
+		// user looking for a cause that does not exist. Corruption is a storage
+		// fault, and the SD card is the thing worth their attention.
+		title = "Media database was rebuilt after damage was found"
+		body = "Zaparoo found damage in its media database and could not read it. The database " +
+			"has been rebuilt and your media is being indexed again. Re-scrape your library to " +
+			"restore box art and metadata. If this keeps happening, check the device's storage."
+	}
 	if userDataLost {
 		// The rescue is the only thing that could have saved these, and it did not.
 		// A reindex will not bring them back, so say so plainly.
 		// A failed read cannot tell an empty database from one full of favorites, so
 		// this hedges rather than telling someone who had none that they lost some.
-		body += " Favorites and launcher overrides set before this device last updated may " +
+		// "before this device last updated" is only true of a downgrade; on the
+		// corruption path nothing updated, so say when they were set instead.
+		when := "before this device last updated"
+		if corrupt {
+			when = "before the database was rebuilt"
+		}
+		body += " Favorites and launcher overrides set " + when + " may " +
 			"not have been carried across, and may need to be set again."
 	}
-	if err := inboxSvc.Add("Media database was rebuilt after a version change",
+	if err := inboxSvc.Add(title,
 		inbox.WithBody(body),
 		inbox.WithSeverity(inbox.SeverityWarning),
 		inbox.WithCategory(inbox.CategoryMediaDBSchemaReset),

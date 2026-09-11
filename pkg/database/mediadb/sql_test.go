@@ -382,6 +382,41 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	return mediaDB, db
 }
 
+// Truncate deletes Tags and TagTypes, so it has to drop the vocabulary stamp
+// with them. Leaving the stamp behind makes sqlSeedCanonicalTags short-circuit
+// on the next index run and the vocabulary is never re-seeded into the now
+// empty tables — the same reasoning invalidateCanonicalTagVocabStampIfDeleted
+// already applies after an orphan-tag cleanup.
+func TestSqlTruncate_ClearsCanonicalTagVocabStamp(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.MigrateUp())
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	var stamped int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DBConfig WHERE Name = ?", DBConfigCanonicalTagVocabHash,
+	).Scan(&stamped))
+	require.Equal(t, 1, stamped, "seeding must record the vocabulary stamp")
+
+	require.NoError(t, mediaDB.Truncate())
+
+	var tagsLeft, stampLeft int
+	require.NoError(t, sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags").Scan(&tagsLeft))
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DBConfig WHERE Name = ?", DBConfigCanonicalTagVocabHash,
+	).Scan(&stampLeft))
+
+	assert.Zero(t, tagsLeft, "truncate removes the vocabulary rows")
+	assert.Zero(t, stampLeft, "so the stamp describing them must go too")
+}
+
 func TestSqlTruncateSystems_EmptyList(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)

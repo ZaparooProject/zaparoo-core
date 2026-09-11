@@ -72,3 +72,27 @@ func TestServiceUnitsDeclineToRestartOnTheUnrecoverableStatus(t *testing.T) {
 			"%s: empty RestartPreventExitStatus", path)
 	}
 }
+
+// The status only reaches a supervisor if the entrypoint returns it. Every
+// platform whose installed unit declines to restart on ExitUnrecoverable has to
+// map the error through ExitCodeFor; a main that exits 1 unconditionally puts
+// the restart loop back while the unit still claims to prevent it.
+//
+// cmd/steamos installs the same unit as cmd/linux, through
+// pkg/platforms/linux/installer, and exited 1 for every startup failure.
+func TestSupervisedEntrypointsMapTheUnrecoverableStatus(t *testing.T) {
+	t.Parallel()
+
+	entrypoints := []string{
+		filepath.Join("..", "..", "cmd", "linux", "main.go"),
+		filepath.Join("..", "..", "cmd", "replayos", "main.go"),
+		filepath.Join("..", "..", "cmd", "steamos", "main.go"),
+	}
+
+	for _, path := range entrypoints {
+		data, err := os.ReadFile(path) //nolint:gosec // repository-relative test fixture
+		require.NoError(t, err, "entrypoint should be readable")
+		assert.Contains(t, string(data), "os.Exit(cli.ExitCodeFor(err))",
+			"%s: startup errors must carry the unrecoverable status to the supervisor", path)
+	}
+}

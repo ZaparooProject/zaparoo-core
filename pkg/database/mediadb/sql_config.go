@@ -320,7 +320,7 @@ func sqlGetScrapingStatus(ctx context.Context, db *sql.DB) (string, error) {
 	return status, nil
 }
 
-func sqlSetScrapingOperation(ctx context.Context, db sqlQueryable, operation database.ScrapingOperation) error {
+func sqlSetScrapingOperation(ctx context.Context, db sqlQueryable, operation *database.ScrapingOperation) error {
 	operationJSON, err := json.Marshal(operation)
 	if err != nil {
 		return fmt.Errorf("failed to marshal scraping operation: %w", err)
@@ -351,6 +351,9 @@ func sqlGetScrapingOperation(ctx context.Context, db *sql.DB) (database.Scraping
 	var operation database.ScrapingOperation
 	if err := json.Unmarshal([]byte(operationJSON), &operation); err != nil {
 		return database.ScrapingOperation{}, false, fmt.Errorf("failed to unmarshal scraping operation: %w", err)
+	}
+	if err := operation.Validate(); err != nil {
+		return database.ScrapingOperation{}, true, fmt.Errorf("invalid stored scraping operation: %w", err)
 	}
 	return operation, true, nil
 }

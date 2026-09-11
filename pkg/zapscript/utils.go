@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -145,9 +146,9 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	execStr := env.Cmd.Args[0]
 
 	if env.Unsafe {
-		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
-	} else if !env.Cfg.IsExecuteAllowed(execStr) {
-		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
+		return platforms.CmdResult{}, ErrRemoteSource
+	} else if env.Source != tokens.SourceControl && !env.Cfg.IsExecuteAllowed(execStr) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrExecuteNotAllowed, execStr)
 	}
 
 	tokenArgs, splitErr := helpers.SplitCommand(execStr)
@@ -163,7 +164,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	ctx, cancel := context.WithTimeout(context.Background(), ExecuteTimeout)
 	defer cancel()
 
-	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
+	//nolint:gosec // Config-defined controls are trusted executable config; other sources require IsExecuteAllowed.
 	execCmd := exec.CommandContext(ctx, tokenArgs[0], tokenArgs[1:]...)
 
 	var stderr bytes.Buffer

@@ -34,10 +34,12 @@ const (
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationMediaScraping        = "media.scraping"
+	NotificationMediaVisibility      = "media.visibility"
 	NotificationTokensStaged         = "tokens.staged"
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+	NotificationPlaytimeExtended     = "playtime.extended"
 	NotificationInboxAdded           = "inbox.added"
 	NotificationClientsPaired        = "clients.paired"
 	NotificationProfilesActive       = "profiles.active"
@@ -59,6 +61,11 @@ const (
 const (
 	PlaytimeLimitReasonSession = "session"
 	PlaytimeLimitReasonDaily   = "daily"
+
+	// PlaytimeExtendModeDuration adds time to the current session.
+	PlaytimeExtendModeDuration = "duration"
+	// PlaytimeExtendModeToday waives the session limit until midnight.
+	PlaytimeExtendModeToday = "today"
 )
 
 type UIEventKind string
@@ -113,6 +120,7 @@ const (
 	MethodMediaHistoryLatest          = "media.history.latest"
 	MethodMediaHistoryTop             = "media.history.top"
 	MethodMediaLookup                 = "media.lookup"
+	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
 	MethodScrapers                    = "scrapers"
@@ -141,6 +149,7 @@ const (
 	MethodPlaytimeLimits              = "settings.playtime.limits"
 	MethodPlaytimeLimitsUpdate        = "settings.playtime.limits.update"
 	MethodPlaytime                    = "playtime"
+	MethodPlaytimeExtend              = "playtime.extend"
 	MethodClients                     = "clients"
 	MethodClientsCurrent              = "clients.current"
 	MethodClientsDelete               = "clients.delete"
@@ -244,6 +253,10 @@ type ErrorObject struct {
 	Code    int    `json:"code"`
 }
 
+// ResponseObject carries a method's successful result. Result has no
+// omitempty because JSON-RPC 2.0 §5 requires the key on success, so a method
+// with nothing to return sends "result": null. Void handlers express that with
+// methods.NoContent, which marshals itself as null.
 type ResponseObject struct {
 	Result  any          `json:"result"`
 	Error   *ErrorObject `json:"error,omitempty"`

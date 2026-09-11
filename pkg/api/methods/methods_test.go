@@ -25,6 +25,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -148,6 +150,7 @@ func TestHandleRunRestDecodesPath(t *testing.T) {
 			select {
 			case token := <-tokenQueue:
 				assert.Equal(t, tt.wantText, token.Text)
+				assert.Nil(t, token.Completion, "REST run stays fire-and-forget")
 			default:
 				t.Fatal("REST run handler did not send token to queue")
 			}
@@ -179,6 +182,37 @@ func TestHandleRunRestRejectsMalformedEscapedPath(t *testing.T) {
 	select {
 	case token := <-tokenQueue:
 		t.Fatalf("REST run handler queued malformed token: %q", token.Text)
+	default:
+	}
+}
+
+// The REST path hands its text to IsRunAllowed, which parses it, so the
+// length bound has to apply before that and before the token is queued.
+func TestHandleRunRestRejectsOversizedScript(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	tokenQueue := make(chan tokens.Token, 1)
+	router := chi.NewRouter()
+	router.Get("/run/*", HandleRunRest(&config.Instance{}, st, tokenQueue))
+
+	oversized := strings.Repeat("A", zapscript.MaxScriptLength+1)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/run/"+oversized, http.NoBody,
+	)
+	req.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	select {
+	case token := <-tokenQueue:
+		t.Fatalf("REST run handler queued an over-long token: %d bytes", len(token.Text))
 	default:
 	}
 }
@@ -769,6 +803,12 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockUserDB := &helpers.MockUserDBI{}
 			mockMediaDB := helpers.NewMockMediaDBI()
 
+			// Indexing re-applies the UserDB projection near the end of a run. It
+			// normally loses the race with the cancellation below, but when it
+			// wins, an unexpected call panics the whole test binary rather than
+			// failing this test (#1379).
+			mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+
 			// Persisted optimization state is restart intent, not process ownership.
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
@@ -811,6 +851,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
+			mockMediaDB.On("RunBackgroundOptimizationWithLease",
+				mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
 
@@ -855,7 +897,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Nil(t, result)
+			assert.Equal(t, NoContent{}, result)
 
 			// Cancel the background indexing goroutine and wait for it
 			// to finish so it doesn't leak into the next subtest.

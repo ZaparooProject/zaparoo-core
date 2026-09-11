@@ -79,7 +79,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(builtIn)), custom...), builtIn...)
 	builtIn = append(builtIn, linuxemu.Launchers(cfg, p.emulationOptions(), existing)...)
 	linuxemu.AttachPlainESDEScanners(cfg, p.emulationOptions(), builtIn)
-	return append(custom, builtIn...)
+	return helpers.CombineParsedLaunchers(custom, builtIn)
 }
 
 func (p *Platform) emulationOptions() linuxemu.Options {

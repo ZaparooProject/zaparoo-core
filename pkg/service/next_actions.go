@@ -37,6 +37,9 @@ const (
 	nextActionNone nextActionResult = iota
 	nextActionArmed
 	nextActionInvalid
+	// nextActionBlocked separates a configuration denial from a malformed
+	// next action so the API reports "blocked" rather than "invalid_script".
+	nextActionBlocked
 )
 
 // launchOverrideTTL bounds how long an armed one-shot launcher override waits
@@ -54,7 +57,7 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 
 	cmd := script.Cmds[0]
 	if svc.Config.IsCommandBlocked(cmd.Name) {
-		return nextActionInvalid
+		return nextActionBlocked
 	}
 	switch cmd.Name {
 	case gozapscript.ZapScriptCmdLaunch:

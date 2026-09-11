@@ -23,6 +23,7 @@ package windows
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -300,6 +301,23 @@ func TestLaunchBoxPipeServerRequestPlatformsNotConnected(t *testing.T) {
 
 	server := NewLaunchBoxPipeServer()
 	err := server.RequestPlatforms()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestLaunchBoxPipeServerRequestGamesForPlatformSyncNotConnected(t *testing.T) {
+	t.Parallel()
+
+	server := NewLaunchBoxPipeServer()
+	t.Cleanup(server.Stop)
+
+	_, err := server.RequestGamesForPlatformSync(context.Background(), "Nintendo Entertainment System")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+
+	// The request that never went out must not stay registered as in flight,
+	// or every later request would be refused as a duplicate.
+	_, err = server.RequestGamesForPlatformSync(context.Background(), "Nintendo Entertainment System")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }

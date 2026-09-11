@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -71,35 +72,18 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 func NewInMemoryMediaDB(tb testing.TB) (db *mediadb.MediaDB, cleanup func()) {
 	tb.Helper()
 
-	// Create temporary directory for test database
+	// Use the production MediaDB opener so tests get the same SQLite connection
+	// hooks, WAL settings, pool behavior, and migrations as runtime databases.
 	tempDir := tb.TempDir()
-	dbPath := filepath.Join(tempDir, "mediadb_test.db")
-
-	// Open SQLite database using temp file with foreign keys enabled and WAL
-	// journal mode. WAL matches the production database configuration and
-	// ensures CASCADE deletes work; it is also load-bearing for indexing
-	// tests specifically — the batched-transaction architecture reads the
-	// next system's state on a separate pool connection while the previous
-	// system's writer transaction is still open, which only works under WAL
-	// (a rollback journal's exclusive lock would deadlock that read), and
-	// NewNamesIndex now verifies journal_mode is "wal" before indexing.
-	sqlDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=ON&_journal_mode=WAL")
-	if err != nil {
-		tb.Fatalf("Failed to open test database: %v", err)
-	}
-
-	db = &mediadb.MediaDB{}
-	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
-	err = db.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: tempDir})
+
+	var err error
+	db, err = mediadb.OpenMediaDB(context.Background(), mockPlatform)
 	if err != nil {
-		if closeErr := sqlDB.Close(); closeErr != nil {
-			tb.Errorf("Failed to close SQL database after setup error: %v", closeErr)
-		}
 		tb.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
-	db.SetDBPathForTesting(dbPath)
 
 	cleanup = func() {
 		if err := db.Close(); err != nil {

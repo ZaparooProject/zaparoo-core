@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
@@ -45,6 +46,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 			Driver:   rc.Driver,
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
+			ScanMode: rc.ScanMode,
 		})
 	}
 
@@ -167,6 +169,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.SystemDefaults != nil {
 		var err error
 		systemDefaults, err = buildSystemDefaults(env.LauncherCache, *params.SystemDefaults)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var readerConnections []config.ReadersConnect
+	if params.ReadersConnect != nil {
+		var err error
+		readerConnections, err = buildReaderConnections(*params.ReadersConnect)
 		if err != nil {
 			return nil, err
 		}
@@ -324,21 +335,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersConnect != nil {
 		log.Debug().Int("count", len(*params.ReadersConnect)).Msg("updating readers.connect")
-		connections := make([]config.ReadersConnect, 0, len(*params.ReadersConnect))
-		for _, rc := range *params.ReadersConnect {
-			connections = append(connections, config.ReadersConnect{
-				Enabled:  rc.Enabled,
-				Driver:   rc.Driver,
-				Path:     rc.Path,
-				IDSource: rc.IDSource,
-			})
-		}
-		env.Config.SetReaderConnections(connections)
+		env.Config.SetReaderConnections(readerConnections)
 	}
 
 	if params.SystemDefaults != nil {
 		log.Debug().Int("count", len(*params.SystemDefaults)).Msg("updating systems.default")
-		env.Config.SetSystemDefaults(systemDefaults)
+		// Merged after the reload above so the entries carry the values on
+		// disk for the fields no client can send.
+		env.Config.SetSystemDefaults(
+			carryUnmodelledSystemDefaults(env.Config.SystemDefaults(), systemDefaults),
+		)
 	}
 
 	err := env.Config.Save()
@@ -388,6 +394,37 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	return resp, nil
 }
 
+// buildReaderConnections validates the API reader-connection payload and
+// converts it to config types.
+//
+// A config file tolerates an unrecognised scan_mode, because one typo must not
+// stop the whole file loading, and the value simply falls through to the next
+// level of the override chain. An API caller is told instead: it would
+// otherwise read its own bad value back from `settings` and see no sign that
+// the reader was ignoring it. Accepted values are stored canonically, so any
+// spelling a hand-edited config file holds survives a round trip through a
+// client that echoes the field back.
+func buildReaderConnections(in []models.ReaderConnection) ([]config.ReadersConnect, error) {
+	out := make([]config.ReadersConnect, 0, len(in))
+	for _, rc := range in {
+		scanMode := config.NormalizeScanMode(rc.ScanMode)
+		if rc.ScanMode != "" && scanMode == "" {
+			return nil, models.ClientErrf(
+				"invalid params: scanMode %q for reader %q must be %q or %q",
+				rc.ScanMode, rc.ConnectionLabel(), config.ScanModeTap, config.ScanModeHold,
+			)
+		}
+		out = append(out, config.ReadersConnect{
+			Enabled:  rc.Enabled,
+			Driver:   rc.Driver,
+			Path:     rc.Path,
+			IDSource: rc.IDSource,
+			ScanMode: scanMode,
+		})
+	}
+	return out, nil
+}
+
 // buildSystemDefaults validates the API system-defaults payload and converts
 // it to config types. The system field is already validated by struct tag;
 // here we additionally check that any non-empty launcher reference matches a
@@ -410,6 +447,40 @@ func buildSystemDefaults(cache *helpers.LauncherCache, in []models.SystemDefault
 		})
 	}
 	return out, nil
+}
+
+// carryUnmodelledSystemDefaults copies forward the system default fields that
+// models.SystemDefault does not carry. settings.update replaces the whole list,
+// so a client editing a launcher would otherwise delete pause_on_launch from
+// the user's config file without ever having been able to see it.
+func carryUnmodelledSystemDefaults(existing, updated []config.SystemsDefault) []config.SystemsDefault {
+	if len(existing) == 0 {
+		return updated
+	}
+
+	// Entries are matched on the resolved system, because config and client
+	// may name the same system differently, the way LookupSystemDefaults does.
+	previous := make(map[string]*config.SystemsDefault, len(existing))
+	for i := range existing {
+		system, err := systemdefs.LookupSystem(existing[i].System)
+		if err != nil {
+			continue
+		}
+		if _, seen := previous[system.ID]; !seen {
+			previous[system.ID] = &existing[i]
+		}
+	}
+
+	for i := range updated {
+		system, err := systemdefs.LookupSystem(updated[i].System)
+		if err != nil {
+			continue
+		}
+		if entry, ok := previous[system.ID]; ok {
+			updated[i].PauseOnLaunch = entry.PauseOnLaunch
+		}
+	}
+	return updated
 }
 
 // launcherRefExists reports whether ref matches a launcher ID or any of a

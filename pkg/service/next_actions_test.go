@@ -70,7 +70,7 @@ func setupNextActionTestEnv(t *testing.T) (*ServiceContext, *mocks.MockPlatform,
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 10),
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
 	return svc, mockPlatform, cfg
@@ -125,7 +125,7 @@ block_commands = ["write"]
 
 	result := handleNextActionPreflight(svc, &token, &script)
 
-	require.Equal(t, nextActionInvalid, result)
+	require.Equal(t, nextActionBlocked, result)
 	assert.Nil(t, svc.State.GetPendingWrite())
 }
 

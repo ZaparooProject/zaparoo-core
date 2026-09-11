@@ -111,7 +111,9 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 }
 
 // createRetroDECKLauncher creates a launcher for a specific RetroDECK system.
-func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, paths RetroDECKPaths) platforms.Launcher {
+func createRetroDECKLauncher(
+	systemFolder string, systemInfo esde.SystemInfo, paths *RetroDECKPaths,
+) platforms.Launcher {
 	launcher := platforms.Launcher{
 		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
@@ -134,9 +136,10 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 				return false
 			}
 
-			// Skip directories and .txt files
+			// Skip directories and .txt files. Test receives the path with
+			// its original case, so the extension check has to fold it.
 			ext := filepath.Ext(path)
-			if ext == "" || ext == ".txt" {
+			if ext == "" || strings.EqualFold(ext, ".txt") {
 				return false
 			}
 
@@ -221,7 +224,7 @@ func GetRetroDECKLaunchers(_ *config.Instance) []platforms.Launcher {
 			Str("launcherID", systemInfo.GetLauncherID()).
 			Msg("registering RetroDECK launcher")
 
-		launcher := createRetroDECKLauncher(systemFolder, systemInfo, paths)
+		launcher := createRetroDECKLauncher(systemFolder, systemInfo, &paths)
 		result = append(result, launcher)
 	}
 

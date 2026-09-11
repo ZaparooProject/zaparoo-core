@@ -203,7 +203,8 @@ func SystemsWithRBF() map[string]RBFInfo {
 	}
 
 	for _, rbfFile := range rbfFiles {
-		for _, system := range Systems {
+		for systemID := range Systems {
+			system := Systems[systemID]
 			shortName := system.RBF
 
 			if strings.Contains(shortName, "/") {

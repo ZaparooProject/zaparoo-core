@@ -708,6 +708,79 @@ func shouldSkipExcludedSymlink(
 	return false, nil
 }
 
+// entryIsSymlink reports whether a walked entry is a symlink.
+//
+// The dirent type is trusted wherever readdir fills it in. Where it does not —
+// the FAT family, which is what MiSTer's /media/fat is — every symlink arrives
+// looking like an ordinary file, which silently disables both the excluded
+// directory and the alias exclusion below it. lstat is the only way to tell
+// there, and it is a plain call rather than a timeout-wrapped one because it
+// runs per entry against a directory that was just read; the timeout-wrapped
+// calls stay on the symlink branches, which only a real link reaches. A failed
+// lstat leaves the entry as the dirent described it.
+//
+// Directories are left alone: a directory entry is reported as one on every
+// filesystem here, and a link to a directory is exactly the case the dirent
+// type gets wrong, so it arrives as a non-directory and is checked.
+func entryIsSymlink(
+	d fs.DirEntry,
+	direntTypesReliable bool,
+	lstat func() (os.FileInfo, error),
+) bool {
+	if d.Type()&os.ModeSymlink != 0 {
+		return true
+	}
+	if direntTypesReliable || d.IsDir() {
+		return false
+	}
+	info, err := lstat()
+	return err == nil && info.Mode()&os.ModeSymlink != 0
+}
+
+// skipEntry returns the sentinel that actually skips this entry, and nothing
+// more. fastwalk only honours filepath.SkipDir for an entry it typed as a
+// directory (enqueued, so the callback runs from walker.walk, which swallows
+// the sentinel) or as a symlink (walker.onDirEnt has an explicit escape
+// hatch). Returned for anything else, the sentinel escapes readDir and aborts
+// iteration of the whole containing directory, dropping every entry after this
+// one.
+//
+// That is not hypothetical on exFAT and FAT: the dirent carries no symlink
+// bit there, so direntTypesReportSymlinks is false and entryIsSymlink finds
+// links by lstat while fastwalk still sees a regular file. A MiSTer log
+// carried 1450 truncated directories under _Arcade/_alternatives from exactly
+// this. Returning nil is the correct skip in that case, because fastwalk never
+// descends into an entry it typed as a regular file.
+func skipEntry(d fs.DirEntry) error {
+	if d.IsDir() || d.Type()&os.ModeSymlink != 0 {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// shouldSkipSymlinkAlias reports whether a symlink must be kept out of the
+// walk because it aliases media already scanned under its target path. A
+// timeout while reading the link leaves its target unknown, but letting
+// fastwalk continue would immediately repeat the blocking call without a
+// timeout, so the link is skipped. Any other read error keeps the link in the
+// walk so ordinary handling applies. Context cancellation takes precedence.
+func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bool, error) {
+	skip, err := check()
+	// Checked before the success return too: a link read that lands after
+	// cancellation still answers, and returning it would let the walk carry on
+	// as though nothing had been interrupted.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err == nil {
+		return skip, nil
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -727,6 +800,7 @@ func GetFiles(
 	var entriesScanned atomic.Int64
 	var symlinksEncountered atomic.Int64
 	var directoriesExcluded atomic.Int64
+	var symlinkAliasesSkipped atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
@@ -739,7 +813,12 @@ func GetFiles(
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
 
-	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
+	// Resolved once per root rather than per entry: one statfs, and the answer
+	// cannot change under the walk.
+	direntSymlinkTypes := direntTypesReportSymlinks(path)
+
+	log.Debug().Str("system", systemID).Str("path", path).
+		Bool("direntSymlinkTypes", direntSymlinkTypes).Msg("starting directory walk")
 	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// fastwalk reports a directory read failure by re-invoking this
@@ -763,10 +842,12 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
-		if d.Type()&os.ModeSymlink != 0 {
+		isSymlink := entryIsSymlink(d, direntSymlinkTypes, func() (os.FileInfo, error) {
+			return os.Lstat(p)
+		})
+		if isSymlink {
 			symlinksEncountered.Add(1)
 		}
-		isSymlink := d.Type()&os.ModeSymlink != 0
 		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
 			shouldSkip := d.IsDir()
 			if isSymlink {
@@ -782,7 +863,26 @@ func GetFiles(
 					Str("system", systemID).
 					Str("path", p).
 					Msg("skipping launcher-excluded scan directory")
-				return filepath.SkipDir
+				return skipEntry(d)
+			}
+		}
+
+		if isSymlink {
+			skip, skipErr := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
+				return matcher.ShouldSkipScanSymlink(system.ID, p, func() (string, error) {
+					return readlinkWithContext(ctx, p)
+				})
+			})
+			if skipErr != nil {
+				return skipErr
+			}
+			if skip {
+				symlinkAliasesSkipped.Add(1)
+				log.Debug().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping symlink alias of scanned media")
+				return skipEntry(d)
 			}
 		}
 
@@ -869,6 +969,12 @@ func GetFiles(
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk directory %s: %w", path, err)
 	}
+	// The callback checks the context per entry, so cancellation during the
+	// last one leaves the walk finishing normally. Reporting a partial file
+	// list as a complete scan is worse than losing a cancelled run's work.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("directory walk cancelled: %w", ctxErr)
+	}
 
 	scanned := entriesScanned.Load()
 	walkElapsed := time.Since(walkStartTime)
@@ -879,6 +985,7 @@ func GetFiles(
 		Int64("entriesScanned", scanned).
 		Int64("symlinksEncountered", symlinksEncountered.Load()).
 		Int64("directoriesExcluded", directoriesExcluded.Load()).
+		Int64("symlinkAliasesSkipped", symlinkAliasesSkipped.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
@@ -1034,7 +1141,18 @@ func NewNamesIndex(
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
 ) (indexedFiles int, err error) {
+	return NewNamesIndexWithSources(ctx, platform, cfg, systems, fdb, update, pauser, nil)
+}
+
+// NewNamesIndexWithSources reports selected successful launcher contributions
+// without changing the existing filesystem or custom scanner contracts.
+func NewNamesIndexWithSources(
+	ctx context.Context, platform platforms.Platform, cfg *config.Instance,
+	systems []systemdefs.System, fdb *database.Database, update func(IndexStatus),
+	pauser *syncutil.Pauser, sourceOptions *IndexSourceOptions,
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
+	sourceCollector := newIndexSourceCollector(cfg, platform, sourceOptions)
 	indexStartTime := time.Now()
 	logIndexingEnvironment(db, platform)
 	metrics := perfmetrics.NewRecorderForDB(db)
@@ -1500,6 +1618,11 @@ func NewNamesIndex(
 		// then a subset of the library, so the reconcile must not treat
 		// absence from it as evidence media is missing.
 		scanIncomplete := false
+		filesystemIncomplete := false
+		var successfulSources map[string]bool
+		if sourceCollector != nil {
+			successfulSources = make(map[string]bool)
+		}
 
 		log.Info().
 			Str("system", systemID).
@@ -1517,6 +1640,7 @@ func NewNamesIndex(
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
 				scanIncomplete = true
+				filesystemIncomplete = true
 				continue
 			}
 			for _, f := range pathFiles {
@@ -1546,11 +1670,13 @@ func NewNamesIndex(
 			}
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			var scanErr error
+			produced := 0
 			if l.SkipFilesystemScan {
 				// Isolated: scanner gets empty input, results accumulated
 				var independent []platforms.ScanResult
 				independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
 				if scanErr == nil {
+					produced = len(independent)
 					files = append(files, independent...)
 				}
 			} else {
@@ -1560,6 +1686,7 @@ func NewNamesIndex(
 				var piped []platforms.ScanResult
 				piped, scanErr = l.Scanner(ctx, cfg, systemID, files)
 				if scanErr == nil {
+					produced = len(piped)
 					files = piped
 				}
 			}
@@ -1578,6 +1705,9 @@ func NewNamesIndex(
 				continue
 			}
 			scannedLaunchers[l.ID] = true
+			if sourceCollector != nil && produced > 0 {
+				successfulSources[l.ID] = true
+			}
 		}
 
 		// 3. Any-scanners — no SystemID, run for every system.
@@ -1595,6 +1725,9 @@ func NewNamesIndex(
 				continue
 			}
 			files = append(files, results...)
+			if sourceCollector != nil && len(results) > 0 {
+				successfulSources[anyScanners[i].ID] = true
+			}
 		}
 
 		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
@@ -1609,6 +1742,14 @@ func NewNamesIndex(
 		}
 
 		files = coalesceScanResults(systemID, files)
+		if sourceCollector != nil {
+			for i := range sysLaunchers {
+				sourceCollector.record(systemID, files, &sysLaunchers[i], successfulSources, filesystemIncomplete)
+			}
+			for _, launcher := range anyScanners {
+				sourceCollector.record(systemID, files, launcher, successfulSources, filesystemIncomplete)
+			}
+		}
 
 		if len(files) == 0 {
 			log.Debug().Msgf("no files found for system: %s", systemID)
@@ -2223,5 +2364,8 @@ func NewNamesIndex(
 		Dur("elapsed", indexElapsed).
 		Msg("media indexing completed successfully")
 
+	if sourceCollector != nil {
+		sourceOptions.Completed(sourceCollector.sources)
+	}
 	return indexedFiles, nil
 }

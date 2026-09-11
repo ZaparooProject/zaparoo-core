@@ -20,7 +20,6 @@
 package installer
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -28,7 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"text/template"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
@@ -41,9 +40,6 @@ var modprobeFile string
 
 //go:embed conf/60-zaparoo.rules
 var udevFile string
-
-//go:embed conf/60-zaparoo-pn532killer.rules
-var pn532KillerUdevFile string
 
 //go:embed conf/zaparoo.service
 var systemdServiceFile string
@@ -67,21 +63,14 @@ var icon128 []byte
 var icon256 []byte
 
 const (
-	modprobePath        = "/etc/modprobe.d/blacklist-zaparoo.conf"
-	udevPath            = "/etc/udev/rules.d/60-zaparoo.rules"
-	pn532KillerUdevPath = "/etc/udev/rules.d/60-zaparoo-pn532killer.rules"
+	modprobePath = "/etc/modprobe.d/blacklist-zaparoo.conf"
+	udevPath     = "/etc/udev/rules.d/60-zaparoo.rules"
 )
 
-type udevRuleFile struct {
-	path    string
-	content string
-}
-
-func managedUdevRuleFiles() []udevRuleFile {
-	return []udevRuleFile{
-		{path: udevPath, content: udevFile},
-		{path: pn532KillerUdevPath, content: pn532KillerUdevFile},
-	}
+// renderExecPath substitutes the sole placeholder in the embedded installer files.
+// Literal replacement preserves path bytes without reflective template method lookup.
+func renderExecPath(content, execPath string) []byte {
+	return []byte(strings.ReplaceAll(content, "{{.ExecPath}}", execPath))
 }
 
 // InstallApplication installs application files (binary, application launcher entry, icon).
@@ -158,25 +147,11 @@ func doInstallApplication(cmd command.Executor, fs afero.Fs, binaryPath string) 
 		return fmt.Errorf("error creating applications directory: %w", err)
 	}
 
-	// Template the desktop file with the installed binary path
-	type DesktopData struct {
-		ExecPath string
-	}
-	data := DesktopData{ExecPath: destBinary}
-
-	tmpl, tmplErr := template.New("desktop").Parse(desktopFile)
-	if tmplErr != nil {
-		return fmt.Errorf("failed to parse desktop template: %w", tmplErr)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute desktop template: %w", err)
-	}
+	desktopContent := renderExecPath(desktopFile, destBinary)
 
 	desktopPath := filepath.Join(desktopDir, "zaparoo.desktop")
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := afero.WriteFile(fs, desktopPath, buf.Bytes(), 0o644); err != nil {
+	if err := afero.WriteFile(fs, desktopPath, desktopContent, 0o644); err != nil {
 		return fmt.Errorf("error writing desktop file: %w", err)
 	}
 
@@ -240,23 +215,7 @@ func doInstallService(cmd command.Executor) error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	// Create template data
-	type ServiceData struct {
-		ExecPath string
-	}
-	data := ServiceData{ExecPath: execPath}
-
-	// Parse service file as template
-	tmpl, err := template.New("service").Parse(systemdServiceFile)
-	if err != nil {
-		return fmt.Errorf("failed to parse service template: %w", err)
-	}
-
-	// Execute template
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute service template: %w", err)
-	}
+	serviceContent := renderExecPath(systemdServiceFile, execPath)
 
 	// Install systemd user service
 	systemdDir := filepath.Join(xdg.ConfigHome, "systemd", "user")
@@ -266,7 +225,7 @@ func doInstallService(cmd command.Executor) error {
 
 	servicePath := filepath.Join(systemdDir, "zaparoo.service")
 	//nolint:gosec // Service file needs to be readable by systemd
-	if err := os.WriteFile(servicePath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(servicePath, serviceContent, 0o644); err != nil {
 		return fmt.Errorf("error writing systemd service file: %w", err)
 	}
 
@@ -297,23 +256,7 @@ func InstallDesktop() error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	// Create template data
-	type DesktopData struct {
-		ExecPath string
-	}
-	data := DesktopData{ExecPath: execPath}
-
-	// Parse desktop file as template
-	tmpl, err := template.New("desktop").Parse(desktopFile)
-	if err != nil {
-		return fmt.Errorf("failed to parse desktop template: %w", err)
-	}
-
-	// Execute template
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute desktop template: %w", err)
-	}
+	desktopContent := renderExecPath(desktopFile, execPath)
 
 	// Install desktop shortcut to ~/Desktop
 	desktopPath := filepath.Join(xdg.Home, "Desktop", "zaparoo.desktop")
@@ -325,7 +268,7 @@ func InstallDesktop() error {
 	}
 
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := os.WriteFile(desktopPath, buf.Bytes(), 0o755); err != nil {
+	if err := os.WriteFile(desktopPath, desktopContent, 0o755); err != nil {
 		return fmt.Errorf("error writing desktop shortcut: %w", err)
 	}
 
@@ -344,8 +287,19 @@ func doInstallHardware(cmd command.Executor) error {
 		return errors.New("hardware install must be run as root")
 	}
 
-	if err := installUdevRules(cmd, managedUdevRuleFiles()); err != nil {
-		return err
+	// install udev rules
+	if _, err := os.Stat(filepath.Dir(udevPath)); os.IsNotExist(err) {
+		return errors.New("udev rules directory does not exist")
+	} else if _, err := os.Stat(udevPath); os.IsNotExist(err) {
+		err = os.WriteFile(udevPath, []byte(udevFile), 0o644) //nolint:gosec // udev rules need to be readable by system
+		if err != nil {
+			return fmt.Errorf("error creating udev rules: %w", err)
+		}
+		// these are just for convenience, don't care too much if they fail
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
+		_ = cmd.Run(ctx, "udevadm", "trigger")
+		cancel()
 	}
 
 	// install modprobe blacklist
@@ -364,43 +318,6 @@ func doInstallHardware(cmd command.Executor) error {
 	}
 
 	return nil
-}
-
-func installUdevRules(cmd command.Executor, rules []udevRuleFile) error {
-	changed := false
-	for _, rule := range rules {
-		if _, err := os.Stat(filepath.Dir(rule.path)); err != nil {
-			if os.IsNotExist(err) {
-				return errors.New("udev rules directory does not exist")
-			}
-			return fmt.Errorf("error checking udev rules directory: %w", err)
-		}
-
-		if _, err := os.Stat(rule.path); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("error checking udev rules %s: %w", rule.path, err)
-		}
-
-		//nolint:gosec // udev rules need to be readable by the system
-		if err := os.WriteFile(rule.path, []byte(rule.content), 0o644); err != nil {
-			return fmt.Errorf("error creating udev rules %s: %w", rule.path, err)
-		}
-		changed = true
-	}
-
-	if changed {
-		reloadUdevRules(cmd)
-	}
-	return nil
-}
-
-func reloadUdevRules(cmd command.Executor) {
-	// These are convenience commands; the rule files remain installed if either command fails.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
-	_ = cmd.Run(ctx, "udevadm", "trigger")
 }
 
 // UninstallApplication removes application files (binary, application launcher entry, icon).
@@ -539,31 +456,18 @@ func doUninstallHardware(cmd command.Executor) error {
 		cancel()
 	}
 
-	if err := uninstallUdevRules(cmd, managedUdevRuleFiles()); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func uninstallUdevRules(cmd command.Executor, rules []udevRuleFile) error {
-	changed := false
-	for _, rule := range rules {
-		if _, err := os.Stat(rule.path); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("error checking udev rules %s: %w", rule.path, err)
+	// remove udev rules
+	if _, err := os.Stat(udevPath); !os.IsNotExist(err) {
+		err = os.Remove(udevPath)
+		if err != nil {
+			return fmt.Errorf("error removing udev rules: %w", err)
 		}
-
-		if err := os.Remove(rule.path); err != nil {
-			return fmt.Errorf("error removing udev rules %s: %w", rule.path, err)
-		}
-		changed = true
+		// these are just for convenience, don't care too much if they fail
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
+		_ = cmd.Run(ctx, "udevadm", "trigger")
+		cancel()
 	}
 
-	if changed {
-		reloadUdevRules(cmd)
-	}
 	return nil
 }

@@ -49,8 +49,32 @@ jobs:
       contents: read
       packages: write
 
-  create-release:
+  # A tag builds, signs and publishes on its own; nothing here used to look at
+  # whether the commit passed its tests, and v2.17.1 shipped on a commit whose
+  # Windows job was failing. Run them here so a release cannot outrun them.
+  # Skipped for test_build, which publishes nothing: build-check.yml only asks
+  # whether every target still compiles, and main has already tested the code.
+  # Declared per job because the workflow-level block above grants contents:
+  # write, which this needs none of.
+  lint-and-test:
     if: ${{ !inputs.test_build }}
+    uses: ./.github/workflows/lint-and-test.yml
+    with:
+      release_gate: true
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: read
+      # lint-and-test.yml declares this at workflow level for its SARIF
+      # upload. The gate skips that upload, but a caller must still grant
+      # every permission the called workflow declares or the run fails at
+      # startup before any job exists, which is how the first v2.17.2 tag
+      # build ended.
+      security-events: write
+
+  create-release:
+    needs: lint-and-test
+    if: ${{ !cancelled() && !inputs.test_build && needs.lint-and-test.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -84,8 +108,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [create-release, ensure-zigcc]
-    if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
+    needs: [create-release, ensure-zigcc, lint-and-test]
+    # 'skipped' is the test_build case, where the gate does not run at all.
+    if: >-
+      ${{ !cancelled() && needs.ensure-zigcc.result == 'success'
+      && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') }}
     permissions:
       contents: write # Needed for uploading release assets
       packages: read # Needed for pulling Docker images from ghcr.io
@@ -449,6 +476,54 @@ jobs:
           PKG_VERSION="${VERSION//-/_}"
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-any.pkg.tar.zst" --clobber
 
+  mister-module-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Check mister module tag
+    # The standalone mister/ module is versioned by its own directory-prefixed
+    # tags, which a vX.Y.Z release does not create. Without this the module
+    # quietly never gets one and third parties can only pin a pseudo-version.
+    if: ${{ !cancelled() && !inputs.test_build }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Report whether mister/ needs a new tag
+        env:
+          tag: ${{ env.BUILD_TAG }}
+          is_nightly: ${{ inputs.is_nightly || 'false' }}
+        run: |
+          # Only stable releases are worth a library tag; a nightly or beta
+          # would just churn the version third parties pin.
+          case "${tag#v}" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          if [ "$is_nightly" = "true" ] || [ "$prerelease" = "true" ]; then
+            echo "$tag is a pre-release; skipping the mister/ tag check."
+            exit 0
+          fi
+          last=$(git tag -l 'mister/v*' | sort -V | tail -n 1)
+          if [ -z "$last" ]; then
+            echo "::warning::The mister/ module has never been tagged. Cut one with 'task mister:tag-module -- v0.1.0' so third parties can pin a version."
+            echo "The mister/ module has never been tagged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git diff --quiet "$last" "$tag" -- mister; then
+            echo "mister/ is unchanged since $last." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::mister/ has changed since $last. Cut a new tag with 'task mister:tag-module -- vX.Y.Z'."
+            {
+              echo "mister/ has changed since $last:"
+              echo '```'
+              git diff --stat "$last" "$tag" -- mister
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   attest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -475,7 +550,7 @@ jobs:
             --pattern "zaparoo-*-setup.exe"
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           format: spdx-json
           output-file: _release/sbom.spdx.json

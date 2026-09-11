@@ -27,7 +27,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -73,7 +72,6 @@ func TestResolveMediaRefs_UsesSingletonFallbackForBatchPath(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	platform := mocks.NewMockPlatform()
-	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
 
 	system := database.System{DBID: 1, SystemID: "NES", Name: "NES"}
 	containerPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))

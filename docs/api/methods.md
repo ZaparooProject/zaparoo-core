@@ -38,7 +38,7 @@ Accepts two types of parameters:
 | :----- | :------ | :------- | :------------------------------------------------------------------------------------------------------------- |
 | type   | string  | No       | An internal category of the type of token being scanned. _Not currently in use outside of logging._            |
 | uid    | string  | No\*     | The UID of the token being scanned. For example, the UID of an NFC tag. Used for matching mappings.            |
-| text   | string  | No\*     | The main text to be processed from a scan, should contain [ZapScript](../../zapscript/index.md).               |
+| text   | string  | No\*     | The main text to be processed from a scan, should contain [ZapScript](../../zapscript/index.md). At most 8192 bytes.               |
 | data   | string  | No\*     | The raw data read from a token, converted to a hexadecimal string. Used in mappings and detection of NFC toys. |
 | unsafe | boolean | No       | Allow unsafe operations. Default is false.                                                                     |
 
@@ -46,11 +46,36 @@ These parameters allow emulating a token exactly as it would be read directly fr
 
 #### Result
 
-Returns `null` on success.
+Returns `null` once the ZapScript has finished executing without error. The method waits for execution to complete: mapping, parsing, launch policy (profiles, playtime limits, blocked commands, hooks), media lookup and every command in the script. Success means the script ran to completion; it does not prove the launched software is still running afterwards.
 
-Currently, it is not reported if the launched ZapScript encountered an error during launching, and the method will return before execution of ZapScript is complete.
+If execution fails, the response carries an [error](index.md#response-errors) whose `data.category` is one of:
+
+| Category           | Meaning                                                                                       |
+| :----------------- | :-------------------------------------------------------------------------------------------- |
+| `busy`             | Another launch is already in progress.                                                        |
+| `media_not_found`  | The requested media could not be found or matched.                                            |
+| `disabled`         | ZapScript execution is disabled in settings.                                                  |
+| `invalid_script`   | The script could not be parsed, names an unknown command or system, or exceeds 8192 bytes.    |
+| `blocked`          | Execution was refused by configuration, a profile requirement or a hook.                      |
+| `playtime_limit`   | A playtime limit prevented the launch.                                                        |
+| `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
+| `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
+| `unavailable`      | The service is shutting down.                                                                 |
+| `execution_failed` | Any other execution failure.                                                                  |
+
+Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back. During shutdown the connection often closes before the `unavailable` response can be written, so treat a dropped connection with a request in flight the same way.
+
+Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 
 For ZapScript `launch.random`, Core selects uniformly from matching non-missing media rows after applying systems, tags, and path scope. Filesystem and virtual path targets recursively include subfolders. Tagged requests never use filesystem fallback because unindexed files have no tag metadata.
+
+##### Compatibility
+
+Earlier Core versions returned `null` as soon as the token was accepted, before execution started, and never reported execution failures. Clients that treated an immediate `null` as "launched" should now expect the response to arrive when execution finishes, or when Core stops waiting for it. A `timeout` or `cancelled` error means Core stopped waiting, not that execution ended: work already started continues, so poll for the effect rather than treating either as proof of failure. Any other error response is authoritative.
+
+##### Aliases
+
+`launch` is a deprecated alias for `run` with identical parameters and result. `run.script` is reserved and currently returns a method-not-found error.
 
 #### Example
 
@@ -77,6 +102,22 @@ For ZapScript `launch.random`, Core selects uniformly from matching non-missing 
 }
 ```
 
+##### Error response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "52f6242e-7a5a-11ef-bf93-020304050607",
+  "error": {
+    "code": 1,
+    "message": "media not found",
+    "data": {
+      "category": "media_not_found"
+    }
+  }
+}
+```
+
 ### stop
 
 **Access:** All clients.
@@ -91,9 +132,17 @@ None.
 
 #### Result
 
-Returns `null` on success.
+Returns `null` on success, meaning nothing was running or the media was
+confirmed stopped. Active media is only cleared when the stop succeeded.
 
-Currently, it is not reported if a process was killed or not.
+Returns an error when the media is known to still be running, such as a
+launcher process that ignored both a close request and a forced kill.
+Launchers that never expose a process at all, like an opened browser tab,
+still report success because there is nothing to stop.
+
+Whether a failure can be detected at all is platform-dependent. Windows
+reports one when it can confirm the media is still running; platforms that
+cannot confirm it continue to report success.
 
 #### Example
 
@@ -525,9 +574,9 @@ None.
 
 **Access:** All clients.
 
-Query the media database and return all matching indexed media.
+Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -537,6 +586,7 @@ An object:
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
+| includeHidden | boolean | No | Include hidden entries for recovery/management. Defaults to `false`; available to all clients. Repeat on subsequent pages. |
 | pathPrefix | string   | No       | Recursively restrict results beneath a filesystem directory or virtual route. Matching respects path boundaries, so `/roms/SNES` does not include `/roms/SNES2`; `%` and `_` are literal path characters. |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
@@ -721,7 +771,15 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
-Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
+Plain directories may also have artwork imported by the `media-folder` scraper. This does not make them launchable or hide their children; it only sets `hasCover` and lets clients request the image with the directory's `(system, path)`.
+
+A directory holding media for more than one system also stays plain, because its `fileCount` is the sum across those systems and the rule is applied one system at a time. A page spanning several systems is resolved per system when `systems` names them; without a `systems` filter such a page is left unresolved, since browsing a media root lists one directory per installed system and resolving all of them is disproportionate to that page's cost.
+
+Tags filter direct media files in the current path. Directories remain visible for navigation with tag-unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+
+Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required `user:favorite` or `user:hidden` filters also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -732,6 +790,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| includeHidden | boolean | No | Include hidden media and its contribution to directory/root counts. Defaults to `false`. Repeat with cursor requests. |
 | rootView   | string | No       | Pathless system-root presentation: `routes` (default) returns separate populated routes; `contents` returns one-level immediate contents and requires exactly one system. Ignored when `path` is non-empty. Repeat with cursor requests. |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
 | cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, tags, letter, and sort parameters. |
@@ -753,7 +812,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -761,11 +820,11 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries. |
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
-| hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
+| hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 
 ##### Browse pagination object
 
@@ -960,6 +1019,7 @@ All parameters are optional.
 | path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
 | systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| includeHidden | boolean | No | Match the visibility mode of `media.browse`. Defaults to `false`. |
 | tags        | string[] | No       | Filter indexed media by tags, using the same syntax and operators as `media.browse`.               |
 | sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
 
@@ -1103,7 +1163,11 @@ have finite vocabularies per system and are always returned in full without trun
 
 Add or remove user tags for an indexed media item.
 
-The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
+Mutable tags are `user:favorite` and `user:hidden`. Both are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the other.
+
+Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
+
+Both flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer either flag; the old path's preference remains stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
 
 #### Parameters
 
@@ -1112,8 +1176,8 @@ The initial mutable tag is `user:favorite`. It appears in normal media tag resul
 | mediaId | number   | No       | Media DBID to update. Cannot be mixed with system/path.   |
 | system  | string   | No       | System ID for path-based lookup. Required when using path. |
 | path    | string   | No       | Media path for path-based lookup. Required with system.    |
-| add     | string[] | No       | Tags to add. Currently only `user:favorite` is mutable.    |
-| remove  | string[] | No       | Tags to remove. Currently only `user:favorite` is mutable. |
+| add     | string[] | No       | Tags to add: `user:favorite` and/or `user:hidden`. |
+| remove  | string[] | No       | Tags to remove: `user:favorite` and/or `user:hidden`. |
 
 Either `mediaId` or `system` plus `path` is required. At least one of `add` or `remove` is required. Search operators (`+`, `-`, `~`) are not valid in mutation requests.
 
@@ -1530,6 +1594,7 @@ Optionally, an object:
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
 | playTime   | number | Yes      | Duration of the play session in seconds.               |
+| tags       | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1566,7 +1631,11 @@ Optionally, an object:
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
-        "playTime": 2730
+        "playTime": 2730,
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ],
     "pagination": {
@@ -1613,6 +1682,7 @@ Optionally, an object:
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+| tags          | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1647,12 +1717,72 @@ Optionally, an object:
         "relativePath": "snes/Super Mario World (USA).sfc",
         "totalPlayTime": 7200,
         "sessionCount": 12,
-        "lastPlayedAt": "2026-02-14T20:30:00Z"
+        "lastPlayedAt": "2026-02-14T20:30:00Z",
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ]
   }
 }
 ```
+
+### media.lookup.candidates
+
+Returns up to five ranked canonical title candidates for an approximate name in **one system**. This is title discovery, not media selection: pass a selected candidate's `systemId` and `name` to `media.lookup` for file selection and enrichment.
+
+**Parameters**
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| system | string | Yes | One canonical system ID; never a list or an all-systems search. |
+| name | string | Yes | Approximate title, 1–256 Unicode characters. Whitespace-only names and names that normalize to an empty slug are rejected. |
+| fuzzySystem | boolean | No | Resolve system names/aliases instead of requiring a canonical ID. Default `false`, matching `media.lookup`. |
+| maxResults | integer | No | Maximum number of candidates, 1–5. Default `5`; out-of-range values are rejected. |
+
+**Result**
+
+`{"candidates": [...]}`; an empty array means no eligible title met the match threshold. Database failures and canceled requests remain errors, not empty results.
+
+Each candidate contains only:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| systemId | string | Canonical system ID. |
+| name | string | Canonical indexed title, deduplicated within the system. |
+| rank | integer | One-based rank; results are ordered by rank. |
+| matchType | string | Stable coarse enum: `exact`, `secondary`, or `fuzzy`. |
+| confidence | number | Advisory ranking evidence, not a probability or a stable client threshold contract. |
+
+Exact normalized primary-title evidence ranks before exact secondary-title evidence. If any eligible primary or secondary exact matches exist, only those matches are returned: results are never padded with fuzzy matches to reach `maxResults`. Fuzzy matching runs only when neither exact class produces an eligible result, and reuses title normalization and the existing length/word-count prefilter, token-order matching, and typo threshold. Within an evidence class, ranking uses confidence, edit-distance tie-breaking for fuzzy matches, then canonical name and an internal identity tie-breaker. Internal algorithm names are not API enums. These candidates need not reproduce the launch resolver's prefix, progressive-trimming, tag preference, or media-selection fallbacks.
+
+A title is eligible only if at least one indexed media entry is present and not user-hidden. Hidden/missing variants do not suppress another eligible variant. Hidden state is always excluded; there is no `includeHidden` override. Authorization matches ordinary media discovery; this method grants no launch or profile-management authority. Results never contain paths, media IDs, tags, artwork, or ZapScript, and requests neither launch nor update history or lookup/resolution caches.
+
+Results describe the **current MediaDB incarnation**, not a durable catalog snapshot. A request pins one database connection and fails with a retryable error if a fresh-start rebuild replaces that database before the final generation check. Cached IDs from a discarded database are not used against its replacement. Ordinary indexing and hide/unhide changes may become visible between read statements; exact matches are read directly from indexed SQL without waiting for a shared slug cache refresh, while fuzzy discovery can lag behind ordinary indexing until that refresh. The later `media.lookup` resolves against its own then-current state, so candidates do not reserve a file or guarantee later availability.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.lookup.candidates",
+  "params": {"system": "NES", "name": "Metriod"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "candidates": [
+      {"systemId": "NES", "name": "Metroid", "rank": 1, "matchType": "fuzzy", "confidence": 0.96}
+    ]
+  }
+}
+```
+
+The example confidence is illustrative; clients should present ordered candidates, not hard-code score cutoffs.
 
 ### media.lookup
 
@@ -1974,19 +2104,19 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 **Access:** All clients.
 
-Return the best matching image for one indexed media row. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
+Return the best matching image for one indexed media row or indexed directory. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
-`media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
+For path requests, `media.image` preserves exact-media behavior first, then checks path-keyed directory properties, then tries existing launcher-relative and singleton media fallbacks. Within media results it checks each requested image type against media-level properties before title-level properties. Directory properties follow the same requested type order. If a stored media file path no longer exists, the stale property is removed and lookup continues; stale directory paths remain until the next completed `media-folder` snapshot.
 
 #### Parameters
 
-An object identifying the media row by `mediaId` or `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+An object identifying a media row by `mediaId` or identifying media/directory content by `(system, path)`. Canonical indexed paths are preferred. Directory artwork requires the directory's exact indexed path. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
-| path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
+| path       | string   | No       | Canonical indexed media or directory path. Required when `mediaId` is omitted. |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 | maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
 | delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |
@@ -2155,8 +2285,39 @@ An object:
 | Key       | Type     | Required | Description                                                                 |
 | :-------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | scraperId | string   | Yes      | Scraper ID from the `scrapers` method, for example `gamelist.xml`.          |
-| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. |
-| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag. Default is false. |
+| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. Cannot be combined with `scope`. |
+| scope     | object   | No       | Select one indexed media item or one directory subtree; see below. |
+| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag, within the selected scope. Default is false. |
+
+#### Scope
+
+Without `scope` (or with `scope: null`), existing `systems` behavior is unchanged. Otherwise, supply exactly one of these forms:
+
+```json
+{"scope": {"mediaId": 42}}
+```
+
+```json
+{"scope": {"file": {"system": "SNES", "path": "/games/SNES/Game.sfc"}}}
+```
+
+```json
+{"scope": {"subtree": {"system": "SNES", "path": "/games/SNES/RPG"}}}
+```
+
+These are parameter fragments; `scraperId` is still required.
+
+- `mediaId` must be a positive indexed media ID, available from `media.search` or `media.browse` **before scraping**. Use it when available; clients that only have a file path can use `file` instead.
+- `file` matches one indexed file or virtual URI exactly. It does not resolve a directory to its launch target. `subtree` selects indexed files below a directory recursively, within the specified system. `/games/foo` does not select `/games/foobar`. A filesystem or volume root is valid.
+- `system` accepts canonical IDs and existing system aliases, case-insensitively, and must identify an indexed system. Path spelling is **case-sensitive on all platforms**, including Windows; use the indexed spelling. Windows native separators and forward slashes are accepted. On Unix, backslashes are literal filename characters.
+- Filesystem paths must be absolute. Relative paths, `..` components, control characters, invalid UTF-8, and paths longer than 4096 bytes are rejected. Repeated native separators, `.` components, and trailing separators are normalized. Paths are matched lexically against the index; symlinks are not resolved and directories are not scanned.
+- Virtual URIs such as `steam://123` are opaque, exact identities supported by `mediaId` or `file`; they are not valid subtree paths. Whether metadata exists depends on the selected scraper's sources.
+- Missing or index-marked-missing IDs/files are client errors. A valid subtree with no present indexed matches succeeds with zero work, even if that directory no longer exists. Unindexed media must be indexed first.
+- Empty scope objects, unknown scope fields, multiple scope forms, and combining `scope` with `systems` (including `[]`) are client errors. Selector arrays are not supported. Duplicate source matches do not scrape a selected media row more than once per run.
+- Scoped progress counts selected media rows: `total` is selection size; unmatched, already-scraped, and already-completed-on-resume rows count as skipped. `totalScraped` retains its existing scraper/library-wide meaning. Source files may still need parsing even when only one media row is selected.
+- Metadata and cleanup writes stay within selected media and their shared titles. Title-level metadata is shared with other ROMs of that title, so those ROMs may display updated title metadata too.
+- Interrupted operations persist normalized scope and force-run markers. Restart recovery restores that scope, never a whole-system fallback. Single-item scopes also pin system and path alongside the ID; an identity that disappeared or changed fails recovery. Subtrees are re-queried within the same stored boundary, not snapshotted as an ID list.
+- Status, cancellation, and playback pause/resume remain operation-wide. Cancellation discards resumable operation state; `media.scrape.resume` resumes a playback-paused run, not a cancelled run. IDs are local to the current media database and are not portable across rebuilds.
 
 #### Result
 
@@ -2413,7 +2574,7 @@ An object:
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -2436,13 +2597,13 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
-  "result": {}
+  "result": null
 }
 ```
 
-##### Background audio example
+##### Slot and arguments example
 
-Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`, and `rewind` controls on the `background` slot. `fast_forward` and `rewind` accept an optional `seconds` argument; default is 10 seconds.
+This request targets the background slot and supplies an action argument. Discover supported actions through `launcherControls`.
 
 ```json
 {
@@ -2531,6 +2692,7 @@ Set `tags` to return only systems containing matching non-missing media. Tagged 
 
 | Key  | Type     | Required | Description                                                                                     |
 | :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required favorites/hidden tag filters also include hidden entries. |
 | all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 | tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 
@@ -2624,6 +2786,9 @@ None.
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
 | backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| playtimeBaseUrl           | string                                    | No       | Configured play history sync server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
+| remoteControlBaseUrl      | string                                    | No       | Configured remote control server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2633,6 +2798,7 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
+| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
 
 ##### System default object
 
@@ -2640,7 +2806,7 @@ None.
 | :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
 | launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
-| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
+| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. |
 
 #### Example
 
@@ -2714,6 +2880,7 @@ An object containing any of the following optional keys:
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
+| remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
 #### Result
 
@@ -3295,7 +3462,7 @@ Delete a local backup ZIP.
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -3312,7 +3479,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "backup-delete-1",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -3606,8 +3773,12 @@ None.
 | cooldownRemaining     | string  | No       | Time until session auto-resets. Only present during `"cooldown"` state.                               |
 | dailyUsageToday       | string  | No       | Total playtime accumulated today. Available in all states when data is available.                     |
 | dailyRemaining        | string  | No       | Time remaining before daily limit reached. Available in all states if daily limit is configured.      |
+| sessionExtension      | string  | No       | Extra time granted to the current session on top of the configured session limit. Omitted when nothing was granted. |
+| sessionExtendedUntil  | string  | No       | RFC 3339 timestamp when a session-limit waiver lapses. While set, the session limit is not enforced and `sessionRemaining` is omitted; the daily limit still applies. |
 
 **Note:** All duration fields use Go's duration format (e.g., `"1h30m45s"`, `"45m"`, `"2h"`).
+
+`sessionRemaining` already accounts for any granted extension, so a client showing time left needs no extra arithmetic. `sessionExtension` is reported separately so a client can show that time was granted rather than silently displaying a larger allowance. See [`playtime.extend`](#playtimeextend).
 
 #### Examples
 
@@ -3673,6 +3844,94 @@ None.
     "cooldownRemaining": "12m30s",
     "dailyUsageToday": "2h15m30s",
     "dailyRemaining": "1h44m30s"
+  }
+}
+```
+
+### playtime.extend
+
+**Access:** `playtime.extend` capability (localhost, or an authenticated admin client).
+
+Grant extra time to the playtime session currently being limited, without stopping what is playing and without changing any configured limit.
+
+The recipient is never named by the caller: a grant always applies to the profile playtime is being enforced against at that moment, so it cannot be aimed at someone else's session. A `duration` grant is held against the current session only and is cleared when that session resets — when a different profile becomes active, when the cooldown window expires, or when limits are disabled. A `today` waiver survives all three because it is day-scoped: it lapses at the next local midnight and nowhere else.
+
+**The daily limit is never affected.** It remains the hard ceiling in both modes; raising it is a settings change, not a grant.
+
+**Modes:**
+
+- `duration` adds time to the current session's allowance. It requires a session to extend, so it is accepted during `active` and `cooldown` states but rejected during `reset`. Cooldown is the common case: the limit stopped the game and the player is about to relaunch.
+- `today` waives the session limit for the recipient profile until the next local midnight. It is day-scoped rather than session-scoped, so it is accepted in any state, and it is rejected when the system clock is unreliable.
+
+A single duration grant must be between 1 minute and 24 hours, and the total accumulated across one session is capped at 24 hours. A grant that would exceed the cap is rejected rather than reduced, so a caller is never told less time was added than it asked for.
+
+The same grant can also be made by scanning a physical card holding `**playtime.extend`, authorized by an administrator profile's switch ID rather than by a paired client.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                                                                      |
+| :-------- | :----- | :------- | :---------------------------------------------------------------------------------------------------------------- |
+| mode      | string | Yes      | `"duration"` or `"today"`.                                                                                       |
+| duration  | string | No       | Time to add, in Go duration format (e.g. `"15m"`, `"1h30m"`). Required for `"duration"` mode, ignored for `"today"`. |
+| requestId | string | No       | Idempotency key. Repeating a request ID reports the original grant instead of adding more time.                  |
+
+#### Result
+
+| Key              | Type    | Required | Description                                                                        |
+| :--------------- | :------ | :------- | :----------------------------------------------------------------------------------- |
+| mode             | string  | Yes      | The mode that was applied.                                                         |
+| replayed         | boolean | Yes      | True when a repeated `requestId` matched an earlier grant and no time was added.    |
+| duration         | string  | No       | Time this grant added. Omitted for `"today"`.                                       |
+| expires          | string  | No       | RFC 3339 timestamp when a `"today"` waiver lapses. Omitted for `"duration"`.         |
+| sessionExtension | string  | No       | The session's accumulated extension after this grant.                              |
+| profileId        | string  | No       | Recipient profile. Omitted for the shared profile.                                 |
+
+A successful grant emits [`playtime.extended`](./notifications.md#playtimeextended). A replayed request granted nothing, so it emits no notification.
+
+#### Examples
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "method": "playtime.extend",
+  "params": {
+    "mode": "duration",
+    "duration": "15m",
+    "requestId": "5f2c9a10-1d44-4f8e-9f0b-6d1c2a3b4c5d"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "mode": "duration",
+    "duration": "15m0s",
+    "sessionExtension": "15m0s",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "replayed": false
+  }
+}
+```
+
+##### Response (waiving the session limit for the rest of the day)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "mode": "today",
+    "expires": "2025-01-23T00:00:00-05:00",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "replayed": false
   }
 }
 ```
@@ -3889,7 +4148,7 @@ Delete a profile. Local UIs may gate this action with `profiles.verify`. The fin
 
 #### Result
 
-Null.
+Returns `null` on success.
 
 ### profiles.active
 
@@ -4041,11 +4300,11 @@ An object:
 | type     | string  | Yes      | The field which will be matched against:<br/>_ `uid`: match on UID, if available. UIDs are normalized before matching to remove spaces, colons and convert to lowercase.<br/>_ `text`: match on the stored text on token.<br/>\* `data`: match on the raw token data, if available. This is converted from bytes to a hexadecimal string and should be matched as this. |
 | match    | string  | Yes      | The method used to match a mapping pattern:<br/>_ `exact`: match the entire string exactly to the field.<br/>_ `partial`: match part of the string to the field.<br/>\* `regex`: use a regular expression to match the field.                                                                                                                                           |
 | pattern  | string  | Yes      | Pattern that will be matched against the token, using the above settings.                                                                                                                                                                                                                                                                                               |
-| override | string  | Yes      | Final text that will completely replace the existing token text if a match was successful.                                                                                                                                                                                                                                                                              |
+| override | string  | Yes      | Final text that will completely replace the existing token text if a match was successful. At most 8192 bytes.                                                                                                                                                                                                                                                          |
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -4073,7 +4332,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -4138,7 +4397,7 @@ An object:
 | type     | string  | No       | The field which will be matched against:<br/>_ `uid`: match on UID, if available. UIDs are normalized before matching to remove spaces, colons and convert to lowercase.<br/>_ `text`: match on the stored text on token.<br/>\* `data`: match on the raw token data, if available. This is converted from bytes to a hexadecimal string and should be matched as this. |
 | match    | string  | No       | The method used to match a mapping pattern:<br/>_ `exact`: match the entire string exactly to the field.<br/>_ `partial`: match part of the string to the field.<br/>\* `regex`: use a regular expression to match the field.                                                                                                                                           |
 | pattern  | string  | No       | Pattern that will be matched against the token, using the above settings.                                                                                                                                                                                                                                                                                               |
-| override | string  | No       | Final text that will completely replace the existing token text if a match was successful.                                                                                                                                                                                                                                                                              |
+| override | string  | No       | Final text that will completely replace the existing token text if a match was successful. At most 8192 bytes.                                                                                                                                                                                                                                                          |
 
 Only keys which are provided in the object will be updated in the database.
 
@@ -4222,9 +4481,11 @@ None.
 
 #### Result
 
-| Key     | Type                       | Required | Description                         |
-| :------ | :------------------------- | :------- | :---------------------------------- |
-| readers | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+| Key               | Type                       | Required | Description                         |
+| :---------------- | :------------------------- | :------- | :---------------------------------- |
+| readers           | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+| holdOwnerReaderId | string                     | No       | ID of the reader whose token is currently tracked as the owner of the running media. Omitted when no token is tracked. |
+| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. This is resolved exactly as the removal will resolve it, so an owner whose reader has since disconnected reports `hold` — the decision made while that reader was present still stands. |
 
 ##### Reader info object
 
@@ -4234,6 +4495,7 @@ None.
 | readerId     | string   | Yes      | Stable reader ID, deterministic across restarts. Format: `{driver}-{hash}`. |
 | driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"acr122pcsc"`, `"file"`). |
 | info         | string   | Yes      | Human-readable information about the reader.  |
+| scanMode     | string   | Yes      | Effective scan mode for this reader (`"tap"` or `"hold"`), resolving its `[[readers.connect]]` entry, then its `[readers.drivers.<id>]` entry, then the global `readers.scan.mode`. |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
 | capabilities | string[] | Yes      | List of capabilities supported by the reader. |
 
@@ -4262,10 +4524,13 @@ None.
         "readerId": "pn532-ujqixjv6",
         "driver": "pn532",
         "info": "PN532 (1-2.3.1)",
+        "scanMode": "tap",
         "capabilities": ["read", "write"],
         "connected": true
       }
-    ]
+    ],
+    "holdOwnerReaderId": "pn532-ujqixjv6",
+    "holdScanMode": "tap"
   }
 }
 ```
@@ -4831,7 +5096,7 @@ Revoke a paired client. Existing encrypted sessions remain active until they dis
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -4848,7 +5113,7 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "clients-delete-1",
-  "result": {}
+  "result": null
 }
 ```
 
@@ -4909,7 +5174,7 @@ None.
 
 #### Result
 
-Returns an empty object `{}` on success.
+Returns `null` on success.
 
 #### Example
 
@@ -4925,7 +5190,98 @@ Returns an empty object `{}` on success.
 {
   "jsonrpc": "2.0",
   "id": "clients-pair-cancel-1",
-  "result": {}
+  "result": null
+}
+```
+
+## Remote control
+
+Remote control lets the Zaparoo Online account a device is linked to send a fixed set of commands to it (search and browse the media library, list systems and launchers, launch, stop, run a MiSTer script) through the Zaparoo Online API. It is off until the device owner turns on `remoteControlEnabled` in [settings.update](#settingsupdate), and is turned off again automatically whenever the account is linked or unlinked. Every command that reaches the device is recorded in a local ledger.
+
+### remote.activity
+
+**Access:** Localhost and authenticated admin clients only.
+
+Return the current remote control status and the most recent entries from the remote command ledger, as an owner-facing record of what the linked account's remote commands have done on this device.
+
+#### Parameters
+
+| Key   | Type   | Required | Description                                                     |
+| :---- | :----- | :------- | :-------------------------------------------------------------- |
+| limit | number | No       | Number of entries to return, between 1 and 100. Defaults to 20. |
+
+#### Result
+
+| Key     | Type                                                   | Required | Description                                       |
+| :------ | :----------------------------------------------------- | :------- | :------------------------------------------------ |
+| status  | [RemoteStatus](#remote-status-object)                  | Yes      | Why the device is or isn't reachable right now.   |
+| entries | [RemoteActivityEntry](#remote-activity-entry-object)[] | Yes      | Ledger entries, newest first.                     |
+
+##### Remote status object
+
+| Key           | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| :------------ | :----- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| state         | string | Yes      | `unknown` (nothing reported yet), `disabled` (remote control is off), `unlinked` (no linked account), `connecting`, `waiting` (polling for commands normally), `not_remote_device` (the server refused the poll because this device is not the account's designated remote device; choose it on Zaparoo Online), `unavailable` (the server reports the feature as off), `credential_rejected` (the server rejected the device credential; link the account again), or `error` (the last capability heartbeat or poll failed for another reason). |
+| lastContactAt | string | No       | RFC 3339 time the remote service last answered normally, whether that was a capability heartbeat or a poll. Omitted until the first successful contact.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| lastErrorCode | string | No       | The server's error code for the last failure (for example `remote_slot_required`), or a short local code such as `unreachable`. Omitted while the state carries no error.                                                                                                                                                                                                                                                                                                                                              |
+
+##### Remote activity entry object
+
+| Key           | Type   | Required | Description                                                                                                                                        |
+| :------------ | :----- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| createdAt     | string | Yes      | RFC 3339 time the command was first received.                                                                                                      |
+| operationType | string | Yes      | The command type, for example `launch` or `media.search`.                                                                                          |
+| originKind    | string | Yes      | `first_party` when the account issued the command directly, or `api_key` when a User API key did.                                                  |
+| originKeyName | string | No       | Name of the User API key that issued the command. Only present for `api_key` origins.                                                              |
+| state         | string | Yes      | Ledger state: `recorded`, `accepted`, `executing`, `terminal` (a result was produced), `void` (the server no longer knew the command), or `expired`. |
+| status        | string | No       | Outcome reported for a terminal entry: `succeeded`, `failed`, or `busy`.                                                                           |
+| errorCode     | string | No       | Failure code for a failed entry, for example `bad_params`, `media_not_found`, or `unsupported`.                                                    |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "method": "remote.activity",
+  "params": {
+    "limit": 2
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "remote-activity-1",
+  "result": {
+    "status": {
+      "state": "waiting",
+      "lastContactAt": "2026-08-30T01:02:03Z"
+    },
+    "entries": [
+      {
+        "createdAt": "2026-08-30T01:01:40Z",
+        "operationType": "launch",
+        "originKind": "api_key",
+        "originKeyName": "misterzine",
+        "state": "terminal",
+        "status": "succeeded"
+      },
+      {
+        "createdAt": "2026-08-30T01:00:12Z",
+        "operationType": "media.search",
+        "originKind": "first_party",
+        "state": "terminal",
+        "status": "failed",
+        "errorCode": "bad_params"
+      }
+    ]
+  }
 }
 ```
 
@@ -4936,6 +5292,14 @@ Direct platform input control for remote control use cases. These methods bypass
 The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character. Macros also support `{delay:duration}`, `{hold:key:duration}`, `{press:key}`, and `{release:key}`. Press and release have short forms `{_key}` and `{^key}`. Delay and explicit hold durations are limited to 30 seconds.
 
 Persistent `{press:key}` and `{release:key}` input is available only over supported WebSocket input sessions. A press remains held across requests from that WebSocket until its matching release. Each WebSocket owns its held keys and buttons; one connection cannot release another connection's input. Core releases all owned input when the WebSocket disconnects, input execution fails, or Core shuts down. HTTP JSON-RPC requests reject persistent press and release tokens because HTTP has no durable session lifecycle.
+
+Keys sent by a client that is neither localhost nor an admin are checked against the `allow` and `block` lists in the `[zapscript.input]` config section, the same lists the ZapScript input commands use. On desktop platforms a default block list rejects keys such as `{alt+f4}`, `{ctrl+alt+delete}` and the Linux TTY switches. Wrapping a key in a `{press:...}`, `{release:...}` or `{hold:...}` macro does not evade the lists. Setting `block = []` clears the defaults. Unlike the ZapScript path, the API does not apply the `mode` setting, so plain characters can always be typed by a client that holds `input`.
+
+On Windows, Core runs unelevated in the user's desktop session, so two limits apply that Core cannot detect or work around: keys sent to a window belonging to an elevated program are silently discarded by Windows, and nothing reaches the secure desktop, meaning UAC prompts, the lock screen and Ctrl+Alt+Del. Keys are injected as scancodes, so which character a key produces still depends on the active keyboard layout.
+
+The virtual gamepad needs a driver on Windows. `input.gamepad` emulates an Xbox 360 controller through ViGEmBus, a kernel-mode driver the Zaparoo installer offers as an optional task; Core never installs it on its own, and installing it is the only step that needs administrator rights. Gamepad support is also off by default on Windows, because an unexpected virtual pad changes controller numbering in games: set `gamepad_enabled = true` under `[input]` to turn it on. With the setting on and the driver absent, `input.gamepad` reports that the driver is missing instead of reporting success. Uninstalling Zaparoo leaves the driver in place, because other software may be using it; remove it separately through Apps & Features, where it is listed as "ViGEm Bus Driver".
+
+The driver is published for x86 and x64 only, so the ARM64 build of Zaparoo does not offer the task and has no virtual gamepad: `gamepad_enabled` there reports the driver as missing whatever the setting says. Keyboard input is unaffected on every architecture.
 
 ### input.keyboard
 

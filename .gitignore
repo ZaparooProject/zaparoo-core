@@ -28,6 +28,7 @@ Taskfile.yml
 .task/
 
 /pkg/assets/_app/dist
+/pkg/assets/_app/packed/dist
 
 /bin
 /_bin
@@ -36,6 +37,7 @@ Taskfile.yml
 /out
 /scripts/mister/build/_build
 /mister
+!/mister/
 /linux
 
 .DS_Store

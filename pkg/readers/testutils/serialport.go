@@ -20,30 +20,18 @@
 package testutils
 
 import (
-	"fmt"
-	"time"
-
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/serialport"
 	"go.bug.st/serial"
 )
 
-// SerialPort defines the interface for serial port operations.
-// This interface is used by serial-based readers for dependency injection and testing.
-type SerialPort interface {
-	Read(p []byte) (n int, err error)
-	Close() error
-	SetReadTimeout(t time.Duration) error
-}
+// SerialPort preserves compatibility for existing reader test helpers.
+type SerialPort = serialport.SerialPort
 
-// SerialPortFactory creates a serial port connection.
-// This factory pattern allows readers to be testable by injecting mock implementations.
-type SerialPortFactory func(path string, mode *serial.Mode) (SerialPort, error)
+// SerialPortFactory preserves compatibility for existing reader test helpers.
+type SerialPortFactory = serialport.SerialPortFactory
 
-// DefaultSerialPortFactory is the default factory that opens real serial ports.
-// It wraps the go.bug.st/serial library for production use.
+// DefaultSerialPortFactory delegates to the production serial factory.
 func DefaultSerialPortFactory(path string, mode *serial.Mode) (SerialPort, error) {
-	port, err := serial.Open(path, mode)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open serial port: %w", err)
-	}
-	return port, nil
+	//nolint:wrapcheck // Preserve existing errors in this compatibility wrapper.
+	return serialport.DefaultSerialPortFactory(path, mode)
 }

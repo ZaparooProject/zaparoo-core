@@ -29,35 +29,47 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
-	"github.com/grandcat/zeroconf"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery/mdns"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
 // ServiceType is the DNS-SD service type for Zaparoo Core.
 const ServiceType = "_zaparoo._tcp"
 
-// retryInterval is how often to retry mDNS registration when network is unavailable.
-const retryInterval = 30 * time.Second
+// watchInterval is how often the interface list is re-examined. It covers both
+// a network that was not ready when Core started and one that changes later:
+// an Ethernet cable plugged in after startup is advertised within a tick,
+// without restarting Core.
+const watchInterval = 15 * time.Second
 
-// maxRetryDuration is the maximum time to keep retrying mDNS registration.
-const maxRetryDuration = 5 * time.Minute
-
-// virtualInterfacePrefixes lists common prefixes for virtual/container network interfaces
-// that should be excluded from mDNS registration.
+// virtualInterfacePrefixes lists common prefixes for virtual/container network
+// interfaces that should be excluded from mDNS registration. "veth" also
+// covers Windows Hyper-V and WSL adapters, which are named
+// "vEthernet (<switch>)".
 var virtualInterfacePrefixes = []string{
 	"docker", "br-", "veth", "virbr", "lxc", "lxd",
 	"cni", "flannel", "cali", "tunl", "wg",
+	"vmware", "virtualbox",
 }
 
-// defaultTXTRecords is intentionally empty: device ID, version, and platform
-// are exposed only via the authenticated API. Broadcasting them on the LAN
-// would expose information useful for targeted attacks (version → known
-// vulnerabilities, platform → attack surface). Any change to this slice must
-// be pinned by TestDefaultTXTRecordsAreEmpty.
-var defaultTXTRecords = []string{}
+// defaultTXTRecords carries no data: device ID, version, and platform are
+// exposed only via the authenticated API. Broadcasting them on the LAN would
+// expose information useful for targeted attacks (version → known
+// vulnerabilities, platform → attack surface).
+//
+// "No data" is one zero-length string, not an empty slice. A TXT record must
+// hold at least one character-string (RFC 1035 §3.3.14, RFC 6763 §6.1), and an
+// empty slice packs to a TXT record with rdlength 0, which strict resolvers
+// reject — Apple's mDNSResponder drops the record outright, and some parsers
+// fail the whole response, taking the address records with it. Any change to
+// this slice must be pinned by TestDefaultTXTRecordsCarryNoData.
+var defaultTXTRecords = []string{""}
 
-// getPreferredInterfaces returns network interfaces suitable for mDNS registration.
-// It filters out loopback, down, non-multicast, and virtual interfaces.
+// getPreferredInterfaces returns network interfaces suitable for mDNS
+// registration. It filters out loopback, down, non-multicast, and virtual
+// interfaces. Interfaces with no address worth advertising are dropped later,
+// by the responder, which is where addresses are already being inspected.
 func getPreferredInterfaces() ([]net.Interface, error) {
 	allIfaces, err := net.Interfaces()
 	if err != nil {
@@ -106,28 +118,47 @@ func isVirtualInterface(name string) bool {
 	return false
 }
 
+// responder is the part of mdns.Responder the discovery service drives. The
+// watch loop is the fix for an interface that appears after startup, so it is
+// worth being able to test it without opening a socket.
+type responder interface {
+	Start(ifaces []net.Interface) error
+	SetInterfaces(ifaces []net.Interface) (bool, error)
+	Interfaces() []string
+	Stop()
+}
+
 // Service manages mDNS service advertising for network discovery.
 // It allows mobile apps to discover Zaparoo Core instances without
 // manual IP configuration.
 type Service struct {
-	server       *zeroconf.Server
-	cfg          *config.Instance
-	cancelFunc   context.CancelFunc
-	instanceName string
-	stopped      bool
-	mu           syncutil.Mutex
+	clock          clockwork.Clock
+	listInterfaces func() ([]net.Interface, error)
+	newResponder   func(svc *mdns.Service, logf func(string, ...any)) responder
+	responder      responder
+	cfg            *config.Instance
+	cancelFunc     context.CancelFunc
+	instanceName   string
+	mu             syncutil.Mutex
+	stopped        bool
 }
 
 // New creates a new discovery service.
 func New(cfg *config.Instance) *Service {
 	return &Service{
-		cfg: cfg,
+		cfg:            cfg,
+		clock:          clockwork.NewRealClock(),
+		listInterfaces: getPreferredInterfaces,
+		newResponder: func(svc *mdns.Service, logf func(string, ...any)) responder {
+			return mdns.New(svc, logf)
+		},
 	}
 }
 
-// Start begins mDNS service advertising. If initial registration fails due to
-// network unavailability, it starts a background retry loop. Returns an error
-// only for permanent failures (e.g., disabled by config).
+// Start begins mDNS service advertising and keeps it in step with the
+// machine's network interfaces. Registration failing right now is not an
+// error: the watch loop retries for as long as the service runs, because a
+// network that is not ready at boot usually becomes ready shortly after.
 func (s *Service) Start() error {
 	if !s.cfg.DiscoveryEnabled() {
 		log.Info().Msg("mDNS discovery disabled by configuration")
@@ -140,99 +171,103 @@ func (s *Service) Start() error {
 	}
 	s.instanceName = instanceName
 
-	if s.tryRegister() {
+	newResponder := s.newResponder(&mdns.Service{
+		Instance: instanceName,
+		Type:     ServiceType,
+		Host:     hostLabel(instanceName),
+		Port:     uint16(s.cfg.APIPort()), //nolint:gosec // a TCP port cannot exceed uint16
+		Text:     defaultTXTRecords,
+	}, func(format string, args ...any) {
+		log.Debug().Msgf("mDNS: "+format, args...)
+	})
+
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
 		return nil
 	}
-
-	log.Info().
-		Dur("retryInterval", retryInterval).
-		Dur("maxDuration", maxRetryDuration).
-		Msg("mDNS registration failed, starting background retry (network may not be ready)")
-
-	ctx, cancel := context.WithTimeout(context.Background(), maxRetryDuration)
-	s.mu.Lock()
+	s.responder = newResponder
+	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelFunc = cancel
 	s.mu.Unlock()
 
-	go s.retryLoop(ctx)
+	started := s.tryStart(newResponder, false)
+
+	go s.watchInterfaces(ctx, newResponder, started)
 
 	return nil
 }
 
-// tryRegister attempts to register the mDNS service. Returns true on success.
-func (s *Service) tryRegister() bool {
-	port := s.cfg.APIPort()
-
-	// See defaultTXTRecords for the rationale behind broadcasting an empty
-	// TXT record set.
-	txtRecords := defaultTXTRecords
-
-	ifaces, err := getPreferredInterfaces()
+// tryStart attempts registration once, reporting whether it succeeded. quiet
+// suppresses the failure log, so a machine that stays offline does not repeat
+// the same line every tick for as long as it runs.
+func (s *Service) tryStart(mdnsResponder responder, quiet bool) bool {
+	ifaces, err := s.listInterfaces()
 	if err != nil {
-		log.Debug().Err(err).Msg("failed to get network interfaces")
+		if !quiet {
+			log.Debug().Err(err).Msg("failed to get network interfaces")
+		}
 		return false
 	}
-
 	if len(ifaces) == 0 {
-		log.Debug().Msg("no suitable network interfaces found for mDNS")
+		if !quiet {
+			log.Debug().Msg("no suitable network interfaces found for mDNS, will keep watching")
+		}
 		return false
 	}
 
-	ifaceNames := make([]string, len(ifaces))
-	for i, iface := range ifaces {
-		ifaceNames[i] = iface.Name
-	}
-	log.Debug().Strs("interfaces", ifaceNames).Msg("selected interfaces for mDNS")
-
-	server, err := zeroconf.Register(
-		s.instanceName,
-		ServiceType,
-		"local.",
-		port,
-		txtRecords,
-		ifaces,
-	)
-	if err != nil {
-		log.Debug().Err(err).Msg("mDNS registration attempt failed")
+	if err := mdnsResponder.Start(ifaces); err != nil {
+		if !quiet {
+			log.Debug().Err(err).Msg("mDNS registration attempt failed, will keep watching")
+		}
 		return false
 	}
-
-	s.mu.Lock()
-	// Check if Stop() was called while we were registering. If so, shut down
-	// the newly created server immediately to avoid a resource leak.
-	if s.stopped {
-		s.mu.Unlock()
-		server.Shutdown()
-		return false
-	}
-	s.server = server
-	s.mu.Unlock()
 
 	log.Info().
 		Str("instance", s.instanceName).
-		Int("port", port).
+		Int("port", s.cfg.APIPort()).
 		Str("type", ServiceType).
-		Strs("interfaces", ifaceNames).
+		Strs("interfaces", mdnsResponder.Interfaces()).
 		Msg("mDNS service advertising started")
 
 	return true
 }
 
-// retryLoop periodically retries mDNS registration until successful or context expires.
-func (s *Service) retryLoop(ctx context.Context) {
-	ticker := time.NewTicker(retryInterval)
+// watchInterfaces keeps the advertised interface set in step with the machine.
+func (s *Service) watchInterfaces(ctx context.Context, mdnsResponder responder, started bool) {
+	ticker := s.clock.NewTicker(watchInterval)
 	defer ticker.Stop()
+
+	reportedFailure := !started
 
 	for {
 		select {
-		case <-ticker.C:
-			if s.tryRegister() {
-				log.Info().Msg("mDNS registration succeeded after retry")
-				return
-			}
 		case <-ctx.Done():
-			log.Warn().Msg("mDNS registration retry timed out, discovery will not be available")
 			return
+		case <-ticker.Chan():
+		}
+
+		if !started {
+			started = s.tryStart(mdnsResponder, reportedFailure)
+			reportedFailure = !started
+			continue
+		}
+
+		ifaces, err := s.listInterfaces()
+		if err != nil {
+			log.Debug().Err(err).Msg("failed to get network interfaces")
+			continue
+		}
+
+		changed, err := mdnsResponder.SetInterfaces(ifaces)
+		if err != nil {
+			log.Debug().Err(err).Msg("mDNS interface update failed")
+			continue
+		}
+		if changed {
+			log.Info().
+				Strs("interfaces", mdnsResponder.Interfaces()).
+				Msg("mDNS interfaces changed, advertising updated")
 		}
 	}
 }
@@ -240,19 +275,20 @@ func (s *Service) retryLoop(ctx context.Context) {
 // Stop gracefully shuts down mDNS advertising, sending goodbye packets.
 func (s *Service) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.stopped = true
+	cancel := s.cancelFunc
+	mdnsResponder := s.responder
+	s.cancelFunc = nil
+	s.responder = nil
+	s.mu.Unlock()
 
-	if s.cancelFunc != nil {
-		s.cancelFunc()
-		s.cancelFunc = nil
+	if cancel != nil {
+		cancel()
 	}
 
-	if s.server != nil {
+	if mdnsResponder != nil {
 		log.Debug().Msg("stopping mDNS service advertising")
-		s.server.Shutdown()
-		s.server = nil
+		mdnsResponder.Stop()
 	}
 }
 
@@ -272,12 +308,45 @@ func (s *Service) resolveInstanceName() (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get hostname, using fallback")
-		deviceID := s.cfg.DeviceID()
-		if len(deviceID) >= 8 {
-			return "zaparoo-" + deviceID[:8], nil
-		}
-		return "zaparoo", nil
+		return fallbackInstanceName(s.cfg.DeviceID()), nil
 	}
 
 	return hostname, nil
+}
+
+// fallbackInstanceName names the service when the machine will not say what it
+// is called. A slice of the device ID keeps two Zaparoo devices on one network
+// from colliding under the same name.
+func fallbackInstanceName(deviceID string) string {
+	if len(deviceID) >= 8 {
+		return "zaparoo-" + deviceID[:8]
+	}
+	return "zaparoo"
+}
+
+// hostLabel picks the single DNS label the SRV record targets. The machine's
+// own hostname is preferred so that "<host>.local" resolves the way the rest
+// of the network already expects; a configured instance name is only a
+// display name and may not match. A hostname that is already qualified is cut
+// back to its first label, because the responder appends ".local".
+func hostLabel(fallback string) string {
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		name = fallback
+	}
+	return firstLabel(name)
+}
+
+// firstLabel reduces a host name to the single DNS label the ".local" suffix
+// is appended to, so a machine named "mister.lan" is published as
+// "mister.local" the way avahi and Windows both publish it, rather than
+// "mister.lan.local".
+func firstLabel(name string) string {
+	if idx := strings.Index(name, "."); idx > 0 {
+		name = name[:idx]
+	}
+	if name == "" {
+		return "zaparoo"
+	}
+	return name
 }

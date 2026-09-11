@@ -42,6 +42,23 @@ func hasPersistentInputTokens(args []string) bool {
 	return false
 }
 
+// checkInputTokens applies the configured allow and block lists to a request's
+// tokens. Admins and localhost are exempt: they can already change the config
+// that defines the lists, so enforcing them there would only be theatre. A
+// member holds CapInput so the app's remote keyboard works, and this is what
+// stops that reaching {alt+f4} or {ctrl+alt+delete}.
+func checkInputTokens(env *requests.RequestEnv, args []string) error {
+	if isLocalOrAdmin(env) {
+		return nil
+	}
+	for _, arg := range args {
+		if err := zapscript.CheckAPIInputKey(env.Config, env.PlatformID, arg); err != nil {
+			return models.ClientErrf("%w", err)
+		}
+	}
+	return nil
+}
+
 func parseInputMacro(cmdName, macro string) ([]string, error) {
 	script, err := zapscriptlib.NewParser("**" + cmdName + ":" + macro).ParseScript()
 	if err != nil {
@@ -65,6 +82,10 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 
 	args, err := parseInputMacro(zapscriptlib.ZapScriptCmdInputKeyboard, params.Keys)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := checkInputTokens(&env, args); err != nil {
 		return nil, err
 	}
 
@@ -98,6 +119,10 @@ func HandleInputGamepad(env requests.RequestEnv) (any, error) {
 
 	args, err := parseInputMacro(zapscriptlib.ZapScriptCmdInputGamepad, params.Buttons)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := checkInputTokens(&env, args); err != nil {
 		return nil, err
 	}
 

@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  test-sanitized-amd64:
+    desc: Test Linux release packages with fatal C undefined-behavior checks
+    cmds:
+      - task: :zigcc:test-linux-amd64-sanitized
+
   dev:
     desc: Start air for live reload development using current architecture
     cmds:

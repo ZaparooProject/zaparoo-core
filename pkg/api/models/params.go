@@ -27,32 +27,35 @@ import (
 )
 
 type SearchParams struct {
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	PathPrefix  *string   `json:"pathPrefix,omitempty"`
-	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-	Query       *string   `json:"query"`
+	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix    *string   `json:"pathPrefix,omitempty"`
+	MaxResults    *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
+	Cursor        *string   `json:"cursor,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Query         *string   `json:"query"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 type BrowseParams struct {
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	Path        *string   `json:"path,omitempty"`
-	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
-	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	Path          *string   `json:"path,omitempty"`
+	RootView      *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
+	MaxResults    *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor        *string   `json:"cursor,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 type SystemsParams struct {
-	Tags *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	All  bool      `json:"all,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	All           bool      `json:"all,omitempty"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 // LaunchersParams filters the launchers list. Systems is intentionally not
@@ -163,6 +166,10 @@ type ReaderConnection struct {
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
+	// ScanMode is validated by the handler rather than by a tag, so it accepts
+	// the same spellings a config file does ("HOLD", " hold ") and stores the
+	// canonical one. See config.NormalizeScanMode.
+	ScanMode string `json:"scanMode,omitempty"`
 }
 
 type SystemDefault struct {
@@ -177,22 +184,30 @@ func (r ReaderConnection) IsEnabled() bool {
 	return r.Enabled == nil || *r.Enabled
 }
 
+// ConnectionLabel names this connection for an error message, in the same
+// driver:path form the config file and logs use.
+func (r ReaderConnection) ConnectionLabel() string {
+	return r.Driver + ":" + r.Path
+}
+
 type UpdateSettingsParams struct {
-	RunZapScript              *bool               `json:"runZapScript"`
-	DebugLogging              *bool               `json:"debugLogging"`
-	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
-	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
-	ErrorReporting            *bool               `json:"errorReporting"`
-	Encryption                *bool               `json:"encryption"`
-	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
-	PlaytimeSyncEnabled       *bool               `json:"playtimeSyncEnabled"`
-	RemoteControlEnabled      *bool               `json:"remoteControlEnabled"`
-	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
-	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
-	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
-	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
-	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
-	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	RunZapScript            *bool     `json:"runZapScript"`
+	DebugLogging            *bool     `json:"debugLogging"`
+	AudioScanFeedback       *bool     `json:"audioScanFeedback"`
+	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
+	ErrorReporting          *bool     `json:"errorReporting"`
+	Encryption              *bool     `json:"encryption"`
+	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
+	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
+	RemoteControlEnabled    *bool     `json:"remoteControlEnabled"`
+	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
+	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
+	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
+	// dive is what makes the tags on ReaderConnection run at all: without it
+	// the validator stops at the slice and every element goes unchecked.
+	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty" validate:"omitempty,dive"`
 	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
@@ -212,6 +227,21 @@ type UpdatePlaytimeLimitsParams struct {
 	SessionReset *string   `json:"sessionReset" validate:"omitempty,duration"`
 	Warnings     *[]string `json:"warnings" validate:"omitempty,dive,duration"`
 	Retention    *int      `json:"retention" validate:"omitempty,gte=0"`
+}
+
+// ExtendPlaytimeParams asks for extra time on the session currently being
+// limited. The recipient is never named by the caller: a grant always
+// applies to the profile governing playtime right now, so it cannot be
+// aimed at somebody else's session.
+type ExtendPlaytimeParams struct {
+	// Duration is the time to add, in Go duration format. Required for
+	// mode "duration" and ignored for "today".
+	Duration *string `json:"duration" validate:"omitempty,duration"`
+	// RequestID makes a grant idempotent across retries. Repeating a
+	// request ID reports the original grant instead of adding more time.
+	RequestID string `json:"requestId" validate:"omitempty,max=128"`
+	// Mode is "duration" or "today".
+	Mode string `json:"mode" validate:"required,oneof=duration today"`
 }
 
 type NewClientParams struct {
@@ -361,9 +391,17 @@ type MediaImageParams struct {
 }
 
 type MediaScrapeParams struct {
-	ScraperID string   `json:"scraperId" validate:"required,min=1"`
-	Systems   []string `json:"systems"   validate:"omitempty,dive,min=1"`
-	Force     bool     `json:"force"`
+	Scope     *MediaScrapeScope `json:"scope,omitempty"`
+	ScraperID string            `json:"scraperId" validate:"required,min=1"`
+	Systems   []string          `json:"systems"   validate:"omitempty,dive,min=1"`
+	Force     bool              `json:"force"`
+}
+
+type MediaLookupCandidatesParams struct {
+	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
+	MaxResults  *int   `json:"maxResults,omitempty" validate:"omitempty,min=1,max=5"`
+	Name        string `json:"name" validate:"required,min=1,max=256"`
+	System      string `json:"system" validate:"required,min=1,max=256"`
 }
 
 type MediaLookupParams struct {

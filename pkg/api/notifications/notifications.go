@@ -76,6 +76,11 @@ func sendNotification(ns chan<- models.Notification, method string, payload any)
 	}
 }
 
+// MediaVisibility asks clients to refresh discovery and hidden indicators.
+func MediaVisibility(ns chan<- models.Notification) {
+	sendNotification(ns, models.NotificationMediaVisibility, nil)
+}
+
 func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
@@ -126,6 +131,10 @@ func PlaytimeLimitReached(ns chan<- models.Notification, payload models.Playtime
 
 func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.PlaytimeLimitWarningParams) {
 	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
+}
+
+func PlaytimeExtended(ns chan<- models.Notification, payload *models.PlaytimeExtendedParams) {
+	sendNotification(ns, models.NotificationPlaytimeExtended, payload)
 }
 
 func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {

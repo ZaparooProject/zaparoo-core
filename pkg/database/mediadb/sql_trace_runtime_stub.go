@@ -22,7 +22,7 @@
 package mediadb
 
 func sqliteDriverName() string {
-	return "sqlite3"
+	return sqliteMediaDriver
 }
 
 func logSQLTraceSummary() {}

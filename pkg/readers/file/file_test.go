@@ -197,6 +197,29 @@ func TestOpen_InvalidDriverID(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid reader id")
 }
 
+// The driver ID in a config file is user input, so its case is not part of the
+// name. connectReaders already matches the driver on the normalized ID, so a
+// driver comparing it exactly refused to open a reader that had been selected
+// for it — leaving the reader missing with nothing logged.
+func TestOpen_DriverIDIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	for _, driver := range []string{"file", "File", "FILE"} {
+		cfg := &config.Instance{}
+		reader := NewReader(cfg)
+		scanQueue := testutils.CreateTestScanChannel(t)
+
+		device := config.ReadersConnect{
+			Driver: driver,
+			Path:   filepath.Join(t.TempDir(), "token.txt"),
+		}
+
+		err := reader.Open(device, scanQueue, readers.OpenOpts{})
+		require.NoError(t, err, "driver %q names the file driver", driver)
+		require.NoError(t, reader.Close())
+	}
+}
+
 func TestOpen_RelativePath(t *testing.T) {
 	t.Parallel()
 

@@ -24,7 +24,6 @@ package mgls
 import (
 	"bytes"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	mglgen "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgl"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -103,60 +103,11 @@ func ReadMRA(path string) (MRA, error) {
 	return mra, nil
 }
 
-// xmlEscapeAttr escapes XML-reserved characters for use in attribute values.
-// MiSTer's MGL parser (SXMLC) decodes these entities when reading paths.
-func xmlEscapeAttr(v string) string {
-	r := s.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-	)
-	return r.Replace(v)
-}
-
+// GenerateMgl is retained for compatibility. New dependency-light callers
+// should use mgl.Generate directly.
 func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
-	if core == nil {
-		return "", errors.New("no core supplied for MGL generation")
-	}
-
-	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
-
-	if core.SetName != "" {
-		sameDir := ""
-		if core.SetNameSameDir {
-			sameDir = " same_dir=\"1\""
-		}
-
-		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, xmlEscapeAttr(core.SetName))
-	}
-
-	if path == "" {
-		mgl += "</mistergamedescription>"
-		return mgl, nil
-	} else if override != "" {
-		mgl += override
-		mgl += "</mistergamedescription>"
-		return mgl, nil
-	}
-
-	mglDef, err := cores.PathToMGLDef(core, path)
-	if err != nil {
-		return "", fmt.Errorf("failed to get MGL definition: %w", err)
-	}
-
-	mgl += fmt.Sprintf(
-		"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
-		mglDef.Delay, mglDef.Method, mglDef.Index, xmlEscapeAttr(path),
-	)
-
-	if mglDef.ResetDelay > 0 {
-		mgl += fmt.Sprintf("\t<reset delay=\"%d\" hold=\"%d\"/>\n",
-			mglDef.ResetDelay, mglDef.ResetHold)
-	}
-
-	mgl += "</mistergamedescription>"
-	return mgl, nil
+	//nolint:wrapcheck // Compatibility wrapper preserves the dependency-light package error.
+	return mglgen.Generate(core, rbfPath, path, override)
 }
 
 func writeTempFile(content string) (string, error) {

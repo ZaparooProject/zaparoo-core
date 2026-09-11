@@ -303,10 +303,20 @@ include the 20% manual and 40% automatic thresholds.
 
 ### Steam Deck / SteamOS
 
-Verify checking while charging/discharging, automatic rejection at 39%,
-acceptance at 40%, charger removal after staging but before the immediate
-pre-install check, normal confirmation, and failed-start rollback without a
-supervisor restart loop.
+Verify checking while charging/discharging, automatic rejection below the
+automatic floor, acceptance above it, charger removal after staging but before
+the immediate pre-install check, normal confirmation, and failed-start rollback.
+
+A refused automatic install is silent. Nothing is logged and no marker is
+written, so a device that is simply not installing looks the same as one that
+never checked. Read `update.status`: an update it reports as available on a
+device with `install = true` that stays on its old version is being held by a
+gate, and the battery is the usual reason.
+
+The rollback happens in the same boot, before the process exits, so the user
+unit's `Restart=on-failure` is never triggered and `NRestarts` stays at zero.
+Do not wait for the supervisor to restart the bad build or for a second boot to
+roll it back — neither happens, and watching for them reads as a hang.
 
 ### Batocera
 

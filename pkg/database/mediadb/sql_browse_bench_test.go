@@ -34,6 +34,80 @@ import (
 
 const browseBenchRows = 1000
 
+func BenchmarkBrowseSortIndexCreate_239k(b *testing.B) {
+	const rows = 239_000
+
+	for _, tc := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "binary",
+			ddl:  "CREATE INDEX idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID)",
+		},
+		{
+			name: "natural",
+			ddl: "CREATE INDEX idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName COLLATE " +
+				browseTitleCollationName + ", DBID)",
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+			defer cleanup()
+			require.NoError(b, dropBrowseSortIndex(mediaDB))
+			seedBrowseSortIndexBenchmark(b, mediaDB, rows)
+			b.ReportMetric(rows, "rows")
+			b.ResetTimer()
+
+			for b.Loop() {
+				b.StopTimer()
+				require.NoError(b, dropBrowseSortIndex(mediaDB))
+				b.StartTimer()
+				_, err := mediaDB.sql.Load().ExecContext(context.Background(), tc.ddl)
+				require.NoError(b, err)
+			}
+		})
+	}
+}
+
+func dropBrowseSortIndex(mediaDB *MediaDB) error {
+	_, err := mediaDB.sql.Load().ExecContext(context.Background(), "DROP INDEX IF EXISTS idx_media_browse_sort")
+	if err != nil {
+		return fmt.Errorf("drop browse sort benchmark index: %w", err)
+	}
+	return nil
+}
+
+func seedBrowseSortIndexBenchmark(b *testing.B, mediaDB *MediaDB, rows int) {
+	b.Helper()
+	ctx := context.Background()
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'Bench', 'Bench');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'bench', 'Bench');
+	`)
+	require.NoError(b, err)
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName)
+		VALUES (1, 1, ?, ?, ?)
+	`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, stmt.Close()) }()
+
+	for i := range rows {
+		shuffled := (i * 104729) % rows
+		parentDir := fmt.Sprintf("/roms/system-%03d/", i%96)
+		name := fmt.Sprintf("Game: Variant %d! Disc %d", shuffled, i%12)
+		path := fmt.Sprintf("%sgame-%06d.rom", parentDir, i)
+		_, err = stmt.ExecContext(ctx, path, parentDir, name)
+		require.NoError(b, err)
+	}
+	require.NoError(b, tx.Commit())
+}
+
 func BenchmarkBrowseFiles_TagAttach_100(b *testing.B) {
 	benchBrowseFilesTagAttach(b, "no-tags", false)
 	benchBrowseFilesTagAttach(b, "with-tags", true)
@@ -145,6 +219,261 @@ func seedBenchCoverFlagsDB(b *testing.B, mediaDB *MediaDB, rows int) []int64 {
 	return mediaIDs
 }
 
+// BenchmarkBrowseFilesDeepPage measures the cost of a page late in a large flat
+// folder against a page at its start.
+//
+// This is the #1460 shape: a system folder holding thousands of files directly,
+// paged a visual page at a time. If the keyset predicate is not something the
+// planner can turn into an index range, a page starts at the top of the folder
+// and filters forward, so the deep page costs proportionally more than the
+// first one and walking the folder is quadratic in its size. The two sub-cases
+// are the same statement over the same data, differing only in how far in the
+// cursor sits, so the ratio between them is the thing to watch.
+func BenchmarkBrowseFilesDeepPage(b *testing.B) {
+	const (
+		rows     = 7000
+		pageSize = 6
+	)
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+
+	// The cursor a client holds at each depth, taken from a real page walk so
+	// the values are the ones production would carry.
+	cursorAt := func(offset int) *database.BrowseCursor {
+		var cursor *database.BrowseCursor
+		for read := 0; read < offset; read += pageSize {
+			page, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+				PathPrefix: parentDir,
+				Cursor:     cursor,
+				Limit:      pageSize,
+				Sort:       "name-asc",
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, page)
+			last := page[len(page)-1]
+			cursor = &database.BrowseCursor{
+				SortValue: last.SortValue,
+				SortMode:  last.SortMode,
+				LastID:    last.MediaID,
+			}
+		}
+		return cursor
+	}
+
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"page_2", pageSize},
+		{"page_1000", rows - 2*pageSize},
+	} {
+		cursor := cursorAt(tc.offset)
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(rows), "folder_files")
+			for b.Loop() {
+				page, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+					PathPrefix: parentDir,
+					Cursor:     cursor,
+					Limit:      pageSize,
+					Sort:       "name-asc",
+				})
+				require.NoError(b, err)
+				require.Len(b, page, pageSize)
+			}
+		})
+	}
+}
+
+// BenchmarkBrowseOverlayFileCount_LargeRoute measures what #1398 paid to count
+// the files in a system's root.
+//
+// "merge" is the statement a one-route overlay used to run: rank every direct
+// file in the route by filename, probe higher-priority routes per candidate, and
+// re-join Media to re-check IsMissing. "collapsed" is what a one-route overlay
+// runs now, a summed BrowseDirCounts self row. Both are measured against the
+// same seeded route so the difference is the statement and not the data.
+func BenchmarkBrowseOverlayFileCount_LargeRoute(b *testing.B) {
+	const rows = 20_000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+	opts := database.BrowseFileCountOptions{Overlay: overlay}
+
+	b.Run("merge", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseOverlayFileCount(ctx, sqlDB, opts)
+			require.NoError(b, err)
+			require.Equal(b, rows, count)
+		}
+	})
+
+	b.Run("collapsed", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseFileCount(ctx, sqlDB, opts)
+			require.NoError(b, err)
+			require.Equal(b, rows, count)
+		}
+	})
+}
+
+// BenchmarkBrowseOverlayMerge_TwoRoutes measures the merged root a one-route
+// collapse cannot help: a system whose media sits under two roots still has to
+// resolve one row per filename across them.
+//
+// The large route is second, which is the order MiSTer produces when the library
+// is on the SD card and a few games are on USB, and the order that makes the
+// merge pay a probe for every row it reads.
+func BenchmarkBrowseOverlayMerge_TwoRoutes(b *testing.B) {
+	const rows = 20_000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+
+	b.Run("count", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			count, err := sqlBrowseFileCount(ctx, sqlDB,
+				database.BrowseFileCountOptions{Overlay: overlay})
+			require.NoError(b, err)
+			require.Equal(b, rows+3, count)
+		}
+	})
+
+	b.Run("files", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			files, err := sqlBrowseFiles(ctx, sqlDB,
+				&database.BrowseFilesOptions{Overlay: overlay, Limit: 26})
+			require.NoError(b, err)
+			require.Len(b, files, 26)
+		}
+	})
+}
+
+// BenchmarkBrowseOverlayDeepPage is BenchmarkBrowseFilesDeepPage for a merged
+// system root, which is the view a frontend opens a system into and the one
+// #1460 was reported against. Each route seeks separately, so a keyset the
+// planner cannot use as an index range costs the deep page every row of every
+// route before it.
+func BenchmarkBrowseOverlayDeepPage(b *testing.B) {
+	const (
+		rows     = 7000
+		pageSize = 6
+	)
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	large := seedBenchBrowseDB(b, mediaDB, rows, false)
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: large, IncludeDirs: true},
+	}}
+
+	cursorAt := func(offset int) *database.BrowseCursor {
+		var cursor *database.BrowseCursor
+		for read := 0; read < offset; read += pageSize {
+			page, err := sqlBrowseFiles(ctx, sqlDB, &database.BrowseFilesOptions{
+				Overlay: overlay,
+				Cursor:  cursor,
+				Limit:   pageSize,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, page)
+			last := page[len(page)-1]
+			cursor = &database.BrowseCursor{
+				SortValue: last.SortValue,
+				SortMode:  last.SortMode,
+				LastID:    last.MediaID,
+			}
+		}
+		return cursor
+	}
+
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"page_2", pageSize},
+		{"page_1000", rows - 2*pageSize},
+	} {
+		cursor := cursorAt(tc.offset)
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(rows), "route_files")
+			for b.Loop() {
+				page, err := sqlBrowseFiles(ctx, sqlDB, &database.BrowseFilesOptions{
+					Overlay: overlay,
+					Cursor:  cursor,
+					Limit:   pageSize,
+				})
+				require.NoError(b, err)
+				require.Len(b, page, pageSize)
+			}
+		})
+	}
+}
+
+// seedBenchSecondRoute adds a small second route for the same system, so the
+// merge has something to resolve names against.
+func seedBenchSecondRoute(b *testing.B, mediaDB *MediaDB, rows int) string {
+	b.Helper()
+	ctx := context.Background()
+	parentDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "bench2")) + "/"
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName)
+		VALUES (1, 1, ?, ?, ?)
+	`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, stmt.Close()) }()
+
+	for i := range rows {
+		name := fmt.Sprintf("second-%04d", i)
+		_, err = stmt.ExecContext(ctx, parentDir+name+".rom", parentDir, name)
+		require.NoError(b, err)
+	}
+	require.NoError(b, tx.Commit())
+	return parentDir
+}
+
 func setupBrowseBenchMediaDB(b *testing.B) (mediaDB *MediaDB, cleanup func()) {
 	b.Helper()
 	tempDir, err := os.MkdirTemp("", "zaparoo-browse-bench-mediadb-*")
@@ -155,6 +484,9 @@ func setupBrowseBenchMediaDB(b *testing.B) (mediaDB *MediaDB, cleanup func()) {
 
 	mediaDB, err = OpenMediaDB(context.Background(), mockPlatform)
 	require.NoError(b, err)
+	// Browse benchmarks model a database after media update has run the
+	// secondary-index creation phase.
+	require.NoError(b, mediaDB.CreateSecondaryIndexes())
 	cleanup = func() {
 		if mediaDB != nil {
 			_ = mediaDB.Close()
@@ -304,4 +636,50 @@ func seedBenchBrowseCacheSystems(b *testing.B, mediaDB *MediaDB, systems int) []
 	}
 	require.NoError(b, tx.Commit())
 	return systemIDs
+}
+
+// BenchmarkBrowseIndexFacet measures the letter rail on a large flat folder,
+// the shape #1460 reported. The facet reads the whole partition by design, so
+// it is the one browse statement that cannot be made page-sized; what it can
+// avoid is doing that read three times over.
+func BenchmarkBrowseIndexFacet(b *testing.B) {
+	const rows = 7000
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+	defer cleanup()
+	parentDir := seedBenchBrowseDB(b, mediaDB, rows, false)
+	require.NoError(b, sqlAnalyze(ctx, mediaDB.sql.Load()))
+	sqlDB := mediaDB.sql.Load()
+
+	b.Run("single_directory", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "folder_files")
+		for b.Loop() {
+			result, err := sqlBrowseIndex(ctx, sqlDB, &database.BrowseIndexOptions{
+				PathPrefix: parentDir,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, result.Buckets)
+		}
+	})
+
+	small := seedBenchSecondRoute(b, mediaDB, 3)
+	require.NoError(b, sqlPopulateBrowseCache(ctx, sqlDB))
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: small, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}}
+
+	b.Run("merged_root", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(rows, "route_files")
+		for b.Loop() {
+			result, err := sqlBrowseIndex(ctx, sqlDB, &database.BrowseIndexOptions{
+				Overlay: overlay,
+			})
+			require.NoError(b, err)
+			require.NotEmpty(b, result.Buckets)
+		}
+	})
 }

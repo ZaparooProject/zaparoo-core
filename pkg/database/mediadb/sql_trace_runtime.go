@@ -61,6 +61,9 @@ var runtimeSQLTrace = newRuntimeSQLTraceCollector()
 func init() {
 	sql.Register(sqliteTraceRuntimeDriver, &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			if err := registerMediaSQLiteCollations(conn); err != nil {
+				return err
+			}
 			if !config.IsDevelopmentVersion() {
 				return nil
 			}
@@ -77,7 +80,7 @@ func sqliteDriverName() string {
 	if config.IsDevelopmentVersion() {
 		return sqliteTraceRuntimeDriver
 	}
-	return "sqlite3"
+	return sqliteMediaDriver
 }
 
 func newRuntimeSQLTraceCollector() *runtimeSQLTraceCollector {

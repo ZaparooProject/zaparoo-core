@@ -548,14 +548,6 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
-func IsTruthy(s string) bool {
-	return strings.EqualFold(s, "true") || strings.EqualFold(s, "yes")
-}
-
-func IsFalsey(s string) bool {
-	return strings.EqualFold(s, "false") || strings.EqualFold(s, "no")
-}
-
 func MaybeJSON(data []byte) bool {
 	for _, b := range data {
 		switch b {

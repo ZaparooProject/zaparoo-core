@@ -52,6 +52,7 @@ type Tracker struct {
 	done        chan struct{}
 	trackedMu   syncutil.Mutex
 	wg          sync.WaitGroup
+	stopOnce    sync.Once
 }
 
 // New creates a new macOS Steam game tracker.
@@ -75,9 +76,14 @@ func (t *Tracker) Start() error {
 	return nil
 }
 
-// Stop stops tracking Steam games.
+// Stop stops tracking Steam games. Stopping twice is a no-op rather than a
+// panic on the closed channel: the platform stops the tracker on shutdown,
+// and a second stop from a test cleanup or a repeated shutdown must not take
+// the process down with it.
 func (t *Tracker) Stop() {
-	close(t.done)
+	t.stopOnce.Do(func() {
+		close(t.done)
+	})
 	t.wg.Wait()
 	log.Info().Msg("macOS Steam game tracker stopped")
 }

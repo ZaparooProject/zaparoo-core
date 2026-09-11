@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
@@ -268,6 +269,9 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 	mockPlatform.On("StartPre", cfg).Return(nil)
 	mockPlatform.On("Stop").Return(nil).Maybe()
 
+	// The runtime keeps the crash file open until the process exits, which
+	// stops Windows removing this test's TempDir.
+	t.Cleanup(crashdump.Stop)
 	svcResult, err := Start(mockPlatform, cfg)
 	require.Nil(t, svcResult)
 	require.Error(t, err)
@@ -447,6 +451,55 @@ func TestWireNativeAudioDrainCallbacks_PrimaryDrainKeepsOtherLaunchersMedia(t *t
 	assert.NotNil(t, st.ActiveMedia(), "natural audio drain must not clear another launcher's media")
 }
 
+// TestClearNativeAudioPrimaryMedia covers the helper shared by the drain callback and
+// the native-audio stop control, which is what makes an explicit **control:stop clear
+// playing state the same way media.control does.
+func TestClearNativeAudioPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	newSvc := func(t *testing.T, media *models.ActiveMedia) *ServiceContext {
+		t.Helper()
+		st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+		t.Cleanup(func() {
+			st.StopService()
+			for {
+				select {
+				case <-ns:
+				default:
+					return
+				}
+			}
+		})
+		if media != nil {
+			st.SetActiveMedia(media)
+		}
+		return &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	}
+
+	t.Run("clears native audio media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia(
+			"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+		))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("keeps another launcher's media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "mister-launcher"))
+		clearNativeAudioPrimaryMedia(svc)
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("no active media is a no-op", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nil)
+		clearNativeAudioPrimaryMedia(svc)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+}
+
 func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {
 	t.Parallel()
 
@@ -508,6 +561,7 @@ func (*resumePlaybackStub) Pause(_ string) error                            { re
 func (*resumePlaybackStub) TogglePause(_ string) error                      { return nil }
 func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
 func (*resumePlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
+
 func (s *resumePlaybackStub) Resume(slot string) error {
 	s.resumed = append(s.resumed, slot)
 	return s.resumeErr
@@ -1473,7 +1527,71 @@ func TestCheckAndResumeScraping_WriteConflictPreservesDurableOperation(t *testin
 	mockMediaDB.AssertExpectations(t)
 }
 
-func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
+func TestCheckAndResumeScrapingVersionedQueueWaitsForOptimization(t *testing.T) {
+	methods.ClearScrapingStatus()
+	t.Cleanup(methods.ClearScrapingStatus)
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+	cfg, err := testhelpers.NewTestConfig(testhelpers.NewMemoryFS(), t.TempDir())
+	require.NoError(t, err)
+	op := database.ScrapingOperation{
+		Version: 1, Status: mediadb.IndexingStatusPending,
+		ScraperID: "local", RunID: "durable", FillMissing: true, Systems: []string{"SNES"},
+	}
+	mdb := testhelpers.NewMockMediaDBI()
+	// Simulate a failed legacy-status update after queue acceptance.
+	mdb.On("GetScrapingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	mdb.On("GetScrapingOperation").Return(op, true, nil).Times(3)
+	mdb.On("GetOptimizationStatus").Return(mediadb.IndexingStatusPending, nil).Once()
+	mdb.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	running := op
+	running.Status = mediadb.IndexingStatusRunning
+	mdb.On("SetScrapingOperation", running).Return(nil).Once()
+	mdb.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mdb.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mdb.On("ClearScrapingOperation").Return(nil).Once()
+	mdb.On("ClearScrapeRunMarkers", mock.Anything, "local", "durable").Return(nil).Once()
+	mdb.On("GetScrapedMediaCount", mock.Anything, "local").Return(0, nil)
+	mdb.On("WALCheckpoint").Return(nil).Once()
+	mdb.On("TrackBackgroundOperation").Return().Once()
+	done := make(chan struct{})
+	mdb.On("BackgroundOperationDone").Run(func(mock.Arguments) { close(done) }).Return().Once()
+	pauser := syncutil.NewPauser()
+	started := false
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", cfg).Return(map[string]platforms.Scraper{"local": {
+		ID: "local", SupportsFillMissing: true,
+		Scrape: func(_ context.Context, _ *config.Instance, _ platforms.Platform, _ afero.Fs,
+			_ *database.Database, opts scraper.ScrapeOptions, _ platforms.ScraperCustomOptions,
+			ch chan<- scraper.ScrapeUpdate,
+		) error {
+			started = true
+			require.Same(t, pauser, opts.Pauser)
+			require.Equal(t, "durable", opts.RunID)
+			require.True(t, opts.FillMissing)
+			ch <- scraper.ScrapeUpdate{Done: true}
+			close(ch)
+			return nil
+		},
+	}})
+	st, _ := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+	db := &database.Database{MediaDB: mdb}
+	checkAndResumeScraping(pl, cfg, db, st, pauser)
+	require.False(t, started)
+	require.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryOptimization)
+	checkAndResumeScraping(pl, cfg, db, st, pauser)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("queued scrape did not drain")
+	}
+	require.True(t, started)
+	require.Eventually(t, func() bool { return !methods.IsScrapingRunning() }, time.Second, time.Millisecond)
+	mdb.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_PersistenceFailurePreservesJob(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	methods.ClearScrapingStatus()
 	fs := testhelpers.NewMemoryFS()
@@ -1482,11 +1600,16 @@ func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) 
 
 	operation := database.ScrapingOperation{ScraperID: "test-scraper"}
 	mockMediaDB := testhelpers.NewMockMediaDBI()
-	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
-	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
-	mockMediaDB.On("SetScrapingOperation", operation).Return(assert.AnError).Once()
-	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
-	mockMediaDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Twice()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Twice()
+	upgraded := operation
+	upgraded.Version, upgraded.Status = 1, mediadb.IndexingStatusRunning
+	mockMediaDB.On("SetScrapingOperation", upgraded).Return(assert.AnError).Once()
+	mockMediaDB.On("ClearScrapingOperation").Return(nil).Maybe()
+	t.Cleanup(func() {
+		mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
+		mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)
+	})
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Scrapers", cfg).Return(map[string]platforms.Scraper{
@@ -1953,4 +2076,195 @@ func TestConfirmPendingUpdate_ShutdownAbandonsTheWait(t *testing.T) {
 	case <-time.After(updateConfirmDelay):
 		t.Fatal("confirmPendingUpdate kept waiting after the service shut down")
 	}
+}
+
+// TestWireNativeAudioDrainCallbacks_NonNaturalPrimaryNoOp pins the split of
+// responsibilities behind an explicit stop. The drain fires with natural=false
+// for a stop or a replacement; the stop control clears the state itself and a
+// replacement's launch publishes the new track, so the callback must leave
+// active media alone.
+func TestWireNativeAudioDrainCallbacks_NonNaturalPrimaryNoOp(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.ActiveMedia())
+
+	svc := &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	registrar.callbacks[mediaslot.Primary](false)
+	assert.NotNil(t, st.ActiveMedia(), "an explicit stop or replacement drain must not clear primary media")
+}
+
+// TestStopNativeAudioPrimaryMedia covers the hook behind the native-audio stop
+// control: the stop runs under the media stop gate and the active media it owned
+// is cleared once it succeeds.
+func TestStopNativeAudioPrimaryMedia(t *testing.T) {
+	t.Parallel()
+
+	nativeTrack := func(name string) *models.ActiveMedia {
+		return models.NewActiveMedia("Audio", "Audio", name+".mp3", name, platforms.NativeAudioLauncherID)
+	}
+	newSvc := func(t *testing.T, media *models.ActiveMedia) *ServiceContext {
+		t.Helper()
+		st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+		t.Cleanup(func() {
+			st.StopService()
+			for {
+				select {
+				case <-ns:
+				default:
+					return
+				}
+			}
+		})
+		if media != nil {
+			st.SetActiveMedia(media)
+		}
+		return &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	}
+
+	t.Run("stops then clears native audio media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			stopped = true
+			assert.NotNil(t, svc.State.ActiveMedia(), "media is cleared after the stop, not before")
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, stopped)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("failed stop keeps media and returns the error", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		stopErr := errors.New("device busy")
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error { return stopErr })
+		require.ErrorIs(t, err, stopErr)
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("keeps another launcher's media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, models.NewActiveMedia("SNES", "SNES", "game.sfc", "Game", "mister-launcher"))
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			stopped = true
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, stopped, "the slot is still silenced even when a game owns the media")
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("nil context is tolerated", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		//nolint:staticcheck // the nil context is the case under test
+		err := stopNativeAudioPrimaryMedia(nil, svc, func() error { return nil })
+		require.NoError(t, err)
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("cancelled context skips the stop", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stopped := false
+		err := stopNativeAudioPrimaryMedia(ctx, svc, func() error {
+			stopped = true
+			return nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, stopped, "a stop that cannot take the gate must not run half way")
+		assert.NotNil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("waits for an in-flight launch", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		access, err := svc.State.AcquireMediaLaunch()
+		require.NoError(t, err)
+
+		stopped := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			done <- stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+				close(stopped)
+				return nil
+			})
+		}()
+		select {
+		case <-stopped:
+			t.Fatal("the stop ran while a launch held the media gate")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		// The launch publishes its track and releases the gate; the stop then
+		// lands on that track, so its state is what gets cleared.
+		access.SetActiveMedia(nativeTrack("replacement"))
+		access.Release()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the stop never acquired the media gate")
+		}
+		<-stopped
+		assert.Nil(t, svc.State.ActiveMedia())
+	})
+
+	t.Run("launch queued behind the stop keeps its media", func(t *testing.T) {
+		t.Parallel()
+		svc := newSvc(t, nativeTrack("track"))
+		inStop := make(chan struct{})
+		launched := make(chan struct{})
+		go func() {
+			defer close(launched)
+			<-inStop
+			access, err := svc.State.AcquireMediaLaunch()
+			if err != nil {
+				return
+			}
+			access.SetActiveMedia(nativeTrack("next"))
+			access.Release()
+		}()
+
+		err := stopNativeAudioPrimaryMedia(context.Background(), svc, func() error {
+			close(inStop)
+			select {
+			case <-launched:
+				t.Error("a launch published while the stop held the media gate")
+			case <-time.After(100 * time.Millisecond):
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		select {
+		case <-launched:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the launch never acquired the media gate after the stop released it")
+		}
+		media := svc.State.ActiveMedia()
+		require.NotNil(t, media, "the track launched after the stop must keep its state")
+		assert.Equal(t, "next", media.Name)
+	})
 }

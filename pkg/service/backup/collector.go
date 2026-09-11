@@ -157,10 +157,16 @@ func (m *Manager) definitionTrustedRoots(def *platforms.BackupDefinition) []stri
 	if len(def.SourceTrustedRoots) > 0 {
 		return canonicalCategoryRoots(def.SourceTrustedRoots, "")
 	}
+	if def.RestoreTargetRoot != "" {
+		return canonicalCategoryRoots([]string{def.SourceRoot}, "")
+	}
 	return definitionCategoryRoots(def, m.pl.RootDirs(m.cfg))
 }
 
 func definitionCategoryRoots(def *platforms.BackupDefinition, platformRoots []string) []string {
+	if def.RestoreTargetRoot != "" {
+		return canonicalCategoryRoots([]string{def.RestoreTargetRoot}, "")
+	}
 	storageRoots := make([]string, 0, len(platformRoots)+1)
 	if primary, ok := definitionStorageRoot(def); ok {
 		storageRoots = append(storageRoots, primary)
@@ -199,7 +205,7 @@ func canonicalCategoryRoots(storageRoots []string, categoryRoot string) []string
 	canonical := make([]string, 0, len(storageRoots))
 	for _, storageRoot := range storageRoots {
 		resolved, ok := canonicalPathFromExistingAncestor(storageRoot)
-		if !ok {
+		if !ok || filepath.Clean(resolved) == string(filepath.Separator) {
 			continue
 		}
 		root := filepath.Clean(filepath.Join(resolved, categoryRoot))
@@ -283,6 +289,9 @@ func (c *sourceCollector) walk(
 	}
 	if len(filepath.ToSlash(logicalRel)) > maxArchivePathLen {
 		c.warn(spec.definition.Category, "<path-too-long>", "source path exceeds portable limit")
+		return
+	}
+	if logicalRel != "" && backupPatternsMatch(filepath.ToSlash(logicalRel)+"/", spec.definition.Exclude) {
 		return
 	}
 	info, err := os.Lstat(physicalPath)

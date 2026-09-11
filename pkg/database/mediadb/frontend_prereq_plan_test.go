@@ -103,13 +103,13 @@ func TestFrontendPrerequisiteQueryPlansUseExistingIndexes(t *testing.T) {
 			Tags:       favorite,
 			Limit:      100,
 		}
-		whereClause, args := browseFilesBaseCondition(opts)
+		whereClause, args := browseFilesBaseCondition(opts, browseTagPlan{})
 		args = append(args, opts.Limit)
 		plan := randomQueryPlan(t, mediaDB.sql.Load(), `
 			SELECT m.DBID
 			FROM Media m
 			WHERE `+whereClause+`
-			ORDER BY m.SortName ASC, m.DBID ASC
+			ORDER BY m.SortName COLLATE ZAPAROO_TITLE_V1 ASC, m.DBID ASC
 			LIMIT ?`, args...)
 		assertRandomPlanContains(t, plan, "mediatags_tag_media_idx")
 		assertRandomPlanContains(t, plan, "mediatitletags_tag_idx")

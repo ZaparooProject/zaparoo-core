@@ -26,11 +26,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -45,6 +49,35 @@ func newTestBroker(ctx context.Context, source <-chan models.Notification) *brok
 	b := broker.NewBroker(ctx, source)
 	b.Start()
 	return b
+}
+
+// waitForServerReady blocks until the API server has bound its listener and
+// written the resolved port back to the config, then returns that port.
+func waitForServerReady(t *testing.T, cfg *config.Instance) int {
+	t.Helper()
+
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	for range 100 {
+		port := cfg.APIPort()
+		if port == 0 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
+		if reqErr != nil {
+			continue
+		}
+		resp, connErr := client.Do(req) //nolint:gosec // test hitting local test server
+		if connErr == nil {
+			_ = resp.Body.Close()
+			return port
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatal("API server did not become ready")
+	return 0
 }
 
 func TestStartWithReadyReportsBindFailure(t *testing.T) {
@@ -78,7 +111,7 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, tokenQueue, nil, db,
-			nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil, ready,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
 		)
 	}()
 
@@ -143,7 +176,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 				defer close(serverDone)
 				serverErr <- StartWithReady(
 					platform, cfg, st, tokenQueue, nil, db,
-					nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil, ready,
+					nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
 				)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -226,7 +259,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	go func() {
 		defer close(serverDone)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -313,7 +346,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 	go func() {
 		defer close(done)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -649,6 +682,181 @@ func TestOriginPolicy_DelayedLocalIPAvailability(t *testing.T) {
 	))
 }
 
+func TestLocalHostNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hostname string
+		expected []string
+	}{
+		{
+			name:     "short hostname gains its mDNS name",
+			hostname: "MiSTer",
+			expected: []string{"MiSTer", "MiSTer.local"},
+		},
+		{
+			name:     "hostname already under .local is not doubled up",
+			hostname: "macbook.local",
+			expected: []string{"macbook.local"},
+		},
+		{
+			name:     "fully qualified hostname also covers its short label",
+			hostname: "mister.lan",
+			expected: []string{"mister.lan", "mister.lan.local", "mister.local"},
+		},
+		{
+			name:     "trailing dot is trimmed",
+			hostname: "mister.",
+			expected: []string{"mister", "mister.local"},
+		},
+		{
+			name:     "empty hostname contributes nothing",
+			hostname: "",
+			expected: nil,
+		},
+		{
+			name:     "whitespace hostname contributes nothing",
+			hostname: "   ",
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, localHostNames(tt.hostname))
+		})
+	}
+}
+
+func TestExpandHostNameOrigins(t *testing.T) {
+	t.Parallel()
+
+	result := expandHostNameOrigins([]string{"mister.local"}, 7497)
+
+	assert.Equal(t, []string{
+		"http://mister.local",
+		"https://mister.local",
+		"http://mister.local:7497",
+		"https://mister.local:7497",
+	}, result)
+}
+
+func TestOriginPolicy_MDNSHostname(t *testing.T) {
+	t.Parallel()
+
+	port := 7497
+	staticOrigins := buildStaticAllowedOrigins(allowedOrigins, nil, port)
+	staticOrigins = append(staticOrigins, expandHostNameOrigins(localHostNames("mister"), port)...)
+	localIPsProvider := func() []string { return nil }
+	customOriginsProvider := func() []string { return nil }
+
+	// Browsing the web UI at the device's mDNS name is the common case: the
+	// page connects back over a WebSocket carrying that origin.
+	assert.True(t, isAllowedOrigin(
+		"http://mister.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, true, "websocket",
+	))
+	assert.True(t, isAllowedOrigin(
+		"http://mister.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+	// A reverse proxy in front of Core serves the name on a default port.
+	assert.True(t, isAllowedOrigin(
+		"https://mister.local", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+	// Another device on the same network is still not trusted.
+	assert.False(t, isAllowedOrigin(
+		"http://batocera.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+}
+
+// TestServerTrustsOwnHostnameOrigins is a regression test for the mDNS hostname
+// origins never reaching the allowlist: they were built from the discovery
+// service's instance name, which only resolves once discovery starts, and
+// discovery starts after the API server has already built its static origins.
+// Browsing the web UI at http://<hostname>.local:<port> then failed to connect.
+func TestServerTrustsOwnHostnameOrigins(t *testing.T) {
+	t.Parallel()
+
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+	hostNames := localHostNames(hostname)
+	require.NotEmpty(t, hostNames, "test host must have a usable hostname")
+	require.True(t, slices.ContainsFunc(hostNames, func(name string) bool {
+		return strings.HasSuffix(strings.ToLower(name), ".local")
+	}), "host names must include an mDNS name")
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+
+	tokenQueue := make(chan tokens.Token, 1)
+
+	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	go func() {
+		defer close(serverDone)
+		serverErr <- Start(
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		close(tokenQueue)
+		<-serverDone
+		require.NoError(t, <-serverErr)
+	}()
+
+	// The listener takes an OS-assigned port, so this also covers the
+	// port-bearing origin forms carrying the port actually bound.
+	port := waitForServerReady(t, cfg)
+
+	client := &http.Client{Timeout: time.Second}
+	healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+
+	checkOrigin := func(origin string) string {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
+		require.NoError(t, reqErr)
+		req.Header.Set("Origin", origin)
+
+		resp, doErr := client.Do(req) //nolint:gosec // test hitting local test server
+		require.NoError(t, doErr)
+		defer func() { _ = resp.Body.Close() }()
+
+		return resp.Header.Get("Access-Control-Allow-Origin")
+	}
+
+	for _, name := range hostNames {
+		origins := []string{
+			"http://" + name,
+			"https://" + name,
+			fmt.Sprintf("http://%s:%d", name, port),
+			fmt.Sprintf("https://%s:%d", name, port),
+		}
+		for _, origin := range origins {
+			assert.Equal(t, origin, checkOrigin(origin), "origin %s should be allowed", origin)
+		}
+		// Port 0 is what was configured; it must never be advertised.
+		assert.Empty(t, checkOrigin(fmt.Sprintf("http://%s:0", name)),
+			"the unresolved port must not be trusted")
+	}
+
+	assert.Empty(t, checkOrigin("http://not-this-device.invalid"), "unrelated origins must stay rejected")
+}
+
 // TestServerBindFailureStopsService verifies that when the API server fails to bind
 // to its port (e.g., port already in use), it calls StopService() to trigger a
 // graceful shutdown of the entire service. This is a regression test for issue #448.
@@ -679,7 +887,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	go func() {
 		defer close(server1Done)
 		server1Err <- Start(
-			platform1, cfg1, st1, tokenQueue1, nil, db1, nil, nil, notifBroker1, "", nil, nil, nil, nil, nil, nil,
+			platform1, cfg1, st1, tokenQueue1, nil, db1, nil, nil, notifBroker1, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -725,7 +933,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	go func() {
 		defer close(server2Done)
 		server2Err <- Start(
-			platform2, cfg2, st2, tokenQueue2, nil, db2, nil, nil, notifBroker2, "", nil, nil, nil, nil, nil, nil,
+			platform2, cfg2, st2, tokenQueue2, nil, db2, nil, nil, notifBroker2, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -1000,7 +1208,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	go func() {
 		defer close(serverDone)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 	defer func() {
@@ -1090,4 +1298,86 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(eventData), &obj))
 	assert.Equal(t, "2.0", obj.JSONRPC)
 	assert.Equal(t, "tokens.staged", obj.Method)
+}
+
+// A notification listener connects and never sends a frame: that is exactly
+// what pkg/api/client's WaitNotification does, and the CLI's -read and -pair
+// waits and both TUI listeners are built on it. Holding such a session at
+// "transport mode unknown" forever would starve it, so the settle grace has to
+// release it as plaintext.
+//
+// The deadline is the shortest budget any of those listeners gives a
+// connection: the TUI's generate-database screen reconnects every 2s, so a
+// settle grace that does not clear 2s leaves that screen showing nothing.
+func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(
+			platform, cfg, st, tokenQueue, nil, db,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		<-serverErr
+	}()
+	require.NoError(t, <-ready)
+	port := waitForServerReady(t, cfg)
+
+	conn := dialWS(t, fmt.Sprintf("ws://127.0.0.1:%d/api/v0", port))
+	defer func() { _ = conn.Close() }()
+
+	// Broadcast repeatedly: the first notifications land while the session is
+	// still unsettled and have to survive the wait, and the later ones cover
+	// the settled steady state.
+	//
+	// The broadcaster is joined rather than only signalled. Parking it in
+	// time.Sleep left it running after the test returned, and whether goleak
+	// saw it came down to which woke first: it passed on Linux and failed on
+	// Windows, where the coarser timer lost that race.
+	stop := make(chan struct{})
+	var broadcasting sync.WaitGroup
+	broadcasting.Add(1)
+	defer func() {
+		close(stop)
+		broadcasting.Wait()
+	}()
+	go func() {
+		defer broadcasting.Done()
+		payload, _ := json.Marshal(map[string]string{"uid": "silent-listener"})
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				select {
+				case st.Notifications <- models.Notification{Method: "tokens.added", Params: payload}:
+				case <-stop:
+					return
+				}
+			}
+		}
+	}()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err, "a listener that never sends a frame must still get notifications")
+
+	var obj models.NotificationObject
+	require.NoError(t, json.Unmarshal(msg, &obj))
+	assert.Equal(t, "tokens.added", obj.Method)
 }

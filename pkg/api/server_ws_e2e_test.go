@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -181,6 +182,64 @@ func TestWSInjectsPlaybackManager(t *testing.T) {
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(msg, &resp))
 	assert.Nil(t, resp.Error)
+}
+
+// TestWSNoContentResultIsNull pins the wire shape of a void method over the
+// plaintext WebSocket path. The encrypted path is not tested separately:
+// sendWSEncryptedResponse builds the identical models.ResponseObject and only
+// then encrypts it, so TestNoContentResponseObjectCarriesNullResult in
+// pkg/api/methods covers it by construction.
+func TestWSNoContentResultIsNull(t *testing.T) {
+	t.Parallel()
+
+	methodMap := NewMethodMap()
+	err := methodMap.AddMethod("test.nocontent", func(_ requests.RequestEnv) (any, error) {
+		return methods.NoContent{}, nil
+	})
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	m := newWebSocketSession()
+	m.HandleMessage(handleWSMessage(
+		methodMap, platform, cfg, st, make(chan tokens.Token, 1), make(chan chan error, 1), db,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer func() {
+		_ = m.Close()
+		srv.Close()
+	}()
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"test.nocontent","id":1}`)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Decode into raw messages: a decoded ResponseObject cannot tell a null
+	// result apart from a missing result key, and the key must be present.
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(msg, &fields))
+
+	result, ok := fields["result"]
+	require.True(t, ok, "void method must send a result key, not omit it")
+	assert.JSONEq(t, "null", string(result))
+	assert.NotContains(t, fields, "error")
 }
 
 // TestWSEncryption_RemotePlaintextRejectedWhenEnabled pins:
@@ -334,4 +393,59 @@ func TestWSRejectsOverLimitRequests(t *testing.T) {
 	if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
 		assert.Contains(t, strings.ToLower(err.Error()), "message too big")
 	}
+}
+
+// A plaintext first frame settles the session's transport mode, which is what
+// re-enables notification delivery. Until that frame arrives the mode is
+// unknown, because a paired client may negotiate encryption instead even when
+// the server only treats encryption as optional.
+func TestDecryptIncomingFrame_PlaintextFrameSettlesAuthState(t *testing.T) {
+	t.Parallel()
+
+	before := make(chan webSocketAuthState, 1)
+	after := make(chan webSocketAuthState, 1)
+	accepted := make(chan bool, 1)
+
+	m := newWebSocketSession()
+	m.HandleConnect(func(s *melody.Session) {
+		// Mirror the real upgrade handler for the optional-encryption case.
+		s.Set(melodySessionAuthStateKey, webSocketAuthUnsettled)
+		s.Set(melodySessionNotifQueueKey, &wsNotificationQueue{})
+	})
+	// This runs on melody's readPump goroutine, so it reports back rather than
+	// asserting: a failed require here would stop that goroutine before "ack"
+	// is written and leave the test blocked on ReadMessage instead of failing.
+	m.HandleMessage(func(s *melody.Session, msg []byte) {
+		before <- getWebSocketAuthState(s)
+		_, _, ok := decryptIncomingFrame(s, msg, nil, false, true, "127.0.0.1")
+		accepted <- ok
+		after <- getWebSocketAuthState(s)
+		_ = s.Write([]byte("ack"))
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	defer func() { _ = m.Close() }()
+
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(
+		websocket.TextMessage, []byte(`{"jsonrpc":"2.0","id":"1","method":"version"}`),
+	))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.NoError(t, err)
+
+	require.True(t, <-accepted, "a plaintext frame is accepted when encryption is optional")
+	assert.Equal(t, webSocketAuthUnsettled, <-before,
+		"transport mode is unknown until the client's first frame")
+	assert.Equal(t, webSocketAuthPlaintext, <-after,
+		"a plaintext first frame settles the session as plaintext")
 }

@@ -35,28 +35,163 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "runonstartup"; Description: "Run Zaparoo Core on startup"; GroupDescription: "Startup options:"
-
+Name: "firewall"; Description: "Allow Zaparoo Core through Windows Firewall"; GroupDescription: "Network:"
+{{if .ViGEmMsi}}; ViGEmBus is a third-party kernel-mode driver by Nefarius Software
+; Solutions. Zaparoo only needs it to emulate a gamepad, so it is offered
+; rather than installed, and the caption says plainly what gets installed.
+Name: "vigembus"; Description: "Install the ViGEmBus virtual gamepad driver (a kernel-mode driver by Nefarius Software Solutions)"; GroupDescription: "Optional drivers:"; Flags: unchecked
+{{end}}
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "ZaparooCore"; ValueData: """{app}\Zaparoo.exe"""; \
   Tasks: runonstartup; Flags: uninsdeletevalue
+; Registers the cleanup of the firewall marker. The marker itself is written
+; by MarkFirewallRuleAdded, so that it records a rule that was really created
+; rather than a task that was merely ticked. HKA follows the install mode: a
+; firewall rule is machine-wide, so an administrative install must record it
+; somewhere any administrator can find it again at uninstall time, not in the
+; installing user's hive.
+Root: HKA; Subkey: "Software\Zaparoo\Core"; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempty
 
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
+{{if .ViGEmMsi}}Source: "ViGEmBusSetup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: vigembus
+{{end}}
+{{if .ViGEmMsi}}[Dirs]
+; The ViGEmBus bootstrapper exits successfully and does nothing at all when
+; its extraction target does not already exist, so the directory is created
+; here rather than left to the /extract switch.
+;
+; It is machine-wide rather than under {tmp} because the install step may run
+; as a different administrator, whose own temp directory this is not. Nothing
+; here is trusted: the elevated step checks the package before installing it.
+Name: "{commonappdata}\Zaparoo\vigembus-stage"; Tasks: vigembus; Flags: deleteafterinstall
+Name: "{commonappdata}\Zaparoo"; Tasks: vigembus; Flags: deleteafterinstall
 
-[Icons]
+{{end}}[Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; Without a rule of our own, Windows falls back to the "allow access" popup the
+; first time Core binds a socket. That popup scopes the rule to whichever of
+; Private/Public happens to be ticked, so Core ends up reachable on one network
+; profile and silently firewalled on another - the usual cause of a device that
+; the app finds over Wi-Fi but not over Ethernet. profile=any covers all three.
+; The rule is deleted first so repeat installs do not stack duplicates.
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName}"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=any"; \
+  StatusMsg: "Adding Windows Firewall rule..."; Flags: runhidden waituntilterminated; \
+  Tasks: firewall; Check: IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
+; A per-user install is not elevated, but netsh is. Ask for it once, and carry
+; on with the install if the prompt is declined.
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName}"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=any"; \
+  StatusMsg: "Adding Windows Firewall rule..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
+  Tasks: firewall; Check: not IsAdminInstallMode; AfterInstall: MarkFirewallRuleAdded
+{{if .ViGEmMsi}}; The vendor bootstrapper never returns when asked to install silently, but
+; it does unpack reliably, so the driver goes in through its own MSI instead.
+; Unpacking needs no elevation and is not trusted; installing needs both.
+Filename: "{tmp}\ViGEmBusSetup.exe"; Parameters: "/extract:""{commonappdata}\Zaparoo\vigembus-stage"""; \
+  StatusMsg: "Unpacking the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
+  Tasks: vigembus
+; The install runs from a script passed on the command line, not from a file,
+; because a file it read could be replaced by anything running as the user and
+; would then be run with administrator rights. The script checks the package
+; is signed by its publisher, from a copy only administrators can write.
+;
+; The gate is elevation, not install scope: PrivilegesRequired=lowest keeps
+; Zaparoo a per-user install even when Setup was started elevated, so
+; IsAdminInstallMode is False there and would skip a driver this process is
+; perfectly able to install.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -NonInteractive -EncodedCommand {{.ViGEmInstallScript}}"; \
+  StatusMsg: "Installing the ViGEmBus driver..."; Flags: runhidden waituntilterminated; \
+  Tasks: vigembus; Check: IsAdminLoggedOn and ViGEmMsiStaged
+; Otherwise the driver needs an elevation prompt. Ask once, and carry on with
+; the install if it is declined. A silent install must never raise that prompt,
+; so an unelevated silent install cannot install the driver.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -NonInteractive -EncodedCommand {{.ViGEmInstallScript}}"; \
+  StatusMsg: "Installing the ViGEmBus driver..."; Flags: shellexec waituntilterminated runhidden skipifsilent; Verb: runas; \
+  Tasks: vigembus; Check: (not IsAdminLoggedOn) and ViGEmMsiStaged
+; [Dirs] deleteafterinstall will not remove a directory that still has files
+; in it, and the unpacked driver is several megabytes, so the staging tree is
+; cleared explicitly. This runs whether or not the install itself went ahead,
+; so a declined elevation prompt does not leave it behind either.
+Filename: "{cmd}"; Parameters: "/c rmdir /s /q ""{commonappdata}\Zaparoo\vigembus-stage"""; \
+  Flags: runhidden waituntilterminated; Tasks: vigembus
+{{end}}Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent unchecked
 
 [UninstallRun]
 Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillService"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; \
+  Flags: runhidden waituntilterminated; RunOnceId: "DelFirewallRule"; \
+  Check: FirewallRuleWasAdded and IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; \
+  Flags: shellexec waituntilterminated runhidden; Verb: runas; RunOnceId: "DelFirewallRuleElevated"; \
+  Check: FirewallRuleWasAdded and not IsAdminInstallMode
 
 [CustomMessages]
 LaunchAfterInstall=&Launch Zaparoo Core after installation
+
+[Code]
+// MarkFirewallRuleAdded records that the netsh step actually ran. A silent
+// per-user install skips it, because netsh needs an elevation prompt that a
+// silent install must not show.
+procedure MarkFirewallRuleAdded;
+begin
+  RegWriteDWordValue(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule', 1);
+end;
+
+// FirewallRuleWasAdded gates the uninstaller's netsh step, so an uninstall
+// only raises an elevation prompt when there is a rule to remove.
+function FirewallRuleWasAdded: Boolean;
+begin
+  Result := RegValueExists(HKEY_AUTO, 'Software\Zaparoo\Core', 'FirewallRule');
+end;
+{{if .ViGEmMsi}}
+// ViGEmMsiStaged reports whether the driver package was actually unpacked, so
+// that a failed unpack does not raise an elevation prompt that could not
+// achieve anything. It says nothing about whether the package can be trusted;
+// the elevated script decides that, where the answer cannot be tampered with.
+function ViGEmMsiStaged: Boolean;
+var
+  Root, Candidate: String;
+  Rec: TFindRec;
+begin
+  Result := False;
+  Root := ExpandConstant('{commonappdata}\Zaparoo\vigembus-stage');
+
+  // The bootstrapper unpacks into a folder named after its own product code,
+  // so the package sits one level below a name this script cannot predict.
+  if FileExists(Root + '\{{.ViGEmMsi}}') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if FindFirst(Root + '\*', Rec) then
+  begin
+    try
+      repeat
+        if ((Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
+           (Rec.Name <> '.') and (Rec.Name <> '..') then
+        begin
+          Candidate := Root + '\' + Rec.Name + '\{{.ViGEmMsi}}';
+          if FileExists(Candidate) then
+          begin
+            Result := True;
+            Break;
+          end;
+        end;
+      until not FindNext(Rec);
+    finally
+      FindClose(Rec);
+    end;
+  end;
+end;
+{{end}}

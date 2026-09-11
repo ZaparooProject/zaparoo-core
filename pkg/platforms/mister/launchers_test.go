@@ -24,6 +24,7 @@ package mister
 import (
 	"archive/zip"
 	"context"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,8 +34,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
@@ -49,6 +52,7 @@ func TestCheckInZip_NonZipPath(t *testing.T) {
 		"/path/to/game.rom",
 		"/path/to/game.bin",
 		"/path/to/game.ZIP.backup",
+		"/media/fat/games/NEOGEO/mslug.neo",
 		"",
 	}
 
@@ -87,10 +91,12 @@ func TestCheckInZip_SingleFileZip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, zipWriter.Close())
 
-	// Should return path to the single file inside zip
-	result := checkInZip(zipPath)
+	// Suppression and the platform launch must see the same contained file.
+	pl := &Platform{}
+	result := pl.NormalizeLaunchPath(zipPath)
 	expected := filepath.Join(zipPath, "somefile.rom")
 	assert.Equal(t, expected, result)
+	assert.Equal(t, result, pl.NormalizeLaunchPath(result), "normalization is idempotent")
 }
 
 func TestCheckInZip_MatchingFilename(t *testing.T) {
@@ -564,6 +570,32 @@ func TestCreateLaunchersAppliesDefaultScanExcludes(t *testing.T) {
 	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.zip/boot.vhd")
 }
 
+func TestCreateLaunchersUsesCatalogScanMetadata(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	byID := make(map[string]platforms.Launcher, len(launchers))
+	for _, launcher := range launchers {
+		byID[launcher.ID] = launcher
+	}
+
+	customScannerSystems := map[string]struct{}{
+		"Amiga":  {},
+		"NeoGeo": {},
+		"ao486":  {},
+	}
+	for _, definition := range catalog.All() {
+		launcher, ok := byID[definition.ID]
+		if !ok {
+			_, customScanner := customScannerSystems[definition.ID]
+			require.True(t, customScanner, "catalog-backed launcher %s missing", definition.ID)
+			continue
+		}
+		assert.Equal(t, definition.Folders, launcher.Folders, definition.ID)
+		assert.Equal(t, definition.Extensions, launcher.Extensions, definition.ID)
+	}
+}
+
 func TestArcadeLauncherExtensions(t *testing.T) {
 	t.Parallel()
 
@@ -580,7 +612,12 @@ func TestArcadeLauncherExtensions(t *testing.T) {
 
 	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
 	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
-	assert.Equal(t, []string{"_Organized"}, arcadeLauncher.ScanDirectoryExcludes)
+	assert.Equal(t, arcadeOrganizerScanDirectoryExcludes, arcadeLauncher.ScanDirectoryExcludes)
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_Organized")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_1 A-E")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_4 Video & Inputs")
+	assert.True(t, arcadeLauncher.ScanSkipInternalSymlinks,
+		"Arcade Organizer aliases resolve inside _Arcade and must not be indexed twice")
 	assert.Contains(t, arcadeLauncher.Extensions, ".mra")
 	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
 }
@@ -863,6 +900,73 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 	}
 }
 
+func TestGameboyLaunchMGLPaths(t *testing.T) {
+	t.Parallel()
+	byID := make(map[string]platforms.Launcher)
+	for _, launcher := range CreateLaunchers(NewPlatform()) {
+		byID[launcher.ID] = launcher
+	}
+	for _, tc := range []struct {
+		id, system, extension, setName string
+		ra, sameDir                    bool
+	}{
+		{id: "Gameboy", system: "Gameboy", extension: ".gb"},
+		{id: "GameboyColor", system: "GameboyColor", extension: ".gbc", setName: "GBC"},
+		{id: "RAGameboy", system: "Gameboy", extension: ".gb", setName: "RA_Gameboy", ra: true, sameDir: true},
+		{id: "RAGameboyColor", system: "GameboyColor", extension: ".gbc", setName: "RA_GBC", ra: true},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			launcher, ok := byID[tc.id]
+			require.True(t, ok)
+			assert.Equal(t, tc.system, launcher.SystemID)
+			require.NotNil(t, launcher.Launch)
+			base, err := cores.GetCore(tc.system)
+			require.NoError(t, err)
+			core := *base
+			if tc.ra {
+				setName, found := retroAchievementsSetName(tc.id)
+				require.True(t, found)
+				require.NoError(t, configureAltCoreWithDefaultSetName(
+					&core, tc.id, "_RA_Cores/Cores/Gameboy", setName, tc.sameDir, nil,
+				))
+			}
+			folders := []string{"GAMEBOY"}
+			if tc.system == "GameboyColor" {
+				folders = append(folders, "GBC")
+			}
+			for _, folder := range folders {
+				assert.Contains(t, byID[tc.system].Folders, folder)
+				assert.Contains(t, byID[tc.system].Extensions, tc.extension)
+				rom := filepath.Join(string(filepath.Separator), "media", "fat", "games", folder, "Game"+tc.extension)
+				document, genErr := mgls.GenerateMgl(&core, core.RBF, rom, "")
+				require.NoError(t, genErr)
+				type setNameElement struct {
+					Name    string `xml:",chardata"`
+					SameDir string `xml:"same_dir,attr"`
+				}
+				type fileElement struct {
+					Path  string `xml:"path,attr"`
+					Index int    `xml:"index,attr"`
+				}
+				var decoded struct {
+					SetName setNameElement `xml:"setname"`
+					File    fileElement    `xml:"file"`
+				}
+				require.NoError(t, xml.Unmarshal([]byte(document), &decoded))
+				assert.Equal(t, "../../../../.."+rom, decoded.File.Path)
+				assert.Equal(t, 1, decoded.File.Index)
+				assert.Equal(t, tc.setName, decoded.SetName.Name)
+				if tc.sameDir {
+					assert.Equal(t, "1", decoded.SetName.SameDir)
+				} else {
+					assert.Empty(t, decoded.SetName.SameDir)
+				}
+			}
+		})
+	}
+}
+
 func TestRetroAchievementsSetNameSameDirRegression(t *testing.T) {
 	t.Parallel()
 
@@ -1080,6 +1184,106 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 			assert.Equal(t, tc.systemID, found.SystemID,
 				"%s must inherit slots from %s", tc.id, tc.systemID)
 			assert.Contains(t, found.Groups, platformshared.LauncherGroupRetroAchievements)
+		})
+	}
+}
+
+// TestAltCoreLauncherGroups pins every alt core family to its config group.
+// The counts are exact: a new alt core launcher that the path classifier does
+// not recognise fails here rather than silently missing from preference.
+func TestAltCoreLauncherGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	counts := map[string]int{}
+	for i := range launchers {
+		for _, group := range launchers[i].Groups {
+			counts[group]++
+		}
+	}
+
+	cases := []struct {
+		group string
+		want  int
+	}{
+		{platformshared.LauncherGroupRetroAchievements, 21},
+		{platformshared.LauncherGroupDB9, 32},
+		{platformshared.LauncherGroupLLAPI, 18},
+		{platformshared.LauncherGroupSinden, 7},
+		{platformshared.LauncherGroupPWM, 5},
+		{platformshared.LauncherGroupDualRAM, 7},
+		{platformshared.LauncherGroupUnstable, 45},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, counts[tc.group], "launcher count for group %s", tc.group)
+	}
+
+	members := []struct {
+		id    string
+		group string
+	}{
+		{"LLAPISNES", platformshared.LauncherGroupLLAPI},
+		{"LLAPI80MHzNintendo64", platformshared.LauncherGroupLLAPI},
+		{"DB9MegaDrive", platformshared.LauncherGroupDB9},
+		{"DB9GBAAccuracy", platformshared.LauncherGroupDB9},
+		{"SindenNES", platformshared.LauncherGroupSinden},
+		{"PWMPSX", platformshared.LauncherGroupPWM},
+		{"PWM2XPSX", platformshared.LauncherGroupPWM},
+		{"DualRAMJaguar", platformshared.LauncherGroupDualRAM},
+		{"RASNES", platformshared.LauncherGroupRetroAchievements},
+	}
+	for _, tc := range members {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, tc.id)
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Contains(t, found.Groups, tc.group)
+		})
+	}
+}
+
+// TestDB9DualRAMLaunchersAreInBothGroups covers the reason classification reads
+// registered RBF paths instead of ID prefixes: these cores are a DB9 fork build
+// *and* a dual-SDRAM build, and no prefix rule can say both.
+func TestDB9DualRAMLaunchersAreInBothGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"DB9DualRAMPSX", "DB9DualRAMSaturn"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found)
+			assert.Equal(t,
+				[]string{platformshared.LauncherGroupDB9, platformshared.LauncherGroupDualRAM},
+				found.Groups,
+				"the family group must come first so Groups[0] identifies the distribution",
+			)
+		})
+	}
+}
+
+// TestStockLaunchersHaveNoGroup keeps the stock cores out of every group, so a
+// preference entry naming a family never resolves to the default core.
+func TestStockLaunchersHaveNoGroup(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"SNES", "NES", "PSX", "Saturn", "Genesis", "2XPSX", "80MHzNintendo64"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found, "%s launcher should exist", id)
+			assert.Empty(t, found.Groups)
 		})
 	}
 }

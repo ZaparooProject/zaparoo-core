@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -71,10 +73,15 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 		{SystemID: "NES", Path: ""},
 	}
 
-	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathOne, pathTwo}).Return(
+	// The database holds canonical forward-slash paths, so the lookup is made
+	// in that form whatever form the refs arrived in, and rows come back
+	// under the refs as given.
+	canonicalOne := pathutil.CanonicalMediaPath(pathOne)
+	canonicalTwo := pathutil.CanonicalMediaPath(pathTwo)
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{canonicalOne, canonicalTwo}).Return(
 		[]database.MediaPathID{
-			{SystemID: "NES", Path: pathOne, DBID: 10},
-			{SystemID: "NES", Path: pathTwo, DBID: 11},
+			{SystemID: "NES", Path: canonicalOne, DBID: 10},
+			{SystemID: "NES", Path: canonicalTwo, DBID: 11},
 		}, nil,
 	)
 
@@ -232,7 +239,7 @@ func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {
 
 	// The same path can exist under multiple systems; only the requested
 	// (system, path) pair should be resolved.
-	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{path}).Return(
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathutil.CanonicalMediaPath(path)}).Return(
 		[]database.MediaPathID{
 			{SystemID: "NES", Path: path, DBID: 10},
 			{SystemID: "FDS", Path: path, DBID: 22},
@@ -245,4 +252,103 @@ func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {
 		{SystemID: "NES", Path: path}: 10,
 	}, ids)
 	mockDB.AssertExpectations(t)
+}
+
+func TestResolvedMediaRefs_DedupesByMediaIDInEntryOrder(t *testing.T) {
+	t.Parallel()
+
+	first := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "a.nes")}
+	second := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "b.nes")}
+	missing := mediaPathRef{SystemID: "NES", Path: filepath.Join("games", "missing.nes")}
+	rows := map[mediaPathRef]database.MediaPathID{
+		first:  {SystemID: "NES", Path: first.Path, DBID: 7, MediaTitleDBID: 70},
+		second: {SystemID: "NES", Path: second.Path, DBID: 5, MediaTitleDBID: 50},
+	}
+
+	mediaIDs, refs := resolvedMediaRefs([]mediaPathRef{first, second, first, missing}, rows)
+
+	assert.Equal(t, map[mediaPathRef]int64{first: 7, second: 5}, mediaIDs)
+	assert.Equal(t, []database.MediaRef{
+		{MediaDBID: 7, MediaTitleDBID: 70},
+		{MediaDBID: 5, MediaTitleDBID: 50},
+	}, refs)
+}
+
+func TestMediaTagsByRefs_EmptyRefsSkipsLookup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{}, nil).Maybe()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, nil)
+
+	assert.True(t, known)
+	assert.Equal(t, map[int64][]database.TagInfo{}, tags)
+	mockMediaDB.AssertNotCalled(t, "GetMediaTagsByMediaRefs", mock.Anything, mock.Anything)
+}
+
+func TestMediaTagsByRefs_NilDatabaseIsKnownEmpty(t *testing.T) {
+	t.Parallel()
+
+	tags, known := mediaTagsByRefs(context.Background(), nil, []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}})
+
+	assert.True(t, known)
+	assert.Equal(t, map[int64][]database.TagInfo{}, tags)
+}
+
+func TestMediaTagsByRefs_ErrorReturnsUnknown(t *testing.T) {
+	t.Parallel()
+
+	refs := []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, refs).
+		Return(nil, errors.New("tag lookup failed")).Once()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, refs)
+
+	assert.False(t, known)
+	assert.Nil(t, tags)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestMediaTagsByRefs_ReturnsLookupResult(t *testing.T) {
+	t.Parallel()
+
+	refs := []database.MediaRef{{MediaDBID: 1, MediaTitleDBID: 10}}
+	expected := map[int64][]database.TagInfo{1: {{Tag: "favorite", Type: "collection"}}}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetMediaTagsByMediaRefs", mock.Anything, refs).Return(expected, nil).Once()
+
+	tags, known := mediaTagsByRefs(context.Background(), mockMediaDB, refs)
+
+	assert.True(t, known)
+	assert.Equal(t, expected, tags)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestMediaEntryTags_TriState(t *testing.T) {
+	t.Parallel()
+
+	tagged := []database.TagInfo{{Tag: "favorite", Type: "collection"}}
+	tags := map[int64][]database.TagInfo{1: tagged, 3: nil}
+	tests := []struct {
+		name     string
+		expected []database.TagInfo
+		mediaID  int64
+		known    bool
+	}{
+		{name: "unknown tags omit", known: false, mediaID: 1, expected: nil},
+		{name: "unresolved media omits", known: true, mediaID: 0, expected: nil},
+		{name: "tagged media returns tags", known: true, mediaID: 1, expected: tagged},
+		{name: "untagged media returns empty array", known: true, mediaID: 2, expected: []database.TagInfo{}},
+		{name: "nil map entry returns empty array", known: true, mediaID: 3, expected: []database.TagInfo{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, mediaEntryTags(tt.known, tt.mediaID, tags))
+		})
+	}
 }

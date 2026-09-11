@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -125,7 +126,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://730/Counter-Strike", nil)
+		_, err := client.Launch(nil, "steam://730/Counter-Strike", &platforms.LaunchOptions{Action: "run"})
 
 		require.NoError(t, err)
 		mockCmd.AssertExpectations(t)
@@ -140,7 +141,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://rungameid/730", nil)
+		_, err := client.Launch(nil, "steam://rungameid/730", &platforms.LaunchOptions{Action: "run"})
 
 		require.NoError(t, err)
 		mockCmd.AssertExpectations(t)
@@ -167,7 +168,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://730/Counter-Strike", nil)
+		_, err := client.Launch(nil, "steam://730/Counter-Strike", &platforms.LaunchOptions{Action: "run"})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to launch Steam")

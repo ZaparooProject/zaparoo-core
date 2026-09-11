@@ -21,7 +21,9 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -30,8 +32,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,4 +145,100 @@ func TestHandleMappings_InvalidParams(t *testing.T) {
 
 	_, err := HandleMappings(env)
 	require.Error(t, err)
+}
+
+// A mapping override replaces a token's text after the token's own length has
+// been checked, so it is the one script the queue's bound never sees. The
+// limit is in bytes, and a rune-counting check would let a multi-byte override
+// through at several times the cap.
+func TestHandleAddMapping_RejectsOversizedOverride(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		override string
+	}{
+		{name: "ascii", override: strings.Repeat("a", zapscript.MaxScriptLength+1)},
+		{name: "multi-byte", override: strings.Repeat("\u3042", zapscript.MaxScriptLength/2)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockUserDB := helpers.NewMockUserDBI()
+			params, err := json.Marshal(models.AddMappingParams{
+				Label:    "oversized",
+				Type:     userdb.MappingTypeID,
+				Match:    userdb.MatchTypeExact,
+				Pattern:  "abcdef",
+				Override: tt.override,
+				Enabled:  true,
+			})
+			require.NoError(t, err)
+
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{UserDB: mockUserDB},
+				Params:   params,
+			}
+
+			_, err = HandleAddMapping(env)
+			require.Error(t, err)
+			mockUserDB.AssertNotCalled(t, "AddMapping", mock.Anything)
+		})
+	}
+}
+
+func TestHandleUpdateMapping_RejectsOversizedOverride(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("GetMapping", int64(7)).Return(dbMappingFixture(), nil)
+
+	override := strings.Repeat("\u3042", zapscript.MaxScriptLength/2)
+	params, err := json.Marshal(models.UpdateMappingParams{
+		ID:       7,
+		Override: &override,
+	})
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		Params:   params,
+	}
+
+	_, err = HandleUpdateMapping(env)
+	require.Error(t, err)
+	mockUserDB.AssertNotCalled(t, "UpdateMapping", mock.Anything, mock.Anything)
+}
+
+// An override at the limit is ordinary input and must still be accepted.
+func TestHandleAddMapping_AcceptsOverrideAtLimit(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddMapping", mock.Anything).Return(nil)
+
+	override := "**launch:" + strings.Repeat("a", zapscript.MaxScriptLength-len("**launch:"))
+	params, err := json.Marshal(models.AddMappingParams{
+		Label:    "at limit",
+		Type:     userdb.MappingTypeID,
+		Match:    userdb.MatchTypeExact,
+		Pattern:  "abcdef",
+		Override: override,
+		Enabled:  true,
+	})
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		Params:   params,
+	}
+
+	_, err = HandleAddMapping(env)
+	require.NoError(t, err)
+	mockUserDB.AssertCalled(t, "AddMapping", mock.Anything)
 }

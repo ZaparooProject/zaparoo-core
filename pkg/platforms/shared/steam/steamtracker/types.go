@@ -23,8 +23,6 @@ package steamtracker
 
 import (
 	"time"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // DefaultPollInterval is the default interval for game state scanning.
@@ -39,30 +37,6 @@ type GameStartCallback func(appID int, pid int, gamePath string)
 // GameStopCallback is called when a Steam game exits.
 // pid identifies the stopped process or platform lifecycle instance.
 type GameStopCallback func(appID, pid int)
-
-type launchOwnership struct {
-	mu    syncutil.Mutex
-	appID int
-	pid   int
-}
-
-func (o *launchOwnership) set(appID, pid int) {
-	o.mu.Lock()
-	o.appID = appID
-	o.pid = pid
-	o.mu.Unlock()
-}
-
-func (o *launchOwnership) clearIfMatches(appID, pid int) bool {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.appID != appID || o.pid != pid {
-		return false
-	}
-	o.appID = 0
-	o.pid = 0
-	return true
-}
 
 // TrackedGame represents a currently tracked Steam game.
 type TrackedGame struct {

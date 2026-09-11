@@ -55,6 +55,7 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 		ID:       "ChimeraGOG",
 		SystemID: systemdefs.SystemPC,
 		Schemes:  []string{shared.SchemeGOG},
+		Test:     shared.SchemeIDTest(shared.SchemeGOG),
 		Scanner: func(
 			_ context.Context,
 			_ *config.Instance,

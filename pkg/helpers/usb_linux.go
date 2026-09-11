@@ -25,7 +25,6 @@ package helpers
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 
@@ -43,28 +42,37 @@ var usbTopologyPattern = regexp.MustCompile(`^\d+-[\d.]+$`)
 // Returns empty string if topology cannot be determined (e.g., in Docker,
 // non-USB device, or missing /sys filesystem).
 func GetUSBTopologyPath(devicePath string) string {
+	sysfsPath := deviceNodeSysfsPath(devicePath)
+	if sysfsPath == "" {
+		return ""
+	}
+
+	// Walk up the path looking for a USB topology directory
+	// The path looks like: /sys/devices/pci.../usb1/1-2/1-2.3/1-2.3:1.0/tty/ttyUSB0
+	// We want to extract "1-2.3" (the USB topology)
+	return extractUSBTopology(sysfsPath)
+}
+
+// deviceNodeSysfsPath resolves a character device node to the sysfs directory
+// describing it, via /sys/dev/char/{major}:{minor}. Returns "" when the node
+// cannot be stat'd or has no sysfs entry.
+func deviceNodeSysfsPath(devicePath string) string {
 	if devicePath == "" {
 		return ""
 	}
 
-	info, err := os.Stat(devicePath)
-	if err != nil {
+	// unix.Stat, not os.Stat: os.Stat's FileInfo.Sys() carries a
+	// *syscall.Stat_t, so asserting it to *unix.Stat_t never succeeded and
+	// every caller silently got "" on every Linux device.
+	var stat unix.Stat_t
+	if err := unix.Stat(devicePath, &stat); err != nil {
 		log.Debug().Str("path", devicePath).Err(err).Msg("cannot stat device")
 		return ""
 	}
 
-	stat, ok := info.Sys().(*unix.Stat_t)
-	if !ok {
-		log.Debug().Str("path", devicePath).Msg("cannot get unix.Stat_t")
-		return ""
-	}
-
-	major := (stat.Rdev >> 8) & 0xff
-	minor := stat.Rdev & 0xff
-
-	// Look up via /sys/dev/char/{major}:{minor} which symlinks to the
-	// full device path in sysfs
-	sysPath := fmt.Sprintf("/sys/dev/char/%d:%d", major, minor)
+	// unix.Major/unix.Minor, not hand-rolled shifts: Linux dev_t is not the
+	// old 16-bit packing, and masking the low byte truncates a minor over 255.
+	sysPath := fmt.Sprintf("/sys/dev/char/%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev))
 	resolved, err := filepath.EvalSymlinks(sysPath)
 	if err != nil {
 		log.Debug().
@@ -74,11 +82,7 @@ func GetUSBTopologyPath(devicePath string) string {
 			Msg("cannot resolve sysfs symlink")
 		return ""
 	}
-
-	// Walk up the path looking for a USB topology directory
-	// The path looks like: /sys/devices/pci.../usb1/1-2/1-2.3/1-2.3:1.0/tty/ttyUSB0
-	// We want to extract "1-2.3" (the USB topology)
-	return extractUSBTopology(resolved)
+	return resolved
 }
 
 // extractUSBTopology walks up a sysfs device path to find the USB topology.

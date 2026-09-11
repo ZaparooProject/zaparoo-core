@@ -113,6 +113,14 @@ func lstatWithContext(ctx context.Context, path string) (os.FileInfo, error) {
 	}, "lstat", path)
 }
 
+// readlinkWithContext runs os.Readlink with a timeout. Same timeout and
+// cancellation semantics as statWithContext.
+func readlinkWithContext(ctx context.Context, path string) (string, error) {
+	return doWithTimeout(ctx, func() (string, error) {
+		return os.Readlink(path)
+	}, "readlink", path)
+}
+
 // evalSymlinksWithContext runs filepath.EvalSymlinks with a timeout. Same
 // timeout and cancellation semantics as statWithContext.
 func evalSymlinksWithContext(ctx context.Context, path string) (string, error) {

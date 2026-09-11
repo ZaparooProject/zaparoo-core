@@ -900,6 +900,39 @@ func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "GetZapLinkHost", mock.Anything)
 }
 
+// TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
+// which insists on being alone on the token sees the expanded script, not the
+// single command printed on the card. A ZapLink resolving to
+// "playtime.extend || launch" would otherwise slip a grant in ahead of the
+// launch and past the pre-launch limit check.
+func TestRunCommandCountsZapLinkExpansionInTotalCommands(t *testing.T) {
+	t.Parallel()
+
+	const linkURL = "https://zaplink.example.com/extend-then-launch"
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	mockUserDB.On("GetZapLinkCache", linkURL).
+		Return("**playtime.extend:1h?profile=switch-abc||**launch:/games/game.rom", nil)
+	mockUserDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	db := &database.Database{UserDB: mockUserDB}
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{Name: "launch", Args: []string{linkURL}},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrExtendNotAlone)
+}
+
 // TestRunCommandAppliesZapLinkForNonRemoteSource pins that every other
 // token source still goes through ZapLink resolution as before. The
 // remote-source skip in RunCommand must not become a blanket skip.

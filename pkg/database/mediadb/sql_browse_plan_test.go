@@ -52,11 +52,12 @@ func TestBrowseFilesQueryPlan_NameSortHasNoFilesort(t *testing.T) {
 	parentDir := seedBrowsePlanTestDB(t, mediaDB, arcadeScaleRows)
 	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql.Load()))
 
-	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, m.SortName AS SortValue
+	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+			m.SortName COLLATE ZAPAROO_TITLE_V1 AS SortValue
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE m.ParentDir = ? AND m.IsMissing = 0
-		ORDER BY m.SortName ASC, m.DBID ASC LIMIT ?`
+		ORDER BY m.SortName COLLATE ZAPAROO_TITLE_V1 ASC, m.DBID ASC LIMIT ?`
 
 	rows, err := mediaDB.sql.Load().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, parentDir, 301)
 	require.NoError(t, err)
@@ -116,24 +117,26 @@ func TestExplainBrowseFilesQuery(t *testing.T) {
 		{
 			name: "name-sort first-page (no cursor)",
 			// Filter ParentDir + IsMissing via idx_media_browse_sort, sort by
-			// m.SortName — no filesort, no MediaTitles join.
-			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, m.SortName AS SortValue
+			// naturally collated SortName — no filesort, no MediaTitles join.
+			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+					m.SortName COLLATE ZAPAROO_TITLE_V1 AS SortValue
 				FROM Media m
 				INNER JOIN Systems s ON m.SystemDBID = s.DBID
 				WHERE m.ParentDir = ? AND m.IsMissing = 0
-				ORDER BY m.SortName ASC, m.DBID ASC LIMIT ?`,
+				ORDER BY m.SortName COLLATE ZAPAROO_TITLE_V1 ASC, m.DBID ASC LIMIT ?`,
 			args: []any{parentDir, 301},
 		},
 		{
 			name: "name-sort non-first-page (with cursor)",
-			// Keyset cursor on (m.SortName, m.DBID) — same table as the filter,
-			// so the index can serve the seek directly.
-			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, m.SortName AS SortValue
+			// Keyset cursor on naturally collated (m.SortName, m.DBID) — same
+			// table as the filter, so the index can serve the seek directly.
+			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+					m.SortName COLLATE ZAPAROO_TITLE_V1 AS SortValue
 				FROM Media m
 				INNER JOIN Systems s ON m.SystemDBID = s.DBID
 				WHERE m.ParentDir = ? AND m.IsMissing = 0
-				  AND (m.SortName, m.DBID) > (?, ?)
-				ORDER BY m.SortName ASC, m.DBID ASC LIMIT ?`,
+				  AND (m.SortName COLLATE ZAPAROO_TITLE_V1, m.DBID) > (?, ?)
+				ORDER BY m.SortName COLLATE ZAPAROO_TITLE_V1 ASC, m.DBID ASC LIMIT ?`,
 			args: []any{parentDir, midName, midID, 301},
 		},
 		{
@@ -150,12 +153,13 @@ func TestExplainBrowseFilesQuery(t *testing.T) {
 			name: "name-sort with letter filter",
 			// Letter filter now uses m.SortName — stays on the same table, no
 			// separate MediaTitles lookup.
-			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, m.SortName AS SortValue
+			query: `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+					m.SortName COLLATE ZAPAROO_TITLE_V1 AS SortValue
 				FROM Media m
 				INNER JOIN Systems s ON m.SystemDBID = s.DBID
 				WHERE m.ParentDir = ? AND m.IsMissing = 0
 				  AND UPPER(SUBSTR(m.SortName, 1, 1)) = ?
-				ORDER BY m.SortName ASC, m.DBID ASC LIMIT ?`,
+				ORDER BY m.SortName COLLATE ZAPAROO_TITLE_V1 ASC, m.DBID ASC LIMIT ?`,
 			// "B" matches "Browse Game ..." — all rows pass.
 			args: []any{parentDir, "B", 301},
 		},
@@ -201,6 +205,9 @@ func setupBrowsePlanTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 
 	mediaDB, err = OpenMediaDB(context.Background(), mockPlatform)
 	require.NoError(t, err)
+	// Query-plan fixtures model a database after media update has run the
+	// secondary-index creation phase.
+	require.NoError(t, mediaDB.CreateSecondaryIndexes())
 	cleanup = func() {
 		if mediaDB != nil {
 			_ = mediaDB.Close()

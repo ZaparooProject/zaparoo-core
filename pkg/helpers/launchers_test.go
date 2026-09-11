@@ -311,6 +311,42 @@ func TestParseCustomLaunchers_EmptyExecuteLeavesLaunchNil(t *testing.T) {
 	assert.Equal(t, []string{filepath.Join(ExeDir(), "movies")}, l.Folders)
 	assert.Equal(t, []string{".mp4", ".mkv"}, l.Extensions)
 	assert.Nil(t, l.Launch, "Launch should be nil when Execute is empty")
+	assert.True(t, l.ScanOnly, "an entry with no execute only widens its system's media")
+}
+
+func TestFilterConflictingLaunchers(t *testing.T) {
+	t.Parallel()
+
+	builtIn := []platforms.Launcher{
+		{ID: "NES", SystemID: "NES", Folders: []string{"NES"}, Extensions: []string{".nes"}},
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}, Extensions: []string{".sfc"}},
+	}
+	custom := []platforms.Launcher{
+		{ID: "nes", SystemID: "NES", Folders: []string{"/games/famicom"}},
+		{ID: "Famicom", SystemID: "NES", Folders: []string{"/games/famicom"}},
+	}
+
+	kept := FilterConflictingLaunchers(custom, builtIn)
+
+	require.Len(t, kept, 1, "the entry colliding with a built-in ID is dropped")
+	assert.Equal(t, "Famicom", kept[0].ID)
+}
+
+func TestCombineParsedLaunchers_KeepsBuiltInOnConflict(t *testing.T) {
+	t.Parallel()
+
+	builtIn := []platforms.Launcher{
+		{ID: "NES", SystemID: "NES", Folders: []string{"NES"}, Extensions: []string{".nes"}},
+	}
+	custom := []platforms.Launcher{
+		{ID: "NES", SystemID: "NES", Folders: []string{"/games/famicom"}},
+	}
+
+	combined := CombineParsedLaunchers(custom, builtIn)
+
+	require.Len(t, combined, 1)
+	assert.Equal(t, []string{"NES"}, combined[0].Folders,
+		"the built-in launcher survives, not the custom entry shadowing it")
 }
 
 func TestParseCustomLaunchers_LaunchLogsArgvAndFailsOnMissingBinary(t *testing.T) {

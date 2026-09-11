@@ -1217,6 +1217,67 @@ func TestHandleSettingsUpdate_SystemDefaults(t *testing.T) {
 	assert.Equal(t, "snes9x", got[1].Launcher)
 }
 
+// TestHandleSettingsUpdate_SystemDefaultsKeepPauseOnLaunch covers a field the
+// API does not model. An update replaces the whole list, so a client editing a
+// launcher used to silently delete pause_on_launch from the user's config file.
+func TestHandleSettingsUpdate_SystemDefaultsKeepPauseOnLaunch(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	pauseOnLaunch := false
+	cfg.SetSystemDefaults([]config.SystemsDefault{
+		{System: "Audio", PauseOnLaunch: &pauseOnLaunch},
+		{System: "SNES", Launcher: "snes9x"},
+	})
+	require.NoError(t, cfg.Save())
+	require.False(t, cfg.AudioPauseOnLaunch())
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes9x", SystemID: "SNES"},
+		{ID: "audioplayer", SystemID: "Audio"},
+	})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "Audio", Launcher: "audioplayer"},
+			{System: "SNES", Launcher: "snes9x"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+		IsLocal:       true,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 2)
+	assert.Equal(t, "Audio", got[0].System)
+	assert.Equal(t, "audioplayer", got[0].Launcher, "the field the client did send is applied")
+	require.NotNil(t, got[0].PauseOnLaunch, "the field the client cannot send survives")
+	assert.False(t, *got[0].PauseOnLaunch)
+	assert.False(t, cfg.AudioPauseOnLaunch())
+}
+
 // TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup verifies a launcher
 // group name is accepted as a launcher reference, mirroring config lookup.
 func TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup(t *testing.T) {
@@ -1799,4 +1860,173 @@ func TestHandleSettingsUpdate_UpdateInstallReloadsChecking(t *testing.T) {
 			assert.Equal(t, tt.wantChecking, cfg.UpdateCheck())
 		})
 	}
+}
+
+// A settings round-trip rebuilds the reader connection slice from the API
+// model, so scan_mode has to survive both conversions or an unrelated settings
+// edit would silently wipe a configured per-reader mode.
+func TestHandleSettings_ReaderConnectionScanModeRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Readers: config.Readers{
+			Connect: []config.ReadersConnect{
+				{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: config.ScanModeHold},
+				{Driver: "libnfc", Path: "/dev/ttyUSB1"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	readEnv := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(readEnv)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.ReadersConnect, 2)
+	assert.Equal(t, config.ScanModeHold, resp.ReadersConnect[0].ScanMode)
+	assert.Empty(t, resp.ReadersConnect[1].ScanMode)
+
+	// Write the response straight back, as a client editing any other setting
+	// on the same screen would.
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+		ReadersConnect: &resp.ReadersConnect,
+	})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.NoError(t, err)
+
+	stored := cfg.Readers().Connect
+	require.Len(t, stored, 2)
+	assert.Equal(t, config.ScanModeHold, stored[0].ScanMode)
+	assert.Empty(t, stored[1].ScanMode)
+	assert.Equal(t, config.ScanModeHold, cfg.ScanModeForReader([]string{"pn532"}, "/dev/ttyUSB0"))
+}
+
+// scanMode reaches the config file verbatim, so the handler is what has to
+// stop a typo getting there. Its validate tag never ran: without `dive` on the
+// slice the validator stops at it and no element tag is consulted.
+func TestHandleSettingsUpdate_ReaderConnectionScanModeValidation(t *testing.T) {
+	t.Parallel()
+
+	newEnv := func(t *testing.T) (*config.Instance, requests.RequestEnv) {
+		t.Helper()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform").Maybe()
+		mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+		cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+		require.NoError(t, err)
+		appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+		t.Cleanup(func() { drainCh(ns) })
+
+		return cfg, requests.RequestEnv{
+			Context:  context.Background(),
+			Platform: mockPlatform,
+			Config:   cfg,
+			State:    appState,
+			IsLocal:  true,
+		}
+	}
+
+	update := func(t *testing.T, env requests.RequestEnv, conns []models.ReaderConnection) error {
+		t.Helper()
+		paramsJSON, err := json.Marshal(models.UpdateSettingsParams{ReadersConnect: &conns})
+		require.NoError(t, err)
+		env.Params = paramsJSON
+		_, updateErr := HandleSettingsUpdate(env)
+		return updateErr
+	}
+
+	t.Run("rejects an unrecognised mode", func(t *testing.T) {
+		t.Parallel()
+		cfg, env := newEnv(t)
+		err := update(t, env, []models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: "banana"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "banana")
+		assert.Empty(t, cfg.Readers().Connect, "a rejected update must not be written")
+	})
+
+	// The rejection happens in the handler's pre-flight block, so nothing else
+	// in the same request is applied either.
+	t.Run("a rejected mode leaves the rest of the request unapplied", func(t *testing.T) {
+		t.Parallel()
+		cfg, env := newEnv(t)
+		before := cfg.DebugLogging()
+		conns := []models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: "banana"},
+		}
+		debug := !before
+		paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+			ReadersConnect: &conns,
+			DebugLogging:   &debug,
+		})
+		require.NoError(t, err)
+		env.Params = paramsJSON
+		_, updateErr := HandleSettingsUpdate(env)
+		require.Error(t, updateErr)
+		assert.Equal(t, before, cfg.DebugLogging(),
+			"an invalid scanMode must not leave other settings half applied")
+	})
+
+	t.Run("rejects an empty driver", func(t *testing.T) {
+		t.Parallel()
+		_, env := newEnv(t)
+		err := update(t, env, []models.ReaderConnection{
+			{Driver: "", Path: "/dev/ttyUSB0"},
+		})
+		require.Error(t, err)
+	})
+
+	// A config file tolerates any spelling of the mode, and `settings` hands
+	// back what the file holds, so a round trip of a hand-edited file must not
+	// be rejected. It is stored canonically from then on.
+	t.Run("accepts and canonicalises other spellings", func(t *testing.T) {
+		t.Parallel()
+		for _, spelling := range []string{"HOLD", "Hold", "  hold  "} {
+			cfg, env := newEnv(t)
+			require.NoError(t, update(t, env, []models.ReaderConnection{
+				{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: spelling},
+			}), "spelling %q must be accepted", spelling)
+			stored := cfg.Readers().Connect
+			require.Len(t, stored, 1)
+			assert.Equal(t, config.ScanModeHold, stored[0].ScanMode,
+				"spelling %q must be stored canonically", spelling)
+		}
+	})
+
+	t.Run("an empty mode stays empty", func(t *testing.T) {
+		t.Parallel()
+		cfg, env := newEnv(t)
+		require.NoError(t, update(t, env, []models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0"},
+		}))
+		stored := cfg.Readers().Connect
+		require.Len(t, stored, 1)
+		assert.Empty(t, stored[0].ScanMode)
+	})
 }

@@ -28,7 +28,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -60,6 +62,68 @@ func NewClientWithExecutor(opts Options, cmd command.Executor) *Client {
 
 // Compile-time interface implementation check.
 var _ SteamClient = (*Client)(nil)
+
+// Launch opens a Steam URL after resolving explicit actions and local installation state.
+func (c *Client) Launch(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+	id, err := ExtractAndValidateID(path)
+	if err != nil {
+		return nil, err
+	}
+
+	action := c.resolveAutomaticAction(cfg, id, platforms.ResolveAction(opts, cfg, &platforms.Launcher{ID: "Steam"}))
+
+	steamURL := BuildSteamURL(id)
+	if platforms.IsActionDetails(action) {
+		steamURL = BuildSteamDetailsURL(id)
+	}
+	if err := c.openURL(steamURL); err != nil {
+		return nil, err
+	}
+	if opts != nil {
+		// DoLaunch uses the effective action to avoid publishing a game that
+		// never started when preflight redirected the request to details.
+		opts.Action = action
+	}
+	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget
+}
+
+// resolveAutomaticAction downgrades an automatic launch to "details" when the
+// app is not installed, so Core opens the store page instead of asking Steam
+// to run something that is not there. An explicit action is honoured as given.
+func (c *Client) resolveAutomaticAction(cfg *config.Instance, id, action string) string {
+	if action != "" {
+		return action
+	}
+	// Official AppIDs fit in 32 bits. Larger IDs include non-Steam shortcut
+	// BPIDs, which have no app manifests and must keep their existing behavior.
+	appID, idErr := strconv.ParseUint(id, 10, 32)
+	if idErr != nil {
+		return action
+	}
+	if cfg == nil {
+		cfg = &config.Instance{}
+	}
+	if c.isAppInstalled(c.FindSteamDir(cfg), strconv.FormatUint(appID, 10)) {
+		return action
+	}
+	log.Debug().Str("appID", id).Msg("Steam app installation not confirmed; opening details")
+	return "details"
+}
+
+// Preflight resolves the effective action before Core stops whatever is
+// playing, so a scan for an uninstalled app opens its store page and leaves
+// the running game alone.
+func (c *Client) Preflight(cfg *config.Instance, path string, opts *platforms.LaunchOptions) error {
+	if opts == nil {
+		return nil
+	}
+	id, err := ExtractAndValidateID(path)
+	if err != nil {
+		return err
+	}
+	opts.Action = c.resolveAutomaticAction(cfg, id, opts.Action)
+	return nil
+}
 
 // IsSteamInstalled checks if Steam is installed by verifying the Steam directory exists.
 // Uses FindSteamDir to locate the directory, respecting config overrides.

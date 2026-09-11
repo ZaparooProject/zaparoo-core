@@ -23,7 +23,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -145,4 +147,30 @@ func TestNewSteamLauncherWithDefaultOptions(t *testing.T) {
 		assert.NotNil(t, launcher.Scanner)
 		assert.NotNil(t, launcher.Launch)
 	})
+}
+
+// Selection must reject a steam:// path whose app ID is unusable. DoLaunch
+// stops the running game as soon as a launcher is chosen, so a launcher that
+// accepts the path and only fails inside Launch has already killed it.
+// Verified on the Windows test box with steam://notanumber/x while FTL ran.
+func TestSteamLauncherSelectionRejectsUnusableIDs(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewSteamLauncher(Options{})
+	pl := mocks.NewMockPlatform()
+
+	for _, path := range []string{
+		"steam://212680/FTL",
+		"steam://1942280/Brotato",
+	} {
+		assert.True(t, helpers.PathIsLauncher(nil, pl, &launcher, path), path)
+	}
+
+	for _, path := range []string{
+		"steam://notanumber/x",
+		"steam://",
+		"steam:///Game",
+	} {
+		assert.False(t, helpers.PathIsLauncher(nil, pl, &launcher, path), path)
+	}
 }

@@ -496,3 +496,25 @@ func createMockManifest(t *testing.T, steamAppsDir string, appID int, name strin
 func escapeVDFPath(path string) string {
 	return strings.ReplaceAll(path, `\`, `\\`)
 }
+
+func TestDefaultSteamAppsDirs(t *testing.T) {
+	// Not parallel: sets the home directory variables os.UserHomeDir reads.
+	t.Run("candidates come from the platform list for the home directory", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		assert.Equal(t, platformSteamAppsDirs(home), DefaultSteamAppsDirs())
+	})
+
+	t.Run("an unresolvable home directory is passed on as empty", func(t *testing.T) {
+		// os.UserHomeDir fails when the variable is unset or empty. The
+		// per-platform list decides what that means: nothing on Linux and
+		// macOS, whose candidates all hang off the home directory, and the
+		// registry and Program Files roots on Windows, which never needed it.
+		t.Setenv("HOME", "")
+		t.Setenv("USERPROFILE", "")
+
+		assert.Equal(t, platformSteamAppsDirs(""), DefaultSteamAppsDirs())
+	})
+}

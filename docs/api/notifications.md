@@ -153,6 +153,10 @@ Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for co
 
 ## Media
 
+### media.visibility
+
+An indexed media item's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing `media.browse`, `media.browse.index` and `media.search` cursors, all of which stop being valid. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
+
 ### media.started
 
 New media was started on server.
@@ -299,7 +303,7 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | total     | number  | Yes      | Total source records for the current system, or 0 before known.   |
 | matched   | number  | Yes      | Number of records matched to existing media rows.                 |
 | skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
-| totalScraped | number | Yes   | Number of media records already marked scraped.                   |
+| totalScraped | number | Yes   | Number of media records already marked scraped, across the scraper/library rather than the current scope. |
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
 | paused    | boolean | Yes      | True when the active scrape is paused.                            |
@@ -440,6 +444,41 @@ The warning applies to whichever limit will be reached first (session or daily).
   "params": {
     "interval": "5m",
     "remaining": "4m58s"
+  }
+}
+```
+
+### playtime.extended
+
+Sent when extra playtime was granted to the session currently being limited, either through the [`playtime.extend`](./methods.md#playtimeextend) method or by scanning a physical extension card. Warning thresholds are re-armed by a grant, so they fire again against the newly granted time.
+
+Profiles are identified by ID only. The switch ID authorizing a card grant is a bearer credential and is never published.
+
+A repeated request that granted no additional time emits no notification.
+
+#### Parameters
+
+| Key              | Type   | Required | Description                                                                    |
+| :--------------- | :----- | :------- | :------------------------------------------------------------------------------- |
+| mode             | string | Yes      | `"duration"` when time was added, `"today"` when the session limit was waived.  |
+| duration         | string | No       | Time this grant added (Go duration format). Omitted for `"today"`.              |
+| expires          | string | No       | RFC 3339 timestamp when a `"today"` waiver lapses. Omitted for `"duration"`.     |
+| sessionExtension | string | No       | The session's accumulated extension after this grant.                          |
+| profileId        | string | No       | Recipient profile. Omitted for the shared profile.                             |
+| grantedBy        | string | No       | Profile that authorized the grant. Omitted when authorized by an admin client rather than a profile credential. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "playtime.extended",
+  "params": {
+    "mode": "duration",
+    "duration": "15m0s",
+    "sessionExtension": "15m0s",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "grantedBy": "0194e2a1-9f8e-7c65-b432-1a0f9e8d7c6b"
   }
 }
 ```
