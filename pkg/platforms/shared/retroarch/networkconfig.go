@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/spf13/afero"
 )
 
@@ -83,7 +84,7 @@ func writeConfig(fs afero.Fs, path, contents string) error {
 	if err := fs.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create RetroArch config directory: %w", err)
 	}
-	if err := afero.WriteFile(fs, path, []byte(contents), 0o600); err != nil {
+	if err := pathutil.WriteFileAtomic(fs, path, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("write RetroArch network config: %w", err)
 	}
 	return nil
