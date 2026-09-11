@@ -542,16 +542,21 @@ func sqlBrowseCacheStatus(ctx context.Context, db sqlQueryable) (browseCacheStat
 }
 
 // browseCacheDirKey converts a browse path into the key the cache builder
-// stores it under. browseCacheAncestorDirs hangs every filesystem directory
-// under "/", so a Windows directory such as C:/roms/ is stored as /C:/roms/.
-// Looking it up in the form callers hold never matched, which made every
-// cache lookup on Windows a miss: the root listing then reported every
-// filesystem root as empty and left it out.
+// stores it under. The path is normalized the way the builder normalizes media
+// paths, so native backslash separators match, and browseCacheAncestorDirs
+// hangs every filesystem directory under "/", so a Windows directory such as
+// C:/roms/ is stored as /C:/roms/. Looking it up in the form callers hold
+// never matched, which made every cache lookup on Windows a miss: the root
+// listing then reported every filesystem root as empty and left it out.
 func browseCacheDirKey(dirPath string) string {
-	if dirPath == "" || strings.HasPrefix(dirPath, "/") || strings.Contains(dirPath, "://") {
+	if dirPath == "" || strings.Contains(dirPath, "://") {
 		return dirPath
 	}
-	return "/" + dirPath
+	key := browseRouteCacheKey(browseCacheNormalizePath(dirPath))
+	if strings.HasPrefix(key, "/") {
+		return key
+	}
+	return "/" + key
 }
 
 func sqlBrowseDirID(ctx context.Context, db sqlQueryable, dirPath string) (id int64, ok bool, err error) {

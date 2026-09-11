@@ -69,10 +69,13 @@ func TestBrowseRootCountsFindWindowsRootsInTheCache(t *testing.T) {
 	}
 
 	// The same key mismatch hid cached directory listings behind the media
-	// fallback; the cache must answer for the Windows prefix directly.
-	_, found, err := sqlBrowseDirectoriesFromCache(ctx, mediaDB.sql.Load(), database.BrowseDirectoriesOptions{
-		PathPrefix: "C:/roms/NES/",
-	})
-	require.NoError(t, err)
-	assert.True(t, found, "the cache must know the Windows directory")
+	// fallback; the cache must answer for the Windows prefix directly, in
+	// either separator form.
+	for _, prefix := range []string{"C:/roms/NES/", `C:\roms\NES\`} {
+		_, found, dirErr := sqlBrowseDirectoriesFromCache(ctx, mediaDB.sql.Load(), database.BrowseDirectoriesOptions{
+			PathPrefix: prefix,
+		})
+		require.NoError(t, dirErr)
+		assert.True(t, found, "the cache must know the Windows directory %q", prefix)
+	}
 }
