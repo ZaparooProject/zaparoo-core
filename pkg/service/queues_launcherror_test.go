@@ -54,6 +54,7 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, expected: true},
 		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
 		{name: "invalid script", err: zapscript.ErrInvalidScript, expected: true},
+		{name: "invalid advanced arguments", err: zapscript.ErrInvalidArguments, expected: true},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, expected: true},
 		{
 			name: "wrapped unsupported control action",

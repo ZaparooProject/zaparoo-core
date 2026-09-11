@@ -68,6 +68,8 @@ var (
 	ErrNoHistory    = errors.New("no play history available")
 	// ErrInvalidScript wraps a ZapScript parse failure.
 	ErrInvalidScript = errors.New("invalid ZapScript")
+	// ErrInvalidArguments identifies user-supplied advanced-argument failures.
+	ErrInvalidArguments = advargs.ErrInvalidArguments
 	// ErrUnknownCommand is returned for a command name with no handler.
 	ErrUnknownCommand = errors.New("unknown command")
 	// ErrCommandBlocked is returned for a command denied by configuration.
@@ -609,6 +611,7 @@ func RunCommand(
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			log.Debug().Err(err).Msgf("command cancelled: %s", logCmd)
 		case errors.Is(err, ErrFileNotFound),
+			errors.Is(err, ErrInvalidArguments),
 			errors.Is(err, platforms.ErrScriptAlreadyRunning),
 			errors.Is(err, systemdefs.ErrUnknownSystem),
 			errors.Is(err, titles.ErrNoMatch),
