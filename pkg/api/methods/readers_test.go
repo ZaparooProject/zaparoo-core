@@ -294,6 +294,8 @@ func TestHandleReaderWrite(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error writing to reader")
+		var quietErr *models.QuietClientError
+		require.ErrorAs(t, err, &quietErr)
 		assert.Equal(t, []bool{true, false}, writeActivity)
 		m.AssertExpectations(t)
 	})
@@ -310,6 +312,8 @@ func TestHandleReaderWrite(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error writing to reader")
+		var quietErr *models.QuietClientError
+		require.ErrorAs(t, err, &quietErr)
 		m.AssertExpectations(t)
 	})
 

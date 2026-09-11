@@ -89,7 +89,7 @@ func HandleReaderWrite(
 		default:
 			log.Error().Err(err).Msg("error writing to reader")
 		}
-		return nil, errors.New("error writing to reader")
+		return nil, fmt.Errorf("%w", models.QuietClientErr(errors.New("error writing to reader")))
 	}
 
 	if t != nil {
