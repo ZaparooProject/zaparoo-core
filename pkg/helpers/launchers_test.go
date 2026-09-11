@@ -20,15 +20,58 @@
 package helpers
 
 import (
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type launcherDiagnosticDeniedFS struct{ afero.Fs }
+
+func (launcherDiagnosticDeniedFS) Stat(string) (os.FileInfo, error) {
+	return nil, os.ErrPermission
+}
+
+func TestLauncherStartDiagnostics(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("private", "working")
+	require.NoError(t, fs.MkdirAll(dir, 0o700))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "program"), nil, 0o700))
+	cmd := &exec.Cmd{Path: "program", Dir: dir}
+	fields := launcherStartDiagnostics(fs, cmd, os.ErrNotExist)
+	assert.Equal(t, map[string]string{
+		"executable_lookup": "resolved", "executable_file": "present",
+		"working_directory": "present", "launch_cause": "unresolved",
+	}, fields)
+
+	cmd.Path = "missing"
+	assert.Equal(t, "missing", launcherStartDiagnostics(fs, cmd, os.ErrNotExist)["executable_file"])
+	cmd.Dir = filepath.Join("missing", "directory")
+	assert.Equal(t, "missing", launcherStartDiagnostics(fs, cmd, os.ErrNotExist)["working_directory"])
+	cmd.Err = exec.ErrNotFound
+	fields = launcherStartDiagnostics(fs, cmd, exec.ErrNotFound)
+	assert.Equal(t, "failed", fields["executable_lookup"])
+	assert.Equal(t, "not_checked", fields["executable_file"])
+	assert.Nil(t, launcherStartDiagnostics(fs, cmd, os.ErrPermission))
+	assert.Nil(t, launcherStartDiagnostics(fs, cmd, errors.New("no such file or directory")))
+
+	cmd.Err = nil
+	cmd.Dir = dir
+	cmd.Path = "."
+	assert.Equal(t, "wrong_type", launcherStartDiagnostics(fs, cmd, os.ErrNotExist)["executable_file"])
+	fields = launcherStartDiagnostics(launcherDiagnosticDeniedFS{fs},
+		&exec.Cmd{Path: "../outside", Dir: "."}, os.ErrNotExist)
+	assert.Equal(t, "inspection_failed", fields["executable_file"])
+}
 
 func TestParseLifecycle(t *testing.T) {
 	t.Parallel()

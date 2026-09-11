@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -33,7 +34,49 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
+
+// These are post-failure observations, not proof of the state at exec time.
+// In particular, existing files do not rule out a missing interpreter or loader.
+func launcherStartDiagnostics(fs afero.Fs, cmd *exec.Cmd, err error) map[string]string {
+	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound) {
+		return nil
+	}
+	status := func(path string, directory bool) string {
+		info, statErr := fs.Stat(path)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "missing"
+		}
+		if statErr != nil {
+			return "inspection_failed"
+		}
+		if info.IsDir() != directory {
+			return "wrong_type"
+		}
+		return "present"
+	}
+	dir := cmd.Dir
+	if dir == "" {
+		dir = "."
+	}
+	fields := map[string]string{
+		"executable_lookup": "resolved",
+		"executable_file":   "not_checked",
+		"working_directory": status(dir, true),
+		"launch_cause":      "unresolved",
+	}
+	if cmd.Err != nil {
+		fields["executable_lookup"] = "failed"
+		return fields
+	}
+	path := cmd.Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	fields["executable_file"] = status(path, false)
+	return fields
+}
 
 func formatExtensions(exts []string) []string {
 	newExts := make([]string, 0)
@@ -184,7 +227,11 @@ func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (plat
 				cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 			}
 			if startErr := cmd.Start(); startErr != nil {
-				log.Error().Err(startErr).Msgf("error running custom launcher: %s", output)
+				event := log.Error().Err(startErr)
+				for key, value := range launcherStartDiagnostics(afero.NewOsFs(), cmd, startErr) {
+					event = event.Str(key, value)
+				}
+				event.Msgf("error running custom launcher: %s", output)
 				return nil, fmt.Errorf("failed to start custom launcher command: %w", startErr)
 			}
 			return cmd.Process, nil
