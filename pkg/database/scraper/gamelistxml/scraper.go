@@ -59,6 +59,7 @@ import (
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
 	MediaDirsByRoot      []map[string]string
+	SourceDirectory      string
 	SystemRootPath       string
 	ROMRootPath          string
 	AssetRootPath        string
@@ -78,6 +79,7 @@ const (
 	gamelistMatchSlugConflict gamelistMatchKind = "slug_conflict"
 	gamelistMatchPathOnly     gamelistMatchKind = "path_only"
 	gamelistMatchArcadeSet    gamelistMatchKind = "arcade_setname"
+	gamelistMatchSource       gamelistMatchKind = "source_directory"
 )
 
 type slugMediaSelection struct {
@@ -93,6 +95,7 @@ type GamelistXMLScraper struct {
 	db                 database.MediaDBI
 	fs                 afero.Fs
 	cfg                *config.Instance
+	sourcesBySystem    map[string][]scraper.MediaSource
 	externalAssetRoots []string
 	matchArcadeSets    bool
 }
@@ -223,7 +226,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
+			systems, sources, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
@@ -231,6 +234,7 @@ func NewPlatformScraper() platforms.Scraper {
 				db:                 db.MediaDB,
 				fs:                 fs,
 				cfg:                cfg,
+				sourcesBySystem:    sources,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
 			}
@@ -294,10 +298,10 @@ func resolveSystemsFromPlatform(
 	fs afero.Fs,
 	mdb database.MediaDBI,
 	systemIDs []string,
-) ([]scraper.ScrapeSystem, error) {
+) ([]scraper.ScrapeSystem, map[string][]scraper.MediaSource, error) {
 	indexed, err := mdb.IndexedSystems()
 	if err != nil {
-		return nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
+		return nil, nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
 	}
 
 	wantedIDs := orderedScrapeSystemIDs(indexed, systemIDs)
@@ -307,7 +311,7 @@ func resolveSystemsFromPlatform(
 	for _, sysID := range wantedIDs {
 		sys, err := mdb.FindSystemBySystemID(sysID)
 		if err != nil {
-			return nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
+			return nil, nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
 		}
 		systemDef, err := systemdefs.GetSystem(sysID)
 		if err != nil {
@@ -326,9 +330,23 @@ func resolveSystemsFromPlatform(
 	extsBySystem := indexedExtensionsBySystem(pl.Launchers(cfg))
 
 	customBase := cfg.ScraperGamelistXMLCustomPath()
+	sourcesBySystem := make(map[string][]scraper.MediaSource)
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
+		var sources scraper.Sources
+		if provider, ok := pl.(platforms.ScrapeSourceProvider); ok {
+			var sourceErr error
+			sources, sourceErr = provider.ScrapeSources(ctx, cfg, fs, sys.ID)
+			if sourceErr != nil {
+				return nil, nil, fmt.Errorf("resolve scrape sources for %s: %w", sys.ID, sourceErr)
+			}
+			for _, root := range sources.Roots {
+				if !slices.Contains(romPaths, root) {
+					romPaths = append(romPaths, root)
+				}
+			}
+		}
 		if len(romPaths) == 0 && !customBundleExists(fs, customBase, sys.ID) {
 			// A system indexed by a launcher with no scan folders of its own,
 			// such as the granular MiSTer arcade systems, still has media rows
@@ -336,6 +354,7 @@ func resolveSystemsFromPlatform(
 			log.Debug().Str("system", sys.ID).Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
 			continue
 		}
+		sourcesBySystem[sys.ID] = sources.Media
 		result = append(result, scraper.ScrapeSystem{
 			DBID:       dbSystems[sys.ID].DBID,
 			ID:         sys.ID,
@@ -343,7 +362,7 @@ func resolveSystemsFromPlatform(
 			Extensions: extsBySystem[sys.ID],
 		})
 	}
-	return result, nil
+	return result, sourcesBySystem, nil
 }
 
 // indexedExtensionsBySystem collects, per system, the extensions its launchers
@@ -536,6 +555,18 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var records []*GamelistRecord
 	var arcadeRecords []*GamelistRecord
 	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
+	var sourceRecords *sourceRecordIndex
+	if len(g.sourcesBySystem[system.ID]) > 0 {
+		sources := scraper.NewSourceIndex(g.sourcesBySystem[system.ID])
+		sourceRecords = &sourceRecordIndex{
+			sources: sources, media: indexSourceMedia(indexes, sources),
+			dirs: make(map[string]map[string]string),
+		}
+		for i, root := range system.ROMPaths {
+			sourceRecords.dirs[root] = mediaDirsByRoot[i]
+		}
+		indexes.MediaByTitleDBID = withoutSourceTitleMatches(indexes.MediaByTitleDBID, sources)
+	}
 	candidateMedia := len(indexes.MediaByPathFold)
 	candidateTitles := len(indexes.TitlesBySlug)
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
@@ -556,6 +587,9 @@ outer:
 			fileMediaDirsByRoot = make([]map[string]string, 0, len(mediaDirsByRoot)+1)
 			fileMediaDirsByRoot = append(fileMediaDirsByRoot, statMediaDirsFS(g.filesystem(), file.AssetRootPath))
 			fileMediaDirsByRoot = append(fileMediaDirsByRoot, mediaDirsByRoot...)
+			if sourceRecords != nil {
+				sourceRecords.dirs[file.AssetRootPath] = fileMediaDirsByRoot[0]
+			}
 		}
 		gamelistFiles++
 		gamelistEntries += len(file.Games)
@@ -569,6 +603,10 @@ outer:
 			}
 
 			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
+			if record := g.matchSourceRecord(indexes, sourceRecords, &file, game, resolved); record != nil {
+				records = append(records, record)
+				continue
+			}
 			var pathMedia database.Media
 			var matchedPathKey string
 			var pathOK bool
@@ -736,6 +774,11 @@ outer:
 			resolved, romRoot := resolveGamelistROMPath(folder.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
+				continue
+			}
+			game := folderAsGame(folder)
+			if record := g.matchSourceRecord(indexes, sourceRecords, &file, &game, resolved); record != nil {
+				records = append(records, record)
 				continue
 			}
 			folderMedia, matchedPathKey, ok := containerMediaForDir(indexes, resolved)
@@ -1412,6 +1455,9 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		if ok {
 			fallbackNames = artworkFallbackNames(resolved, record.ROMRootPath)
 		}
+	}
+	if record.SourceDirectory != "" {
+		fallbackNames = esmedia.DirectoryArtworkFallbackNames(record.SourceDirectory, record.ROMRootPath)
 	}
 	if record.MatchKind == gamelistMatchArcadeSet {
 		// Set-name entries commonly carry a foreign or sibling ROM path that

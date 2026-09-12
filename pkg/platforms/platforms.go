@@ -471,6 +471,13 @@ type ScraperCustomOption struct {
 // ScraperCustomOptions maps option names to their available values per scraper.
 type ScraperCustomOptions map[string][]ScraperCustomOption
 
+// ScrapeSourceProvider supplies metadata roots and game directories for virtual
+// launchers without enabling filesystem indexing for those launchers.
+// Missing optional installations return empty sources; read failures return errors.
+type ScrapeSourceProvider interface {
+	ScrapeSources(context.Context, *config.Instance, afero.Fs, string) (scraper.Sources, error)
+}
+
 // Scraper defines a metadata scraper available on a platform.
 // Scrapers are returned lazily by Platform.Scrapers and carry their full
 // implementation in the Scrape function field.

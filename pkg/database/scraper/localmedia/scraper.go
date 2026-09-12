@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -58,8 +59,9 @@ var artworkPropertyOrder = []tags.TagValue{ //nolint:gochecknoglobals // Stable 
 }
 
 type scraperImpl struct {
-	db database.MediaDBI
-	fs afero.Fs
+	db              database.MediaDBI
+	fs              afero.Fs
+	sourcesBySystem map[string][]scraper.MediaSource
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
@@ -79,11 +81,11 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.SystemIDs())
+			systems, sources, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("localmedia: resolve systems: %w", err)
 			}
-			s := &scraperImpl{db: db.MediaDB, fs: fs}
+			s := &scraperImpl{db: db.MediaDB, fs: fs, sourcesBySystem: sources}
 			go s.scrapeLoop(ctx, opts, systems, ch)
 			return nil
 		},
@@ -94,12 +96,13 @@ func resolveSystemsFromPlatform(
 	ctx context.Context,
 	cfg *config.Instance,
 	pl platforms.Platform,
+	fs afero.Fs,
 	mdb database.MediaDBI,
 	systemIDs []string,
-) ([]scraper.ScrapeSystem, error) {
+) ([]scraper.ScrapeSystem, map[string][]scraper.MediaSource, error) {
 	indexed, err := mdb.IndexedSystems()
 	if err != nil {
-		return nil, fmt.Errorf("list indexed systems: %w", err)
+		return nil, nil, fmt.Errorf("list indexed systems: %w", err)
 	}
 
 	wantedIDs := orderedScrapeSystemIDs(indexed, systemIDs)
@@ -108,7 +111,7 @@ func resolveSystemsFromPlatform(
 	for _, sysID := range wantedIDs {
 		sys, err := mdb.FindSystemBySystemID(sysID)
 		if err != nil {
-			return nil, fmt.Errorf("look up system %q: %w", sysID, err)
+			return nil, nil, fmt.Errorf("look up system %q: %w", sysID, err)
 		}
 		systemDef, err := systemdefs.GetSystem(sysID)
 		if err != nil {
@@ -124,16 +127,31 @@ func resolveSystemsFromPlatform(
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
 
+	sourcesBySystem := make(map[string][]scraper.MediaSource)
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
+		var sources scraper.Sources
+		if provider, ok := pl.(platforms.ScrapeSourceProvider); ok {
+			var sourceErr error
+			sources, sourceErr = provider.ScrapeSources(ctx, cfg, fs, sys.ID)
+			if sourceErr != nil {
+				return nil, nil, fmt.Errorf("resolve scrape sources for %s: %w", sys.ID, sourceErr)
+			}
+			for _, root := range sources.Roots {
+				if !slices.Contains(romPaths, root) {
+					romPaths = append(romPaths, root)
+				}
+			}
+		}
 		if len(romPaths) == 0 {
 			log.Debug().Str("system", sys.ID).Msg("localmedia: no launcher paths found, skipping")
 			continue
 		}
+		sourcesBySystem[sys.ID] = sources.Media
 		result = append(result, scraper.ScrapeSystem{DBID: dbSystems[sys.ID].DBID, ID: sys.ID, ROMPaths: romPaths})
 	}
-	return result, nil
+	return result, sourcesBySystem, nil
 }
 
 func orderedScrapeSystemIDs(indexed, requested []string) []string {
@@ -207,6 +225,10 @@ func (s *scraperImpl) scrapeLoop(
 
 		processed, matched, skipped := 0, 0, 0
 		availableDirs := s.availableDirsByRoot(system.ROMPaths)
+		var sources *scraper.SourceIndex
+		if len(s.sourcesBySystem[system.ID]) > 0 {
+			sources = scraper.NewSourceIndex(s.sourcesBySystem[system.ID])
+		}
 		var containers scraper.ContainerResolver = containerIndexForMedia(mediaRows)
 		if opts.Scope != nil {
 			containers, err = scraper.ScopedContainers(ctx, s.db, system.ID, mediaRows)
@@ -248,13 +270,13 @@ func (s *scraperImpl) scrapeLoop(
 				}
 				continue
 			}
-			isContainerTarget := isContainerLaunchTarget(containers, media)
-			props := s.mediaPropsForPath(media.Path, system.ROMPaths, availableDirs, isContainerTarget)
+			roots, names, cleanupNames := mediaArtworkNames(media, system.ROMPaths, containers, sources, opts.Force)
+			props := s.mediaPropsForNames(names, roots, availableDirs)
 			staleDeleted := 0
 			if opts.Force {
 				var cleanupErr error
-				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(
-					ctx, media, system.ROMPaths, props,
+				staleDeleted, cleanupErr = s.deleteStaleLocalMediaPropsNamed(
+					ctx, media, roots, props, cleanupNames,
 				)
 				if cleanupErr != nil {
 					skipped++
@@ -486,7 +508,12 @@ func (s *scraperImpl) mediaPropsForPath(
 	availableDirs map[string]map[string]string,
 	isContainerTarget bool,
 ) []database.MediaProperty {
-	fallbackNames := artworkFallbackNames(path, roots, isContainerTarget)
+	return s.mediaPropsForNames(artworkFallbackNames(path, roots, isContainerTarget), roots, availableDirs)
+}
+
+func (s *scraperImpl) mediaPropsForNames(
+	fallbackNames, roots []string, availableDirs map[string]map[string]string,
+) []database.MediaProperty {
 	if len(fallbackNames) == 0 {
 		return nil
 	}
@@ -573,6 +600,14 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 	roots []string,
 	foundProps []database.MediaProperty,
 ) (int, error) {
+	names := artworkFallbackNames(media.Path, roots, true)
+	return s.deleteStaleLocalMediaPropsNamed(ctx, media, roots, foundProps, names)
+}
+
+func (s *scraperImpl) deleteStaleLocalMediaPropsNamed(
+	ctx context.Context, media *database.MediaWithFullPath, roots []string,
+	foundProps []database.MediaProperty, fallbackNames []string,
+) (int, error) {
 	existingProps, err := s.db.GetMediaPropertyMetadata(ctx, media.DBID)
 	if err != nil {
 		return 0, fmt.Errorf("localmedia: load media properties for %d: %w", media.DBID, err)
@@ -588,7 +623,7 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 		if _, found := foundTypes[prop.TypeTag]; found {
 			continue
 		}
-		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots, true) {
+		if prop.TypeTagDBID == 0 || !isLocalMediaPropForNames(&prop, roots, fallbackNames) {
 			continue
 		}
 		if err := s.db.DeleteMediaProperty(ctx, media.DBID, prop.TypeTagDBID); err != nil {
@@ -600,12 +635,7 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 	return deleted, nil
 }
 
-func isLocalMediaPropForPath(
-	prop *database.MediaProperty,
-	mediaPath string,
-	roots []string,
-	isContainerTarget bool,
-) bool {
+func isLocalMediaPropForNames(prop *database.MediaProperty, roots, fallbackNames []string) bool {
 	propValue, ok := imagePropertyValue(prop.TypeTag)
 	if !ok || prop.Text == "" {
 		return false
@@ -617,7 +647,6 @@ func isLocalMediaPropForPath(
 
 	// Match the prop path against the media/ convention under any root (art may
 	// live cross-drive), using the same names a scrape would have written.
-	fallbackNames := artworkFallbackNames(mediaPath, roots, isContainerTarget)
 	if len(fallbackNames) == 0 {
 		return false
 	}

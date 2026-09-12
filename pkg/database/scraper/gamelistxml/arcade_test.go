@@ -358,7 +358,7 @@ func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
 	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS1).Return(database.System{DBID: 1}, nil)
 	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS2).Return(database.System{DBID: 2}, nil)
 
-	systems, err := resolveSystemsFromPlatform(t.Context(), newCustomGamelistConfig(t, custom), pl, fs, mdb, nil)
+	systems, _, err := resolveSystemsFromPlatform(t.Context(), newCustomGamelistConfig(t, custom), pl, fs, mdb, nil)
 	require.NoError(t, err)
 	require.Len(t, systems, 1, "only the system with an installed bundle survives having no launcher paths")
 	assert.Equal(t, systemdefs.SystemCPS1, systems[0].ID)
@@ -366,7 +366,7 @@ func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
 
 	plain, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	systems, err = resolveSystemsFromPlatform(t.Context(), plain, pl, fs, mdb, nil)
+	systems, _, err = resolveSystemsFromPlatform(t.Context(), plain, pl, fs, mdb, nil)
 	require.NoError(t, err)
 	assert.Empty(t, systems, "without a configured bundle directory the systems are still skipped")
 }
