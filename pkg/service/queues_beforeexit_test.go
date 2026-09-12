@@ -161,7 +161,7 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 10),
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
 	st.SetBeforeExitHook(func() { runBeforeExitHook(svc) })

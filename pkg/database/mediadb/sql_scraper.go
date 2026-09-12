@@ -1823,6 +1823,19 @@ func applyScrapeWriteTargetsBulk(
 ) (scrapeBatchSQLStats, error) {
 	start := time.Now()
 	stats := scrapeBatchSQLStats{Targets: len(targets)}
+	for _, target := range targets {
+		if target.Write.FillMissing {
+			// Preserve input order for shared titles. Reuse the same transactional
+			// insert-only path as single writes; normal batches retain bulk SQL.
+			for _, item := range targets {
+				if err := applyScrapeWriteTarget(ctx, writeCtx, item); err != nil {
+					return stats, err
+				}
+			}
+			stats.Duration = time.Since(start)
+			return stats, nil
+		}
+	}
 	if err := preloadScrapeWriteLookupCache(ctx, writeCtx, targets); err != nil {
 		return stats, fmt.Errorf("preload scrape write lookups: %w", err)
 	}
@@ -1865,6 +1878,9 @@ func applyScrapeWriteTarget(
 	ctx context.Context, writeCtx *scrapeWriteTxContext, target database.ScrapeWriteTarget,
 ) error {
 	write := target.Write
+	if write.FillMissing {
+		return fillMissingScrapeTarget(ctx, writeCtx, target)
+	}
 	if len(write.MediaTags) > 0 {
 		if err := upsertMediaTagsWithContext(ctx, writeCtx, target.MediaDBID, write.MediaTags); err != nil {
 			return fmt.Errorf("upsert media tags: %w", err)

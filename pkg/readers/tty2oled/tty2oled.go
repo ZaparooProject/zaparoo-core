@@ -68,6 +68,7 @@ type Reader struct {
 	operationWorkerCancel context.CancelFunc
 	deviceConfig          config.ReadersConnect
 	path                  string
+	identity              readers.USBReaderID
 	mu                    syncutil.RWMutex
 	wg                    sync.WaitGroup // tracks operationWorker goroutine
 	connected             bool
@@ -485,11 +486,8 @@ func (*Reader) Capabilities() []readers.Capability {
 }
 
 func (r *Reader) ReaderID() string {
-	stablePath := helpers.GetUSBTopologyPath(r.getDevicePath())
-	if stablePath == "" {
-		stablePath = r.getDevicePath()
-	}
-	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
+	path := r.getDevicePath()
+	return r.identity.ID(r.Metadata().ID, helpers.GetUSBTopologyPath(path), path)
 }
 
 func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {

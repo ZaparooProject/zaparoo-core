@@ -107,6 +107,8 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, state.ErrLaunchInProgress) ||
 		errors.Is(err, platforms.ErrScriptAlreadyRunning) ||
 		errors.Is(err, state.ErrLaunchBlockedByHook) ||
+		errors.Is(err, state.ErrLaunchRequiresProfile) ||
+		errors.Is(err, playtime.ErrLimitReached) ||
 		errors.Is(err, systemdefs.ErrUnknownSystem) ||
 		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
@@ -197,9 +199,13 @@ func runTokenZapScriptWithContext(
 		}
 		cmd := cmds[i]
 
-		// Run before_media_start hook; errors block the launch.
-		beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
-		if shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
+		deferLaunch := (suppressTapRelaunch(svc, &originToken, inHookContext) ||
+			originToken.LaunchGuardGeneration != 0) && zapscript.HasResolvedLaunchTarget(cmd.Name)
+		beforeMediaStart := func() error {
+			beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
+			if !shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
+				return nil
+			}
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
 				Active:     currentPrimary,
@@ -216,6 +222,12 @@ func runTokenZapScriptWithContext(
 			hookErr := runTokenZapScriptWithContext(runCtx, svc, hookToken, hookPlsc, &hookEnv, true)
 			if hookErrorBlocks(hookErr) {
 				return fmt.Errorf("%w: %w", state.ErrLaunchBlockedByHook, hookErr)
+			}
+			return nil
+		}
+		if !deferLaunch {
+			if hookErr := beforeMediaStart(); hookErr != nil {
+				return hookErr
 			}
 		}
 
@@ -260,11 +272,42 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
-		if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, currentPlaylist); stopErr != nil {
-			return stopErr
+		preparePlayback := func() error {
+			if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, currentPlaylist); stopErr != nil {
+				return stopErr
+			}
+			return pauseBackgroundForPrimaryLaunch(svc, cmd, currentPlaylist)
 		}
-		if pauseErr := pauseBackgroundForPrimaryLaunch(svc, cmd, currentPlaylist); pauseErr != nil {
-			return pauseErr
+		var skipLaunch func(platforms.ResolvedLaunch) bool
+		var prepareLaunch func(platforms.ResolvedLaunch) (bool, error)
+		if deferLaunch {
+			skipLaunch = func(target platforms.ResolvedLaunch) bool {
+				return suppressTapRelaunch(svc, &originToken, inHookContext) &&
+					launchMatchesActive(svc.State.ActiveMedia(), target)
+			}
+			prepareLaunch = func(target platforms.ResolvedLaunch) (bool, error) {
+				if originToken.LaunchGuardGeneration != 0 {
+					proceed, guardErr := confirmResolvedLaunch(runCtx, svc, &originToken)
+					if guardErr != nil || !proceed {
+						return false, guardErr
+					}
+					if admissionErr := recheckConfirmedLaunch(svc, cmd.Name); admissionErr != nil {
+						return false, admissionErr
+					}
+				}
+				if skipLaunch(target) {
+					return false, nil
+				}
+				if hookErr := beforeMediaStart(); hookErr != nil {
+					return false, hookErr
+				}
+				if skipLaunch(target) {
+					return false, nil
+				}
+				return true, preparePlayback()
+			}
+		} else if prepareErr := preparePlayback(); prepareErr != nil {
+			return prepareErr
 		}
 
 		result, err := zapscript.RunCommand(
@@ -285,6 +328,8 @@ func runTokenZapScriptWithContext(
 			zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
 				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
+				SkipMediaLaunch:    skipLaunch,
+				PrepareMediaLaunch: prepareLaunch,
 				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
@@ -329,7 +374,7 @@ func runTokenZapScriptWithContext(
 					softwareToken := *holdToken
 					log.Debug().Msg("media changed, updating hold owner")
 					select {
-					case svc.LaunchSoftwareQueue <- &softwareToken:
+					case svc.LaunchSoftwareQueue <- softwareTokenUpdate{token: &softwareToken}:
 					case <-runCtx.Done():
 						select {
 						case <-svc.State.GetContext().Done():

@@ -86,9 +86,10 @@ tasks:
       - '{{if .SKIP_SERVICE_RESTART}}echo "Skipping MiSTer service restart"{{else}}ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart{{end}}'
 
   bench-build:
-    desc: Cross-compile benchmark test binaries for MiSTer ARM
+    desc: Cross-compile benchmark test binaries for MiSTer ARM (EXTRA_TEST_PKGS adds integration packages)
     vars:
       BENCH_PKGS: '{{default "" .BENCH_PKGS}}'
+      EXTRA_TEST_PKGS: '{{default "" .EXTRA_TEST_PKGS}}'
     cmds:
       - task: :zigcc:setup
       - task: :docker:run
@@ -112,7 +113,7 @@ tasks:
             bash -c 'set -e && mkdir -p _build/bench_arm &&
             PKGS="{{.BENCH_PKGS}}" &&
             if [ -z "$PKGS" ]; then
-            PKGS=$(find ./pkg -name "*_bench_test.go" -o -name "*_test.go" | xargs grep -l "func Benchmark" | xargs -I{} dirname {} | sort -u);
+            PKGS="$(find ./pkg -name "*_bench_test.go" -o -name "*_test.go" | xargs grep -l "func Benchmark" | xargs -I{} dirname {} | sort -u) {{.EXTRA_TEST_PKGS}}";
             fi &&
             for pkg in $PKGS; do
             name=$(basename $pkg) &&

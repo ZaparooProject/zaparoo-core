@@ -30,8 +30,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// reapplyMediaUserData re-materializes the media.db projection (favourite tags
-// and launcher-override properties) from the UserDB source of truth after the
+// reapplyMediaUserData re-materializes the media.db projection (favourite/hidden
+// tags and launcher-override properties) from the UserDB source of truth after the
 // media rows have been (re)built. UserDB owns this data so that a wiped or
 // rebuilt media.db can be reconstructed; on an incremental reindex the rows
 // already exist and the writes are idempotent no-ops.
@@ -97,6 +97,14 @@ func reapplyMediaUserData(
 					TagDBID:   favTagDBID,
 				}); fErr != nil {
 					return applied, fmt.Errorf("failed to re-apply favourite for %q: %w", item.Path, fErr)
+				}
+				wrote = true
+			}
+			if item.IsHidden {
+				if hErr := db.UpdateMediaTags(ctx, media.DBID, nil, []database.MediaTagRef{{
+					Type: string(tags.TagTypeUser), Tag: string(tags.TagUserHidden),
+				}}); hErr != nil {
+					return applied, fmt.Errorf("failed to re-apply hidden preference for %q: %w", item.Path, hErr)
 				}
 				wrote = true
 			}

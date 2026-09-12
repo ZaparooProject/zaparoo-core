@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/rs/zerolog/log"
@@ -131,7 +132,12 @@ func resolveMediaPathIDs(
 		return map[mediaPathRef]database.MediaPathID{}, nil
 	}
 
+	// Media.Path is stored in canonical forward-slash form, but history and
+	// playtime rows keep the path the launch was given, which on Windows can
+	// carry backslashes. Look up by the canonical form and hand each row back
+	// under the caller's own ref, or Windows entries never get their tags.
 	wanted := make(map[mediaPathRef]bool, len(refs))
+	refsByCanonical := make(map[mediaPathRef][]mediaPathRef, len(refs))
 	paths := make([]string, 0, len(refs))
 	seenPaths := make(map[string]bool, len(refs))
 	for _, ref := range refs {
@@ -139,9 +145,12 @@ func resolveMediaPathIDs(
 			continue
 		}
 		wanted[ref] = true
-		if !seenPaths[ref.Path] {
-			seenPaths[ref.Path] = true
-			paths = append(paths, ref.Path)
+		canonical := pathutil.CanonicalMediaPath(ref.Path)
+		key := mediaPathRef{SystemID: ref.SystemID, Path: canonical}
+		refsByCanonical[key] = append(refsByCanonical[key], ref)
+		if !seenPaths[canonical] {
+			seenPaths[canonical] = true
+			paths = append(paths, canonical)
 		}
 	}
 	if len(paths) == 0 {
@@ -159,8 +168,8 @@ func resolveMediaPathIDs(
 		if row.DBID <= 0 {
 			continue
 		}
-		ref := mediaPathRef{SystemID: row.SystemID, Path: row.Path}
-		if wanted[ref] {
+		key := mediaPathRef{SystemID: row.SystemID, Path: pathutil.CanonicalMediaPath(row.Path)}
+		for _, ref := range refsByCanonical[key] {
 			resolved[ref] = row
 		}
 	}

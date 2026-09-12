@@ -54,6 +54,8 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
+	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
@@ -557,6 +559,8 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		SkipMediaLaunch:    opts.SkipMediaLaunch,
+		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
@@ -587,15 +591,39 @@ func RunCommand(
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandBlocked, cmd.Name)
 	}
 
+	// A ZapLink may replace a deferred launch with a different command kind.
+	// Such commands have no resolved-target callback, but still need the
+	// preparation that the service deferred for the original launch command.
+	if opts.PrepareMediaLaunch != nil && !HasResolvedLaunchTarget(cmd.Name) {
+		proceed, prepareErr := opts.PrepareMediaLaunch(platforms.ResolvedLaunch{})
+		if prepareErr != nil {
+			return platforms.CmdResult{}, prepareErr
+		}
+		if !proceed {
+			return platforms.CmdResult{Unsafe: unsafe, NewCommands: newCmds}, nil
+		}
+	}
+
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
 		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}
-		if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
+		if opts.PrepareMediaLaunch != nil && HasResolvedLaunchTarget(cmd.Name) {
+			// Preparation may wait for confirmation or run a hook that launches
+			// its own media. Neither may hold the exclusive launch guard.
+			env.AcquireLaunch = func() (func(), error) {
+				if err := opts.LauncherManager.TryStartLaunch(); err != nil {
+					return nil, fmt.Errorf("launch guard: %w", err)
+				}
+				return opts.LauncherManager.EndLaunch, nil
+			}
+		} else {
+			if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
+			}
+			defer opts.LauncherManager.EndLaunch()
 		}
-		defer opts.LauncherManager.EndLaunch()
 		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
@@ -606,6 +634,13 @@ func RunCommand(
 
 	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
+	if errors.Is(err, errMediaLaunchSkipped) {
+		// A resolved no-op is successful, including when wrapped by random
+		// or last-played launch handlers. Preserve metadata and chained commands.
+		log.Debug().Str("command", cmd.Name).Msg("resolved media launch skipped")
+		res.MediaChanged = false
+		err = nil
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

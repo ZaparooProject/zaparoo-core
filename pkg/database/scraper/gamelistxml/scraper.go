@@ -182,7 +182,8 @@ type loadRecordIndexes struct {
 	// to, matching what browse shows for the same folder. It is built over every
 	// indexed row, including already-scraped ones, because a directory holding
 	// nested media is not a container regardless of scrape state.
-	Containers *container.Index
+	Containers scraper.ContainerResolver
+	Scoped     bool
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -222,7 +223,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.Systems)
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
@@ -617,7 +618,17 @@ outer:
 				ProvidedName: game.Name,
 			})
 
+			// main resolves the path above, before the arcade-set fallback, so
+			// only the scoped guard belongs here: a scoped run must not fall
+			// through to the slug match, which reaches across the system.
+			if indexes.Scoped && !pathOK {
+				continue
+			}
+
 			title, titleOK := indexes.TitlesBySlug[pf.Slug]
+			if indexes.Scoped && title.DBID != pathMedia.MediaTitleDBID {
+				titleOK = false
+			}
 			switch {
 			case titleOK:
 				if pathOK && pathMedia.MediaTitleDBID == title.DBID {
@@ -832,6 +843,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	// Lowest CPU/IO priority for the whole scrape run; the locked thread
 	// dies with this goroutine so the change never leaks.
 	bgpriority.Apply()
+
+	if opts.Scope != nil {
+		g.scrapeScoped(ctx, opts, systems, mdb, ch)
+		return
+	}
 
 	const id = "gamelist.xml"
 	metrics := perfmetrics.NewRecorderForDB(mdb)
@@ -2051,6 +2067,10 @@ func matchMediaByResolvedPath(
 		return media, key, true
 	}
 
+	if indexes.Scoped {
+		return database.Media{}, "", false
+	}
+
 	// A directory the container index knows about is only ever resolved there,
 	// against every row. Prefix matching sees just the rows still unscraped
 	// this run, so a directory holding several children starts to look
@@ -2714,6 +2734,12 @@ func matchCompanionChildMedia(
 			return companionMediaMatch{}
 		}
 		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
+	}
+
+	// A scoped run must not reach the filename fallback below: it matches by
+	// name across the system, which is outside the requested scope.
+	if indexes.Scoped {
+		return companionMediaMatch{}
 	}
 
 	filenameKey := mediaFilenameKey(child.ResolvedPath)

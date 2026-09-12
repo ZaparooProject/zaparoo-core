@@ -269,6 +269,30 @@ func TestFindSingleContainerLaunchMedia_ReturnsM3UForDiscFolder(t *testing.T) {
 	assert.Equal(t, m3uPath, media.Path)
 }
 
+func TestFindSingleContainerLaunchMedia_ReturnsFirstSharedTitleDisc(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	containerPath := filepath.ToSlash(filepath.Join("roms", "PSX", "Shared Title"))
+	parentDir := containerPath + "/"
+	disc1Path := filepath.ToSlash(filepath.Join(containerPath, "Game (Disc 1).chd"))
+	disc2Path := filepath.ToSlash(filepath.Join(containerPath, "Game (Disc 2).chd"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 2, 1, ?, ?);
+	`, disc2Path, parentDir, disc1Path, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, containerPath)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, disc1Path, media.Path)
+}
+
 func TestFindSingleContainerLaunchMedia_RejectsAmbiguousDirectChildren(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -849,6 +873,58 @@ func TestClearScrapeRunMarkers_MissingRunIsNoop(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "test", "missing-run"))
+}
+
+func TestApplyScrapeFillMissingPreservesExistingValues(t *testing.T) {
+	t.Parallel()
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupScraperTestDB(t)
+			defer cleanup()
+			_, err := db.sql.Load().ExecContext(t.Context(),
+				"INSERT INTO Tags (TypeDBID, Tag) VALUES (3, 'image-screenshot')")
+			require.NoError(t, err)
+			initial := &database.ScrapeWrite{
+				Sentinel:   database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags:  []database.TagInfo{{Type: "developer", Tag: "original", Label: "Original"}},
+				TitleProps: []database.MediaProperty{{TypeTag: "property:description", Text: "Keep description"}},
+				MediaProps: []database.MediaProperty{{TypeTag: "property:image-boxart", Text: "keep.png"}},
+			}
+			require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, initial))
+			fill := &database.ScrapeWrite{
+				FillMissing: true, Sentinel: initial.Sentinel,
+				TitleTags:  []database.TagInfo{{Type: "developer", Tag: "replacement"}, {Type: "genre", Tag: "puzzle"}},
+				TitleProps: []database.MediaProperty{{TypeTag: "property:description", Text: "Replace description"}},
+				MediaProps: []database.MediaProperty{
+					{TypeTag: "property:image-boxart", Text: "replace.png"},
+					{TypeTag: "property:image-screenshot", Text: "new.png"},
+				},
+			}
+			if batch {
+				require.NoError(t, db.ApplyScrapeResults(t.Context(), []database.ScrapeWriteTarget{
+					{MediaDBID: 1, MediaTitleDBID: 1, Write: fill},
+				}))
+			} else {
+				require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, fill))
+			}
+			var description, image, screenshot, developer string
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaTitleProperties WHERE MediaTitleDBID=1 AND TypeTagDBID=1").Scan(&description))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				"SELECT Text FROM MediaProperties WHERE MediaDBID=1 AND TypeTagDBID=2").Scan(&image))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				`SELECT p.Text FROM MediaProperties p JOIN Tags t ON p.TypeTagDBID=t.DBID
+				 WHERE p.MediaDBID=1 AND t.Tag='image-screenshot'`).Scan(&screenshot))
+			require.NoError(t, db.sql.Load().QueryRowContext(t.Context(),
+				`SELECT t.Tag FROM MediaTitleTags mt JOIN Tags t ON mt.TagDBID=t.DBID
+				 WHERE mt.MediaTitleDBID=1 AND t.TypeDBID=2`).Scan(&developer))
+			require.Equal(t, "Keep description", description)
+			require.Equal(t, "keep.png", image)
+			require.Equal(t, "new.png", screenshot)
+			require.Equal(t, "original", developer)
+		})
+	}
 }
 
 func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
@@ -2317,6 +2393,32 @@ func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
 	assert.Equal(t, cuePath, aliases[0].Row.Path)
 }
 
+func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := aliasTestDir(parent, "SharedTitle")
+	disc1Path := filepath.ToSlash(filepath.Join(parent, "SharedTitle", "Game (Disc 1).pbp"))
+	disc2Path := filepath.ToSlash(filepath.Join(parent, "SharedTitle", "Game (Disc 2).pbp"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?);
+	`, disc2Path, gameDir, disc1Path, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, disc1Path, aliases[0].Row.Path)
+}
+
 func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupAliasTestDB(t)
@@ -3031,10 +3133,12 @@ func TestResolveSingletonContainerAliases_AmbiguousDirIsNotAliased(t *testing.T)
 	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
 	gameDir := aliasTestDir(parent, "TwoGames")
 	_, err := mediaDB.sql.Load().ExecContext(ctx, `
-		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'one', 'One');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'one', 'One'),
+			(2, 2, 'two', 'Two');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
 			(1, 1, 2, ?, ?),
-			(2, 1, 2, ?, ?);
+			(2, 2, 2, ?, ?);
 	`,
 		filepath.ToSlash(filepath.Join(parent, "TwoGames", "One.cue")), gameDir,
 		filepath.ToSlash(filepath.Join(parent, "TwoGames", "Two.cue")), gameDir)

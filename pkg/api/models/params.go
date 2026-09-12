@@ -27,32 +27,35 @@ import (
 )
 
 type SearchParams struct {
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	PathPrefix  *string   `json:"pathPrefix,omitempty"`
-	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
-	Query       *string   `json:"query"`
+	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix    *string   `json:"pathPrefix,omitempty"`
+	MaxResults    *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
+	Cursor        *string   `json:"cursor,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Query         *string   `json:"query"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 type BrowseParams struct {
-	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	Path        *string   `json:"path,omitempty"`
-	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
-	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
-	Cursor      *string   `json:"cursor,omitempty"`
-	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Systems       *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	Path          *string   `json:"path,omitempty"`
+	RootView      *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
+	MaxResults    *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor        *string   `json:"cursor,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter        *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort          *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 type SystemsParams struct {
-	Tags *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	All  bool      `json:"all,omitempty"`
+	Tags          *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	All           bool      `json:"all,omitempty"`
+	IncludeHidden bool      `json:"includeHidden,omitempty"`
 }
 
 // LaunchersParams filters the launchers list. Systems is intentionally not
@@ -388,9 +391,17 @@ type MediaImageParams struct {
 }
 
 type MediaScrapeParams struct {
-	ScraperID string   `json:"scraperId" validate:"required,min=1"`
-	Systems   []string `json:"systems"   validate:"omitempty,dive,min=1"`
-	Force     bool     `json:"force"`
+	Scope     *MediaScrapeScope `json:"scope,omitempty"`
+	ScraperID string            `json:"scraperId" validate:"required,min=1"`
+	Systems   []string          `json:"systems"   validate:"omitempty,dive,min=1"`
+	Force     bool              `json:"force"`
+}
+
+type MediaLookupCandidatesParams struct {
+	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
+	MaxResults  *int   `json:"maxResults,omitempty" validate:"omitempty,min=1,max=5"`
+	Name        string `json:"name" validate:"required,min=1,max=256"`
+	System      string `json:"system" validate:"required,min=1,max=256"`
 }
 
 type MediaLookupParams struct {

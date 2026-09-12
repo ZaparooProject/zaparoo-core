@@ -35,10 +35,12 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
+github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612 h1:djwJgc45dnDiDNRHP0Buqz8ta6kE/1dcr6efQeSVBQA=
+github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
 github.com/ZaparooProject/go-gameid v0.2.0 h1:nYDxozhwsJXacdh/lwHOJofz4SlA609WKTD38UOQy+0=
 github.com/ZaparooProject/go-gameid v0.2.0/go.mod h1:gPQg1jQ4jgkguOJeKUiIqZeucz0GsSR67UQ/JOgYUDI=
-github.com/ZaparooProject/go-pn532 v0.25.0 h1:R9pewRLrsPXmTTpMUdTQRcMuHXsXRecr3stjdiHSbBI=
-github.com/ZaparooProject/go-pn532 v0.25.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
+github.com/ZaparooProject/go-pn532 v0.26.0 h1:wRRrIyYMsKUUC+ddeO0IoifVDYaDTA8tg57YjukicIA=
+github.com/ZaparooProject/go-pn532 v0.26.0/go.mod h1:fSidCDd3a43w9TN9sHIpJdl1gQ5CTX/WgtnrniAdV+4=
 github.com/ZaparooProject/go-zapscript v0.19.0 h1:M4t3dlOrfx0g8ZkLuGt7pRhNa5SqWMs5oAgucZpovQE=
 github.com/ZaparooProject/go-zapscript v0.19.0/go.mod h1:ofo4vj6lFW0eUuSyPLt0R0JjJxExhn9eitSmFBWQVoU=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
@@ -89,8 +91,6 @@ github.com/eclipse/paho.mqtt.golang v1.5.1 h1:/VSOv3oDLlpqR2Epjn1Q7b2bSTplJIeV2I
 github.com/eclipse/paho.mqtt.golang v1.5.1/go.mod h1:1/yJCneuyOoCOzKSsOTUc0AJfpsItBGWvYpBLimhArU=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
-github.com/expr-lang/expr v1.17.8 h1:W1loDTT+0PQf5YteHSTpju2qfUfNoBt4yw9+wOEU9VM=
-github.com/expr-lang/expr v1.17.8/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
 github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
 github.com/fatih/color v1.18.0/go.mod h1:4FelSpRwEGDpQ12mAdzqdOukCy4u8WUtOY6lkT/6HfU=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=

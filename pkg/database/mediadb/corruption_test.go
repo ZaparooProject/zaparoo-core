@@ -67,7 +67,7 @@ func TestSystemsQueriesMarkCorruption(t *testing.T) {
 					if method == "tagged" {
 						tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
 					}
-					_, err = db.SystemMediaCounts(t.Context(), tags)
+					_, err = db.SystemMediaCounts(t.Context(), tags, false)
 				}
 				require.ErrorIs(t, err, cause)
 				assert.Equal(t, database.IsCorruptionError(cause), database.IsMarkedCorrupt(db.dbPath))

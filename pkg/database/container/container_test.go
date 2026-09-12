@@ -33,6 +33,12 @@ func media(dbid int64, path string) database.Media {
 	return database.Media{DBID: dbid, Path: path, ParentDir: container.ParentDir(path)}
 }
 
+func titledMedia(dbid, mediaTitleDBID int64, path string) database.Media {
+	row := media(dbid, path)
+	row.MediaTitleDBID = mediaTitleDBID
+	return row
+}
+
 // A row whose Path came from filepath.Join carries the host separator. Before
 // this, ParentDir searched only for "/", returned empty, and Resolve then found
 // no container at all — folder artwork was dropped on Windows.
@@ -105,10 +111,42 @@ func TestSelectLaunchMedia(t *testing.T) {
 			},
 		},
 		{
-			name: "discs without a playlist are ambiguous",
+			name: "discs without a playlist or title are ambiguous",
 			rows: []database.Media{
 				media(1, "/roms/PSX/Game/Game (Disc 1).chd"),
 				media(2, "/roms/PSX/Game/Game (Disc 2).chd"),
+			},
+		},
+		{
+			name: "shared title disc set chooses lowest path regardless of input order",
+			rows: []database.Media{
+				titledMedia(2, 10, "/roms/PSX/Game/Game (Disc 2).chd"),
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).chd"),
+			},
+			want:  1,
+			found: true,
+		},
+		{
+			name: "shared title disc set accepts case insensitive extensions",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).IMG"),
+				titledMedia(2, 10, "/roms/PSX/Game/Game (Disc 2).PBP"),
+			},
+			want:  1,
+			found: true,
+		},
+		{
+			name: "disc images with different titles are ambiguous",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).chd"),
+				titledMedia(2, 11, "/roms/PSX/Game/Game (Disc 2).chd"),
+			},
+		},
+		{
+			name: "same title non-disc files are ambiguous",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/NES/Hacks/Game Hack 1.nes"),
+				titledMedia(2, 10, "/roms/NES/Hacks/Game Hack 2.nes"),
 			},
 		},
 		{
@@ -234,6 +272,8 @@ func TestMayHaveContainerTarget(t *testing.T) {
 		"/roms/PSX/Game/Game.cue",
 		"/roms/PSX/Game/Game (Disc 1).chd",
 		"/roms/PSX/Game/Game.iso",
+		"/roms/PSX/Game/Game.img",
+		"/roms/PSX/Game/Game.pbp",
 	} {
 		assert.True(t, container.MayHaveContainerTarget(path), path)
 	}

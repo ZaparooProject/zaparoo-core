@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -50,6 +51,46 @@ func bundlePlatform(t *testing.T, logBody, stderrBody string) platforms.Platform
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{LogDir: logDir, TempDir: logDir})
 	return pl
+}
+
+func TestReadLogBundle_IncludesPersistentCrash(t *testing.T) {
+	t.Parallel()
+	logDir := t.TempDir()
+	dataDir := t.TempDir()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: logDir, DataDir: dataDir})
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, config.LogFile),
+		[]byte(strings.Repeat("{\"msg\":\"routine\"}\n", 200)), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, config.StderrFile),
+		[]byte(strings.Repeat("stderr chatter\n", 200)), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, crashdump.CurrentFile),
+		[]byte("zaparoo-core@2.0.0\n"), 0o600))
+	crash := "zaparoo-core@1.0.0\npanic: retained evidence\n" + strings.Repeat("stack frame\n", 200)
+	previous := filepath.Join(dataDir, crashdump.PreviousFile)
+	require.NoError(t, os.WriteFile(previous, []byte(crash), 0o600))
+	for _, limit := range []int{0, 1, 40, 200, 512, 4096} {
+		data, err := helpers.ReadLogBundle(pl, limit)
+		require.NoError(t, err)
+		if limit > 0 {
+			assert.LessOrEqual(t, len(data), limit)
+		}
+		if limit == 0 || limit >= 200 {
+			assert.Contains(t, string(data), crashdump.PreviousFile)
+			assert.Contains(t, string(data), "panic: retained evidence")
+		}
+	}
+	//nolint:gosec // Test-owned crash file inside t.TempDir.
+	retained, err := os.ReadFile(previous)
+	require.NoError(t, err)
+	assert.Equal(t, crash, string(retained), "bundling must not consume evidence")
+
+	// Before a service restart, the newest crash still occupies CurrentFile.
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, crashdump.CurrentFile),
+		[]byte("zaparoo-core@2.0.0\npanic: newest evidence\n"), 0o600))
+	data, err := helpers.ReadLogBundle(pl, 512)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "panic: newest evidence")
+	assert.Contains(t, string(data), "panic: retained evidence")
 }
 
 func TestReadLogBundle_AppendsStderr(t *testing.T) {

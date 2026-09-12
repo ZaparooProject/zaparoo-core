@@ -867,12 +867,37 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mgls.LaunchCore(cfg, p, system)
-	if err != nil {
+	if err = mgls.LaunchCore(cfg, p, system); err != nil {
+		// The system's own core is not installed, but an alternate
+		// implementation of it may be. Launchers are already ordered by
+		// preference, so the first core-backed one that resolves is the one a
+		// media launch for this system would have used: an install carrying
+		// only the alternate should not be told the system has no core.
+		if launcher, ok := p.installedAltSystemLauncher(cfg, id); ok {
+			return p.LaunchSystemLauncher(cfg, id, launcher)
+		}
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
 	p.clearTrackedActiveGame()
 	return nil
+}
+
+// installedAltSystemLauncher finds an installed alternate core for a system,
+// in the launcher list's own preference order.
+func (p *Platform) installedAltSystemLauncher(
+	cfg *config.Instance, systemID string,
+) (*platforms.Launcher, bool) {
+	launchers := p.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
+		if l.SystemID != systemID || l.ID == systemID || !misterCoreBacked(l.ID, systemID) {
+			continue
+		}
+		if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, l.ID, systemID); ok {
+			return l, true
+		}
+	}
+	return nil, false
 }
 
 // LaunchSystemLauncher implements platforms.SystemLauncherSelector, loading
@@ -898,12 +923,16 @@ func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, l
 	return nil
 }
 
+func (*Platform) NormalizeLaunchPath(path string) string {
+	return checkInZip(path)
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
-	path = checkInZip(path)
+	path = p.NormalizeLaunchPath(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
 
 	if launcher == nil {
@@ -1484,6 +1513,8 @@ func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) mo
 		coreName := info.ShortName
 		if setName, found := retroAchievementsSetName(l.ID); found {
 			coreName = setName
+		} else if l.ID == hybridDVDCore.LauncherID {
+			coreName = hybridDVDCore.SetName
 		}
 		runtime.MisterCore = &models.MisterCoreInfo{
 			Name:    coreName,
@@ -1745,7 +1776,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	)
 	setCoreAvailability(ls)
 
-	return helpers.CombineLaunchers(cfg, p, ls)
+	return helpers.CombineLaunchers(cfg, p, prioritizeNGPCCore(cfg, ls))
 }
 
 func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {

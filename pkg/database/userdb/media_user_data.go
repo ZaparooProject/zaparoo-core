@@ -33,20 +33,20 @@ import (
 
 // GetMediaUserData returns the user-data row for a media path. The bool is false
 // when no row exists for the (systemID, path) key, in which case the media has no
-// favourite or launcher-override intent recorded.
+// user preferences recorded.
 func (db *UserDB) GetMediaUserData(systemID, path string) (database.MediaUserData, bool, error) {
 	return sqlGetMediaUserData(db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path))
 }
 
 // UpsertMediaUserData inserts or updates the user-data row for (SystemID, Path).
 // CreatedAt is set on insert only; UpdatedAt is set on every write. A row with no
-// favourite and no launcher override carries no user intent, so it is deleted
-// rather than persisted (keeping ListMediaUserData and the backfill guard honest).
+// favourite, hidden preference, or launcher override carries no user intent,
+// so it is deleted rather than persisted.
 func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 	conn := db.sql.Load()
 	normalized := *data
 	normalized.Path = pathutil.CanonicalMediaPath(data.Path)
-	if !normalized.IsFavorite && normalized.LauncherOverride == "" {
+	if !normalized.IsFavorite && !normalized.IsHidden && normalized.LauncherOverride == "" {
 		return sqlDeleteMediaUserData(db.ctx, conn, normalized.SystemID, normalized.Path)
 	}
 	return sqlUpsertMediaUserData(db.ctx, conn, &normalized, time.Now().Unix())
@@ -63,6 +63,16 @@ func (db *UserDB) SetMediaUserFavorite(systemID, path string, favorite bool) err
 	)
 }
 
+// SetMediaUserHidden changes visibility without disturbing other preferences.
+func (db *UserDB) SetMediaUserHidden(systemID, path string, hidden bool) error {
+	return mediaUserDataColumnWrite(db.ctx, db.sql.Load(), `
+		insert into MediaUserData(SystemID, Path, IsHidden, CreatedAt, UpdatedAt)
+		values (?, ?, ?, ?, ?)
+		on conflict(SystemID, Path) do update set
+			IsHidden = excluded.IsHidden, UpdatedAt = excluded.UpdatedAt;
+	`, systemID, pathutil.CanonicalMediaPath(path), hidden, time.Now().Unix())
+}
+
 // SetMediaUserLauncherOverride records (or clears, when launcherID is empty) the
 // launcher-override intent for a media path without disturbing the favourite
 // flag on the same row. See SetMediaUserFavorite for the concurrency guarantee.
@@ -74,7 +84,7 @@ func (db *UserDB) SetMediaUserLauncherOverride(systemID, path, launcherID string
 
 // SetMediaUserSnapshot records a successfully resolved scanner identity
 // snapshot on an existing user-data row. It never inserts: a snapshot without
-// user intent (favourite/override) is meaningless. Empty tags are significant
+// user intent (favourite/hidden/override) is meaningless. Empty tags are significant
 // and replace stale tags; callers must skip this method when lookup fails.
 func (db *UserDB) SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error {
 	return sqlSetMediaUserSnapshot(
@@ -102,7 +112,7 @@ func sqlGetMediaUserData(
 	var rawTags string
 	q, err := db.PrepareContext(ctx, `
 		select
-		DBID, SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
+		DBID, SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
 		from MediaUserData
 		where SystemID = ? and Path = ?;
 	`)
@@ -119,6 +129,7 @@ func sqlGetMediaUserData(
 		&row.SystemID,
 		&row.Path,
 		&row.IsFavorite,
+		&row.IsHidden,
 		&row.LauncherOverride,
 		&row.MediaName,
 		&rawTags,
@@ -141,10 +152,11 @@ func sqlUpsertMediaUserData(
 ) error {
 	stmt, err := db.PrepareContext(ctx, `
 		insert into MediaUserData(
-			SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
-		) values (?, ?, ?, ?, ?, ?, ?, ?)
+			SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(SystemID, Path) do update set
 			IsFavorite = excluded.IsFavorite,
+			IsHidden = excluded.IsHidden,
 			LauncherOverride = excluded.LauncherOverride,
 			MediaName = case when excluded.MediaName != '' then excluded.MediaName else MediaUserData.MediaName end,
 			Tags = case when excluded.Tags != '' then excluded.Tags else MediaUserData.Tags end,
@@ -162,6 +174,7 @@ func sqlUpsertMediaUserData(
 		data.SystemID,
 		data.Path,
 		data.IsFavorite,
+		data.IsHidden,
 		data.LauncherOverride,
 		data.MediaName,
 		database.EncodeTagStrings(data.Tags),
@@ -214,9 +227,9 @@ func sqlSetMediaUserSnapshot(
 }
 
 // mediaUserDataColumnWrite applies a single-column upsert and then deletes the
-// row if no user intent remains (not a favourite and no launcher override),
+// row if no user intent remains (neither favourite nor hidden and no launcher override),
 // both inside one transaction so the pair is atomic against concurrent writers.
-// value is the column-specific bind (favourite bool or launcher ID string).
+// value is the column-specific bind (preference bool or launcher ID string).
 func mediaUserDataColumnWrite(
 	ctx context.Context, db *sql.DB, upsert, systemID, path string, value any, now int64,
 ) (err error) {
@@ -235,9 +248,16 @@ func mediaUserDataColumnWrite(
 	}
 	if _, err = tx.ExecContext(ctx, `
 		delete from MediaUserData
-		where SystemID = ? and Path = ? and IsFavorite = 0 and LauncherOverride = '';
+		where SystemID = ? and Path = ? and IsFavorite = 0 and IsHidden = 0 and LauncherOverride = '';
 	`, systemID, path); err != nil {
 		return fmt.Errorf("failed to prune empty media user data row: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		insert into DeviceState(Key, Value, UpdatedAt) values (?, '1', ?)
+		on conflict(Key) do update set Value = cast(DeviceState.Value as integer) + 1,
+			UpdatedAt = excluded.UpdatedAt;
+	`, database.DeviceStateKeyMediaPreferencesRevision, now); err != nil {
+		return fmt.Errorf("failed to advance media preferences revision: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit media user data transaction: %w", err)
@@ -259,7 +279,7 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 
 	q, err := db.PrepareContext(ctx, `
 		select
-		DBID, SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
+		DBID, SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
 		from MediaUserData;
 	`)
 	if err != nil {
@@ -288,6 +308,7 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 			&row.SystemID,
 			&row.Path,
 			&row.IsFavorite,
+			&row.IsHidden,
 			&row.LauncherOverride,
 			&row.MediaName,
 			&rawTags,

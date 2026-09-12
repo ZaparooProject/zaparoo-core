@@ -261,7 +261,8 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodMediaActive: true, models.MethodMediaActiveUpdate: true,
 	models.MethodMediaCleanOrphans: true, models.MethodMediaHistory: true,
 	models.MethodMediaHistoryLatest: true, models.MethodMediaHistoryTop: true,
-	models.MethodMediaLookup: true, models.MethodMediaMeta: true, models.MethodMediaImage: true,
+	models.MethodMediaLookup: true, models.MethodMediaLookupCandidates: true,
+	models.MethodMediaMeta: true, models.MethodMediaImage: true,
 	models.MethodScrapers: true, models.MethodMediaScrape: true,
 	models.MethodMediaScrapeStatus: true, models.MethodMediaScrapeCancel: true,
 	models.MethodMediaScrapeResume: true, models.MethodMediaControl: true,
@@ -378,33 +379,34 @@ func NewMethodMap() *MethodMap {
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
 		// media
-		models.MethodMedia:               methods.HandleMedia,
-		models.MethodMediaGenerate:       methods.HandleGenerateMedia,
-		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
-		models.MethodMediaGenerateResume: methods.HandleMediaGenerateResume,
-		models.MethodMediaIndex:          methods.HandleGenerateMedia,
-		models.MethodMediaSearch:         methods.HandleMediaSearch,
-		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
-		models.MethodMediaBrowseIndex:    methods.HandleMediaBrowseIndex,
-		models.MethodMediaTags:           methods.HandleMediaTags,
-		models.MethodMediaTagsUpdate:     methods.HandleMediaTagsUpdate,
-		models.MethodMediaMetaUpdate:     methods.HandleMediaMetaUpdate,
-		models.MethodMediaActive:         methods.HandleActiveMedia,
-		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
-		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
-		models.MethodMediaHistory:        methods.HandleMediaHistory,
-		models.MethodMediaHistoryLatest:  methods.HandleMediaHistoryLatest,
-		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
-		models.MethodMediaLookup:         methods.HandleMediaLookup,
-		models.MethodMediaMeta:           methods.HandleMediaMeta,
-		models.MethodMediaImage:          methods.HandleMediaImage,
-		models.MethodScrapers:            methods.HandleScrapers,
-		models.MethodMediaScrape:         methods.HandleMediaScrape,
-		models.MethodMediaScrapeStatus:   methods.HandleMediaScrapeStatus,
-		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
-		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
-		models.MethodMediaControl:        methods.HandleMediaControl,
-		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
+		models.MethodMedia:                 methods.HandleMedia,
+		models.MethodMediaGenerate:         methods.HandleGenerateMedia,
+		models.MethodMediaGenerateCancel:   methods.HandleMediaGenerateCancel,
+		models.MethodMediaGenerateResume:   methods.HandleMediaGenerateResume,
+		models.MethodMediaIndex:            methods.HandleGenerateMedia,
+		models.MethodMediaSearch:           methods.HandleMediaSearch,
+		models.MethodMediaBrowse:           methods.HandleMediaBrowse,
+		models.MethodMediaBrowseIndex:      methods.HandleMediaBrowseIndex,
+		models.MethodMediaTags:             methods.HandleMediaTags,
+		models.MethodMediaTagsUpdate:       methods.HandleMediaTagsUpdate,
+		models.MethodMediaMetaUpdate:       methods.HandleMediaMetaUpdate,
+		models.MethodMediaActive:           methods.HandleActiveMedia,
+		models.MethodMediaActiveUpdate:     methods.HandleUpdateActiveMedia,
+		models.MethodMediaCleanOrphans:     methods.HandleMediaCleanOrphans,
+		models.MethodMediaHistory:          methods.HandleMediaHistory,
+		models.MethodMediaHistoryLatest:    methods.HandleMediaHistoryLatest,
+		models.MethodMediaHistoryTop:       methods.HandleMediaHistoryTop,
+		models.MethodMediaLookup:           methods.HandleMediaLookup,
+		models.MethodMediaLookupCandidates: methods.HandleMediaLookupCandidates,
+		models.MethodMediaMeta:             methods.HandleMediaMeta,
+		models.MethodMediaImage:            methods.HandleMediaImage,
+		models.MethodScrapers:              methods.HandleScrapers,
+		models.MethodMediaScrape:           methods.HandleMediaScrape,
+		models.MethodMediaScrapeStatus:     methods.HandleMediaScrapeStatus,
+		models.MethodMediaScrapeCancel:     methods.HandleMediaScrapeCancel,
+		models.MethodMediaScrapeResume:     methods.HandleMediaScrapeResume,
+		models.MethodMediaControl:          methods.HandleMediaControl,
+		models.MethodMediaTitleParse:       methods.HandleMediaTitleParse,
 		// settings
 		models.MethodSettings:                    methods.HandleSettings,
 		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
@@ -548,6 +550,33 @@ func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handle
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 		})
 	}
+}
+
+// mountWebSocketRoutes registers the WebSocket upgrade routes on r behind
+// rateLimit. The group carries no request timeout: the upgrade handler
+// returns only when the connection closes, and chi's Timeout middleware
+// writes a 504 header on return whenever its deadline has passed, which on
+// a hijacked connection is discarded by net/http with a warning on stderr.
+// Per-message deadlines are applied in handleWSMessage instead.
+func mountWebSocketRoutes(
+	r chi.Router,
+	rateLimit func(http.Handler) http.Handler,
+	handle func(w http.ResponseWriter, r *http.Request, version string),
+) {
+	r.Group(func(r chi.Router) {
+		r.Use(rateLimit)
+		r.Use(middleware.NoCache)
+
+		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "latest")
+		})
+		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0")
+		})
+		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
+			handle(w, r, "v0.1")
+		})
+	})
 }
 
 // apiMethodManagesRestoreAccess lists methods that coordinate with the
@@ -773,9 +802,20 @@ var mimeFallbacks = map[string]string{
 // Unknown paths fall back to index.html for client-side routing.
 func fsCustom404(root http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
 		upath := r.URL.Path
+		assetPath := strings.TrimPrefix(upath, "/")
+		if assetPath == "" {
+			serveIndex(w, r, root)
+			return
+		}
+		// Confine request-derived names before passing them to any filesystem.
+		if !filepath.IsLocal(assetPath) {
+			http.NotFound(w, r)
+			return
+		}
 
-		f, err := root.Open(upath)
+		f, err := root.Open(assetPath + ".gz")
 		if err != nil {
 			if os.IsNotExist(err) {
 				serveIndex(w, r, root)
@@ -807,13 +847,16 @@ func fsCustom404(root http.FileSystem) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
-		http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
+		if upath == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		serveCompressedAppContent(w, r, upath, stat, f)
 	})
 }
 
 // serveIndex serves the SPA index.html for client-side routing.
 func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
-	index, err := root.Open("index.html")
+	index, err := root.Open("index.html.gz")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening index.html")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -831,22 +874,22 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
+	serveCompressedAppContent(w, r, "index.html", stat, index)
 }
 
 const errMsgAppNotFound = "Zaparoo App files not found. " +
-	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
+	"Copy the built zaparoo-app files to pkg/assets/_app/dist/ and run task app:compress before building."
 
 // handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
-	appFs, err := fs.Sub(assets.App, "_app/dist")
+	appFs, err := fs.Sub(assets.App, "_app/packed/dist")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening app dist")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
 	}
 
-	if _, err := appFs.Open("index.html"); err != nil {
+	if _, err := fs.Stat(appFs, "index.html.gz"); err != nil {
 		log.Error().Msg("zaparoo-app files not found in embedded filesystem")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
@@ -2189,21 +2232,7 @@ func StartWithReady(
 	// WebSocket routes — open to remote clients regardless of AllowedIPs.
 	// Encryption (when enabled) or API key auth (when disabled) is the
 	// security mechanism here.
-	r.Group(func(r chi.Router) {
-		r.Use(apiRateLimitMiddleware)
-		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
-
-		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "latest")
-		})
-		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0")
-		})
-		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-			wsHandler(w, r, "v0.1")
-		})
-	})
+	mountWebSocketRoutes(r, apiRateLimitMiddleware, wsHandler)
 
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.

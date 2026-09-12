@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -285,6 +286,9 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	seedMigratedMediaDB(ctx, t, mockPlatform)
 	markSchemaAhead(ctx, t, testRoot, config.MediaDbFile)
 
+	// The runtime keeps the crash file open until the process exits, which
+	// stops Windows removing this test's TempDir.
+	t.Cleanup(crashdump.Stop)
 	svcResult, startErr := Start(mockPlatform, cfg)
 	require.Nil(t, svcResult)
 	require.Error(t, startErr, "the occupied API port is what stops this run, not the rebuild")

@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -40,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +60,7 @@ type scanBehaviorEnv struct {
 	st          *state.State
 	cfg         *config.Instance
 	userDB      *testhelpers.MockUserDBI
+	mediaDB     *testhelpers.MockMediaDBI
 	svc         *ServiceContext
 	launchHook  *launchHook
 	historyHook *historyHook
@@ -69,6 +72,7 @@ type scanBehaviorEnv struct {
 	stopCh      chan struct{}
 	keyboardCh  chan string
 	historyCh   chan database.HistoryEntry
+	uiCh        chan models.UIStateResponse
 	romsDir     string
 }
 
@@ -123,6 +127,17 @@ func setupScanBehavior(
 	t *testing.T,
 	scanMode string,
 	exitDelay float32,
+) *scanBehaviorEnv {
+	t.Helper()
+	// Buffer updates so launch goroutines can finish during shutdown.
+	return setupScanBehaviorWithSoftwareQueue(t, scanMode, exitDelay, make(chan softwareTokenUpdate, 10))
+}
+
+func setupScanBehaviorWithSoftwareQueue(
+	t *testing.T,
+	scanMode string,
+	exitDelay float32,
+	lsq chan softwareTokenUpdate,
 ) *scanBehaviorEnv {
 	t.Helper()
 
@@ -223,6 +238,11 @@ mode = "unrestricted"`))
 		stopCh <- struct{}{}
 	}).Maybe()
 
+	mockPlatform.On("ReturnToMenu").Return(nil).Run(func(_ mock.Arguments) {
+		st.SetActiveMedia(nil)
+		stopCh <- struct{}{}
+	}).Maybe()
+
 	mockPlatform.On("KeyboardPress",
 		mock.AnythingOfType("string"),
 	).Return(nil).Run(func(args mock.Arguments) {
@@ -234,12 +254,16 @@ mode = "unrestricted"`))
 	mockPlatform.On("ConsoleManager").Return(platforms.NoOpConsoleManager{}).Maybe()
 
 	fakeClock := clockwork.NewFakeClock()
+	uiCh := make(chan models.UIStateResponse, 32)
+	ui := uievents.New(fakeClock, nil, func(update models.UIStateResponse) {
+		select {
+		case uiCh <- update:
+		default:
+		}
+	})
 
-	// lsq is buffered so goroutines spawned by processTokenQueue and timedExit
-	// can complete their sends after context cancellation.
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token)
-	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
 	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, nil, mockPlayer)
@@ -250,8 +274,12 @@ mode = "unrestricted"`))
 		State:               st,
 		DB:                  db,
 		Profiles:            profiles.NewService(db, st),
+		LimitsManager:       limitsManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
+		ConfirmQueue:        make(chan chan error),
+		UI:                  ui,
 		BackgroundWG:        &sync.WaitGroup{},
 	}
 
@@ -285,6 +313,7 @@ mode = "unrestricted"`))
 		st:          st,
 		cfg:         cfg,
 		userDB:      mockUserDB,
+		mediaDB:     mockMediaDB,
 		fs:          fs.Fs,
 		svc:         svc,
 		launchHook:  hook,
@@ -297,6 +326,7 @@ mode = "unrestricted"`))
 		stopCh:      stopCh,
 		keyboardCh:  keyboardCh,
 		historyCh:   historyCh,
+		uiCh:        uiCh,
 	}
 }
 
@@ -494,6 +524,25 @@ func (env *scanBehaviorEnv) waitForActiveCard(t *testing.T, uid string) {
 	}
 }
 
+// waitForCardRemoved polls until readerManager has processed a removal and
+// cleared the active card. sendRemoval only queues the scan, so a test that
+// re-taps straight afterwards is racing the removal that is supposed to have
+// reset the reader's state.
+func (env *scanBehaviorEnv) waitForCardRemoved(t *testing.T) {
+	t.Helper()
+	deadline := time.After(behaviorTimeout)
+	for {
+		if env.st.GetActiveCard().UID == "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for the active card to clear after removal")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // waitForTimerStopped polls until the exit timer has been stopped, verified by
 // the fake clock having no remaining waiters.
 func (env *scanBehaviorEnv) waitForTimerStopped(t *testing.T) {
@@ -581,7 +630,7 @@ func TestScanBehavior_Tap_DifferentCardLaunchesDirectly(t *testing.T) {
 	}
 }
 
-func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
+func TestScanBehavior_Tap_SameCardAfterRemoveDoesNotReload(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
@@ -589,10 +638,14 @@ func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
 	env.waitForLaunch(t)
 
 	env.sendRemoval()
+	// The relaunch depends on the removal having cleared the previous token, and
+	// sendRemoval only queues it. Without this the re-tap can reach the loop
+	// while the card is still active and be dropped as a repeat.
+	env.waitForCardRemoved(t)
 
-	// Re-tap same card — should launch again (prevToken cleared by removal).
+	// Presence deduplication resets on removal, but the resolved game is still running.
 	env.sendGameScan("game1", env.gamePath("game.rom"))
-	env.waitForLaunch(t)
+	env.expectNoLaunch(t)
 }
 
 func TestScanBehavior_Tap_CommandDoesNotInterruptGame(t *testing.T) {
@@ -1055,6 +1108,63 @@ func TestScanBehavior_Hold_ConflictingTraitsInheritGlobalMode(t *testing.T) {
 	env.waitForStop(t)
 }
 
+func TestScanBehavior_Hold_DiscControlCardPreservesMedia(t *testing.T) {
+	// Not parallel: control dispatch uses the global launcher cache.
+	previous := helpers.GlobalLauncherCache.GetAllLaunchers()
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(previous) })
+	for _, action := range []string{
+		platforms.ControlToggleTray, platforms.ControlNext, platforms.ControlPrevious,
+	} {
+		t.Run(action, func(t *testing.T) {
+			controlled := make(chan struct{}, 1)
+			helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{{
+				ID: "disc-test",
+				Controls: map[string]platforms.Control{action: {
+					Func: func(context.Context, *config.Instance, platforms.ControlParams) error {
+						controlled <- struct{}{}
+						return nil
+					},
+				}},
+			}})
+			env := setupScanBehavior(t, config.ScanModeHold, 0)
+			env.sendGameScan("game1", env.gamePath("game.m3u"))
+			env.waitForLaunch(t)
+			env.waitForSoftwareTokenUID(t, "game1")
+			media := env.st.ActiveMedia()
+			media.LauncherID = "disc-test"
+			env.st.SetActiveMedia(media)
+			// Snapshot by value. ActiveMedia can hand back the very pointer
+			// stored here, and comparing that with itself holds however the
+			// struct was rewritten in the meantime.
+			expectedMedia := *media
+			gen, active := env.st.ActiveMediaReadyGeneration()
+			require.True(t, active)
+			env.st.MarkActiveMediaReady(gen)
+			env.sendTraitScan("disc", "#tap", "**control:"+action)
+			select {
+			case <-controlled:
+			case <-time.After(behaviorTimeout):
+				t.Fatal("disc control was not dispatched")
+			}
+			env.sendRemoval()
+			env.expectNoStop(t)
+			env.waitForSoftwareTokenUID(t, "game1")
+			current := env.st.ActiveMedia()
+			require.NotNil(t, current, "disc control cleared active media")
+			assert.Equal(t, expectedMedia, *current)
+			select {
+			case <-env.launchCh:
+				t.Fatal("disc control relaunched media")
+			default:
+			}
+			env.sendGameScan("game1", env.gamePath("game.m3u"))
+			env.waitForActiveCard(t, "game1")
+			env.sendRemoval()
+			env.waitForStop(t)
+		})
+	}
+}
+
 // A #tap card that only runs a control command changes nothing: the card that
 // launched the running game keeps hold ownership, and its own removal still
 // exits.
@@ -1108,9 +1218,13 @@ func TestScanBehavior_Hold_TapTraitRescanNeverExits(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
 
-	for range 3 {
+	for i := range 3 {
 		env.sendTraitScan("game1", "#tap", env.gamePath("game.rom"))
-		env.waitForLaunch(t)
+		if i == 0 {
+			env.waitForLaunch(t)
+		} else {
+			env.expectNoLaunch(t)
+		}
 		env.waitForActiveCard(t, "game1")
 		env.sendRemoval()
 		env.expectNoStop(t)
@@ -1322,8 +1436,8 @@ func TestScanBehavior_HoldDelayed_ReinsertionStillCancelsExit(t *testing.T) {
 	env.expectNoStop(t)
 }
 
-// A reader in tap mode never arms a timer, so a repeat tap of the same card
-// reloads the game every time even after another reader has run an exit.
+// With legacy relaunch enabled, a tap reader reloads on every tap even after
+// another reader has run a hold exit. A stale timer must not swallow a scan.
 func TestScanBehavior_Tap_RepeatTapsAfterAHoldReaderArmedATimer(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
@@ -1339,12 +1453,13 @@ scan_mode = "hold"`))
 	env.waitForSoftwareTokenUID(t, "game1")
 	env.sendRemovalOn(testReaderID)
 	env.waitForStop(t)
-	// StopActiveLauncher is observed before timedExit queues its final owner
-	// clear. Wait for that clear so it cannot erase the next tap's owner.
-	require.Eventually(t, func() bool {
-		return env.st.GetSoftwareToken() == nil
-	}, behaviorTimeout, time.Millisecond, "hold-reader exit cleanup did not finish")
 
+	// Relaunch suppression is the default, so the repeat taps this asserts only
+	// reload with it turned off.
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+allow_relaunch = true`))
+
+	// Tap immediately: the previous exit's cleanup may still be in flight.
 	// From then on the tap reader must keep reloading on every tap.
 	for range 2 {
 		env.sendScanOn(testReader2ID, "game2", env.gamePath("tap.rom"))

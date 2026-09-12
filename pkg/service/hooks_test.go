@@ -28,7 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +61,7 @@ func setupHookTest(t *testing.T) *ServiceContext {
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
 		},
-		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 1),
 		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
 }

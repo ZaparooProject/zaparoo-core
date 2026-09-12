@@ -34,6 +34,14 @@ import (
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
+// softwareTokenUpdate publishes a launch owner, or conditionally clears the
+// owner after a timed exit. A nil token is scoped to both captured generations.
+type softwareTokenUpdate struct {
+	token           *tokens.Token
+	ownerGeneration uint64
+	exitGeneration  uint64
+}
+
 // ServiceContext holds the shared dependencies threaded through all
 // service-layer functions. Created once in Start() and passed by pointer.
 type ServiceContext struct {
@@ -45,9 +53,10 @@ type ServiceContext struct {
 	LimitsManager       *playtime.LimitsManager
 	PlaybackManager     audio.PlaybackManager
 	UI                  *uievents.Service
-	LaunchSoftwareQueue chan *tokens.Token
+	LaunchSoftwareQueue chan softwareTokenUpdate
 	PlaylistQueue       chan *playlists.Playlist
 	ConfirmQueue        chan chan error
 	LaunchGuardCancel   chan struct{}
+	ResolvedLaunchGuard chan *resolvedLaunchConfirmation
 	BackgroundWG        *sync.WaitGroup
 }

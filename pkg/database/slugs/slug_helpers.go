@@ -867,3 +867,59 @@ func NormalizeDotSeparators(s string) string {
 
 	return strings.TrimSpace(s)
 }
+
+// AbbreviationExpansionSlack reports how many characters a name's slug could
+// have gained had a mistyped word been recognised as an abbreviation.
+//
+// Slug generation expands a known abbreviation ("bros" becomes "brothers"), so
+// a typo in that one word silently costs the slug the whole expansion:
+// "Super Mario Bros." slugs to 18 characters, "Super Mario Bross" to 15. A
+// fuzzy lookup comparing lengths has to allow for that gap, and only for it.
+//
+// Exact matches score zero: those already expanded, so nothing was lost. Only a
+// word one edit away from an abbreviation counts, and the result is the largest
+// expansion such a word could have produced.
+func AbbreviationExpansionSlack(name string) int {
+	slack := 0
+	consider := func(word string, table map[string]string) {
+		for abbreviation, expansion := range table {
+			growth := len(expansion) - len(abbreviation)
+			if growth <= slack || word == abbreviation {
+				continue
+			}
+			if withinOneEdit(word, abbreviation) {
+				slack = growth
+			}
+		}
+	}
+	for _, word := range strings.Fields(strings.ToLower(name)) {
+		word = strings.Trim(word, ".,:;!?()[]{}\"'-")
+		if word == "" {
+			continue
+		}
+		consider(word, withOrWithoutPeriodAbbreviations)
+		consider(word, periodRequiredAbbreviations)
+	}
+	return slack
+}
+
+// withinOneEdit reports whether one insertion, deletion or substitution turns a
+// into b. Bounded by construction: the abbreviation table holds short words.
+func withinOneEdit(a, b string) bool {
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	if len(b)-len(a) > 1 {
+		return false
+	}
+	for i := range len(a) {
+		if a[i] == b[i] {
+			continue
+		}
+		if len(a) == len(b) {
+			return a[i+1:] == b[i+1:]
+		}
+		return a[i:] == b[i+1:]
+	}
+	return len(b)-len(a) <= 1
+}

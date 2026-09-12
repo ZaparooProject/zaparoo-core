@@ -218,8 +218,47 @@ func makeDatabase(
 		log.Warn().Err(err).Msg("failed to backfill media user data into the user database")
 	}
 
+	repairBrowseSortIndex(mediaDB)
+
 	success = true
 	return db, reset, nil
+}
+
+// repairBrowseSortIndex rebuilds the browse sort index off the startup path if
+// it predates the title collation.
+//
+// It is a database this build can read and query correctly, so there is nothing
+// to keep the user waiting for; what it cannot do is serve a browse ORDER BY
+// from that index, which makes every page of a large folder read and sort the
+// whole folder. Rebuilding takes minutes on a large library on SD, so it runs in
+// the background and reports itself in the log rather than delaying startup.
+//
+// An interrupted index is left alone. It resumes shortly after this point, and a
+// full run drops the secondary indexes to keep bulk inserts fast and recreates
+// them at the end — including this one, correctly. Rebuilding here would race
+// that drop and slow the run down for no gain.
+func repairBrowseSortIndex(mediaDB *mediadb.MediaDB) {
+	if activeMediaWriteOperation(mediaDB) != database.MediaWriteOperationNone {
+		return
+	}
+	status, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		// The persisted status is the only thing that knows about an index
+		// interrupted in a previous run; HasBackgroundOperations does not see
+		// it until GenerateMediaDB registers its goroutine. Not knowing means
+		// not rebuilding, or this races the secondary-index drop of a resuming
+		// full run.
+		log.Warn().Err(err).Msg("skipping browse sort index check: indexing status unavailable")
+		return
+	}
+	if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
+		return
+	}
+	go func() {
+		if err := mediaDB.EnsureBrowseSortIndex(); err != nil {
+			log.Warn().Err(err).Msg("failed to rebuild the browse sort index; browsing large folders stays slow")
+		}
+	}()
 }
 
 // rescueMediaUserData reads the favorites and launcher overrides out of a media

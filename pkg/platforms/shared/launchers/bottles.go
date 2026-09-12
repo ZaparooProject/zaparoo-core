@@ -104,6 +104,7 @@ func buildBottlesLauncher(options bottlesOptions) platforms.Launcher {
 
 	return platforms.Launcher{
 		ID: "Bottles", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeBottles},
+		Test:      shared.SchemeIDTest(shared.SchemeBottles),
 		Lifecycle: platforms.LifecycleBlocking,
 		Availability: func(*config.Instance) error {
 			_, err := resolveCLI()

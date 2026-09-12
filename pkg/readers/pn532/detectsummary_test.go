@@ -23,7 +23,10 @@
 package pn532
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-pn532/detection"
@@ -45,6 +48,14 @@ func resetDetectSummary(t *testing.T) {
 	})
 }
 
+func uartProbes(paths ...string) []detection.ProbeResult {
+	probes := make([]detection.ProbeResult, 0, len(paths))
+	for _, path := range paths {
+		probes = append(probes, detection.ProbeResult{Transport: detection.TransportUART, Path: path})
+	}
+	return probes
+}
+
 func TestLogDetectionSummary_LogsOncePerChange(t *testing.T) {
 	// The reader manager calls Detect once a second. Logging every call would
 	// bury the log, so the summary is the thing that makes an info-level
@@ -52,11 +63,11 @@ func TestLogDetectionSummary_LogsOncePerChange(t *testing.T) {
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
-	ports := []string{"/dev/ttyUSB0"}
+	probes := []detection.ProbeResult{{Transport: detection.TransportUART, Path: "/dev/ttyUSB0", Found: true}}
 	devices := []detection.DeviceInfo{{Transport: "uart", Path: "/dev/ttyUSB0"}}
 
 	for range 5 {
-		logDetectionSummary(ports, nil, devices, nil, nil)
+		logDetectionSummary(probes, nil, devices, nil)
 	}
 
 	entries := decodeLogEntries(t, buf)
@@ -64,61 +75,33 @@ func TestLogDetectionSummary_LogsOncePerChange(t *testing.T) {
 	assert.Equal(t, "PN532 auto-detect", entries[0].Message)
 }
 
-func TestLogDetectionSummary_LogsAgainWhenPortsChange(t *testing.T) {
+func TestLogDetectionSummary_LogsAgainWhenProbesChange(t *testing.T) {
 	// Plugging or unplugging a port is exactly what a user needs to see.
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
-	logDetectionSummary([]string{"/dev/ttyUSB0"}, nil, nil, nil, nil)
-	logDetectionSummary([]string{"/dev/ttyUSB0", "/dev/ttyUSB1"}, nil, nil, nil, nil)
-	logDetectionSummary([]string{"/dev/ttyUSB0"}, nil, nil, nil, nil)
+	logDetectionSummary(uartProbes("/dev/ttyUSB0"), nil, nil, nil)
+	logDetectionSummary(uartProbes("/dev/ttyUSB0", "/dev/ttyUSB1"), nil, nil, nil)
+	logDetectionSummary(uartProbes("/dev/ttyUSB0"), nil, nil, nil)
 
 	assert.Len(t, decodeLogEntries(t, buf), 3, "each change should be reported")
 }
 
-func TestLogDetectionSummary_IgnoresOrderingOfPortsAndIgnores(t *testing.T) {
-	// The ignore list is built from map iteration and the enumerated ports
-	// arrive in directory order. Without sorting, a stable bus would appear to
+func TestLogDetectionSummary_IgnoresOrderingOfProbesAndIgnores(t *testing.T) {
+	// The ignore list is built from map iteration and probes arrive in the
+	// order detectors finished. Without sorting, a stable bus would appear to
 	// change on every tick and the log would fill up again.
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
 	logDetectionSummary(
-		[]string{"/dev/ttyUSB0", "/dev/ttyUSB1"},
-		[]string{"/dev/ttyACM0", "/dev/ttyUSB9"}, nil, nil, nil)
+		uartProbes("/dev/ttyUSB0", "/dev/ttyUSB1"),
+		[]string{"/dev/ttyACM0", "/dev/ttyUSB9"}, nil, nil)
 	logDetectionSummary(
-		[]string{"/dev/ttyUSB1", "/dev/ttyUSB0"},
-		[]string{"/dev/ttyUSB9", "/dev/ttyACM0"}, nil, nil, nil)
+		uartProbes("/dev/ttyUSB1", "/dev/ttyUSB0"),
+		[]string{"/dev/ttyUSB9", "/dev/ttyACM0"}, nil, nil)
 
 	assert.Len(t, decodeLogEntries(t, buf), 1, "reordering alone is not a change")
-}
-
-func TestLogDetectionSummary_ReportsEnumerationFailure(t *testing.T) {
-	// An enumeration failure leaves the port list empty, which reads exactly
-	// like a bus with no serial ports on it. Without the error surfaced, the
-	// summary cannot tell those apart, which is the ambiguity it exists to
-	// remove.
-	resetDetectSummary(t)
-	buf := captureDebugLog(t)
-
-	logDetectionSummary(nil, nil, nil, errors.New("permission denied"), nil)
-
-	require.Len(t, decodeLogEntries(t, buf), 1)
-	assert.Contains(t, buf.String(), "enumeration_error")
-	assert.Contains(t, buf.String(), "permission denied")
-}
-
-func TestLogDetectionSummary_EnumerationFailureIsPartOfTheSummary(t *testing.T) {
-	// An enumeration that starts failing is a change worth reporting even
-	// though every visible list stays empty.
-	resetDetectSummary(t)
-	buf := captureDebugLog(t)
-
-	logDetectionSummary(nil, nil, nil, nil, nil)
-	logDetectionSummary(nil, nil, nil, errors.New("permission denied"), nil)
-
-	assert.Len(t, decodeLogEntries(t, buf), 2,
-		"an enumeration failure appearing is a state change")
 }
 
 func TestLogDetectionSummary_OmitsExpectedDetectionMiss(t *testing.T) {
@@ -127,7 +110,7 @@ func TestLogDetectionSummary_OmitsExpectedDetectionMiss(t *testing.T) {
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
-	logDetectionSummary([]string{"/dev/ttyUSB0"}, nil, nil, nil, detection.ErrNoDevicesFound)
+	logDetectionSummary(uartProbes("/dev/ttyUSB0"), nil, nil, detection.ErrNoDevicesFound)
 
 	require.Len(t, decodeLogEntries(t, buf), 1)
 	assert.NotContains(t, buf.String(), "error",
@@ -141,7 +124,7 @@ func TestLogDetectionSummary_ReportsADetectionTimeout(t *testing.T) {
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
-	logDetectionSummary([]string{"/dev/ttyACM0", "/dev/ttyUSB0"}, nil, nil, nil, detection.ErrDetectionTimeout)
+	logDetectionSummary(uartProbes("/dev/ttyACM0", "/dev/ttyUSB0"), nil, nil, detection.ErrDetectionTimeout)
 
 	require.Len(t, decodeLogEntries(t, buf), 1)
 	assert.Contains(t, buf.String(), detection.ErrDetectionTimeout.Error())
@@ -151,8 +134,77 @@ func TestLogDetectionSummary_ReportsUnexpectedDetectionError(t *testing.T) {
 	resetDetectSummary(t)
 	buf := captureDebugLog(t)
 
-	logDetectionSummary([]string{"/dev/ttyUSB0"}, nil, nil, nil, errors.New("bus exploded"))
+	logDetectionSummary(uartProbes("/dev/ttyUSB0"), nil, nil, errors.New("bus exploded"))
 
 	require.Len(t, decodeLogEntries(t, buf), 1)
 	assert.Contains(t, buf.String(), "bus exploded")
+}
+
+// resetFailedProbes gives a test an empty failed-probe set and restores the
+// package-level state afterwards.
+func resetFailedProbes(t *testing.T) {
+	t.Helper()
+	probeStateMu.Lock()
+	saved := failedProbePaths
+	failedProbePaths = make(map[string]failedProbeEntry)
+	probeStateMu.Unlock()
+	t.Cleanup(func() {
+		probeStateMu.Lock()
+		failedProbePaths = saved
+		probeStateMu.Unlock()
+	})
+}
+
+func TestRecordFailedProbes(t *testing.T) {
+	// Only a probe that ran and got no answer marks a port. One that answered,
+	// one already connected, one detection reported anyway, and one whose
+	// device file has gone must all stay probe-able.
+	resetFailedProbes(t)
+
+	dir := t.TempDir()
+	paths := make(map[string]string)
+	for _, name := range []string{"failed", "answered", "connected", "detected"} {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		paths[name] = path
+	}
+	probes := []detection.ProbeResult{
+		{Transport: detection.TransportUART, Path: paths["failed"]},
+		{Transport: detection.TransportUART, Path: paths["answered"], Found: true},
+		{Transport: detection.TransportUART, Path: paths["connected"]},
+		{Transport: detection.TransportUART, Path: paths["detected"]},
+		{Transport: detection.TransportUART, Path: filepath.Join(dir, "gone")},
+	}
+	devices := []detection.DeviceInfo{{Transport: detection.TransportUART, Path: paths["detected"]}}
+
+	recordFailedProbes(probes, devices, map[string]bool{paths["connected"]: true})
+
+	probeStateMu.RLock()
+	defer probeStateMu.RUnlock()
+	assert.Len(t, failedProbePaths, 1)
+	assert.Contains(t, failedProbePaths, paths["failed"])
+}
+
+func TestDetect_RecordsFailedProbesWhenNothingIsFound(t *testing.T) {
+	// DetectAll reports "no devices" whenever every probe went unanswered,
+	// which is exactly when the unanswered ports need recording. Returning
+	// before the bookkeeping left them to be probed again on every tick.
+	resetFailedProbes(t)
+	resetDetectSummary(t)
+
+	port := filepath.Join(t.TempDir(), "ttyUSB0")
+	require.NoError(t, os.WriteFile(port, nil, 0o600))
+
+	orig := detectAll
+	t.Cleanup(func() { detectAll = orig })
+	detectAll = func(_ context.Context, opts *detection.Options) ([]detection.DeviceInfo, error) {
+		opts.ReportProbe(detection.ProbeResult{Transport: detection.TransportUART, Path: port})
+		return nil, detection.ErrNoDevicesFound
+	}
+
+	assert.Empty(t, (&Reader{}).Detect(nil))
+
+	probeStateMu.RLock()
+	defer probeStateMu.RUnlock()
+	assert.Contains(t, failedProbePaths, port, "an unanswered probe must be recorded even when nothing was found")
 }

@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-gameid v0.2.0
-	github.com/ZaparooProject/go-pn532 v0.25.0
+	github.com/ZaparooProject/go-pn532 v0.26.0
 	github.com/ZaparooProject/go-zapscript v0.19.0
 	github.com/ZaparooProject/zaparoo-core/mister v0.1.0
 	github.com/adrg/xdg v0.5.3
@@ -22,6 +22,7 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/expr-lang/expr v1.17.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/gen2brain/malgo v0.11.26
@@ -83,7 +84,6 @@ require (
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.10.2 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
@@ -152,3 +152,6 @@ require (
 // what anyone importing Core as a library resolves if they also compile
 // pkg/platforms/mister. Move it whenever a new mister/vX.Y.Z is tagged.
 replace github.com/ZaparooProject/zaparoo-core/mister => ./mister
+
+// Preserve Expr semantics while enabling the validated static method profile.
+replace github.com/expr-lang/expr => github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612

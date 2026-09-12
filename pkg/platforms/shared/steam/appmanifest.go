@@ -28,6 +28,7 @@ import (
 
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // AppInfo contains metadata for a Steam app from its manifest.
@@ -97,16 +98,20 @@ func ReadAppManifest(steamAppsDir string, appID int) (AppInfo, bool) {
 // FindSteamAppsDir finds the steamapps directory from a Steam root directory.
 // It checks for both lowercase and mixed-case "steamapps" directories.
 func FindSteamAppsDir(steamDir string) string {
+	return findSteamAppsDirFS(afero.NewOsFs(), steamDir)
+}
+
+func findSteamAppsDirFS(fs afero.Fs, steamDir string) string {
 	// Common variations of the steamapps directory name
 	candidates := []string{
 		"steamapps",
 		"SteamApps",
-		"steam/steamapps",
+		filepath.Join("steam", "steamapps"),
 	}
 
 	for _, candidate := range candidates {
 		path := filepath.Join(steamDir, candidate)
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
+		if info, err := fs.Stat(path); err == nil && info.IsDir() {
 			return path
 		}
 	}

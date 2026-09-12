@@ -41,6 +41,10 @@ func expectAnalyzeStep(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("(?i)PRAGMA optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	// AnalyzeApproximate then reads the media_missing_idx row to correct it; an
+	// empty result is the no-op path (see sqlTruthfulMissingIndexStat).
+	mock.ExpectQuery("SELECT stat FROM sqlite_stat1").
+		WillReturnRows(sqlmock.NewRows([]string{"stat"}))
 }
 
 func expectTemporaryParentDirRepairStepNoop(mock sqlmock.Sqlmock) {

@@ -51,13 +51,14 @@ const (
 )
 
 type readerManagerEnv struct {
-	st           *state.State
-	scanQueue    chan readers.Scan
-	itq          chan tokens.Token
-	confirmQueue chan chan error
-	ui           *uievents.Service
-	notifCh      <-chan models.Notification
-	clock        clockwork.Clock
+	st            *state.State
+	scanQueue     chan readers.Scan
+	itq           chan tokens.Token
+	confirmQueue  chan chan error
+	softwareQueue chan softwareTokenUpdate
+	ui            *uievents.Service
+	notifCh       <-chan models.Notification
+	clock         clockwork.Clock
 }
 
 type countingUIRenderer struct {
@@ -124,7 +125,7 @@ func setupReaderManagerWithRenderer(
 
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token, 10)
-	lsq := make(chan *tokens.Token, 10)
+	lsq := make(chan softwareTokenUpdate)
 	plq := make(chan *playlists.Playlist, 10)
 	cfq := make(chan chan error, 10)
 	lgcq := make(chan struct{}, 1)
@@ -161,13 +162,14 @@ func setupReaderManagerWithRenderer(
 	})
 
 	return &readerManagerEnv{
-		st:           st,
-		scanQueue:    scanQueue,
-		itq:          itq,
-		confirmQueue: cfq,
-		ui:           ui,
-		notifCh:      notifCh,
-		clock:        clk,
+		st:            st,
+		scanQueue:     scanQueue,
+		itq:           itq,
+		confirmQueue:  cfq,
+		softwareQueue: lsq,
+		ui:            ui,
+		notifCh:       notifCh,
+		clock:         clk,
 	}
 }
 
@@ -1482,7 +1484,7 @@ func TestReaderManager_LaunchGuard_MappedTokenStaged(t *testing.T) {
 
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token, 10)
-	lsq := make(chan *tokens.Token, 10)
+	lsq := make(chan softwareTokenUpdate, 10)
 	plq := make(chan *playlists.Playlist, 10)
 	cfq := make(chan chan error, 10)
 
@@ -1824,7 +1826,7 @@ func TestReaderManager_ContextCancellation_ItqSend(t *testing.T) {
 
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token) // unbuffered, no consumer
-	lsq := make(chan *tokens.Token, 10)
+	lsq := make(chan softwareTokenUpdate, 10)
 	plq := make(chan *playlists.Playlist, 10)
 	cfq := make(chan chan error, 10)
 
@@ -1928,7 +1930,7 @@ func TestReaderManager_ContextCancellation_ConfirmItqSend(t *testing.T) {
 
 	scanQueue := make(chan readers.Scan)
 	itq := make(chan tokens.Token) // unbuffered, no consumer
-	lsq := make(chan *tokens.Token, 10)
+	lsq := make(chan softwareTokenUpdate, 10)
 	plq := make(chan *playlists.Playlist, 10)
 	cfq := make(chan chan error, 10)
 

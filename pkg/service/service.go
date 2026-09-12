@@ -30,6 +30,8 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -385,6 +387,14 @@ func startService(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (*StartResult, error) {
+	// CLI and widget processes never enter here, so they cannot rotate the
+	// running service's crash file. Capture must precede native initialization.
+	previousCrash, crashErr := crashdump.Start(helpers.DataDir(pl), config.AppVersion)
+	if crashErr != nil {
+		log.Warn().Err(crashErr).Msg("could not initialize persistent crash capture")
+	}
+	telemetry.ReportCrash(previousCrash)
+
 	// A config file created outside Core can lack a device ID. The service
 	// daemon owns device identity (TUI/CLI processes only read it), so
 	// mint and persist one before anything reads it. Save generates a
@@ -428,7 +438,7 @@ func startService(
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
-	lsq := make(chan *tokens.Token)       // launch software queue
+	lsq := make(chan softwareTokenUpdate) // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
 	lgcq := make(chan struct{}, 1)        // launch guard cancellation queue
@@ -530,6 +540,7 @@ func startService(
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		LaunchGuardCancel:   lgcq,
+		ResolvedLaunchGuard: make(chan *resolvedLaunchConfirmation),
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)

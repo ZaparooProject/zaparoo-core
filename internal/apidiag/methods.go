@@ -28,7 +28,7 @@ var knownMethods = func() map[string]struct{} {
 launch run confirm ui ui.respond run.script stop tokens media
 media.generate media.generate.cancel media.generate.resume media.index
 media.search media.tags media.tags.update media.meta.update media.active
-media.history media.history.latest media.history.top media.lookup media.meta media.image
+media.history media.history.latest media.history.top media.lookup media.lookup.candidates media.meta media.image
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
 media.browse media.browse.index media.control media.active.update media.clean.orphans
 settings settings.update settings.reload settings.logs.download

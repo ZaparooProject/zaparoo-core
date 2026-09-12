@@ -574,9 +574,9 @@ None.
 
 **Access:** All clients.
 
-Query the media database and return all matching indexed media.
+Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -586,6 +586,7 @@ An object:
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
+| includeHidden | boolean | No | Include hidden entries for recovery/management. Defaults to `false`; available to all clients. Repeat on subsequent pages. |
 | pathPrefix | string   | No       | Recursively restrict results beneath a filesystem directory or virtual route. Matching respects path boundaries, so `/roms/SNES` does not include `/roms/SNES2`; `%` and `_` are literal path characters. |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
@@ -770,11 +771,15 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
-A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it holds one media file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and holds no media in subdirectories. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
+Plain directories may also have artwork imported by the `media-folder` scraper. This does not make them launchable or hide their children; it only sets `hasCover` and lets clients request the image with the directory's `(system, path)`.
 
 A directory holding media for more than one system also stays plain, because its `fileCount` is the sum across those systems and the rule is applied one system at a time. A page spanning several systems is resolved per system when `systems` names them; without a `systems` filter such a page is left unresolved, since browsing a media root lists one directory per installed system and resolving all of them is disproportionate to that page's cost.
 
-Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+Tags filter direct media files in the current path. Directories remain visible for navigation with tag-unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+
+Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required `user:favorite` or `user:hidden` filters also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -785,6 +790,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| includeHidden | boolean | No | Include hidden media and its contribution to directory/root counts. Defaults to `false`. Repeat with cursor requests. |
 | rootView   | string | No       | Pathless system-root presentation: `routes` (default) returns separate populated routes; `contents` returns one-level immediate contents and requires exactly one system. Ignored when `path` is non-empty. Repeat with cursor requests. |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
 | cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, tags, letter, and sort parameters. |
@@ -818,7 +824,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
-| hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
+| hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 
 ##### Browse pagination object
 
@@ -1013,6 +1019,7 @@ All parameters are optional.
 | path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
 | systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| includeHidden | boolean | No | Match the visibility mode of `media.browse`. Defaults to `false`. |
 | tags        | string[] | No       | Filter indexed media by tags, using the same syntax and operators as `media.browse`.               |
 | sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
 
@@ -1156,7 +1163,11 @@ have finite vocabularies per system and are always returned in full without trun
 
 Add or remove user tags for an indexed media item.
 
-The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
+Mutable tags are `user:favorite` and `user:hidden`. Both are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the other.
+
+Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
+
+Both flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer either flag; the old path's preference remains stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
 
 #### Parameters
 
@@ -1165,8 +1176,8 @@ The initial mutable tag is `user:favorite`. It appears in normal media tag resul
 | mediaId | number   | No       | Media DBID to update. Cannot be mixed with system/path.   |
 | system  | string   | No       | System ID for path-based lookup. Required when using path. |
 | path    | string   | No       | Media path for path-based lookup. Required with system.    |
-| add     | string[] | No       | Tags to add. Currently only `user:favorite` is mutable.    |
-| remove  | string[] | No       | Tags to remove. Currently only `user:favorite` is mutable. |
+| add     | string[] | No       | Tags to add: `user:favorite` and/or `user:hidden`. |
+| remove  | string[] | No       | Tags to remove: `user:favorite` and/or `user:hidden`. |
 
 Either `mediaId` or `system` plus `path` is required. At least one of `add` or `remove` is required. Search operators (`+`, `-`, `~`) are not valid in mutation requests.
 
@@ -1717,6 +1728,62 @@ Optionally, an object:
 }
 ```
 
+### media.lookup.candidates
+
+Returns up to five ranked canonical title candidates for an approximate name in **one system**. This is title discovery, not media selection: pass a selected candidate's `systemId` and `name` to `media.lookup` for file selection and enrichment.
+
+**Parameters**
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| system | string | Yes | One canonical system ID; never a list or an all-systems search. |
+| name | string | Yes | Approximate title, 1–256 Unicode characters. Whitespace-only names and names that normalize to an empty slug are rejected. |
+| fuzzySystem | boolean | No | Resolve system names/aliases instead of requiring a canonical ID. Default `false`, matching `media.lookup`. |
+| maxResults | integer | No | Maximum number of candidates, 1–5. Default `5`; out-of-range values are rejected. |
+
+**Result**
+
+`{"candidates": [...]}`; an empty array means no eligible title met the match threshold. Database failures and canceled requests remain errors, not empty results.
+
+Each candidate contains only:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| systemId | string | Canonical system ID. |
+| name | string | Canonical indexed title, deduplicated within the system. |
+| rank | integer | One-based rank; results are ordered by rank. |
+| matchType | string | Stable coarse enum: `exact`, `secondary`, or `fuzzy`. |
+| confidence | number | Advisory ranking evidence, not a probability or a stable client threshold contract. |
+
+Exact normalized primary-title evidence ranks before exact secondary-title evidence. If any eligible primary or secondary exact matches exist, only those matches are returned: results are never padded with fuzzy matches to reach `maxResults`. Fuzzy matching runs only when neither exact class produces an eligible result, and reuses title normalization and the existing length/word-count prefilter, token-order matching, and typo threshold. Within an evidence class, ranking uses confidence, edit-distance tie-breaking for fuzzy matches, then canonical name and an internal identity tie-breaker. Internal algorithm names are not API enums. These candidates need not reproduce the launch resolver's prefix, progressive-trimming, tag preference, or media-selection fallbacks.
+
+A title is eligible only if at least one indexed media entry is present and not user-hidden. Hidden/missing variants do not suppress another eligible variant. Hidden state is always excluded; there is no `includeHidden` override. Authorization matches ordinary media discovery; this method grants no launch or profile-management authority. Results never contain paths, media IDs, tags, artwork, or ZapScript, and requests neither launch nor update history or lookup/resolution caches.
+
+Results describe the **current MediaDB incarnation**, not a durable catalog snapshot. A request pins one database connection and fails with a retryable error if a fresh-start rebuild replaces that database before the final generation check. Cached IDs from a discarded database are not used against its replacement. Ordinary indexing and hide/unhide changes may become visible between read statements; exact matches are read directly from indexed SQL without waiting for a shared slug cache refresh, while fuzzy discovery can lag behind ordinary indexing until that refresh. The later `media.lookup` resolves against its own then-current state, so candidates do not reserve a file or guarantee later availability.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.lookup.candidates",
+  "params": {"system": "NES", "name": "Metriod"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "candidates": [
+      {"systemId": "NES", "name": "Metroid", "rank": 1, "matchType": "fuzzy", "confidence": 0.96}
+    ]
+  }
+}
+```
+
+The example confidence is illustrative; clients should present ordered candidates, not hard-code score cutoffs.
+
 ### media.lookup
 
 **Access:** All clients.
@@ -2037,19 +2104,19 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 **Access:** All clients.
 
-Return the best matching image for one indexed media row. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
+Return the best matching image for one indexed media row or indexed directory. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
-`media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
+For path requests, `media.image` preserves exact-media behavior first, then checks path-keyed directory properties, then tries existing launcher-relative and singleton media fallbacks. Within media results it checks each requested image type against media-level properties before title-level properties. Directory properties follow the same requested type order. If a stored media file path no longer exists, the stale property is removed and lookup continues; stale directory paths remain until the next completed `media-folder` snapshot.
 
 #### Parameters
 
-An object identifying the media row by `mediaId` or `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+An object identifying a media row by `mediaId` or identifying media/directory content by `(system, path)`. Canonical indexed paths are preferred. Directory artwork requires the directory's exact indexed path. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
-| path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
+| path       | string   | No       | Canonical indexed media or directory path. Required when `mediaId` is omitted. |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 | maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
 | delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |
@@ -2218,8 +2285,39 @@ An object:
 | Key       | Type     | Required | Description                                                                 |
 | :-------- | :------- | :------- | :-------------------------------------------------------------------------- |
 | scraperId | string   | Yes      | Scraper ID from the `scrapers` method, for example `gamelist.xml`.          |
-| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. |
-| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag. Default is false. |
+| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. Cannot be combined with `scope`. |
+| scope     | object   | No       | Select one indexed media item or one directory subtree; see below. |
+| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag, within the selected scope. Default is false. |
+
+#### Scope
+
+Without `scope` (or with `scope: null`), existing `systems` behavior is unchanged. Otherwise, supply exactly one of these forms:
+
+```json
+{"scope": {"mediaId": 42}}
+```
+
+```json
+{"scope": {"file": {"system": "SNES", "path": "/games/SNES/Game.sfc"}}}
+```
+
+```json
+{"scope": {"subtree": {"system": "SNES", "path": "/games/SNES/RPG"}}}
+```
+
+These are parameter fragments; `scraperId` is still required.
+
+- `mediaId` must be a positive indexed media ID, available from `media.search` or `media.browse` **before scraping**. Use it when available; clients that only have a file path can use `file` instead.
+- `file` matches one indexed file or virtual URI exactly. It does not resolve a directory to its launch target. `subtree` selects indexed files below a directory recursively, within the specified system. `/games/foo` does not select `/games/foobar`. A filesystem or volume root is valid.
+- `system` accepts canonical IDs and existing system aliases, case-insensitively, and must identify an indexed system. Path spelling is **case-sensitive on all platforms**, including Windows; use the indexed spelling. Windows native separators and forward slashes are accepted. On Unix, backslashes are literal filename characters.
+- Filesystem paths must be absolute. Relative paths, `..` components, control characters, invalid UTF-8, and paths longer than 4096 bytes are rejected. Repeated native separators, `.` components, and trailing separators are normalized. Paths are matched lexically against the index; symlinks are not resolved and directories are not scanned.
+- Virtual URIs such as `steam://123` are opaque, exact identities supported by `mediaId` or `file`; they are not valid subtree paths. Whether metadata exists depends on the selected scraper's sources.
+- Missing or index-marked-missing IDs/files are client errors. A valid subtree with no present indexed matches succeeds with zero work, even if that directory no longer exists. Unindexed media must be indexed first.
+- Empty scope objects, unknown scope fields, multiple scope forms, and combining `scope` with `systems` (including `[]`) are client errors. Selector arrays are not supported. Duplicate source matches do not scrape a selected media row more than once per run.
+- Scoped progress counts selected media rows: `total` is selection size; unmatched, already-scraped, and already-completed-on-resume rows count as skipped. `totalScraped` retains its existing scraper/library-wide meaning. Source files may still need parsing even when only one media row is selected.
+- Metadata and cleanup writes stay within selected media and their shared titles. Title-level metadata is shared with other ROMs of that title, so those ROMs may display updated title metadata too.
+- Interrupted operations persist normalized scope and force-run markers. Restart recovery restores that scope, never a whole-system fallback. Single-item scopes also pin system and path alongside the ID; an identity that disappeared or changed fails recovery. Subtrees are re-queried within the same stored boundary, not snapshotted as an ID list.
+- Status, cancellation, and playback pause/resume remain operation-wide. Cancellation discards resumable operation state; `media.scrape.resume` resumes a playback-paused run, not a cancelled run. IDs are local to the current media database and are not portable across rebuilds.
 
 #### Result
 
@@ -2503,9 +2601,9 @@ Returns `null` on success.
 }
 ```
 
-##### Background audio example
+##### Slot and arguments example
 
-Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`, and `rewind` controls on the `background` slot. `fast_forward` and `rewind` accept an optional `seconds` argument; default is 10 seconds.
+This request targets the background slot and supplies an action argument. Discover supported actions through `launcherControls`.
 
 ```json
 {
@@ -2594,6 +2692,7 @@ Set `tags` to return only systems containing matching non-missing media. Tagged 
 
 | Key  | Type     | Required | Description                                                                                     |
 | :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required favorites/hidden tag filters also include hidden entries. |
 | all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 | tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 
