@@ -79,7 +79,7 @@ func prepareCandidateBenchmark(b *testing.B, db *MediaDB, size int) {
 func loadCandidateFixtureDB(t testing.TB, db *MediaDB, path string) {
 	t.Helper()
 	require.NoError(t, db.Close())
-	database.RemoveSidecars(db.dbPath)
+	_ = database.RemoveSidecars(db.dbPath)
 	//nolint:gosec // Explicit operator-selected test fixture input.
 	source, err := os.Open(path)
 	require.NoError(t, err)

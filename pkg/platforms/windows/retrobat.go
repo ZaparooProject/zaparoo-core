@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 	"golang.org/x/sys/windows"
 )
 
@@ -75,15 +76,6 @@ type windowsProcessInfo struct {
 // and returns the path with the actual filesystem case to prevent case-sensitivity
 // issues with EmulationStation's path comparisons.
 func findRetroBatDir(cfg *config.Instance) (string, error) {
-	// Check user-configured directory first
-	if def := cfg.LookupLauncherDefaults("RetroBat", nil); def.InstallDir != "" {
-		if normalizedPath, err := mediascanner.FindPath(context.Background(), def.InstallDir); err == nil {
-			log.Debug().Msgf("using user-configured RetroBat directory: %s", normalizedPath)
-			return normalizedPath, nil
-		}
-		log.Warn().Msgf("user-configured RetroBat directory not found: %s", def.InstallDir)
-	}
-
 	// Common RetroBat installation paths
 	paths := []string{
 		`C:\RetroBat`,
@@ -94,23 +86,67 @@ func findRetroBatDir(cfg *config.Instance) (string, error) {
 		`C:\Games\RetroBat`,
 	}
 
-	for _, path := range paths {
-		if stat, err := os.Stat(path); err == nil && stat.IsDir() {
-			// Verify it looks like a RetroBat installation by checking for key files
-			retroBatExe := filepath.Join(path, "retrobat.exe")
-			if _, err := os.Stat(retroBatExe); err == nil {
-				// Use FindPath to get the actual filesystem case
-				if normalizedPath, err := mediascanner.FindPath(context.Background(), path); err == nil {
-					return normalizedPath, nil
-				}
-				// Fallback to original path if FindPath fails (shouldn't happen)
+	return findRetroBatDirFS(afero.NewOsFs(), cfg.LookupLauncherDefaults("RetroBat", nil).InstallDir,
+		paths, func(path string) (string, error) {
+			return mediascanner.FindPath(context.Background(), path)
+		})
+}
+
+var errRetroBatNotInstalled = errors.New("RetroBat installation directory not found")
+
+// findRetroBatDirFS preserves discovery failures and filesystem casing. Only
+// absent automatic candidates produce errRetroBatNotInstalled; configured
+// paths and I/O failures remain distinguishable from an optional installation.
+func findRetroBatDirFS(
+	fs afero.Fs, configured string, candidates []string, normalize func(string) (string, error),
+) (string, error) {
+	var failures []error
+	if configured != "" {
+		info, err := fs.Stat(configured)
+		if err == nil && !info.IsDir() {
+			err = errors.New("installation path is not a directory")
+		}
+		if err == nil {
+			var path string
+			path, err = normalize(configured)
+			if err == nil {
 				return path, nil
 			}
-			log.Debug().Msgf("directory exists at %s but retrobat.exe not found", path)
 		}
+		failures = append(failures, fmt.Errorf("configured RetroBat directory: %w", err))
+		log.Warn().Err(err).Msg("configured RetroBat directory unavailable; trying automatic discovery")
 	}
-
-	return "", errors.New("RetroBat installation directory not found")
+	for _, candidate := range candidates {
+		info, err := fs.Stat(candidate)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				failures = append(failures, fmt.Errorf("probe RetroBat directory: %w", err))
+			}
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		info, err = fs.Stat(filepath.Join(candidate, "retrobat.exe"))
+		if err != nil {
+			if !os.IsNotExist(err) {
+				failures = append(failures, fmt.Errorf("probe RetroBat executable: %w", err))
+			}
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+		path, err := normalize(candidate)
+		if err == nil {
+			return path, nil
+		}
+		failures = append(failures, fmt.Errorf("normalize RetroBat directory: %w", err))
+	}
+	if len(failures) > 0 {
+		return "", fmt.Errorf("RetroBat installation discovery failed: %w", errors.Join(failures...))
+	}
+	return "", errRetroBatNotInstalled
 }
 
 func killRetroBatGame(cfg *config.Instance) error {
@@ -358,6 +394,9 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 		) ([]platforms.ScanResult, error) {
 			retroBatDir, err := findRetroBatDir(cfg)
 			if err != nil {
+				if err == errRetroBatNotInstalled { //nolint:errorlint // Only exact absence, never joined failures.
+					return nil, platforms.ErrScannerUnavailable
+				}
 				return nil, err
 			}
 

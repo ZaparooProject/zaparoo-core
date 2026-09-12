@@ -9,18 +9,50 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+type scriptStatFailureFS struct {
+	afero.Fs
+	err error
+}
+
+func (fs scriptStatFailureFS) Stat(name string) (os.FileInfo, error) {
+	return nil, &os.PathError{Op: "stat", Path: name, Err: fs.err}
+}
+
+func TestCheckScriptFile(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("scripts", "test.sh")
+	err := checkScriptFile(fs, path)
+	require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
+	require.NoError(t, checkScriptFile(fs, path))
+
+	for _, cause := range []error{os.ErrPermission, syscall.EIO} {
+		err = checkScriptFile(scriptStatFailureFS{Fs: fs, err: cause}, path)
+		require.ErrorIs(t, err, cause)
+		require.NotErrorIs(t, err, zapscript.ErrFileNotFound)
+	}
+}
+
 func restoreScriptTestHooks(t *testing.T) {
 	t.Helper()
 
+	oldCheckScriptActive := checkScriptActive
 	oldGetConsoleManager := getScriptConsoleManager
 	oldRunChvt := runScriptChvt
 	oldWriteLauncher := writeScriptLauncher
@@ -28,6 +60,7 @@ func restoreScriptTestHooks(t *testing.T) {
 	oldRunHiddenCommand := runHiddenScriptCommand
 	oldKillHiddenProcessGroup := killHiddenScriptProcessGroup
 	t.Cleanup(func() {
+		checkScriptActive = oldCheckScriptActive
 		getScriptConsoleManager = oldGetConsoleManager
 		runScriptChvt = oldRunChvt
 		writeScriptLauncher = oldWriteLauncher
@@ -47,6 +80,30 @@ func newTestScript(t *testing.T, name string) string {
 
 func newTestScriptPlatform() *Platform {
 	return &Platform{activeMedia: func() *models.ActiveMedia { return nil }}
+}
+
+func TestRunScriptContext_RejectsBusyRunnerBeforeSideEffects(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hidden=%t", hidden), func(t *testing.T) {
+			restoreScriptTestHooks(t)
+			checkScriptActive = func(context.Context) bool { return true }
+			getScriptConsoleManager = func(*Platform) platforms.ConsoleManager {
+				t.Fatal("busy refusal must not open a console")
+				return nil
+			}
+			startScriptCommand = func(*exec.Cmd) error {
+				t.Fatal("busy refusal must not start a visible script")
+				return nil
+			}
+			runHiddenScriptCommand = func(*exec.Cmd) error {
+				t.Fatal("busy refusal must not start a hidden script")
+				return nil
+			}
+			err := runScriptContext(t.Context(), nil, newTestScript(t, "busy.sh"), "", hidden)
+			require.ErrorIs(t, err, platforms.ErrScriptAlreadyRunning)
+			require.EqualError(t, err, "a script is already running")
+		})
+	}
 }
 
 func TestRunScriptContext_CancelsHiddenScriptWithExecutionContext(t *testing.T) {

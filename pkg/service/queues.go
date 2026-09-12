@@ -97,12 +97,15 @@ func isExpectedLaunchError(err error) bool {
 	return errors.Is(err, zapscript.ErrFileNotFound) ||
 		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
 		errors.Is(err, zapscript.ErrInvalidScript) ||
+		errors.Is(err, zapscript.ErrInvalidArguments) ||
 		errors.Is(err, zapscript.ErrUnknownCommand) ||
+		errors.Is(err, zapscript.ErrUnsupportedControlAction) ||
 		errors.Is(err, zapscript.ErrCommandBlocked) ||
 		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
 		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
 		errors.Is(err, zapscript.ErrRemoteSource) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
+		errors.Is(err, platforms.ErrScriptAlreadyRunning) ||
 		errors.Is(err, state.ErrLaunchBlockedByHook) ||
 		errors.Is(err, state.ErrLaunchRequiresProfile) ||
 		errors.Is(err, playtime.ErrLimitReached) ||

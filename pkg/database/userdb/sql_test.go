@@ -1032,22 +1032,10 @@ func TestSqlAddInboxMessage_WithCategory_Insert(t *testing.T) {
 		CreatedAt: now,
 	}
 
-	// Expect transaction begin
-	mock.ExpectBegin()
-
-	// First, expect the SELECT to check for existing message - no rows found
-	mock.ExpectQuery(`SELECT DBID FROM Inbox WHERE Category = \? AND ProfileID = \?`).
-		WithArgs(msg.Category, msg.ProfileID).
-		WillReturnError(sql.ErrNoRows)
-
-	// Then expect the INSERT
 	rows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
-	mock.ExpectQuery(`INSERT INTO Inbox.*RETURNING DBID`).
+	mock.ExpectQuery(`INSERT INTO Inbox.*ON CONFLICT.*DO UPDATE SET.*RETURNING DBID`).
 		WithArgs(msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, now.Unix()).
 		WillReturnRows(rows)
-
-	// Expect transaction commit
-	mock.ExpectCommit()
 
 	result, err := sqlAddInboxMessage(context.Background(), db, msg)
 	require.NoError(t, err)
@@ -1073,22 +1061,10 @@ func TestSqlAddInboxMessage_WithCategory_Update(t *testing.T) {
 		CreatedAt: now,
 	}
 
-	// Expect transaction begin
-	mock.ExpectBegin()
-
-	// First, expect the SELECT to find existing message
-	existingRows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
-	mock.ExpectQuery(`SELECT DBID FROM Inbox WHERE Category = \? AND ProfileID = \?`).
-		WithArgs(msg.Category, msg.ProfileID).
-		WillReturnRows(existingRows)
-
-	// Then expect the UPDATE
-	mock.ExpectExec(`UPDATE Inbox SET Title = \?, Body = \?, Severity = \?, CreatedAt = \? WHERE DBID = \?`).
-		WithArgs(msg.Title, msg.Body, msg.Severity, now.Unix(), int64(42)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Expect transaction commit
-	mock.ExpectCommit()
+	rows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
+	mock.ExpectQuery(`INSERT INTO Inbox.*ON CONFLICT.*DO UPDATE SET.*RETURNING DBID`).
+		WithArgs(msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, now.Unix()).
+		WillReturnRows(rows)
 
 	result, err := sqlAddInboxMessage(context.Background(), db, msg)
 	require.NoError(t, err)

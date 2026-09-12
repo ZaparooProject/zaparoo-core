@@ -28,7 +28,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/spf13/afero"
 )
 
 type Startup struct {
@@ -42,13 +44,17 @@ type Entry struct {
 }
 
 func (s *Startup) Load() error {
+	return s.loadFile(afero.NewOsFs(), config.StartupFile)
+}
+
+func (s *Startup) loadFile(fs afero.Fs, path string) error {
 	var entries []Entry
 
-	contents, err := os.ReadFile(config.StartupFile)
+	contents, err := afero.ReadFile(fs, path)
 	if os.IsNotExist(err) {
 		contents = []byte{}
 	} else if err != nil {
-		return fmt.Errorf("failed to read startup file %s: %w", config.StartupFile, err)
+		return fmt.Errorf("failed to read startup file %s: %w", path, err)
 	}
 
 	lines := strings.Split(string(contents), "\n")
@@ -66,6 +72,10 @@ func (s *Startup) Load() error {
 		} else if line != "" {
 			section = append(section, line)
 		}
+	}
+
+	if len(section) != 0 {
+		sections = append(sections, section)
 	}
 
 	for _, section := range sections {
@@ -102,6 +112,10 @@ func (s *Startup) Load() error {
 }
 
 func (s *Startup) Save() error {
+	return s.saveFile(afero.NewOsFs(), config.StartupFile)
+}
+
+func (s *Startup) saveFile(fs afero.Fs, path string) error {
 	if len(s.Entries) == 0 {
 		return errors.New("no startup entries to save")
 	}
@@ -122,16 +136,21 @@ func (s *Startup) Save() error {
 	}
 
 	// Ensure parent directory exists before writing
-	dir := filepath.Dir(config.StartupFile)
-	err := os.MkdirAll(dir, 0o750)
+	dir := filepath.Dir(path)
+	err := fs.MkdirAll(dir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	//nolint:gosec // shared system startup script
-	err = os.WriteFile(config.StartupFile, []byte(contents.String()), 0o644)
+	mode := os.FileMode(0o644)
+	if info, statErr := fs.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat startup file: %w", statErr)
+	}
+	err = pathutil.WriteFileAtomic(fs, path, []byte(contents.String()), mode)
 	if err != nil {
-		return fmt.Errorf("failed to write startup file %s: %w", config.StartupFile, err)
+		return fmt.Errorf("failed to write startup file %s: %w", path, err)
 	}
 	return nil
 }

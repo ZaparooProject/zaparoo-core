@@ -31,16 +31,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var errCoreNameUnavailable = errors.New("core name is temporarily unavailable")
+
 // ReadCoreName reads the active core name from MiSTer's temp file.
 func ReadCoreName() (string, error) {
-	data, err := os.ReadFile(config.CoreNameFile)
+	return parseCoreNameFile(config.CoreNameFile)
+}
+
+func parseCoreNameFile(path string) (string, error) {
+	//nolint:gosec // Path is fixed in production and test-controlled otherwise.
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read core name file: %w", err)
 	}
 
 	name := strings.TrimSpace(string(data))
 	if name == "" {
-		return "", errors.New("core name file is empty")
+		return "", errCoreNameUnavailable
 	}
 
 	return name, nil
@@ -50,7 +57,11 @@ func ReadCoreName() (string, error) {
 func GetActiveCoreName() string {
 	name, err := ReadCoreName()
 	if err != nil {
-		log.Error().Err(err).Msg("error trying to get the core name")
+		if errors.Is(err, errCoreNameUnavailable) {
+			log.Debug().Err(err).Msg("core name file is empty during rewrite")
+		} else {
+			log.Error().Err(err).Msg("error trying to get the core name")
+		}
 		return ""
 	}
 

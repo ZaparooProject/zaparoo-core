@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/getsentry/sentry-go"
 	sentryzerolog "github.com/getsentry/sentry-go/zerolog"
@@ -122,9 +123,7 @@ func Init(reportingEnabled bool, deviceID, appVersion, platformID string) error 
 		ServerName:     "",
 		MaxBreadcrumbs: 0,
 		HTTPClient:     httpClient,
-		BeforeSend: func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
-			return sanitizeEvent(event)
-		},
+		BeforeSend:     beforeSendEvent,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize sentry: %w", err)
@@ -183,6 +182,15 @@ func Flush() {
 // Enabled returns whether telemetry is enabled.
 func Enabled() bool {
 	return enabled
+}
+
+func beforeSendEvent(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
+	if hint != nil {
+		if report, ok := hint.Data.(apidiag.Report); ok {
+			return apiTimeoutEvent(event, &report)
+		}
+	}
+	return sanitizeEvent(event)
 }
 
 // sanitizeEvent removes PII from Sentry events before sending.

@@ -132,8 +132,9 @@ allow_execute = [".*"]`))
 	assert.Equal(t, platforms.CmdResult{}, result)
 }
 
-// TestCmdExecute_StderrCapture verifies that stderr is captured in error messages.
-func TestCmdExecute_StderrCapture(t *testing.T) {
+// TestCmdExecute_FailureRedactsCommandAndStderr verifies process-controlled
+// details stay out of errors that may reach telemetry.
+func TestCmdExecute_FailureRedactsCommandAndStderr(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -156,7 +157,9 @@ allow_execute = [".*"]`))
 	_, err := cmdExecute(nil, env)
 
 	require.Error(t, err, "execute should fail with non-zero exit")
-	assert.Contains(t, err.Error(), "stderr_test_message", "error should contain stderr output")
+	assert.Contains(t, err.Error(), "exit status 1")
+	assert.NotContains(t, err.Error(), "stderr_test_message")
+	assert.NotContains(t, err.Error(), "bash")
 }
 
 // TestCmdExecute_TimeoutConstant verifies the timeout constant value.

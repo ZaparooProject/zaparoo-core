@@ -19,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -81,6 +82,16 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 	}, nil
 }
 
+func checkScriptFile(fs afero.Fs, path string) error {
+	if _, err := fs.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("script not found: %w: %w", zapscript.ErrFileNotFound, err)
+		}
+		return fmt.Errorf("failed to stat script: %w", err)
+	}
+	return nil
+}
+
 func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return func(pl platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 		var advArgs gozapscript.MisterScriptArgs
@@ -109,8 +120,8 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 		}
 
 		scriptPath := filepath.Join(config.ScriptsDir, script)
-		if _, err := os.Stat(scriptPath); err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("script not found: %s", script)
+		if err := checkScriptFile(afero.NewOsFs(), scriptPath); err != nil {
+			return platforms.CmdResult{}, err
 		}
 
 		script = scriptPath

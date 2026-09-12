@@ -72,7 +72,7 @@ func TestOpenMigratedDatabaseClosesMigrationFailureWithoutPublishing(t *testing.
 	previous := db.sql.Load()
 	require.NoError(t, db.closeAndDrain())
 	dbPath := db.GetDBPath()
-	database.RemoveSidecars(dbPath)
+	require.NoError(t, database.RemoveSidecars(dbPath))
 	require.NoError(t, os.Remove(dbPath))
 
 	broken, err := sql.Open("sqlite3", dbPath)

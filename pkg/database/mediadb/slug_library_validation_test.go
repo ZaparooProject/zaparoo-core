@@ -235,7 +235,7 @@ func TestSlugLibraryCacheMeasurement(t *testing.T) {
 	db, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 	require.NoError(t, db.Close())
-	database.RemoveSidecars(db.dbPath)
+	_ = database.RemoveSidecars(db.dbPath)
 	require.NoError(t, os.Remove(db.dbPath))
 	copySlugValidationFile(t, input, db.dbPath)
 	require.NoError(t, db.Open())

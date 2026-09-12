@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -148,17 +149,21 @@ func PreserveCorruptFile(path, dbLabel string) {
 
 // RemoveSidecars deletes the -wal and -shm sidecar files for dbPath. A stale WAL
 // left next to a freshly restored or recreated database would re-corrupt it.
-func RemoveSidecars(dbPath string) {
-	RemoveSidecarsFS(afero.NewOsFs(), dbPath)
+func RemoveSidecars(dbPath string) error {
+	return RemoveSidecarsFS(afero.NewOsFs(), dbPath)
 }
 
 // RemoveSidecarsFS deletes database sidecars through fs.
-func RemoveSidecarsFS(fs afero.Fs, dbPath string) {
+func RemoveSidecarsFS(fs afero.Fs, dbPath string) error {
+	var removeErr error
 	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
 		if err := fs.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Str("path", sidecar).Msg("failed to remove database sidecar")
+			removeErr = errors.Join(removeErr,
+				fmt.Errorf("remove database sidecar %s: %w", filepath.Base(sidecar), err))
 		}
 	}
+	return removeErr
 }
 
 // IntegrityReport runs PRAGMA integrity_check(maxRows) against sqlDB and returns the

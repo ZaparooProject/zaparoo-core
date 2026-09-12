@@ -154,7 +154,8 @@ func selectPictureVariant(baseName string) string {
 		log.Error().Str("baseName", baseName).Msg("no variants available")
 		return baseName // fallback to original name
 	}
-	selected := int(hash) % variantsLen
+	// Reduce before converting: uint32 hashes can overflow int on 32-bit targets.
+	selected := int(uint(hash) % uint(variantsLen))
 
 	// Safety check to prevent index out of bounds
 	if selected < 0 || selected >= len(variants) {

@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -46,6 +47,15 @@ var (
 
 const APIPath = "/api/v0.1"
 
+// HTTP status distinguishes rejected upgrades without exposing response bodies
+// or headers, which may contain credentials or private server details.
+func websocketDialError(err error, response *http.Response) error {
+	if response != nil && errors.Is(err, websocket.ErrBadHandshake) {
+		return fmt.Errorf("failed to dial websocket (HTTP status %d): %w", response.StatusCode, err)
+	}
+	return fmt.Errorf("failed to dial websocket: %w", err)
+}
+
 // isExpectedWebsocketClose reports whether a websocket read error is an expected
 // disconnect (the connection closed, the peer went away, or an abnormal closure
 // such as the service restarting) rather than a genuine protocol/read fault.
@@ -65,27 +75,44 @@ func isExpectedWebsocketClose(err error) bool {
 // The returned function must be run even if there is an error so the service
 // isn't left in an unusable state.
 func DisableZapScript(cfg *config.Instance) func() {
-	_, err := LocalClient(
+	return disableZapScriptWithRequest(cfg, LocalClient)
+}
+
+func disableZapScriptWithRequest(
+	cfg *config.Instance,
+	request func(context.Context, *config.Instance, string, string) (string, error),
+) func() {
+	_, err := request(
 		context.Background(),
 		cfg,
 		models.MethodSettingsUpdate,
 		"{\"runZapScript\":false}",
 	)
 	if err != nil {
-		log.Error().Err(err).Msg("error disabling runZapScript")
+		logZapScriptToggleError(err, "error disabling runZapScript")
 		return func() {}
 	}
 
 	return func() {
-		_, err = LocalClient(
+		_, err = request(
 			context.Background(),
 			cfg,
 			models.MethodSettingsUpdate,
 			"{\"runZapScript\":true}",
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("error enabling runZapScript")
+			logZapScriptToggleError(err, "error enabling runZapScript")
 		}
+	}
+}
+
+// A stopped local service is expected when entering or leaving a management UI.
+// Keep authentication, protocol and other transport failures reportable.
+func logZapScriptToggleError(err error, message string) {
+	if isConnectionRefused(err) {
+		log.Warn().Err(err).Msg(message)
+	} else {
+		log.Error().Err(err).Msg(message)
 	}
 }
 
@@ -131,9 +158,9 @@ func LocalClient(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
+	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", websocketDialError(err, response)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -262,9 +289,9 @@ func WaitNotification(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", websocketDialError(err, response)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -449,9 +476,9 @@ func waitNotificationsWithClock(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, _, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to dial websocket: %w", err)
+		return "", "", websocketDialError(err, response)
 	}
 	connectionClosed := false
 	closeConnection := func() {

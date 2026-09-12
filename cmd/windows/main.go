@@ -125,6 +125,7 @@ func acquireSingleInstanceWith(ops singleInstanceOps) (*singleInstance, bool) {
 		if closeErr := ops.closeHandle(handle); closeErr != nil {
 			log.Debug().Err(closeErr).Msg("could not close duplicate single-instance mutex handle")
 		}
+		log.Warn().Msg("core is already running")
 		return nil, true
 	}
 	if err != nil {
@@ -214,7 +215,6 @@ func run() error {
 
 	instance, running := acquireSingleInstance()
 	if running {
-		log.Error().Msg("core is already running")
 		return errors.New("zaparoo is already running")
 	}
 	defer func() {

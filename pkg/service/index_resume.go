@@ -932,7 +932,11 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 			})
 		}, pauser, lease)
 		if runErr != nil {
-			log.Error().Err(runErr).Msg("optimization auto-resume failed")
+			if database.IsOptimizationCanceled(runErr) {
+				log.Debug().Err(runErr).Msg("optimization auto-resume canceled")
+			} else {
+				log.Error().Err(runErr).Msg("optimization auto-resume failed")
+			}
 		}
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)

@@ -254,11 +254,19 @@ func noteIndexingCorruption(db database.MediaDBI, reason string) {
 		Msg("media database integrity check after corruption detected during indexing")
 	db.MarkCorrupt(reason)
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+		logPostCorruptionStateError(setErr, "failed to mark media database as corrupt")
 	}
 	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+		logPostCorruptionStateError(setErr, "failed to clear last indexed system after corrupt database detection")
 	}
+}
+
+func logPostCorruptionStateError(err error, msg string) {
+	if isSQLiteDatabaseCorrupt(err) {
+		log.Debug().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
 }
 
 func finalizeIndexingError(db database.MediaDBI, err error) {
@@ -1699,6 +1707,12 @@ func NewNamesIndexWithSources(
 					// The scanner's backing service (e.g. Kodi) isn't running.
 					// Expected on devices without it; keep out of Sentry.
 					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
+					continue
+				}
+				// Only the platform's exact unavailable result is expected. A joined
+				// failure must remain reportable; keep scanIncomplete set above.
+				if scanErr == platforms.ErrScannerUnavailable { //nolint:errorlint // Do not hide joined I/O failures.
+					log.Warn().Err(scanErr).Msgf("skipping %s scanner: optional installation unavailable", l.ID)
 					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)

@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -41,6 +42,8 @@ import (
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1764,78 +1767,100 @@ func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
 // the scan is incomplete the previously indexed row absent from this run must
 // keep its missing state instead of being flagged.
 func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
-	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
+	for _, scanFailure := range []error{
+		errors.New("gamelist parse failed"),
+		platforms.ErrScannerUnavailable,
+		errors.Join(platforms.ErrScannerUnavailable, os.ErrPermission),
+	} {
+		t.Run(scanFailure.Error(), func(t *testing.T) {
+			var output bytes.Buffer
+			originalLogger, originalLevel := log.Logger, zerolog.GlobalLevel()
+			log.Logger = zerolog.New(&output)
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = originalLogger; zerolog.SetGlobalLevel(originalLevel) })
 
-	customDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.bin"), []byte("test"), 0o600))
+			customDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.bin"), []byte("test"), 0o600))
 
-	customLauncher := platforms.Launcher{
-		ID:         "custom-ps2",
-		SystemID:   systemdefs.SystemPS2,
-		Folders:    []string{customDir},
-		Extensions: []string{".iso", ".bin"},
+			customLauncher := platforms.Launcher{
+				ID:         "custom-ps2",
+				SystemID:   systemdefs.SystemPS2,
+				Folders:    []string{customDir},
+				Extensions: []string{".iso", ".bin"},
+			}
+			// Pipeline scanner that fails outright (e.g. corrupt gamelist.xml).
+			failingLauncher := platforms.Launcher{
+				ID:                 "failing-enricher",
+				SystemID:           systemdefs.SystemPS2,
+				SkipFilesystemScan: errors.Is(scanFailure, platforms.ErrScannerUnavailable),
+				Scanner: func(_ context.Context, _ *config.Instance, _ string,
+					_ []platforms.ScanResult,
+				) ([]platforms.ScanResult, error) {
+					return nil, scanFailure
+				},
+			}
+
+			fsHelper := testhelpers.NewMemoryFS()
+			cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+			require.NoError(t, err)
+
+			platform := mocks.NewMockPlatform()
+			platform.On("ID").Return("test-platform")
+			platform.On("Settings").Return(platforms.Settings{})
+			platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+				[]platforms.Launcher{customLauncher, failingLauncher})
+
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			defer cleanup()
+
+			testLauncherCacheMutex.Lock()
+			originalCache := helpers.GlobalLauncherCache
+			testCache := &helpers.LauncherCache{}
+			testCache.Initialize(platform, cfg)
+			helpers.GlobalLauncherCache = testCache
+			defer func() {
+				helpers.GlobalLauncherCache = originalCache
+				testLauncherCacheMutex.Unlock()
+			}()
+
+			// Plant a previously indexed row that this run won't collect. With the
+			// scan incomplete it must keep IsMissing=0.
+			plantedPath := filepath.Join(customDir, "planted.iso")
+			require.NoError(t, os.WriteFile(plantedPath, []byte("test"), 0o600))
+			systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+			require.NoError(t, err)
+			require.NoError(t, os.Remove(plantedPath))
+
+			filesIndexed, err := NewNamesIndex(
+				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, 2, filesIndexed,
+				"filesystem files must survive a failing pipeline scanner")
+
+			mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+			require.NoError(t, err)
+			byBase := make(map[string]database.MediaWithFullPath)
+			for _, entry := range mediaEntries {
+				byBase[filepath.Base(entry.Path)] = entry
+			}
+			require.Len(t, byBase, 3)
+			assert.False(t, byBase["game1.iso"].IsMissing)
+			assert.False(t, byBase["game2.bin"].IsMissing)
+			assert.False(t, byBase["planted.iso"].IsMissing,
+				"an incomplete scan must not flag absent media as missing")
+			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
+				assert.Contains(t, output.String(), "optional installation unavailable")
+				assert.NotContains(t, output.String(), `"level":"error"`)
+			} else {
+				assert.Contains(t, output.String(), `"level":"error"`)
+			}
+		})
 	}
-	// Pipeline scanner that fails outright (e.g. corrupt gamelist.xml).
-	failingLauncher := platforms.Launcher{
-		ID:       "failing-enricher",
-		SystemID: systemdefs.SystemPS2,
-		Scanner: func(_ context.Context, _ *config.Instance, _ string,
-			_ []platforms.ScanResult,
-		) ([]platforms.ScanResult, error) {
-			return nil, errors.New("gamelist parse failed")
-		},
-	}
-
-	fsHelper := testhelpers.NewMemoryFS()
-	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
-	require.NoError(t, err)
-
-	platform := mocks.NewMockPlatform()
-	platform.On("ID").Return("test-platform")
-	platform.On("Settings").Return(platforms.Settings{})
-	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
-	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
-		[]platforms.Launcher{customLauncher, failingLauncher})
-
-	db, cleanup := testhelpers.NewTestDatabase(t)
-	defer cleanup()
-
-	testLauncherCacheMutex.Lock()
-	originalCache := helpers.GlobalLauncherCache
-	testCache := &helpers.LauncherCache{}
-	testCache.Initialize(platform, cfg)
-	helpers.GlobalLauncherCache = testCache
-	defer func() {
-		helpers.GlobalLauncherCache = originalCache
-		testLauncherCacheMutex.Unlock()
-	}()
-
-	// Plant a previously indexed row that this run won't collect. With the
-	// scan incomplete it must keep IsMissing=0.
-	plantedPath := filepath.Join(customDir, "planted.iso")
-	require.NoError(t, os.WriteFile(plantedPath, []byte("test"), 0o600))
-	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
-	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(plantedPath))
-
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, filesIndexed,
-		"filesystem files must survive a failing pipeline scanner")
-
-	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
-	require.NoError(t, err)
-	byBase := make(map[string]database.MediaWithFullPath)
-	for _, entry := range mediaEntries {
-		byBase[filepath.Base(entry.Path)] = entry
-	}
-	require.Len(t, byBase, 3)
-	assert.False(t, byBase["game1.iso"].IsMissing)
-	assert.False(t, byBase["game2.bin"].IsMissing)
-	assert.False(t, byBase["planted.iso"].IsMissing,
-		"an incomplete scan must not flag absent media as missing")
 }
 
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file

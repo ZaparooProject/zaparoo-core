@@ -319,8 +319,11 @@ tasks:
 
   bench-compare:
     desc: Compare current benchmarks against baseline (requires benchstat, install with go install golang.org/x/perf/cmd/benchstat@latest)
+    vars:
+      BENCH_PKGS: '{{default "./..." .BENCH_PKGS}}'
+      BENCH_PATTERN: '{{default "." .BENCH_PATTERN}}'
     cmds:
-      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" > /tmp/zaparoo-bench-current.txt'
+      - bash -o pipefail -c 'go test -run="^$$" -bench="{{.BENCH_PATTERN}}" -benchmem -count=6 -timeout=45m {{.BENCH_PKGS}} | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" > /tmp/zaparoo-bench-current.txt'
       - benchstat testdata/benchmarks/baseline.txt /tmp/zaparoo-bench-current.txt
 
   get-logs:

@@ -23,7 +23,9 @@ package mister
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"os"
 	"path/filepath"
@@ -40,9 +42,43 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMGLLaunchErrorReporting(t *testing.T) {
+	// Logging tests replace the global logger and must remain serial.
+	missingPath := filepath.Join(t.TempDir(), "missing.mgl")
+	missingErr := mgls.LaunchBasicFile(missingPath)
+	require.ErrorIs(t, missingErr, zapscript.ErrFileNotFound)
+
+	for _, tt := range []struct {
+		err   error
+		name  string
+		level string
+	}{
+		{name: "missing requested MGL", err: missingErr, level: "warn"},
+		{name: "missing internal file", err: os.ErrNotExist, level: "error"},
+		{name: "permission failure", err: os.ErrPermission, level: "error"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			logMGLLaunchError(tt.err)
+
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, tt.level, entry["level"])
+			assert.Equal(t, tt.err.Error(), entry["error"])
+		})
+	}
+}
 
 func TestCheckInZip_NonZipPath(t *testing.T) {
 	t.Parallel()

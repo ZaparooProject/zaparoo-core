@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -533,6 +534,8 @@ func (c *Client) SetURL(url string) {
 	c.url = url
 }
 
+const maxAPIResponseBytes = 64 << 20
+
 // APIRequest makes a raw JSON-RPC request to Kodi API
 func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (json.RawMessage, error) {
 	req := APIPayload{
@@ -578,15 +581,29 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 		_ = resp.Body.Close() // Ignore close error in defer
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("unexpected HTTP status from kodi api: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(body) > maxAPIResponseBytes {
+		return nil, fmt.Errorf("kodi api response exceeds %d bytes", maxAPIResponseBytes)
 	}
 
 	var apiResp APIResponse
 	err = json.Unmarshal(body, &apiResp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		mediaType, _, contentTypeErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		if contentTypeErr != nil {
+			mediaType = "invalid"
+		} else if mediaType == "" {
+			mediaType = "unspecified"
+		}
+		return nil, fmt.Errorf("invalid kodi JSON response (status %d, content type %s)",
+			resp.StatusCode, mediaType)
 	}
 	if apiResp.Error != nil {
 		return nil, fmt.Errorf("error from kodi api: %s", apiResp.Error.Message)

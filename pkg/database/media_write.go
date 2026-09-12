@@ -20,6 +20,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -53,6 +54,33 @@ type MediaDBWriteCoordinator interface {
 	RunBackgroundOptimizationWithLease(
 		statusCallback func(optimizing bool), pauser *syncutil.Pauser, lease *MediaWriteLease,
 	) error
+}
+
+// IsOptimizationCanceled reports cancellation without a concurrent operation or
+// cleanup failure. Joined failures must remain reportable and must not be
+// mistaken for an ordinary interrupted optimization.
+func IsOptimizationCanceled(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch e := err.(type) { //nolint:errorlint // Inspect every immediate child, not just one matching descendant.
+	case interface{ Unwrap() []error }:
+		found := false
+		for _, child := range e.Unwrap() {
+			if child == nil {
+				continue
+			}
+			if !IsOptimizationCanceled(child) {
+				return false
+			}
+			found = true
+		}
+		return found
+	case interface{ Unwrap() error }:
+		return IsOptimizationCanceled(e.Unwrap())
+	default:
+		return err == context.Canceled //nolint:errorlint // Wrappers have already been traversed.
+	}
 }
 
 // GetMediaDBWriteCoordinator returns write arbitration supported by current MediaDB implementations.

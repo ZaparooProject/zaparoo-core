@@ -2120,6 +2120,48 @@ func TestCmdSearchUsesOrderedFallback(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_RejectsEntirelyInvalidSystemList(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.random", Args: []string{"all**"}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	assert.Equal(t, platforms.CmdResult{}, result)
+	require.ErrorIs(t, err, systemdefs.ErrUnknownSystem)
+	assert.Contains(t, err.Error(), "all**")
+	mockMediaDB.AssertNotCalled(t, "RandomGameWithQuery", mock.Anything, mock.Anything)
+	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestCmdRandom_MixedSystemListKeepsValidSystems(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	searchErr := errors.New("stop after query verification")
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.MatchedBy(func(query *database.MediaQuery) bool {
+		return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemNES
+	})).Return(database.SearchResult{}, searchErr).Once()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.random", Args: []string{"bad-system", systemdefs.SystemNES}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.ErrorIs(t, err, searchErr)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
 	t.Parallel()
 

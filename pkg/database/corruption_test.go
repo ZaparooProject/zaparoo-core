@@ -32,6 +32,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/mattn/go-sqlite3"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -132,14 +133,35 @@ func TestRemoveSidecars(t *testing.T) {
 		require.NoError(t, os.WriteFile(sidecar, []byte("x"), 0o600))
 	}
 
-	RemoveSidecars(dbPath)
+	require.NoError(t, RemoveSidecars(dbPath))
 
 	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
 		_, err := os.Stat(sidecar)
 		assert.True(t, os.IsNotExist(err), "sidecar should be removed: %s", sidecar)
 	}
 	// Removing absent sidecars is a no-op.
-	RemoveSidecars(dbPath)
+	require.NoError(t, RemoveSidecars(dbPath))
+}
+
+func TestRemoveSidecarsReportsFailures(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	dbPath := filepath.Join("data", "test.db")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(dbPath), 0o750))
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		require.NoError(t, afero.WriteFile(fs, sidecar, []byte("x"), 0o600))
+	}
+
+	err := RemoveSidecarsFS(afero.NewReadOnlyFs(fs), dbPath)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test.db-wal")
+	assert.Contains(t, err.Error(), "test.db-shm")
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		exists, existsErr := afero.Exists(fs, sidecar)
+		require.NoError(t, existsErr)
+		assert.True(t, exists)
+	}
 }
 
 func TestIntegrityReport_HealthyReturnsOK(t *testing.T) {

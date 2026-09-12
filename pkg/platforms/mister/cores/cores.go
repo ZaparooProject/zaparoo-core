@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 )
 
@@ -61,7 +62,7 @@ func GetCore(id string) (*Core, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
 	}
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", systemdefs.ErrUnknownSystem, id)
 }
 
 func GetGroup(groupID string) (Core, error) {
@@ -98,5 +99,5 @@ func LookupCore(id string) (*Core, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", systemdefs.ErrUnknownSystem, id)
 }

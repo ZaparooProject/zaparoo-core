@@ -89,16 +89,10 @@ type ArcadeDbEntry struct {
 
 func parseGitHubContentsResponse(statusCode int, body []byte) ([]GithubContentsItem, error) {
 	if statusCode != http.StatusOK {
-		bodyPreview := string(body)
-		if len(bodyPreview) > 200 {
-			bodyPreview = bodyPreview[:200] + "..."
-		}
 		if statusCode == http.StatusForbidden {
-			return nil, fmt.Errorf(
-				"GitHub API returned %d (forbidden, probably rate limited): %s",
-				statusCode, bodyPreview)
+			return nil, fmt.Errorf("GitHub API returned %d (forbidden, probably rate limited)", statusCode)
 		}
-		return nil, fmt.Errorf("GitHub API returned %d: %s", statusCode, bodyPreview)
+		return nil, fmt.Errorf("GitHub API returned %d", statusCode)
 	}
 
 	var contents []GithubContentsItem
@@ -213,9 +207,11 @@ func (c *Client) Update(arcadeDBPath string) (bool, error) {
 		return false, fmt.Errorf("download failed with status %d", statusCode)
 	}
 
-	err = afero.WriteFile(c.fs, arcadeDBPath, body, 0o600)
-	if err != nil {
-		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
+	if _, err = parseCatalog(bytes.NewReader(body)); err != nil {
+		return false, fmt.Errorf("invalid downloaded arcadedb: %w", err)
+	}
+	if err := c.replaceCatalog(arcadeDBPath, body); err != nil {
+		return false, err
 	}
 
 	return true, nil
@@ -252,13 +248,16 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 		_ = file.Close()
 	}()
 
-	entries := make([]ArcadeDbEntry, 0)
-	err = gocsv.Unmarshal(file, &entries)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
+	entries, parseErr := parseCatalog(file)
+	if parseErr == nil {
+		return entries, nil
 	}
-
-	return filterValidEntries(entries), nil
+	fallback, fallbackErr := c.readEmbedded()
+	if fallbackErr != nil {
+		return nil, errors.Join(parseErr, fallbackErr)
+	}
+	log.Error().Err(parseErr).Msg("invalid cached arcade database; using embedded fallback")
+	return fallback, nil
 }
 
 func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {

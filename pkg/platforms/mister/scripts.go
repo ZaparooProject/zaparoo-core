@@ -28,6 +28,7 @@ const (
 )
 
 var (
+	checkScriptActive       = scriptIsActive
 	getScriptConsoleManager = func(pl *Platform) platforms.ConsoleManager { return pl.ConsoleManager() }
 	runScriptChvt           = func(ctx context.Context, vt string) error {
 		return exec.CommandContext(ctx, "chvt", vt).Run() //nolint:gosec // Fixed executable; VT is internal.
@@ -74,9 +75,9 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		return fmt.Errorf("failed to stat script file: %w", err)
 	}
 
-	active := scriptIsActive(ctx)
+	active := checkScriptActive(ctx)
 	if active {
-		return errors.New("a script is already running")
+		return platforms.ErrScriptAlreadyRunning
 	}
 
 	if hidden {

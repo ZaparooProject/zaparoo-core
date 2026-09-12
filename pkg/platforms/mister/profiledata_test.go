@@ -38,6 +38,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type rejectedProfileNameFS struct{ afero.Fs }
+
+func (rejectedProfileNameFS) Rename(string, string) error { return iofs.ErrPermission }
+
+func TestProfileNameAtomicReplacement(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	dir := "profile"
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	d := profileDataManager{fs: fs}
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Original"})
+	path := filepath.Join(dir, profileNameFile)
+	original, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, "Original\n", string(original))
+	d.fs = rejectedProfileNameFS{fs}
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Replacement"})
+	got, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, original, got)
+	files, err := afero.ReadDir(fs, dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	d.fs = fs
+	d.writeNameFile(dir, platforms.ProfileRef{Name: "Replacement"})
+	got, err = afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, "Replacement\n", string(got))
+}
+
 // fakeMounter simulates the kernel mount table: binds resolve their source
 // through the current table (so a bind of a path inside a cifs mount
 // carries the cifs identity, exactly like the kernel), and unmount removes

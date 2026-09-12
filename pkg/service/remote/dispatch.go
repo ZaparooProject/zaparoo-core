@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
 )
@@ -130,7 +131,7 @@ func shrinkPage(raw json.RawMessage) (json.RawMessage, bool) {
 // logged locally and only a stable code crosses the wire.
 func classifyHandlerError(err error) operationResult {
 	switch {
-	case errors.Is(err, state.ErrLaunchInProgress):
+	case errors.Is(err, state.ErrLaunchInProgress), errors.Is(err, platforms.ErrScriptAlreadyRunning):
 		return operationResult{Status: "busy"}
 	case errors.Is(err, methods.ErrForbidden):
 		return failResult("forbidden")

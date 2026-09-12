@@ -211,6 +211,16 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 	}
 }
 
+func TestParse_InvalidLauncherIsTyped(t *testing.T) {
+	t.Parallel()
+	var args zapscript.LaunchRandomArgs
+
+	err := Parse(map[string]string{"launcher": "N64"}, &args, NewParseContext([]string{"mister"}))
+
+	require.ErrorIs(t, err, ErrInvalidArguments)
+	assert.Contains(t, err.Error(), `launcher "N64" not found`)
+}
+
 func TestParse_LaunchArgs(t *testing.T) {
 	t.Parallel()
 

@@ -586,50 +586,18 @@ func sqlAddInboxMessage(ctx context.Context, db *sql.DB, msg *database.InboxMess
 	var dbid int64
 
 	if msg.Category != "" {
-		tx, err := db.BeginTx(ctx, nil)
+		err := db.QueryRowContext(ctx, `
+			INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(Category, ProfileID) WHERE Category IS NOT NULL DO UPDATE SET
+				Title = excluded.Title,
+				Body = excluded.Body,
+				Severity = excluded.Severity,
+				CreatedAt = excluded.CreatedAt
+			RETURNING DBID;
+		`, msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
 		if err != nil {
-			return nil, fmt.Errorf("failed to begin transaction: %w", err)
-		}
-		defer func() {
-			if err != nil {
-				_ = tx.Rollback()
-			}
-		}()
-
-		// Check if a message with this category+profile already exists
-		var existingID int64
-		err = tx.QueryRowContext(ctx,
-			`SELECT DBID FROM Inbox WHERE Category = ? AND ProfileID = ?`,
-			msg.Category, msg.ProfileID,
-		).Scan(&existingID)
-
-		switch {
-		case err == nil:
-			// Message exists, update it
-			_, err = tx.ExecContext(ctx, `
-				UPDATE Inbox SET Title = ?, Body = ?, Severity = ?, CreatedAt = ?
-				WHERE DBID = ?
-			`, msg.Title, msg.Body, msg.Severity, msg.CreatedAt.Unix(), existingID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to update inbox message: %w", err)
-			}
-			dbid = existingID
-		case errors.Is(err, sql.ErrNoRows):
-			// Message doesn't exist, insert new
-			err = tx.QueryRowContext(ctx, `
-				INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
-				VALUES (?, ?, ?, ?, ?, ?)
-				RETURNING DBID;
-			`, msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
-			if err != nil {
-				return nil, fmt.Errorf("failed to insert inbox message: %w", err)
-			}
-		default:
-			return nil, fmt.Errorf("failed to check existing inbox message: %w", err)
-		}
-
-		if err = tx.Commit(); err != nil {
-			return nil, fmt.Errorf("failed to commit transaction: %w", err)
+			return nil, fmt.Errorf("failed to upsert inbox message: %w", err)
 		}
 	} else {
 		// No category: always insert new message

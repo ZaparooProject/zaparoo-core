@@ -850,7 +850,7 @@ var Systems = map[string]System{
 	},
 	SystemSNES: {
 		ID:      SystemSNES,
-		Aliases: []string{"SuperNintendo"},
+		Aliases: []string{"SuperNintendo", "Super Nintendo Entertainment System"},
 		Slugs:   []string{"superfamicom", "sfc", "supercomboy", "supernes", "superfam", "snesclassic"},
 	},
 	SystemSNESMSU1: {

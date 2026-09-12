@@ -55,6 +55,10 @@ func NewParser() *Parser {
 	return &Parser{validate: v}
 }
 
+// ErrInvalidArguments identifies user-supplied advanced arguments that could
+// not be decoded or validated.
+var ErrInvalidArguments = errors.New("invalid arguments")
+
 // DefaultParser is a convenience parser for simple use cases.
 var DefaultParser = NewParser()
 
@@ -88,7 +92,7 @@ func (p *Parser) Parse(raw map[string]string, dest any, ctx *ParseContext) error
 	}
 
 	if err := decoder.Decode(raw); err != nil {
-		return fmt.Errorf("failed to decode arguments: %w", err)
+		return fmt.Errorf("%w: failed to decode arguments: %w", ErrInvalidArguments, err)
 	}
 
 	// Run validation with context
@@ -101,7 +105,7 @@ func (p *Parser) Parse(raw map[string]string, dest any, ctx *ParseContext) error
 			for _, fe := range validationErrors {
 				errMsgs = append(errMsgs, formatValidationError(fe))
 			}
-			return fmt.Errorf("invalid arguments: %s", strings.Join(errMsgs, "; "))
+			return fmt.Errorf("%w: %s", ErrInvalidArguments, strings.Join(errMsgs, "; "))
 		}
 		return fmt.Errorf("validation failed: %w", err)
 	}

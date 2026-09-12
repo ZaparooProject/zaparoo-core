@@ -27,6 +27,7 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -115,6 +116,7 @@ func TestCommandClassifiesRunZapScriptErrors(t *testing.T) {
 		wantErrorCode string
 	}{
 		{name: "launch in progress is busy", err: state.ErrLaunchInProgress, wantStatus: "busy"},
+		{name: "script running is busy", err: platforms.ErrScriptAlreadyRunning, wantStatus: "busy"},
 		{
 			name: "file not found", err: zapscript.ErrFileNotFound,
 			wantStatus: "failed", wantErrorCode: "media_not_found",

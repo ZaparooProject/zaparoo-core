@@ -80,6 +80,40 @@ func waitForServerReady(t *testing.T, cfg *config.Instance) int {
 	return 0
 }
 
+func TestWebSocketRouteRejectsNonUpgradeRequest(t *testing.T) {
+	t.Parallel()
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	ready := make(chan error, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(
+			platform, cfg, st, make(chan tokens.Token, 1), nil, db,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		require.NoError(t, <-serverErr)
+	}()
+	require.NoError(t, <-ready)
+	port := waitForServerReady(t, cfg)
+
+	requestURL := fmt.Sprintf("http://127.0.0.1:%d/api/v0", port)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, requestURL, http.NoBody)
+	require.NoError(t, err)
+	resp, err := (&http.Client{Timeout: time.Second}).Do(req) //nolint:gosec // local integration server
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
 func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	t.Parallel()
 

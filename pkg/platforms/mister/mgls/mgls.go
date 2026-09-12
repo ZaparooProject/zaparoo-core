@@ -24,6 +24,7 @@ package mgls
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,9 +38,24 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	mglgen "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgl"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+// missingRequestedFileError preserves the diagnostic and filesystem cause while
+// marking a missing user-selected file as an expected launch failure.
+type missingRequestedFileError struct {
+	error
+}
+
+func (missingRequestedFileError) Is(target error) bool {
+	return target == zapscript.ErrFileNotFound
+}
+
+func (e missingRequestedFileError) Unwrap() error {
+	return e.error
+}
 
 type commandInterfaceWriter struct {
 	open func() (io.WriteCloser, error)
@@ -139,10 +155,15 @@ func validateLoadCorePath(path string) error {
 
 func launchFileWithDefaults(path string) error {
 	fs := afero.NewOsFs()
-	return launchFile(fs, newCommandInterfaceWriter(fs), path)
+	return launchFile(fs, newCommandInterfaceWriter(fs), path, true)
 }
 
-func launchFile(fs afero.Fs, commandWriter io.Writer, path string) error {
+func launchGeneratedFile(path string) error {
+	fs := afero.NewOsFs()
+	return launchFile(fs, newCommandInterfaceWriter(fs), path, false)
+}
+
+func launchFile(fs afero.Fs, commandWriter io.Writer, path string, requested bool) error {
 	validationErr := validateLoadCorePath(path)
 	if validationErr != nil {
 		return validationErr
@@ -154,7 +175,12 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string) error {
 	}
 
 	if _, err := fs.Stat(path); err != nil {
-		return fmt.Errorf("launch file not accessible: %w", err)
+		wrapped := fmt.Errorf("launch file not accessible: %w", err)
+		// A generated MGL disappearing is an internal failure, not missing media.
+		if requested && errors.Is(err, os.ErrNotExist) {
+			return missingRequestedFileError{wrapped}
+		}
+		return wrapped
 	}
 
 	log.Debug().Str("file", path).Msg("sending to command interface")
@@ -193,7 +219,7 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	return launchFileWithDefaults(tmpFile)
+	return launchGeneratedFile(tmpFile)
 }
 
 // LaunchShortCore attempts to launch a core with a short path, as per what's
@@ -209,7 +235,7 @@ func LaunchShortCore(path string) error {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
-	return launchFileWithDefaults(tmpFile)
+	return launchGeneratedFile(tmpFile)
 }
 
 // writeCurrentPath writes the CURRENTPATH, FULLPATH, and FILESELECT files

@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -87,26 +88,30 @@ func queueDuration(enqueuedAt time.Time) time.Duration {
 }
 
 type wsRequestJob struct {
-	tracker    RequestTracker
-	methodMap  *MethodMap
-	cs         *apimiddleware.ClientSession
-	cancel     context.CancelFunc
-	env        *requests.RequestEnv
-	enqueuedAt time.Time
-	requestID  models.RPCID
-	method     string
-	msg        []byte
-	image      bool
+	diagnostics *apidiag.Recorder
+	tracker     RequestTracker
+	methodMap   *MethodMap
+	cs          *apimiddleware.ClientSession
+	cancel      context.CancelFunc
+	env         *requests.RequestEnv
+	enqueuedAt  time.Time
+	requestID   models.RPCID
+	method      string
+	msg         []byte
+	image       bool
 }
 
 type wsResponseJob struct {
-	enqueuedAt time.Time
-	tracker    RequestTracker
-	cs         *apimiddleware.ClientSession
-	cancel     context.CancelFunc
-	method     string
-	result     requestResult
-	pong       bool
+	ctx         context.Context
+	diagnostics *apidiag.Recorder
+	endQueue    func()
+	enqueuedAt  time.Time
+	tracker     RequestTracker
+	cs          *apimiddleware.ClientSession
+	cancel      context.CancelFunc
+	method      string
+	result      requestResult
+	pong        bool
 }
 
 type wsSessionDispatcher struct {
@@ -231,12 +236,7 @@ func (d *wsSessionDispatcher) drainQueuedResponses() {
 	for {
 		select {
 		case resp := <-d.responses:
-			if resp.cancel != nil {
-				resp.cancel()
-			}
-			if resp.tracker != nil {
-				resp.tracker.RequestEnded()
-			}
+			resp.finish()
 		default:
 			return
 		}
@@ -326,6 +326,8 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 
 	//nolint:gosec // Cancellation is transferred to job and invoked when response handling completes.
 	ctx, cancel := requestContextForAPIMethod(d.ctx, job.method)
+	ctx, job.diagnostics = beginAPIDiagnostics(ctx, job.methodMap, job.env,
+		job.method, apidiag.WebSocket, queueDuration(job.enqueuedAt))
 	job.env.Context = ctx
 	job.cancel = cancel
 
@@ -333,6 +335,7 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Msg("panic in websocket request worker")
 			d.enqueueResponse(&wsResponseJob{
+				ctx: ctx, diagnostics: job.diagnostics,
 				result: requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorInternalError, ShouldReply: true},
 				cs:     job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
 			})
@@ -340,6 +343,8 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 	}()
 
 	if job.image {
+		endSlot := apidiag.Begin(ctx, apidiag.ConcurrencySlot)
+		defer endSlot()
 		select {
 		case <-job.env.Context.Done():
 			d.finishWithoutReply(job)
@@ -350,13 +355,17 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 		case wsGlobalImageSlots <- struct{}{}:
 			defer func() { <-wsGlobalImageSlots }()
 		}
+		endSlot()
 	}
 
+	endLock := apidiag.Begin(ctx, apidiag.DatabaseLock)
 	unlock := lockMediaDBForAPIMethod(job.method)
+	endLock()
 	defer unlock()
 
 	result := processRequestObject(job.methodMap, *job.env, job.msg)
 	d.enqueueResponse(&wsResponseJob{
+		ctx: ctx, diagnostics: job.diagnostics,
 		result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
 	})
 }
@@ -396,6 +405,7 @@ func lockMediaDBForAPIMethod(method string) func() {
 
 func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
 	d.enqueueResponse(&wsResponseJob{
+		ctx: job.env.Context, diagnostics: job.diagnostics,
 		result:  requestResult{ShouldReply: false},
 		cs:      job.cs,
 		tracker: job.tracker,
@@ -406,15 +416,24 @@ func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
 
 func (d *wsSessionDispatcher) enqueueResponse(resp *wsResponseJob) {
 	resp.enqueuedAt = time.Now()
+	resp.endQueue = apidiag.Begin(resp.ctx, apidiag.ResponseQueue)
 	select {
 	case <-d.ctx.Done():
-		if resp.cancel != nil {
-			resp.cancel()
-		}
-		if resp.tracker != nil {
-			resp.tracker.RequestEnded()
-		}
+		resp.finish()
 	case d.responses <- resp:
+	}
+}
+
+func (resp *wsResponseJob) finish() {
+	if resp.endQueue != nil {
+		resp.endQueue()
+	}
+	resp.diagnostics.Finish()
+	if resp.cancel != nil {
+		resp.cancel()
+	}
+	if resp.tracker != nil {
+		resp.tracker.RequestEnded()
 	}
 }
 
@@ -440,14 +459,10 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 		Dur("responseQueueDuration", queueDuration(resp.enqueuedAt)).
 		Msg("websocket response dequeued")
 
-	defer func() {
-		if resp.cancel != nil {
-			resp.cancel()
-		}
-		if resp.tracker != nil {
-			resp.tracker.RequestEnded()
-		}
-	}()
+	defer resp.finish()
+	if resp.endQueue != nil {
+		resp.endQueue()
+	}
 
 	if resp.pong {
 		if err := writePong(d.session.Write, resp.cs); err != nil {
@@ -461,18 +476,30 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 		return
 	}
 
+	// The send helpers time marshaling and enqueueing separately. Melody's Write
+	// enqueues a frame; response_write does not claim socket delivery.
 	if resp.result.Error != nil {
-		if err := sendWSEncryptedError(d.session, resp.cs, resp.result.ID, *resp.result.Error); err != nil {
-			logWSWriteError(err, "error sending error response")
+		if err := sendWSEncryptedError(resp.ctx, d.session, resp.cs, resp.result.ID, *resp.result.Error); err != nil {
+			apidiag.RecordError(resp.ctx, err)
+			if !isAPIContextFailure(resp.ctx, err) {
+				logWSWriteError(err, "error sending error response")
+			}
 			closeMelodySession(d.session)
 		}
 	} else {
-		if err := sendWSEncryptedResponse(d.session, resp.cs, resp.result.ID, resp.result.Result); err != nil {
-			logWSWriteError(err, "error sending response")
+		if err := sendWSEncryptedResponse(
+			resp.ctx, d.session, resp.cs, resp.result.ID, resp.result.Result,
+		); err != nil {
+			apidiag.RecordError(resp.ctx, err)
+			if !isAPIContextFailure(resp.ctx, err) {
+				logWSWriteError(err, "error sending response")
+			}
 			closeMelodySession(d.session)
 		}
 	}
 	if resp.result.AfterWrite != nil {
+		endAfterWrite := apidiag.Begin(resp.ctx, apidiag.AfterWrite)
+		defer endAfterWrite()
 		resp.result.AfterWrite()
 	}
 }

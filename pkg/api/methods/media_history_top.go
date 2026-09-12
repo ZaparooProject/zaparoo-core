@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -73,7 +74,9 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 
 	entries, err := env.Database.UserDB.GetMediaHistoryTop(systemIDs, since, limit)
 	if err != nil {
-		log.Error().Err(err).Msg("error getting media history top")
+		if !apidiag.IsContextFailure(env.Context, err) {
+			log.Error().Err(err).Msg("error getting media history top")
+		}
 		return nil, fmt.Errorf("error getting media history top: %w", err)
 	}
 	mediaRefs := make([]mediaPathRef, 0, len(entries))

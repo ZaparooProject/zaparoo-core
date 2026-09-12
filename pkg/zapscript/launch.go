@@ -600,15 +600,22 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 
 	// assume given a list of system ids
 	systems := make([]systemdefs.System, 0, len(env.Cmd.Args))
+	var firstLookupErr error
 
 	for _, id := range env.Cmd.Args {
 		system, lookupErr := systemdefs.LookupSystem(id)
 		if lookupErr != nil {
-			log.Error().Err(lookupErr).Msgf("error looking up system: %s", id)
+			log.Warn().Err(lookupErr).Msgf("error looking up system: %s", id)
+			if firstLookupErr == nil {
+				firstLookupErr = fmt.Errorf("failed to lookup system %q: %w", id, lookupErr)
+			}
 			continue
 		}
 
 		systems = append(systems, *system)
+	}
+	if len(systems) == 0 && firstLookupErr != nil {
+		return platforms.CmdResult{}, firstLookupErr
 	}
 
 	mediaQuery := database.MediaQuery{Tags: tagFilters}

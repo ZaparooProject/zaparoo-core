@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -452,6 +453,60 @@ func TestInbox_CategoryUpsert_Integration(t *testing.T) {
 	messages, err = userDB.GetInboxMessages()
 	require.NoError(t, err)
 	assert.Len(t, messages, 3, "Should have 3 messages (category is per-profile)")
+}
+
+func TestInbox_CategoryUpsertConcurrent_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	const writers = 32
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	ids := make(chan int64, writers)
+	var writersDone sync.WaitGroup
+	writersDone.Add(writers)
+	for i := range writers {
+		go func() {
+			defer writersDone.Done()
+			<-start
+			msg := database.InboxMessage{
+				Title:     "Concurrent update",
+				Body:      "writer",
+				Category:  "concurrent-category",
+				ProfileID: 7,
+				CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+			}
+			inserted, err := userDB.AddInboxMessage(&msg)
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- inserted.DBID
+		}()
+	}
+	close(start)
+	writersDone.Wait()
+	close(errs)
+	close(ids)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var dbid int64
+	for id := range ids {
+		if dbid == 0 {
+			dbid = id
+		}
+		assert.Equal(t, dbid, id)
+	}
+	assert.Positive(t, dbid)
+	messages, err := userDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, dbid, messages[0].DBID)
 }
 
 func TestClientCRUD_Integration(t *testing.T) {

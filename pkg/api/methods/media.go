@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -579,7 +580,11 @@ func startPostIndexOptimization(
 	go func() {
 		defer mediaDB.BackgroundOperationDone()
 		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
-			log.Error().Err(err).Msg("post-index background optimization failed")
+			if database.IsOptimizationCanceled(err) {
+				log.Debug().Err(err).Msg("post-index background optimization canceled")
+			} else {
+				log.Error().Err(err).Msg("post-index background optimization failed")
+			}
 		}
 	}()
 	return nil
@@ -1027,6 +1032,8 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	log.Info().Msg("received media search request")
 	handlerStarted := time.Now()
 	semaphoreStarted := time.Now()
+	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
+	defer endSlot()
 
 	select {
 	case searchSem <- struct{}{}:
@@ -1035,6 +1042,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, env.Context.Err()
 	}
 	semaphoreDuration := time.Since(semaphoreStarted)
+	endSlot()
 
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {

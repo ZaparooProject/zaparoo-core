@@ -31,6 +31,7 @@ import (
 	"unicode"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -85,7 +86,7 @@ func (m *manager) executeCommand(
 		switch {
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			return failResult("execution_timeout")
-		case errors.Is(err, state.ErrLaunchInProgress):
+		case errors.Is(err, state.ErrLaunchInProgress), errors.Is(err, platforms.ErrScriptAlreadyRunning):
 			return operationResult{Status: "busy"}
 		case errors.Is(err, zapscript.ErrFileNotFound):
 			return failResult("media_not_found")

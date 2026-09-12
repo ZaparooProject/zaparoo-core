@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -65,6 +66,9 @@ func HandleReaderWrite(
 		r, err = readers.SelectWriterPreferred(allReaders, prefs)
 	}
 	if err != nil {
+		if errors.Is(err, readers.ErrNoWritableReader) {
+			return nil, fmt.Errorf("failed to select writer: %w", models.QuietClientErr(err))
+		}
 		return nil, models.ClientErrf("failed to select writer: %w", err)
 	}
 	readerID := r.ReaderID()
@@ -85,7 +89,7 @@ func HandleReaderWrite(
 		default:
 			log.Error().Err(err).Msg("error writing to reader")
 		}
-		return nil, errors.New("error writing to reader")
+		return nil, fmt.Errorf("%w", models.QuietClientErr(errors.New("error writing to reader")))
 	}
 
 	if t != nil {

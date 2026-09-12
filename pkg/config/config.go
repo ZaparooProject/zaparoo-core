@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
 	toml "github.com/pelletier/go-toml/v2"
@@ -36,6 +37,15 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+// Write beside the destination so replacement never exposes a partial TOML file.
+// A failed save must not remove the previously valid configuration.
+func writeConfigAtomically(fs afero.Fs, path string, data []byte) error {
+	if err := pathutil.WriteFileAtomic(fs, path, data, 0o600); err != nil {
+		return fmt.Errorf("save config atomically: %w", err)
+	}
+	return nil
+}
 
 const (
 	SchemaVersion       = 1
@@ -496,7 +506,7 @@ func (c *Instance) Save() error {
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
 	output := append([]byte(configHeader), data...)
-	if err := afero.WriteFile(c.getFs(), c.cfgPath, output, 0o600); err != nil {
+	if err := writeConfigAtomically(c.getFs(), c.cfgPath, output); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	return nil
@@ -570,7 +580,7 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 		return err
 	}
 
-	if err := afero.WriteFile(fs, c.authPath, data, 0o600); err != nil {
+	if err := writeConfigAtomically(fs, c.authPath, data); err != nil {
 		return fmt.Errorf("failed to write auth file: %w", err)
 	}
 
@@ -620,7 +630,7 @@ func (c *Instance) DeleteAuthEntries(domains []string) error {
 	if err != nil {
 		return err
 	}
-	if err := afero.WriteFile(fs, c.authPath, out, 0o600); err != nil {
+	if err := writeConfigAtomically(fs, c.authPath, out); err != nil {
 		return fmt.Errorf("failed to write auth file: %w", err)
 	}
 

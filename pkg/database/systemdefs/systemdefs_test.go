@@ -491,6 +491,7 @@ func TestLookupSystemNaturalLanguage(t *testing.T) {
 
 		// Nintendo systems
 		{"Super Nintendo", "Super Nintendo", "SNES"},
+		{"Super Nintendo Entertainment System", "Super Nintendo Entertainment System", "SNES"},
 		{"Super Famicom", "Super Famicom", "SNES"},
 		{"Nintendo Entertainment System", "Nintendo Entertainment System", "NES"},
 		{"Nintendo 64", "Nintendo 64", "Nintendo64"},

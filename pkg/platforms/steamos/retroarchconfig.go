@@ -25,10 +25,6 @@ func ensureNativeRetroArchSystemConfigs(
 	zaparooConfigDir string,
 	cores []sharedretroarch.CoreLaunch,
 ) error {
-	contents, err := sharedretroarch.ConfigForProfile(sharedretroarch.ConfigProfileLowLatency)
-	if err != nil {
-		return fmt.Errorf("build low-latency RetroArch profile: %w", err)
-	}
 	if err := fs.MkdirAll(zaparooConfigDir, 0o750); err != nil {
 		return fmt.Errorf("create Zaparoo config directory: %w", err)
 	}
@@ -43,7 +39,7 @@ func ensureNativeRetroArchSystemConfigs(
 			continue
 		}
 		path := nativeRetroArchSystemConfigPath(zaparooConfigDir, systemID)
-		if err := afero.WriteFile(fs, path, []byte(contents), 0o600); err != nil {
+		if err := sharedretroarch.EnsureConfigProfile(fs, path, sharedretroarch.ConfigProfileLowLatency); err != nil {
 			return fmt.Errorf("write native RetroArch config for %s: %w", systemID, err)
 		}
 		written[systemID] = struct{}{}

@@ -30,10 +30,11 @@ import (
 )
 
 var (
-	ErrNoActiveMedia         = errors.New("no active media")
-	ErrNoLauncher            = errors.New("no launcher associated with active media")
-	ErrNoControlCapabilities = errors.New("no control capabilities")
-	ErrNoLauncherCache       = errors.New("launcher cache not available")
+	ErrNoActiveMedia            = errors.New("no active media")
+	ErrNoLauncher               = errors.New("no launcher associated with active media")
+	ErrNoControlCapabilities    = errors.New("no control capabilities")
+	ErrUnsupportedControlAction = errors.New("not supported by launcher")
+	ErrNoLauncherCache          = errors.New("launcher cache not available")
 )
 
 //nolint:gocritic // single-use parameter in command handler
@@ -73,7 +74,7 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	control, ok := launcher.Controls[action]
 	if !ok {
-		return platforms.CmdResult{}, fmt.Errorf("action %q not supported by launcher %s", action, launcherID)
+		return platforms.CmdResult{}, fmt.Errorf("action %q %w %s", action, ErrUnsupportedControlAction, launcherID)
 	}
 
 	// Build control params from advargs, stripping the global "when" key

@@ -20,6 +20,9 @@
 package tty2oled
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -34,6 +37,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.bug.st/serial"
@@ -41,7 +46,9 @@ import (
 
 type recordingSerialPort struct {
 	*testutils.MockSerialPort
-	writes [][]byte
+	writeErr error
+	onWrite  func()
+	writes   [][]byte
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -60,6 +67,12 @@ func (*recordingSerialPort) SetMode(*serial.Mode) error {
 
 func (p *recordingSerialPort) Write(data []byte) (int, error) {
 	p.writes = append(p.writes, append([]byte(nil), data...))
+	if p.onWrite != nil {
+		p.onWrite()
+	}
+	if p.writeErr != nil {
+		return 0, p.writeErr
+	}
 	return len(data), nil
 }
 
@@ -541,6 +554,53 @@ func TestOnMediaChange_DuplicateMedia(t *testing.T) {
 	})
 
 	assert.NoError(t, err, "duplicate media should not error, just skip")
+}
+
+func TestOperationWorker_ClearDisplay(t *testing.T) {
+	// Serial subtests own the logger; wait for the worker before inspecting output.
+	for _, tc := range []struct {
+		err  error
+		name string
+	}{
+		{name: "clear"},
+		{name: "serial failure", err: errors.New("serial write failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			oldLogger, oldLevel := log.Logger, zerolog.GlobalLevel()
+			log.Logger = zerolog.New(&output)
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = oldLogger; zerolog.SetGlobalLevel(oldLevel) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			port := newRecordingSerialPort()
+			port.writeErr = tc.err
+			port.onWrite = cancel
+			sm := NewStateManager()
+			sm.ForceState(StateConnected)
+			reader := &Reader{
+				port: port, stateManager: sm,
+				operationQueue: make(chan MediaOperation, 1), operationWorkerCtx: ctx,
+			}
+			require.NoError(t, reader.OnMediaChange(nil))
+			reader.wg.Add(1)
+			go reader.operationWorker()
+			reader.wg.Wait()
+
+			require.Len(t, port.writes, 1, "queued clear must reach serial port")
+			assert.Equal(t, CmdClearShow+CommandTerminator, string(port.writes[0]))
+			assert.NotContains(t, output.String(), "operation.media is nil")
+			assert.False(t, reader.operationInProgress)
+			if tc.err == nil {
+				assert.NotContains(t, output.String(), `"level":"error"`)
+			} else {
+				assert.Contains(t, output.String(), `"level":"error"`)
+				assert.Contains(t, output.String(), "Failed to process queued media operation")
+				assert.Contains(t, output.String(), tc.err.Error())
+			}
+		})
+	}
 }
 
 func TestOnMediaChange_NilMedia(t *testing.T) {

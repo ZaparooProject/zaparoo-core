@@ -42,6 +42,15 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// ErrScannerUnavailable identifies an absent optional scanner source, not a
+// configuration or I/O failure. Scanning remains incomplete so existing media
+// is preserved. Return this directly, without joining it with another failure.
+var ErrScannerUnavailable = errors.New("optional scanner source is unavailable")
+
+// ErrScriptAlreadyRunning reports a script launch refused because the platform's
+// script runner is occupied. The caller must still receive the refusal.
+var ErrScriptAlreadyRunning = errors.New("a script is already running")
+
 // ErrStopFailed reports that a stop was attempted and did not succeed: the
 // media is still running. Callers must not treat the media as stopped, and
 // platforms returning it must leave active media in place so Core's state

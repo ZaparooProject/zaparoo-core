@@ -27,10 +27,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,7 +207,7 @@ func TestLaunchFileRejectsControlCharacters(t *testing.T) {
 			t.Parallel()
 
 			var command bytes.Buffer
-			err := launchFile(afero.NewMemMapFs(), &command, path)
+			err := launchFile(afero.NewMemMapFs(), &command, path, true)
 			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
 		})
 	}
@@ -220,13 +222,81 @@ func TestLaunchFileRejectsMissingTarget(t *testing.T) {
 
 			path := filepath.Join("media", "fat", "missing"+ext)
 			var command bytes.Buffer
-			err := launchFile(afero.NewMemMapFs(), &command, path)
+			err := launchFile(afero.NewMemMapFs(), &command, path, true)
 
 			require.ErrorContains(t, err, "launch file not accessible")
 			require.ErrorIs(t, err, os.ErrNotExist)
+			require.ErrorIs(t, err, zapscript.ErrFileNotFound)
 			require.Empty(t, command.String())
 		})
 	}
+}
+
+type launchStatErrorFS struct {
+	afero.Fs
+	err error
+}
+
+func (fs launchStatErrorFS) Stat(path string) (os.FileInfo, error) {
+	return nil, &os.PathError{Op: "stat", Path: path, Err: fs.err}
+}
+
+func TestLaunchFileErrorClassification(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		cause     error
+		name      string
+		requested bool
+		expected  bool
+	}{
+		{name: "missing requested file", cause: os.ErrNotExist, requested: true, expected: true},
+		{name: "missing generated MGL", cause: os.ErrNotExist},
+		{name: "requested file permission denied", cause: os.ErrPermission, requested: true},
+		{name: "requested file disk I/O error", cause: syscall.EIO, requested: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join("media", "fat", "game.mgl")
+			fs := launchStatErrorFS{Fs: afero.NewMemMapFs(), err: tt.cause}
+			var command bytes.Buffer
+			err := launchFile(fs, &command, path, tt.requested)
+
+			require.ErrorIs(t, err, tt.cause)
+			if tt.expected {
+				require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+			} else {
+				require.NotErrorIs(t, err, zapscript.ErrFileNotFound)
+			}
+			var pathErr *os.PathError
+			require.ErrorAs(t, err, &pathErr)
+			require.EqualError(t, err, "launch file not accessible: "+pathErr.Error())
+			assert.Empty(t, command.String())
+		})
+	}
+}
+
+func TestLaunchGeneratedFileMissingIsUnexpected(t *testing.T) {
+	t.Parallel()
+
+	err := launchGeneratedFile(filepath.Join(t.TempDir(), ".LASTLAUNCH.mgl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NotErrorIs(t, err, zapscript.ErrFileNotFound)
+}
+
+func TestLaunchFileMissingCommandInterfaceIsUnexpected(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("media", "fat", "game.mra")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
+
+	err := launchFile(fs, newCommandInterfaceWriter(fs), path, true)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NotErrorIs(t, err, zapscript.ErrFileNotFound)
+	require.ErrorContains(t, err, "failed to open command interface")
 }
 
 func TestLaunchFileWritesCommand(t *testing.T) {
@@ -238,10 +308,36 @@ func TestLaunchFileWritesCommand(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
 
 	var command bytes.Buffer
-	err := launchFile(fs, &command, path)
+	err := launchFile(fs, &command, path, true)
 
 	require.NoError(t, err)
 	require.Equal(t, "load_core "+path+"\n", command.String())
+}
+
+func TestLaunchGeneratedMGLForROMInsideZip(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := t.TempDir()
+	zipPath := filepath.Join(root, "games", "NES", "collection.zip")
+	romPath := filepath.Join(zipPath, "game.nes")
+	mglPath := filepath.Join(root, ".LASTLAUNCH.mgl")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o755))
+	require.NoError(t, afero.WriteFile(fs, zipPath, nil, 0o600))
+
+	core, err := cores.GetCore("NES")
+	require.NoError(t, err)
+	mgl, err := GenerateMgl(core, "_Console/NES", romPath, "")
+	require.NoError(t, err)
+	assert.Contains(t, mgl, romPath)
+	require.NoError(t, afero.WriteFile(fs, mglPath, []byte(mgl), 0o600))
+	_, err = fs.Stat(romPath)
+	require.Error(t, err, "archive members are not ordinary filesystem paths")
+
+	var command bytes.Buffer
+	err = launchFile(fs, &command, mglPath, false)
+	require.NoError(t, err)
+	assert.Equal(t, "load_core "+mglPath+"\n", command.String())
 }
 
 func TestCommandInterfaceWriter(t *testing.T) {

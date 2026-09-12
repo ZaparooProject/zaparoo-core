@@ -21,6 +21,8 @@ package mediadb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/rs/zerolog/log"
 )
@@ -46,7 +48,10 @@ func (db *MediaDB) prefetchSearchPages(ctx context.Context) error {
 		//nolint:gosec // table names are hardcoded literals, not user input
 		if err := db.sql.Load().QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return errors.Join(err, ctx.Err())
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("prefetch %s: %w", table, err)
 			}
 			log.Warn().Err(err).Str("table", table).Msg("page prefetch failed, skipping")
 			continue

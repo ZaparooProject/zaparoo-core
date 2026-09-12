@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -276,12 +277,15 @@ func parseBrowseTagFilters(rawTags *[]string) ([]zapscript.TagFilter, error) {
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMedia(env requests.RequestEnv) (result any, resultErr error) {
+	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
+	defer endSlot()
 	select {
 	case browseSem <- struct{}{}:
 		defer func() { <-browseSem }()
 	case <-env.Context.Done():
 		return nil, env.Context.Err()
 	}
+	endSlot()
 
 	var params models.BrowseParams
 	if len(env.Params) > 0 {

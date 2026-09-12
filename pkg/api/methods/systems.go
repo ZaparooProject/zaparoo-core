@@ -20,6 +20,8 @@
 package methods
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -88,6 +90,9 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 			}
 			mediaCountsAvailable = true
 		} else {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, fmt.Errorf("error getting system media counts: %w", err)
+			}
 			log.Error().Err(err).Msg("error getting system media counts")
 			indexed, err = env.Database.MediaDB.IndexedSystems()
 			if err != nil {

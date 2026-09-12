@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,6 +193,7 @@ func TestClassifyHandlerError(t *testing.T) {
 		wantCode   string
 	}{
 		{err: state.ErrLaunchInProgress, wantStatus: "busy"},
+		{err: platforms.ErrScriptAlreadyRunning, wantStatus: "busy"},
 		{err: methods.ErrForbidden, wantStatus: "failed", wantCode: "forbidden"},
 		{err: context.DeadlineExceeded, wantStatus: "failed", wantCode: "timeout"},
 		{err: context.Canceled, wantStatus: "failed", wantCode: "timeout"},

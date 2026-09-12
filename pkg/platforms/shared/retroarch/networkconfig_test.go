@@ -20,6 +20,7 @@
 package retroarch
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -27,6 +28,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type rejectedConfigReplacementFS struct{ afero.Fs }
+
+func (rejectedConfigReplacementFS) Rename(string, string) error { return os.ErrPermission }
+
+func TestConfigReplacementFailurePreservesOverlay(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("settings", "overlay.cfg")
+	require.NoError(t, EnsureNetworkCommandConfig(fs, path))
+	original, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	err = EnsureConfigProfile(rejectedConfigReplacementFS{fs}, path, ConfigProfileLowLatency)
+	require.ErrorIs(t, err, os.ErrPermission)
+	got, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, original, got)
+	files, err := afero.ReadDir(fs, filepath.Dir(path))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+}
 
 func TestConfigForProfile(t *testing.T) {
 	t.Parallel()

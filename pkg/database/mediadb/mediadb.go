@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
@@ -49,6 +50,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
+	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -1552,7 +1554,11 @@ func (db *MediaDB) SetIndexingStatus(status string) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingStatus(db.ctx, db.conn(), status)
+	operation := db.ActiveMediaWriteOperation()
+	inTransaction := db.tx != nil
+	started := time.Now()
+	err := sqlSetIndexingStatus(db.ctx, db.conn(), status)
+	return indexingStateLockError(err, "status", operation, inTransaction, time.Since(started))
 }
 
 func (db *MediaDB) GetIndexingStatus() (string, error) {
@@ -1704,7 +1710,9 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 		return fmt.Errorf("failed to remove corrupt media database: %w", err)
 	}
 
-	database.RemoveSidecars(db.dbPath)
+	if err := database.RemoveSidecars(db.dbPath); err != nil {
+		return fmt.Errorf("failed to remove corrupt media database sidecars: %w", err)
+	}
 
 	if err := db.Open(); err != nil {
 		return fmt.Errorf("failed to reopen media database after recreate: %w", err)
@@ -1875,7 +1883,24 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
+	operation := db.ActiveMediaWriteOperation()
+	inTransaction := db.tx != nil
+	started := time.Now()
+	err := sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
+	return indexingStateLockError(err, "systems", operation, inTransaction, time.Since(started))
+}
+
+// Capture only bounded state observations; none identifies the competing writer.
+func indexingStateLockError(
+	err error, field string, operation database.MediaWriteOperation, inTransaction bool, duration time.Duration,
+) error {
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked) {
+		return err
+	}
+	return fmt.Errorf("indexing %s write [sqlite_code=%d sqlite_extended_code=%d "+
+		"operation=%s transaction=%t sql_ms=%d]: %w",
+		field, int(sqliteErr.Code), int(sqliteErr.ExtendedCode), operation, inTransaction, duration.Milliseconds(), err)
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {
@@ -2254,67 +2279,76 @@ func (db *MediaDB) closeAllPreparedStatements() {
 	}
 }
 
-// closeAllBatchInserters closes all batch inserters and sets them to nil.
-func (db *MediaDB) closeAllBatchInserters() error {
+// closeAllBatchInserters releases batches, discarding on abort or after the first
+// flush failure so cleanup cannot write outside an automatically rolled-back transaction.
+func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 	var closeErrs []error
 	if db.batchInsertSystem != nil {
-		if closeErr := db.batchInsertSystem.Close(); closeErr != nil {
+		if closeErr := db.batchInsertSystem.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertSystem")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertSystem: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertSystem = nil
 	}
 	if db.batchInsertMediaTitle != nil {
-		if closeErr := db.batchInsertMediaTitle.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMediaTitle.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTitle")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTitle: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMediaTitle = nil
 	}
 	if db.batchInsertMedia != nil {
-		if closeErr := db.batchInsertMedia.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMedia.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMedia")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMedia: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMedia = nil
 	}
 	if db.batchInsertTag != nil {
-		if closeErr := db.batchInsertTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertTag = nil
 	}
 	if db.batchInsertTagType != nil {
-		if closeErr := db.batchInsertTagType.Close(); closeErr != nil {
+		if closeErr := db.batchInsertTagType.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTagType")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTagType: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertTagType = nil
 	}
 	if db.batchInsertMediaTag != nil {
-		if closeErr := db.batchInsertMediaTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertMediaTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertMediaTag = nil
 	}
 	if db.batchInsertScanStage != nil {
-		if closeErr := db.batchInsertScanStage.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanStage.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanStage")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanStage: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertScanStage = nil
 	}
 	if db.batchInsertScanTag != nil {
-		if closeErr := db.batchInsertScanTag.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanTag.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanTag")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanTag: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertScanTag = nil
 	}
 	if db.batchInsertScanProperty != nil {
-		if closeErr := db.batchInsertScanProperty.Close(); closeErr != nil {
+		if closeErr := db.batchInsertScanProperty.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanProperty")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanProperty: %w", closeErr))
 		}
@@ -2457,8 +2491,8 @@ func (db *MediaDB) rollbackTransactionLocked() error {
 	}
 
 	db.closeAllPreparedStatements()
-	batchErr := db.closeAllBatchInserters()
-	rbErr := db.tx.Rollback()
+	batchErr := db.closeAllBatchInserters(false)
+	rbErr := rollbackSQLTransaction(db.tx, db.txConn)
 	db.clearTransactionState()
 	connErr := db.releaseWriterConn()
 	return errors.Join(batchErr, rbErr, connErr)
@@ -2742,10 +2776,15 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return nil // No active transaction
 	}
 
+	if sqliteTransactionEnded(db.txConn) {
+		cleanupErr := db.rollbackTransactionLocked()
+		return errors.Join(errors.New("cannot commit: SQLite transaction already ended"), cleanupErr)
+	}
+
 	flushStart := time.Now()
 	// Flush all batch inserters before committing (if any were created).
 	if db.batchInsertSystem != nil {
-		if closeErr := db.closeAllBatchInserters(); closeErr != nil {
+		if closeErr := db.closeAllBatchInserters(true); closeErr != nil {
 			cleanupErr := db.rollbackTransactionLocked()
 			return errors.Join(fmt.Errorf("failed to flush batch inserts: %w", closeErr), cleanupErr)
 		}
@@ -3013,11 +3052,12 @@ var (
 // connection for the whole request replaces those with a single wait, and the
 // statements then see a consistent snapshot as a side benefit.
 type browseCall struct {
-	started time.Time
-	conn    browseConn
-	op      string
-	wait    time.Duration
-	routes  int
+	endDiagnostic func()
+	started       time.Time
+	conn          browseConn
+	op            string
+	wait          time.Duration
+	routes        int
 }
 
 // browseConn is the connection a browse runs its statements on, carrying the
@@ -3055,21 +3095,25 @@ func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*bro
 		return nil, ErrNullSQL
 	}
 	started := time.Now()
+	endWait := apidiag.Begin(ctx, apidiag.DatabasePool)
 	conn, err := sqlDB.Conn(ctx)
+	endWait()
 	wait := time.Since(started)
 	if err != nil {
 		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
 	}
 	return &browseCall{
-		conn:    browseConn{Conn: conn, pool: sqlDB},
-		op:      op,
-		routes:  routes,
-		started: started,
-		wait:    wait,
+		endDiagnostic: apidiag.Begin(ctx, apidiag.Database),
+		conn:          browseConn{Conn: conn, pool: sqlDB},
+		op:            op,
+		routes:        routes,
+		started:       started,
+		wait:          wait,
 	}, nil
 }
 
 func (c *browseCall) finish(db *MediaDB) {
+	defer c.endDiagnostic()
 	if err := c.conn.Close(); err != nil {
 		log.Warn().Err(err).Str("op", c.op).Msg("failed to release browse connection")
 	}
@@ -3376,6 +3420,8 @@ func (db *MediaDB) SearchMediaWithFilters(
 	ctx context.Context,
 	filters *database.SearchFilters,
 ) ([]database.SearchResultWithCursor, error) {
+	endDiagnostic := apidiag.Begin(ctx, apidiag.Database)
+	defer endDiagnostic()
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
@@ -3592,6 +3638,8 @@ func (db *MediaDB) slugCacheSearch(
 func (db *MediaDB) SearchMediaBySlug(
 	ctx context.Context, systemID string, slug string, tagFilters []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
+	endDiagnostic := apidiag.Begin(ctx, apidiag.Database)
+	defer endDiagnostic()
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
@@ -3890,7 +3938,11 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	if db.sql.Load() == nil {
 		return systems, ErrNullSQL
 	}
-	return sqlIndexedSystems(db.ctx, db.sql.Load())
+	systems, err := sqlIndexedSystems(db.ctx, db.sql.Load())
+	if database.IsCorruptionError(err) {
+		db.NoteCorruption(err)
+	}
+	return systems, err
 }
 
 func (db *MediaDB) SystemMediaCounts(
@@ -3904,9 +3956,16 @@ func (db *MediaDB) SystemMediaCounts(
 	if len(tagFilters) > 0 {
 		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
 		if visibilityErr != nil {
+			if database.IsCorruptionError(visibilityErr) {
+				db.NoteCorruption(visibilityErr)
+			}
 			return nil, visibilityErr
 		}
-		return sqlSystemMediaCounts(ctx, db.sql.Load(), scoped)
+		counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), scoped)
+		if database.IsCorruptionError(err) {
+			db.NoteCorruption(err)
+		}
+		return counts, err
 	}
 	// The untagged totals are cached per index generation and shared with random
 	// weighting, so subtract hidden media from them rather than re-aggregating
@@ -3942,6 +4001,9 @@ func (db *MediaDB) cachedSystemMediaCounts(ctx context.Context) ([]database.Syst
 	generation := db.systemMediaCountsGen.Load()
 	counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), nil)
 	if err != nil {
+		if database.IsCorruptionError(err) {
+			db.NoteCorruption(err)
+		}
 		return nil, err
 	}
 	if generation == db.systemMediaCountsGen.Load() {
@@ -4637,6 +4699,25 @@ func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFull
 	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID)
 }
 
+func logOptimizationFailure(err error, message string) {
+	if database.IsOptimizationCanceled(err) {
+		log.Debug().Err(err).Msg(message)
+	} else {
+		log.Error().Err(err).Msg(message)
+	}
+}
+
+func (db *MediaDB) waitOptimizationRetry(delay time.Duration) error {
+	timer := db.clock.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-db.ctx.Done():
+		return db.ctx.Err()
+	case <-timer.Chan():
+		return nil
+	}
+}
+
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.
@@ -4649,7 +4730,7 @@ func (db *MediaDB) RunBackgroundOptimization(
 		return
 	}
 	if err := db.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
-		log.Error().Err(err).Msg("background optimization failed")
+		logOptimizationFailure(err, "background optimization failed")
 	}
 }
 
@@ -4673,6 +4754,11 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	if !lease.ValidFor(database.MediaWriteOperationOptimization) {
 		lease.Release()
 		return database.ErrMediaWriteLease
+	}
+	if db.ctx != nil && database.IsOptimizationCanceled(db.ctx.Err()) {
+		lease.Release()
+		notifyOptimizationStatus(statusCallback, false)
+		return db.ctx.Err()
 	}
 
 	db.isOptimizing.Store(true)
@@ -4740,7 +4826,10 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 				_ = db.SetOptimizationStatus(IndexingStatusFailed)
 			}
 			runErr = fmt.Errorf("background optimization panic: %v", r)
-			notifyOptimizationStatus(statusCallback, false)
+		}
+		notifyOptimizationStatus(statusCallback, false)
+		if database.IsOptimizationCanceled(runErr) {
+			log.Debug().Err(runErr).Msg("background optimization canceled; retaining checkpoint")
 		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
@@ -4749,9 +4838,6 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	if db.sql.Load() == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
-		if statusCallback != nil {
-			statusCallback(false)
-		}
 		return ErrNullSQL
 	}
 
@@ -4759,10 +4845,7 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	// Set status to running
 	if err := db.SetOptimizationStatus(IndexingStatusRunning); err != nil {
-		log.Error().Err(err).Msg("failed to set optimization status to running")
-		if statusCallback != nil {
-			statusCallback(false)
-		}
+		logOptimizationFailure(err, "failed to set optimization status to running")
 		return fmt.Errorf("failed to set optimization status to running: %w", err)
 	}
 
@@ -4854,6 +4937,9 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 	// pragma_optimize/page_prefetch work already done on a previous boot.
 	startStep := 0
 	if persisted, stepErr := db.GetOptimizationStep(); stepErr != nil {
+		if database.IsOptimizationCanceled(stepErr) {
+			return fmt.Errorf("read optimization checkpoint: %w", stepErr)
+		}
 		log.Warn().Err(stepErr).Msg("failed to read persisted optimization step; starting from the first step")
 	} else if persisted != "" {
 		for i := range steps {
@@ -4875,54 +4961,64 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 
 	// Execute each step with retry logic
 	for _, step := range steps[startStep:] {
-		// Wait if paused (e.g. game is running)
+		if err := db.ctx.Err(); err != nil {
+			return err
+		}
+		// Wait if paused (e.g. game is running). Cancellation keeps the last
+		// checkpoint intact so the next run can resume unfinished work.
 		if err := pauser.Wait(db.ctx); err != nil {
-			log.Info().Msg("background optimization cancelled while paused")
-			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				if errors.Is(setErr, context.Canceled) {
-					log.Debug().Err(setErr).Msg("set optimization status to failed skipped (cancelled)")
-				} else {
-					log.Error().Err(setErr).Msg("failed to set optimization status to failed")
-				}
-			}
-			if statusCallback != nil {
-				statusCallback(false)
-			}
 			return fmt.Errorf("wait to run background optimization: %w", err)
 		}
 
 		log.Info().Msgf("running optimization step: %s", step.name)
 
 		if err := db.SetOptimizationStep(step.name); err != nil {
-			// A cancelled context here just means the service is shutting down
-			// mid-optimization; that's expected, so keep it out of Sentry.
-			if errors.Is(err, context.Canceled) {
-				log.Debug().Err(err).Msgf("set optimization step to %s skipped (cancelled)", step.name)
-			} else {
-				log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
+			if database.IsOptimizationCanceled(err) {
+				return err
 			}
+			log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
 		}
 
 		// Execute step with retry and exponential backoff
 		stepMetricsStart := stepRecorder.Capture(db.ctx, true)
 		var stepErr error
+		attempts := 0
 		for attempt := 0; attempt <= step.maxRetries; attempt++ {
+			if err := db.ctx.Err(); err != nil {
+				stepErr = errors.Join(stepErr, err)
+				break
+			}
+			attempts++
 			stepErr = step.fn()
 			if stepErr == nil {
 				break // Success
 			}
 
+			if database.IsOptimizationCanceled(stepErr) {
+				break
+			}
+			if err := db.ctx.Err(); err != nil {
+				stepErr = errors.Join(stepErr, err)
+				break
+			}
 			if attempt < step.maxRetries {
 				delay := step.retryDelay * time.Duration(1<<attempt) // Exponential backoff
 				log.Warn().Err(stepErr).Msgf("optimization step %s failed (attempt %d/%d), retrying in %v",
 					step.name, attempt+1, step.maxRetries+1, delay)
-				db.clock.Sleep(delay)
+				if err := db.waitOptimizationRetry(delay); err != nil {
+					stepErr = errors.Join(stepErr, err)
+					break
+				}
 			}
 		}
 
+		// A canceled step is unfinished, not failed. Keep its checkpoint.
+		if database.IsOptimizationCanceled(stepErr) {
+			return stepErr
+		}
 		// Final check after all retries
 		if stepErr != nil {
-			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
+			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, attempts)
 			// Database corruption can't be repaired by optimization. Route it to the
 			// same corrupt-database state the indexer uses so the app surfaces the
 			// repair/rebuild flow instead of repeatedly failing maintenance. The sidecar
@@ -4932,8 +5028,11 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 				log.Error().Strs("integrity", db.IntegrityReport()).
 					Msg("media database integrity check after optimization failure")
 				db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", step.name, stepErr))
-				if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
-					log.Error().Err(setErr).Msg("failed to mark media database as corrupt after optimization failure")
+				if !database.IsOptimizationCanceled(db.ctx.Err()) {
+					if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
+						logOptimizationFailure(setErr,
+							"failed to mark media database as corrupt after optimization failure")
+					}
 				}
 			}
 			// Clear the step before writing the failed status: a crash between the
@@ -4941,16 +5040,15 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 			// next boot's failure-resume would start mid-list and skip the steps
 			// before it. The reverse gap (step cleared, status still running) just
 			// re-runs everything from the first step.
-			if setErr := db.SetOptimizationStep(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear optimization step on failure")
-			}
-			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
-			}
-
-			// Notify that optimization has failed
-			if statusCallback != nil {
-				statusCallback(false)
+			if !database.IsOptimizationCanceled(db.ctx.Err()) {
+				if setErr := db.SetOptimizationStep(""); setErr != nil {
+					logOptimizationFailure(setErr, "failed to clear optimization step on failure")
+				}
+				if !database.IsOptimizationCanceled(db.ctx.Err()) {
+					if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
+						logOptimizationFailure(setErr, "failed to set optimization status to failed")
+					}
+				}
 			}
 			return stepErr
 		}
@@ -4962,19 +5060,20 @@ func (db *MediaDB) RunBackgroundOptimizationWithLease(
 		log.Info().Msgf("optimization step %s completed", step.name)
 	}
 
+	if err := db.ctx.Err(); err != nil {
+		return err
+	}
 	// Mark as completed
 	if err := db.SetOptimizationStatus(IndexingStatusCompleted); err != nil {
-		log.Error().Err(err).Msg("failed to set optimization status to completed")
+		logOptimizationFailure(err, "failed to set optimization status to completed")
 		return fmt.Errorf("failed to set optimization status to completed: %w", err)
 	}
 	// Clear optimization step on completion
 	if err := db.SetOptimizationStep(""); err != nil {
-		log.Error().Err(err).Msg("failed to clear optimization step on completion")
-	}
-
-	// Notify that optimization has completed
-	if statusCallback != nil {
-		statusCallback(false)
+		logOptimizationFailure(err, "failed to clear optimization step on completion")
+		if database.IsOptimizationCanceled(err) {
+			return err
+		}
 	}
 
 	log.Info().Msg("background database optimization completed")

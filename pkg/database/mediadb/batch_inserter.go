@@ -393,7 +393,18 @@ func (b *BatchInserter) flushSingleRow() error {
 
 // Close flushes remaining items and closes all cached statements
 func (b *BatchInserter) Close() error {
-	flushErr := b.Flush()
+	return b.finish(true)
+}
+
+// finish discards pending rows on abort. Flushing after SQLite auto-rollback can
+// otherwise write those rows outside the transaction in autocommit mode.
+func (b *BatchInserter) finish(flush bool) error {
+	var flushErr error
+	if flush {
+		flushErr = b.Flush()
+	}
+	b.buffer = nil
+	b.currentCount = 0
 	var firstCloseErr error
 	for rowCount, stmt := range b.stmtCache {
 		if closeErr := stmt.Close(); closeErr != nil {

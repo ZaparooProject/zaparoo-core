@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
@@ -44,10 +45,22 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "file not found", err: zapscript.ErrFileNotFound, expected: true},
 		{name: "no playlist active", err: zapscript.ErrNoPlaylistActive, expected: true},
 		{name: "launch in progress", err: state.ErrLaunchInProgress, expected: true},
+		{name: "script busy", err: platforms.ErrScriptAlreadyRunning, expected: true},
+		{
+			name: "wrapped script busy", err: fmt.Errorf("forward: %w", platforms.ErrScriptAlreadyRunning),
+			expected: true,
+		},
+		{name: "untyped similar error", err: errors.New("a script is already running"), expected: false},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, expected: true},
 		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
 		{name: "invalid script", err: zapscript.ErrInvalidScript, expected: true},
+		{name: "invalid advanced arguments", err: zapscript.ErrInvalidArguments, expected: true},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, expected: true},
+		{
+			name: "wrapped unsupported control action",
+			err:  fmt.Errorf("wrapped: %w", zapscript.ErrUnsupportedControlAction), expected: true,
+		},
+		{name: "untyped action error", err: errors.New("not supported by launcher"), expected: false},
 		{name: "command blocked", err: zapscript.ErrCommandBlocked, expected: true},
 		{name: "hook blocked launch", err: state.ErrLaunchBlockedByHook, expected: true},
 		{name: "launch panicked", err: errLaunchPanicked, expected: false},

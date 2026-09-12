@@ -26,6 +26,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -86,7 +87,9 @@ func HandleRemoteActivity(env requests.RequestEnv) (any, error) {
 
 	commands, err := env.Database.UserDB.ListRecentRemoteCommands(limit)
 	if err != nil {
-		log.Error().Err(err).Msg("error listing remote command activity")
+		if !apidiag.IsContextFailure(env.Context, err) {
+			log.Error().Err(err).Msg("error listing remote command activity")
+		}
 		return nil, fmt.Errorf("error listing remote command activity: %w", err)
 	}
 

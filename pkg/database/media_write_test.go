@@ -20,6 +20,9 @@
 package database
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +31,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsOptimizationCanceled(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err      error
+		name     string
+		canceled bool
+	}{
+		{name: "nil"},
+		{name: "canceled", err: context.Canceled, canceled: true},
+		{name: "wrapped", err: fmt.Errorf("status: %w", context.Canceled), canceled: true},
+		{name: "joined cancellations", err: errors.Join(context.Canceled, context.Canceled), canceled: true},
+		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "text", err: errors.New("context canceled")},
+		{name: "mixed", err: errors.Join(context.Canceled, errors.New("disk failure"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.canceled, IsOptimizationCanceled(tc.err)) })
+	}
+}
 
 func TestMediaWriteArbiterPairwiseConflicts(t *testing.T) {
 	operations := []MediaWriteOperation{

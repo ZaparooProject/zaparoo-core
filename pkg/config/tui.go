@@ -28,6 +28,7 @@ import (
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // TUIConfig holds TUI-specific configuration.
@@ -183,7 +184,7 @@ func SaveTUIConfig(configDir string) error {
 		return fmt.Errorf("failed to marshal TUI config: %w", err)
 	}
 
-	if err := os.WriteFile(tuiPath, data, 0o600); err != nil {
+	if err := writeConfigAtomically(afero.NewOsFs(), tuiPath, data); err != nil {
 		return fmt.Errorf("failed to write TUI config: %w", err)
 	}
 

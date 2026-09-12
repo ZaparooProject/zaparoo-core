@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -86,12 +87,15 @@ func HandleMediaBrowseIndex(env requests.RequestEnv) (any, error) { //nolint:goc
 
 //nolint:gocritic // Request environment is a per-handler value.
 func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error) {
+	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
+	defer endSlot()
 	select {
 	case browseSem <- struct{}{}:
 		defer func() { <-browseSem }()
 	case <-env.Context.Done():
 		return nil, env.Context.Err()
 	}
+	endSlot()
 
 	var params models.BrowseParams
 	if len(env.Params) > 0 {
