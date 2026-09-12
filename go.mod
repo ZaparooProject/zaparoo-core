@@ -31,7 +31,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
-	github.com/go-playground/validator/v10 v10.30.3
+	github.com/go-playground/validator/v10 v10.30.4
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
 	github.com/godbus/dbus/v5 v5.2.2
@@ -85,7 +85,7 @@ require (
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/fatih/color v1.18.0 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
@@ -109,7 +109,7 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
-	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
