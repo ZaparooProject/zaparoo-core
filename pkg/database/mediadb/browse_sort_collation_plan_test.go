@@ -232,7 +232,12 @@ func TestBrowseSortIndexRepair_MakesCursorPagesSeek(t *testing.T) {
 		"without the collation a cursor page must be sorting the folder; if that stops "+
 			"being true the repair below is no longer measuring anything:\n%s", before)
 
+	// Startup registers the worker before dispatch; its own tracking must not
+	// make the repair mistake itself for a competing writer.
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
 	require.NoError(t, mediaDB.EnsureBrowseSortIndex())
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
 
 	assert.Contains(t, browseSortIndexDDL(t, mediaDB), browseTitleCollationName,
 		"the repair must leave the collated index in place")
@@ -292,10 +297,32 @@ func TestBrowseSortIndexRepair_RunsWhileTheSlugCacheRecovers(t *testing.T) {
 	assert.Contains(t, browseSortIndexDDL(t, mediaDB), browseTitleCollationName,
 		"the repair must still install the collated index while the cache rebuilds")
 	assertCursorPageSeeks(t, cursorPagePlan(t, mediaDB, parentDir))
+}
 
-	// A media write still holds it off: that one drops the secondary indexes.
-	mediaDB.TrackBackgroundOperation()
-	defer mediaDB.BackgroundOperationDone()
-	assert.True(t, mediaDB.hasBackgroundWrites(),
-		"a tracked media write must still stop the repair racing an index drop")
+func TestBrowseSortIndexRepair_SkipsActiveWriter(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []database.MediaWriteOperation{
+		database.MediaWriteOperationIndexing,
+		database.MediaWriteOperationOptimization,
+		database.MediaWriteOperationMaintenance,
+		database.MediaWriteOperationRecovery,
+	} {
+		t.Run(string(operation), func(t *testing.T) {
+			t.Parallel()
+
+			mediaDB, cleanup := setupMigratedOnlyMediaDB(t)
+			defer cleanup()
+			before := browseSortIndexDDL(t, mediaDB)
+			require.NotContains(t, before, browseTitleCollationName)
+
+			lease, err := mediaDB.AcquireMediaWrite(operation)
+			require.NoError(t, err)
+			defer lease.Release()
+			require.NoError(t, mediaDB.EnsureBrowseSortIndex())
+			assert.Equal(t, before, browseSortIndexDDL(t, mediaDB),
+				"repair must not rebuild indexes while another writer owns the database")
+			assert.Equal(t, operation, mediaDB.ActiveMediaWriteOperation())
+		})
+	}
 }
