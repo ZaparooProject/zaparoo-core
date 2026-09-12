@@ -254,7 +254,11 @@ func repairBrowseSortIndex(mediaDB *mediadb.MediaDB) {
 	if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
 		return
 	}
+	// Register before dispatch so shutdown also waits for a worker that has not
+	// started inspecting the indexes yet.
+	mediaDB.TrackBackgroundOperation()
 	go func() {
+		defer mediaDB.BackgroundOperationDone()
 		if err := mediaDB.EnsureBrowseSortIndex(); err != nil {
 			log.Warn().Err(err).Msg("failed to rebuild the browse sort index; browsing large folders stays slow")
 		}

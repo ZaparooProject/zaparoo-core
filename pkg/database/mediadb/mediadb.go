@@ -1272,15 +1272,24 @@ func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
 //
 // Deliberately off the startup path: it is minutes of work on a large library
 // on SD. Skipped while indexing or optimization owns the database, because
-// CreateSecondaryIndexes runs at the end of that work anyway.
+// CreateSecondaryIndexes runs at the end of that work anyway. Callers running
+// this asynchronously must TrackBackgroundOperation before launching the worker
+// and call BackgroundOperationDone after it returns.
 func (db *MediaDB) EnsureBrowseSortIndex() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	if db.hasBackgroundWrites() {
+	// Use write ownership rather than background tracking: the caller already
+	// registered this worker for shutdown, which must not make it skip itself.
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationMaintenance)
+	if errors.Is(err, database.ErrMediaWriteConflict) {
 		log.Debug().Msg("skipping browse index check while background work owns the database")
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 
 	stale, err := db.missingSecondaryIndexes()
 	if err != nil {
@@ -1296,10 +1305,6 @@ func (db *MediaDB) EnsureBrowseSortIndex() error {
 	}
 	log.Info().Strs("indexes", names).
 		Msg("browse indexes are missing or predate their collation, building them so browsing and search stay fast")
-	// Tracked only around the build: taken any earlier and the
-	// HasBackgroundOperations check above would see this call's own tracking.
-	db.TrackBackgroundOperation()
-	defer db.BackgroundOperationDone()
 	started := time.Now()
 	if err := db.CreateSecondaryIndexes(); err != nil {
 		return fmt.Errorf("building browse indexes: %w", err)
@@ -5157,18 +5162,6 @@ func (db *MediaDB) HasBackgroundOperations() bool {
 	recovering := db.slugCacheState.worker != nil
 	db.slugCacheState.mu.Unlock()
 	return recovering || db.backgroundOpsCount.Load() > 0
-}
-
-// hasBackgroundWrites reports whether a media write operation owns the database.
-// The browse index repair has to stand back for one of those, because a full
-// index run drops the secondary indexes to keep bulk inserts fast and recreates
-// them at the end. It must not stand back for the slug cache rebuild, which is
-// a read-only in-memory pass that touches no index and starts at the same
-// moment the repair does: counting it would leave the repair silently skipping
-// every startup, and browsing large folders slow, for the one reason the repair
-// exists.
-func (db *MediaDB) hasBackgroundWrites() bool {
-	return db.backgroundOpsCount.Load() > 0
 }
 
 // BackgroundOperationDone decrements the background operations counter.
