@@ -159,6 +159,29 @@ func TestMakeDatabase_CompatibleMediaDBIsKept(t *testing.T) {
 	assert.Equal(t, "Test System", system.Name)
 }
 
+func TestRepairBrowseSortIndex_CloseWaitsForRepair(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pl, dataDir := newMediaDBPlatform(t)
+	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mediaDB.Close()) })
+	require.NoError(t, mediaDB.MigrateUp())
+
+	repairBrowseSortIndex(mediaDB)
+	require.NoError(t, mediaDB.Close(), "shutdown must join the entire repair worker")
+
+	conn, err := sql.Open("sqlite3", filepath.Join(dataDir, config.MediaDbFile))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	var indexDDL string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE name = 'idx_media_browse_sort'").Scan(&indexDDL))
+	assert.Contains(t, indexDDL, "ZAPAROO_TITLE_V1",
+		"repair must finish before Close returns, even when shutdown starts immediately")
+}
+
 // A user database from a newer build has to stay fatal: unlike the media
 // database, nothing can reconstruct what is in it, so starting up and writing
 // against a schema this build does not understand would lose data. The update
