@@ -61,11 +61,15 @@ func (env *scanBehaviorEnv) scanWithCompletion(t *testing.T, uid, text string) *
 func TestTapRelaunch_SameTargetPreservesStateAndChainedCommands(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
+	// A direct launch clears its prior playlist through the asynchronous playlist
+	// queue. Seed one so waiting for nil proves that clear has been consumed.
+	env.st.SetActivePlaylist(&playlists.Playlist{ID: "clear-on-first-launch"})
 	path := env.gamePath("game.rom")
 	first := env.scanWithCompletion(t, "first", path)
 	require.NoError(t, waitCompletion(t, first))
 	require.Equal(t, path, env.waitForLaunch(t))
 	env.waitForSoftwareToken(t)
+	env.waitForPlaylistCleared(t)
 	active := env.st.ActiveMedia()
 	owner := env.st.GetSoftwareToken()
 	playlist := &playlists.Playlist{ID: "keep-this-playlist"}
