@@ -74,37 +74,9 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 				return results, nil
 			}
 
-			// Scan GOG game directories
-			entries, err := os.ReadDir(gogPath)
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to read Chimera GOG directory")
-				return results, nil
-			}
-
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-
-				gameID := entry.Name()
-				gamePath := filepath.Join(gogPath, gameID)
-
-				// Look for game executable
-				startScript := findChimeraExecutable(gamePath)
-				if startScript != "" {
-					results = append(results, platforms.ScanResult{
-						Name: gameID, // TODO: Parse game name from info file if available
-						Path: virtualpath.CreateVirtualPath(shared.SchemeGOG, gameID, gameID),
-						Source: &platforms.MediaSource{
-							Path: gamePath, Root: gogPath, Kind: platforms.MediaSourceDirectory,
-						},
-						NoExt: true,
-					})
-				}
-			}
-
-			log.Debug().Msgf("found %d Chimera GOG games", len(results))
-			return results, nil
+			games := scanChimeraGOGGames(gogPath)
+			log.Debug().Msgf("found %d Chimera GOG games", len(games))
+			return append(results, games...), nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// Extract game ID from gog://game_id
@@ -140,6 +112,34 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 			return nil, nil
 		},
 	}
+}
+
+func scanChimeraGOGGames(gogPath string) []platforms.ScanResult {
+	entries, err := os.ReadDir(gogPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read Chimera GOG directory")
+		return nil
+	}
+	results := make([]platforms.ScanResult, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		gameID := entry.Name()
+		gamePath := filepath.Join(gogPath, gameID)
+		if findChimeraExecutable(gamePath) == "" {
+			continue
+		}
+		results = append(results, platforms.ScanResult{
+			Name: gameID, // TODO: Parse game name from info file if available
+			Path: virtualpath.CreateVirtualPath(shared.SchemeGOG, gameID, gameID),
+			Source: &platforms.MediaSource{
+				Path: gamePath, Root: gogPath, Kind: platforms.MediaSourceDirectory,
+			},
+			NoExt: true,
+		})
+	}
+	return results
 }
 
 // findChimeraExecutable looks for common executable names in a game directory.

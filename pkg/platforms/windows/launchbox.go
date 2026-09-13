@@ -194,6 +194,15 @@ type launchBoxGame struct {
 	ApplicationPath string `xml:"ApplicationPath"`
 }
 
+func launchBoxPluginXMLSources(
+	root, platformName string, findErr error,
+) map[string]*platforms.MediaSource {
+	if findErr != nil {
+		return nil
+	}
+	return launchBoxXMLSources(root, platformName)
+}
+
 func launchBoxXMLSources(root, platformName string) map[string]*platforms.MediaSource {
 	path := filepath.Join(root, "Data", "Platforms", platformName+".xml")
 	//nolint:gosec // LaunchBox root and platform name come from local configuration.
@@ -1381,7 +1390,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 
 			if pipe != nil && pipe.IsConnected() {
 				pluginSucceeded := false
-				launchBoxDir, _ := findLaunchBoxDir(cfg)
+				launchBoxDir, findErr := findLaunchBoxDir(cfg)
 				for _, lbSys := range platformsToQuery {
 					games, err := pipe.RequestGamesForPlatformSync(ctx, lbSys)
 					if err != nil {
@@ -1389,7 +1398,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 						continue
 					}
 					pluginSucceeded = true
-					sources := launchBoxXMLSources(launchBoxDir, lbSys)
+					sources := launchBoxPluginXMLSources(launchBoxDir, lbSys, findErr)
 					for _, game := range games {
 						// Add the primary game
 						results = append(results, platforms.ScanResult{

@@ -73,6 +73,22 @@ func TestSourceIndexAmbiguity(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestSourceIndexIgnoresIncompleteRows(t *testing.T) {
+	t.Parallel()
+	index := NewSourceIndex([]database.MediaSource{
+		{MediaDBID: 1, MediaPath: "not-virtual", SourceKey: "/games/one", Unique: true},
+		{MediaDBID: 2, MediaPath: "test://two/Two", Unique: true},
+	})
+	require.False(t, index.HasMedia("test://two/Two"))
+	_, ok := index.ForPath("/games/one")
+	require.False(t, ok)
+
+	var nilIndex *SourceIndex
+	require.False(t, nilIndex.HasMedia("test://two/Two"))
+	_, ok = nilIndex.ForPath("/games/one")
+	require.False(t, ok)
+}
+
 func TestVirtualMediaKey(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "scummvm://engine:game/", VirtualMediaKey("SCUMMVM://engine%3Agame/Changed%20name"))

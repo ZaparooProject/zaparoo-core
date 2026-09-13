@@ -31,7 +31,7 @@ import (
 func TestSteamAppMetadataSource(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()
-	library := filepath.Join(string(filepath.Separator), "library")
+	library := filepath.Join(t.TempDir(), "library")
 	game := filepath.Join(library, "steamapps", "common", "Game")
 	require.NoError(t, fs.MkdirAll(game, 0o750))
 	source := steamAppMetadataSource(fs, library, map[string]any{"installdir": "Game"})
@@ -45,7 +45,7 @@ func TestSteamAppMetadataSource(t *testing.T) {
 func TestSteamShortcutMetadataSource(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()
-	startDir := filepath.Join(string(filepath.Separator), "games", "Shortcut")
+	startDir := filepath.Join(t.TempDir(), "games", "Shortcut")
 	require.NoError(t, fs.MkdirAll(startDir, 0o750))
 	source := steamShortcutMetadataSource(fs, &vdfbinary.Shortcut{StartDir: startDir})
 	require.NotNil(t, source)
