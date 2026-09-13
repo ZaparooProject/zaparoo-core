@@ -467,7 +467,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 //nolint:gocritic // Preserve the existing service resume contract.
 func ResumeMediaScrape(env *requests.RequestEnv, operation database.ScrapingOperation) error {
-	_, err := startMediaScrapeOperation(env, &operation, true)
+	_, err := startMediaScrapeOperation(env, &operation, nil, true)
 	return err
 }
 
@@ -478,18 +478,21 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScrapeParams, runID string) (any, error) {
 	return startMediaScrapeOperation(env, &database.ScrapingOperation{
 		ScraperID: params.ScraperID, Systems: params.Systems, Force: params.Force, RunID: runID,
-	}, false)
+	}, params.Scope, false)
 }
 
 func startMediaScrapeOperation(
-	env *requests.RequestEnv, request *database.ScrapingOperation, resume bool,
+	env *requests.RequestEnv,
+	request *database.ScrapingOperation,
+	requestedScope *models.MediaScrapeScope,
+	resume bool,
 ) (any, error) {
 	operation := *request
 	if err := operation.Validate(); err != nil {
 		return nil, models.ClientErrf("invalid scraping operation options: %w", err)
 	}
 	params := models.MediaScrapeParams{
-		ScraperID: operation.ScraperID, Systems: operation.Systems, Force: operation.Force,
+		Scope: requestedScope, ScraperID: operation.ScraperID, Systems: operation.Systems, Force: operation.Force,
 	}
 	// A resumed or queued job already carries a resolved scope; a fresh request
 	// resolves one from its parameters below.

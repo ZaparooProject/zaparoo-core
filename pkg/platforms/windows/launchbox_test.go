@@ -25,7 +25,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +36,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLaunchBoxPluginSourcesRequireDiscoveredDirectory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "Games", "Game.exe")
+	require.NoError(t, os.MkdirAll(filepath.Dir(appPath), 0o750))
+	require.NoError(t, os.WriteFile(appPath, []byte("game"), 0o600))
+	xmlPath := filepath.Join(root, "Data", "Platforms", "Windows.xml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(xmlPath), 0o750))
+	require.NoError(t, os.WriteFile(xmlPath, []byte(
+		`<LaunchBox><Game><ID>game-id</ID><Title>Game</Title>`+
+			`<ApplicationPath>Games\\Game.exe</ApplicationPath></Game></LaunchBox>`), 0o600))
+
+	require.Contains(t, launchBoxPluginXMLSources(root, "Windows", nil), "game-id")
+	require.Nil(t, launchBoxPluginXMLSources(root, "Windows", errors.New("not installed")),
+		"plugin results must remain source-less when LaunchBox directory discovery fails")
+}
 
 func TestPluginEventJSONSerialization(t *testing.T) {
 	t.Parallel()

@@ -201,6 +201,7 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 
 	result := files[:0]
 	positions := make(map[string]int, len(files))
+	sourceConflicts := make(map[string]bool)
 	for _, file := range files {
 		key := scanResultIdentity(file.Path)
 		position, found := positions[key]
@@ -220,6 +221,17 @@ func coalesceScanResults(systemID string, files []platforms.ScanResult) []platfo
 				Str("keptName", existing.Name).
 				Str("ignoredName", file.Name).
 				Msg("coalesced scan result with conflicting name")
+		}
+		if !sourceConflicts[key] {
+			switch {
+			case existing.Source == nil:
+				existing.Source = file.Source
+			case file.Source != nil && *existing.Source != *file.Source:
+				existing.Source = nil
+				sourceConflicts[key] = true
+				log.Warn().Str("system", systemID).Str("path", existing.Path).
+					Msg("coalesced scan result with conflicting media source provenance")
+			}
 		}
 		existing.NoExt = existing.NoExt || file.NoExt
 	}
@@ -1842,6 +1854,7 @@ func NewNamesIndexWithSources(
 				MediaType:    mediaType,
 				ProvidedName: file.Name,
 				PrefixPolicy: prefixPolicy,
+				Source:       file.Source,
 				NoExt:        file.NoExt,
 			})
 			insertDur += time.Since(insertStart)

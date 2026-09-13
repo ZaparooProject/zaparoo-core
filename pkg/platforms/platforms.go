@@ -293,10 +293,28 @@ type CmdResult struct {
 	Unsafe bool
 }
 
+type MediaSourceKind string
+
+const (
+	MediaSourceFile      MediaSourceKind = "file"
+	MediaSourceDirectory MediaSourceKind = "directory"
+)
+
+// MediaSource is optional local metadata provenance for virtual media. Path is
+// a file or directory anchor beneath Root; Kind makes lookup independent of
+// whether the configured target currently exists.
+type MediaSource struct {
+	Path string
+	Root string
+	Kind MediaSourceKind
+}
+
 // ScanResult is a result generated from a media database indexing files or
 // other media sources.
 type ScanResult struct {
-	// Path is the absolute path to this media.
+	// Source is optional local metadata provenance for a virtual launch URI.
+	Source *MediaSource
+	// Path is the absolute path or virtual launch URI for this media.
 	Path string
 	// Name is the display name of the media, shown to the users and used for
 	// search queries.

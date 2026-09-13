@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 type ScummVMGame struct {
 	TargetID    string // Section name, used to launch the game
 	Description string // Human-readable game title
+	Path        string // Configured game directory, used for metadata discovery
 }
 
 // findScummVMBinary searches for ScummVM executable in the ScummVM directory
@@ -58,7 +61,14 @@ func findScummVMBinary() (string, error) {
 
 // parseScummVMIni parses the scummvm.ini file and extracts game configurations
 func parseScummVMIni(iniPath string) ([]ScummVMGame, error) {
-	file, err := os.Open(iniPath) //nolint:gosec // Path is from const or config
+	return parseScummVMIniFS(context.Background(), afero.NewOsFs(), iniPath)
+}
+
+func parseScummVMIniFS(ctx context.Context, fs afero.Fs, iniPath string) ([]ScummVMGame, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := fs.Open(iniPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open scummvm.ini: %w", err)
 	}
@@ -71,8 +81,13 @@ func parseScummVMIni(iniPath string) ([]ScummVMGame, error) {
 	var games []ScummVMGame
 	var currentGame *ScummVMGame
 
-	scanner := bufio.NewScanner(file)
+	const maxIniSize = 16 << 20
+	limited := &io.LimitedReader{R: file, N: maxIniSize + 1}
+	scanner := bufio.NewScanner(limited)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		line := strings.TrimSpace(scanner.Text())
 
 		// Skip empty lines and comments
@@ -111,9 +126,11 @@ func parseScummVMIni(iniPath string) ([]ScummVMGame, error) {
 				key := strings.TrimSpace(parts[0])
 				value := strings.TrimSpace(parts[1])
 
-				// Extract description for human-readable name
-				if key == "description" {
+				switch key {
+				case "description":
 					currentGame.Description = value
+				case "path":
+					currentGame.Path = value
 				}
 			}
 		}
@@ -128,6 +145,12 @@ func parseScummVMIni(iniPath string) ([]ScummVMGame, error) {
 		return nil, fmt.Errorf("error reading scummvm.ini: %w", err)
 	}
 
+	if limited.N == 0 {
+		return nil, fmt.Errorf("scummvm.ini exceeds %d byte limit", maxIniSize)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return games, nil
 }
 
@@ -161,9 +184,10 @@ func scanScummVMGames(
 	for _, game := range games {
 		virtualPath := virtualpath.CreateVirtualPath(shared.SchemeScummVM, game.TargetID, game.Description)
 		results = append(results, platforms.ScanResult{
-			Path:  virtualPath,
-			Name:  game.Description,
-			NoExt: true, // Virtual paths have no extension
+			Path:   virtualPath,
+			Name:   game.Description,
+			Source: scummVMMetadataSource(game),
+			NoExt:  true, // Virtual paths have no extension
 		})
 	}
 

@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
@@ -66,6 +69,7 @@ type MediaPathFragments struct {
 // StageMediaPathParams contains parameters for StageMediaPath.
 type StageMediaPathParams struct {
 	Config       *config.Instance
+	Source       *platforms.MediaSource
 	DB           database.MediaDBI
 	Path         string
 	SystemID     string
@@ -92,6 +96,15 @@ func StageMediaPath(params *StageMediaPathParams) error {
 
 	metadata := mediadb.GenerateSlugMetadataFromTokens(params.MediaType, pf.Title, pf.Slug, pf.SlugTokens)
 
+	var source *database.ScanStagedSource
+	if params.Source != nil {
+		var sourceErr error
+		source, sourceErr = normalizeScanSource(pf.Path, params.Source)
+		if sourceErr != nil {
+			log.Warn().Err(sourceErr).Str("system", params.SystemID).Str("path", pf.Path).
+				Msg("ignoring invalid media source provenance")
+		}
+	}
 	staged := database.ScanStagedMedia{
 		Path:          pf.Path,
 		ParentDir:     mediadb.ParentDirForMediaPath(pf.Path),
@@ -103,11 +116,38 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		SlugWordCount: metadata.SlugWordCount,
 		Tags:          stagedTagsFromFragments(&pf, params.Config),
 		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
+		Source:        source,
 	}
 	if err := params.DB.StageScannedMedia(&staged); err != nil {
 		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)
 	}
 	return nil
+}
+
+func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*database.ScanStagedSource, error) {
+	if !strings.Contains(mediaPath, "://") {
+		return nil, errors.New("source provenance requires a virtual media path")
+	}
+	if source.Kind != platforms.MediaSourceFile && source.Kind != platforms.MediaSourceDirectory {
+		return nil, fmt.Errorf("invalid source kind %q", source.Kind)
+	}
+	if virtualpath.ContainsControlChar(source.Path) || virtualpath.ContainsControlChar(source.Root) {
+		return nil, errors.New("source path contains control character")
+	}
+	path := filepath.Clean(source.Path)
+	root := filepath.Clean(source.Root)
+	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
+		return nil, errors.New("source path and root must be absolute")
+	}
+	if filepath.Dir(root) == root {
+		return nil, errors.New("source root cannot be a filesystem root")
+	}
+	if !helpers.PathHasPrefix(path, root) {
+		return nil, errors.New("source path is outside source root")
+	}
+	return &database.ScanStagedSource{
+		Path: path, Key: helpers.NormalizePathForComparison(path), Root: root, Kind: string(source.Kind),
+	}, nil
 }
 
 func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []database.ScanStagedProperty {

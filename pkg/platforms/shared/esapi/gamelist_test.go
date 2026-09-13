@@ -176,6 +176,61 @@ func TestReadGameReferencesXMLFS(t *testing.T) {
 	assert.Equal(t, []GameReference{{Name: "Game", Path: "./game.rom"}}, references)
 }
 
+func TestGameListXMLBOM(t *testing.T) {
+	t.Parallel()
+
+	const body = `<gameList><game><name>Game</name><path>./game.rom</path></game></gameList>`
+	for _, tc := range []struct {
+		name  string
+		data  string
+		valid bool
+	}{
+		{name: "plain", data: body, valid: true},
+		{name: "BOM", data: "\xef\xbb\xbf" + body, valid: true},
+		{
+			name: "BOM with declaration", valid: true,
+			data: "\xef\xbb\xbf" + `<?xml version="1.0" encoding="UTF-8"?>` + "\r\n" + body,
+		},
+		{name: "duplicate BOM", data: "\xef\xbb\xbf\xef\xbb\xbf" + body},
+		{name: "BOM after whitespace", data: " \xef\xbb\xbf" + body},
+		{name: "trailing BOM", data: body + "\xef\xbb\xbf"},
+		{name: "trailing text", data: "\xef\xbb\xbf" + body + "suffix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			path := filepath.Join("lists", "gamelist.xml")
+			require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+			require.NoError(t, afero.WriteFile(fs, path, []byte(tc.data), 0o600))
+			validationErr := ValidateGameListXML([]byte(tc.data))
+			parsed, parseErr := ParseGameListXML([]byte(tc.data))
+			full, fullErr := ReadGameListXMLFS(fs, path)
+			refs, refsErr := ReadGameReferencesXMLFS(fs, path)
+			for _, err := range []error{validationErr, parseErr, fullErr, refsErr} {
+				if tc.valid {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, "character data outside gameList root element")
+				}
+			}
+			if tc.valid {
+				require.Len(t, parsed.Games, 1)
+				assert.Equal(t, "Game", parsed.Games[0].Name)
+				assert.Equal(t, parsed, full)
+				assert.Equal(t, []GameReference{{Name: "Game", Path: "./game.rom"}}, refs)
+			}
+		})
+	}
+}
+
+func TestGameListXMLBOMSizeLimit(t *testing.T) {
+	t.Parallel()
+	data := []byte("\xef\xbb\xbf<gameList/>" + strings.Repeat(" ", MaxGameListXMLSize-len("<gameList/>")))
+	require.ErrorIs(t, ValidateGameListXML(data), ErrGameListTooLarge)
+	_, err := ParseGameListXML(data)
+	require.ErrorIs(t, err, ErrGameListTooLarge)
+}
+
 func TestGameListXMLLimits(t *testing.T) {
 	t.Parallel()
 

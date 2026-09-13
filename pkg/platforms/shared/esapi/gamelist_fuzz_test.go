@@ -28,6 +28,10 @@ func FuzzParseGameListXML(f *testing.F) {
 	f.Add([]byte(`<gameList><game><boxart2d>./cover.png</boxart2d><box2d>./alias.png</box2d></game></gameList>`))
 	f.Add([]byte(`<gameList>`))
 	f.Add([]byte(`not xml`))
+	f.Add([]byte("\xef\xbb\xbf" + `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<gameList><game><path>./game.rom</path></game></gameList>`))
+	f.Add([]byte("\xef\xbb\xbf<gameList/>suffix"))
+	f.Add([]byte("\xef\xbb\xbf\xef\xbb\xbf<gameList/>"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > MaxGameListXMLSize {

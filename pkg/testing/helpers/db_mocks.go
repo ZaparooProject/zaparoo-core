@@ -2390,6 +2390,38 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	return []database.MediaWithFullPath{}, nil
 }
 
+func (m *MockMediaDBI) GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error) {
+	if !m.hasExpectedCall("GetMediaSourceRoots") {
+		return nil, nil
+	}
+	args := m.Called(ctx, systemID)
+	roots, ok := args.Get(0).([]string)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetMediaSourceRoots returned %T, want []string", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMediaSourceRoots failed: %w", err)
+	}
+	return roots, nil
+}
+
+func (m *MockMediaDBI) GetMediaSourcesForScrape(
+	ctx context.Context, systemID string, scope *database.ScrapeScope,
+) ([]database.MediaSource, error) {
+	if !m.hasExpectedCall("GetMediaSourcesForScrape") {
+		return nil, nil
+	}
+	args := m.Called(ctx, systemID, scope)
+	sources, ok := args.Get(0).([]database.MediaSource)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetMediaSourcesForScrape returned %T, want []database.MediaSource", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMediaSourcesForScrape failed: %w", err)
+	}
+	return sources, nil
+}
+
 func (m *MockMediaDBI) GetMissingMediaCount() (int, error) {
 	if !m.hasExpectedCall("GetMissingMediaCount") {
 		return 0, nil

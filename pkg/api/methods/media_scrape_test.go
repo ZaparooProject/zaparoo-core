@@ -969,6 +969,65 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	id := int64(42)
+	path := filepath.ToSlash(filepath.Join(t.TempDir(), "game.nes"))
+	row := database.MediaFullRow{
+		Media:  database.Media{DBID: id, Path: path},
+		System: database.System{DBID: 1, SystemID: "NES"},
+	}
+	expectedScope := &database.ScrapeScope{SystemID: "NES", Path: path, MediaID: id}
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystem", assertmock.Anything, id).Return(&row, nil).Once()
+	mockDB.On("SetScrapingOperation", assertmock.MatchedBy(func(operation database.ScrapingOperation) bool {
+		return operation.Scope != nil && *operation.Scope == *expectedScope
+	})).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "scope-scraper").Return(0, nil)
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	var gotOptions scraper.ScrapeOptions
+	scopeScraper := platforms.Scraper{
+		ID: "scope-scraper", Name: "Scope Scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			gotOptions = opts
+			go func() {
+				ch <- scraper.ScrapeUpdate{Done: true}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"scope-scraper": scopeScraper},
+		mockDB,
+		models.MediaScrapeParams{
+			ScraperID: "scope-scraper",
+			Scope:     &models.MediaScrapeScope{MediaID: &id},
+		},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	require.Equal(t, expectedScope, gotOptions.Scope)
+	require.Equal(t, []string{"NES"}, gotOptions.Systems)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrapeStatus_UsesPersistedRunningOperation(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()

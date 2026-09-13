@@ -191,9 +191,10 @@ func scanSteamAppsFS(fs afero.Fs, steamDir string) ([]platforms.ScanResult, erro
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", appID, appName),
-				Name:  appName,
-				NoExt: true,
+				Path:   virtualpath.CreateVirtualPath("steam", appID, appName),
+				Name:   appName,
+				Source: steamAppMetadataSource(fs, libraryPath, appState),
+				NoExt:  true,
 			})
 		}
 	}
@@ -212,6 +213,46 @@ func scanSteamAppsFS(fs afero.Fs, steamDir string) ([]platforms.ScanResult, erro
 		Msg("Steam app scan complete")
 
 	return results, nil
+}
+
+func steamAppMetadataSource(fs afero.Fs, libraryPath string, appState map[string]any) *platforms.MediaSource {
+	installDir, ok := appState["installdir"].(string)
+	installDir = strings.TrimSpace(installDir)
+	if !ok || installDir == "" || filepath.IsAbs(installDir) || virtualpath.ContainsControlChar(installDir) {
+		return nil
+	}
+	root := filepath.Join(libraryPath, "steamapps", "common")
+	path := filepath.Join(root, installDir)
+	rel, relErr := filepath.Rel(root, path)
+	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	return &platforms.MediaSource{Path: path, Root: root, Kind: platforms.MediaSourceDirectory}
+}
+
+func steamShortcutMetadataSource(fs afero.Fs, shortcut *vdfbinary.Shortcut) *platforms.MediaSource {
+	startDir := filepath.Clean(strings.Trim(strings.TrimSpace(shortcut.StartDir), `"`))
+	if filepath.IsAbs(startDir) && !virtualpath.ContainsControlChar(startDir) {
+		if info, err := fs.Stat(startDir); err == nil && info.IsDir() {
+			return &platforms.MediaSource{
+				Path: startDir, Root: filepath.Dir(startDir), Kind: platforms.MediaSourceDirectory,
+			}
+		}
+	}
+	executable := NormalizeShortcutExecutable(shortcut.Exe)
+	if !filepath.IsAbs(executable) || virtualpath.ContainsControlChar(executable) {
+		return nil
+	}
+	if info, err := fs.Stat(executable); err != nil || info.IsDir() {
+		return nil
+	}
+	return &platforms.MediaSource{
+		Path: executable, Root: filepath.Dir(executable), Kind: platforms.MediaSourceFile,
+	}
 }
 
 // NormalizeShortcutExecutable extracts and cleans a shortcut's executable
@@ -348,9 +389,8 @@ func scanSteamShortcutsFiltered(
 			bpid := (uint64(shortcut.AppID) << 32) | 0x02000000
 
 			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), shortcut.AppName),
-				Name:  shortcut.AppName,
-				NoExt: true,
+				Path: virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), shortcut.AppName),
+				Name: shortcut.AppName, Source: steamShortcutMetadataSource(fs, &shortcut), NoExt: true,
 			})
 		}
 	}

@@ -20,6 +20,10 @@
 package pinup
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
@@ -27,6 +31,12 @@ import (
 // ScanResults converts a library into indexable media. Every table becomes a
 // popper:// virtual path keyed by GameID; the display name is what users see.
 func ScanResults(lib Library) []platforms.ScanResult {
+	return ScanResultsWithRoot(lib, "")
+}
+
+// ScanResultsWithRoot adds local table-file provenance when Popper provides a
+// trustworthy games directory and filename.
+func ScanResultsWithRoot(lib Library, installRoot string) []platforms.ScanResult {
 	results := make([]platforms.ScanResult, 0, len(lib.Tables))
 	for i := range lib.Tables {
 		table := &lib.Tables[i]
@@ -34,11 +44,35 @@ func ScanResults(lib Library) []platforms.ScanResult {
 		if name == "" || virtualpath.ContainsControlChar(name) {
 			continue
 		}
+		emulator := lib.Emulators[table.EmulatorID]
 		results = append(results, platforms.ScanResult{
-			Path:  TablePath(table.ID, name),
-			Name:  name,
-			NoExt: true,
+			Path: TablePath(table.ID, name), Name: name,
+			Source: popperMetadataSource(installRoot, &emulator, table.FileName), NoExt: true,
 		})
 	}
 	return results
+}
+
+func popperMetadataSource(installRoot string, emulator *Emulator, fileName string) *platforms.MediaSource {
+	gamesDir := filepath.Clean(strings.Trim(strings.TrimSpace(emulator.GamesDir), `"`))
+	fileName = strings.Trim(strings.TrimSpace(fileName), `"`)
+	if gamesDir == "." || gamesDir == "" || fileName == "" ||
+		virtualpath.ContainsControlChar(gamesDir) || virtualpath.ContainsControlChar(fileName) {
+		return nil
+	}
+	if !filepath.IsAbs(gamesDir) {
+		if installRoot == "" {
+			return nil
+		}
+		gamesDir = filepath.Join(installRoot, gamesDir)
+	}
+	path := filepath.Clean(fileName)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(gamesDir, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	return &platforms.MediaSource{Path: path, Root: gamesDir, Kind: platforms.MediaSourceFile}
 }

@@ -295,6 +295,20 @@ type MediaFullRow struct {
 	Title MediaTitle
 }
 
+// MediaSource is scanner-owned local metadata provenance for an indexed
+// virtual Media row. Unique is computed across all present rows in the system
+// before any scrape scope is applied.
+type MediaSource struct {
+	MediaPath  string
+	SourcePath string
+	SourceKey  string
+	SourceRoot string
+	SourceKind string
+	MediaDBID  int64
+	SystemDBID int64
+	Unique     bool
+}
+
 // MediaUserData is the source-of-truth record for user-authored data about a
 // single media path: favourite/hidden preferences and any per-game launcher
 // override. It lives in UserDB (durable, power-loss safe) and is materialized
@@ -893,10 +907,20 @@ type ScanStagedProperty struct {
 	Text string
 }
 
+// ScanStagedSource is optional local metadata provenance for a virtual media
+// row, normalized before it reaches database staging.
+type ScanStagedSource struct {
+	Path string
+	Key  string
+	Root string
+	Kind string
+}
+
 // ScanStagedMedia is one scanned file's parsed fragments, staged into the
 // ScanStage/ScanStageTags tables for set-based reconcile against the media
 // tables. SecondarySlug is empty when the title has none.
 type ScanStagedMedia struct {
+	Source        *ScanStagedSource
 	Path          string
 	ParentDir     string
 	Slug          string
@@ -1295,6 +1319,11 @@ type MediaDBI interface {
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	// GetMediaSourceRoots returns distinct local metadata roots for present media in a system.
+	GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error)
+	// GetMediaSourcesForScrape returns source rows for a full system or optional scrape scope.
+	// Unique is evaluated against the full system before scope filtering.
+	GetMediaSourcesForScrape(ctx context.Context, systemID string, scope *ScrapeScope) ([]MediaSource, error)
 	// GetScrapeMedia selects present indexed media and their titles within an exact resolved scope.
 	GetScrapeMedia(ctx context.Context, scope ScrapeScope) ([]MediaFullRow, error)
 	// GetScopedScrapeMediaIDs selects sentinel or force-run markers without loading an entire system.

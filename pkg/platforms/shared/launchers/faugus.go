@@ -30,8 +30,9 @@ const (
 )
 
 type faugusGame struct {
-	GameID string `json:"gameid"`
-	Title  string `json:"title"`
+	GameID   string `json:"gameid"`
+	Title    string `json:"title"`
+	GamePath string `json:"gamepath"`
 }
 
 type faugusOptions struct {
@@ -150,8 +151,20 @@ func scanFaugusGames(path string) ([]platforms.ScanResult, error) {
 			!validApplicationField(title, maxFaugusFieldLength) {
 			continue
 		}
+		var source *platforms.MediaSource
+		gamePath := filepath.Clean(strings.TrimSpace(game.GamePath))
+		if filepath.IsAbs(gamePath) && !virtualpath.ContainsControlChar(gamePath) {
+			if info, statErr := os.Stat(gamePath); statErr == nil {
+				kind := platforms.MediaSourceFile
+				if info.IsDir() {
+					kind = platforms.MediaSourceDirectory
+				}
+				source = &platforms.MediaSource{Path: gamePath, Root: filepath.Dir(gamePath), Kind: kind}
+			}
+		}
 		results = append(results, platforms.ScanResult{
-			Name: title, Path: virtualpath.CreateVirtualPath(shared.SchemeFaugus, gameID, title), NoExt: true,
+			Name: title, Path: virtualpath.CreateVirtualPath(shared.SchemeFaugus, gameID, title),
+			Source: source, NoExt: true,
 		})
 	}
 	return results, nil
