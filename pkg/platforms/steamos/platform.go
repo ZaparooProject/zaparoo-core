@@ -23,10 +23,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamos
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -56,6 +58,10 @@ type runtimeBroker interface {
 	Start(context.Context, *steamruntime.Command) (*os.Process, error)
 	Stop(context.Context) error
 	Wait(context.Context, int) error
+	Serve() error
+	SetHostRegisteredHook(func(pid int))
+	Close()
+	HostPIDs() []int
 	Available() bool
 	HasActive() bool
 	Owns(int) bool
@@ -74,6 +80,7 @@ type Platform struct {
 	setActiveMedia            func(*models.ActiveMedia)
 	emulationOptionsOverride  *linuxemu.Options
 	backupSteamRoot           atomic.Pointer[string]
+	trackerReady              atomic.Pointer[steamtracker.PlatformIntegration]
 	retroArchAppendConfigPath string
 }
 
@@ -195,6 +202,32 @@ func (p *Platform) StartPost(
 	steamRoot := steam.NewClient(steam.DefaultSteamOSOptions()).FindSteamDir(cfg)
 	p.backupSteamRoot.Store(&steamRoot)
 
+	// Accept launch peers from here on, not from the first launch: a host has
+	// to be able to register while nothing is running. Ahead of the process
+	// scanner, which is allowed to fail without taking the platform with it.
+	if p.steamRuntime != nil {
+		// The hook goes on before the socket does. A frontend that is already
+		// running retries its registration about once a second, so it can
+		// arrive the instant Serve returns: setting the hook afterwards both
+		// races the accept loop and loses the first registration, which is
+		// the one that matters most. It reads the tracker through an atomic
+		// because it runs on that accept loop while startup is still
+		// building the rest of this.
+		p.steamRuntime.SetHostRegisteredHook(func(int) {
+			if tracker := p.trackerReady.Load(); tracker != nil {
+				tracker.ForgetIgnoredGames()
+			}
+		})
+		if err := p.steamRuntime.Serve(); err != nil {
+			log.Warn().Err(err).Msg("Steam Runtime socket unavailable; hosts cannot register")
+		}
+		// A frontend Steam started is a Steam app like any other, so the
+		// tracker sees it start and claims its reaper as the running game.
+		// Preempting that "game" for the next launch would terminate the very
+		// process asking for the launch.
+		p.SetProtectedProcess(p.ownsLaunchHost)
+	}
+
 	// Create shared process scanner for both Steam and emulator tracking
 	p.procScanner = procscanner.New()
 	if err := p.procScanner.Start(); err != nil {
@@ -211,6 +244,13 @@ func (p *Platform) StartPost(
 		steamRoot,
 	)
 	p.steamTracker.IgnoreExecutable(steamruntime.DefaultInstallPaths().Runtime)
+	// The frontend is a launcher, not something the user played.
+	p.steamTracker.IgnoreProcessTree(p.ownsLaunchHost)
+	// Detection and registration arrive in either order, so publish the
+	// tracker for the registration hook to find and revisit what was already
+	// tracked. Any registration that beat this still gets a second look,
+	// because the tracker has not started detecting yet.
+	p.trackerReady.Store(p.steamTracker)
 	p.steamTracker.Start()
 
 	// Start emulator tracker for EmuDeck/RetroDECK game detection
@@ -268,6 +308,10 @@ func (p *Platform) Stop() error {
 		p.procScanner.Stop()
 	}
 
+	if p.steamRuntime != nil {
+		p.steamRuntime.Close()
+	}
+
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()
 }
@@ -285,6 +329,65 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	}
 	//nolint:wrapcheck // Pass-through to shared Linux process manager.
 	return p.Base.StopActiveLauncher(intent)
+}
+
+// ownsLaunchHost reports whether pid is the registered launch host or one of
+// its ancestors, which is how the Steam reaper wrapping the frontend is
+// recognized without matching on an executable path: a launcher script would
+// otherwise protect every Steam game started through the same interpreter.
+func (p *Platform) ownsLaunchHost(pid int) bool {
+	if p.steamRuntime == nil || pid <= 0 {
+		return false
+	}
+	// Every connected host counts, not only the one that owns launches: a
+	// second frontend must not cost the first its protection.
+	for _, host := range p.steamRuntime.HostPIDs() {
+		if host == pid || processHasAncestor(host, pid) {
+			return true
+		}
+	}
+	return false
+}
+
+// processHasAncestor walks pid's parents looking for ancestor. Bounded: a
+// broken or racing /proc must not spin, and no real tree is this deep.
+func processHasAncestor(pid, ancestor int) bool {
+	const maxDepth = 24
+	for depth := 0; depth < maxDepth && pid > 1; depth++ {
+		parent, ok := processParent(pid)
+		if !ok {
+			return false
+		}
+		if parent == ancestor {
+			return true
+		}
+		pid = parent
+	}
+	return false
+}
+
+// processParent reads the parent pid out of /proc/<pid>/stat. The comm field
+// can itself contain spaces and brackets, so the fields after it are read
+// from the last ')' rather than by splitting the whole line.
+func processParent(pid int) (int, bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	commEnd := bytes.LastIndexByte(data, ')')
+	if commEnd < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(string(data[commEnd+1:]))
+	// After the comm field: state, ppid, ...
+	if len(fields) < 2 {
+		return 0, false
+	}
+	parent, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, false
+	}
+	return parent, true
 }
 
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
@@ -372,6 +475,16 @@ func (p *Platform) wrapSteamRuntime(launcher *platforms.Launcher) {
 		if err != nil {
 			return nil, fmt.Errorf("start Steam Runtime launch: %w", err)
 		}
+		// No focus handling here, for either peer. Both run the game inside
+		// a Steam-owned session, and Steam sets the compositor properties
+		// for the windows in one, so claiming them again is redundant. It is
+		// also unable to succeed: the pid Core holds is the launcher it
+		// started, and every emulator here is a Flatpak whose real window
+		// belongs to a process inside the sandbox with a different pid. On
+		// device that showed up as "timeout waiting for game window" five
+		// seconds after each launch, on a game that was already on screen.
+		// Direct launches keep their own ManageFocus, because nothing else
+		// is claiming the screen for those.
 		return process, nil
 	}
 	launcher.Lifecycle = platforms.LifecycleBlocking

@@ -669,3 +669,39 @@ func TestID(t *testing.T) {
 		})
 	}
 }
+
+// A tracked tree that turns out to be protected is dropped rather than
+// signalled, but stopping is still a full stop: callers are entitled to assume
+// nothing is active once this returns, so active media is cleared the same way
+// every other path clears it.
+func TestStopActiveLauncherSparesAProtectedTreeAndStillClears(t *testing.T) {
+	t.Parallel()
+
+	base := NewBase("test")
+	cleared := false
+	base.activeMedia = func() *models.ActiveMedia { return &models.ActiveMedia{Path: "steam://1"} }
+	base.setActiveMedia = func(media *models.ActiveMedia) { cleared = media == nil }
+	killed := false
+	base.lastLauncher = platforms.Launcher{Kill: func(*config.Instance) error {
+		killed = true
+		return nil
+	}}
+	base.SetProtectedProcess(func(pid int) bool { return pid == os.Getpid() })
+
+	self, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	base.SetTrackedProcess(self)
+	assert.Nil(t, base.trackedProcess, "a protected tree is never taken up in the first place")
+
+	// Track it behind the guard's back, the way the tracker does before the
+	// host has registered, then stop.
+	base.processMu.Lock()
+	base.trackedProcess = self
+	base.processMu.Unlock()
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
+
+	assert.True(t, cleared, "active media must still be cleared")
+	assert.False(t, killed, "a custom Kill must not reach the protected tree either")
+	assert.Nil(t, base.trackedProcess)
+	require.NoError(t, syscall.Kill(os.Getpid(), 0), "this process must survive")
+}

@@ -29,15 +29,71 @@ import (
 )
 
 const (
-	socketName              = "steam-runtime.sock"
-	phaseStarted            = "started"
-	phaseExited             = "exited"
-	phaseError              = "error"
-	protocolVersion         = 1
-	protocolLimit           = 64 * 1024
-	brokerTimeout           = 30 * time.Second
+	socketName      = "steam-runtime.sock"
+	hostSocketName  = "steam-launch-host.sock"
+	phaseStarted    = "started"
+	phaseExited     = "exited"
+	phaseError      = "error"
+	roleLaunch      = "launch"
+	roleHostLaunch  = "host-launch"
+	roleHost        = "host"
+	pokeLaunch      = "launch"
+	protocolVersion = 1
+	protocolLimit   = 64 * 1024
+	brokerTimeout   = 30 * time.Second
+	// A registered host only has to open a socket, so it answers in
+	// milliseconds or it is gone. Steam starting the shortcut is the slow
+	// case and keeps the full brokerTimeout.
+	hostTimeout             = 5 * time.Second
+	helloTimeout            = 10 * time.Second
 	runtimeCommandWaitDelay = 2 * time.Second
 )
+
+// hello is the first frame a peer sends after connecting, naming what the
+// connection is for.
+//
+// roleLaunch carries exactly one command: the broker sends it, the peer runs
+// it and reports the two phases, and the connection is done. The process Steam
+// starts from the Runtime shortcut opens one of these and nothing else.
+// roleHostLaunch is the same exchange opened by a standing host instead. It is
+// a separate role rather than bookkeeping on the broker's side because the two
+// can arrive out of order: a slow host whose launch was already given up on
+// can still turn up while the shortcut is being waited for. Reading which peer
+// answered off the connection itself is the only account that cannot get out
+// of step, and it decides who is signalled when the launch is stopped. The
+// shortcut process is disposable; a host is the frontend and must survive the
+// game it was asked to run.
+//
+// roleHost is a standing registration from a process that is already inside a
+// Steam session of its own and will open a roleHostLaunch connection whenever
+// it is poked. The frontend registers as a host when Steam started it, which
+// makes the Runtime shortcut redundant for as long as the frontend is on
+// screen: no second Steam app has to appear to own the emulator.
+type hello struct {
+	Role    string `json:"role"`
+	Version int    `json:"version"`
+}
+
+// poke asks a registered host to open a launch connection. It deliberately
+// carries no command. The command travels on the connection the host opens in
+// answer, so from that point a hosted launch and a shortcut launch are the
+// same exchange.
+type poke struct {
+	Kind    string `json:"kind"`
+	Version int    `json:"version"`
+}
+
+func validateHello(frame *hello) error {
+	if frame.Version != protocolVersion {
+		return fmt.Errorf("unsupported runtime protocol version: %d", frame.Version)
+	}
+	switch frame.Role {
+	case roleLaunch, roleHostLaunch, roleHost:
+		return nil
+	default:
+		return fmt.Errorf("unknown runtime peer role: %q", frame.Role)
+	}
+}
 
 // Command describes one emulator process for Steam Runtime to own.
 type Command struct {
@@ -154,6 +210,19 @@ func socketPath() (string, error) {
 	return filepath.Join(dir, socketName), nil
 }
 
+// hostSocketPath is deliberately not the launch socket. A Core without host
+// support binds the launch socket only for the seconds a launch is in flight,
+// and a frontend retrying a registration against it would be handed that
+// launch's command and swallow it. A separate path means an older Core simply
+// has nothing to connect to.
+func hostSocketPath() (string, error) {
+	dir, err := runtimeDirectory()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, hostSocketName), nil
+}
+
 func socketPeerCredentials(conn *net.UnixConn) (*unix.Ucred, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
@@ -207,21 +276,6 @@ func listenSocket(path string) (*net.UnixListener, error) {
 		return nil, fmt.Errorf("secure Steam Runtime socket: %w", err)
 	}
 	return listener, nil
-}
-
-func acceptRuntime(ctx context.Context, listener *net.UnixListener) (*net.UnixConn, error) {
-	deadline := time.Now().Add(brokerTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	if err := listener.SetDeadline(deadline); err != nil {
-		return nil, fmt.Errorf("set Steam Runtime listener deadline: %w", err)
-	}
-	conn, err := listener.AcceptUnix()
-	if err != nil {
-		return nil, fmt.Errorf("accept Steam Runtime session: %w", err)
-	}
-	return conn, nil
 }
 
 func sendResult(encoder *json.Encoder, result commandResult) error {
@@ -346,8 +400,19 @@ func Run(ctx context.Context) error {
 	if err := conn.SetDeadline(time.Now().Add(brokerTimeout)); err != nil {
 		return fmt.Errorf("set Steam Runtime read deadline: %w", err)
 	}
+	// The broker classifies connections by this frame. The shortcut only ever
+	// runs one command, so it never registers as a host.
+	if err := json.NewEncoder(conn).Encode(hello{Role: roleLaunch, Version: protocolVersion}); err != nil {
+		return fmt.Errorf("send Steam Runtime hello: %w", err)
+	}
 	var spec Command
 	if err := json.NewDecoder(io.LimitReader(conn, protocolLimit)).Decode(&spec); err != nil {
+		// The broker keeps the socket bound between launches, so a user
+		// starting the shortcut by hand connects to a broker with nothing
+		// to give and is hung up on. That is a no-op, not a failure.
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
 		return fmt.Errorf("read Steam Runtime command: %w", err)
 	}
 	if err := validateCommand(&spec); err != nil {

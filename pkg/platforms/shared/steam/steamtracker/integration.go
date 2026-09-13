@@ -45,6 +45,7 @@ type PlatformIntegration struct {
 	setActiveMedia func(*models.ActiveMedia)
 	activeGames    map[int]int
 	ignoredPaths   map[string]struct{}
+	ignoredTree    func(reaperPID int) bool
 	steamRoot      string
 	mu             syncutil.Mutex
 }
@@ -72,6 +73,68 @@ func NewPlatformIntegration(
 	}
 	pi.tracker = New(scanner, pi.onGameStart, pi.onGameStop)
 	return pi
+}
+
+// IgnoreProcessTree prevents a Steam game from becoming user-visible
+// ActiveMedia when its reaper owns a process Core has a use for.
+//
+// The frontend is the case: Steam starts it like any other app, but it is a
+// launcher, not something the user played, so recording it would put "Steam
+// Game <id>" in their history and point Resume back at their own frontend.
+// Matched by process rather than by path because a frontend started through a
+// wrapper script reports the interpreter as its executable.
+//
+// The predicate is called with the tracker lock held, so it must not reach
+// back into the tracker.
+func (pi *PlatformIntegration) IgnoreProcessTree(owns func(reaperPID int) bool) {
+	pi.mu.Lock()
+	pi.ignoredTree = owns
+	pi.mu.Unlock()
+}
+
+// ForgetIgnoredGames re-tests the games being tracked against the ignore
+// predicate and drops the ones that now match.
+//
+// Core can learn that a Steam game is really its own frontend after the fact.
+// The frontend registers as a launch host a moment after Steam starts it, and
+// Core restarting underneath a frontend that is already running reverses the
+// order entirely: the game is detected first and the registration arrives
+// second. Without this the frontend lands in the user's play history and
+// Resume points back at their own launcher.
+func (pi *PlatformIntegration) ForgetIgnoredGames() {
+	pi.mu.Lock()
+	if pi.ignoredTree == nil {
+		pi.mu.Unlock()
+		return
+	}
+	forget := make(map[int]int, len(pi.activeGames))
+	for appID, reaperPID := range pi.activeGames {
+		if pi.ignoredTree(reaperPID) {
+			forget[appID] = reaperPID
+		}
+	}
+	for appID := range forget {
+		delete(pi.activeGames, appID)
+	}
+	pi.mu.Unlock()
+
+	for appID, reaperPID := range forget {
+		if pi.base != nil && reaperPID != 0 {
+			pi.base.ClearTrackedProcessPID(reaperPID)
+		}
+		log.Info().Int("appID", appID).Int("reaperPID", reaperPID).
+			Msg("forgetting a Steam game that is Core's own launch host")
+		if pi.activeMedia == nil || pi.setActiveMedia == nil {
+			continue
+		}
+		current := pi.activeMedia()
+		if current == nil {
+			continue
+		}
+		if id, ok := steam.ExtractAppIDFromPath(current.Path); ok && id == appID {
+			pi.setActiveMedia(nil)
+		}
+	}
 }
 
 // IgnoreExecutable prevents an internal Steam-owned helper shortcut from
@@ -107,6 +170,9 @@ func (pi *PlatformIntegration) Stop() {
 func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string) {
 	pi.mu.Lock()
 	_, ignored := pi.ignoredPaths[steam.NormalizeShortcutExecutable(gamePath)]
+	if !ignored && pi.ignoredTree != nil {
+		ignored = pi.ignoredTree(reaperPID)
+	}
 	if !ignored {
 		pi.activeGames[appID] = reaperPID
 	}

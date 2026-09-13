@@ -154,3 +154,57 @@ func TestPlatformIntegrationForgetsReaperAfterNormalExit(t *testing.T) {
 
 	assert.NoError(t, syscall.Kill(cmd.Process.Pid, 0))
 }
+
+// Detection and host registration arrive in either order. Core restarting
+// underneath a frontend that is already running detects the frontend as a
+// Steam game first, and only learns it is the launch host when it registers a
+// moment later. Left as it is, the user's own launcher sits in their play
+// history and Resume points back at it.
+func TestForgetIgnoredGamesDropsAGameThatTurnsOutToBeTheHost(t *testing.T) {
+	t.Parallel()
+
+	active := &models.ActiveMedia{Path: "steam://789"}
+	integration := &PlatformIntegration{
+		activeMedia:    func() *models.ActiveMedia { return active },
+		setActiveMedia: func(media *models.ActiveMedia) { active = media },
+		activeGames:    map[int]int{789: 4242, 111: 5150},
+	}
+
+	// The host turns out to live in 4242's tree, and nothing else does.
+	integration.IgnoreProcessTree(func(reaperPID int) bool { return reaperPID == 4242 })
+	integration.ForgetIgnoredGames()
+
+	assert.Nil(t, active, "ActiveMedia pointing at the host must be cleared")
+	assert.Equal(t, map[int]int{111: 5150}, integration.activeGames,
+		"only the host's game is forgotten")
+}
+
+// Someone else's game stays put even when it is the active one.
+func TestForgetIgnoredGamesLeavesRealMediaAlone(t *testing.T) {
+	t.Parallel()
+
+	active := &models.ActiveMedia{Path: "steam://111"}
+	expected := active
+	integration := &PlatformIntegration{
+		activeMedia:    func() *models.ActiveMedia { return active },
+		setActiveMedia: func(media *models.ActiveMedia) { active = media },
+		activeGames:    map[int]int{789: 4242, 111: 5150},
+	}
+
+	integration.IgnoreProcessTree(func(reaperPID int) bool { return reaperPID == 4242 })
+	integration.ForgetIgnoredGames()
+
+	assert.Same(t, expected, active)
+	assert.Equal(t, map[int]int{111: 5150}, integration.activeGames)
+}
+
+// With no predicate installed there is nothing to reconsider.
+func TestForgetIgnoredGamesIsANoopWithoutAPredicate(t *testing.T) {
+	t.Parallel()
+
+	integration := &PlatformIntegration{activeGames: map[int]int{789: 4242}}
+
+	integration.ForgetIgnoredGames()
+
+	assert.Equal(t, map[int]int{789: 4242}, integration.activeGames)
+}
