@@ -22,7 +22,10 @@ package kodi
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
@@ -45,9 +48,9 @@ func ScanMovies(
 
 	for _, movie := range movies {
 		results = append(results, platforms.ScanResult{
-			Name:  movie.Label,
-			Path:  virtualpath.CreateVirtualPath(shared.SchemeKodiMovie, strconv.Itoa(movie.ID), movie.Label),
-			NoExt: true,
+			Name:   movie.Label,
+			Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiMovie, strconv.Itoa(movie.ID), movie.Label),
+			Source: kodiMetadataSource(movie.File), NoExt: true,
 		})
 	}
 
@@ -76,9 +79,9 @@ func ScanTV(
 		for _, ep := range episodes {
 			label := show.Label + " - " + ep.Label
 			results = append(results, platforms.ScanResult{
-				Name:  label,
-				Path:  virtualpath.CreateVirtualPath(shared.SchemeKodiEpisode, strconv.Itoa(ep.ID), label),
-				NoExt: true,
+				Name:   label,
+				Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiEpisode, strconv.Itoa(ep.ID), label),
+				Source: kodiMetadataSource(ep.File), NoExt: true,
 			})
 		}
 	}
@@ -102,13 +105,30 @@ func ScanSongs(
 	for _, song := range songs {
 		name := song.Artist + " - " + song.Album + " - " + song.Label
 		results = append(results, platforms.ScanResult{
-			Name:  name,
-			Path:  virtualpath.CreateVirtualPath(shared.SchemeKodiSong, strconv.Itoa(song.ID), name),
-			NoExt: true,
+			Name:   name,
+			Path:   virtualpath.CreateVirtualPath(shared.SchemeKodiSong, strconv.Itoa(song.ID), name),
+			Source: kodiMetadataSource(song.File), NoExt: true,
 		})
 	}
 
 	return results, nil
+}
+
+func kodiMetadataSource(path string) *platforms.MediaSource {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" || !filepath.IsAbs(path) ||
+		strings.Contains(path, "://") || virtualpath.ContainsControlChar(path) {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	kind := platforms.MediaSourceFile
+	if info.IsDir() {
+		kind = platforms.MediaSourceDirectory
+	}
+	return &platforms.MediaSource{Path: path, Root: filepath.Dir(path), Kind: kind}
 }
 
 // ScanAlbums scans albums from Kodi library using the provided client

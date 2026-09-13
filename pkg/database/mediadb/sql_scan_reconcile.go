@@ -168,6 +168,13 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 		) WITHOUT ROWID`,
 		`CREATE INDEX IF NOT EXISTS scanstageproperties_property_idx
 			ON ScanStageProperties(PropertyType, Property, Text)`,
+		`CREATE TABLE IF NOT EXISTS ScanStageSources (
+			Path       TEXT PRIMARY KEY,
+			SourcePath TEXT NOT NULL,
+			SourceKey  TEXT NOT NULL,
+			SourceRoot TEXT NOT NULL,
+			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory'))
+		) WITHOUT ROWID`,
 		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
 		) WITHOUT ROWID`,
@@ -183,7 +190,9 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 // sqlClearScanStage empties all scanner staging tables. Called before staging a
 // system (clearing any rows a crashed run left behind) and after its reconcile.
 func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
-	for _, table := range []string{"ScanStageProperties", "ScanStageTags", "ScanStage", "ScanTouchedTitles"} {
+	for _, table := range []string{
+		"ScanStageSources", "ScanStageProperties", "ScanStageTags", "ScanStage", "ScanTouchedTitles",
+	} {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			if sqlErrorIsMissingScanStage(err) {
@@ -769,6 +778,36 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	recordChunkedStep("upsert media", time.Since(upsertStart), upsertTiming)
 	if err != nil {
 		return stats, err
+	}
+
+	if _, err = execStep("upsert media sources", `
+		INSERT INTO MediaSources (MediaDBID, SourcePath, SourceKey, SourceRoot, SourceKind)
+		SELECT m.DBID, ss.SourcePath, ss.SourceKey, ss.SourceRoot, ss.SourceKind
+		FROM ScanStageSources ss
+		JOIN Media m ON m.SystemDBID = ? AND m.Path = ss.Path
+		ON CONFLICT(MediaDBID) DO UPDATE SET
+			SourcePath = excluded.SourcePath,
+			SourceKey = excluded.SourceKey,
+			SourceRoot = excluded.SourceRoot,
+			SourceKind = excluded.SourceKind
+		WHERE MediaSources.SourcePath IS NOT excluded.SourcePath
+		   OR MediaSources.SourceKey IS NOT excluded.SourceKey
+		   OR MediaSources.SourceRoot IS NOT excluded.SourceRoot
+		   OR MediaSources.SourceKind IS NOT excluded.SourceKind`, systemDBID); err != nil {
+		return stats, err
+	}
+	if !opts.IncompleteScan {
+		if _, err = execStep("delete stale media sources", `
+			DELETE FROM MediaSources
+			WHERE MediaDBID IN (
+				SELECT m.DBID FROM Media m
+				WHERE m.SystemDBID = ?
+				  AND NOT EXISTS (
+					SELECT 1 FROM ScanStageSources ss WHERE ss.Path = m.Path
+				  )
+			)`, systemDBID); err != nil {
+			return stats, err
+		}
 	}
 
 	if _, err = execStep("upsert media properties", `

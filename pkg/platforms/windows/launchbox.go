@@ -189,8 +189,45 @@ type launchBoxXML struct {
 }
 
 type launchBoxGame struct {
-	Title string `xml:"Title"`
-	ID    string `xml:"ID"`
+	Title           string `xml:"Title"`
+	ID              string `xml:"ID"`
+	ApplicationPath string `xml:"ApplicationPath"`
+}
+
+func launchBoxXMLSources(root, platformName string) map[string]*platforms.MediaSource {
+	path := filepath.Join(root, "Data", "Platforms", platformName+".xml")
+	//nolint:gosec // LaunchBox root and platform name come from local configuration.
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close() //nolint:errcheck // Read-only optional metadata source.
+	var data launchBoxXML
+	if err := xml.NewDecoder(file).Decode(&data); err != nil {
+		return nil
+	}
+	result := make(map[string]*platforms.MediaSource)
+	for _, game := range data.Games {
+		if source := launchBoxMetadataSource(root, game.ApplicationPath); source != nil {
+			result[game.ID] = source
+		}
+	}
+	return result
+}
+
+func launchBoxMetadataSource(root, applicationPath string) *platforms.MediaSource {
+	path := filepath.Clean(strings.Trim(strings.TrimSpace(applicationPath), `"`))
+	if path == "." || path == "" || virtualpath.ContainsControlChar(path) {
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	return &platforms.MediaSource{Path: path, Root: filepath.Dir(path), Kind: platforms.MediaSourceFile}
 }
 
 // lbSysMap maps Zaparoo system IDs to LaunchBox platform names
@@ -1344,6 +1381,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 
 			if pipe != nil && pipe.IsConnected() {
 				pluginSucceeded := false
+				launchBoxDir, _ := findLaunchBoxDir(cfg)
 				for _, lbSys := range platformsToQuery {
 					games, err := pipe.RequestGamesForPlatformSync(ctx, lbSys)
 					if err != nil {
@@ -1351,12 +1389,12 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 						continue
 					}
 					pluginSucceeded = true
+					sources := launchBoxXMLSources(launchBoxDir, lbSys)
 					for _, game := range games {
 						// Add the primary game
 						results = append(results, platforms.ScanResult{
-							Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
-							Name:  game.Title,
-							NoExt: true,
+							Path: virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+							Name: game.Title, Source: sources[game.ID], NoExt: true,
 						})
 
 						// Add additional applications (merged games, secondary discs, etc.)
@@ -1416,9 +1454,8 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 
 				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
-						Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
-						Name:  game.Title,
-						NoExt: true,
+						Path: virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+						Name: game.Title, Source: launchBoxMetadataSource(lbDir, game.ApplicationPath), NoExt: true,
 					})
 				}
 				log.Debug().Msgf("scanned %d games from LaunchBox XML for %s", len(lbXML.Games), lbSys)

@@ -50,9 +50,18 @@ description=Flight of the Amazon Queen
 path=/media/fat/ScummVM/GAMES/queen
 `,
 			expected: []ScummVMGame{
-				{TargetID: "monkey1", Description: "The Secret of Monkey Island"},
-				{TargetID: "tentacle", Description: "Day of the Tentacle"},
-				{TargetID: "queen", Description: "Flight of the Amazon Queen"},
+				{
+					TargetID: "monkey1", Description: "The Secret of Monkey Island",
+					Path: filepath.Join(scummvmBaseDir, "GAMES", "monkey1"),
+				},
+				{
+					TargetID: "tentacle", Description: "Day of the Tentacle",
+					Path: filepath.Join(scummvmBaseDir, "GAMES", "tentacle"),
+				},
+				{
+					TargetID: "queen", Description: "Flight of the Amazon Queen",
+					Path: filepath.Join(scummvmBaseDir, "GAMES", "queen"),
+				},
 			},
 			wantErr: false,
 		},
@@ -71,8 +80,11 @@ description=Maniac Mansion
 path=/media/fat/ScummVM/GAMES/maniac
 `,
 			expected: []ScummVMGame{
-				{TargetID: "loom", Description: "loom"}, // Falls back to target ID
-				{TargetID: "maniac", Description: "Maniac Mansion"},
+				{TargetID: "loom", Description: "loom", Path: filepath.Join(scummvmBaseDir, "GAMES", "loom")},
+				{
+					TargetID: "maniac", Description: "Maniac Mansion",
+					Path: filepath.Join(scummvmBaseDir, "GAMES", "maniac"),
+				},
 			},
 			wantErr: false,
 		},
@@ -91,7 +103,10 @@ description=The Secret of Monkey Island
 path=/media/fat/ScummVM/GAMES/monkey1
 `,
 			expected: []ScummVMGame{
-				{TargetID: "monkey1", Description: "The Secret of Monkey Island"},
+				{
+					TargetID: "monkey1", Description: "The Secret of Monkey Island",
+					Path: filepath.Join(scummvmBaseDir, "GAMES", "monkey1"),
+				},
 			},
 			wantErr: false,
 		},

@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -77,10 +78,23 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lutrisQueryTimeout)
 	defer cancel()
-	rows, err := db.QueryContext(ctx, `
-		SELECT substr(name, 1, ?), substr(slug, 1, ?)
-		FROM games WHERE installed = 1 LIMIT ?
-	`, maxLutrisFieldLength+1, maxLutrisFieldLength+1, maxLutrisGames+1)
+	var hasDirectory bool
+	var directoryColumns int
+	if columnErr := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('games') WHERE name = 'directory'",
+	).Scan(&directoryColumns); columnErr == nil {
+		hasDirectory = directoryColumns > 0
+	}
+	query := `SELECT substr(name, 1, ?), substr(slug, 1, ?) FROM games WHERE installed = 1 LIMIT ?`
+	if hasDirectory {
+		query = `SELECT substr(name, 1, ?), substr(slug, 1, ?), substr(COALESCE(directory, ''), 1, ?)
+			FROM games WHERE installed = 1 LIMIT ?`
+	}
+	args := []any{maxLutrisFieldLength + 1, maxLutrisFieldLength + 1, maxLutrisGames + 1}
+	if hasDirectory {
+		args = []any{maxLutrisFieldLength + 1, maxLutrisFieldLength + 1, maxLutrisFieldLength + 1, maxLutrisGames + 1}
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query Lutris games: %w", err)
 	}
@@ -91,9 +105,15 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	}()
 
 	for rows.Next() {
-		var nameValue, slugValue sql.NullString
-		if err := rows.Scan(&nameValue, &slugValue); err != nil {
-			return nil, fmt.Errorf("scan Lutris game row: %w", err)
+		var nameValue, slugValue, directoryValue sql.NullString
+		var scanErr error
+		if hasDirectory {
+			scanErr = rows.Scan(&nameValue, &slugValue, &directoryValue)
+		} else {
+			scanErr = rows.Scan(&nameValue, &slugValue)
+		}
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan Lutris game row: %w", scanErr)
 		}
 		if len(results) >= maxLutrisGames {
 			return nil, errors.New("lutris game library exceeds entry limit")
@@ -107,8 +127,18 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 			virtualpath.ContainsControlChar(name) || virtualpath.ContainsControlChar(slug) {
 			continue
 		}
+		var source *platforms.MediaSource
+		directory := filepath.Clean(strings.TrimSpace(directoryValue.String))
+		if directoryValue.Valid && filepath.IsAbs(directory) && !virtualpath.ContainsControlChar(directory) {
+			if info, statErr := os.Stat(directory); statErr == nil && info.IsDir() {
+				source = &platforms.MediaSource{
+					Path: directory, Root: filepath.Dir(directory), Kind: platforms.MediaSourceDirectory,
+				}
+			}
+		}
 		results = append(results, platforms.ScanResult{
-			Name: name, Path: virtualpath.CreateVirtualPath(shared.SchemeLutris, slug, name), NoExt: true,
+			Name: name, Path: virtualpath.CreateVirtualPath(shared.SchemeLutris, slug, name),
+			Source: source, NoExt: true,
 		})
 	}
 	if err := rows.Err(); err != nil {

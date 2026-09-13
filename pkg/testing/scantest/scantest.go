@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +44,11 @@ func IndexMediaPaths(
 	tb testing.TB, db database.MediaDBI, systemID string, paths ...string,
 ) database.ScanReconcileStats {
 	tb.Helper()
-	return IndexMediaPathsWithOpts(tb, db, systemID, database.ScanReconcileOpts{}, paths...)
+	results := make([]platforms.ScanResult, 0, len(paths))
+	for _, path := range paths {
+		results = append(results, platforms.ScanResult{Path: path})
+	}
+	return IndexScanResults(tb, db, systemID, database.ScanReconcileOpts{}, results...)
 }
 
 // IndexMediaPathsWithOpts runs IndexMediaPaths with explicit ReconcileStagedSystem
@@ -56,16 +61,32 @@ func IndexMediaPathsWithOpts(
 	paths ...string,
 ) database.ScanReconcileStats {
 	tb.Helper()
+	results := make([]platforms.ScanResult, 0, len(paths))
+	for _, path := range paths {
+		results = append(results, platforms.ScanResult{Path: path})
+	}
+	return IndexScanResults(tb, db, systemID, opts, results...)
+}
+
+// IndexScanResults stages complete scanner results, including optional source
+// provenance, through the production reconciliation pipeline.
+func IndexScanResults(
+	tb testing.TB,
+	db database.MediaDBI,
+	systemID string,
+	opts database.ScanReconcileOpts,
+	results ...platforms.ScanResult,
+) database.ScanReconcileStats {
+	tb.Helper()
 	ctx := context.Background()
 
 	require.NoError(tb, mediascanner.SeedCanonicalTags(ctx, db))
 	require.NoError(tb, db.BeginTransaction(true))
 	require.NoError(tb, db.ClearScanStage())
-	for _, path := range paths {
+	for _, result := range results {
 		require.NoError(tb, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
-			DB:       db,
-			SystemID: systemID,
-			Path:     path,
+			DB: db, SystemID: systemID, Path: result.Path, ProvidedName: result.Name,
+			Source: result.Source, NoExt: result.NoExt,
 		}))
 	}
 	stats, err := db.ReconcileStagedSystem(ctx, systemID, opts)

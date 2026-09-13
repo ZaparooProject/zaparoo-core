@@ -59,6 +59,7 @@ import (
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
 	MediaDirsByRoot      []map[string]string
+	SourceDirectory      string
 	SystemRootPath       string
 	ROMRootPath          string
 	AssetRootPath        string
@@ -78,6 +79,7 @@ const (
 	gamelistMatchSlugConflict gamelistMatchKind = "slug_conflict"
 	gamelistMatchPathOnly     gamelistMatchKind = "path_only"
 	gamelistMatchArcadeSet    gamelistMatchKind = "arcade_setname"
+	gamelistMatchSource       gamelistMatchKind = "source_directory"
 )
 
 type slugMediaSelection struct {
@@ -93,6 +95,7 @@ type GamelistXMLScraper struct {
 	db                 database.MediaDBI
 	fs                 afero.Fs
 	cfg                *config.Instance
+	scope              *database.ScrapeScope
 	externalAssetRoots []string
 	matchArcadeSets    bool
 }
@@ -231,6 +234,7 @@ func NewPlatformScraper() platforms.Scraper {
 				db:                 db.MediaDB,
 				fs:                 fs,
 				cfg:                cfg,
+				scope:              opts.Scope,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
 			}
@@ -323,17 +327,34 @@ func resolveSystemsFromPlatform(
 	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
-	extsBySystem := indexedExtensionsBySystem(pl.Launchers(cfg))
+	launchers := pl.Launchers(cfg)
+	extsBySystem := indexedExtensionsBySystem(launchers)
+	virtualSystems := virtualLauncherSystems(launchers)
 
 	customBase := cfg.ScraperGamelistXMLCustomPath()
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
+		sourceRoots, sourceErr := mdb.GetMediaSourceRoots(ctx, sys.ID)
+		if sourceErr != nil {
+			return nil, fmt.Errorf("resolve indexed media source roots for %s: %w", sys.ID, sourceErr)
+		}
+		for _, root := range sourceRoots {
+			if !slices.Contains(romPaths, root) {
+				romPaths = append(romPaths, root)
+			}
+		}
 		if len(romPaths) == 0 && !customBundleExists(fs, customBase, sys.ID) {
 			// A system indexed by a launcher with no scan folders of its own,
 			// such as the granular MiSTer arcade systems, still has media rows
 			// worth enriching from a custom bundle.
-			log.Debug().Str("system", sys.ID).Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
+			if _, virtual := virtualSystems[sys.ID]; virtual {
+				log.Warn().Str("system", sys.ID).
+					Msg("virtual media has no indexed metadata sources; reindex this system before scraping")
+			} else {
+				log.Debug().Str("system", sys.ID).
+					Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
+			}
 			continue
 		}
 		result = append(result, scraper.ScrapeSystem{
@@ -344,6 +365,16 @@ func resolveSystemsFromPlatform(
 		})
 	}
 	return result, nil
+}
+
+func virtualLauncherSystems(launchers []platforms.Launcher) map[string]struct{} {
+	result := make(map[string]struct{})
+	for i := range launchers {
+		if launchers[i].SystemID != "" && len(launchers[i].Schemes) > 0 {
+			result[launchers[i].SystemID] = struct{}{}
+		}
+	}
+	return result
 }
 
 // indexedExtensionsBySystem collects, per system, the extensions its launchers
@@ -536,6 +567,23 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var records []*GamelistRecord
 	var arcadeRecords []*GamelistRecord
 	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
+	var indexedSources []database.MediaSource
+	if g.db != nil {
+		var err error
+		indexedSources, err = g.db.GetMediaSourcesForScrape(ctx, system.ID, g.scope)
+		if err != nil {
+			return nil, fmt.Errorf("load indexed media sources for %s: %w", system.ID, err)
+		}
+	}
+	var sourceRecords *sourceRecordIndex
+	if len(indexedSources) > 0 {
+		sources := scraper.NewSourceIndex(indexedSources)
+		sourceRecords = &sourceRecordIndex{sources: sources, dirs: make(map[string]map[string]string)}
+		for i, root := range system.ROMPaths {
+			sourceRecords.dirs[root] = mediaDirsByRoot[i]
+		}
+		indexes.MediaByTitleDBID = withoutSourceTitleMatches(indexes.MediaByTitleDBID, sources)
+	}
 	candidateMedia := len(indexes.MediaByPathFold)
 	candidateTitles := len(indexes.TitlesBySlug)
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
@@ -556,6 +604,9 @@ outer:
 			fileMediaDirsByRoot = make([]map[string]string, 0, len(mediaDirsByRoot)+1)
 			fileMediaDirsByRoot = append(fileMediaDirsByRoot, statMediaDirsFS(g.filesystem(), file.AssetRootPath))
 			fileMediaDirsByRoot = append(fileMediaDirsByRoot, mediaDirsByRoot...)
+			if sourceRecords != nil {
+				sourceRecords.dirs[file.AssetRootPath] = fileMediaDirsByRoot[0]
+			}
 		}
 		gamelistFiles++
 		gamelistEntries += len(file.Games)
@@ -569,6 +620,10 @@ outer:
 			}
 
 			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
+			if record := g.matchSourceRecord(indexes, sourceRecords, &file, game, resolved); record != nil {
+				records = append(records, record)
+				continue
+			}
 			var pathMedia database.Media
 			var matchedPathKey string
 			var pathOK bool
@@ -736,6 +791,11 @@ outer:
 			resolved, romRoot := resolveGamelistROMPath(folder.Path, file.RootPath, system.ROMPaths)
 			if resolved == "" {
 				invalidPaths++
+				continue
+			}
+			game := folderAsGame(folder)
+			if record := g.matchSourceRecord(indexes, sourceRecords, &file, &game, resolved); record != nil {
+				records = append(records, record)
 				continue
 			}
 			folderMedia, matchedPathKey, ok := containerMediaForDir(indexes, resolved)
@@ -1412,6 +1472,9 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		if ok {
 			fallbackNames = artworkFallbackNames(resolved, record.ROMRootPath)
 		}
+	}
+	if record.SourceDirectory != "" {
+		fallbackNames = esmedia.DirectoryArtworkFallbackNames(record.SourceDirectory, record.ROMRootPath)
 	}
 	if record.MatchKind == gamelistMatchArcadeSet {
 		// Set-name entries commonly carry a foreign or sibling ROM path that

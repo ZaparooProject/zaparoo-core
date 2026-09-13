@@ -260,7 +260,7 @@ func parseGameListDocument[T any](data []byte) (T, error) {
 	if err := ValidateGameListXML(data); err != nil {
 		return document, err
 	}
-	if err := xml.Unmarshal(data, &document); err != nil {
+	if err := xml.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &document); err != nil {
 		return document, fmt.Errorf("decode gamelist XML: %w", err)
 	}
 	return document, nil
@@ -271,6 +271,9 @@ func ValidateGameListXML(data []byte) error {
 	if len(data) > MaxGameListXMLSize {
 		return ErrGameListTooLarge
 	}
+	// Windows scrapers may emit a UTF-8 BOM. It is an encoding signature only
+	// at byte zero, not whitespace we should tolerate elsewhere in the document.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	depth := 0
 	entries := 0
