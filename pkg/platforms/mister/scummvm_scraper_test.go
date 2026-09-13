@@ -37,6 +37,18 @@ func writeScummVMScrapeFile(t *testing.T, fs afero.Fs, path, data string) {
 	require.NoError(t, afero.WriteFile(fs, path, []byte(data), 0o600))
 }
 
+func indexScummVMResults(t *testing.T, db database.MediaDBI, games ...ScummVMGame) {
+	t.Helper()
+	results := make([]platforms.ScanResult, 0, len(games))
+	for _, game := range games {
+		results = append(results, platforms.ScanResult{
+			Path: virtualpath.CreateVirtualPath("scummvm", game.TargetID, game.Description),
+			Name: game.Description, Source: scummVMMetadataSource(game), NoExt: true,
+		})
+	}
+	scantest.IndexScanResults(t, db, systemdefs.SystemScummVM, database.ScanReconcileOpts{}, results...)
+}
+
 func runScummVMScraper(
 	t *testing.T, fs afero.Fs, db database.MediaDBI, id string, opts scraper.ScrapeOptions,
 ) {
@@ -97,8 +109,6 @@ func TestScummVMGamelistTargetMatching(t *testing.T) {
 					if tc.sharedDirectory {
 						twoDir = oneDir
 					}
-					writeScummVMScrapeFile(t, fs, scummvmIniPath,
-						fmt.Sprintf("[one]\npath=%s\n[two]\npath=%s\n", oneDir, twoDir))
 					if tc.marker != "" {
 						writeScummVMScrapeFile(t, fs, filepath.Join(root, tc.path), tc.marker)
 					}
@@ -114,7 +124,10 @@ func TestScummVMGamelistTargetMatching(t *testing.T) {
 					t.Cleanup(cleanup)
 					one := virtualpath.CreateVirtualPath("scummvm", "one", "First")
 					two := virtualpath.CreateVirtualPath("scummvm", "two", "Second")
-					scantest.IndexMediaPaths(t, db, systemdefs.SystemScummVM, one, two)
+					indexScummVMResults(t, db,
+						ScummVMGame{TargetID: "one", Description: "First", Path: oneDir},
+						ScummVMGame{TargetID: "two", Description: "Second", Path: twoDir},
+					)
 					rows, err := db.GetMediaBySystemID(systemdefs.SystemScummVM)
 					require.NoError(t, err)
 					opts := scraper.ScrapeOptions{Force: true}
@@ -159,15 +172,14 @@ func TestScummVMLocalArtworkDoesNotCrossTargets(t *testing.T) {
 			if shared {
 				secondRoot = firstRoot
 			}
-			writeScummVMScrapeFile(t, fs, scummvmIniPath, fmt.Sprintf(
-				"[one]\npath=%s\n[two]\npath=%s\n",
-				filepath.Join(firstRoot, "game"), filepath.Join(secondRoot, "game")))
 			writeScummVMScrapeFile(t, fs, filepath.Join(firstRoot, "media", "boxart", "game.png"), "first target only")
 			db, cleanup := helpers.NewInMemoryMediaDB(t)
 			t.Cleanup(cleanup)
 			one := virtualpath.CreateVirtualPath("scummvm", "one", "First")
-			two := virtualpath.CreateVirtualPath("scummvm", "two", "Second")
-			scantest.IndexMediaPaths(t, db, systemdefs.SystemScummVM, one, two)
+			indexScummVMResults(t, db,
+				ScummVMGame{TargetID: "one", Description: "First", Path: filepath.Join(firstRoot, "game")},
+				ScummVMGame{TargetID: "two", Description: "Second", Path: filepath.Join(secondRoot, "game")},
+			)
 			rows, err := db.GetMediaBySystemID(systemdefs.SystemScummVM)
 			require.NoError(t, err)
 			for _, row := range rows {
@@ -193,12 +205,10 @@ func TestScummVMLocalArtworkForceCleanup(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "game.v1")
 	cover := filepath.Join(root, "media", "boxart", "game.v1.png")
-	writeScummVMScrapeFile(t, fs, scummvmIniPath, fmt.Sprintf("[one]\npath=%s\n", dir))
 	writeScummVMScrapeFile(t, fs, cover, "image")
 	db, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
-	virtual := virtualpath.CreateVirtualPath("scummvm", "one", "First")
-	scantest.IndexMediaPaths(t, db, systemdefs.SystemScummVM, virtual)
+	indexScummVMResults(t, db, ScummVMGame{TargetID: "one", Description: "First", Path: dir})
 	runScummVMScraper(t, fs, db, "media-folder", scraper.ScrapeOptions{Force: true})
 	rows, err := db.GetMediaBySystemID(systemdefs.SystemScummVM)
 	require.NoError(t, err)
@@ -222,8 +232,6 @@ func TestScummVMScrapersImportConfiguredGame(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "ScummVM", "GAMES")
 			gameDir := filepath.Join(root, "monkey.v1")
 			cover := filepath.Join(root, "media", "boxart", "monkey.v1.png")
-			writeScummVMScrapeFile(t, fs, scummvmIniPath,
-				fmt.Sprintf("[monkey-target]\ndescription=New display title\npath=%s\n", gameDir))
 			writeScummVMScrapeFile(t, fs, cover, "image")
 			writeScummVMScrapeFile(t, fs, filepath.Join(root, "gamelist.xml"),
 				`<gameList><game><path>./monkey.v1</path><name>Unrelated scraper title</name>`+
@@ -231,7 +239,9 @@ func TestScummVMScrapersImportConfiguredGame(t *testing.T) {
 			db, cleanup := helpers.NewInMemoryMediaDB(t)
 			t.Cleanup(cleanup)
 			virtual := virtualpath.CreateVirtualPath("scummvm", "monkey-target", "Old display title")
-			scantest.IndexMediaPaths(t, db, systemdefs.SystemScummVM, virtual)
+			indexScummVMResults(t, db, ScummVMGame{
+				TargetID: "monkey-target", Description: "Old display title", Path: gameDir,
+			})
 
 			runScummVMScraper(t, fs, db, scraperID, scraper.ScrapeOptions{Force: true})
 

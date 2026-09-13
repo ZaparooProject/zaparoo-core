@@ -23,7 +23,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,8 +37,13 @@ func FuzzScummVMMarkerSource(f *testing.F) {
 	f.Add("monkey\nunknown")
 	f.Add("unknown")
 	root := f.TempDir()
-	source := scraper.MediaSource{MediaPath: "scummvm://monkey/Title", Directory: filepath.Join(root, "monkey")}
-	index := scraper.NewSourceIndex([]scraper.MediaSource{source})
+	sourcePath := filepath.Join(root, "monkey")
+	source := database.MediaSource{
+		MediaDBID: 1, MediaPath: "scummvm://monkey/Title", SourcePath: sourcePath,
+		SourceKey: helpers.NormalizePathForComparison(sourcePath), SourceRoot: root,
+		SourceKind: "directory", Unique: true,
+	}
+	index := scraper.NewSourceIndex([]database.MediaSource{source})
 	f.Fuzz(func(t *testing.T, data string) {
 		if len(data) > 4096 {
 			t.Skip()

@@ -1,63 +1,47 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 //go:build linux
 
 package mister
 
 import (
-	"context"
-	"errors"
-	"io/fs"
 	"path/filepath"
-	"slices"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
-	"github.com/spf13/afero"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// ScrapeSources discovers metadata beside configured ScummVM games, including
-// games stored outside the install directory. The binary need not be running or
-// available: the INI owns target identity, while indexed rows own write targets.
-func (*Platform) ScrapeSources(
-	ctx context.Context, _ *config.Instance, filesystem afero.Fs, systemID string,
-) (scraper.Sources, error) {
-	var sources scraper.Sources
-	if systemID != systemdefs.SystemScummVM {
-		return sources, nil
+// scummVMMetadataSource converts ScummVM's configured game directory into
+// provenance carried by the normal media indexing pipeline.
+func scummVMMetadataSource(game ScummVMGame) *platforms.MediaSource {
+	if game.Path == "" || strings.Contains(game.Path, "://") || virtualpath.ContainsControlChar(game.Path) {
+		return nil
 	}
-	if filesystem == nil {
-		filesystem = afero.NewOsFs()
+	directory := filepath.Clean(game.Path)
+	if !filepath.IsAbs(directory) {
+		directory = filepath.Join(scummvmBaseDir, directory)
 	}
-	games, err := parseScummVMIniFS(ctx, filesystem, scummvmIniPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return sources, nil
+	root := filepath.Dir(directory)
+	if root == directory {
+		return nil
 	}
-	if err != nil {
-		return sources, err
-	}
-	for _, game := range games {
-		if game.Path == "" || strings.Contains(game.Path, "://") || virtualpath.ContainsControlChar(game.Path) {
-			continue
-		}
-		directory := filepath.Clean(game.Path)
-		if !filepath.IsAbs(directory) {
-			// ScummVM is launched with its install directory as the working directory.
-			directory = filepath.Join(scummvmBaseDir, directory)
-		}
-		root := filepath.Dir(directory)
-		if root == directory {
-			continue
-		}
-		if !slices.Contains(sources.Roots, root) {
-			sources.Roots = append(sources.Roots, root)
-		}
-		sources.Media = append(sources.Media, scraper.MediaSource{
-			MediaPath: virtualpath.CreateVirtualPath(shared.SchemeScummVM, game.TargetID, game.Description),
-			Directory: directory,
-		})
-	}
-	return sources, nil
+	return &platforms.MediaSource{Path: directory, Root: root, Kind: platforms.MediaSourceDirectory}
 }

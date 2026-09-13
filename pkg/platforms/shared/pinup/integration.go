@@ -217,7 +217,7 @@ func (i *Integration) Scan(ctx context.Context, cfg *config.Instance) ([]platfor
 	if err != nil {
 		return nil, fmt.Errorf("scan PinUP Popper tables: %w", err)
 	}
-	return ScanResults(lib), nil
+	return ScanResultsWithRoot(lib, inst.Dir), nil
 }
 
 // Launch asks Popper to start a table and begins tracking the emulator it

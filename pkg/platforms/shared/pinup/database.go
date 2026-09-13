@@ -97,15 +97,24 @@ func readOnlyDSN(dbPath string) string {
 // readEmulators returns the visible emulators that run pinball tables, keyed
 // by EMUID. Others are logged so a user can see why their games are absent.
 func readEmulators(ctx context.Context, db *sql.DB) (map[int]Emulator, error) {
-	rows, err := db.QueryContext(ctx, `
+	gamesDirColumn := "''"
+	var gamesDirColumns int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('Emulators') WHERE name = 'DirGames'",
+	).Scan(&gamesDirColumns); err == nil && gamesDirColumns > 0 {
+		gamesDirColumn = "DirGames"
+	}
+	//nolint:gosec // Column expression is selected from fixed local constants.
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT EMUID, COALESCE(Visible, 1),
 			substr(COALESCE(EmuName, ''), 1, ?), substr(COALESCE(EmuDisplay, ''), 1, ?),
-			substr(COALESCE(DirMedia, ''), 1, ?), substr(COALESCE(GamesExt, ''), 1, ?),
-			substr(COALESCE(LaunchScript, ''), 1, ?), substr(COALESCE(ProcessName, ''), 1, ?),
+			substr(COALESCE(DirMedia, ''), 1, ?), substr(COALESCE(%s, ''), 1, ?),
+			substr(COALESCE(GamesExt, ''), 1, ?), substr(COALESCE(LaunchScript, ''), 1, ?),
+			substr(COALESCE(ProcessName, ''), 1, ?),
 			substr(COALESCE(WinTitle, ''), 1, ?)
-		FROM Emulators`,
+		FROM Emulators`, gamesDirColumn),
 		maxFieldLength, maxFieldLength, maxFieldLength, maxFieldLength,
-		maxFieldLength, maxFieldLength, maxFieldLength,
+		maxFieldLength, maxFieldLength, maxFieldLength, maxFieldLength,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query PinUP Popper emulators: %w", err)
@@ -124,7 +133,7 @@ func readEmulators(ctx context.Context, db *sql.DB) (map[int]Emulator, error) {
 			e       Emulator
 		)
 		if err := rows.Scan(
-			&id, &visible, &e.Name, &e.Display, &e.MediaDir, &e.GamesExt,
+			&id, &visible, &e.Name, &e.Display, &e.MediaDir, &e.GamesDir, &e.GamesExt,
 			&e.LaunchScript, &e.ProcessName, &e.WindowTitle,
 		); err != nil {
 			return nil, fmt.Errorf("scan PinUP Popper emulator row: %w", err)
@@ -139,6 +148,7 @@ func readEmulators(ctx context.Context, db *sql.DB) (map[int]Emulator, error) {
 		e.ProcessName = cleanField(e.ProcessName)
 		e.WindowTitle = cleanField(e.WindowTitle)
 		e.MediaDir = strings.TrimSpace(e.MediaDir)
+		e.GamesDir = strings.TrimSpace(e.GamesDir)
 		e.GamesExt = strings.TrimSpace(e.GamesExt)
 		switch {
 		case !e.Visible:

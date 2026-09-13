@@ -33,49 +33,32 @@ import (
 
 type sourceRecordIndex struct {
 	sources *scraper.SourceIndex
-	media   map[string]database.Media
 	dirs    map[string]map[string]string
 }
 
-// ES ScummVM launch files name a target in their contents. Filenames and engine
-// game IDs alone cannot distinguish multiple configured versions of a game.
+// ES ScummVM launch files name a target in their contents. This is an input
+// format adapter only: target ownership comes from centrally indexed sources.
 func (g *GamelistXMLScraper) scummVMMarkerSource(
 	sources *scraper.SourceIndex, path string,
-) (scraper.MediaSource, bool) {
+) (database.MediaSource, bool) {
 	if !strings.EqualFold(filepath.Ext(path), ".scummvm") {
-		return scraper.MediaSource{}, false
+		return database.MediaSource{}, false
 	}
 	file, err := g.filesystem().Open(path)
 	if err != nil {
-		return scraper.MediaSource{}, false
+		return database.MediaSource{}, false
 	}
 	defer file.Close() //nolint:errcheck // Read-only metadata source.
 	const maxTargetSize = 1024
 	data, err := io.ReadAll(io.LimitReader(file, maxTargetSize+1))
 	if err != nil || len(data) > maxTargetSize {
-		return scraper.MediaSource{}, false
+		return database.MediaSource{}, false
 	}
 	target := strings.TrimSpace(strings.TrimPrefix(string(data), "\xef\xbb\xbf"))
 	if target == "" || virtualpath.ContainsControlChar(target) {
-		return scraper.MediaSource{}, false
+		return database.MediaSource{}, false
 	}
 	return sources.ForMedia(virtualpath.CreateVirtualPath(shared.SchemeScummVM, target, ""))
-}
-
-func indexSourceMedia(indexes loadRecordIndexes, sources *scraper.SourceIndex) map[string]database.Media {
-	byIdentity := make(map[string]database.Media)
-	for _, media := range indexes.MediaByPathFold {
-		if !sources.HasMedia(media.Path) {
-			continue
-		}
-		key := scraper.VirtualMediaKey(media.Path)
-		if _, exists := byIdentity[key]; exists {
-			byIdentity[key] = database.Media{}
-		} else {
-			byIdentity[key] = media
-		}
-	}
-	return byIdentity
 }
 
 func withoutSourceTitleMatches(
@@ -92,18 +75,18 @@ func withoutSourceTitleMatches(
 	return filtered
 }
 
-// Source identities outrank titles: scraper names may differ from ScummVM's
-// descriptions, and neither name is sufficient to distinguish configured targets.
+// Source identities outrank titles: scraper names may differ from launcher
+// display names, and neither name safely distinguishes configured targets.
 func (g *GamelistXMLScraper) matchSourceRecord(
 	indexes loadRecordIndexes, sourceRecords *sourceRecordIndex,
 	file *parsedGamelistFile, game *esapi.Game, resolved string,
 ) *GamelistRecord {
-	if sourceRecords == nil || len(sourceRecords.media) == 0 {
+	if sourceRecords == nil {
 		return nil
 	}
 	source, ok := sourceRecords.sources.ForMedia(game.Path)
 	if !ok && resolved != "" {
-		source, ok = sourceRecords.sources.ForDirectory(resolved)
+		source, ok = sourceRecords.sources.ForPath(resolved)
 		if !ok {
 			source, ok = g.scummVMMarkerSource(sourceRecords.sources, resolved)
 		}
@@ -111,26 +94,20 @@ func (g *GamelistXMLScraper) matchSourceRecord(
 	if !ok {
 		return nil
 	}
-	media := sourceRecords.media[scraper.VirtualMediaKey(source.MediaPath)]
-	if media.DBID == 0 {
-		return nil
-	}
-	key := pathFoldKey(media.Path)
-	if _, pending := indexes.MediaByPathFold[key]; !pending {
+	key := pathFoldKey(source.MediaPath)
+	media, exists := indexes.MediaByPathFold[key]
+	if !exists || media.DBID != source.MediaDBID {
 		return nil
 	}
 	delete(indexes.MediaByPathFold, key)
 
-	root := filepath.Dir(source.Directory)
-	// Unlike physical ROMs, distinct virtual targets can have equal directory
-	// basenames on different drives. Only their own directory owns fallback art.
-	dirs := []map[string]string{sourceRecords.dirs[root]}
+	dirs := []map[string]string{sourceRecords.dirs[source.SourceRoot]}
 	if file.AssetRootPath != "" {
 		dirs = append([]map[string]string{sourceRecords.dirs[file.AssetRootPath]}, dirs...)
 	}
 	return &GamelistRecord{
-		Game: *game, SystemRootPath: file.RootPath, ROMRootPath: root, AssetRootPath: file.AssetRootPath,
-		SourceDirectory: source.Directory, MediaDirsByRoot: dirs,
+		Game: *game, SystemRootPath: file.RootPath, ROMRootPath: source.SourceRoot,
+		AssetRootPath: file.AssetRootPath, SourceDirectory: source.SourcePath, MediaDirsByRoot: dirs,
 		MatchKind: gamelistMatchSource, MatchedTitleDBID: media.MediaTitleDBID, MatchedMediaDBID: media.DBID,
 		MediaLevelWriteSafe: true, RequireExistingImage: file.RequireExistingImage,
 	}

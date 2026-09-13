@@ -20,8 +20,6 @@
 package localmedia
 
 import (
-	"path/filepath"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
@@ -33,17 +31,20 @@ func mediaArtworkNames(
 ) (lookupRoots, names, cleanupNames []string) {
 	if sources != nil && sources.HasMedia(media.Path) {
 		source, ok := sources.ForMedia(media.Path)
-		if !ok || media.IsMissing {
+		if !ok || !source.Unique || media.IsMissing {
 			return nil, nil, nil
 		}
-		if _, unique := sources.ForDirectory(source.Directory); !unique {
+		// Source-backed virtual targets never search another root: equal names on
+		// separate drives must not share artwork.
+		switch source.SourceKind {
+		case "directory":
+			names = esmedia.DirectoryArtworkFallbackNames(source.SourcePath, source.SourceRoot)
+		case "file":
+			names = artworkFallbackNames(source.SourcePath, []string{source.SourceRoot}, false)
+		default:
 			return nil, nil, nil
 		}
-		// Same-named directories on separate drives belong to different virtual
-		// targets. Do not let cross-root artwork fallback attach one to another.
-		root := filepath.Dir(source.Directory)
-		names = esmedia.DirectoryArtworkFallbackNames(source.Directory, root)
-		return []string{root}, names, names
+		return []string{source.SourceRoot}, names, names
 	}
 	isContainer := isContainerLaunchTarget(containers, media)
 	names = artworkFallbackNames(media.Path, roots, isContainer)

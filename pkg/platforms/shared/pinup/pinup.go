@@ -54,6 +54,7 @@ type Emulator struct {
 	Name         string
 	Display      string
 	MediaDir     string
+	GamesDir     string
 	GamesExt     string
 	LaunchScript string
 	ProcessName  string

@@ -95,7 +95,7 @@ type GamelistXMLScraper struct {
 	db                 database.MediaDBI
 	fs                 afero.Fs
 	cfg                *config.Instance
-	sourcesBySystem    map[string][]scraper.MediaSource
+	scope              *database.ScrapeScope
 	externalAssetRoots []string
 	matchArcadeSets    bool
 }
@@ -226,7 +226,7 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
-			systems, sources, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, fs, db.MediaDB, opts.SystemIDs())
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
@@ -234,7 +234,7 @@ func NewPlatformScraper() platforms.Scraper {
 				db:                 db.MediaDB,
 				fs:                 fs,
 				cfg:                cfg,
-				sourcesBySystem:    sources,
+				scope:              opts.Scope,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
 			}
@@ -298,10 +298,10 @@ func resolveSystemsFromPlatform(
 	fs afero.Fs,
 	mdb database.MediaDBI,
 	systemIDs []string,
-) ([]scraper.ScrapeSystem, map[string][]scraper.MediaSource, error) {
+) ([]scraper.ScrapeSystem, error) {
 	indexed, err := mdb.IndexedSystems()
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
+		return nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
 	}
 
 	wantedIDs := orderedScrapeSystemIDs(indexed, systemIDs)
@@ -311,7 +311,7 @@ func resolveSystemsFromPlatform(
 	for _, sysID := range wantedIDs {
 		sys, err := mdb.FindSystemBySystemID(sysID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
+			return nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
 		}
 		systemDef, err := systemdefs.GetSystem(sysID)
 		if err != nil {
@@ -327,34 +327,36 @@ func resolveSystemsFromPlatform(
 	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
 		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
 	}
-	extsBySystem := indexedExtensionsBySystem(pl.Launchers(cfg))
+	launchers := pl.Launchers(cfg)
+	extsBySystem := indexedExtensionsBySystem(launchers)
+	virtualSystems := virtualLauncherSystems(launchers)
 
 	customBase := cfg.ScraperGamelistXMLCustomPath()
-	sourcesBySystem := make(map[string][]scraper.MediaSource)
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
-		var sources scraper.Sources
-		if provider, ok := pl.(platforms.ScrapeSourceProvider); ok {
-			var sourceErr error
-			sources, sourceErr = provider.ScrapeSources(ctx, cfg, fs, sys.ID)
-			if sourceErr != nil {
-				return nil, nil, fmt.Errorf("resolve scrape sources for %s: %w", sys.ID, sourceErr)
-			}
-			for _, root := range sources.Roots {
-				if !slices.Contains(romPaths, root) {
-					romPaths = append(romPaths, root)
-				}
+		sourceRoots, sourceErr := mdb.GetMediaSourceRoots(ctx, sys.ID)
+		if sourceErr != nil {
+			return nil, fmt.Errorf("resolve indexed media source roots for %s: %w", sys.ID, sourceErr)
+		}
+		for _, root := range sourceRoots {
+			if !slices.Contains(romPaths, root) {
+				romPaths = append(romPaths, root)
 			}
 		}
 		if len(romPaths) == 0 && !customBundleExists(fs, customBase, sys.ID) {
 			// A system indexed by a launcher with no scan folders of its own,
 			// such as the granular MiSTer arcade systems, still has media rows
 			// worth enriching from a custom bundle.
-			log.Debug().Str("system", sys.ID).Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
+			if _, virtual := virtualSystems[sys.ID]; virtual {
+				log.Warn().Str("system", sys.ID).
+					Msg("virtual media has no indexed metadata sources; reindex this system before scraping")
+			} else {
+				log.Debug().Str("system", sys.ID).
+					Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
+			}
 			continue
 		}
-		sourcesBySystem[sys.ID] = sources.Media
 		result = append(result, scraper.ScrapeSystem{
 			DBID:       dbSystems[sys.ID].DBID,
 			ID:         sys.ID,
@@ -362,7 +364,17 @@ func resolveSystemsFromPlatform(
 			Extensions: extsBySystem[sys.ID],
 		})
 	}
-	return result, sourcesBySystem, nil
+	return result, nil
+}
+
+func virtualLauncherSystems(launchers []platforms.Launcher) map[string]struct{} {
+	result := make(map[string]struct{})
+	for i := range launchers {
+		if launchers[i].SystemID != "" && len(launchers[i].Schemes) > 0 {
+			result[launchers[i].SystemID] = struct{}{}
+		}
+	}
+	return result
 }
 
 // indexedExtensionsBySystem collects, per system, the extensions its launchers
@@ -555,13 +567,18 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var records []*GamelistRecord
 	var arcadeRecords []*GamelistRecord
 	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
-	var sourceRecords *sourceRecordIndex
-	if len(g.sourcesBySystem[system.ID]) > 0 {
-		sources := scraper.NewSourceIndex(g.sourcesBySystem[system.ID])
-		sourceRecords = &sourceRecordIndex{
-			sources: sources, media: indexSourceMedia(indexes, sources),
-			dirs: make(map[string]map[string]string),
+	var indexedSources []database.MediaSource
+	if g.db != nil {
+		var err error
+		indexedSources, err = g.db.GetMediaSourcesForScrape(ctx, system.ID, g.scope)
+		if err != nil {
+			return nil, fmt.Errorf("load indexed media sources for %s: %w", system.ID, err)
 		}
+	}
+	var sourceRecords *sourceRecordIndex
+	if len(indexedSources) > 0 {
+		sources := scraper.NewSourceIndex(indexedSources)
+		sourceRecords = &sourceRecordIndex{sources: sources, dirs: make(map[string]map[string]string)}
 		for i, root := range system.ROMPaths {
 			sourceRecords.dirs[root] = mediaDirsByRoot[i]
 		}

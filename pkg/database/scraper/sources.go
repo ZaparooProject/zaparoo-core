@@ -23,54 +23,46 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 )
 
-// MediaSource ties a virtual launcher target to its configured game directory.
-// It supplies metadata context only; it never changes indexing or launch paths.
-type MediaSource struct {
-	MediaPath string
-	Directory string
-}
-
-// Sources supplements filesystem launcher roots for metadata-only discovery.
-type Sources struct {
-	Roots []string
-	Media []MediaSource
-}
-
-// SourceIndex resolves configured identities without guessing from display names.
-// Conflicting identities and directories remain ambiguous even when only one of
-// their media rows is selected or has not already been scraped.
+// SourceIndex provides temporary lookup keys over source rows already selected
+// from MediaDB. It never discovers launcher configuration or broadens scope.
 type SourceIndex struct {
-	byMedia map[string]MediaSource
-	byDir   map[string]MediaSource
+	byMedia map[string]database.MediaSource
+	byPath  map[string]database.MediaSource
 }
 
-func NewSourceIndex(sources []MediaSource) *SourceIndex {
-	index := &SourceIndex{byMedia: make(map[string]MediaSource), byDir: make(map[string]MediaSource)}
+func NewSourceIndex(sources []database.MediaSource) *SourceIndex {
+	index := &SourceIndex{
+		byMedia: make(map[string]database.MediaSource, len(sources)),
+		byPath:  make(map[string]database.MediaSource, len(sources)),
+	}
 	for _, source := range sources {
-		key := VirtualMediaKey(source.MediaPath)
-		if key == "" || !filepath.IsAbs(source.Directory) {
+		mediaKey := VirtualMediaKey(source.MediaPath)
+		if mediaKey == "" || source.SourceKey == "" {
 			continue
 		}
-		source.Directory = filepath.Clean(source.Directory)
-		if previous, exists := index.byMedia[key]; exists && previous.Directory != source.Directory {
-			index.byMedia[key] = MediaSource{}
+		if previous, exists := index.byMedia[mediaKey]; exists && previous.MediaDBID != source.MediaDBID {
+			index.byMedia[mediaKey] = database.MediaSource{}
 		} else if !exists {
-			index.byMedia[key] = source
+			index.byMedia[mediaKey] = source
 		}
-		dirKey := sourceDirectoryKey(source.Directory)
-		if previous, exists := index.byDir[dirKey]; exists && VirtualMediaKey(previous.MediaPath) != key {
-			index.byDir[dirKey] = MediaSource{}
+		if !source.Unique {
+			index.byPath[source.SourceKey] = database.MediaSource{}
+			continue
+		}
+		if previous, exists := index.byPath[source.SourceKey]; exists && previous.MediaDBID != source.MediaDBID {
+			index.byPath[source.SourceKey] = database.MediaSource{}
 		} else if !exists {
-			index.byDir[dirKey] = source
+			index.byPath[source.SourceKey] = source
 		}
 	}
 	return index
 }
 
-// VirtualMediaKey ignores the mutable display name but preserves target ID case.
+// VirtualMediaKey ignores mutable display text while preserving scheme and ID.
 func VirtualMediaKey(path string) string {
 	parsed, err := virtualpath.ParseVirtualPathStr(path)
 	if err != nil || parsed.ID == "" {
@@ -79,22 +71,23 @@ func VirtualMediaKey(path string) string {
 	return virtualpath.CreateVirtualPath(strings.ToLower(parsed.Scheme), parsed.ID, "")
 }
 
-func (s *SourceIndex) ForMedia(path string) (MediaSource, bool) {
+func (s *SourceIndex) ForMedia(path string) (database.MediaSource, bool) {
+	if s == nil {
+		return database.MediaSource{}, false
+	}
 	source := s.byMedia[VirtualMediaKey(path)]
-	return source, source.Directory != ""
+	return source, source.MediaDBID != 0
 }
 
 func (s *SourceIndex) HasMedia(path string) bool {
-	_, exists := s.byMedia[VirtualMediaKey(path)]
+	_, exists := s.ForMedia(path)
 	return exists
 }
 
-func (s *SourceIndex) ForDirectory(path string) (MediaSource, bool) {
-	source := s.byDir[sourceDirectoryKey(path)]
-	canonical, ok := s.ForMedia(source.MediaPath)
-	return canonical, ok && canonical.Directory == source.Directory
-}
-
-func sourceDirectoryKey(path string) string {
-	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+func (s *SourceIndex) ForPath(path string) (database.MediaSource, bool) {
+	if s == nil {
+		return database.MediaSource{}, false
+	}
+	source := s.byPath[strings.ToLower(filepath.ToSlash(filepath.Clean(path)))]
+	return source, source.MediaDBID != 0
 }

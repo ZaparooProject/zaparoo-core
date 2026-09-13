@@ -195,6 +195,7 @@ type MediaDB struct {
 	systemMediaCountsCache  atomic.Pointer[systemMediaCountsSnapshot]
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
+	batchInsertScanSource   *BatchInserter
 	dbPath                  string
 	slugCacheState          slugCacheLifecycle
 	backgroundOps           sync.WaitGroup
@@ -2356,8 +2357,16 @@ func (db *MediaDB) closeAllBatchInserters(flush bool) error {
 		if closeErr := db.batchInsertScanProperty.finish(flush); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanProperty")
 			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanProperty: %w", closeErr))
+			flush = false
 		}
 		db.batchInsertScanProperty = nil
+	}
+	if db.batchInsertScanSource != nil {
+		if closeErr := db.batchInsertScanSource.finish(flush); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanSource")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanSource: %w", closeErr))
+		}
+		db.batchInsertScanSource = nil
 	}
 
 	return errors.Join(closeErrs...)
@@ -2389,6 +2398,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 		db.batchInsertScanStage,
 		db.batchInsertScanTag,
 		db.batchInsertScanProperty,
+		db.batchInsertScanSource,
 	} {
 		if bi == nil {
 			continue
@@ -2404,7 +2414,8 @@ func (db *MediaDB) FlushBatchInserters() error {
 // staging tables through the batch inserters. Requires an open batch
 // transaction (BeginTransaction(true)).
 func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
-	if db.batchInsertScanStage == nil || db.batchInsertScanTag == nil || db.batchInsertScanProperty == nil {
+	if db.batchInsertScanStage == nil || db.batchInsertScanTag == nil || db.batchInsertScanProperty == nil ||
+		db.batchInsertScanSource == nil {
 		return errors.New("staging scanned media requires an open batch transaction")
 	}
 	if err := db.batchInsertScanStage.Add(
@@ -2425,6 +2436,13 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 			media.Path, property.Type, property.Name, property.Text,
 		); err != nil {
 			return fmt.Errorf("failed to stage scanned media property %s:%s: %w", property.Type, property.Name, err)
+		}
+	}
+	if media.Source != nil {
+		if err := db.batchInsertScanSource.Add(
+			media.Path, media.Source.Path, media.Source.Key, media.Source.Root, media.Source.Kind,
+		); err != nil {
+			return fmt.Errorf("failed to stage scanned media source %s: %w", media.Path, err)
 		}
 	}
 	return nil
@@ -2643,6 +2661,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 			[]string{"Path", "PropertyType", "Property", "Text"}, db.batchSize, true); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for scan stage properties: %w", err)
+		}
+		if db.batchInsertScanSource, err = NewBatchInserterWithOptions(db.ctx, tx, "ScanStageSources",
+			[]string{"Path", "SourcePath", "SourceKey", "SourceRoot", "SourceKind"}, db.batchSize, true); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for scan stage sources: %w", err)
 		}
 
 		// Set up foreign key dependencies to ensure proper flush order

@@ -93,8 +93,11 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 				startScript := findChimeraExecutable(gamePath)
 				if startScript != "" {
 					results = append(results, platforms.ScanResult{
-						Name:  gameID, // TODO: Parse game name from info file if available
-						Path:  virtualpath.CreateVirtualPath(shared.SchemeGOG, gameID, gameID),
+						Name: gameID, // TODO: Parse game name from info file if available
+						Path: virtualpath.CreateVirtualPath(shared.SchemeGOG, gameID, gameID),
+						Source: &platforms.MediaSource{
+							Path: gamePath, Root: gogPath, Kind: platforms.MediaSourceDirectory,
+						},
 						NoExt: true,
 					})
 				}

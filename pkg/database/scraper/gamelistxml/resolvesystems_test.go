@@ -80,7 +80,7 @@ func TestResolveSystemsFromPlatformCarriesLauncherExtensions(t *testing.T) {
 		},
 	})
 
-	systems, _, err := resolveSystemsFromPlatform(context.Background(), cfg, pl, afero.NewOsFs(), db, nil)
+	systems, err := resolveSystemsFromPlatform(context.Background(), cfg, pl, afero.NewOsFs(), db, nil)
 	require.NoError(t, err)
 
 	byID := make(map[string]struct {

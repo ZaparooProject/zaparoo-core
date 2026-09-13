@@ -21,61 +21,56 @@ package scraper
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func testSource(id int64, mediaPath, sourcePath string, unique bool) database.MediaSource {
+	return database.MediaSource{
+		MediaDBID: id, MediaPath: mediaPath, SourcePath: sourcePath,
+		SourceKey: strings.ToLower(filepath.ToSlash(filepath.Clean(sourcePath))), SourceRoot: filepath.Dir(sourcePath),
+		SourceKind: "directory", Unique: unique,
+	}
+}
+
 func TestSourceIndex(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	first := MediaSource{MediaPath: "scummvm://monkey-vga/Old%20title", Directory: filepath.Join(root, "monkey.v1")}
-	second := MediaSource{MediaPath: "scummvm://monkey-ega/Title", Directory: filepath.Join(root, "monkey.v2")}
-	index := NewSourceIndex([]MediaSource{first, second, first})
+	first := testSource(1, "scummvm://monkey-vga/Old%20title", filepath.Join(root, "monkey.v1"), true)
+	second := testSource(2, "scummvm://monkey-ega/Title", filepath.Join(root, "monkey.v2"), true)
+	index := NewSourceIndex([]database.MediaSource{first, second, first})
 	got, ok := index.ForMedia("SCUMMVM://monkey-vga/New%20title")
 	require.True(t, ok)
 	assert.Equal(t, first, got)
-	got, ok = index.ForDirectory(first.Directory + string(filepath.Separator))
+	got, ok = index.ForPath(first.SourcePath + string(filepath.Separator))
 	require.True(t, ok)
 	assert.Equal(t, first, got)
 	assert.False(t, index.HasMedia("scummvm://unknown/Old%20title"))
 	assert.False(t, index.HasMedia("scummvm://MONKEY-VGA/Old%20title"))
-	_, ok = index.ForDirectory(filepath.Join(root, "unknown"))
+	_, ok = index.ForPath(filepath.Join(root, "unknown"))
 	assert.False(t, ok)
 }
 
 func TestSourceIndexAmbiguity(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	first := MediaSource{MediaPath: "scummvm://one/Title", Directory: filepath.Join(root, "game")}
-	for _, tc := range []struct {
-		name          string
-		second        MediaSource
-		identityValid bool
-	}{
-		{
-			name: "shared directory", identityValid: true,
-			second: MediaSource{MediaPath: "scummvm://two/Title", Directory: first.Directory},
-		},
-		{
-			name:   "conflicting target",
-			second: MediaSource{MediaPath: first.MediaPath, Directory: filepath.Join(root, "different")},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			// Repetition must never revive a key marked ambiguous.
-			index := NewSourceIndex([]MediaSource{first, tc.second, first, tc.second})
-			_, ok := index.ForDirectory(first.Directory)
-			assert.False(t, ok)
-			_, ok = index.ForDirectory(tc.second.Directory)
-			assert.False(t, ok)
-			_, ok = index.ForMedia(first.MediaPath)
-			assert.Equal(t, tc.identityValid, ok)
-			assert.True(t, index.HasMedia(first.MediaPath), "ambiguous targets remain excluded from title guessing")
-		})
-	}
+	shared := filepath.Join(root, "game")
+	first := testSource(1, "scummvm://one/Title", shared, false)
+	second := testSource(2, "scummvm://two/Title", shared, false)
+	index := NewSourceIndex([]database.MediaSource{first, second})
+	_, ok := index.ForPath(shared)
+	assert.False(t, ok)
+	_, ok = index.ForMedia(first.MediaPath)
+	assert.True(t, ok, "ambiguous sources remain excluded from title guessing")
+
+	conflict := testSource(3, first.MediaPath, filepath.Join(root, "different"), true)
+	index = NewSourceIndex([]database.MediaSource{first, conflict})
+	_, ok = index.ForMedia(first.MediaPath)
+	assert.False(t, ok)
 }
 
 func TestVirtualMediaKey(t *testing.T) {
