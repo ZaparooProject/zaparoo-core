@@ -1120,6 +1120,14 @@ type UserDBI interface {
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	ListDeckItemLinks() ([]DeckItemLink, error)
 	CountOwnedDecks() (int, error)
+	RenameDeck(oldID, newID string) error
+
+	// Library sync bookkeeping for decks.
+	ListDeckSync() ([]DeckSyncRow, error)
+	GetDeckSync(deckID string) (DeckSyncRow, bool, error)
+	UpsertDeckSync(rows []DeckSyncRow) error
+	DeleteDeckSync(deckIDs []string) error
+	ClearDeckSync() error
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
 	GetSupportedZapLinkHosts() ([]string, error)

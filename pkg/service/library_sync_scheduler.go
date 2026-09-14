@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -91,15 +92,33 @@ func startLibrarySyncScheduler(
 		Inbox:         st.Inbox(),
 		Pauser:        pauser,
 		SendHeartbeat: manager.SendCapabilityHeartbeat,
+		Notifications: st.Notifications,
+		DeckResolveDeps: &decks.ResolveDeps{
+			MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg,
+			LaunchersForSystem: func(systemID string) []platforms.Launcher {
+				all := pl.Launchers(cfg)
+				out := make([]platforms.Launcher, 0, len(all))
+				for i := range all {
+					if all[i].SystemID == systemID {
+						out = append(out, all[i])
+					}
+				}
+				return out
+			},
+		},
 	})
 	requests := make(chan struct{}, 1)
 	stateRequests := make(chan struct{}, 1)
+	accessRequests := make(chan struct{}, 1)
 	st.SetLibrarySyncSignals(state.LibrarySyncSignals{
 		SettingChanged: func() {
 			signalLibrarySync(requests)
 			signalLibrarySync(stateRequests)
 		},
-		StateChanged: func() { signalLibrarySync(stateRequests) },
+		StateChanged:  func() { signalLibrarySync(stateRequests) },
+		DecksChanged:  func() { signalLibrarySync(stateRequests) },
+		DecksAccessed: func() { signalLibrarySync(accessRequests) },
+		RefreshDeck:   svc.RefreshDeck,
 	})
 	indexing, subID := notifBroker.Subscribe(32, models.NotificationMediaIndexing)
 	wg.Add(2)
@@ -110,7 +129,7 @@ func startLibrarySyncScheduler(
 	}()
 	go func() {
 		defer wg.Done()
-		libraryStateLoop(ctx, svc, stateRequests, &defaultLibraryStateTimings)
+		libraryStateLoop(ctx, svc, stateRequests, accessRequests, &defaultLibraryStateTimings)
 	}()
 }
 
@@ -140,19 +159,23 @@ var defaultLibraryStateTimings = libraryStateTimings{
 }
 
 // libraryStateRunner is the part of the Library sync service that keeps
-// personal state converged.
+// personal state and decks converged.
 type libraryStateRunner interface {
 	SyncState(ctx context.Context) (librarysync.StateResult, error)
+	SyncDecks(ctx context.Context) (librarysync.DecksResult, error)
+	PullDecksIfStale(ctx context.Context) error
 }
 
-// libraryStateLoop pulls and pushes personal state apart from the inventory,
-// so an edit is pushed within seconds even while a large first inventory is
-// still being resolved. Edits are coalesced over a short debounce; otherwise
-// a pass runs after startup and hourly.
+// libraryStateLoop pulls and pushes personal state and decks apart from the
+// inventory, so an edit is pushed within seconds even while a large first
+// inventory is still being resolved. Edits are coalesced over a short
+// debounce; otherwise a pass runs after startup and hourly. A client looking
+// at decks pulls them when the last pull is stale.
 func libraryStateLoop(
 	ctx context.Context,
 	runner libraryStateRunner,
 	requests <-chan struct{},
+	accesses <-chan struct{},
 	timings *libraryStateTimings,
 ) {
 	startup := time.NewTimer(timings.startup)
@@ -168,7 +191,12 @@ func libraryStateLoop(
 	retry := intervalState{backoff: timings.initialBackoff}
 	run := func() {
 		now := time.Now()
-		_, err := runner.SyncState(ctx)
+		_, stateErr := runner.SyncState(ctx)
+		_, decksErr := runner.SyncDecks(ctx)
+		err := stateErr
+		if err == nil || librarysync.IsIdleError(err) {
+			err = decksErr
+		}
 		switch {
 		case ctx.Err() != nil:
 		case err == nil || librarysync.IsIdleError(err):
@@ -189,6 +217,10 @@ func libraryStateLoop(
 		case <-requests:
 			pending = true
 			debounce.Reset(timings.debounce)
+		case <-accesses:
+			if err := runner.PullDecksIfStale(ctx); err != nil && !librarysync.IsIdleError(err) {
+				log.Debug().Err(err).Msg("decks not pulled for a client")
+			}
 		case <-debounce.C:
 			if retry.nextAttempt.IsZero() || !time.Now().Before(retry.nextAttempt) {
 				run()

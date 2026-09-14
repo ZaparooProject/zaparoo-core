@@ -27,13 +27,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
@@ -78,6 +81,12 @@ type Options struct {
 	SendHeartbeat func(context.Context) error
 	// Now returns the current time. Optional.
 	Now func() time.Time
+	// Notifications receives decks.changed when a sync pass changes a deck.
+	// Optional.
+	Notifications chan<- models.Notification
+	// DeckResolveDeps tags the media a synced deck's games resolve to.
+	// Optional.
+	DeckResolveDeps *decks.ResolveDeps
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -92,7 +101,11 @@ type Service struct {
 	pauser        *syncutil.Pauser
 	sendHeartbeat func(context.Context) error
 	now           func() time.Time
+	notifications chan<- models.Notification
+	deckDeps      *decks.ResolveDeps
+	deckSem       chan struct{}
 	resolvePace   time.Duration
+	lastDeckPull  atomic.Int64
 	inventoryMu   syncutil.Mutex
 	stateMu       syncutil.Mutex
 }
@@ -108,6 +121,9 @@ func New(opts *Options) *Service {
 		sendHeartbeat: opts.SendHeartbeat,
 		now:           opts.Now,
 		resolvePace:   opts.ResolvePace,
+		notifications: opts.Notifications,
+		deckDeps:      opts.DeckResolveDeps,
+		deckSem:       make(chan struct{}, 1),
 	}
 	if s.now == nil {
 		s.now = time.Now

@@ -20,6 +20,7 @@
 package state
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,14 +42,28 @@ func TestLibrarySyncSignals(t *testing.T) {
 	st.RequestLibrarySync()
 	st.NotifyLibraryStateChanged()
 
-	settings, edits := 0, 0
+	st.NotifyLibraryDecksChanged()
+	st.NotifyLibraryDecksAccessed()
+	st.RefreshLibraryDeck(context.Background(), "0123456789ab")
+
+	settings, edits, deckEdits, accesses := 0, 0, 0, 0
+	refreshed := ""
 	st.SetLibrarySyncSignals(LibrarySyncSignals{
 		SettingChanged: func() { settings++ },
 		StateChanged:   func() { edits++ },
+		DecksChanged:   func() { deckEdits++ },
+		DecksAccessed:  func() { accesses++ },
+		RefreshDeck:    func(_ context.Context, deckID string) { refreshed = deckID },
 	})
 	st.RequestLibrarySync()
 	st.NotifyLibraryStateChanged()
 	st.NotifyLibraryStateChanged()
+	st.NotifyLibraryDecksChanged()
+	st.NotifyLibraryDecksAccessed()
+	st.RefreshLibraryDeck(context.Background(), "0123456789ab")
 	assert.Equal(t, 1, settings)
 	assert.Equal(t, 2, edits)
+	assert.Equal(t, 1, deckEdits)
+	assert.Equal(t, 1, accesses)
+	assert.Equal(t, "0123456789ab", refreshed)
 }

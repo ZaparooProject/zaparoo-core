@@ -52,13 +52,17 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	if env.Database == nil || env.Database.UserDB == nil {
 		return nil, errors.New(errDecksNoUserDB)
 	}
+	env.State.NotifyLibraryDecksAccessed()
 	list, err := env.Database.UserDB.ListDecks()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list decks: %w", err)
 	}
+	locked := lockedDecks(&env)
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
-		resp.Decks = append(resp.Decks, deckResponse(&list[i], nil))
+		deck := deckResponse(&list[i], nil)
+		deck.Locked = locked[deck.DeckID]
+		resp.Decks = append(resp.Decks, deck)
 	}
 	return resp, nil
 }
@@ -72,11 +76,12 @@ func HandleDecksGet(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
+	env.State.NotifyLibraryDecksAccessed()
 	deck, err := loadDeck(&env, params.DeckID)
 	if err != nil {
 		return nil, err
 	}
-	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
+	return lockedDeckResponse(&env, deck), nil
 }
 
 // HandleDecksNew creates a deck owned by this device.
@@ -114,6 +119,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	}
 	projectDeck(&env, deck)
 	notifyDecksChanged(&env, deck.DeckID, models.DecksChangedCreated)
+	env.State.NotifyLibraryDecksChanged()
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
 
@@ -130,7 +136,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !deck.Owned {
+	if !deck.Owned || isDeckLocked(&env, deck.DeckID) {
 		return nil, models.ClientErr(database.ErrDeckReadOnly)
 	}
 
@@ -166,6 +172,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	}
 	projectDeck(&env, updated)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
+	env.State.NotifyLibraryDecksChanged()
 	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
 }
 
@@ -185,6 +192,9 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, models.ClientErr(err)
 	}
+	if isDeckLocked(&env, deckID) {
+		return nil, models.ClientErr(database.ErrDeckReadOnly)
+	}
 	existed, err := env.Database.UserDB.DeleteDeck(deckID)
 	if err != nil {
 		return nil, deckError(err)
@@ -198,6 +208,7 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 		}
 	}
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
+	env.State.NotifyLibraryDecksChanged()
 	return NoContent{}, nil
 }
 
@@ -470,6 +481,38 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 		}
 	}
 	return available
+}
+
+// isDeckLocked reports whether the linked account locked a deck, which keeps
+// it read-only here.
+func isDeckLocked(env *requests.RequestEnv, deckID string) bool {
+	row, found, err := env.Database.UserDB.GetDeckSync(deckID)
+	if err != nil {
+		log.Warn().Err(err).Str("deck", deckID).Msg("failed to read deck sync state")
+		return false
+	}
+	return found && row.Locked
+}
+
+func lockedDecks(env *requests.RequestEnv) map[string]bool {
+	rows, err := env.Database.UserDB.ListDeckSync()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read deck sync state")
+		return nil
+	}
+	locked := make(map[string]bool, len(rows))
+	for i := range rows {
+		if rows[i].Locked {
+			locked[rows[i].DeckID] = true
+		}
+	}
+	return locked
+}
+
+func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) models.DeckResponse {
+	resp := deckResponse(deck, anchorAvailability(env, deck.Items))
+	resp.Locked = isDeckLocked(env, deck.DeckID)
+	return resp
 }
 
 func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResponse {

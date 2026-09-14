@@ -206,6 +206,28 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) error {
 	})
 }
 
+// RenameDeck moves a deck and its sync row to a new ID. Fails with
+// ErrDeckNotFound when no deck holds oldID.
+func (db *UserDB) RenameDeck(oldID, newID string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) error {
+		res, err := tx.ExecContext(ctx, `update Decks set DeckID = ?, UpdatedAt = ? where DeckID = ?;`,
+			newID, now, oldID)
+		if err != nil {
+			return fmt.Errorf("failed to rename deck: %w", err)
+		}
+		if affectedErr := requireDeckAffected(res); affectedErr != nil {
+			return affectedErr
+		}
+		if _, err = tx.ExecContext(ctx, `update DeckSync set DeckID = ? where DeckID = ?;`, newID, oldID); err != nil {
+			return fmt.Errorf("failed to rename deck sync row: %w", err)
+		}
+		return nil
+	})
+}
+
 // SetDeckItemAnchor records the local file a game item resolved to. It never
 // inserts.
 func (db *UserDB) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {

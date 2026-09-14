@@ -331,8 +331,9 @@ func runTokenZapScriptWithContext(
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
 				},
-				PlaybackManager: svc.PlaybackManager,
-				UI:              svc.UI,
+				PlaybackManager:  svc.PlaybackManager,
+				UI:               svc.UI,
+				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
 			},
 			&cmdEnv,
 		)
