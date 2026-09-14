@@ -322,7 +322,7 @@ func runTokenZapScriptWithContext(
 			len(cmds),
 			i,
 			svc.DB,
-			zapscript.RunCommandOptions{
+			&zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
 				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
 				SkipMediaLaunch:    skipLaunch,

@@ -355,6 +355,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | decks.new                       | Create a deck.                                                                        | All clients |
 | decks.update                    | Edit a deck's name, description or items.                                             | All clients |
 | decks.delete                    | Delete a deck.                                                                        | All clients |
+| decks.open                      | Open a deck as the active playlist.                                                   | All clients |
 | settings.auth.claim             | Claim API credentials from remote server.                                             | All clients |
 | settings.auth.status            | Return credential link status.                                                        | All clients |
 | settings.auth.unlink            | Remove online account credentials.                                                    | Local/admin |

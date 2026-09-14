@@ -544,7 +544,7 @@ Title1=Portable Game`), 0o600))
 		1,
 		0,
 		nil,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 
