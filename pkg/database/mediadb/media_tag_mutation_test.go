@@ -22,11 +22,13 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -420,3 +422,79 @@ func assertMediaHasTag(
 }
 
 var _ database.MediaDBI = (*MediaDB)(nil)
+
+// SetMediaTagMembership makes exactly the listed media carry a tag in one
+// step: additions, removals and an empty list that clears the tag, with the
+// system tag cache kept in step and no write when nothing changes.
+func TestSetMediaTagMembership(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, _, mediaIDs := setupDisambTitle(t, mediaDB, "NES", "Member", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "a.nes"), tags: map[string]string{"region": "us"}},
+		{path: browseTestPath("roms", "nes", "b.nes"), tags: map[string]string{"region": "eu"}},
+		{path: browseTestPath("roms", "nes", "c.nes"), tags: map[string]string{"region": "jp"}},
+	})
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	deck := database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(tags.DeckTag("0123456789ab"))}
+
+	changed, err := mediaDB.SetMediaTagMembership(ctx, deck, nil)
+	require.NoError(t, err)
+	assert.False(t, changed, "clearing a tag that does not exist changes nothing")
+
+	changed, err = mediaDB.SetMediaTagMembership(ctx, deck, []int64{mediaIDs[0], mediaIDs[1], mediaIDs[0]})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assertMediaHasTag(t, mediaDB, mediaIDs[0], deck, true)
+	assertMediaHasTag(t, mediaDB, mediaIDs[1], deck, true)
+	assertMediaHasTag(t, mediaDB, mediaIDs[2], deck, false)
+	assert.Equal(t, int64(2), cachedTagCount(t, rawDB, "NES", deck.Type, deck.Tag))
+
+	changed, err = mediaDB.SetMediaTagMembership(ctx, deck, []int64{mediaIDs[1], mediaIDs[0]})
+	require.NoError(t, err)
+	assert.False(t, changed, "the same membership in another order is not a change")
+
+	revisionBefore := projectionRevision(t, rawDB)
+	changed, err = mediaDB.SetMediaTagMembership(ctx, deck, []int64{mediaIDs[1], mediaIDs[2]})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assertMediaHasTag(t, mediaDB, mediaIDs[0], deck, false)
+	assertMediaHasTag(t, mediaDB, mediaIDs[1], deck, true)
+	assertMediaHasTag(t, mediaDB, mediaIDs[2], deck, true)
+	assert.Equal(t, int64(2), cachedTagCount(t, rawDB, "NES", deck.Type, deck.Tag))
+	assert.NotEqual(t, revisionBefore, projectionRevision(t, rawDB), "a change invalidates browse cursors")
+
+	changed, err = mediaDB.SetMediaTagMembership(ctx, deck, nil)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	for _, id := range mediaIDs {
+		assertMediaHasTag(t, mediaDB, id, deck, false)
+	}
+	assert.Zero(t, cachedTagCount(t, rawDB, "NES", deck.Type, deck.Tag))
+
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	filtered, err := mediaDB.SearchMediaWithFilters(ctx, &database.SearchFilters{
+		Systems: []systemdefs.System{*nes},
+		Tags:    []zapscript.TagFilter{{Type: deck.Type, Value: deck.Tag, Operator: zapscript.TagOperatorAND}},
+		Limit:   10,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+}
+
+func projectionRevision(t *testing.T, rawDB *sql.DB) string {
+	t.Helper()
+	var value string
+	err := rawDB.QueryRowContext(context.Background(),
+		`SELECT Value FROM DBConfig WHERE Name = ?`, database.DeviceStateKeyMediaPreferencesRevision,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+	require.NoError(t, err)
+	return value
+}

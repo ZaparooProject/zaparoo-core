@@ -17,7 +17,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package decks
+package decks_test
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +36,7 @@ import (
 
 func TestTitleLaunchScript(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "**launch.title:SNES/Super Metroid", TitleLaunchScript("SNES", "Super Metroid", nil))
+	assert.Equal(t, "**launch.title:SNES/Super Metroid", decks.TitleLaunchScript("SNES", "Super Metroid", nil))
 
 	// Every script must parse back to one launch.title command whose single
 	// argument is the system, title and tags as composed.
@@ -62,7 +63,7 @@ func TestTitleLaunchScript(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			script := TitleLaunchScript("SNES", tc.name, tc.tags)
+			script := decks.TitleLaunchScript("SNES", tc.name, tc.tags)
 			parsed, err := zapscript.NewParser(script).ParseScript()
 			require.NoError(t, err, script)
 			require.Len(t, parsed.Cmds, 1, script)
@@ -88,7 +89,7 @@ func TestComposeMediaItem(t *testing.T) {
 	plainPath := filepath.Join("roms", "SNES", "Super Mario World (USA).sfc")
 	scantest.IndexMediaPaths(t, mediaDB, "SNES", hackPath, plainPath)
 
-	hack, err := ComposeMediaItem(ctx, mediaDB, "SNES", hackPath)
+	hack, err := decks.ComposeMediaItem(ctx, mediaDB, "SNES", hackPath)
 	require.NoError(t, err)
 	assert.Equal(t, database.DeckItemKindScript, hack.Kind)
 	assert.Equal(t, "Super Mario World", hack.Name)
@@ -105,13 +106,13 @@ func TestComposeMediaItem(t *testing.T) {
 	assert.Contains(t, hack.Anchor.Tags, "unlicensed:hack")
 	assert.Contains(t, hack.Anchor.Tags, "region:us")
 
-	plain, err := ComposeMediaItem(ctx, mediaDB, "SNES", plainPath)
+	plain, err := decks.ComposeMediaItem(ctx, mediaDB, "SNES", plainPath)
 	require.NoError(t, err)
 	assert.NotContains(t, plain.ZapScript, "hack")
 	assert.NotEqual(t, hack.ZapScript, plain.ZapScript, "the hack and the plain release compose different scripts")
 
-	_, err = ComposeMediaItem(ctx, mediaDB, "SNES", filepath.Join("roms", "SNES", "Missing.sfc"))
-	require.ErrorIs(t, err, ErrMediaNotIndexed)
+	_, err = decks.ComposeMediaItem(ctx, mediaDB, "SNES", filepath.Join("roms", "SNES", "Missing.sfc"))
+	require.ErrorIs(t, err, decks.ErrMediaNotIndexed)
 }
 
 // Right after an upgrade that changed the variant rule, a title's stored
@@ -135,7 +136,7 @@ func TestComposeMediaItem_StaleDisambiguation(t *testing.T) {
 
 	current := make(map[string]string, len(paths))
 	for _, path := range paths {
-		item, err := ComposeMediaItem(ctx, mediaDB, "SNES", path)
+		item, err := decks.ComposeMediaItem(ctx, mediaDB, "SNES", path)
 		require.NoError(t, err)
 		current[path] = item.ZapScript
 	}
@@ -151,7 +152,7 @@ func TestComposeMediaItem_StaleDisambiguation(t *testing.T) {
 	require.Empty(t, stale, "the stored types are stale")
 
 	for _, path := range paths {
-		item, composeErr := ComposeMediaItem(ctx, mediaDB, "SNES", path)
+		item, composeErr := decks.ComposeMediaItem(ctx, mediaDB, "SNES", path)
 		require.NoError(t, composeErr)
 		assert.Equal(t, current[path], item.ZapScript, "stale stored types still compose the current script")
 	}

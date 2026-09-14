@@ -1879,6 +1879,16 @@ func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) SetMediaTagMembership(
+	ctx context.Context, ref database.MediaTagRef, mediaDBIDs []int64,
+) (bool, error) {
+	args := m.Called(ctx, ref, mediaDBIDs)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
 func (m *MockMediaDBI) UpdateMediaTags(
 	ctx context.Context,
 	mediaDBID int64,
@@ -2847,6 +2857,7 @@ func NewMockUserDBI() *MockUserDBI {
 	// projection. Default to an empty list so tests exercising NewNamesIndex
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	m.On("ListDeckItemLinks").Return([]database.DeckItemLink{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	return m
 }

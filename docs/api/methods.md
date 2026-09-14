@@ -4158,6 +4158,8 @@ Every deck has a twelve-character ID drawn from the Crockford base32 alphabet (d
 
 A deck item is either a `script` (a name and the ZapScript it runs) or a `card` (an online card by ID, with its scripts and display metadata as pulled). A game added from the local library is stored as a script item: Core composes `**launch.title:<system>/<title>` with the file's disambiguating tags, so the item names the same game on any device, and keeps the file it was added from as the item's `media` so this device launches exactly that file. Card and deck `metadata` are stored as received and returned verbatim.
 
+Every indexed file a deck's game items resolve to carries the tag `user:deck:<id>`, so a deck can be browsed, searched and picked from with the ordinary tag filters, for example `**launch.random:SNES?tags=user:deck:0k3v9x2rq7bm`. An item resolves by the file it is linked to, or by its title when that file is gone or the item was added on another device, in which case it is linked to the file it matched. The tags are rebuilt after every reindex. Deck tags cannot be set through `media.tags.update`.
+
 Decks are private to the device. Creating, editing and deleting them is open to every accepted client, like favorites.
 
 ### Deck object
