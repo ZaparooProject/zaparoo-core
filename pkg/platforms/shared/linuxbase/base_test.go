@@ -196,6 +196,40 @@ func TestClearTrackedProcessPIDGuardsReplacement(t *testing.T) {
 	assert.False(t, base.ClearTrackedProcessPID(1002))
 }
 
+func TestClearTrackedProcessAndLauncherPIDClearsStopState(t *testing.T) {
+	t.Parallel()
+
+	tracked := &os.Process{Pid: 1002}
+	cfg := &config.Instance{}
+	killCalled := false
+	base := NewBase("test")
+	base.trackedProcess = tracked
+	base.completedTrackedProcess = &os.Process{Pid: 1001}
+	base.trackedProcessDone = make(chan struct{})
+	base.processWaitClaimed = true
+	base.lastLauncher = platforms.Launcher{Kill: func(*config.Instance) error {
+		killCalled = true
+		return nil
+	}}
+	base.lastConfig = cfg
+
+	assert.False(t, base.ClearTrackedProcessAndLauncherPID(1001))
+	assert.Same(t, tracked, base.trackedProcess)
+	assert.NotNil(t, base.lastLauncher.Kill)
+	assert.Same(t, cfg, base.lastConfig)
+
+	assert.True(t, base.ClearTrackedProcessAndLauncherPID(1002))
+	assert.Nil(t, base.trackedProcess)
+	assert.Nil(t, base.completedTrackedProcess)
+	assert.Nil(t, base.trackedProcessDone)
+	assert.False(t, base.processWaitClaimed)
+	assert.Nil(t, base.lastLauncher.Kill)
+	assert.Nil(t, base.lastConfig)
+
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
+	assert.False(t, killCalled, "cleared launcher state must not run a stale Kill callback")
+}
+
 func TestClearTrackedProcessMediaDoesNotClearReplacement(t *testing.T) {
 	t.Parallel()
 

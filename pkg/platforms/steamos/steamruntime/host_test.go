@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -771,6 +772,37 @@ func TestAcceptErrorsOnlyEndTheLoopWhenTheListenerIsClosed(t *testing.T) {
 	assert.False(t, acceptIsFatal(syscall.EMFILE))
 	assert.False(t, acceptIsFatal(syscall.ECONNABORTED))
 	assert.False(t, acceptIsFatal(errors.New("something else")))
+}
+
+// A failed host bind leaves the launch listener usable. A later Serve retries
+// only the missing host listener so host support can recover without restart.
+func TestServeRetriesHostListenerAfterPartialBind(t *testing.T) {
+	broker := testBroker(t)
+	t.Cleanup(broker.Close)
+
+	hostPath := hostSocket(t)
+	require.NoError(t, os.Mkdir(hostPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(hostPath, "block"), []byte("block"), 0o600))
+
+	require.NoError(t, broker.Serve())
+	broker.mu.Lock()
+	launchListener := broker.listener
+	hostListener := broker.hostListener
+	broker.mu.Unlock()
+	require.NotNil(t, launchListener)
+	assert.Nil(t, hostListener)
+
+	require.NoError(t, os.RemoveAll(hostPath))
+	require.NoError(t, broker.Serve())
+	broker.mu.Lock()
+	currentLaunchListener := broker.listener
+	hostListener = broker.hostListener
+	broker.mu.Unlock()
+	assert.Same(t, launchListener, currentLaunchListener)
+	require.NotNil(t, hostListener)
+
+	registerTestHost(t)
+	waitForHost(t, broker)
 }
 
 // Closing and serving again has to work, which is the observable half of the

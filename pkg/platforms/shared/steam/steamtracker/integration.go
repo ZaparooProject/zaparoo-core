@@ -120,7 +120,7 @@ func (pi *PlatformIntegration) ForgetIgnoredGames() {
 
 	for appID, reaperPID := range forget {
 		if pi.base != nil && reaperPID != 0 {
-			pi.base.ClearTrackedProcessPID(reaperPID)
+			pi.base.ClearTrackedProcessAndLauncherPID(reaperPID)
 		}
 		log.Info().Int("appID", appID).Int("reaperPID", reaperPID).
 			Msg("forgetting a Steam game that is Core's own launch host")

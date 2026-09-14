@@ -186,20 +186,25 @@ func (b *Broker) Serve() error {
 func (b *Broker) ensureListener() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.listener != nil {
+	if b.listener != nil && b.hostListener != nil {
 		return nil
 	}
-	path, err := socketPath()
-	if err != nil {
-		return err
+	if b.listener == nil {
+		path, err := socketPath()
+		if err != nil {
+			return err
+		}
+		listener, err := listenSocket(path)
+		if err != nil {
+			return err
+		}
+		b.listener = listener
+		b.socket = path
+		go b.acceptLoop(listener, roleLaunch)
 	}
-	listener, err := listenSocket(path)
-	if err != nil {
-		return err
+	if b.hostListener != nil {
+		return nil
 	}
-	b.listener = listener
-	b.socket = path
-	go b.acceptLoop(listener, roleLaunch)
 	// A host registering is not urgent enough to fail a launch over, so a
 	// second socket that will not bind is logged and left alone.
 	hostPath, err := hostSocketPath()

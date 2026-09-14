@@ -177,6 +177,19 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
+func (b *Base) clearTrackedProcessLocked() {
+	b.trackedProcess = nil
+	b.completedTrackedProcess = nil
+	b.trackedProcessDone = nil
+	b.processWaitClaimed = false
+}
+
+func (b *Base) clearTrackedProcessAndLauncherLocked() {
+	b.clearTrackedProcessLocked()
+	b.lastLauncher = platforms.Launcher{}
+	b.lastConfig = nil
+}
+
 // ClearTrackedProcessPID forgets a completed externally-owned process without
 // signaling it. The PID check prevents an older lifecycle event from clearing
 // a newer tracked process.
@@ -188,10 +201,22 @@ func (b *Base) ClearTrackedProcessPID(pid int) bool {
 		return false
 	}
 
-	b.trackedProcess = nil
-	b.completedTrackedProcess = nil
-	b.trackedProcessDone = nil
-	b.processWaitClaimed = false
+	b.clearTrackedProcessLocked()
+	return true
+}
+
+// ClearTrackedProcessAndLauncherPID forgets a tracked process and its
+// launcher-specific stop state without signaling it. The PID check prevents an
+// older lifecycle event from clearing a newer launch.
+func (b *Base) ClearTrackedProcessAndLauncherPID(pid int) bool {
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
+
+	if b.trackedProcess == nil || b.trackedProcess.Pid != pid {
+		return false
+	}
+
+	b.clearTrackedProcessAndLauncherLocked()
 	return true
 }
 
@@ -293,12 +318,7 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 	if proc != nil && b.isProtectedLocked(proc.Pid) {
 		log.Debug().Int("pid", proc.Pid).
 			Msg("not stopping a protected process tree; clearing it instead")
-		b.trackedProcess = nil
-		b.completedTrackedProcess = nil
-		b.trackedProcessDone = nil
-		b.processWaitClaimed = false
-		b.lastLauncher = platforms.Launcher{}
-		b.lastConfig = nil
+		b.clearTrackedProcessAndLauncherLocked()
 		proc = nil
 	}
 	customKill := b.lastLauncher.Kill
