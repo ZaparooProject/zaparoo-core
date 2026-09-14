@@ -123,6 +123,7 @@ const (
 	MethodMediaLookupCandidates       = "media.lookup.candidates"
 	MethodMediaMeta                   = "media.meta"
 	MethodMediaImage                  = "media.image"
+	MethodMediaAsset                  = "media.asset"
 	MethodScrapers                    = "scrapers"
 	MethodMediaScrape                 = "media.scrape"
 	MethodMediaScrapeStatus           = "media.scrape.status"

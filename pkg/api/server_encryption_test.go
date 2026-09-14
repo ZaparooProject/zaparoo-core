@@ -32,6 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/gorilla/websocket"
@@ -121,7 +122,9 @@ func TestWritePong_Encrypted(t *testing.T) {
 // established session needs to decrypt server messages. Tests use it to
 // verify wire shape end-to-end.
 type testEncryptionPeerSecrets struct {
+	c2sGCM   cipher.AEAD
 	s2cGCM   cipher.AEAD
+	c2sNonce []byte
 	s2cNonce []byte
 	aad      []byte
 }
@@ -159,6 +162,16 @@ func establishTestEncryptionSession(t *testing.T) (*apimiddleware.ClientSession,
 // hand the frame to the code under test instead of the gateway.
 func newTestEncryptionFirstFrame(t *testing.T) *testEncryptionFirstFrame {
 	t.Helper()
+	return newTestEncryptionFirstFrameForRequest(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`),
+	)
+}
+
+func newTestEncryptionFirstFrameForRequest(
+	t *testing.T,
+	plaintextReq []byte,
+) *testEncryptionFirstFrame {
+	t.Helper()
 
 	pairingKey := make([]byte, crypto.PairingKeySize)
 	_, err := cryptorand.Read(pairingKey)
@@ -170,6 +183,7 @@ func newTestEncryptionFirstFrame(t *testing.T) *testEncryptionFirstFrame {
 		ClientName: "Test",
 		AuthToken:  "test-auth-token",
 		PairingKey: pairingKey,
+		Role:       string(permissions.RoleMember),
 	}
 
 	db := helpers.NewMockUserDBI()
@@ -189,7 +203,6 @@ func newTestEncryptionFirstFrame(t *testing.T) *testEncryptionFirstFrame {
 	require.NoError(t, err)
 
 	aad := []byte(c.AuthToken + ":ws")
-	plaintextReq := []byte(`{"jsonrpc":"2.0","method":"version","id":1}`)
 	ct, err := crypto.Encrypt(clientC2S, keys.C2SNonce, 0, plaintextReq, aad)
 	require.NoError(t, err)
 
@@ -202,7 +215,9 @@ func newTestEncryptionFirstFrame(t *testing.T) *testEncryptionFirstFrame {
 			SessionSalt: base64.StdEncoding.EncodeToString(salt),
 		},
 		secrets: &testEncryptionPeerSecrets{
+			c2sGCM:   clientC2S,
 			s2cGCM:   clientS2C,
+			c2sNonce: keys.C2SNonce,
 			s2cNonce: keys.S2CNonce,
 			aad:      aad,
 		},

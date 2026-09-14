@@ -1946,7 +1946,7 @@ Single requests return the existing single `media` response shape. Batch request
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
 | blobSize    | number | No       | Size in bytes for binary-backed properties. |
 
-Binary property data is not returned by `media.meta`. Use `media.image` to fetch image bytes.
+Binary property data is not returned by `media.meta`. Use `media.image` to fetch image bytes and `media.asset` to fetch supported file-backed assets.
 Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
 
 #### Example
@@ -2096,6 +2096,102 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
     "media": {
       "launcherOverride": null
     }
+  }
+}
+```
+
+### media.asset
+
+**Access:** All clients.
+
+Return one bounded base64 chunk from an allowlisted file-backed property associated with indexed media. Initial support is `assetType: "manual"`, which resolves `property:manual` and accepts only regular PDF files within trusted media or scraper roots. `video` and other assets are not currently supported. Source paths and basenames are never returned.
+
+Each request is independent. Start with `offset: 0`, then request `nextOffset` with the exact `etag` from the preceding response until `complete` is `true`. Assets no larger than one requested chunk return with `complete: true` in first response; clients must stop when `complete` is true. This pull model keeps memory and WebSocket messages bounded and gives clients natural backpressure. If an asset changes between chunks, Core rejects the continuation; restart from offset zero.
+
+Asset resolution follows media metadata precedence: primary media property, equivalent media aliases, then title property.
+
+#### Parameters
+
+An object identifying a media row by `mediaId` or by `(system, path)`.
+
+| Key       | Type   | Required | Description |
+| :-------- | :----- | :------- | :---------- |
+| mediaId   | number | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system    | string | No       | System ID. Required when `mediaId` is omitted. |
+| path      | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
+| assetType | string | Yes      | Allowlisted asset type. Currently only `manual`. Raw property tags are not accepted. |
+| offset    | number | No       | Zero-based raw byte offset. Defaults to `0`. Nonzero offsets require `etag`. An offset equal to `size` returns an empty complete chunk; larger offsets are rejected. |
+| length    | number | No       | Requested raw bytes. Defaults to and cannot exceed 524288 (512 KiB). |
+| etag      | string | No       | Opaque asset version from a prior response. Required when `offset` is nonzero. |
+
+#### Result
+
+| Key         | Type    | Required | Description |
+| :---------- | :------ | :------- | :---------- |
+| assetType   | string  | Yes      | Resolved allowlisted asset type. |
+| typeTag     | string  | Yes      | Canonical matched property tag; `property:manual` for manuals. |
+| contentType | string  | Yes      | Validated MIME type; `application/pdf` for manuals. |
+| extension   | string  | Yes      | Validated extension without a dot; `pdf` for manuals. |
+| size        | number  | Yes      | Total raw asset size in bytes. |
+| etag        | string  | Yes      | Opaque asset version. Send unchanged on continuation requests. |
+| offset      | number  | Yes      | Raw byte offset returned by this response. |
+| length      | number  | Yes      | Actual raw bytes in `data`. May be smaller than requested at EOF. |
+| data        | string  | Yes      | Base64-encoded chunk bytes. Empty at exact EOF. |
+| nextOffset  | number  | No       | Offset for next request. Omitted when `complete` is true. |
+| complete    | boolean | Yes      | Whether this response reaches asset EOF. |
+
+#### Example
+
+##### Initial request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.asset",
+  "params": {
+    "mediaId": 123,
+    "assetType": "manual",
+    "length": 524288
+  }
+}
+```
+
+##### Partial response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "assetType": "manual",
+    "typeTag": "property:manual",
+    "contentType": "application/pdf",
+    "extension": "pdf",
+    "size": 7340032,
+    "etag": "43e47c399d35d8be...",
+    "offset": 0,
+    "length": 524288,
+    "data": "JVBERi0xLjcK...",
+    "nextOffset": 524288,
+    "complete": false
+  }
+}
+```
+
+##### Continuation request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "media.asset",
+  "params": {
+    "mediaId": 123,
+    "assetType": "manual",
+    "offset": 524288,
+    "length": 524288,
+    "etag": "43e47c399d35d8be..."
   }
 }
 ```
