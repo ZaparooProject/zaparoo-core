@@ -4162,7 +4162,7 @@ A deck item is either a `script` (a name and the ZapScript it runs) or a `card` 
 
 Every indexed file a deck's game items resolve to carries the tag `user:deck:<id>`, so a deck can be browsed, searched and picked from with the ordinary tag filters, for example `**launch.random:SNES?tags=user:deck:0k3v9x2rq7bm`. An item resolves by the file it is linked to, or by its title when it has no linked file on this device or that file is no longer indexed, in which case it is linked to the file it matched. A title match only counts when it is a confident one. When the linked file is still indexed but was not found by the last scan, such as a file on a drive that was unplugged, the item keeps its link and its title match carries the tag until the file is found again. Tags are updated in the background shortly after a deck is created, edited or deleted, so `decks.new` and `decks.update` return before they are in place, and a title item is linked once its title has been matched; Core sends `decks.changed` with `updated` when it links items. The tags are also rebuilt after every reindex, after `media.clean.orphans` removes files and after a backup is restored. Deck tags cannot be set through `media.tags.update`.
 
-Decks are private to the device. Creating, editing and deleting them is open to every accepted client, like favorites.
+Decks work with no account. With Library sync on, the decks this device owns sync with the linked Zaparoo Online account: a deck made on either side appears on the other, an edit on one side is taken by the other, and when both sides edited a deck the changes are merged, with a name or description changed on the device kept. A deck deleted on the account is deleted here. Creating, editing and deleting decks is open to every accepted client, like favorites.
 
 ### Deck object
 
@@ -4172,6 +4172,7 @@ Decks are private to the device. Creating, editing and deleting them is open to 
 | name        | string                           | Yes      | Display name, at most 100 characters.                                |
 | description | string                           | Yes      | Description, at most 1000 characters. Empty when unset.              |
 | owned       | boolean                          | Yes      | True for decks made on this device or its account; false for a cached copy of somebody else's deck, which cannot be edited. |
+| locked      | boolean                          | Yes      | True when the linked Zaparoo Online account locked the deck. A locked deck cannot be edited or deleted on the device. |
 | itemCount   | number                           | Yes      | Number of items in the deck.                                         |
 | items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order, `[]` when empty. Omitted by `decks`.    |
 | metadata    | object                           | No       | Display metadata as received from the account, verbatim.             |
@@ -4289,6 +4290,7 @@ The created [Deck](#deck-object) with `items`.
     "name": "Weekend",
     "description": "",
     "owned": true,
+    "locked": false,
     "itemCount": 2,
     "items": [
       {
@@ -4323,7 +4325,7 @@ The created [Deck](#deck-object) with `items`.
 
 **Access:** All clients.
 
-Edit an owned deck. A cached copy of somebody else's deck is read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items. The whole edit is applied at once, to the deck as it is at that moment: if any part fails, nothing changes. A request with no changes returns the deck as it is and sends no notification.
+Edit an owned deck. A cached copy of somebody else's deck, and a deck the account locked, are read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items. The whole edit is applied at once, to the deck as it is at that moment: if any part fails, nothing changes. A request with no changes returns the deck as it is and sends no notification.
 
 #### Parameters
 
@@ -4344,7 +4346,7 @@ The updated [Deck](#deck-object) with `items`.
 
 **Access:** All clients.
 
-Delete a deck, owned or cached.
+Delete a deck, owned or cached. A deck the account locked cannot be deleted.
 
 #### Parameters
 

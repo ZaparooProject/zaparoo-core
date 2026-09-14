@@ -27,8 +27,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -85,6 +87,9 @@ type Options struct {
 	// Launchers returns the launchers of a system, used to pick the copy a
 	// launch would start when a pulled flag needs a home. Optional.
 	Launchers func(systemID string) []platforms.Launcher
+	// Notifications receives decks.changed when a sync pass changes a deck.
+	// Optional.
+	Notifications chan<- models.Notification
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -100,7 +105,10 @@ type Service struct {
 	sendHeartbeat func(context.Context) error
 	now           func() time.Time
 	launchers     func(systemID string) []platforms.Launcher
+	notifications chan<- models.Notification
+	deckSem       chan struct{}
 	resolvePace   time.Duration
+	lastDeckPull  atomic.Int64
 	inventoryMu   syncutil.Mutex
 	stateMu       syncutil.Mutex
 }
@@ -117,6 +125,8 @@ func New(opts *Options) *Service {
 		now:           opts.Now,
 		launchers:     opts.Launchers,
 		resolvePace:   opts.ResolvePace,
+		notifications: opts.Notifications,
+		deckSem:       make(chan struct{}, 1),
 	}
 	if s.now == nil {
 		s.now = time.Now

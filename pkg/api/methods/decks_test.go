@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -530,6 +531,47 @@ func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	assert.Equal(t, "Old deck", legacy.Name)
 	_, isNoContent = e.call(t, HandleDecksDelete, `{"deckId":"KQ7RIL0U"}`).(NoContent)
 	assert.True(t, isNoContent)
+}
+
+func TestHandleDecks_LockedDeckIsReadOnly(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	require.NoError(t, e.env.Database.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Locked", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
+	}))
+	require.NoError(t, e.env.Database.UserDB.UpsertDeckSync([]database.DeckSyncRow{
+		{DeckID: "0123456789ab", Revision: 3, Locked: true},
+	}))
+
+	var signals atomic.Int32
+	e.env.State.SetLibrarySyncSignals(state.LibrarySyncSignals{
+		DecksAccessed: func() { signals.Add(1) },
+		DecksChanged:  func() { t.Error("a refused edit must not signal a push") },
+	})
+
+	got, ok := e.call(t, HandleDecksGet, `{"deckId":"0123456789ab"}`).(models.DeckResponse)
+	require.True(t, ok)
+	assert.True(t, got.Locked)
+	list, ok := e.call(t, HandleDecks, `{}`).(models.DecksResponse)
+	require.True(t, ok)
+	require.Len(t, list.Decks, 1)
+	assert.True(t, list.Decks[0].Locked)
+	assert.Equal(t, int32(2), signals.Load(), "looking at decks asks for a pull")
+
+	_, err := HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Changed"}`))
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+	_, err = HandleDecksDelete(withParams(&e.env, `{"deckId":"0123456789ab"}`))
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+}
+
+func TestHandleDecksNew_SignalsSync(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	var changed atomic.Int32
+	e.env.State.SetLibrarySyncSignals(state.LibrarySyncSignals{DecksChanged: func() { changed.Add(1) }})
+	e.call(t, HandleDecksNew, `{"name":"Weekend"}`)
+	assert.Equal(t, int32(1), changed.Load())
 }
 
 func TestHandleDecksNew_Validation(t *testing.T) {
