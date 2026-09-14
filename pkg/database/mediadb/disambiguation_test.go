@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -787,4 +788,133 @@ func TestAttachZapScriptTags_OrdersByDisplayPriority(t *testing.T) {
 		results[0].ZapScriptTags[2].Type,
 	}
 	assert.Equal(t, []string{"unfinished", "region", "rev"}, gotOrder)
+}
+
+// A game-variant tag (tags.GameVariantTags) disambiguates a title even when the
+// title has a single media row: the tag is what tells the hack from the plain
+// release on a device that holds both, so a device holding only the hack must
+// still emit it or the other device resolves the original.
+func TestRecomputeSystemDisambiguation_LoneVariantAlwaysDisambiguates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		tags map[string]string
+		want string
+	}{
+		{name: "hack", tags: map[string]string{"unlicensed": "hack", "region": "us"}, want: "unlicensed"},
+		{name: "hacked dump sub-variant", tags: map[string]string{"dump": "hacked:ffe"}, want: "dump"},
+		{name: "modified dump", tags: map[string]string{"dump": "modified"}, want: "dump"},
+		{name: "homebrew", tags: map[string]string{"release": "homebrew", "year": "2019"}, want: "release"},
+		{name: "public domain", tags: map[string]string{"copyright": "pd"}, want: "copyright"},
+		{name: "translation is a version", tags: map[string]string{"unlicensed": "translation"}, want: ""},
+		{name: "plain release", tags: map[string]string{"region": "us", "rev": "1"}, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mediaDB, cleanup := setupTempMediaDB(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "SNES", "Lone Game", []disambTitleMedia{
+				{path: browseTestPath("roms", "snes", "lone.sfc"), tags: tc.tags},
+			})
+			require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+			assert.Equal(t, tc.want, titleDisambiguationTypes(t, mediaDB, titleDBID))
+
+			results := []database.SearchResultWithCursor{
+				{MediaID: mediaIDs[0], DisambiguationTypes: tc.want},
+			}
+			require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
+			if tc.want == "" {
+				assert.Empty(t, results[0].ZapScriptTags)
+				return
+			}
+			require.Len(t, results[0].ZapScriptTags, 1)
+			assert.Equal(t, tc.want, results[0].ZapScriptTags[0].Type)
+			assert.Equal(t, tc.tags[tc.want], results[0].ZapScriptTags[0].Tag)
+		})
+	}
+}
+
+// Two hacks of one game tagged identically disagree on nothing, so the sibling
+// rule alone would emit no tag; the variant rule still marks the type.
+func TestRecomputeSystemDisambiguation_IdenticalVariantSiblingsKeepTag(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, _ := setupDisambTitle(t, mediaDB, "SNES", "Twin Hack", []disambTitleMedia{
+		{path: browseTestPath("roms", "snes", "twin-a.sfc"), tags: map[string]string{"unlicensed": "hack"}},
+		{path: browseTestPath("roms", "snes", "twin-b.sfc"), tags: map[string]string{"unlicensed": "hack"}},
+	})
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "unlicensed", titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// A missing media row's variant tag must not mark the title.
+func TestRecomputeSystemDisambiguation_MissingVariantIgnored(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "SNES", "Gone Hack", []disambTitleMedia{
+		{path: browseTestPath("roms", "snes", "gone-hack.sfc"), tags: map[string]string{"unlicensed": "hack"}},
+		{path: browseTestPath("roms", "snes", "gone-plain.sfc"), tags: map[string]string{"region": "us"}},
+	})
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, mediaIDs[0])
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// The SQL form of the variant rule and the Go form must agree on every
+// canonical value of the types the rule names, plus the hacked sub-variants.
+func TestGameVariantTagSQLPredicate_AgreesWithGo(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	db := mediaDB.sql.Load()
+
+	_, err := db.ExecContext(ctx, `CREATE TEMP TABLE variant_probe (Type TEXT NOT NULL, Tag TEXT NOT NULL)`)
+	require.NoError(t, err)
+	type pair struct{ typ, value string }
+	probes := make([]pair, 0, 128)
+	probeTypes := []tags.TagType{tags.TagTypeUnlicensed, tags.TagTypeDump, tags.TagTypeRelease, tags.TagTypeCopyright}
+	for _, tagType := range probeTypes {
+		for _, value := range tags.CanonicalTagDefinitions[tagType] {
+			probes = append(probes, pair{string(tagType), tags.PadTagValue(string(value))})
+		}
+	}
+	probes = append(probes,
+		pair{"dump", "hacked:ffe"}, pair{"dump", "hacked:intro-removed"}, pair{"dump", "hackedx"},
+		pair{"release", "hack"}, pair{"unlicensed", "homebrew"}, pair{"region", "us"},
+	)
+	for _, p := range probes {
+		_, err = db.ExecContext(ctx, `INSERT INTO variant_probe (Type, Tag) VALUES (?, ?)`, p.typ, p.value)
+		require.NoError(t, err)
+	}
+
+	clause, args := tags.GameVariantTagSQLPredicate("Type", "Tag")
+	//nolint:gosec // clause is a parameterized predicate built from constants; values are bound.
+	rows, err := db.QueryContext(ctx, `SELECT Type, Tag FROM variant_probe WHERE `+clause, args...)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	matched := make(map[pair]bool)
+	for rows.Next() {
+		var p pair
+		require.NoError(t, rows.Scan(&p.typ, &p.value))
+		matched[p] = true
+	}
+	require.NoError(t, rows.Err())
+
+	for _, p := range probes {
+		assert.Equal(t, tags.IsGameVariantTag(p.typ, tags.UnpadTagValue(p.value)), matched[p], "%s:%s", p.typ, p.value)
+	}
+	assert.True(t, matched[pair{"unlicensed", "hack"}])
+	assert.True(t, matched[pair{"dump", "hacked:ffe"}])
+	assert.False(t, matched[pair{"dump", "hackedx"}])
 }

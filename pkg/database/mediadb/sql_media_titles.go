@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -276,10 +277,11 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		typeArgs[i] = t
 	}
 	typeClause := " AND tt.Type IN (" + prepareVariadic("?", ",", len(database.ZapScriptTagTypes)) + ")"
+	variantClause, variantArgs := tags.GameVariantTagSQLPredicate("tt.Type", "t.Tag")
 
 	// Chunk IDs so bound parameters stay under SQLite's limit; leave room for the
-	// type params the set statement appends.
-	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
+	// type and variant params the set statement appends.
+	chunkSize := sqliteMaxParams - len(typeArgs) - len(variantArgs)
 	chunkCount := (len(ids) + chunkSize - 1) / chunkSize
 	log.Debug().
 		Str("filter", filterCol).
@@ -310,9 +312,13 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		// type disambiguates when its sibling media disagree: either two media carry
 		// different per-media value-sets (COUNT(DISTINCT vs) > 1), or some media carry
 		// the type and others lack it (mtc < the title's total non-missing media count)
-		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored
-		// comma-joined in alphabetical order; read paths reorder them by display rank.
-		// The IS NOT guard skips rows already holding the computed value.
+		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". A type also
+		// disambiguates whenever any present media of the title carries a game-variant
+		// value (tags.GameVariantTags: hacks, homebrew, public domain), sibling or
+		// not, so a device holding only "Game (Hack)" still emits the tag and another
+		// device does not resolve the plain release. Types are stored comma-joined in
+		// alphabetical order; read paths reorder them by display rank. The IS NOT
+		// guard skips rows already holding the computed value.
 		//
 		// tot and mvs use CROSS JOIN (SQLite's manual join-order override) so the
 		// scoped title set always drives the lookups through
@@ -351,10 +357,21 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc
 				FROM mvs GROUP BY tid, typ
 			),
+			variant AS MATERIALIZED (
+				SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ
+				FROM scope
+				CROSS JOIN Media m ON m.MediaTitleDBID = scope.tid
+				CROSS JOIN MediaTags x ON x.MediaDBID = m.DBID
+				CROSS JOIN Tags t ON t.DBID = x.TagDBID
+				CROSS JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+				WHERE m.IsMissing = 0 AND %s
+			),
 			qual AS MATERIALIZED (
 				SELECT agg.tid AS tid, agg.typ AS typ
 				FROM agg JOIN tot ON tot.tid = agg.tid
 				WHERE agg.dv > 1 OR agg.mtc < tot.tm
+				UNION
+				SELECT tid, typ FROM variant
 			),
 			grp AS MATERIALIZED (
 				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
@@ -369,11 +386,12 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			FROM result
 			WHERE MediaTitles.DBID = result.tid
 			  AND MediaTitles.DisambiguationTypes IS NOT result.types
-		`, filterCol, holders, typeClause)
+		`, filterCol, holders, typeClause, variantClause)
 
-		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))
+		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs)+len(variantArgs))
 		setArgs = append(setArgs, chunkArgs...)
 		setArgs = append(setArgs, typeArgs...)
+		setArgs = append(setArgs, variantArgs...)
 		res, err := db.ExecContext(ctx, setQuery, setArgs...)
 		if err != nil {
 			return fmt.Errorf("failed to recompute disambiguation: %w", err)

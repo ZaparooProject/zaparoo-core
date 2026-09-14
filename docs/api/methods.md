@@ -615,7 +615,7 @@ An object:
 | hasCover  | boolean                  | Yes      | Whether media-level or title-level image properties are available. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item. Includes the disambiguating tags inline (e.g. `@Arcade/X-Men Vs. Street Fighter (region:eu) (builddate:1996-10-04)`) so the written command resolves back to this specific variant. |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
-| disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Omitted when the title has nothing to disambiguate. Clients can render these to tell variants apart. |
+| disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, hacked or modified dump, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Omitted when there is nothing to disambiguate. Clients can render these to tell variants apart. |
 
 ##### System object
 
@@ -823,7 +823,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries. |
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
-| disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
+| disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, hacked or modified dump, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Same object shape as `tags`. Omitted when there is nothing to disambiguate. |
 | hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
 
 ##### Browse pagination object
