@@ -39,10 +39,15 @@ var ErrMediaNotIndexed = errors.New("media is not indexed")
 // TitleLaunchScript renders the explicit title launch for a game:
 // **launch.title:<System>/<Title> (type:value)... The tags are the title's
 // disambiguating tags, which always include the ones that make the file a
-// distinct game, so the script names this game on any device.
+// distinct game, so the script names this game on any device. The argument
+// is written through the ZapScript serializer, so a title holding a
+// character the parser treats specially (a question mark, a comma between
+// grouped tag values, a pipe) is quoted and survives as one argument.
 func TitleLaunchScript(systemID, name string, tags []database.TagInfo) string {
-	return "**" + zapscript.ZapScriptCmdLaunchTitle + ":" +
-		strings.TrimPrefix(database.BuildTitleZapScript(systemID, name, tags), "@")
+	return zapscript.Command{
+		Name: zapscript.ZapScriptCmdLaunchTitle,
+		Args: []string{strings.TrimPrefix(database.BuildTitleZapScript(systemID, name, tags), "@")},
+	}.String()
 }
 
 // ComposeMediaItem builds the deck item for an indexed file: a script item
