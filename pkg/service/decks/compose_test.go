@@ -22,8 +22,10 @@ package decks
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
@@ -34,8 +36,42 @@ import (
 func TestTitleLaunchScript(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "**launch.title:SNES/Super Metroid", TitleLaunchScript("SNES", "Super Metroid", nil))
-	assert.Equal(t, "**launch.title:SNES/Super Mario World (unlicensed:hack)",
-		TitleLaunchScript("SNES", "Super Mario World", []database.TagInfo{{Type: "unlicensed", Tag: "hack"}}))
+
+	// Every script must parse back to one launch.title command whose single
+	// argument is the system, title and tags as composed.
+	tests := []struct {
+		name string
+		want string
+		tags []database.TagInfo
+	}{
+		{
+			name: "Super Mario World",
+			tags: []database.TagInfo{{Type: "unlicensed", Tag: "hack"}},
+			want: "SNES/Super Mario World (unlicensed:hack)",
+		},
+		{name: "Who Wants to Be a Millionaire?", want: "SNES/Who Wants to Be a Millionaire?"},
+		{name: "Rock || Roll", want: "SNES/Rock || Roll"},
+		{
+			name: "Game",
+			tags: []database.TagInfo{{Type: "region", Tag: "eu"}, {Type: "region", Tag: "us"}},
+			want: "SNES/Game (region:eu, region:us)",
+		},
+		{name: `Say "Hi"`, want: `SNES/Say "Hi"`},
+		{name: "Hello [[World]]", want: "SNES/Hello [[World]]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			script := TitleLaunchScript("SNES", tc.name, tc.tags)
+			parsed, err := zapscript.NewParser(script).ParseScript()
+			require.NoError(t, err, script)
+			require.Len(t, parsed.Cmds, 1, script)
+			assert.Equal(t, zapscript.ZapScriptCmdLaunchTitle, parsed.Cmds[0].Name)
+			require.Len(t, parsed.Cmds[0].Args, 1, script)
+			assert.Equal(t, tc.want, parsed.Cmds[0].Args[0])
+			assert.True(t, parsed.Cmds[0].AdvArgs.IsEmpty(), script)
+		})
+	}
 }
 
 // A game added from this device composes a title launch that names the same
@@ -56,8 +92,13 @@ func TestComposeMediaItem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, database.DeckItemKindScript, hack.Kind)
 	assert.Equal(t, "Super Mario World", hack.Name)
-	assert.Contains(t, hack.ZapScript, "**launch.title:SNES/Super Mario World")
-	assert.Contains(t, hack.ZapScript, "(unlicensed:hack)")
+	parsed, err := zapscript.NewParser(hack.ZapScript).ParseScript()
+	require.NoError(t, err)
+	require.Len(t, parsed.Cmds, 1)
+	assert.Equal(t, zapscript.ZapScriptCmdLaunchTitle, parsed.Cmds[0].Name)
+	require.Len(t, parsed.Cmds[0].Args, 1)
+	assert.True(t, strings.HasPrefix(parsed.Cmds[0].Args[0], "SNES/Super Mario World"))
+	assert.Contains(t, parsed.Cmds[0].Args[0], "(unlicensed:hack)")
 	assert.Equal(t, "SNES", hack.Anchor.SystemID)
 	assert.Equal(t, filepath.ToSlash(hackPath), hack.Anchor.Path)
 	assert.Equal(t, "Super Mario World", hack.Anchor.MediaName)
