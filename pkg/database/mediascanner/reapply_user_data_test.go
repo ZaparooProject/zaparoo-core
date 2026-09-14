@@ -58,6 +58,7 @@ func TestReapplyMediaUserData(t *testing.T) {
 	}))
 	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
 		SystemID: "NES", Path: bothPath, IsFavorite: true, LauncherOverride: "RetroArch",
+		IsLiked: true, IsPlayLater: true, IsHidden: true,
 	}))
 	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
 		SystemID: "NES", Path: filepath.Join("roms", "NES", "Ghost.nes"), IsFavorite: true,
@@ -78,6 +79,10 @@ func TestReapplyMediaUserData(t *testing.T) {
 
 	assert.True(t, mediaHasFavorite(ctx, t, mediaDB, "NES", bothPath))
 	assert.Equal(t, "RetroArch", mediaLauncherOverride(ctx, t, mediaDB, "NES", bothPath))
+	for _, want := range []tags.TagValue{tags.TagUserHidden, tags.TagUserLiked, tags.TagUserPlayLater} {
+		assert.True(t, mediaHasUserTag(ctx, t, mediaDB, "NES", bothPath, want), "%s", want)
+	}
+	assert.False(t, mediaHasUserTag(ctx, t, mediaDB, "NES", bothPath, tags.TagUserDisliked))
 
 	assert.False(t, mediaHasFavorite(ctx, t, mediaDB, "NES", plainPath))
 	assert.Empty(t, mediaLauncherOverride(ctx, t, mediaDB, "NES", plainPath))
@@ -118,10 +123,17 @@ func mediaDBIDForPath(
 
 func mediaHasFavorite(ctx context.Context, t *testing.T, db database.MediaDBI, systemID, path string) bool {
 	t.Helper()
+	return mediaHasUserTag(ctx, t, db, systemID, path, tags.TagUserFavorite)
+}
+
+func mediaHasUserTag(
+	ctx context.Context, t *testing.T, db database.MediaDBI, systemID, path string, value tags.TagValue,
+) bool {
+	t.Helper()
 	tagInfos, err := db.GetMediaTagsByMediaDBID(ctx, mediaDBIDForPath(ctx, t, db, systemID, path))
 	require.NoError(t, err)
 	for _, ti := range tagInfos {
-		if ti.Type == string(tags.TagTypeUser) && ti.Tag == string(tags.TagUserFavorite) {
+		if ti.Type == string(tags.TagTypeUser) && ti.Tag == string(value) {
 			return true
 		}
 	}

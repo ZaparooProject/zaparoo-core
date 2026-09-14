@@ -29,21 +29,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// setMediaUserFavorite records the favourite intent for a media path in UserDB,
-// the source of truth; callers then materialize the media.db projection. The
-// write is column-scoped and atomic so it cannot clobber a concurrent launcher
-// override edit on the same path.
-func setMediaUserFavorite(env *requests.RequestEnv, systemID, path string, favorite bool) error {
-	if err := env.Database.UserDB.SetMediaUserFavorite(systemID, path, favorite); err != nil {
-		return fmt.Errorf("failed to set media user favorite: %w", err)
-	}
-	snapshotMediaUserIdentity(env, systemID, path)
-	return nil
-}
-
 // setMediaUserLauncherOverride records the launcher-override intent for a media
 // path in UserDB. An empty launcherID clears the override. See
-// setMediaUserFavorite for the concurrency guarantee.
+// UserDB.SetMediaUserFlag for the concurrency guarantee.
 func setMediaUserLauncherOverride(env *requests.RequestEnv, systemID, path, launcherID string) error {
 	if err := env.Database.UserDB.SetMediaUserLauncherOverride(systemID, path, launcherID); err != nil {
 		return fmt.Errorf("failed to set media user launcher override: %w", err)
@@ -69,7 +57,7 @@ func snapshotMediaUserIdentity(env *requests.RequestEnv, systemID, path string) 
 		return
 	}
 	if err := env.Database.UserDB.SetMediaUserSnapshot(
-		systemID, path, identity.DisplayName, identity.LegacyTags(),
+		systemID, path, identity.DisplayName, identity.CoreSlug, identity.LegacyTags(),
 	); err != nil {
 		log.Warn().Err(err).Str("path", path).Msg("failed to store media user identity snapshot")
 	}
