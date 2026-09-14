@@ -150,9 +150,20 @@ func TestHandleDecks_CreateGetListDelete(t *testing.T) {
 	assert.Nil(t, list.Decks[0].Items)
 	assert.Equal(t, 4, list.Decks[0].ItemCount)
 
+	// Both game items carry the deck's membership tag, so the deck can be
+	// browsed and searched like any other tag.
+	tagged := searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID})
+	taggedIDs := make([]int64, 0, len(tagged.Results))
+	for _, r := range tagged.Results {
+		taggedIDs = append(taggedIDs, r.MediaID)
+	}
+	assert.ElementsMatch(t, e.ids, taggedIDs)
+
 	_, isNoContent := e.call(t, HandleDecksDelete, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)).(NoContent)
 	assert.True(t, isNoContent)
 	e.expectNotification(t, created.DeckID, models.DecksChangedDeleted)
+	assert.Empty(t, searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID}).Results,
+		"deleting a deck removes its membership tags")
 	_, err := HandleDecksGet(withParams(&e.env, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)))
 	require.ErrorIs(t, err, database.ErrDeckNotFound)
 	_, err = HandleDecksDelete(withParams(&e.env, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)))
@@ -181,12 +192,18 @@ func TestHandleDecksUpdate(t *testing.T) {
 	assert.Equal(t, 2, updated.Items[1].Position)
 	e.expectNotification(t, created.DeckID, models.DecksChangedUpdated)
 
+	tagged := searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID})
+	require.Len(t, tagged.Results, 1, "the media item added by the update carries the tag")
+	assert.Equal(t, e.ids[0], tagged.Results[0].MediaID)
+
 	replaced, ok := e.call(t, HandleDecksUpdate, fmt.Sprintf(`{"deckId":%q, "items": [
 		{"kind": "script", "name": "Only", "zapscript": "**only"}]}`, created.DeckID)).(models.DeckResponse)
 	require.True(t, ok)
 	require.Len(t, replaced.Items, 1)
 	assert.Equal(t, "Only", replaced.Items[0].Name)
 	assert.Equal(t, "Edited", replaced.Name, "an items-only update keeps the name")
+	assert.Empty(t, searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID}).Results,
+		"replacing the items moves the tag with them")
 
 	_, err := HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(`{"deckId":%q, "name": "  "}`, created.DeckID)))
 	require.Error(t, err)

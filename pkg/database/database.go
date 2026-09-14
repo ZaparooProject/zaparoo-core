@@ -1345,6 +1345,7 @@ type MediaDBI interface {
 		remove []MediaTagRef,
 		add []MediaTagRef,
 	) error
+	SetMediaTagMembership(ctx context.Context, ref MediaTagRef, mediaDBIDs []int64) (bool, error)
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
