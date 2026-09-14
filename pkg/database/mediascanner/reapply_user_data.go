@@ -30,9 +30,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// reapplyMediaUserData re-materializes the media.db projection (favourite/hidden
-// tags and launcher-override properties) from the UserDB source of truth after the
-// media rows have been (re)built. UserDB owns this data so that a wiped or
+// reapplyMediaUserData re-materializes the media.db projection (the user's
+// favourite, hidden, liked, disliked and play-later tags and launcher-override
+// properties) from the UserDB source of truth after the media rows have been
+// (re)built. UserDB owns this data so that a wiped or
 // rebuilt media.db can be reconstructed; on an incremental reindex the rows
 // already exist and the writes are idempotent no-ops.
 //
@@ -61,8 +62,8 @@ func reapplyMediaUserData(
 	overrideTypeTag := tags.PropertyTypeTag(tags.TagPropertyLauncherOverride)
 
 	bySystem := make(map[string][]database.MediaUserData)
-	for _, row := range rows {
-		bySystem[row.SystemID] = append(bySystem[row.SystemID], row)
+	for i := range rows {
+		bySystem[rows[i].SystemID] = append(bySystem[rows[i].SystemID], rows[i])
 	}
 
 	applied := 0
@@ -100,11 +101,9 @@ func reapplyMediaUserData(
 				}
 				wrote = true
 			}
-			if item.IsHidden {
-				if hErr := db.UpdateMediaTags(ctx, media.DBID, nil, []database.MediaTagRef{{
-					Type: string(tags.TagTypeUser), Tag: string(tags.TagUserHidden),
-				}}); hErr != nil {
-					return applied, fmt.Errorf("failed to re-apply hidden preference for %q: %w", item.Path, hErr)
+			if refs := userFlagTagRefs(&item); len(refs) > 0 {
+				if hErr := db.UpdateMediaTags(ctx, media.DBID, nil, refs); hErr != nil {
+					return applied, fmt.Errorf("failed to re-apply user flags for %q: %w", item.Path, hErr)
 				}
 				wrote = true
 			}
@@ -125,6 +124,27 @@ func reapplyMediaUserData(
 
 	log.Debug().Int("rows", len(rows)).Int("applied", applied).Msg("re-applied media user data")
 	return applied, nil
+}
+
+// userFlagTagRefs lists the user tags a row's flags project to, favourite
+// excluded because it takes the direct tag-DBID path.
+func userFlagTagRefs(item *database.MediaUserData) []database.MediaTagRef {
+	flagTags := []struct {
+		tag tags.TagValue
+		set bool
+	}{
+		{tags.TagUserHidden, item.IsHidden},
+		{tags.TagUserLiked, item.IsLiked},
+		{tags.TagUserDisliked, item.IsDisliked},
+		{tags.TagUserPlayLater, item.IsPlayLater},
+	}
+	refs := make([]database.MediaTagRef, 0, len(flagTags))
+	for _, ft := range flagTags {
+		if ft.set {
+			refs = append(refs, database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(ft.tag)})
+		}
+	}
+	return refs
 }
 
 // ensureFavoriteTag finds or inserts the canonical user:favorite tag and returns

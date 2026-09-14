@@ -260,7 +260,8 @@ func TestSetMediaUserSnapshot(t *testing.T) {
 
 	// Snapshot on a missing row is a no-op: identity without user intent
 	// is meaningless.
-	require.NoError(t, userDB.SetMediaUserSnapshot("SNES", path, "Super Metroid", []string{"region:us"}))
+	require.NoError(t, userDB.SetMediaUserSnapshot(
+		"SNES", path, "Super Metroid", "supermetroid", []string{"region:us"}))
 	_, found, err := userDB.GetMediaUserData("SNES", path)
 	require.NoError(t, err)
 	assert.False(t, found)
@@ -268,7 +269,7 @@ func TestSetMediaUserSnapshot(t *testing.T) {
 	// Favourite first, then snapshot the scanner identity onto the row.
 	require.NoError(t, userDB.SetMediaUserFavorite("SNES", path, true))
 	require.NoError(t, userDB.SetMediaUserSnapshot(
-		"SNES", path, "Super Metroid", []string{"region:us", "rev:1"}))
+		"SNES", path, "Super Metroid", "supermetroid", []string{"region:us", "rev:1"}))
 	got, found, err := userDB.GetMediaUserData("SNES", path)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -277,7 +278,7 @@ func TestSetMediaUserSnapshot(t *testing.T) {
 
 	// A successful lookup with no tags clears stale disambiguation while
 	// retaining the current scanner name.
-	require.NoError(t, userDB.SetMediaUserSnapshot("SNES", path, "Super Metroid", nil))
+	require.NoError(t, userDB.SetMediaUserSnapshot("SNES", path, "Super Metroid", "supermetroid", nil))
 	got, found, err = userDB.GetMediaUserData("SNES", path)
 	require.NoError(t, err)
 	require.True(t, found)

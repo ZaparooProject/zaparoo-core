@@ -20,6 +20,8 @@
 package tags
 
 import (
+	"strings"
+
 	"github.com/ZaparooProject/go-zapscript"
 )
 
@@ -155,17 +157,72 @@ const (
 )
 
 const (
-	TagUserFavorite TagValue = "favorite"
-	TagUserHidden   TagValue = "hidden"
+	TagUserFavorite  TagValue = "favorite"
+	TagUserHidden    TagValue = "hidden"
+	TagUserLiked     TagValue = "liked"
+	TagUserDisliked  TagValue = "disliked"
+	TagUserPlayLater TagValue = "play-later"
+	// TagUserDeckPrefix leads a deck membership tag: user:deck:<deck id>.
+	TagUserDeckPrefix = "deck:"
 )
 
-// UtilityTags are non-metadata tags the browse grid renders directly
-// (favorite and hidden indicators) and are therefore always attached to browse
+// UtilityTags are non-metadata tags the browse grid renders directly (the
+// user's flags on an entry) and are therefore always attached to browse
 // results. All other (metadata) tags are excluded from browse and fetched on
 // demand via media.meta. Add an entry here when the grid renders a new tag.
+// Deck membership tags are an unbounded set and are read through filters or
+// media.meta instead.
 var UtilityTags = []CanonicalTag{
 	{Type: TagTypeUser, Value: TagUserFavorite},
 	{Type: TagTypeUser, Value: TagUserHidden},
+	{Type: TagTypeUser, Value: TagUserLiked},
+	{Type: TagTypeUser, Value: TagUserDisliked},
+	{Type: TagTypeUser, Value: TagUserPlayLater},
+}
+
+// MutableUserTags are the user tags a client may add or remove directly.
+// Deck membership is managed through the decks methods.
+var MutableUserTags = []TagValue{
+	TagUserFavorite, TagUserHidden, TagUserLiked, TagUserDisliked, TagUserPlayLater,
+}
+
+// LocalOnlyUserTags are user tags that describe this device only and are
+// never sent to a linked online account.
+var LocalOnlyUserTags = []TagValue{TagUserHidden}
+
+// IsMutableUserTag reports whether a user tag value may be set by a client.
+func IsMutableUserTag(value TagValue) bool {
+	for _, v := range MutableUserTags {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLocalOnlyUserTag reports whether a user tag value stays on this device.
+func IsLocalOnlyUserTag(value TagValue) bool {
+	for _, v := range LocalOnlyUserTags {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+// DeckTag returns the user tag value that marks membership of one deck.
+func DeckTag(deckID string) TagValue {
+	return TagValue(TagUserDeckPrefix + deckID)
+}
+
+// ParseDeckTag returns the deck ID a user tag value names, if it is a deck
+// membership tag.
+func ParseDeckTag(value TagValue) (deckID string, ok bool) {
+	after, found := strings.CutPrefix(string(value), TagUserDeckPrefix)
+	if !found || after == "" {
+		return "", false
+	}
+	return after, true
 }
 
 // Tag Format:
