@@ -343,6 +343,13 @@ type DecksDeleteParams struct {
 	DeckID string `json:"deckId" validate:"required,min=1"`
 }
 
+// DecksOpenParams opens a deck as the active playlist. Slot selects the
+// media slot, as the playlist commands' slot argument does.
+type DecksOpenParams struct {
+	DeckID string `json:"deckId" validate:"required,min=1"`
+	Slot   string `json:"slot"`
+}
+
 // SwitchProfileParams switches the device's active profile. Exactly one of
 // ProfileID or SwitchID selects the target; both omitted (or null) means
 // deactivate. PIN is required when the target profile has one set.

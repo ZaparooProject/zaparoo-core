@@ -4156,6 +4156,8 @@ A deck is a persistent, ordered list of games and cards the user keeps on the de
 
 Every deck has a twelve-character ID drawn from the Crockford base32 alphabet (digits and letters without I, L, O and U). Core stores and shows it lower-case and matches it without regard to case; IDs of eight characters from older decks are also accepted, and may use any digit or letter. The same ID names the deck on the device, in its `user:deck:<id>` tag, on a card and on the account.
 
+A deck opens as a playlist from ZapScript with `**playlist.open:deck://<id>` (and `playlist.load` and `playlist.play` accept the same argument), from the API with `decks.open`, or by tapping the deck's ZapLink. A deck reached through its ZapLink is cached on the device as a read-only copy, so it opens offline next time; a deck the device already owns opens its own copy instead. The playlist ID is `ZON-<id>` whichever way the deck was opened, so reopening the deck that is playing keeps its position.
+
 A deck item is either a `script` (a name and the ZapScript it runs) or a `card` (an online card by ID, with its scripts and display metadata as pulled). A game added from the local library is stored as a script item: Core composes `**launch.title:<system>/<title>` with the file's disambiguating tags, so the item names the same game on any device, and keeps the file it was added from as the item's `media` so this device launches exactly that file. Card and deck `metadata` are stored as received and returned verbatim.
 
 Every indexed file a deck's game items resolve to carries the tag `user:deck:<id>`, so a deck can be browsed, searched and picked from with the ordinary tag filters, for example `**launch.random:SNES?tags=user:deck:0k3v9x2rq7bm`. An item resolves by the file it is linked to, or by its title when it has no linked file on this device or that file is no longer indexed, in which case it is linked to the file it matched. A title match only counts when it is a confident one. When the linked file is still indexed but was not found by the last scan, such as a file on a drive that was unplugged, the item keeps its link and its title match carries the tag until the file is found again. Tags are updated in the background shortly after a deck is created, edited or deleted, so `decks.new` and `decks.update` return before they are in place, and a title item is linked once its title has been matched; Core sends `decks.changed` with `updated` when it links items. The tags are also rebuilt after every reindex, after `media.clean.orphans` removes files and after a backup is restored. Deck tags cannot be set through `media.tags.update`.
@@ -4349,6 +4351,25 @@ Delete a deck, owned or cached.
 | Key    | Type   | Required | Description  |
 | :----- | :----- | :------- | :----------- |
 | deckId | string | Yes      | The deck ID. |
+
+#### Result
+
+None.
+
+### decks.open
+
+**Access:** All clients.
+
+Open a deck as the active playlist. This runs `**playlist.open:deck://<id>`, the same command a card can carry, and returns once it has run, like [`run`](#run).
+
+Before a deck opens it is brought up to date when that is quick: a cached copy of somebody else's deck is fetched again from its link, and a deck that syncs with an online account is pulled. Either way a slow or offline service never delays the open for more than a few seconds, and the local copy opens when the refresh fails. A game item whose linked file is still indexed launches that exact file; any other game item runs its title launch. A card item runs its script, or opens its scripts as a nested playlist when it has several, the way the card's own link does.
+
+#### Parameters
+
+| Key    | Type   | Required | Description                                             |
+| :----- | :----- | :------- | :------------------------------------------------------- |
+| deckId | string | Yes      | The deck ID.                                             |
+| slot   | string | No       | Media slot to open the playlist in, as the playlist commands' `slot` argument. |
 
 #### Result
 

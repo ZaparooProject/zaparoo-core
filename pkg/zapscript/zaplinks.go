@@ -257,7 +257,13 @@ func isZapLink(link string, db *database.Database) bool {
 }
 
 func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return getRemoteZapScriptContext(context.Background(), urlStr, platform)
+}
+
+// getRemoteZapScriptContext fetches a ZapLink body within ctx, bounded by the
+// same ten-second ceiling a plain fetch uses.
+func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)

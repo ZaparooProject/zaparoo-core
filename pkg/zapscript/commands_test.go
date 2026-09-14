@@ -715,7 +715,7 @@ func TestRunCommandResolvesPathRootBeforePlatformRoots(t *testing.T) {
 				1,
 				0,
 				nil,
-				RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+				&RunCommandOptions{LauncherManager: state.NewLauncherManager()},
 				&zapscript.ArgExprEnv{},
 			)
 
@@ -747,7 +747,7 @@ func TestRunCommandInjectsUIService(t *testing.T) {
 		1,
 		0,
 		&database.Database{},
-		RunCommandOptions{UI: ui},
+		&RunCommandOptions{UI: ui},
 		&zapscript.ArgExprEnv{},
 	)
 	require.NoError(t, err)
@@ -774,7 +774,7 @@ func TestRunCommandInjectsTokenPathRoot(t *testing.T) {
 		1,
 		0,
 		nil,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 
@@ -870,7 +870,7 @@ func TestRunCommandSystemErrorReporting(t *testing.T) {
 			_, err := RunCommand(
 				t.Context(), pl, cfg, playlists.PlaylistController{}, tokens.Token{},
 				zapscript.Command{Name: zapscript.ZapScriptCmdLaunchSystem, Args: []string{"GameCom"}},
-				1, 0, nil, RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+				1, 0, nil, &RunCommandOptions{LauncherManager: state.NewLauncherManager()},
 				&zapscript.ArgExprEnv{},
 			)
 
@@ -914,7 +914,7 @@ func TestRunCommandSkippedWhenLogRedactsSensitiveCommand(t *testing.T) {
 		1,
 		0,
 		nil,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 
@@ -955,7 +955,7 @@ func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
 		1,
 		0,
 		db,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 
@@ -990,7 +990,7 @@ func TestRunCommandCountsZapLinkExpansionInTotalCommands(t *testing.T) {
 		1,
 		0,
 		db,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 
@@ -1021,7 +1021,7 @@ func TestRunCommandAppliesZapLinkForNonRemoteSource(t *testing.T) {
 		1,
 		0,
 		db,
-		RunCommandOptions{},
+		&RunCommandOptions{},
 		&zapscript.ArgExprEnv{},
 	)
 

@@ -168,6 +168,7 @@ const (
 	MethodDecksNew                    = "decks.new"
 	MethodDecksUpdate                 = "decks.update"
 	MethodDecksDelete                 = "decks.delete"
+	MethodDecksOpen                   = "decks.open"
 	MethodProfilesVerify              = "profiles.verify"
 	MethodSystems                     = "systems"
 	MethodLaunchers                   = "launchers"
