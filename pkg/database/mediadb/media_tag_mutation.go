@@ -341,3 +341,192 @@ func refreshMediaTagCache(ctx context.Context, tx *sql.Tx, systemDBID, tagDBID i
 	}
 	return nil
 }
+
+// SetMediaTagMembership makes exactly the given media carry one file-level
+// tag: rows holding it that are not listed lose it, listed rows without it
+// gain it. It runs as one transaction and refreshes the tag cache, count cache
+// and slug cache of every system whose membership changed. An empty list
+// removes the tag everywhere. It reports whether anything changed.
+func (db *MediaDB) SetMediaTagMembership(
+	ctx context.Context,
+	ref database.MediaTagRef,
+	mediaDBIDs []int64,
+) (bool, error) {
+	changed, err := db.applyMediaTagMembership(ctx, ref, mediaDBIDs)
+	if err != nil || !changed {
+		return changed, err
+	}
+	db.inMemoryTagCache.Store(nil)
+	clearUtilityTagCache()
+	if persistErr := db.PersistTagCache(); persistErr != nil {
+		log.Warn().Err(persistErr).Str("tag", ref.Type+":"+ref.Tag).
+			Msg("failed to remove stale persisted tag cache after media tag membership update")
+	}
+	return true, nil
+}
+
+func (db *MediaDB) applyMediaTagMembership(
+	ctx context.Context,
+	ref database.MediaTagRef,
+	mediaDBIDs []int64,
+) (changed bool, err error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return false, ErrNullSQL
+	}
+	if db.inTransaction {
+		return false, ErrTransactionActive
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin media tag membership transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	resolved, found, err := findOrCreateMediaTag(ctx, tx, ref, len(mediaDBIDs) > 0)
+	if err != nil {
+		return false, fmt.Errorf("resolve media tag %s:%s: %w", ref.Type, ref.Tag, err)
+	}
+	if !found && len(mediaDBIDs) == 0 {
+		return false, nil
+	}
+
+	current, err := mediaDBIDsWithTag(ctx, tx, resolved.tagDBID)
+	if err != nil {
+		return false, err
+	}
+	want := make(map[int64]struct{}, len(mediaDBIDs))
+	for _, id := range mediaDBIDs {
+		want[id] = struct{}{}
+	}
+	touched := make([]int64, 0)
+	for id := range current {
+		if _, keep := want[id]; keep {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx,
+			"DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID = ?", id, resolved.tagDBID,
+		); err != nil {
+			return false, fmt.Errorf("remove media tag %s:%s: %w", ref.Type, ref.Tag, err)
+		}
+		touched = append(touched, id)
+	}
+	for id := range want {
+		if _, has := current[id]; has {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, insertMediaTagSQL, id, resolved.tagDBID); err != nil {
+			return false, fmt.Errorf("add media tag %s:%s: %w", ref.Type, ref.Tag, err)
+		}
+		touched = append(touched, id)
+	}
+	if len(touched) == 0 {
+		return false, nil
+	}
+
+	systems, err := systemsOfMedia(ctx, tx, touched)
+	if err != nil {
+		return false, err
+	}
+	for systemDBID, systemID := range systems {
+		cacheReady, cacheErr := systemTagCacheReady(ctx, tx, systemDBID)
+		if cacheErr != nil {
+			return false, cacheErr
+		}
+		if cacheReady {
+			if refreshErr := refreshMediaTagCache(ctx, tx, systemDBID, resolved.tagDBID); refreshErr != nil {
+				return false, refreshErr
+			}
+		}
+		if _, err = tx.ExecContext(ctx,
+			"DELETE FROM SlugResolutionCache WHERE SystemID = ?", systemID,
+		); err != nil {
+			return false, fmt.Errorf("invalidate slug cache after tag membership update: %w", err)
+		}
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM MediaCountCache"); err != nil {
+		return false, fmt.Errorf("invalidate media count cache after tag membership update: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO DBConfig(Name, Value) VALUES (?, '1')
+		ON CONFLICT(Name) DO UPDATE SET Value = CAST(DBConfig.Value AS INTEGER) + 1
+	`, database.DeviceStateKeyMediaPreferencesRevision); err != nil {
+		return false, fmt.Errorf("advance media projection revision: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit media tag membership transaction: %w", err)
+	}
+	committed = true
+	return true, nil
+}
+
+func mediaDBIDsWithTag(ctx context.Context, tx *sql.Tx, tagDBID int64) (map[int64]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT MediaDBID FROM MediaTags WHERE TagDBID = ?", tagDBID)
+	if err != nil {
+		return nil, fmt.Errorf("list media carrying tag: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan media carrying tag: %w", err)
+		}
+		out[id] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate media carrying tag: %w", err)
+	}
+	return out, nil
+}
+
+// systemsOfMedia maps the system DBIDs of the given media to their system IDs.
+func systemsOfMedia(ctx context.Context, tx *sql.Tx, mediaDBIDs []int64) (map[int64]string, error) {
+	out := make(map[int64]string)
+	for start := 0; start < len(mediaDBIDs); start += sqliteMaxParams {
+		chunk := mediaDBIDs[start:min(start+sqliteMaxParams, len(mediaDBIDs))]
+		if err := collectSystemsOfMedia(ctx, tx, chunk, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func collectSystemsOfMedia(ctx context.Context, tx *sql.Tx, mediaDBIDs []int64, out map[int64]string) error {
+	args := make([]any, len(mediaDBIDs))
+	for i, id := range mediaDBIDs {
+		args[i] = id
+	}
+	//nolint:gosec // prepareVariadic only emits placeholders.
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT s.DBID, s.SystemID FROM Media m JOIN Systems s ON s.DBID = m.SystemDBID
+		WHERE m.DBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("resolve systems of media: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var dbid int64
+		var systemID string
+		if err = rows.Scan(&dbid, &systemID); err != nil {
+			return fmt.Errorf("scan system of media: %w", err)
+		}
+		out[dbid] = systemID
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("iterate systems of media: %w", err)
+	}
+	return nil
+}

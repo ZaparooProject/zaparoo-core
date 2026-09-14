@@ -98,9 +98,18 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			defer func() { helpers.GlobalLauncherCache = previous; testLauncherCacheMutex.Unlock() }()
 			var sources []IndexedSource
 			called := false
+			deckHookCalled := false
 			_, err = NewNamesIndexWithSources(ctx, pl, cfg, []systemdefs.System{{ID: systemdefs.SystemNES}},
 				db, func(IndexStatus) {}, nil, &IndexSourceOptions{
 					LauncherIDs: []string{"filesystem", "catalog"},
+					ReapplyDeckTags: func(context.Context) (int, error) {
+						deckHookCalled = true
+						status, statusErr := db.MediaDB.GetIndexingStatus()
+						require.NoError(t, statusErr)
+						require.NotEqual(t, mediadb.IndexingStatusCompleted, status,
+							"deck tags are re-applied before indexing reports completion")
+						return 0, nil
+					},
 					Completed: func(result []IndexedSource) {
 						called = true
 						status, statusErr := db.MediaDB.GetIndexingStatus()
@@ -116,6 +125,7 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.True(t, called)
+			require.True(t, deckHookCalled, "a completed index re-applies deck tags")
 			want := []IndexedSource{{LauncherID: "filesystem", SystemID: systemdefs.SystemNES, Files: 1}}
 			if mode == "success" {
 				want = append(want, IndexedSource{LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1})

@@ -20,6 +20,8 @@
 package mediascanner
 
 import (
+	"context"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -35,8 +37,11 @@ type IndexedSource struct {
 // IndexSourceOptions requests a bounded summary for selected launchers. Completed
 // runs only after successful finalization; existing index callers need no hook.
 type IndexSourceOptions struct {
-	Completed   func([]IndexedSource)
-	LauncherIDs []string
+	Completed func([]IndexedSource)
+	// ReapplyDeckTags re-materializes deck membership tags after user data
+	// is re-applied and before the search caches are built. Nil skips it.
+	ReapplyDeckTags func(ctx context.Context) (int, error)
+	LauncherIDs     []string
 }
 
 type indexSourceCollector struct {

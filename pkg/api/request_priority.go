@@ -147,7 +147,10 @@ func isImageAPIMethod(method string) bool {
 
 func isMediaDBTransactionAPIMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodMediaTagsUpdate) ||
-		strings.EqualFold(method, models.MethodMediaMetaUpdate)
+		strings.EqualFold(method, models.MethodMediaMetaUpdate) ||
+		strings.EqualFold(method, models.MethodDecksNew) ||
+		strings.EqualFold(method, models.MethodDecksUpdate) ||
+		strings.EqualFold(method, models.MethodDecksDelete)
 }
 
 // isMediaDBFreeInstantMethod reports whether method is a control method that
