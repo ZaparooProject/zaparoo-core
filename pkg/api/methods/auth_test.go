@@ -384,9 +384,9 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 
 // TestSettingsAuthClaim_ResetsAllOnlineConsent pins that a fresh claim,
 // even re-claiming for the same account, resets every Online feature's
-// consent (remote control, cloud backup, play history sync), since it is a
-// new "who is on the other end" event and must be re-approved explicitly
-// rather than silently carrying over.
+// consent (remote control, cloud backup, play history sync, library sync),
+// since it is a new "who is on the other end" event and must be re-approved
+// explicitly rather than silently carrying over.
 func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
 	// Not parallel: swaps package-level claimClient
 
@@ -415,9 +415,11 @@ func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
 	cfg.SetRemoteControl(true)
 	cfg.SetBackupRemoteEnabled(true)
 	cfg.SetPlaytimeSync(true)
+	cfg.SetLibrarySync(true)
 	require.True(t, cfg.RemoteControlEnabled())
 	require.True(t, cfg.BackupRemoteEnabled())
 	require.True(t, cfg.PlaytimeSyncEnabled())
+	require.True(t, cfg.LibrarySyncEnabled())
 
 	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
 		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
@@ -444,6 +446,7 @@ func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
 	assert.False(t, cfg.RemoteControlEnabled())
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled())
+	assert.False(t, cfg.LibrarySyncEnabled())
 }
 
 // TestSettingsAuthClaim_SurfacesConsentResetSaveFailure pins that a failed
@@ -840,9 +843,9 @@ func TestSettingsAuthUnlink_MarksRemoteUnlinked(t *testing.T) {
 
 // TestSettingsAuthUnlink_ResetsAllOnlineConsent pins that unlinking clears
 // every Online feature's consent (remote control, cloud backup, play
-// history sync), not just remote control. The credential all three depend
-// on is gone, so none of their consent should silently survive to whatever
-// links next.
+// history sync, library sync), not just remote control. The credential they
+// all depend on is gone, so none of their consent should silently survive to
+// whatever links next.
 func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
 	// Not parallel: SaveAuthEntry updates the global auth config.
 	env := newAuthUnlinkTestEnv(t)
@@ -850,9 +853,11 @@ func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
 	env.Config.SetRemoteControl(true)
 	env.Config.SetBackupRemoteEnabled(true)
 	env.Config.SetPlaytimeSync(true)
+	env.Config.SetLibrarySync(true)
 	require.True(t, env.Config.RemoteControlEnabled())
 	require.True(t, env.Config.BackupRemoteEnabled())
 	require.True(t, env.Config.PlaytimeSyncEnabled())
+	require.True(t, env.Config.LibrarySyncEnabled())
 
 	_, err := HandleSettingsAuthUnlink(env)
 	require.NoError(t, err)
@@ -860,6 +865,7 @@ func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
 	assert.False(t, env.Config.RemoteControlEnabled())
 	assert.False(t, env.Config.BackupRemoteEnabled())
 	assert.False(t, env.Config.PlaytimeSyncEnabled())
+	assert.False(t, env.Config.LibrarySyncEnabled())
 }
 
 // TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure pins that a failed

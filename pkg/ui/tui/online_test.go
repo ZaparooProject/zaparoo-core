@@ -106,17 +106,22 @@ func TestRemoteStatusDetail(t *testing.T) {
 	assert.Contains(t, detail, "Last contact: 30 Aug 01:02")
 }
 
-// onlineTestSettingsWithEndpoints builds a settings response with all three
+// onlineTestSettingsWithEndpoints builds a settings response with all four
 // configurable Online endpoints set explicitly, for pinning per-feature
 // custom-server warnings independently.
-func onlineTestSettingsWithEndpoints(backupURL, playtimeURL, remoteControlURL string) *models.SettingsResponse {
+func onlineTestSettingsWithEndpoints(
+	backupURL, playtimeURL, libraryURL, remoteControlURL string,
+) *models.SettingsResponse {
 	playtimeSyncEnabled := true
+	librarySyncEnabled := true
 	remoteControlEnabled := true
 	return &models.SettingsResponse{
 		BackupRemoteBaseURL:  &backupURL,
 		PlaytimeBaseURL:      &playtimeURL,
+		LibraryBaseURL:       &libraryURL,
 		RemoteControlBaseURL: &remoteControlURL,
 		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
+		LibrarySyncEnabled:   &librarySyncEnabled,
 		RemoteControlEnabled: &remoteControlEnabled,
 	}
 }
@@ -132,6 +137,7 @@ func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *test
 	mockSvc.SetupGetSettings(onlineTestSettingsWithEndpoints(
 		config.DefaultBackupRemoteBaseURL,
 		"https://custom-playtime.example.com",
+		"https://custom-library.example.com",
 		"https://custom-remote.example.com",
 	))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
@@ -160,6 +166,9 @@ func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *test
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	assert.True(t, runner.WaitForText("Custom server: custom-playtime.example.com.", uiSettleTimeout))
+
+	runner.SimulateArrowDown()
+	assert.True(t, runner.WaitForText("Custom server: custom-library.example.com.", uiSettleTimeout))
 }
 
 func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *testing.T) {
@@ -171,7 +180,8 @@ func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *te
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupGetSettings(onlineTestSettingsWithEndpoints(
-		config.DefaultBackupRemoteBaseURL, config.DefaultPlaytimeBaseURL, config.DefaultRemoteControlBaseURL,
+		config.DefaultBackupRemoteBaseURL, config.DefaultPlaytimeBaseURL,
+		config.DefaultLibraryBaseURL, config.DefaultRemoteControlBaseURL,
 	))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
@@ -204,6 +214,7 @@ func TestBuildOnlineSettingsMenu_NotLinkedShowsLinkAction_Integration(t *testing
 	require.True(t, runner.WaitForText("Link account", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Not linked"), "link status shows on the menu line")
 	assert.True(t, runner.ContainsText("Play history sync"), "sync consent is configurable before linking")
+	assert.True(t, runner.ContainsText("Library sync"), "library sync consent is configurable before linking")
 	assert.True(t, runner.ContainsText("Cloud backup"), "features are discoverable while unlinked")
 	assert.False(t, runner.ContainsText("Unlink account"))
 	assert.False(t, runner.ContainsText("Warp:"), "Warp status is hidden until an account is linked")
@@ -232,6 +243,7 @@ func TestBuildOnlineSettingsMenu_LinkedShowsAccountControls_Integration(t *testi
 	assert.True(t, runner.ContainsText("Remote control"))
 	assert.True(t, runner.ContainsText("Waiting for commands"), "remote status shows on the menu line")
 	assert.True(t, runner.ContainsText("Play history sync"))
+	assert.True(t, runner.ContainsText("Library sync"))
 	assert.True(t, runner.ContainsText("Cloud backup"))
 	assert.True(t, runner.ContainsText("Unlink account"))
 	assert.False(t, runner.ContainsText("Link account"))
@@ -375,6 +387,45 @@ func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *
 	}, uiSettleTimeout), "toggle should disable playtime sync consent")
 }
 
+func TestBuildOnlineSettingsMenu_LibrarySyncToggleUpdatesConsent_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Library sync", uiSettleTimeout))
+
+	// Account, Warp, Unlink account, Remote control, Remote status, Remote
+	// control activity, Play history sync, then Library sync.
+	for range 7 {
+		runner.SimulateArrowDown()
+	}
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForCondition(func() bool {
+		for _, call := range mockSvc.Calls {
+			if call.Method != "UpdateSettings" {
+				continue
+			}
+			params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
+			if ok && params.LibrarySyncEnabled != nil && *params.LibrarySyncEnabled {
+				return true
+			}
+		}
+		return false
+	}, uiSettleTimeout), "toggle should enable library sync consent")
+}
+
 func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -474,7 +525,8 @@ func TestBuildOnlineSettingsMenu_CloudBackupNavigatesToBackupPage_Integration(t 
 	require.True(t, runner.WaitForText("Cloud backup", uiSettleTimeout))
 
 	// Account, Warp, Unlink account, Remote control, Remote status, Remote
-	// control activity, Play history sync, then Cloud backup.
+	// control activity, Play history sync, Library sync, then Cloud backup.
+	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()

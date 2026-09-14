@@ -128,7 +128,7 @@ func renderOnlineSettingsMenu(
 	status := data.status
 	serverHost := onlineServerHost(data.settings)
 
-	remoteControlHost, playtimeHost, backupHost := "", "", ""
+	remoteControlHost, playtimeHost, libraryHost, backupHost := "", "", "", ""
 	if data.settings != nil {
 		if data.settings.RemoteControlBaseURL != nil {
 			remoteControlHost = customBaseURLHost(*data.settings.RemoteControlBaseURL)
@@ -136,11 +136,14 @@ func renderOnlineSettingsMenu(
 		if data.settings.PlaytimeBaseURL != nil {
 			playtimeHost = customBaseURLHost(*data.settings.PlaytimeBaseURL)
 		}
+		if data.settings.LibraryBaseURL != nil {
+			libraryHost = customBaseURLHost(*data.settings.LibraryBaseURL)
+		}
 		if data.settings.BackupRemoteBaseURL != nil {
 			backupHost = customBaseURLHost(*data.settings.BackupRemoteBaseURL)
 		}
 	}
-	if remoteControlHost != "" || playtimeHost != "" || backupHost != "" {
+	if remoteControlHost != "" || playtimeHost != "" || libraryHost != "" || backupHost != "" {
 		frame.SetInfoText(fmt.Sprintf(
 			"[%s]One or more Zaparoo Online endpoints are set to a custom server. Review below.[-]",
 			CurrentTheme().WarningColorName,
@@ -215,6 +218,27 @@ func renderOnlineSettingsMenu(
 			menu.refreshAllItems(menu.GetCurrentItem())
 			log.Warn().Err(err).Msg("error updating play history sync setting")
 			ShowErrorModal(pages, app, "Failed to save play history sync setting", func() {
+				app.SetFocus(menu.List)
+			})
+		}
+	})
+	librarySyncEnabled := false
+	if data.settings != nil && data.settings.LibrarySyncEnabled != nil {
+		librarySyncEnabled = *data.settings.LibrarySyncEnabled
+	}
+	librarySyncDesc := "Sync your game list, favorites, likes and decks with your linked Zaparoo Online account"
+	if !status.Remote.Linked {
+		librarySyncDesc = "Sync your game list, favorites, likes and decks when this device is linked to Zaparoo Online"
+	}
+	librarySyncDesc = customEndpointWarning(libraryHost) + librarySyncDesc
+	menu.AddToggle("Library sync", librarySyncDesc, &librarySyncEnabled, func(value bool) {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{LibrarySyncEnabled: &value}); err != nil {
+			librarySyncEnabled = !value
+			menu.refreshAllItems(menu.GetCurrentItem())
+			log.Warn().Err(err).Msg("error updating library sync setting")
+			ShowErrorModal(pages, app, "Failed to save library sync setting", func() {
 				app.SetFocus(menu.List)
 			})
 		}

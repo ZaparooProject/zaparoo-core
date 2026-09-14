@@ -497,23 +497,26 @@ func TestRemoteControlDefaultsDisabled(t *testing.T) {
 	assert.False(t, cfg.RemoteControlEnabled())
 }
 
-// TestResetOnlineConsentClearsAllThreeFlags pins that ResetOnlineConsent
+// TestResetOnlineConsentClearsEveryFlag pins that ResetOnlineConsent
 // covers every Online feature's consent flag, not just remote control.
-func TestResetOnlineConsentClearsAllThreeFlags(t *testing.T) {
+func TestResetOnlineConsentClearsEveryFlag(t *testing.T) {
 	t.Parallel()
 	cfg := &Instance{}
 	cfg.SetRemoteControl(true)
 	cfg.SetBackupRemoteEnabled(true)
 	cfg.SetPlaytimeSync(true)
+	cfg.SetLibrarySync(true)
 	require.True(t, cfg.RemoteControlEnabled())
 	require.True(t, cfg.BackupRemoteEnabled())
 	require.True(t, cfg.PlaytimeSyncEnabled())
+	require.True(t, cfg.LibrarySyncEnabled())
 
 	cfg.ResetOnlineConsent()
 
 	assert.False(t, cfg.RemoteControlEnabled())
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled())
+	assert.False(t, cfg.LibrarySyncEnabled())
 }
 
 func TestRemoteControlPersistsInServiceConfig(t *testing.T) {

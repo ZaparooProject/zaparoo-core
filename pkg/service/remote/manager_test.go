@@ -95,12 +95,41 @@ func TestHeartbeatUsesConfiguredEndpoint(t *testing.T) {
 		}
 		assert.NotContains(t, capabilities, "backup")
 		assert.Contains(t, capabilities, "remote_operations")
+		assert.NotContains(t, capabilities, "library_sync", "library sync belongs to another endpoint")
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 	m := newHTTPTestManager(t, server.URL)
 
 	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
+}
+
+// TestHeartbeatReportsLibrarySyncOnSharedEndpoint pins that this heartbeat
+// carries the library_sync entry whenever Library sync talks to the same
+// endpoint, so a remote control heartbeat never drops it from the document.
+func TestHeartbeatReportsLibrarySyncOnSharedEndpoint(t *testing.T) {
+	var sawLibrarySync atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if raw, ok := body.Capabilities["library_sync"]; ok {
+			assert.JSONEq(t, `{"version":1,"enabled":true}`, string(raw))
+			sawLibrarySync.Store(true)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	require.NoError(t, m.deps.Config.SetLibraryBaseURL(server.URL))
+	m.deps.Config.SetLibrarySync(true)
+
+	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
+	assert.True(t, sawLibrarySync.Load())
 }
 
 func TestWaitUsesContractRequest(t *testing.T) {

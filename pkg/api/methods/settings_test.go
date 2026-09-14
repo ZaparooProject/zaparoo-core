@@ -713,11 +713,13 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	debugLogging := true
 	backupRemoteEnabled := true
 	playtimeSyncEnabled := true
+	librarySyncEnabled := true
 	remoteControlEnabled := true
 	params := models.UpdateSettingsParams{
 		DebugLogging:         &debugLogging,
 		BackupRemoteEnabled:  &backupRemoteEnabled,
 		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
+		LibrarySyncEnabled:   &librarySyncEnabled,
 		RemoteControlEnabled: &remoteControlEnabled,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -739,6 +741,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled(), "consent setting must not change on rejected request")
+	assert.False(t, cfg.LibrarySyncEnabled())
 	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A remote member client is rejected the same way.
@@ -747,6 +750,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.Error(t, err)
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled())
+	assert.False(t, cfg.LibrarySyncEnabled())
 	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A paired admin client is as privileged as a local connection.
@@ -755,7 +759,41 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.NoError(t, err)
 	assert.True(t, cfg.BackupRemoteEnabled())
 	assert.True(t, cfg.PlaytimeSyncEnabled())
+	assert.True(t, cfg.LibrarySyncEnabled())
 	assert.True(t, cfg.RemoteControlEnabled())
+}
+
+func TestHandleSettingsUpdate_LibrarySyncRequiresLocalOrAdmin(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{LibrarySyncEnabled: &enabled})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context:    context.Background(),
+		Platform:   mockPlatform,
+		Config:     cfg,
+		State:      appState,
+		Params:     paramsJSON,
+		PlatformID: platformids.Mister,
+		ClientRole: string(permissions.RoleMember),
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.False(t, cfg.LibrarySyncEnabled())
+
+	env.IsLocal = true
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.True(t, cfg.LibrarySyncEnabled())
 }
 
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
@@ -1523,6 +1561,10 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	assert.Equal(t, config.DefaultRemoteControlBaseURL, *resp.RemoteControlBaseURL)
 	require.NotNil(t, resp.PlaytimeSyncEnabled)
 	assert.False(t, *resp.PlaytimeSyncEnabled)
+	require.NotNil(t, resp.LibraryBaseURL)
+	assert.Equal(t, config.DefaultLibraryBaseURL, *resp.LibraryBaseURL)
+	require.NotNil(t, resp.LibrarySyncEnabled)
+	assert.False(t, *resp.LibrarySyncEnabled)
 
 	env.IsLocal = false
 	result, err = HandleSettings(env)
@@ -1533,6 +1575,8 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	assert.Nil(t, resp.PlaytimeBaseURL)
 	assert.Nil(t, resp.RemoteControlBaseURL)
 	assert.Nil(t, resp.PlaytimeSyncEnabled)
+	assert.Nil(t, resp.LibraryBaseURL)
+	assert.Nil(t, resp.LibrarySyncEnabled)
 }
 
 // TestHandleSettings_ReportsCustomOnlineEndpoints pins that settings

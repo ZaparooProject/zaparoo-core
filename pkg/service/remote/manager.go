@@ -305,6 +305,9 @@ func (m *manager) sendCapabilityHeartbeat(ctx context.Context) error {
 	if m.deps.Config.RemoteControlEnabled() {
 		capabilities["remote_operations"] = map[string]any{"version": 1, "enabled": true}
 	}
+	if sameEndpoint(m.deps.Config.RemoteControlBaseURL(), m.deps.Config.LibraryBaseURL()) {
+		capabilities["library_sync"] = backup.LibrarySyncCapability(m.deps.Config)
+	}
 	body := map[string]any{
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,

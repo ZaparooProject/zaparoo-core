@@ -199,6 +199,7 @@ type UpdateSettingsParams struct {
 	Encryption              *bool     `json:"encryption"`
 	BackupRemoteEnabled     *bool     `json:"backupRemoteEnabled"`
 	PlaytimeSyncEnabled     *bool     `json:"playtimeSyncEnabled"`
+	LibrarySyncEnabled      *bool     `json:"librarySyncEnabled"`
 	RemoteControlEnabled    *bool     `json:"remoteControlEnabled"`
 	UpdateChannel           *string   `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	BackupRemoteSchedule    *string   `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
