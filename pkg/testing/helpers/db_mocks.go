@@ -258,6 +258,13 @@ func (m *MockUserDBI) SetMediaUserHidden(systemID, path string, hidden bool) err
 	return nil
 }
 
+func (m *MockUserDBI) SetMediaUserFlag(systemID, path string, flag database.MediaUserFlag, value bool) error {
+	if err := m.Called(systemID, path, flag, value).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user flag failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
 	args := m.Called(systemID, path, launcherID)
 	if err := args.Error(0); err != nil {
@@ -471,8 +478,8 @@ func (m *MockUserDBI) CleanupMediaHistory(retentionDays int, requireSynced bool)
 	return rowsDeleted, nil
 }
 
-func (m *MockUserDBI) SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error {
-	args := m.Called(systemID, path, mediaName, tags)
+func (m *MockUserDBI) SetMediaUserSnapshot(systemID, path, mediaName, slug string, tags []string) error {
+	args := m.Called(systemID, path, mediaName, slug, tags)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock UserDBI set media user snapshot failed: %w", err)
 	}

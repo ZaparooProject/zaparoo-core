@@ -690,3 +690,23 @@ func TestCanonicalTagStringGlobalUniqueness(t *testing.T) {
 	assert.Len(t, seen, totalTags,
 		"All CanonicalTag.String() outputs must be globally unique")
 }
+
+func TestUserTagHelpers(t *testing.T) {
+	t.Parallel()
+	for _, v := range []TagValue{TagUserFavorite, TagUserHidden, TagUserLiked, TagUserDisliked, TagUserPlayLater} {
+		assert.True(t, IsMutableUserTag(v), "%s", v)
+		assert.Contains(t, UtilityTags, CanonicalTag{Type: TagTypeUser, Value: v})
+	}
+	assert.False(t, IsMutableUserTag(DeckTag("0123456789ab")))
+	assert.True(t, IsLocalOnlyUserTag(TagUserHidden))
+	assert.False(t, IsLocalOnlyUserTag(TagUserFavorite))
+
+	assert.Equal(t, TagValue("deck:0123456789ab"), DeckTag("0123456789ab"))
+	id, ok := ParseDeckTag(TagValue("deck:0123456789ab"))
+	assert.True(t, ok)
+	assert.Equal(t, "0123456789ab", id)
+	_, ok = ParseDeckTag(TagUserFavorite)
+	assert.False(t, ok)
+	_, ok = ParseDeckTag(TagValue("deck:"))
+	assert.False(t, ok)
+}
