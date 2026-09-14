@@ -1102,6 +1102,18 @@ type UserDBI interface {
 	UpsertMediaUserData(data *MediaUserData) error
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)
+
+	// Decks
+	CreateDeck(deck *Deck) error
+	GetDeck(deckID string) (*Deck, error)
+	ListDecks() ([]Deck, error)
+	UpdateDeckMeta(deckID, name, description string, metadata json.RawMessage) error
+	ReplaceDeckItems(deckID string, items []DeckItem) error
+	DeleteDeck(deckID string) (bool, error)
+	UpsertRemoteDeck(deck *Deck) error
+	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
+	ListDeckItemLinks() ([]DeckItemLink, error)
+	CountOwnedDecks() (int, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
 	GetSupportedZapLinkHosts() ([]string, error)

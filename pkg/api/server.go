@@ -247,7 +247,9 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodProfiles:       true, models.MethodProfilesNew: true,
 	models.MethodProfilesUpdate: true, models.MethodProfilesDelete: true,
 	models.MethodProfilesActive: true, models.MethodProfilesSwitch: true,
-	models.MethodProfilesVerify:    true,
+	models.MethodProfilesVerify: true,
+	models.MethodDecks:          true, models.MethodDecksGet: true, models.MethodDecksNew: true,
+	models.MethodDecksUpdate: true, models.MethodDecksDelete: true,
 	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
 	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
 }
@@ -443,6 +445,12 @@ func NewMethodMap() *MethodMap {
 		models.MethodProfilesActive: methods.HandleProfilesActive,
 		models.MethodProfilesSwitch: methods.HandleProfilesSwitch,
 		models.MethodProfilesVerify: methods.HandleProfilesVerify,
+		// decks
+		models.MethodDecks:       methods.HandleDecks,
+		models.MethodDecksGet:    methods.HandleDecksGet,
+		models.MethodDecksNew:    methods.HandleDecksNew,
+		models.MethodDecksUpdate: methods.HandleDecksUpdate,
+		models.MethodDecksDelete: methods.HandleDecksDelete,
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)

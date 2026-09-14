@@ -36,16 +36,10 @@ func TestMediaHiddenMigrationPreservesExistingPreferences(t *testing.T) {
 	require.NoError(t, db.SetMediaUserFavorite("NES", path, true))
 	require.NoError(t, db.SetMediaUserLauncherOverride("NES", path, "RetroArch"))
 
-	// Restore the schema that preceded the hidden flag in this disposable test DB,
-	// then exercise the normal migration runner with existing user data.
-	_, err := db.sql.Load().ExecContext(t.Context(), `ALTER TABLE MediaUserData DROP COLUMN Slug;
-		ALTER TABLE MediaUserData DROP COLUMN IsPlayLater;
-		ALTER TABLE MediaUserData DROP COLUMN IsDisliked;
-		ALTER TABLE MediaUserData DROP COLUMN IsLiked;
-		DELETE FROM goose_db_version WHERE version_id = 20260914100000;
-		ALTER TABLE MediaUserData DROP COLUMN IsHidden;
-		DELETE FROM goose_db_version WHERE version_id = 20260827120000;`)
-	require.NoError(t, err)
+	// Roll back to the schema that preceded the hidden flag, running every
+	// later Down step too, then exercise the normal migration runner with the
+	// existing user data.
+	require.NoError(t, database.MigrateDownTo(db.sql.Load(), migrationFiles, "migrations", 20260827120000-1))
 	// Bypass the sidecar written for the newer schema by setupTempUserDB.
 	require.NoError(t, sqlMigrateUp(db.sql.Load(), ""))
 	row, found, err := db.GetMediaUserData("NES", path)

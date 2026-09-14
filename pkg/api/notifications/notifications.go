@@ -167,6 +167,12 @@ func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesD
 	sendNotification(ns, models.NotificationProfilesData, payload)
 }
 
+// DecksChanged broadcasts that a deck was created, updated, deleted or
+// refreshed from its source, so clients refresh their deck lists.
+func DecksChanged(ns chan<- models.Notification, payload models.DecksChangedNotification) {
+	sendNotification(ns, models.NotificationDecksChanged, payload)
+}
+
 func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatusResponse) {
 	sendNotification(ns, models.NotificationAuthLinkStatus, payload)
 }
