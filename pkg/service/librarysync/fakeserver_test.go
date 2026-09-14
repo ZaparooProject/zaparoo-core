@@ -26,31 +26,38 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // fakeOnline implements the device side of the Library sync contract in
 // memory, closely enough to exercise every path Core takes.
 type fakeOnline struct {
-	t          *testing.T
-	ordinals   map[string]uint32
-	rejected   map[string]string
-	issued     map[uint32]bool
-	held       *fakeInventory
-	server     *httptest.Server
-	token      string
-	calls      map[string]int
-	putError   string
-	resolved   [][]database.MediaIdentity
-	limitFirst int
-	mu         syncutil.Mutex
-	nextID     uint32
+	t             *testing.T
+	stateRows     map[string]*fakeStateRow
+	ordinals      map[string]uint32
+	rejected      map[string]string
+	issued        map[uint32]bool
+	held          *fakeInventory
+	server        *httptest.Server
+	calls         map[string]int
+	rejectState   string
+	token         string
+	putError      string
+	statePushes   [][]fakeStatePushItem
+	resolved      [][]database.MediaIdentity
+	stateRevision int64
+	stateFloor    int64
+	limitFirst    int
+	mu            syncutil.Mutex
+	nextID        uint32
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -62,6 +69,41 @@ type fakeResolveRequest struct {
 	Items []fakeResolveItem `json:"items"`
 }
 
+// fakeStateRow is one personal state row as the fake account holds it.
+//
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeStateRow struct {
+	MediaType     string   `json:"media_type"`
+	SystemID      string   `json:"system_id"`
+	CoreSlug      string   `json:"core_slug"`
+	Title         string   `json:"title"`
+	Intent        string   `json:"intent"`
+	Reaction      string   `json:"reaction"`
+	VariantTags   []string `json:"variant_tags"`
+	PreferredTags []string `json:"preferred_tags"`
+	Revision      int64    `json:"revision"`
+	Favorite      bool     `json:"favorite"`
+	Deleted       bool     `json:"deleted"`
+}
+
+func (row *fakeStateRow) isDefault() bool {
+	return !row.Favorite && row.Intent == "none" && row.Reaction == "none"
+}
+
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeStatePushItem struct {
+	Favorite      *bool     `json:"favorite"`
+	PreferredTags *[]string `json:"preferred_tags"`
+	MediaType     string    `json:"media_type"`
+	SystemID      string    `json:"system_id"`
+	CoreSlug      string    `json:"core_slug"`
+	Title         string    `json:"title"`
+	Intent        string    `json:"intent"`
+	Reaction      string    `json:"reaction"`
+	Tags          []string  `json:"tags"`
+	BaseRevision  int64     `json:"base_revision"`
+}
+
 type fakeInventory struct {
 	sha        string
 	ordinals   []uint32
@@ -71,13 +113,14 @@ type fakeInventory struct {
 func newFakeOnline(t *testing.T) *fakeOnline {
 	t.Helper()
 	f := &fakeOnline{
-		t:        t,
-		ordinals: make(map[string]uint32),
-		rejected: make(map[string]string),
-		issued:   make(map[uint32]bool),
-		calls:    make(map[string]int),
-		nextID:   100,
-		token:    "library-token",
+		t:         t,
+		ordinals:  make(map[string]uint32),
+		rejected:  make(map[string]string),
+		issued:    make(map[uint32]bool),
+		calls:     make(map[string]int),
+		nextID:    100,
+		token:     "library-token",
+		stateRows: make(map[string]*fakeStateRow),
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
@@ -151,6 +194,10 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case "PUT /v1/device/library/inventory/{sha256}":
 		f.handlePut(w, r)
+	case "POST /v1/device/library/state":
+		f.handleStatePush(w, r)
+	case "GET /v1/device/library/state":
+		f.handleStatePull(w, r)
 	default:
 		f.t.Errorf("unexpected request %s", key)
 		w.WriteHeader(http.StatusTeapot)
@@ -268,4 +315,176 @@ func writeFakeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": code}})
+}
+
+func fakeStateKey(mediaType, systemID, slug string, tagList []string) (key string, variants []string) {
+	variants = make([]string, 0, 1)
+	for _, tv := range tagList {
+		tagType, value, _ := strings.Cut(tv, ":")
+		if tags.IsGameVariantTag(tagType, value) {
+			variants = append(variants, tv)
+		}
+	}
+	sort.Strings(variants)
+	return mediaType + "|" + systemID + "|" + slug + "|" + strings.Join(variants, "+"), variants
+}
+
+// putStateRow writes a row as if another device or Zaparoo Online had.
+func (f *fakeOnline) putStateRow(row *fakeStateRow) *fakeStateRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, variants := fakeStateKey(row.MediaType, row.SystemID, row.CoreSlug, row.VariantTags)
+	f.stateRevision++
+	stored := *row
+	stored.VariantTags = variants
+	stored.Revision = f.stateRevision
+	if stored.PreferredTags == nil {
+		stored.PreferredTags = []string{}
+	}
+	if stored.Intent == "" {
+		stored.Intent = "none"
+	}
+	if stored.Reaction == "" {
+		stored.Reaction = "none"
+	}
+	f.stateRows[key] = &stored
+	copied := stored
+	return &copied
+}
+
+func (f *fakeOnline) stateRow(mediaType, systemID, slug string, variants ...string) *fakeStateRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, _ := fakeStateKey(mediaType, systemID, slug, variants)
+	row, ok := f.stateRows[key]
+	if !ok {
+		return nil
+	}
+	copied := *row
+	return &copied
+}
+
+// eraseState erases every state row the way an account-wide erase does.
+func (f *fakeOnline) eraseState() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stateRevision++
+	f.stateFloor = f.stateRevision
+	f.stateRows = make(map[string]*fakeStateRow)
+}
+
+func (f *fakeOnline) pushedState() [][]fakeStatePushItem {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]fakeStatePushItem(nil), f.statePushes...)
+}
+
+func (f *fakeOnline) setRejectState(code string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rejectState = code
+}
+
+func (f *fakeOnline) handleStatePush(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Items []fakeStatePushItem `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Items) == 0 {
+		writeFakeError(w, http.StatusBadRequest, "validation_error")
+		return
+	}
+	f.statePushes = append(f.statePushes, request.Items)
+	results := make([]map[string]any, 0, len(request.Items))
+	for i := range request.Items {
+		item := &request.Items[i]
+		if item.Tags == nil {
+			writeFakeError(w, http.StatusBadRequest, "validation_error")
+			return
+		}
+		if f.rejectState != "" {
+			results = append(results, map[string]any{
+				"index": i, "status": "rejected", "code": f.rejectState, "state": nil,
+			})
+			continue
+		}
+		key, variants := fakeStateKey(item.MediaType, item.SystemID, item.CoreSlug, item.Tags)
+		row := f.stateRows[key]
+		switch {
+		case row == nil && item.BaseRevision > 0:
+			results = append(results, map[string]any{"index": i, "status": "conflict", "state": nil})
+			continue
+		case row != nil && row.Revision != item.BaseRevision:
+			results = append(results, map[string]any{"index": i, "status": "conflict", "state": row})
+			continue
+		}
+		next := fakeStateRow{
+			MediaType: item.MediaType, SystemID: item.SystemID, CoreSlug: item.CoreSlug,
+			VariantTags: variants, Intent: "none", Reaction: "none", PreferredTags: []string{},
+		}
+		if row != nil && !row.Deleted {
+			next = *row
+		}
+		if item.Title != "" {
+			next.Title = item.Title
+		}
+		if item.Favorite != nil {
+			next.Favorite = *item.Favorite
+		}
+		if item.Intent != "" {
+			next.Intent = item.Intent
+		}
+		if item.Reaction != "" {
+			next.Reaction = item.Reaction
+		}
+		if item.PreferredTags != nil {
+			next.PreferredTags = *item.PreferredTags
+		}
+		if next.Favorite && next.Reaction == "disliked" {
+			results = append(results, map[string]any{
+				"index": i, "status": "rejected", "code": "invalid_state", "state": nil,
+			})
+			continue
+		}
+		if row == nil && next.isDefault() {
+			results = append(results, map[string]any{"index": i, "status": "applied", "state": nil})
+			continue
+		}
+		f.stateRevision++
+		next.Revision = f.stateRevision
+		next.Deleted = next.isDefault()
+		stored := next
+		f.stateRows[key] = &stored
+		results = append(results, map[string]any{"index": i, "status": "applied", "state": &stored})
+	}
+	writeFakeJSON(w, map[string]any{"items": results, "applied": 0, "conflicts": 0, "rejected": 0})
+}
+
+func (f *fakeOnline) handleStatePull(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 500 {
+		writeFakeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	reset := false
+	if since > 0 && since < f.stateFloor {
+		reset = true
+		since = 0
+	}
+	rows := make([]*fakeStateRow, 0)
+	for _, row := range f.stateRows {
+		if row.Revision > since {
+			rows = append(rows, row)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Revision < rows[j].Revision })
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	next := since
+	if len(rows) > 0 {
+		next = rows[len(rows)-1].Revision
+	}
+	writeFakeJSON(w, map[string]any{"items": rows, "next_since": next, "has_more": hasMore, "reset": reset})
 }

@@ -93,19 +93,115 @@ func startLibrarySyncScheduler(
 		SendHeartbeat: manager.SendCapabilityHeartbeat,
 	})
 	requests := make(chan struct{}, 1)
-	st.SetLibrarySyncRequester(func() {
-		select {
-		case requests <- struct{}{}:
-		default:
-		}
+	stateRequests := make(chan struct{}, 1)
+	st.SetLibrarySyncSignals(state.LibrarySyncSignals{
+		SettingChanged: func() {
+			signalLibrarySync(requests)
+			signalLibrarySync(stateRequests)
+		},
+		StateChanged: func() { signalLibrarySync(stateRequests) },
 	})
 	indexing, subID := notifBroker.Subscribe(32, models.NotificationMediaIndexing)
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		defer notifBroker.Unsubscribe(subID)
 		librarySyncLoop(ctx, svc, idleSched, requests, indexing, &defaultLibrarySyncTimings)
 	}()
+	go func() {
+		defer wg.Done()
+		libraryStateLoop(ctx, svc, stateRequests, &defaultLibraryStateTimings)
+	}()
+}
+
+func signalLibrarySync(requests chan<- struct{}) {
+	select {
+	case requests <- struct{}{}:
+	default:
+	}
+}
+
+type libraryStateTimings struct {
+	check          time.Duration
+	startup        time.Duration
+	debounce       time.Duration
+	interval       time.Duration
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+}
+
+var defaultLibraryStateTimings = libraryStateTimings{
+	check:          time.Minute,
+	startup:        2 * time.Minute,
+	debounce:       2 * time.Second,
+	interval:       time.Hour,
+	initialBackoff: time.Minute,
+	maxBackoff:     time.Hour,
+}
+
+// libraryStateRunner is the part of the Library sync service that keeps
+// personal state converged.
+type libraryStateRunner interface {
+	SyncState(ctx context.Context) (librarysync.StateResult, error)
+}
+
+// libraryStateLoop pulls and pushes personal state apart from the inventory,
+// so an edit is pushed within seconds even while a large first inventory is
+// still being resolved. Edits are coalesced over a short debounce; otherwise
+// a pass runs after startup and hourly.
+func libraryStateLoop(
+	ctx context.Context,
+	runner libraryStateRunner,
+	requests <-chan struct{},
+	timings *libraryStateTimings,
+) {
+	startup := time.NewTimer(timings.startup)
+	defer startup.Stop()
+	ticker := time.NewTicker(timings.check)
+	defer ticker.Stop()
+	debounce := time.NewTimer(timings.debounce)
+	debounce.Stop()
+	defer debounce.Stop()
+
+	started := false
+	pending := false
+	retry := intervalState{backoff: timings.initialBackoff}
+	run := func() {
+		now := time.Now()
+		_, err := runner.SyncState(ctx)
+		switch {
+		case ctx.Err() != nil:
+		case err == nil || librarysync.IsIdleError(err):
+			pending = false
+			retry.recordSuccess(now, timings.initialBackoff)
+		default:
+			retry.recordFailure(now, timings.initialBackoff, timings.maxBackoff)
+			log.Warn().Err(err).Dur("retry_in", retry.nextAttempt.Sub(now)).Msg("library state sync failed")
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-startup.C:
+			started = true
+			run()
+		case <-requests:
+			pending = true
+			debounce.Reset(timings.debounce)
+		case <-debounce.C:
+			if retry.nextAttempt.IsZero() || !time.Now().Before(retry.nextAttempt) {
+				run()
+			}
+		case <-ticker.C:
+			now := time.Now()
+			intervalDue := (pending || started) && retry.due(now, timings.interval)
+			retryDue := pending && !retry.nextAttempt.IsZero() && !now.Before(retry.nextAttempt)
+			if intervalDue || retryDue {
+				run()
+			}
+		}
+	}
 }
 
 // librarySyncLoop runs Library sync passes: after the startup delay, when the

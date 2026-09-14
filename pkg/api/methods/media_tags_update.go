@@ -113,6 +113,9 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	if _, changed := changes[database.MediaUserFlagHidden]; changed && env.State != nil {
 		notifications.MediaVisibility(env.State.Notifications)
 	}
+	if syncedFlagChanged(changes) {
+		env.State.NotifyLibraryStateChanged()
+	}
 
 	fetchStarted := time.Now()
 	fileTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
@@ -214,6 +217,17 @@ func resolveUserFlagChanges(
 		implyClear(database.MediaUserFlagDisliked)
 	}
 	return changes, nil
+}
+
+// syncedFlagChanged reports whether a change touches a flag Library sync
+// carries; hidden stays on the device.
+func syncedFlagChanged(changes map[database.MediaUserFlag]bool) bool {
+	for flag := range changes {
+		if !tags.IsLocalOnlyUserTag(tags.TagValue(flag)) {
+			return true
+		}
+	}
+	return false
 }
 
 // userFlagTagRefs splits resolved flag changes into the user tags to add and

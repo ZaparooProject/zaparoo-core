@@ -1103,6 +1103,12 @@ type UserDBI interface {
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)
 
+	// Library sync bookkeeping for personal state.
+	ListLibraryStateSync() ([]LibraryStateSyncRow, error)
+	UpsertLibraryStateSync(rows []LibraryStateSyncRow) error
+	DeleteLibraryStateSync(identityKeys []string) error
+	ClearLibraryStateSync() error
+
 	// Decks
 	CreateDeck(deck *Deck) error
 	GetDeck(deckID string) (*Deck, error)
