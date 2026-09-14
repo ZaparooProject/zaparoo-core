@@ -700,6 +700,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 				+ st.staged_count > 1`,
 			args: []any{systemDBID, systemDBID},
 		},
+		// A title whose staged files carry a game-variant tag (a hack, homebrew
+		// or public-domain work) disambiguates on that tag whatever its file
+		// count, so a lone hack still emits it in its title launch. The
+		// captures above only see multi-file titles; this one runs on fresh
+		// systems too.
+		variantTitleCapture(systemDBID),
 	}
 	// The remaining captures all read FROM Media for this system, which is still
 	// empty at this point in a fresh reconcile (the upsert runs below), so they
@@ -978,6 +984,23 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, clearErr
 	}
 	return stats, nil
+}
+
+// variantTitleCapture marks every staged title that carries a game-variant
+// tag (tags.GameVariantTags) as touched, so its disambiguation is recomputed
+// even when it has a single file.
+func variantTitleCapture(systemDBID int64) scanReconcileStep {
+	clause, args := tags.GameVariantTagSQLPredicate("st.TagType", "st.Tag")
+	return scanReconcileStep{
+		step: "capture variant titles",
+		query: `
+		INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
+		SELECT DISTINCT t.DBID FROM ScanStageTags st
+		JOIN ScanStage s ON s.Path = st.Path
+		JOIN MediaTitles t ON t.SystemDBID = ? AND t.Slug = s.Slug
+		WHERE ` + clause,
+		args: append([]any{systemDBID}, args...),
+	}
 }
 
 // sqlCountScanTouchedTitles returns the number of titles touched by the
