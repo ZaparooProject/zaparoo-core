@@ -63,6 +63,7 @@ type Base struct {
 	activeMedia             func() *models.ActiveMedia
 	setActiveMedia          func(*models.ActiveMedia)
 	trackedProcess          *os.Process
+	protectedProcess        func(pid int) bool
 	completedTrackedProcess *os.Process
 	trackedProcessDone      chan struct{}
 	lastConfig              *config.Instance
@@ -117,10 +118,40 @@ func (*Base) Stop() error {
 	return nil
 }
 
+// SetProtectedProcess installs a predicate naming process trees Core must
+// never track or terminate.
+//
+// It exists for one case: on SteamOS the frontend is itself a Steam app, so
+// the Steam tracker sees it start and tracks its reaper as the running game.
+// The next launch then preempts the "running game" and terminates that tree,
+// which is the frontend. A process that is hosting launches for Core is not
+// media and cannot be the thing a launch stops.
+//
+// The predicate is called with processMu held, so it must not reach back into
+// anything that takes processMu, and it must not block: it sits in the path of
+// every tracked-process change.
+func (b *Base) SetProtectedProcess(protected func(pid int) bool) {
+	b.processMu.Lock()
+	b.protectedProcess = protected
+	b.processMu.Unlock()
+}
+
+// isProtectedLocked reports whether pid owns a tree Core must leave alone.
+// Callers hold processMu.
+func (b *Base) isProtectedLocked(pid int) bool {
+	return b.protectedProcess != nil && b.protectedProcess(pid)
+}
+
 // SetTrackedProcess stores a process handle, killing any existing tracked process.
 func (b *Base) SetTrackedProcess(proc *os.Process) {
 	b.processMu.Lock()
 	defer b.processMu.Unlock()
+
+	if proc != nil && b.isProtectedLocked(proc.Pid) {
+		log.Debug().Int("pid", proc.Pid).
+			Msg("refusing to track a protected process tree")
+		return
+	}
 
 	// Process handles may be recreated for the same PID when a tracker restarts.
 	// Keep existing lifecycle state instead of signaling the live process.
@@ -146,6 +177,19 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
+func (b *Base) clearTrackedProcessLocked() {
+	b.trackedProcess = nil
+	b.completedTrackedProcess = nil
+	b.trackedProcessDone = nil
+	b.processWaitClaimed = false
+}
+
+func (b *Base) clearTrackedProcessAndLauncherLocked() {
+	b.clearTrackedProcessLocked()
+	b.lastLauncher = platforms.Launcher{}
+	b.lastConfig = nil
+}
+
 // ClearTrackedProcessPID forgets a completed externally-owned process without
 // signaling it. The PID check prevents an older lifecycle event from clearing
 // a newer tracked process.
@@ -157,10 +201,22 @@ func (b *Base) ClearTrackedProcessPID(pid int) bool {
 		return false
 	}
 
-	b.trackedProcess = nil
-	b.completedTrackedProcess = nil
-	b.trackedProcessDone = nil
-	b.processWaitClaimed = false
+	b.clearTrackedProcessLocked()
+	return true
+}
+
+// ClearTrackedProcessAndLauncherPID forgets a tracked process and its
+// launcher-specific stop state without signaling it. The PID check prevents an
+// older lifecycle event from clearing a newer launch.
+func (b *Base) ClearTrackedProcessAndLauncherPID(pid int) bool {
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
+
+	if b.trackedProcess == nil || b.trackedProcess.Pid != pid {
+		return false
+	}
+
+	b.clearTrackedProcessAndLauncherLocked()
 	return true
 }
 
@@ -252,6 +308,19 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 
 	b.processMu.Lock()
 	proc := b.trackedProcess
+	// Tracking can predate the protection: the frontend registers as a launch
+	// host a moment after Steam starts it, by which time the tracker has
+	// already claimed its reaper. Forget it rather than signal it, and drop
+	// the launcher with it so a custom Kill cannot reach the same tree by
+	// another route. Dropping the handle rather than returning here keeps the
+	// rest of the contract: callers are entitled to assume nothing is active
+	// once this returns, so active media is still cleared below.
+	if proc != nil && b.isProtectedLocked(proc.Pid) {
+		log.Debug().Int("pid", proc.Pid).
+			Msg("not stopping a protected process tree; clearing it instead")
+		b.clearTrackedProcessAndLauncherLocked()
+		proc = nil
+	}
 	customKill := b.lastLauncher.Kill
 	cfg := b.lastConfig
 	b.lastLauncher = platforms.Launcher{}

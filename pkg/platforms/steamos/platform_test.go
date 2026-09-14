@@ -26,13 +26,16 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/steamruntime"
@@ -53,6 +56,7 @@ type fakeRuntimeBroker struct {
 	clearedPID int
 	waitedPID  int
 	stopCalls  int
+	hostPID    int
 }
 
 func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Command) (*os.Process, error) {
@@ -72,9 +76,19 @@ func (f *fakeRuntimeBroker) Wait(_ context.Context, pid int) error {
 	f.waitedPID = pid
 	return f.waitErr
 }
-func (f *fakeRuntimeBroker) Available() bool { return f.available }
-func (f *fakeRuntimeBroker) HasActive() bool { return f.active }
-func (f *fakeRuntimeBroker) Owns(int) bool   { return f.owns }
+
+func (f *fakeRuntimeBroker) HostPIDs() []int {
+	if f.hostPID <= 0 {
+		return nil
+	}
+	return []int{f.hostPID}
+}
+func (*fakeRuntimeBroker) Serve() error                    { return nil }
+func (*fakeRuntimeBroker) SetHostRegisteredHook(func(int)) {}
+func (*fakeRuntimeBroker) Close()                          {}
+func (f *fakeRuntimeBroker) Available() bool               { return f.available }
+func (f *fakeRuntimeBroker) HasActive() bool               { return f.active }
+func (f *fakeRuntimeBroker) Owns(int) bool                 { return f.owns }
 func (f *fakeRuntimeBroker) Clear(pid int) bool {
 	f.clearedPID = pid
 	return f.clear
@@ -543,4 +557,91 @@ func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
 
 	p := NewPlatform()
 	assert.NoError(t, p.ReturnToMenu())
+}
+
+// The frontend is a Steam app, so the tracker sees it start and claims its
+// reaper as the running game. Preempting that "game" for the next launch used
+// to terminate the tree the frontend lives in, which is the process that asked
+// for the launch: pressing a game quit the frontend and the launch then timed
+// out waiting for a host that no longer existed.
+func TestLaunchHostTreeIsNotTracked(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{hostPID: os.Getpid()}
+	platform := &Platform{Base: linuxbase.NewBase(platformids.SteamOS), steamRuntime: broker}
+	platform.SetProtectedProcess(platform.ownsLaunchHost)
+
+	// The host itself, and the parent Steam would have wrapped it in. Every
+	// ancestor is protected on purpose: terminating any tree the host sits
+	// inside takes the host with it, whatever else that tree holds.
+	assert.True(t, platform.ownsLaunchHost(os.Getpid()))
+	assert.True(t, platform.ownsLaunchHost(os.Getppid()))
+
+	// A process the host does not live inside stays stoppable, which is what
+	// keeps ordinary media preemption working. Another game's reaper is a
+	// sibling of ours, never an ancestor.
+	sibling := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, sibling.Start())
+	t.Cleanup(func() {
+		_ = sibling.Process.Kill()
+		_, _ = sibling.Process.Wait()
+	})
+	assert.False(t, platform.ownsLaunchHost(sibling.Process.Pid))
+
+	self, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	platform.Base.SetTrackedProcess(self)
+	require.NoError(t, platform.Base.StopActiveLauncher(platforms.StopForPreemption))
+	// Still here: the guard refused to track it, so nothing signaled this tree.
+	require.NoError(t, syscall.Kill(os.Getpid(), 0))
+}
+
+// Without a registered host nothing is protected, so ordinary preemption is
+// untouched.
+func TestNothingIsProtectedWithoutAHost(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{
+		Base:         linuxbase.NewBase(platformids.SteamOS),
+		steamRuntime: &fakeRuntimeBroker{},
+	}
+
+	assert.False(t, platform.ownsLaunchHost(os.Getpid()))
+	assert.False(t, platform.ownsLaunchHost(1))
+}
+
+func TestProcessAncestryWalksUpAndStops(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, processHasAncestor(os.Getpid(), os.Getppid()))
+	// A process is not its own ancestor, and an unrelated pid is not one either.
+	assert.False(t, processHasAncestor(os.Getpid(), os.Getpid()))
+	assert.False(t, processHasAncestor(os.Getpid(), -1))
+	// A pid that cannot be read yields no ancestry rather than spinning.
+	assert.False(t, processHasAncestor(1<<30, 1))
+}
+
+// The ancestry check has to point the right way. A hosted game is a child of
+// the launch host, so it must stay stoppable; getting the direction backwards
+// would protect every game the frontend starts and leave them unkillable.
+func TestAHostedGameIsNotProtected(t *testing.T) {
+	t.Parallel()
+
+	game := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, game.Start())
+	t.Cleanup(func() {
+		_ = game.Process.Kill()
+		_, _ = game.Process.Wait()
+	})
+
+	// This process stands in for the frontend, and the child it just started
+	// for the game the frontend was asked to run.
+	platform := &Platform{
+		Base:         linuxbase.NewBase(platformids.SteamOS),
+		steamRuntime: &fakeRuntimeBroker{hostPID: os.Getpid()},
+	}
+
+	assert.False(t, platform.ownsLaunchHost(game.Process.Pid),
+		"a game started by the host is below it, never above it")
+	assert.True(t, platform.ownsLaunchHost(os.Getpid()))
 }

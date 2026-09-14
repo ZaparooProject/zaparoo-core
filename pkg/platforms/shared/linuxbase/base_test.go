@@ -196,6 +196,40 @@ func TestClearTrackedProcessPIDGuardsReplacement(t *testing.T) {
 	assert.False(t, base.ClearTrackedProcessPID(1002))
 }
 
+func TestClearTrackedProcessAndLauncherPIDClearsStopState(t *testing.T) {
+	t.Parallel()
+
+	tracked := &os.Process{Pid: 1002}
+	cfg := &config.Instance{}
+	killCalled := false
+	base := NewBase("test")
+	base.trackedProcess = tracked
+	base.completedTrackedProcess = &os.Process{Pid: 1001}
+	base.trackedProcessDone = make(chan struct{})
+	base.processWaitClaimed = true
+	base.lastLauncher = platforms.Launcher{Kill: func(*config.Instance) error {
+		killCalled = true
+		return nil
+	}}
+	base.lastConfig = cfg
+
+	assert.False(t, base.ClearTrackedProcessAndLauncherPID(1001))
+	assert.Same(t, tracked, base.trackedProcess)
+	assert.NotNil(t, base.lastLauncher.Kill)
+	assert.Same(t, cfg, base.lastConfig)
+
+	assert.True(t, base.ClearTrackedProcessAndLauncherPID(1002))
+	assert.Nil(t, base.trackedProcess)
+	assert.Nil(t, base.completedTrackedProcess)
+	assert.Nil(t, base.trackedProcessDone)
+	assert.False(t, base.processWaitClaimed)
+	assert.Nil(t, base.lastLauncher.Kill)
+	assert.Nil(t, base.lastConfig)
+
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
+	assert.False(t, killCalled, "cleared launcher state must not run a stale Kill callback")
+}
+
 func TestClearTrackedProcessMediaDoesNotClearReplacement(t *testing.T) {
 	t.Parallel()
 
@@ -668,4 +702,40 @@ func TestID(t *testing.T) {
 			assert.Equal(t, tc.platformID, base.ID())
 		})
 	}
+}
+
+// A tracked tree that turns out to be protected is dropped rather than
+// signalled, but stopping is still a full stop: callers are entitled to assume
+// nothing is active once this returns, so active media is cleared the same way
+// every other path clears it.
+func TestStopActiveLauncherSparesAProtectedTreeAndStillClears(t *testing.T) {
+	t.Parallel()
+
+	base := NewBase("test")
+	cleared := false
+	base.activeMedia = func() *models.ActiveMedia { return &models.ActiveMedia{Path: "steam://1"} }
+	base.setActiveMedia = func(media *models.ActiveMedia) { cleared = media == nil }
+	killed := false
+	base.lastLauncher = platforms.Launcher{Kill: func(*config.Instance) error {
+		killed = true
+		return nil
+	}}
+	base.SetProtectedProcess(func(pid int) bool { return pid == os.Getpid() })
+
+	self, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	base.SetTrackedProcess(self)
+	assert.Nil(t, base.trackedProcess, "a protected tree is never taken up in the first place")
+
+	// Track it behind the guard's back, the way the tracker does before the
+	// host has registered, then stop.
+	base.processMu.Lock()
+	base.trackedProcess = self
+	base.processMu.Unlock()
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
+
+	assert.True(t, cleared, "active media must still be cleared")
+	assert.False(t, killed, "a custom Kill must not reach the protected tree either")
+	assert.Nil(t, base.trackedProcess)
+	require.NoError(t, syscall.Kill(os.Getpid(), 0), "this process must survive")
 }
