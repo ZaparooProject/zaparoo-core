@@ -2638,6 +2638,64 @@ func (m *MockMediaDBI) IndexGeneration() (int64, error) {
 	return v, nil
 }
 
+func (m *MockMediaDBI) LibraryMediaPage(
+	ctx context.Context, afterMediaDBID int64, limit int,
+) ([]database.LibraryMediaRow, error) {
+	args := m.Called(ctx, afterMediaDBID, limit)
+	if rows, ok := args.Get(0).([]database.LibraryMediaRow); ok {
+		return rows, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetLibraryOrdinals(
+	ctx context.Context, fingerprints []string,
+) (map[string]database.LibraryOrdinal, error) {
+	args := m.Called(ctx, fingerprints)
+	if found, ok := args.Get(0).(map[string]database.LibraryOrdinal); ok {
+		return found, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) PutLibraryOrdinals(ctx context.Context, ordinals []database.LibraryOrdinal) error {
+	args := m.Called(ctx, ordinals)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) MarkLibraryOrdinalsSeen(ctx context.Context, fingerprints []string, generation int64) error {
+	args := m.Called(ctx, fingerprints, generation)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) PruneLibraryOrdinals(ctx context.Context, generation int64) (int64, error) {
+	args := m.Called(ctx, generation)
+	removed, ok := args.Get(0).(int64)
+	if !ok {
+		removed = 0
+	}
+	return removed, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) ClearLibraryOrdinalCache(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetLibraryInventoryState(ctx context.Context) (database.LibraryInventoryState, error) {
+	args := m.Called(ctx)
+	state, ok := args.Get(0).(database.LibraryInventoryState)
+	if !ok {
+		state = database.LibraryInventoryState{}
+	}
+	return state, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) SetLibraryInventoryState(ctx context.Context, state *database.LibraryInventoryState) error {
+	args := m.Called(ctx, state)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) BumpIndexGeneration() (int64, error) {
 	args := m.Called()
 	v, ok := args.Get(0).(int64)

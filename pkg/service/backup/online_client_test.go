@@ -91,6 +91,8 @@ func TestOnlineClientRequests(t *testing.T) {
 	client, err := env.Manager.NewOnlineClient(server.URL + "/")
 	require.NoError(t, err)
 	assert.Equal(t, server.URL, client.BaseURL())
+	assert.Len(t, client.CredentialTag(), 16)
+	assert.NotContains(t, client.CredentialTag(), "online-token")
 	ctx := context.Background()
 
 	var out struct {

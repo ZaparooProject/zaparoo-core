@@ -1219,6 +1219,18 @@ type MediaDBI interface {
 	IndexGeneration() (int64, error)
 	BumpIndexGeneration() (int64, error)
 
+	// Library sync: a paged walk of present media, the cache of resolve
+	// answers keyed by identity fingerprint, and the record of the last
+	// committed inventory. All of it is disposable with this database.
+	LibraryMediaPage(ctx context.Context, afterMediaDBID int64, limit int) ([]LibraryMediaRow, error)
+	GetLibraryOrdinals(ctx context.Context, fingerprints []string) (map[string]LibraryOrdinal, error)
+	PutLibraryOrdinals(ctx context.Context, ordinals []LibraryOrdinal) error
+	MarkLibraryOrdinalsSeen(ctx context.Context, fingerprints []string, generation int64) error
+	PruneLibraryOrdinals(ctx context.Context, generation int64) (int64, error)
+	ClearLibraryOrdinalCache(ctx context.Context) error
+	GetLibraryInventoryState(ctx context.Context) (LibraryInventoryState, error)
+	SetLibraryInventoryState(ctx context.Context, state *LibraryInventoryState) error
+
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
 		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
