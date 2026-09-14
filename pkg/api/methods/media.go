@@ -1000,6 +1000,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 func searchResultSystem(
 	systemID string,
 	launchableSystems map[string]launchables.VirtualSystem,
+	categoryResolver config.CategoryResolver,
 ) models.System {
 	result := models.System{ID: systemID, Name: systemID}
 	if system, err := systemdefs.GetSystem(systemID); err == nil {
@@ -1007,6 +1008,7 @@ func searchResultSystem(
 		metadata, metadataErr := assets.GetSystemMetadata(system.ID)
 		if metadataErr != nil {
 			log.Err(metadataErr).Str("systemID", system.ID).Msg("error getting system metadata")
+			applyOrdinarySystemCategories(&result, categoryResolver, system.ID)
 			return result
 		}
 		result.Name = metadata.Name
@@ -1017,6 +1019,7 @@ func searchResultSystem(
 		if metadata.Manufacturer != "" {
 			result.Manufacturer = &metadata.Manufacturer
 		}
+		applyOrdinarySystemCategories(&result, categoryResolver, system.ID)
 		return result
 	}
 
@@ -1024,6 +1027,7 @@ func searchResultSystem(
 		result.Name = system.Name
 		result.Category = system.Category
 		result.ZapScript = system.ZapScript()
+		applyVirtualSystemCategories(&result, categoryResolver, system.Categories)
 	}
 	return result
 }
@@ -1189,6 +1193,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	categoryResolver := systemCategoryResolver(env.Config)
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
 	var systemBuildDuration time.Duration
 	var zapScriptDuration time.Duration
@@ -1196,7 +1201,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	for i := range searchResults {
 		result := &searchResults[i]
 		stageStarted := time.Now()
-		resultSystem := searchResultSystem(result.SystemID, launchableSystems)
+		resultSystem := searchResultSystem(result.SystemID, launchableSystems, categoryResolver)
 		systemBuildDuration += time.Since(stageStarted)
 
 		stageStarted = time.Now()

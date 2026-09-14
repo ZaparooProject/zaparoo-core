@@ -623,10 +623,15 @@ An object:
 | :----------- | :----- | :------- | :----------------------------------------------------------------------- |
 | id           | string | No       | Internal system ID for this system.                                      |
 | name         | string | No       | Display name of the system.                                              |
-| category     | string | No       | Category of system (e.g., "Console", "Computer"). Not yet formalised.    |
-| releaseDate  | string | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
+| category     | string   | No       | Primary category of system (e.g., "Console", "Computer"). Preserved for compatibility with clients that support one category. |
+| categories   | string[] | No       | Complete ordered category membership. Primary `category` is first, followed by configured additional memberships. |
+| releaseDate  | string   | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
 | manufacturer | string | No       | Manufacturer of the system (e.g., "Nintendo", "Sega").                   |
 | mediaCount   | number | No       | Populated only in `systems` responses; not included on System objects nested in `media.search` results. Exact non-missing indexed media-row count for this system, or exact matching count when `systems.tags` is set. Zero means the system is supported but empty. Omitted by older Core versions or when counts are unavailable. |
+
+Clients should use `categories` when present and fall back to `[category]` when connected to older Core versions. Custom category strings are literal display values configured in Core TOML. Core matches configured references case-insensitively but returns canonical built-in spelling or custom declaration spelling. Clients display unknown custom values as received.
+
+Available categories remain dynamic: derive them from `categories` on systems returned by the current request. Core does not return a separate fixed category catalog. Filters such as `systems.tags` may therefore change which categories are represented.
 
 ##### Pagination object
 
@@ -2684,6 +2689,8 @@ List systems currently indexed or supported by an available launcher on the runn
 
 Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index. On MiSTer, a launcher whose FPGA core isn't installed on the SD card counts as unavailable, so without `all` the system list reflects only systems you can currently launch. See [launchers](#launchers) to check which core a launcher needs.
 
+Responses include each system's primary `category` and complete `categories` membership. Additional custom memberships come from manual Core TOML configuration; this API does not provide category mutation or UI behavior. Clients derive available categories from systems in the response.
+
 Responses include an exact non-missing `mediaCount` for each system when the media database count query succeeds. Supported systems with no indexed media have `mediaCount: 0`. The field is omitted if counts are unavailable, preserving compatibility with older clients and database-error fallback behavior.
 
 Set `tags` to return only systems containing matching non-missing media. Tagged responses use `mediaCount` for the exact matching count and omit zero-match systems. Tag syntax and AND/NOT/OR operators match `media.search`. Tags remain the final filter when combined with `all`, so launcher-only systems with no matching media are omitted.
@@ -2731,6 +2738,7 @@ See [System object](#system-object).
         "id": "GameboyColor",
         "name": "Gameboy Color",
         "category": "Handheld",
+        "categories": ["Handheld"],
         "releaseDate": "1998-10-21",
         "manufacturer": "Nintendo",
         "mediaCount": 842
@@ -2739,6 +2747,7 @@ See [System object](#system-object).
         "id": "EDSAC",
         "name": "EDSAC",
         "category": "Computer",
+        "categories": ["Computer", "Favorite Systems"],
         "releaseDate": "1949-05-06",
         "manufacturer": "University of Cambridge",
         "mediaCount": 0

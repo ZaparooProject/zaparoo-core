@@ -82,6 +82,7 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			resultSystem.Manufacturer = &metadata.Manufacturer
 		}
 	}
+	applyOrdinarySystemCategories(&resultSystem, systemCategoryResolver(env.Config), system.ID)
 
 	// Populate disambiguating ZapScript tags if not already computed
 	// (e.g., cache-hit path in ResolveTitle skips tag computation)

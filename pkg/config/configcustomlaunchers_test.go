@@ -161,6 +161,41 @@ func TestValidateCustomLauncher_CommandVirtualSystem(t *testing.T) {
 	require.NoError(t, validateCustomLauncher(&entry))
 }
 
+func TestValidateCustomLauncher_CustomCategoryMemberships(t *testing.T) {
+	resolver := newCategoryResolver([]SystemsCategory{{Name: "Favorite Systems"}, {Name: "Kids"}})
+	entry := LaunchersCustom{
+		ID: "Tools", Kind: CustomLauncherKindVirtualSystem,
+		Backend: CustomLauncherBackendCommand, Name: "Tools",
+		Category: "favorite systems", Categories: []string{"KIDS", "Favorite Systems", "kids"},
+		Execute: "echo tools",
+	}
+
+	require.NoError(t, validateCustomLauncherWithCategories(&entry, resolver))
+	assert.Equal(t, "Favorite Systems", entry.Category)
+	assert.Equal(t, []string{"Kids"}, entry.Categories)
+}
+
+func TestValidateCustomLauncher_RejectsUndeclaredAdditionalCategory(t *testing.T) {
+	entry := LaunchersCustom{
+		ID: "Tools", Kind: CustomLauncherKindVirtualSystem,
+		Backend: CustomLauncherBackendCommand, Name: "Tools",
+		Categories: []string{"Favorites"}, Execute: "echo tools",
+	}
+
+	require.ErrorContains(t,
+		validateCustomLauncherWithCategories(&entry, newCategoryResolver(nil)),
+		`unsupported virtual_system category "Favorites"`)
+}
+
+func TestValidateCustomLauncher_RejectsCategoriesOnMediaLauncher(t *testing.T) {
+	entry := LaunchersCustom{
+		ID: "Famicom", System: "NES", MediaDirs: []string{"Games"},
+		Categories: []string{"Console"},
+	}
+
+	require.ErrorContains(t, validateCustomLauncher(&entry), "categories require")
+}
+
 func TestValidateCustomLauncher_RejectsInvalidMisterLoadPath(t *testing.T) {
 	paths := []string{
 		"/media/fat/_Other/Arduboy",
@@ -246,6 +281,25 @@ excute = "misspelled"
 	require.Len(t, cfg.CustomLaunchers(), 1)
 }
 
+func TestLoadCustomLaunchers_RejectsCategoryDeclarations(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "invalid.toml"), []byte(`
+[[systems.category]]
+name = "Favorites"
+systems = ["SNES"]
+
+[[launchers.custom]]
+id = "Tools"
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.Error(t, cfg.LoadCustomLaunchers(launchersDir))
+	assert.Empty(t, cfg.CustomLaunchers())
+}
+
 func TestLoadCustomLaunchers_RetainsSnapshotWhenAllFilesFail(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	launchersDir := filepath.Join("data", "launchers")
@@ -291,6 +345,33 @@ execute = "echo inline"
 	assert.Equal(t, "echo inline", entries[0].Execute)
 }
 
+func TestLoadCustomLaunchers_ResolvesMainConfigCategories(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "favorite systems"
+categories = ["COMPUTER"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+`))
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Favorite Systems", entries[0].Category)
+	assert.Equal(t, []string{"Computer"}, entries[0].Categories)
+}
+
 func TestCustomLaunchers_ReturnsDeepCopy(t *testing.T) {
 	cfg := &Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -308,4 +389,26 @@ menu = "**input.keyboard:{f1}"
 
 	second := cfg.CustomLaunchers()
 	assert.Equal(t, "**input.keyboard:{f1}", second[0].Controls["menu"])
+}
+
+func TestCustomLaunchers_ReturnsCategoryCopy(t *testing.T) {
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorites"
+
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+categories = ["Favorites"]
+execute = "echo tools"
+`))
+
+	first := cfg.CustomLaunchers()
+	require.Len(t, first, 1)
+	first[0].Categories[0] = "mutated"
+
+	second := cfg.CustomLaunchers()
+	assert.Equal(t, []string{"Favorites"}, second[0].Categories)
 }

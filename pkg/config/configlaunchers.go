@@ -84,6 +84,7 @@ type LaunchersCustom struct {
 	System     string            `toml:"system,omitempty"`
 	Name       string            `toml:"name,omitempty"`
 	Category   string            `toml:"category,omitempty"`
+	Categories []string          `toml:"categories,omitempty"`
 	Execute    string            `toml:"execute,omitempty"`
 	Lifecycle  string            `toml:"lifecycle,omitempty"`
 	LoadPath   string            `toml:"load_path,omitempty"`
@@ -318,6 +319,12 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 			continue
 		}
 
+		if len(newVals.Systems.Category) > 0 {
+			log.Warn().Str("file", launcherPath).
+				Msg("custom launcher file skipped: systems categories must be declared in config.toml")
+			continue
+		}
+
 		rawLaunchers = append(rawLaunchers, newVals.Launchers.Custom...)
 		filesCount++
 	}
@@ -329,7 +336,13 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		return errors.New("failed to parse any custom launcher files")
 	}
 
-	validated := validateCustomLaunchers(rawLaunchers, c.vals.Launchers.Custom, "external launcher files")
+	categoryResolver := newCategoryResolver(c.vals.Systems.Category)
+	validated := validateCustomLaunchers(
+		rawLaunchers,
+		c.vals.Launchers.Custom,
+		"external launcher files",
+		categoryResolver,
+	)
 	c.customLaunchersExternal = cloneCustomLaunchers(validated)
 
 	for i := range validated {

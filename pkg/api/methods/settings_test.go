@@ -949,6 +949,12 @@ func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
 	require.NoError(t, err)
 	content := strings.Replace(string(data),
 		"scan_feedback = false", "scan_feedback = false\nvolume = 42", 1)
+	content += `
+
+[[systems.category]]
+name = "Favorite Systems"
+systems = ["SNES"]
+`
 	require.NotEqual(t, string(data), content, "replacement should have occurred")
 	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path
 	require.NoError(t, err)
@@ -979,6 +985,9 @@ func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
 	// Both the external edit and the API change should be present
 	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should survive settings update")
 	assert.True(t, cfg.ErrorReporting(), "API change should be applied")
+	assert.Equal(t, []string{"Console", "Favorite Systems"},
+		cfg.SystemCategoryResolver().ForSystem("SNES", "Console"),
+		"external category edit should survive settings update")
 }
 
 func TestHandleSettings_AudioVolumeDefault(t *testing.T) {

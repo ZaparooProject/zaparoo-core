@@ -55,6 +55,7 @@ func TestContract_SystemsResponse(t *testing.T) {
 	response := models.SystemsResponse{
 		Systems: []models.System{{
 			ID: "SNES", Name: "Super Nintendo", Category: "Console",
+			Categories:  []string{"Console", "Favorite Systems"},
 			ReleaseDate: &releaseDate, Manufacturer: &manufacturer, MediaCount: &mediaCount,
 			ZapScript: "**launch.system:SNES",
 		}},
@@ -63,6 +64,7 @@ func TestContract_SystemsResponse(t *testing.T) {
 	assert.JSONEq(t, `{
 		"systems": [{
 			"id": "SNES", "name": "Super Nintendo", "category": "Console",
+			"categories": ["Console", "Favorite Systems"],
 			"release_date": "1990-11-21", "manufacturer": "Nintendo", "media_count": 842,
 			"zap_script": "**launch.system:SNES"
 		}]
@@ -116,8 +118,11 @@ func TestContract_SearchResults(t *testing.T) {
 			Name: "Chrono Trigger", Path: "/roms/SNES/Chrono Trigger.sfc",
 			ZapScript: "**launch:/roms/SNES/Chrono Trigger.sfc", RelPath: &relPath,
 			MediaID: 42, HasCover: true,
-			System: models.System{ID: "SNES", Name: "Super Nintendo", Category: "Console"},
-			Tags:   []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG", Count: 3}},
+			System: models.System{
+				ID: "SNES", Name: "Super Nintendo", Category: "Console",
+				Categories: []string{"Console", "Favorite Systems"},
+			},
+			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG", Count: 3}},
 			DisambiguatingTags: []database.TagInfo{
 				{Tag: "rev:1", Type: "revision"},
 			},
@@ -132,7 +137,10 @@ func TestContract_SearchResults(t *testing.T) {
 			"zap_script": "**launch:/roms/SNES/Chrono Trigger.sfc",
 			"relative_path": "SNES/Chrono Trigger.sfc",
 			"media_id": 42, "has_cover": true,
-			"system": {"id": "SNES", "name": "Super Nintendo", "category": "Console"},
+			"system": {
+				"id": "SNES", "name": "Super Nintendo", "category": "Console",
+				"categories": ["Console", "Favorite Systems"]
+			},
 			"tags": [{"tag": "rpg", "type": "genre", "label": "RPG", "count": 3}],
 			"disambiguating_tags": [{"tag": "rev:1", "type": "revision"}]
 		}]

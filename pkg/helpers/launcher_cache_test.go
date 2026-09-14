@@ -38,22 +38,26 @@ func TestGetLaunchableSystems_ReturnsCopy(t *testing.T) {
 
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
 	systems := []launchables.VirtualSystem{
-		{ID: id, Name: "Chess", Category: "Other"},
+		{ID: id, Name: "Chess", Category: "Other", Categories: []string{"Favorites"}},
 	}
 	cache := &LauncherCache{}
 	cache.setLaunchableSystems(systems)
 	systems[0].Name = "Mutated Source"
+	systems[0].Categories[0] = "Mutated Source Category"
 
 	got := cache.GetLaunchableSystems()
 	require.Len(t, got, 1)
 	assert.Equal(t, id, got[0].ID)
 	assert.Equal(t, "Chess", got[0].Name)
 	assert.Equal(t, "Other", got[0].Category)
+	assert.Equal(t, []string{"Favorites"}, got[0].Categories)
 
 	got[0].Name = "Mutated Result"
+	got[0].Categories[0] = "Mutated Result Category"
 	gotAgain := cache.GetLaunchableSystems()
 	require.Len(t, gotAgain, 1)
 	assert.Equal(t, "Chess", gotAgain[0].Name)
+	assert.Equal(t, []string{"Favorites"}, gotAgain[0].Categories)
 
 	var wg sync.WaitGroup
 	for range 8 {

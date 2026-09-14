@@ -351,6 +351,7 @@ func (c *Instance) LoadTOML(data string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	oldVals := c.vals
+	oldVals.Systems.Category = cloneSystemCategories(c.vals.Systems.Category)
 	if err := c.applyTOML(data); err != nil {
 		c.vals = oldVals
 		return err
@@ -403,10 +404,15 @@ func (c *Instance) applyTOML(data string) error {
 		}
 	}
 
+	if err := validateSystemCategories(c.vals.Systems.Category); err != nil {
+		return fmt.Errorf("invalid systems categories: %w", err)
+	}
+	categoryResolver := newCategoryResolver(c.vals.Systems.Category)
 	c.vals.Launchers.Custom = validateCustomLaunchers(
 		c.vals.Launchers.Custom,
 		nil,
 		"config.toml",
+		categoryResolver,
 	)
 	if err := validateLauncherDefaults(c.vals.Launchers.Default); err != nil {
 		return fmt.Errorf("invalid launcher defaults: %w", err)

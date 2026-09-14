@@ -113,7 +113,7 @@ func TestSortedSearchCursorEncodeDecode(t *testing.T) {
 func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {
 	t.Parallel()
 
-	result := searchResultSystem("virtual-system", nil)
+	result := searchResultSystem("virtual-system", nil, config.CategoryResolver{})
 	assert.Equal(t, "virtual-system", result.ID)
 	assert.Equal(t, "virtual-system", result.Name)
 }
@@ -121,20 +121,42 @@ func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {
 func TestSearchResultSystem_UsesLaunchableSystemMap(t *testing.T) {
 	t.Parallel()
 
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+`))
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
 	encodedID := launchables.EncodeID(id)
 	result := searchResultSystem(encodedID, map[string]launchables.VirtualSystem{
 		encodedID: {
-			ID:       id,
-			Name:     "Chess",
-			Category: "Other",
+			ID:         id,
+			Name:       "Chess",
+			Category:   "Favorite Systems",
+			Categories: []string{"OTHER", "favorite systems"},
 		},
-	})
+	}, cfg.SystemCategoryResolver())
 
 	assert.Equal(t, encodedID, result.ID)
 	assert.Equal(t, "Chess", result.Name)
-	assert.Equal(t, "Other", result.Category)
+	assert.Equal(t, "Favorite Systems", result.Category)
+	assert.Equal(t, []string{"Favorite Systems", "Other"}, result.Categories)
 	assert.Equal(t, "zaparoo://"+encodedID+"/Chess", result.ZapScript)
+}
+
+func TestSearchResultSystem_IncludesOrdinaryCategoryMemberships(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+systems = ["SNES"]
+`))
+
+	result := searchResultSystem("SNES", nil, cfg.SystemCategoryResolver())
+	assert.Equal(t, "Console", result.Category)
+	assert.Equal(t, []string{"Console", "Favorite Systems"}, result.Categories)
 }
 
 func TestDecodeCursor_InvalidInputs(t *testing.T) {

@@ -62,9 +62,41 @@ func TestHandleSystems_IncludesIndexedAndAvailableLauncherSystems(t *testing.T) 
 	response, ok := result.(models.SystemsResponse)
 	require.True(t, ok)
 	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	require.Len(t, response.Systems, 2)
+	assert.Equal(t, []string{"Console"}, response.Systems[0].Categories)
+	assert.Equal(t, []string{"Console"}, response.Systems[1].Categories)
 	assert.Equal(t, map[string]int{"NES": 12, "SNES": 0}, systemResponseMediaCounts(response))
 	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_IncludesLiteralCategoryMemberships(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+systems = ["SNES"]
+
+[[systems.category]]
+name = "Kids"
+systems = ["SNES"]
+`))
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "SNES", Count: 1}}, nil)
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Config:   cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	require.Len(t, response.Systems, 1)
+	assert.Equal(t, "Console", response.Systems[0].Category)
+	assert.Equal(t, []string{"Console", "Favorite Systems", "Kids"}, response.Systems[0].Categories)
 }
 
 func TestHandleSystems_IncludesUnindexedAvailable3DO(t *testing.T) {

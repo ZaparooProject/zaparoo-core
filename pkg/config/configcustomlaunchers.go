@@ -30,14 +30,6 @@ import (
 
 const defaultVirtualSystemCategory = "Other"
 
-var validVirtualSystemCategories = map[string]struct{}{
-	"Other":    {},
-	"Console":  {},
-	"Computer": {},
-	"Handheld": {},
-	"Arcade":   {},
-}
-
 func effectiveCustomLauncherKind(entry *LaunchersCustom) string {
 	if entry.Kind == "" {
 		return CustomLauncherKindLauncher
@@ -56,6 +48,7 @@ func validateCustomLaunchers(
 	raw []LaunchersCustom,
 	existing []LaunchersCustom,
 	source string,
+	categoryResolver CategoryResolver,
 ) []LaunchersCustom {
 	valid := make([]LaunchersCustom, 0, len(raw))
 	seenIDs := make(map[string]struct{}, len(existing)+len(raw))
@@ -65,7 +58,7 @@ func validateCustomLaunchers(
 
 	for i := range raw {
 		entry := cloneCustomLauncher(&raw[i])
-		if err := validateCustomLauncher(&entry); err != nil {
+		if err := validateCustomLauncherWithCategories(&entry, categoryResolver); err != nil {
 			log.Warn().Err(err).Str("source", source).Str("id", entry.ID).
 				Msg("ignoring invalid custom launcher")
 			continue
@@ -84,6 +77,10 @@ func validateCustomLaunchers(
 }
 
 func validateCustomLauncher(entry *LaunchersCustom) error {
+	return validateCustomLauncherWithCategories(entry, newCategoryResolver(nil))
+}
+
+func validateCustomLauncherWithCategories(entry *LaunchersCustom, categoryResolver CategoryResolver) error {
 	if entry.ID == "" {
 		return errors.New("id is required")
 	}
@@ -134,8 +131,8 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 
 	switch kind {
 	case CustomLauncherKindLauncher:
-		if entry.Name != "" || entry.Category != "" {
-			return fmt.Errorf("name and category require kind %q", CustomLauncherKindVirtualSystem)
+		if entry.Name != "" || entry.Category != "" || len(entry.Categories) > 0 {
+			return fmt.Errorf("name, category, and categories require kind %q", CustomLauncherKindVirtualSystem)
 		}
 		if backend == CustomLauncherBackendMisterCore {
 			return fmt.Errorf("backend %q currently requires kind %q",
@@ -161,9 +158,22 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 		if entry.Category == "" {
 			entry.Category = defaultVirtualSystemCategory
 		}
-		if _, ok := validVirtualSystemCategories[entry.Category]; !ok {
+		canonicalCategory, ok := categoryResolver.Canonical(entry.Category)
+		if !ok {
 			return fmt.Errorf("unsupported virtual_system category %q", entry.Category)
 		}
+		entry.Category = canonicalCategory
+		categories := make([]string, 0, len(entry.Categories))
+		for _, category := range entry.Categories {
+			canonical, found := categoryResolver.Canonical(category)
+			if !found {
+				return fmt.Errorf("unsupported virtual_system category %q", category)
+			}
+			if !strings.EqualFold(entry.Category, canonical) && !containsFold(categories, canonical) {
+				categories = append(categories, canonical)
+			}
+		}
+		entry.Categories = categories
 		if entry.System != "" || len(entry.MediaDirs) > 0 || len(entry.FileExts) > 0 ||
 			len(entry.Groups) > 0 || len(entry.Schemes) > 0 || len(entry.Controls) > 0 ||
 			entry.Restricted {
@@ -213,6 +223,7 @@ func cloneCustomLauncher(source *LaunchersCustom) LaunchersCustom {
 	entry.FileExts = append([]string(nil), entry.FileExts...)
 	entry.Groups = append([]string(nil), entry.Groups...)
 	entry.Schemes = append([]string(nil), entry.Schemes...)
+	entry.Categories = append([]string(nil), entry.Categories...)
 	return entry
 }
 

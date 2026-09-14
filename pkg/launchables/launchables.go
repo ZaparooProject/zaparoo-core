@@ -65,10 +65,11 @@ type Provider interface {
 type VirtualSystem struct {
 	Launch LaunchFunc
 	// Test reports whether the launchable is available. Nil means always available.
-	Test     func(*config.Instance) bool
-	Name     string
-	Category string
-	ID       uuid.UUID
+	Test       func(*config.Instance) bool
+	Name       string
+	Category   string
+	Categories []string
+	ID         uuid.UUID
 }
 
 // VirtualMedia is a single launch-only media-shaped entry attached to a real
@@ -165,9 +166,10 @@ func commandVirtualSystems(cfg *config.Instance, pl platforms.Platform) []Launch
 		}
 		launch := launcher.Launch
 		defs = append(defs, VirtualSystem{
-			ID:       uuid.NewSHA1(ZaparooLaunchableNamespace, []byte(entry.Backend+":"+strings.ToLower(entry.ID))),
-			Name:     entry.Name,
-			Category: entry.Category,
+			ID:         uuid.NewSHA1(ZaparooLaunchableNamespace, []byte(entry.Backend+":"+strings.ToLower(entry.ID))),
+			Name:       entry.Name,
+			Category:   entry.Category,
+			Categories: append([]string(nil), entry.Categories...),
 			Launch: func(runtimeCfg *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
 				return launch(runtimeCfg, "", opts)
 			},
@@ -209,7 +211,7 @@ func validateLaunchables(defs []Launchable) error {
 	for i := range defs {
 		switch entry := defs[i].(type) {
 		case VirtualSystem:
-			if err := validateSystem(entry); err != nil {
+			if err := validateSystem(&entry); err != nil {
 				return err
 			}
 			if err := addID(seen, entry.ID, "system", entry.Name); err != nil {
@@ -219,7 +221,7 @@ func validateLaunchables(defs []Launchable) error {
 			if entry == nil {
 				return errors.New("nil virtual system")
 			}
-			if err := validateSystem(*entry); err != nil {
+			if err := validateSystem(entry); err != nil {
 				return err
 			}
 			if err := addID(seen, entry.ID, "system", entry.Name); err != nil {
@@ -249,7 +251,7 @@ func validateLaunchables(defs []Launchable) error {
 	return nil
 }
 
-func validateSystem(entry VirtualSystem) error {
+func validateSystem(entry *VirtualSystem) error {
 	if err := validateCommon(entry.ID, entry.Name, entry.Launch); err != nil {
 		return fmt.Errorf("virtual system %q: %w", entry.Name, err)
 	}
@@ -355,7 +357,7 @@ func LaunchersFor(systems []VirtualSystem, media []VirtualMedia) []platforms.Lau
 	}
 	launchers := make([]platforms.Launcher, 0, len(systems)+len(media))
 	for i := range systems {
-		launchers = append(launchers, systemLauncher(systems[i]))
+		launchers = append(launchers, systemLauncher(&systems[i]))
 	}
 	for i := range media {
 		launchers = append(launchers, mediaLauncher(media[i]))
@@ -363,7 +365,7 @@ func LaunchersFor(systems []VirtualSystem, media []VirtualMedia) []platforms.Lau
 	return launchers
 }
 
-func systemLauncher(entry VirtualSystem) platforms.Launcher {
+func systemLauncher(entry *VirtualSystem) platforms.Launcher {
 	return platforms.Launcher{
 		ID:      launcherID(entry.ID),
 		Schemes: []string{Scheme},

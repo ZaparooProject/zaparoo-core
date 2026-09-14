@@ -129,9 +129,7 @@ func (lc *LauncherCache) GetLaunchableSystems() []launchables.VirtualSystem {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
-	result := make([]launchables.VirtualSystem, len(lc.launchableSystems))
-	copy(result, lc.launchableSystems)
-	return result
+	return cloneVirtualSystems(lc.launchableSystems)
 }
 
 // InitializeFromSlice builds the launcher cache from a pre-built slice of launchers.
@@ -169,7 +167,16 @@ func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 func (lc *LauncherCache) setLaunchableSystems(systems []launchables.VirtualSystem) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-	lc.launchableSystems = append([]launchables.VirtualSystem(nil), systems...)
+	lc.launchableSystems = cloneVirtualSystems(systems)
+}
+
+func cloneVirtualSystems(systems []launchables.VirtualSystem) []launchables.VirtualSystem {
+	owned := make([]launchables.VirtualSystem, len(systems))
+	copy(owned, systems)
+	for i := range owned {
+		owned[i].Categories = append([]string(nil), owned[i].Categories...)
+	}
+	return owned
 }
 
 func (lc *LauncherCache) setExtraLaunchers(extra []platforms.Launcher) {

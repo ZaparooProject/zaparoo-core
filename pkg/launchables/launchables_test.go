@@ -105,12 +105,16 @@ func TestLaunchablesReturnsPlatformDefinitions(t *testing.T) {
 func TestLaunchablesReturnsCommandVirtualSystemWithoutPlatformProvider(t *testing.T) {
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+
 [[launchers.custom]]
 id = "Tools"
 kind = "virtual_system"
 backend = "command"
 name = "Tools"
 category = "Computer"
+categories = ["favorite systems"]
 execute = "echo tools"
 `))
 	platform := mocks.NewMockPlatform()
@@ -123,6 +127,7 @@ execute = "echo tools"
 	require.True(t, ok)
 	assert.Equal(t, "Tools", entry.Name)
 	assert.Equal(t, "Computer", entry.Category)
+	assert.Equal(t, []string{"Favorite Systems"}, entry.Categories)
 	assert.Equal(t, uuid.NewSHA1(ZaparooLaunchableNamespace, []byte("command:tools")), entry.ID)
 }
 
