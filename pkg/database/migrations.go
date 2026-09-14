@@ -156,6 +156,27 @@ func MigrateUp(
 	return nil
 }
 
+// MigrateDownTo rolls a database back to the given schema version, running
+// every later migration's Down step in reverse order. It holds the same lock
+// as MigrateUp because goose keeps its filesystem and dialect in global state.
+// It exists for tests that exercise an upgrade from an older schema; a bare
+// single-step Down would revert whichever migration happens to be newest and
+// stop testing the one intended once another migration lands.
+func MigrateDownTo(db *sql.DB, migrationFiles embed.FS, migrationDir string, version int64) error {
+	migrationMutex.Lock()
+	defer migrationMutex.Unlock()
+
+	goose.SetLogger(&gooseZerologAdapter{})
+	goose.SetBaseFS(migrationFiles)
+	if err := goose.SetDialect("sqlite"); err != nil {
+		return fmt.Errorf("error setting goose dialect: %w", err)
+	}
+	if err := goose.DownTo(db, migrationDir, version); err != nil {
+		return fmt.Errorf("error running migrations down to %d: %w", version, err)
+	}
+	return nil
+}
+
 // loadSchemaVersionSidecar returns the recorded schema version when the
 // sidecar exists and the live DB file's mtime and size match the values
 // captured at write time. Any deviation is treated as "no sidecar" so the
