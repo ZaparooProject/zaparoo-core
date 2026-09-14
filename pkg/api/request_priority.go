@@ -101,7 +101,10 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodMappingsNew,
 		models.MethodMappingsDelete,
 		models.MethodMappingsUpdate,
-		models.MethodMappingsReload:
+		models.MethodMappingsReload,
+		models.MethodDecksNew,
+		models.MethodDecksUpdate,
+		models.MethodDecksDelete:
 		return apiPriorityHigh
 	case models.MethodMediaImage,
 		models.MethodMediaAsset,

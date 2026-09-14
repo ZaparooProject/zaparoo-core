@@ -303,6 +303,90 @@ func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) CreateDeck(deck *database.Deck) error {
+	if err := m.Called(deck).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI create deck failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetDeck(deckID string) (*database.Deck, error) {
+	args := m.Called(deckID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get deck failed: %w", err)
+	}
+	if deck, ok := args.Get(0).(*database.Deck); ok {
+		return deck, nil
+	}
+	return nil, nil //nolint:nilnil // a nil deck with no error is the mock's "not stubbed" answer
+}
+
+func (m *MockUserDBI) ListDecks() ([]database.Deck, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list decks failed: %w", err)
+	}
+	if decks, ok := args.Get(0).([]database.Deck); ok {
+		return decks, nil
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) UpdateDeckMeta(deckID, name, description string, metadata json.RawMessage) error {
+	if err := m.Called(deckID, name, description, metadata).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update deck meta failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ReplaceDeckItems(deckID string, items []database.DeckItem) error {
+	if err := m.Called(deckID, items).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI replace deck items failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteDeck(deckID string) (bool, error) {
+	args := m.Called(deckID)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock UserDBI delete deck failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
+func (m *MockUserDBI) UpsertRemoteDeck(deck *database.Deck) error {
+	if err := m.Called(deck).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI upsert remote deck failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {
+	if err := m.Called(itemDBID, anchor).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set deck item anchor failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ListDeckItemLinks() ([]database.DeckItemLink, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list deck item links failed: %w", err)
+	}
+	if links, ok := args.Get(0).([]database.DeckItemLink); ok {
+		return links, nil
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) CountOwnedDecks() (int, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock UserDBI count owned decks failed: %w", err)
+	}
+	return args.Int(0), nil
+}
+
 func (m *MockUserDBI) UpdateZapLinkHost(host string, isZapScript int) error {
 	args := m.Called(host, isZapScript)
 	if err := args.Error(0); err != nil {

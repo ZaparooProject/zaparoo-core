@@ -292,6 +292,54 @@ type DeleteProfileParams struct {
 	ProfileID string `json:"profileId" validate:"required,min=1"`
 }
 
+// DeckItemInput names one deck member as a client supplies it. kind "media"
+// names an indexed game by mediaId or system plus path and is stored as a
+// script item Core composes; "script" carries a name and ZapScript; "card"
+// names an online card by ID with its scripts and metadata as pulled.
+type DeckItemInput struct {
+	MediaID   *int64                `json:"mediaId,omitempty"`
+	Metadata  json.RawMessage       `json:"metadata,omitempty"`
+	Kind      string                `json:"kind" validate:"required,oneof=media script card"`
+	Name      string                `json:"name" validate:"max=100"`
+	ZapScript string                `json:"zapscript" validate:"max=5000"`
+	CardID    string                `json:"cardId" validate:"max=64"`
+	System    string                `json:"system"`
+	Path      string                `json:"path"`
+	Scripts   []DeckCardScriptInput `json:"scripts,omitempty" validate:"omitempty,dive"`
+}
+
+// DeckCardScriptInput is one script of a card item.
+type DeckCardScriptInput struct {
+	Name      string `json:"name"`
+	ZapScript string `json:"zapscript" validate:"required,max=5000"`
+}
+
+type DecksGetParams struct {
+	DeckID string `json:"deckId" validate:"required,min=1"`
+}
+
+type DecksNewParams struct {
+	Name        string          `json:"name" validate:"required,min=1,max=100"`
+	Description string          `json:"description" validate:"max=1000"`
+	Items       []DeckItemInput `json:"items" validate:"max=120,dive"`
+}
+
+// DecksUpdateParams edits a deck. items replaces the whole list; addItems
+// appends; removeItemIds drops members by their item id. They are applied
+// as remove, replace, then append.
+type DecksUpdateParams struct {
+	Name          *string          `json:"name" validate:"omitempty,min=1,max=100"`
+	Description   *string          `json:"description" validate:"omitempty,max=1000"`
+	Items         *[]DeckItemInput `json:"items" validate:"omitempty,max=120,dive"`
+	DeckID        string           `json:"deckId" validate:"required,min=1"`
+	AddItems      []DeckItemInput  `json:"addItems" validate:"omitempty,max=120,dive"`
+	RemoveItemIDs []int64          `json:"removeItemIds"`
+}
+
+type DecksDeleteParams struct {
+	DeckID string `json:"deckId" validate:"required,min=1"`
+}
+
 // SwitchProfileParams switches the device's active profile. Exactly one of
 // ProfileID or SwitchID selects the target; both omitted (or null) means
 // deactivate. PIN is required when the target profile has one set.

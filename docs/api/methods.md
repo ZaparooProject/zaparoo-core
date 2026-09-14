@@ -4150,6 +4150,207 @@ Returns `null` on success.
 }
 ```
 
+## Decks
+
+A deck is a persistent, ordered list of games and cards the user keeps on the device. It is the one list type Zaparoo syncs with a linked online account, and everything about it works with no account: the ID is minted on the device, and a deck reached through a ZapLink is cached in the same list as a read-only copy.
+
+Every deck has a twelve-character ID drawn from the Crockford base32 alphabet (digits and letters without I, L, O and U). Core stores and shows it lower-case and matches it without regard to case; IDs of eight characters from older decks are also accepted. The same ID names the deck on the device, in its `user:deck:<id>` tag, on a card and on the account.
+
+A deck item is either a `script` (a name and the ZapScript it runs) or a `card` (an online card by ID, with its scripts and display metadata as pulled). A game added from the local library is stored as a script item: Core composes `**launch.title:<system>/<title>` with the file's disambiguating tags, so the item names the same game on any device, and keeps the file it was added from as the item's `media` so this device launches exactly that file. Card and deck `metadata` are stored as received and returned verbatim.
+
+Decks are private to the device. Creating, editing and deleting them is open to every accepted client, like favorites.
+
+### Deck object
+
+| Key         | Type                             | Required | Description                                                          |
+| :---------- | :------------------------------- | :------- | :------------------------------------------------------------------- |
+| deckId      | string                           | Yes      | The deck's ID, lower-case.                                           |
+| name        | string                           | Yes      | Display name, at most 100 characters.                                |
+| description | string                           | Yes      | Description, at most 1000 characters. Empty when unset.              |
+| owned       | boolean                          | Yes      | True for decks made on this device or its account; false for a cached copy of somebody else's deck, which cannot be edited. |
+| itemCount   | number                           | Yes      | Number of items in the deck.                                         |
+| items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order. Omitted by `decks`.                     |
+| metadata    | object                           | No       | Display metadata as received from the account, verbatim.             |
+| createdAt   | number                           | Yes      | Unix timestamp of creation.                                          |
+| updatedAt   | number                           | Yes      | Unix timestamp of the last change.                                   |
+
+### Deck item object
+
+| Key       | Type     | Required | Description                                                                                 |
+| :-------- | :------- | :------- | :------------------------------------------------------------------------------------------ |
+| id        | number   | Yes      | Item ID, stable for the item's lifetime. Used by `removeItemIds`.                           |
+| position  | number   | Yes      | 1-based position in the deck.                                                               |
+| kind      | string   | Yes      | `script` or `card`.                                                                         |
+| name      | string   | Yes      | Display name.                                                                               |
+| zapscript | string   | No       | The ZapScript a `script` item runs.                                                         |
+| cardId    | string   | No       | The online card a `card` item names.                                                        |
+| scripts   | object[] | No       | A `card` item's scripts, each `{name, zapscript}`.                                          |
+| metadata  | object   | No       | A `card` item's display metadata, verbatim.                                                 |
+| media     | object   | No       | The local file a game item is linked to: `system`, `path`, `name`, `tags` and `available` (whether the path is currently indexed). Absent for cards and for items added elsewhere that have not been resolved on this device. |
+
+### Deck item input
+
+Items are supplied to `decks.new` and `decks.update` in this shape. A deck holds at most 120 items.
+
+| Key       | Type     | Required | Description                                                                                  |
+| :-------- | :------- | :------- | :------------------------------------------------------------------------------------------- |
+| kind      | string   | Yes      | `media`, `script` or `card`.                                                                 |
+| mediaId   | number   | No       | For `media`: the indexed media to add. Cannot be mixed with system/path.                    |
+| system    | string   | No       | For `media`: system ID for path-based lookup. Required with `path`.                          |
+| path      | string   | No       | For `media`: media path. Required with `system`.                                             |
+| name      | string   | No       | Display name. Required for `script`; overrides the indexed title for `media`.                |
+| zapscript | string   | No       | Required for `script`. At most 5000 characters.                                              |
+| cardId    | string   | No       | Required for `card`.                                                                         |
+| scripts   | object[] | No       | For `card`: the card's scripts, each `{name, zapscript}`.                                    |
+| metadata  | object   | No       | For `card`: display metadata to keep with the item.                                          |
+
+### decks
+
+**Access:** All clients.
+
+List every deck without its items.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key   | Type                     | Required | Description    |
+| :---- | :----------------------- | :------- | :------------- |
+| decks | [Deck](#deck-object)[]   | Yes      | List of decks, most recently changed first. |
+
+### decks.get
+
+**Access:** All clients.
+
+Return one deck with its items.
+
+#### Parameters
+
+| Key    | Type   | Required | Description  |
+| :----- | :----- | :------- | :----------- |
+| deckId | string | Yes      | The deck ID. |
+
+#### Result
+
+A [Deck](#deck-object) with `items`.
+
+### decks.new
+
+**Access:** All clients.
+
+Create a deck owned by this device. Core mints the ID. A device holds at most 200 owned decks.
+
+#### Parameters
+
+| Key         | Type                                 | Required | Description                            |
+| :---------- | :----------------------------------- | :------- | :------------------------------------- |
+| name        | string                               | Yes      | Display name, at most 100 characters.  |
+| description | string                               | No       | At most 1000 characters.               |
+| items       | [DeckItemInput](#deck-item-input)[]  | No       | Members in order, at most 120.         |
+
+#### Result
+
+The created [Deck](#deck-object) with `items`.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5d8f1b6e-7a5d-11ef-9c7b-020304050607",
+  "method": "decks.new",
+  "params": {
+    "name": "Weekend",
+    "items": [
+      {"kind": "media", "mediaId": 42},
+      {"kind": "script", "name": "Something random", "zapscript": "**launch.random:SNES"}
+    ]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5d8f1b6e-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "deckId": "0k3v9x2rq7bm",
+    "name": "Weekend",
+    "description": "",
+    "owned": true,
+    "itemCount": 2,
+    "items": [
+      {
+        "id": 1,
+        "position": 1,
+        "kind": "script",
+        "name": "Super Metroid",
+        "zapscript": "**launch.title:SNES/Super Metroid (region:us)",
+        "media": {
+          "system": "SNES",
+          "path": "/media/fat/games/SNES/Super Metroid (USA).sfc",
+          "name": "Super Metroid",
+          "tags": ["region:us"],
+          "available": true
+        }
+      },
+      {
+        "id": 2,
+        "position": 2,
+        "kind": "script",
+        "name": "Something random",
+        "zapscript": "**launch.random:SNES"
+      }
+    ],
+    "createdAt": 1726300000,
+    "updatedAt": 1726300000
+  }
+}
+```
+
+### decks.update
+
+**Access:** All clients.
+
+Edit an owned deck. A cached copy of somebody else's deck is read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items.
+
+#### Parameters
+
+| Key           | Type                                 | Required | Description                                                    |
+| :------------ | :----------------------------------- | :------- | :------------------------------------------------------------- |
+| deckId        | string                               | Yes      | The deck ID.                                                   |
+| name          | string                               | No       | New display name.                                              |
+| description   | string                               | No       | New description.                                               |
+| items         | [DeckItemInput](#deck-item-input)[]  | No       | Replaces the whole item list, in order.                        |
+| addItems      | [DeckItemInput](#deck-item-input)[]  | No       | Items to append.                                               |
+| removeItemIds | number[]                             | No       | Item IDs to remove.                                            |
+
+#### Result
+
+The updated [Deck](#deck-object) with `items`.
+
+### decks.delete
+
+**Access:** All clients.
+
+Delete a deck, owned or cached.
+
+#### Parameters
+
+| Key    | Type   | Required | Description  |
+| :----- | :----- | :------- | :----------- |
+| deckId | string | Yes      | The deck ID. |
+
+#### Result
+
+None.
+
 ## Profiles
 
 Profiles are lightweight runtime identities: named buckets of preferences, limits, and profile-owned data. One profile is active per device at a time, switched via the API or by scanning an NFC card containing the profile's switch ID (`**profile:<switchId>`). Profile roles (`admin` or `member`) are separate from paired-client roles: profile roles identify who may authorize local household management, while client roles describe which remote device may call privileged APIs.

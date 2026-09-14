@@ -39,12 +39,7 @@ func TestMediaReactionsMigrationPreservesExistingPreferences(t *testing.T) {
 	require.NoError(t, db.SetMediaUserHidden("NES", path, true))
 	require.NoError(t, db.SetMediaUserLauncherOverride("NES", path, "RetroArch"))
 
-	_, err := db.sql.Load().ExecContext(t.Context(), `ALTER TABLE MediaUserData DROP COLUMN Slug;
-		ALTER TABLE MediaUserData DROP COLUMN IsPlayLater;
-		ALTER TABLE MediaUserData DROP COLUMN IsDisliked;
-		ALTER TABLE MediaUserData DROP COLUMN IsLiked;
-		DELETE FROM goose_db_version WHERE version_id = 20260914100000;`)
-	require.NoError(t, err)
+	require.NoError(t, database.MigrateDownTo(db.sql.Load(), migrationFiles, "migrations", 20260914100000-1))
 	require.NoError(t, sqlMigrateUp(db.sql.Load(), ""))
 
 	row, found, err := db.GetMediaUserData("NES", path)
