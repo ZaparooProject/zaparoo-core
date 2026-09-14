@@ -62,7 +62,7 @@ const (
 	// reindexing alone; a stamp mismatch triggers a one-time background backfill
 	// instead (see runDisambiguationBackfill). Bump this whenever the recompute
 	// query or the ZapScriptTagTypes mapping changes.
-	disambiguationAlgoVersion = "1"
+	disambiguationAlgoVersion = "2"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
