@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
@@ -409,6 +410,10 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	var args zapscript.PlaylistArgs
 	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return nil, fmt.Errorf("invalid advanced arguments: %w", err)
+	}
+
+	if deckID, isDeck := decks.ParseDeckURI(env.Cmd.Args[0]); isDeck {
+		return loadDeckPlaylist(pl, &env, deckID, &args)
 	}
 
 	if helpers.MaybeJSON([]byte(env.Cmd.Args[0])) {

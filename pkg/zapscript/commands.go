@@ -56,6 +56,7 @@ type RunCommandOptions struct {
 	SkipMediaLaunch    func(platforms.ResolvedLaunch) bool
 	PrepareMediaLaunch func(platforms.ResolvedLaunch) (bool, error)
 	BeforeExit         func()
+	RefreshOwnedDeck   func(ctx context.Context, deckID string)
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager
@@ -475,9 +476,12 @@ func RunCommand(
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
-	opts RunCommandOptions,
+	opts *RunCommandOptions,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
+	if opts == nil {
+		opts = &RunCommandOptions{}
+	}
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
 
@@ -500,6 +504,7 @@ func RunCommand(
 		if lenErr := ValidateScriptLength(linkValue); lenErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", lenErr)
 		}
+		linkValue = adoptZapLinkDeck(db, cmd.Args[0], linkValue)
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := zapscript.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()
@@ -559,6 +564,7 @@ func RunCommand(
 		SkipMediaLaunch:    opts.SkipMediaLaunch,
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
+		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
 		UI:                 opts.UI,

@@ -160,7 +160,7 @@ func BenchmarkScanToLaunch_ExactMatch(b *testing.B) {
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db,
-				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&zapscript.RunCommandOptions{LauncherManager: env.lm},
 				&env.exprEnv,
 			)
 			if err != nil {
@@ -204,7 +204,7 @@ func BenchmarkScanToLaunch_DirectPath(b *testing.B) {
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db,
-				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&zapscript.RunCommandOptions{LauncherManager: env.lm},
 				&env.exprEnv,
 			)
 			if err != nil {
@@ -260,7 +260,7 @@ func BenchmarkScanToLaunch_WithMapping(b *testing.B) {
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db,
-				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&zapscript.RunCommandOptions{LauncherManager: env.lm},
 				&env.exprEnv,
 			)
 			if err != nil {

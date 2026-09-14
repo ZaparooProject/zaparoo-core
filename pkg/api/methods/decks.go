@@ -22,10 +22,12 @@ package methods
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -197,6 +199,33 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	}
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
 	return NoContent{}, nil
+}
+
+// HandleDecksOpen opens a deck as the active playlist by running the
+// playlist command that names it, so it takes the same path as a card tap.
+//
+//nolint:gocritic // single-use parameter in API handler
+func HandleDecksOpen(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received decks open request")
+	var params models.DecksOpenParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	deck, err := loadDeck(&env, params.DeckID)
+	if err != nil {
+		return nil, err
+	}
+	cmd := zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistOpen, Args: []string{decks.DeckURI(deck.DeckID)}}
+	if slot := strings.TrimSpace(params.Slot); slot != "" {
+		cmd.AdvArgs = zapscript.NewAdvArgs(map[string]string{string(zapscript.KeySlot): slot})
+	}
+	text := cmd.String()
+	runParams, err := json.Marshal(models.RunParams{Text: &text})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build open request: %w", err)
+	}
+	env.Params = runParams
+	return HandleRun(env)
 }
 
 // projectDeck tags the media a deck's game items resolve to with the deck's
