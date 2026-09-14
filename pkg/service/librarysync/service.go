@@ -97,6 +97,7 @@ type Service struct {
 	now           func() time.Time
 	resolvePace   time.Duration
 	inventoryMu   syncutil.Mutex
+	stateMu       syncutil.Mutex
 }
 
 // New returns a Service.

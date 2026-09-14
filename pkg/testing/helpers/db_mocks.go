@@ -843,6 +843,29 @@ func (m *MockUserDBI) DeleteProfile(profileID string) error {
 	return nil
 }
 
+func (m *MockUserDBI) ListLibraryStateSync() ([]database.LibraryStateSyncRow, error) {
+	args := m.Called()
+	if rows, ok := args.Get(0).([]database.LibraryStateSyncRow); ok {
+		return rows, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) UpsertLibraryStateSync(rows []database.LibraryStateSyncRow) error {
+	args := m.Called(rows)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) DeleteLibraryStateSync(identityKeys []string) error {
+	args := m.Called(identityKeys)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) ClearLibraryStateSync() error {
+	args := m.Called()
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockUserDBI) SetDeviceState(key, value string) error {
 	args := m.Called(key, value)
 	if err := args.Error(0); err != nil {

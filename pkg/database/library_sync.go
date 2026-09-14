@@ -77,3 +77,33 @@ func BuildMediaIdentity(
 ) (MediaIdentity, error) {
 	return newMediaIdentity(mediaType, canonicalSystemID, displayName, coreSlug, tagInfos)
 }
+
+// Personal state values of the Library sync contract.
+const (
+	LibraryIntentNone       = "none"
+	LibraryIntentPlayLater  = "play_later"
+	LibraryReactionNone     = "none"
+	LibraryReactionLiked    = "liked"
+	LibraryReactionDisliked = "disliked"
+)
+
+// LibraryStateSyncRow is the last personal state row this device agreed
+// with the account for one game, or the row it holds no copy of yet.
+type LibraryStateSyncRow struct {
+	IdentityKey   string
+	MediaType     string
+	SystemID      string
+	CoreSlug      string
+	Title         string
+	Intent        string
+	Reaction      string
+	RejectedCode  string
+	RejectedHash  string
+	VariantTags   []string
+	PreferredTags []string
+	Revision      int64
+	UpdatedAt     int64
+	Favorite      bool
+	Deleted       bool
+	Unmatched     bool
+}

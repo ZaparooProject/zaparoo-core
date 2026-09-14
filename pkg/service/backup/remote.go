@@ -1967,11 +1967,16 @@ func remoteBackupPath(id string) string {
 	return "/v1/device/backups/" + escapedID
 }
 
-func remoteEndpoint(baseURL, requestPath string) (string, error) {
+// remoteEndpoint joins a request path, with an optional query after "?", onto
+// the base URL. Callers escape path segments themselves, so a literal "?" only
+// ever starts the query.
+func remoteEndpoint(baseURL, requestPathAndQuery string) (string, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup base URL: %w", err)
 	}
+	requestPath, rawQuery, _ := strings.Cut(requestPathAndQuery, "?")
+	base.RawQuery = rawQuery
 	decodedRequestPath, err := url.PathUnescape(requestPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup request path: %w", err)
