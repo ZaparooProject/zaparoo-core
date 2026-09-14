@@ -286,7 +286,7 @@ func ValidateRemoteControlBaseURL(rawURL string) error {
 }
 
 // ResetOnlineConsent clears every Online feature's explicit consent flag:
-// remote control, cloud backup, and play history sync. Call this whenever
+// remote control, cloud backup, play history sync and Library sync. Call this whenever
 // the linked credential changes (a fresh claim, or unlink) since that is a
 // new "who is on the other end" event, and every consent must be
 // re-approved explicitly rather than silently carrying over to whoever
@@ -295,4 +295,5 @@ func (c *Instance) ResetOnlineConsent() {
 	c.SetRemoteControl(false)
 	c.SetBackupRemoteEnabled(false)
 	c.SetPlaytimeSync(false)
+	c.SetLibrarySync(false)
 }

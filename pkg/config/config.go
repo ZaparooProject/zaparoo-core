@@ -95,6 +95,7 @@ type Values struct {
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Library        Library   `toml:"library,omitempty"`
 	Profiles       Profiles  `toml:"profiles,omitempty"`
 	Media          Media     `toml:"media,omitempty"`
 	Scraper        Scraper   `toml:"scraper,omitempty"`
@@ -383,6 +384,13 @@ func (c *Instance) applyTOML(data string) error {
 			log.Warn().Err(err).Str("value", c.vals.Playtime.BaseURL).
 				Msg("invalid playtime base URL in config, falling back to default")
 			c.vals.Playtime.BaseURL = ""
+		}
+	}
+	if c.vals.Library.BaseURL != "" {
+		if err := ValidateLibraryBaseURL(c.vals.Library.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Library.BaseURL).
+				Msg("invalid library base URL in config, falling back to default")
+			c.vals.Library.BaseURL = ""
 		}
 	}
 	if c.vals.Service.RemoteControl.BaseURL != "" {

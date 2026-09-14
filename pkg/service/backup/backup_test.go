@@ -1156,6 +1156,24 @@ func TestHeartbeatCapabilitiesWithdrawRemoteOperationsWithoutConsent(t *testing.
 	assert.Contains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "remote_operations")
 }
 
+func TestHeartbeatCapabilitiesReportLibrarySync(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Instance{}
+	librarySync, ok := heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())["library_sync"].(map[string]any)
+	require.True(t, ok, "library sync is reported while off")
+	assert.Equal(t, 1, librarySync["version"])
+	assert.Equal(t, false, librarySync["enabled"])
+
+	cfg.SetLibrarySync(true)
+	librarySync, ok = heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())["library_sync"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, librarySync["enabled"])
+
+	require.NoError(t, cfg.SetLibraryBaseURL("https://library.example.com"))
+	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "library_sync")
+	assert.Contains(t, heartbeatCapabilities(cfg, cfg.LibraryBaseURL()), "library_sync")
+}
+
 func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 	env.Manager.cfg.SetRemoteControl(true)
@@ -3412,7 +3430,7 @@ func TestRemoteUploadKeepsServerQuotaCheckAuthoritative(t *testing.T) {
 	}
 
 	err := client.doBytes(
-		context.Background(), http.MethodPut, "/v1/device/backup-packs/hash", []byte("pack"), nil,
+		context.Background(), http.MethodPut, "/v1/device/backup-packs/hash", []byte("pack"), nil, nil,
 	)
 	require.ErrorIs(t, err, errRemoteQuotaExceeded)
 }

@@ -103,6 +103,10 @@ var (
 	errRemoteIntegrityRetry = errors.New("remote backup integrity mismatch")
 	errRemoteMissingObjects = errors.New("remote backup snapshot references missing objects")
 	errRemoteNewerSchema    = errors.New("backup requires a newer Core version")
+	// errRemotePayloadTooLarge and errRemoteBackupTooLarge keep the text these
+	// codes have always logged with.
+	errRemotePayloadTooLarge = errors.New("remote backup payload too large")
+	errRemoteBackupTooLarge  = errors.New("remote backup has too many files")
 )
 
 // IsRemoteUnlinkedError reports expected inactivity when no usable online
@@ -1575,7 +1579,18 @@ func heartbeatCapabilities(cfg *config.Instance, baseURL string) map[string]any 
 	if cfg.RemoteControlEnabled() && sameRemoteEndpoint(baseURL, cfg.RemoteControlBaseURL()) {
 		capabilities["remote_operations"] = map[string]any{"version": 1, "enabled": true}
 	}
+	if sameRemoteEndpoint(baseURL, cfg.LibraryBaseURL()) {
+		capabilities["library_sync"] = LibrarySyncCapability(cfg)
+	}
 	return capabilities
+}
+
+// LibrarySyncCapability is the library_sync entry of the heartbeat
+// capability document. It is always reported, with enabled false while the
+// user has not opted in, so the account can tell a device that turned Library
+// sync off from one whose Core does not support it.
+func LibrarySyncCapability(cfg *config.Instance) map[string]any {
+	return map[string]any{"version": 1, "enabled": cfg.LibrarySyncEnabled()}
 }
 
 func sameRemoteEndpoint(first, second string) bool {
@@ -1776,7 +1791,7 @@ func (c *remoteClient) uploadPackPlan(
 		// safe to wait out and retry.
 		if uploadErr := c.retryRateLimited(ctx, func() error {
 			resp = remotePackResponse{}
-			return c.doBytes(ctx, http.MethodPut, uploadPath, body, &resp)
+			return c.doBytes(ctx, http.MethodPut, uploadPath, body, nil, &resp)
 		}); uploadErr != nil {
 			return result, uploadErr
 		}
@@ -1878,13 +1893,14 @@ func (c *remoteClient) doBytes(
 	ctx context.Context,
 	method, path string,
 	body []byte,
+	headers http.Header,
 	out any,
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, remoteTransferTimeout(int64(len(body))))
 	defer cancel()
 	reader := bytes.NewReader(body)
 	contentType := "application/octet-stream"
-	return c.doRaw(ctx, method, path, reader, contentType, func(resp *http.Response) error {
+	return c.doRawHeaders(ctx, method, path, reader, contentType, headers, func(resp *http.Response) error {
 		if out == nil {
 			return nil
 		}
@@ -1903,6 +1919,19 @@ func (c *remoteClient) doRaw(
 	contentType string,
 	onOK func(*http.Response) error,
 ) error {
+	return c.doRawHeaders(ctx, method, requestPath, body, contentType, nil, onOK)
+}
+
+// doRawHeaders is doRaw with extra request headers. The headers cannot
+// replace the credential, device or content type headers.
+func (c *remoteClient) doRawHeaders(
+	ctx context.Context,
+	method, requestPath string,
+	body io.Reader,
+	contentType string,
+	headers http.Header,
+	onOK func(*http.Response) error,
+) error {
 	endpoint, err := remoteEndpoint(c.baseURL, requestPath)
 	if err != nil {
 		return err
@@ -1910,6 +1939,11 @@ func (c *remoteClient) doRaw(
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return fmt.Errorf("creating remote backup request: %w", err)
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.bearer)
 	req.Header.Set(zapscript.HeaderZaparooOS, runtime.GOOS)
@@ -1972,35 +2006,31 @@ func remoteStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusTooManyRequests || apiErr.Error.Code == "rate_limited" {
 		return &remoteRateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
+	result := &APIError{Status: resp.StatusCode, Code: apiErr.Error.Code, Message: apiErr.Error.Message}
 	switch apiErr.Error.Code {
 	case "not_available":
-		return errRemoteNotAvailable
+		result.sentinel = errRemoteNotAvailable
 	case "quota_exceeded":
-		return errRemoteQuotaExceeded
+		result.sentinel = errRemoteQuotaExceeded
 	case "payload_too_large":
-		return errors.New("remote backup payload too large")
+		result.sentinel = errRemotePayloadTooLarge
 	case "missing_objects":
-		return errRemoteMissingObjects
+		result.sentinel = errRemoteMissingObjects
 	case "backup_too_large":
-		return errors.New("remote backup has too many files")
+		result.sentinel = errRemoteBackupTooLarge
 	case "integrity_mismatch":
-		return errRemoteIntegrityRetry
+		result.sentinel = errRemoteIntegrityRetry
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return errRemoteUnlinked
+	if result.sentinel == nil && resp.StatusCode == http.StatusUnauthorized {
+		result.sentinel = errRemoteUnlinked
 	}
-	if apiErr.Error.Message != "" {
-		return fmt.Errorf(
-			"remote backup server returned status %d: %s",
-			resp.StatusCode,
-			apiErr.Error.Message,
-		)
+	if result.Message == "" {
+		result.Message = strings.TrimSpace(string(body))
 	}
-	msg := strings.TrimSpace(string(body))
-	if msg == "" {
-		msg = resp.Status
+	if result.Message == "" {
+		result.Message = resp.Status
 	}
-	return fmt.Errorf("remote backup server returned status %d: %s", resp.StatusCode, msg)
+	return result
 }
 
 // parseRetryAfter reads a Retry-After header's delay-seconds form; absent
