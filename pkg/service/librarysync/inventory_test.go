@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -88,11 +89,12 @@ func newSyncFixture(t *testing.T, paths ...string) *syncFixture {
 	manager := backup.NewManager(cfg, platform, db).
 		WithRateLimitWaits(time.Millisecond, time.Millisecond, 5*time.Millisecond)
 	f.svc = librarysync.New(&librarysync.Options{
-		Config:      cfg,
-		DB:          db,
-		NewClient:   manager.NewOnlineClient,
-		Now:         func() time.Time { return time.Unix(f.now.Load(), 0).UTC() },
-		ResolvePace: time.Millisecond,
+		Config:          cfg,
+		DB:              db,
+		NewClient:       manager.NewOnlineClient,
+		Now:             func() time.Time { return time.Unix(f.now.Load(), 0).UTC() },
+		ResolvePace:     time.Millisecond,
+		DeckResolveDeps: &decks.ResolveDeps{MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg},
 		SendHeartbeat: func(context.Context) error {
 			f.heartbeats.Add(1)
 			return nil

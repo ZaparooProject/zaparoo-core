@@ -916,6 +916,7 @@ type DeckResponse struct {
 	UpdatedAt   int64              `json:"updatedAt"`
 	ItemCount   int                `json:"itemCount"`
 	Owned       bool               `json:"owned"`
+	Locked      bool               `json:"locked"`
 }
 
 // DecksResponse is the response for the decks RPC method.

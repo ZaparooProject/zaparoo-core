@@ -856,6 +856,43 @@ func (m *MockUserDBI) DeleteProfile(profileID string) error {
 	return nil
 }
 
+func (m *MockUserDBI) RenameDeck(oldID, newID string) error {
+	args := m.Called(oldID, newID)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) ListDeckSync() ([]database.DeckSyncRow, error) {
+	args := m.Called()
+	if rows, ok := args.Get(0).([]database.DeckSyncRow); ok {
+		return rows, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) GetDeckSync(deckID string) (database.DeckSyncRow, bool, error) {
+	args := m.Called(deckID)
+	row, ok := args.Get(0).(database.DeckSyncRow)
+	if !ok {
+		row = database.DeckSyncRow{}
+	}
+	return row, args.Bool(1), args.Error(2) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) UpsertDeckSync(rows []database.DeckSyncRow) error {
+	args := m.Called(rows)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) DeleteDeckSync(deckIDs []string) error {
+	args := m.Called(deckIDs)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockUserDBI) ClearDeckSync() error {
+	args := m.Called()
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockUserDBI) ListLibraryStateSync() ([]database.LibraryStateSyncRow, error) {
 	args := m.Called()
 	if rows, ok := args.Get(0).([]database.LibraryStateSyncRow); ok {

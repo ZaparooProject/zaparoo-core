@@ -111,3 +111,17 @@ type LibraryStateSyncRow struct {
 	Deleted           bool
 	Unmatched         bool
 }
+
+// DeckSyncRow is the last copy of an owned deck this device agreed with the
+// account. Snapshot is the agreed deck content as JSON; Revision 0 means the
+// deck was never created on the account.
+type DeckSyncRow struct {
+	DeckID       string
+	Snapshot     string
+	RejectedCode string
+	RejectedHash string
+	Revision     int64
+	UpdatedAt    int64
+	Conflicts    int
+	Locked       bool
+}

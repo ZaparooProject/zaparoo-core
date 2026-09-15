@@ -363,6 +363,62 @@ func TestLaunchPlaylistMedia_DisabledRunZapScriptDoesNotPlayFailSoundOrRecordFai
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestHandlePlaylist_RefreshKeepsPositionAndPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	active := makeServicePlaylist()
+	active.Index = 1
+	active.Playing = true
+	svc.State.SetActivePlaylist(active)
+
+	refresh := &playlists.Playlist{
+		ID: active.ID, Name: "renamed", Refresh: true, Loop: true,
+		Items: []playlists.PlaylistItem{
+			{Name: "Item 1", ZapScript: "**test1"},
+			{Name: "Item 2", ZapScript: "**test2"},
+			{Name: "Item 4", ZapScript: "**test4"},
+		},
+	}
+	handlePlaylist(svc, refresh, nil)
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.NotSame(t, active, got, "the active playlist is replaced")
+	assert.Equal(t, "renamed", got.Name)
+	assert.Len(t, got.Items, 3)
+	assert.Equal(t, "**test4", got.Items[2].ZapScript)
+	assert.Equal(t, 1, got.Index, "the position is kept")
+	assert.True(t, got.Playing, "playback state is kept")
+	assert.True(t, got.Loop)
+	assert.Empty(t, recorder.played, "a refresh never launches")
+}
+
+func TestHandlePlaylist_RefreshClampsIndexAndIgnoresOtherIDs(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	active.Index = 2
+	svc.State.SetActivePlaylist(active)
+
+	handlePlaylist(svc, &playlists.Playlist{ID: "other", Refresh: true, Items: active.Items}, nil)
+	assert.Same(t, active, svc.State.GetActivePlaylist(), "a refresh for another playlist is ignored")
+
+	handlePlaylist(svc, &playlists.Playlist{
+		ID: active.ID, Refresh: true, Items: []playlists.PlaylistItem{{Name: "Only", ZapScript: "**only"}},
+	}, nil)
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.Equal(t, 0, got.Index, "the position is clamped to the new length")
+
+	svc.State.SetActivePlaylist(nil)
+	handlePlaylist(svc, &playlists.Playlist{ID: active.ID, Refresh: true, Items: active.Items}, nil)
+	assert.Nil(t, svc.State.GetActivePlaylist(), "a refresh never opens a playlist")
+}
+
 func TestHandlePlaylist_BackgroundSlotUpdatesBackgroundStateOnly(t *testing.T) {
 	t.Parallel()
 

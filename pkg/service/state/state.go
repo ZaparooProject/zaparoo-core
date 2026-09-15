@@ -1212,6 +1212,14 @@ type LibrarySyncSignals struct {
 	SettingChanged func()
 	// StateChanged pushes personal state soon, after a local edit.
 	StateChanged func()
+	// DecksChanged pushes decks soon, after a local edit.
+	DecksChanged func()
+	// DecksAccessed pulls decks when the last pull is stale, for a client
+	// listing them.
+	DecksAccessed func()
+	// RefreshDeck asks for a background pull of decks as one opens, when the
+	// last pull is stale. It returns at once.
+	RefreshDeck func(ctx context.Context, deckID string)
 }
 
 // SetLibrarySyncSignals installs the Library sync scheduler's signals.
@@ -1243,5 +1251,29 @@ func (s *State) RequestLibrarySync() {
 func (s *State) NotifyLibraryStateChanged() {
 	if signal := s.librarySync().StateChanged; signal != nil {
 		signal()
+	}
+}
+
+// NotifyLibraryDecksChanged tells Library sync that a deck changed on this
+// device.
+func (s *State) NotifyLibraryDecksChanged() {
+	if signal := s.librarySync().DecksChanged; signal != nil {
+		signal()
+	}
+}
+
+// NotifyLibraryDecksAccessed tells Library sync that a client is looking at
+// decks.
+func (s *State) NotifyLibraryDecksAccessed() {
+	if signal := s.librarySync().DecksAccessed; signal != nil {
+		signal()
+	}
+}
+
+// RefreshLibraryDeck brings an owned deck up to date before it opens. It
+// returns at once when Library sync is not running.
+func (s *State) RefreshLibraryDeck(ctx context.Context, deckID string) {
+	if refresh := s.librarySync().RefreshDeck; refresh != nil {
+		refresh(ctx, deckID)
 	}
 }
