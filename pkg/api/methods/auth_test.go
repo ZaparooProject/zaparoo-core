@@ -105,7 +105,7 @@ func TestSettingsAuthStatus_AllowsConfiguredBackupURL(t *testing.T) {
 	t.Cleanup(config.ClearAuthCfgForTesting)
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	require.NoError(t, cfg.SetOnlineBaseURL("http://127.0.0.1:8787"))
 	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "http://127.0.0.1:8787"})
 	require.NoError(t, err)
 
@@ -324,7 +324,7 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 
 	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(claimServer.URL))
 	mockPlatform.On("Settings").Return(platforms.Settings{
 		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
 	})
@@ -405,7 +405,7 @@ func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
 
 	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(claimServer.URL))
 	mockPlatform.On("Settings").Return(platforms.Settings{
 		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
 	})
@@ -481,7 +481,7 @@ func TestSettingsAuthClaim_SurfacesConsentResetSaveFailure(t *testing.T) {
 	configDir := t.TempDir()
 	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(claimServer.URL))
 	mockPlatform.On("Settings").Return(platforms.Settings{
 		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
 	})
@@ -569,7 +569,7 @@ func TestSettingsAuthClaim_NoRelatedTrust(t *testing.T) {
 
 	// The stored entry carries its provenance so unlink can find it.
 	t.Cleanup(config.ClearAuthCfgForTesting)
-	entry := config.LookupAuth(config.GetAuthCfg(), config.BackupAuthLookupURL(claimServer.URL))
+	entry := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(claimServer.URL))
 	require.NotNil(t, entry)
 	assert.Equal(t, claimServer.URL, entry.LinkedVia)
 }
@@ -758,7 +758,7 @@ func TestSettingsAuthUnlink_CustomServerScopedToItsOwnFamily(t *testing.T) {
 
 	// Unlinking the configured custom server removes only its entry;
 	// credentials for other domains are untouched.
-	require.NoError(t, env.Config.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	require.NoError(t, env.Config.SetOnlineBaseURL("http://127.0.0.1:8787"))
 	require.NoError(t, env.Config.SaveAuthEntry("http://127.0.0.1:8787",
 		config.CredentialEntry{Bearer: "t1", LinkedVia: "http://127.0.0.1:8787"}))
 	require.NoError(t, env.Config.SaveAuthEntry("https://api.zaparoo.com",
@@ -796,7 +796,7 @@ func TestSettingsAuthUnlink_RemovesConfiguredBackupServerCredential(t *testing.T
 	// Not parallel: SaveAuthEntry updates the global auth config.
 	env := newAuthUnlinkTestEnv(t)
 
-	require.NoError(t, env.Config.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	require.NoError(t, env.Config.SetOnlineBaseURL("http://127.0.0.1:8787"))
 	require.NoError(t, env.Config.SaveAuthEntry("http://127.0.0.1:8787", config.CredentialEntry{Bearer: "t1"}))
 
 	result, err := HandleSettingsAuthUnlink(env)

@@ -427,7 +427,7 @@ func TestSettingsAuthLink_HappyPath(t *testing.T) {
 
 	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
@@ -473,7 +473,7 @@ func TestSettingsAuthLink_HappyPath(t *testing.T) {
 	assert.Equal(t, models.AuthLinkStatusApproved, approvedNotification.Status)
 	assertAuthLinkNotificationRedacted(t, &approvedNotification)
 
-	entry := config.LookupAuth(config.GetAuthCfg(), config.BackupAuthLookupURL(server.URL))
+	entry := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(server.URL))
 	require.NotNil(t, entry, "the approved claim stores the credential")
 	assert.Equal(t, "zpd1_device_token", entry.Bearer)
 	assert.False(t, st.BackupCoordinator().RemoteUnlinked())

@@ -144,10 +144,7 @@ type SettingsResponse struct {
 	LibrarySyncEnabled        *bool              `json:"librarySyncEnabled,omitempty"`
 	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
-	BackupRemoteBaseURL       *string            `json:"backupRemoteBaseUrl,omitempty"`
-	RemoteControlBaseURL      *string            `json:"remoteControlBaseUrl,omitempty"`
-	PlaytimeBaseURL           *string            `json:"playtimeBaseUrl,omitempty"`
-	LibraryBaseURL            *string            `json:"libraryBaseUrl,omitempty"`
+	OnlineBaseURL             *string            `json:"onlineBaseUrl,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`

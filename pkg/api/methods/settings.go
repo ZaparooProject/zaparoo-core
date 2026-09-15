@@ -89,22 +89,16 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	if isLocalOrAdmin(&env) {
 		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
 		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
-		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
 		playtimeSyncEnabled := env.Config.PlaytimeSyncEnabled()
-		playtimeBaseURL := env.Config.PlaytimeBaseURL()
 		librarySyncEnabled := env.Config.LibrarySyncEnabled()
-		libraryBaseURL := env.Config.LibraryBaseURL()
 		remoteControlEnabled := env.Config.RemoteControlEnabled()
-		remoteControlBaseURL := env.Config.RemoteControlBaseURL()
+		onlineBaseURL := env.Config.OnlineBaseURL()
 		resp.BackupRemoteEnabled = &backupRemoteEnabled
 		resp.BackupRemoteSchedule = &backupRemoteSchedule
-		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
 		resp.PlaytimeSyncEnabled = &playtimeSyncEnabled
-		resp.PlaytimeBaseURL = &playtimeBaseURL
 		resp.LibrarySyncEnabled = &librarySyncEnabled
-		resp.LibraryBaseURL = &libraryBaseURL
 		resp.RemoteControlEnabled = &remoteControlEnabled
-		resp.RemoteControlBaseURL = &remoteControlBaseURL
+		resp.OnlineBaseURL = &onlineBaseURL
 	}
 
 	return resp, nil

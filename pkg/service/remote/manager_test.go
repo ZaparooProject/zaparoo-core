@@ -47,7 +47,7 @@ import (
 func newHTTPTestManager(t *testing.T, serverURL string) *manager {
 	t.Helper()
 	cfg := &config.Instance{}
-	require.NoError(t, cfg.SetRemoteControlBaseURL(serverURL))
+	require.NoError(t, cfg.SetOnlineBaseURL(serverURL))
 	cfg.SetRemoteControl(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL(serverURL): {Bearer: "zpd1_test"},
@@ -58,6 +58,10 @@ func newHTTPTestManager(t *testing.T, serverURL string) *manager {
 	return &manager{
 		deps: Deps{Config: cfg, Platform: platform}, httpClient: http.DefaultClient,
 		executionSlot: make(chan struct{}, 1),
+		// A rejected credential marks the account unlinked through the backup
+		// manager, which needs the service state; tests observe the call
+		// instead.
+		markUnlinked: func() {},
 	}
 }
 
@@ -93,9 +97,11 @@ func TestHeartbeatUsesConfiguredEndpoint(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		assert.NotContains(t, capabilities, "backup")
+		// One online service hears the whole capability document from
+		// whichever loop sends the heartbeat.
+		assert.Contains(t, capabilities, "backup")
 		assert.Contains(t, capabilities, "remote_operations")
-		assert.NotContains(t, capabilities, "library_sync", "library sync belongs to another endpoint")
+		assert.Contains(t, capabilities, "library_sync")
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -104,10 +110,10 @@ func TestHeartbeatUsesConfiguredEndpoint(t *testing.T) {
 	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
 }
 
-// TestHeartbeatReportsLibrarySyncOnSharedEndpoint pins that this heartbeat
-// carries the library_sync entry whenever Library sync talks to the same
-// endpoint, so a remote control heartbeat never drops it from the document.
-func TestHeartbeatReportsLibrarySyncOnSharedEndpoint(t *testing.T) {
+// TestHeartbeatReportsLibrarySync pins that this heartbeat carries the
+// library_sync entry with the user's setting, so a remote control heartbeat
+// never drops it from the document.
+func TestHeartbeatReportsLibrarySync(t *testing.T) {
 	var sawLibrarySync atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -125,7 +131,6 @@ func TestHeartbeatReportsLibrarySyncOnSharedEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 	m := newHTTPTestManager(t, server.URL)
-	require.NoError(t, m.deps.Config.SetLibraryBaseURL(server.URL))
 	m.deps.Config.SetLibrarySync(true)
 
 	require.NoError(t, m.sendCapabilityHeartbeat(context.Background()))
@@ -310,15 +315,13 @@ func TestWaitUnauthorizedCarriesRejectedBearer(t *testing.T) {
 	assert.Equal(t, "zpd1_test", rejectedBearer(err))
 }
 
-// TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer pins the re-link
-// race: a 401 for a bearer that is no longer the stored credential is a
-// late answer about the old token and must not flag the fresh link as
-// unlinked; a 401 for the current bearer (or one of unknown provenance)
-// still does.
-func TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer(t *testing.T) {
+// TestMarkUnlinkedIfCurrentIgnoresSupersededBearer pins the re-link race: a
+// 401 for a bearer that is no longer the stored credential is a late answer
+// about the old token and must not flag the fresh link as unlinked; a 401
+// for the current bearer (or one of unknown provenance) still does.
+func TestMarkUnlinkedIfCurrentIgnoresSupersededBearer(t *testing.T) {
 	cfg := &config.Instance{}
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://online.example.com"))
-	require.NoError(t, cfg.SetBackupRemoteBaseURL("https://online.example.com"))
+	require.NoError(t, cfg.SetOnlineBaseURL("https://online.example.com"))
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL("https://online.example.com"): {Bearer: "zpd1_new"},
 	})
@@ -327,13 +330,13 @@ func TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer(t *testing.T) {
 	calls := 0
 	m := &manager{deps: Deps{Config: cfg}, markUnlinked: func() { calls++ }}
 
-	m.markUnlinkedIfSharedEndpoint("zpd1_old")
+	m.markUnlinkedIfCurrent("zpd1_old")
 	assert.Equal(t, 0, calls, "a superseded bearer's 401 must be ignored")
 
-	m.markUnlinkedIfSharedEndpoint("zpd1_new")
+	m.markUnlinkedIfCurrent("zpd1_new")
 	assert.Equal(t, 1, calls, "the current bearer's 401 marks the account unlinked")
 
-	m.markUnlinkedIfSharedEndpoint("")
+	m.markUnlinkedIfCurrent("")
 	assert.Equal(t, 2, calls, "a 401 of unknown provenance is treated as current")
 }
 
@@ -343,7 +346,7 @@ func TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer(t *testing.T) {
 // one-minute rejection back-off.
 func TestSupersededRejection(t *testing.T) {
 	cfg := &config.Instance{}
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://online.example.com"))
+	require.NoError(t, cfg.SetOnlineBaseURL("https://online.example.com"))
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL("https://online.example.com"): {Bearer: "zpd1_new"},
 	})
@@ -611,7 +614,7 @@ func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.Instance{}
-	require.NoError(t, cfg.SetRemoteControlBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 	cfg.SetRemoteControl(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
@@ -756,9 +759,8 @@ func TestRunRetriesImmediatelyAfterSupersededHeartbeatRejection(t *testing.T) {
 
 // TestRunUnauthorizedHeartbeatStopsCleanlyOnCancel pins the credential-
 // rejected branch of the capability heartbeat: it must not panic or spin
-// tightly (markUnlinkedIfSharedEndpoint is a safe no-op here since
-// RemoteControlBaseURL and BackupRemoteBaseURL differ by default), and the
-// loop must still stop cleanly once its context is cancelled while backed off.
+// tightly, and the loop must still stop cleanly once its context is
+// cancelled while backed off.
 func TestRunUnauthorizedHeartbeatStopsCleanlyOnCancel(t *testing.T) {
 	var heartbeatCalls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

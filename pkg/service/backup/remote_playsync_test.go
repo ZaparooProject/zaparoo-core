@@ -117,7 +117,7 @@ func playSyncTestServer(t *testing.T, watermark *time.Time) (*httptest.Server, *
 
 func configurePlaytimeTestAuth(t *testing.T, manager *Manager, baseURL string) {
 	t.Helper()
-	require.NoError(t, manager.cfg.SetPlaytimeBaseURL(baseURL))
+	require.NoError(t, manager.cfg.SetOnlineBaseURL(baseURL))
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL(baseURL): {Bearer: "test-token"},
 	})
@@ -171,8 +171,7 @@ func TestSyncPlayHistory_BulkImport(t *testing.T) {
 
 	server, batches := playSyncTestServer(t, nil)
 	configurePlaytimeTestAuth(t, env.Manager, server.URL)
-	assert.Equal(t, config.DefaultBackupRemoteBaseURL, env.Manager.cfg.BackupRemoteBaseURL())
-	assert.Equal(t, server.URL, env.Manager.cfg.PlaytimeBaseURL())
+	assert.Equal(t, server.URL, env.Manager.cfg.OnlineBaseURL())
 
 	first := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
 	second := playSyncTestEntry(2, "22222222-2222-4222-8222-222222222222", "Game B", base.Add(time.Hour))
