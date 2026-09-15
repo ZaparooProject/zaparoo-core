@@ -102,7 +102,7 @@ func HandleMediaAsset(env requests.RequestEnv) (any, error) {
 		return nil, mediaAssetNotFoundError(params.assetType)
 	}
 
-	file, err := openTrustedMediaAsset(&env, row.System.SystemID, property.Text)
+	file, err := openTrustedMediaAsset(&env, row.System.SystemID, params.assetType, property.Text)
 	if err != nil {
 		return nil, err
 	}
@@ -317,10 +317,11 @@ func mediaAssetETag(
 func openTrustedMediaAsset(
 	env *requests.RequestEnv,
 	systemID string,
+	assetType string,
 	assetPath string,
 ) (*os.File, error) {
 	if !filepath.IsAbs(assetPath) {
-		return nil, mediaAssetNotFoundError("requested")
+		return nil, mediaAssetNotFoundError(assetType)
 	}
 	assetPath = filepath.Clean(assetPath)
 
@@ -344,7 +345,7 @@ func openTrustedMediaAsset(
 			return file, nil
 		}
 	}
-	return nil, mediaAssetNotFoundError("requested")
+	return nil, mediaAssetNotFoundError(assetType)
 }
 
 func trustedMediaAssetRoots(env *requests.RequestEnv, systemID string) ([]string, error) {

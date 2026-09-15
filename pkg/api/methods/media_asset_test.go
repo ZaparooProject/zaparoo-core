@@ -454,6 +454,7 @@ func TestHandleMediaAsset_RejectsUnsafeOrInvalidFiles(t *testing.T) {
 			require.Error(t, err)
 			var clientErr *models.ClientError
 			require.ErrorAs(t, err, &clientErr)
+			assert.Equal(t, "media.asset: no manual asset found", err.Error())
 			mockDB.AssertExpectations(t)
 		})
 	}
