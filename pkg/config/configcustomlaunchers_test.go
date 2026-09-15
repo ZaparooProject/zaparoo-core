@@ -451,3 +451,33 @@ execute = "echo tools"
 	require.Len(t, entries, 1, "an undeclared category must not remove the virtual system")
 	assert.Equal(t, "Tools", entries[0].ID)
 }
+
+func TestCustomLaunchers_InlineReplacesExternalWithSameID(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "tools.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "External Tools"
+execute = "echo external"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	// A later config reload adds an inline launcher with the same ID without
+	// reloading the launcher files.
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.custom]]
+id = "tools"
+kind = "virtual_system"
+name = "Inline Tools"
+execute = "echo inline"
+`))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Inline Tools", entries[0].Name)
+}

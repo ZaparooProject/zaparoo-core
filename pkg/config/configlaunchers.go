@@ -367,7 +367,17 @@ func (c *Instance) CustomLaunchers() []LaunchersCustom {
 
 	entries := make([]LaunchersCustom, 0, len(c.loaded.customLaunchersInline)+len(c.customLaunchersExternal))
 	entries = append(entries, c.loaded.customLaunchersInline...)
-	entries = append(entries, c.customLaunchersExternal...)
+	// A config reload can add an inline launcher with an ID that a launcher
+	// file already uses. The inline entry wins, as it does when files load.
+	inlineIDs := make(map[string]struct{}, len(c.loaded.customLaunchersInline))
+	for i := range c.loaded.customLaunchersInline {
+		inlineIDs[strings.ToLower(c.loaded.customLaunchersInline[i].ID)] = struct{}{}
+	}
+	for i := range c.customLaunchersExternal {
+		if _, exists := inlineIDs[strings.ToLower(c.customLaunchersExternal[i].ID)]; !exists {
+			entries = append(entries, c.customLaunchersExternal[i])
+		}
+	}
 	return cloneCustomLaunchers(entries)
 }
 

@@ -2157,3 +2157,81 @@ execute = "echo inline"
 	require.Len(t, launchers, 1, "settings.update must not delete inline custom launchers from config.toml")
 	assert.Equal(t, "InlineTools", launchers[0].ID)
 }
+
+func TestHandlePlaytimeLimitsUpdate_WaitsForSettingsUpdate(t *testing.T) {
+	t.Parallel()
+
+	fs := &configOpenTrackingFS{
+		Fs:    afero.NewMemMapFs(),
+		opens: make(chan struct{}, 1),
+	}
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, fs)
+	require.NoError(t, err)
+
+	volumeEntered := make(chan struct{})
+	releaseVolume := make(chan struct{})
+	player := mocks.NewMockPlayer()
+	player.On("SetVolume", 0.25).Run(func(mock.Arguments) {
+		close(volumeEntered)
+		<-releaseVolume
+	}).Return().Once()
+
+	volume := 25
+	settingsParams, err := json.Marshal(models.UpdateSettingsParams{AudioVolume: &volume})
+	require.NoError(t, err)
+	retention := 45
+	playtimeParams, err := json.Marshal(models.UpdatePlaytimeLimitsParams{Retention: &retention})
+	require.NoError(t, err)
+
+	settingsResult := make(chan error, 1)
+	go func() {
+		_, updateErr := HandleSettingsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Player: player, Params: settingsParams, IsLocal: true,
+		})
+		settingsResult <- updateErr
+	}()
+
+	select {
+	case <-volumeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("settings update did not reach its runtime side effect")
+	}
+
+	fs.track.Store(true)
+	playtimeStarted := make(chan struct{})
+	playtimeResult := make(chan error, 1)
+	go func() {
+		close(playtimeStarted)
+		_, updateErr := HandlePlaytimeLimitsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Params: playtimeParams, IsLocal: true,
+		})
+		playtimeResult <- updateErr
+	}()
+	<-playtimeStarted
+
+	select {
+	case <-fs.opens:
+		close(releaseVolume)
+		t.Fatal("playtime limits update loaded config before the settings update completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseVolume)
+
+	select {
+	case updateErr := <-settingsResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("settings update did not complete")
+	}
+	select {
+	case updateErr := <-playtimeResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("playtime limits update did not complete")
+	}
+
+	require.NoError(t, cfg.Load())
+	assert.Equal(t, volume, cfg.AudioVolume())
+	assert.Equal(t, retention, cfg.PlaytimeRetention())
+	player.AssertExpectations(t)
+}

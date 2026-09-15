@@ -680,6 +680,7 @@ Available categories remain dynamic: derive them from `categories` on systems re
         "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
+          "categories": ["Handheld"],
           "id": "Gameboy",
           "name": "Gameboy"
         },
@@ -738,6 +739,7 @@ Available categories remain dynamic: derive them from `categories` on systems re
         "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
+          "categories": ["Console"],
           "id": "NES",
           "name": "Nintendo Entertainment System"
         },
@@ -1855,6 +1857,7 @@ An object:
         "id": "SNES",
         "name": "Super Nintendo Entertainment System",
         "category": "Console",
+        "categories": ["Console"],
         "releaseDate": "1990-11-21",
         "manufacturer": "Nintendo"
       },

@@ -535,6 +535,9 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	releaseConfig := env.Config.AcquireUpdateLock()
+	defer releaseConfig()
+
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save.
 	if err := reloadConfigBeforeSave(env.Config, "playtime limits update"); err != nil {
