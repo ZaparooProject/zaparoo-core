@@ -57,9 +57,20 @@ type operationEnvelope struct {
 	ProtocolVersion int             `json:"protocol_version"`
 }
 
+// Envelope types the wait answers with. Unknown types are ignored.
+const (
+	envelopeTypeOperationTarget = "operation_target"
+	envelopeTypeLibraryChanged  = "library_changed"
+)
+
+// waitEnvelope is one answer from the device wait: an operation to run, or
+// a hint that library data changed on the account (which kinds, and the
+// revision of the write, on the same scale as the pull cursors).
 type waitEnvelope struct {
 	Operation *operationEnvelope `json:"operation,omitempty"`
 	Type      string             `json:"type"`
+	Kinds     []string           `json:"kinds,omitempty"`
+	Revision  int64              `json:"revision,omitempty"`
 }
 
 const (
