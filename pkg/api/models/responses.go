@@ -431,6 +431,21 @@ type MediaMetaBatchResponse struct {
 	Items []MediaMetaBatchItemResponse `json:"items"`
 }
 
+// MediaAssetResponse is one bounded chunk from an indexed media asset.
+type MediaAssetResponse struct {
+	NextOffset  *int64 `json:"nextOffset,omitempty"`
+	AssetType   string `json:"assetType"`
+	TypeTag     string `json:"typeTag"`
+	ContentType string `json:"contentType"`
+	Extension   string `json:"extension"`
+	ETag        string `json:"etag"`
+	Data        string `json:"data"`
+	Size        int64  `json:"size"`
+	Offset      int64  `json:"offset"`
+	Length      int64  `json:"length"`
+	Complete    bool   `json:"complete"`
+}
+
 // MediaImageResponse is the response for the media.image method.
 // Inline delivery contains Data; local-path delivery contains LocalPath.
 type MediaImageResponse struct {

@@ -212,6 +212,24 @@ func TestLogSafeResponse(t *testing.T) {
 	}
 }
 
+func TestLogSafeResponse_MediaAssetRedaction(t *testing.T) {
+	const secretBlob = "AAAABASE64SECRETPAYLOAD=="
+	buf := captureLogs(t, zerolog.DebugLevel)
+
+	logSafeResponse(models.MediaAssetResponse{
+		TypeTag:     "property:manual",
+		ContentType: "application/pdf",
+		Data:        secretBlob,
+		Size:        100,
+		Offset:      10,
+		Length:      20,
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, `"length":20`)
+	assert.NotContains(t, out, secretBlob)
+}
+
 // TestLogSafeResponse_BatchRedaction verifies batch-response branches log only
 // an item count and never include per-item details.
 func TestLogSafeResponse_BatchRedaction(t *testing.T) {

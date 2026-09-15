@@ -376,6 +376,16 @@ type MediaMetaUpdateParams struct {
 	Media   json.RawMessage `json:"media,omitempty"`
 }
 
+type MediaAssetParams struct {
+	MediaID   *int64 `json:"mediaId,omitempty"`
+	Offset    *int64 `json:"offset,omitempty"`
+	Length    *int64 `json:"length,omitempty"`
+	System    string `json:"system" validate:"omitempty,min=1"`
+	Path      string `json:"path" validate:"omitempty,min=1"`
+	AssetType string `json:"assetType"`
+	ETag      string `json:"etag,omitempty"`
+}
+
 type MediaImageParams struct {
 	MediaID *int64 `json:"mediaId,omitempty"`
 	// MaxSize is a hint for the longest edge (in pixels) of the returned image.

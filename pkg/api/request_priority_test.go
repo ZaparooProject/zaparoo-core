@@ -45,6 +45,7 @@ func TestRequestTimeoutForAPIMethod(t *testing.T) {
 		{"update apply", models.MethodUpdateApply, 0},
 		{"case insensitive", "SETTINGS.BACKUP", 0},
 		{"backup list", models.MethodSettingsBackupList, config.APIRequestTimeout},
+		{"media asset", models.MethodMediaAsset, config.APIRequestTimeout},
 		{"unknown", "custom.method", config.APIRequestTimeout},
 		{"empty", "", config.APIRequestTimeout},
 	}
@@ -88,6 +89,7 @@ func TestClassifyAPIMethod(t *testing.T) {
 		{"input gamepad", models.MethodInputGamepad, apiPriorityInput},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
+		{"low media asset", models.MethodMediaAsset, apiPriorityLow},
 		{"low update apply", models.MethodUpdateApply, apiPriorityLow},
 		{"update check stays normal", models.MethodUpdateCheck, apiPriorityNormal},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
@@ -102,6 +104,14 @@ func TestClassifyAPIMethod(t *testing.T) {
 			assert.Equal(t, tt.want, classifyAPIMethod(tt.method))
 		})
 	}
+}
+
+func TestMediaAssetMethodWiringAndLegacyPolicy(t *testing.T) {
+	t.Parallel()
+
+	_, ok := NewMethodMap().GetMethod(models.MethodMediaAsset)
+	assert.True(t, ok)
+	assert.True(t, legacyAllowedMethods[models.MethodMediaAsset])
 }
 
 func TestMethodFromAPIRequestPayload(t *testing.T) {

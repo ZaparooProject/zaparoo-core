@@ -104,6 +104,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodMappingsReload:
 		return apiPriorityHigh
 	case models.MethodMediaImage,
+		models.MethodMediaAsset,
 		models.MethodMediaGenerate,
 		models.MethodMediaGenerateCancel,
 		models.MethodMediaGenerateResume,
@@ -140,6 +141,10 @@ func methodFromAPIRequestPayload(msg []byte) string {
 
 func isImageAPIMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodMediaImage)
+}
+
+func isAssetAPIMethod(method string) bool {
+	return strings.EqualFold(method, models.MethodMediaAsset)
 }
 
 func isMediaDBTransactionAPIMethod(method string) bool {

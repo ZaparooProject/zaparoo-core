@@ -200,6 +200,15 @@ func logSafeResponse(result any) {
 			Str("delivery", resp.Delivery).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
+	case models.MediaAssetResponse:
+		log.Debug().
+			Str("typeTag", resp.TypeTag).
+			Str("contentType", resp.ContentType).
+			Int64("offset", resp.Offset).
+			Int64("length", resp.Length).
+			Int64("size", resp.Size).
+			Bool("complete", resp.Complete).
+			Msg("sending response")
 	case models.MediaMetaResponse:
 		log.Debug().
 			Str("system", resp.Media.Title.System.ID).
@@ -262,7 +271,7 @@ var legacyAllowedMethods = map[string]bool{
 	models.MethodMediaCleanOrphans: true, models.MethodMediaHistory: true,
 	models.MethodMediaHistoryLatest: true, models.MethodMediaHistoryTop: true,
 	models.MethodMediaLookup: true, models.MethodMediaLookupCandidates: true,
-	models.MethodMediaMeta: true, models.MethodMediaImage: true,
+	models.MethodMediaMeta: true, models.MethodMediaImage: true, models.MethodMediaAsset: true,
 	models.MethodScrapers: true, models.MethodMediaScrape: true,
 	models.MethodMediaScrapeStatus: true, models.MethodMediaScrapeCancel: true,
 	models.MethodMediaScrapeResume: true, models.MethodMediaControl: true,
@@ -400,6 +409,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaLookupCandidates: methods.HandleMediaLookupCandidates,
 		models.MethodMediaMeta:             methods.HandleMediaMeta,
 		models.MethodMediaImage:            methods.HandleMediaImage,
+		models.MethodMediaAsset:            methods.HandleMediaAsset,
 		models.MethodScrapers:              methods.HandleScrapers,
 		models.MethodMediaScrape:           methods.HandleMediaScrape,
 		models.MethodMediaScrapeStatus:     methods.HandleMediaScrapeStatus,

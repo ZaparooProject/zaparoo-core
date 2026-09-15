@@ -47,6 +47,7 @@ const (
 	wsLowQueueSize            = 16
 	wsResponseQueueSize       = 256
 	wsGlobalImageConcurrent   = 2
+	wsGlobalAssetConcurrent   = 2
 	wsInputWorkerDrainTimeout = 2 * time.Second
 )
 
@@ -58,8 +59,14 @@ const (
 
 var (
 	errWSRequestQueueFull = errors.New("websocket request queue is full")
-	wsGlobalImageSlots    = make(chan struct{}, wsGlobalImageConcurrent)
-	wsMediaDBMu           syncutil.RWMutex
+	// wsGlobalImageSlots and wsGlobalAssetSlots bound the number of large,
+	// blob/file-backed reads in flight across every session. The per-session
+	// worker pool only caps concurrency within one connection, so without a
+	// global gate N connections each downloading a manual would run 2N base64
+	// encodes at once and starve the shared writer on a small device.
+	wsGlobalImageSlots = make(chan struct{}, wsGlobalImageConcurrent)
+	wsGlobalAssetSlots = make(chan struct{}, wsGlobalAssetConcurrent)
+	wsMediaDBMu        syncutil.RWMutex
 )
 
 const wsDispatcherSessionKey = "api.ws.dispatcher"
@@ -94,11 +101,14 @@ type wsRequestJob struct {
 	cs          *apimiddleware.ClientSession
 	cancel      context.CancelFunc
 	env         *requests.RequestEnv
-	enqueuedAt  time.Time
-	requestID   models.RPCID
-	method      string
-	msg         []byte
-	image       bool
+	// gate, when non-nil, is a global slot pool the job must acquire before
+	// running, so heavy blob/file reads (media.image, media.asset) stay
+	// bounded across all sessions.
+	gate       chan struct{}
+	enqueuedAt time.Time
+	requestID  models.RPCID
+	method     string
+	msg        []byte
 }
 
 type wsResponseJob struct {
@@ -342,7 +352,7 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 		}
 	}()
 
-	if job.image {
+	if job.gate != nil {
 		endSlot := apidiag.Begin(ctx, apidiag.ConcurrencySlot)
 		defer endSlot()
 		select {
@@ -352,8 +362,8 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 		case <-d.ctx.Done():
 			d.finishWithoutReply(job)
 			return
-		case wsGlobalImageSlots <- struct{}{}:
-			defer func() { <-wsGlobalImageSlots }()
+		case job.gate <- struct{}{}:
+			defer func() { <-job.gate }()
 		}
 		endSlot()
 	}
@@ -382,12 +392,29 @@ func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
 	if isMediaDBTransactionAPIMethod(method) {
 		return mediaDBLockWrite
 	}
-	// media.image already has its own tiny concurrency gate; do not let slow
-	// image reads/resizes hold the API DB read lane and starve tag/meta writes.
-	if isImageAPIMethod(method) {
+	// media.image and media.asset have their own global concurrency gate and
+	// do only read-only lookups, so they must not hold the API DB read lane:
+	// a slow client that stalls a large response would otherwise keep the read
+	// lock and starve tag/meta writes for as long as the response is stuck.
+	if isImageAPIMethod(method) || isAssetAPIMethod(method) {
 		return mediaDBLockNone
 	}
 	return mediaDBLockRead
+}
+
+// globalSlotPoolForAPIMethod returns the cross-session concurrency gate a
+// method must hold while running, or nil when it is ungated. Large
+// blob/file-backed reads share small pools so their base64 work and buffered
+// responses stay bounded across every connection.
+func globalSlotPoolForAPIMethod(method string) chan struct{} {
+	switch {
+	case isImageAPIMethod(method):
+		return wsGlobalImageSlots
+	case isAssetAPIMethod(method):
+		return wsGlobalAssetSlots
+	default:
+		return nil
+	}
 }
 
 func lockMediaDBForAPIMethod(method string) func() {
@@ -524,7 +551,7 @@ func enqueueWSRequest(
 		msg:        append([]byte(nil), msg...),
 		cs:         cs,
 		tracker:    tracker,
-		image:      isImageAPIMethod(method),
+		gate:       globalSlotPoolForAPIMethod(method),
 	}
 	if err := d.enqueue(job, priority); err != nil {
 		if errors.Is(err, errWSRequestQueueFull) {
