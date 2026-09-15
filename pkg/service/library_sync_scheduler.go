@@ -73,6 +73,21 @@ type librarySyncRunner interface {
 	SyncInventory(ctx context.Context, force bool) (librarysync.InventoryResult, error)
 }
 
+// systemLaunchers returns a lookup of the launchers that serve one system,
+// the same set a title launch ranks file types with.
+func systemLaunchers(cfg *config.Instance, pl platforms.Platform) func(systemID string) []platforms.Launcher {
+	return func(systemID string) []platforms.Launcher {
+		all := pl.Launchers(cfg)
+		out := make([]platforms.Launcher, 0, len(all))
+		for i := range all {
+			if all[i].SystemID == systemID {
+				out = append(out, all[i])
+			}
+		}
+		return out
+	}
+}
+
 func startLibrarySyncScheduler(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -85,6 +100,7 @@ func startLibrarySyncScheduler(
 	wg *sync.WaitGroup,
 ) {
 	manager := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+	launchers := systemLaunchers(cfg, pl)
 	svc := librarysync.New(&librarysync.Options{
 		Config:        cfg,
 		DB:            db,
@@ -94,18 +110,9 @@ func startLibrarySyncScheduler(
 		SendHeartbeat: manager.SendCapabilityHeartbeat,
 		Notifications: st.Notifications,
 		DeckResolveDeps: &decks.ResolveDeps{
-			MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg,
-			LaunchersForSystem: func(systemID string) []platforms.Launcher {
-				all := pl.Launchers(cfg)
-				out := make([]platforms.Launcher, 0, len(all))
-				for i := range all {
-					if all[i].SystemID == systemID {
-						out = append(out, all[i])
-					}
-				}
-				return out
-			},
+			MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg, LaunchersForSystem: launchers,
 		},
+		Launchers: launchers,
 	})
 	requests := make(chan struct{}, 1)
 	stateRequests := make(chan struct{}, 1)

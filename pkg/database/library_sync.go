@@ -101,11 +101,15 @@ type LibraryStateSyncRow struct {
 	RejectedHash  string
 	VariantTags   []string
 	PreferredTags []string
-	Revision      int64
-	UpdatedAt     int64
-	Favorite      bool
-	Deleted       bool
-	Unmatched     bool
+	// SentPreferredTags is the version this device last named from its
+	// starred copy, so a star that moves is told apart from a version the
+	// account chose.
+	SentPreferredTags []string
+	Revision          int64
+	UpdatedAt         int64
+	Favorite          bool
+	Deleted           bool
+	Unmatched         bool
 }
 
 // DeckSyncRow is the last copy of an owned deck this device agreed with the

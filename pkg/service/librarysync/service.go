@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -87,6 +88,9 @@ type Options struct {
 	// DeckResolveDeps tags the media a synced deck's games resolve to.
 	// Optional.
 	DeckResolveDeps *decks.ResolveDeps
+	// Launchers returns the launchers of a system, used to pick the copy a
+	// launch would start when a pulled flag needs a home. Optional.
+	Launchers func(systemID string) []platforms.Launcher
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -104,6 +108,7 @@ type Service struct {
 	notifications chan<- models.Notification
 	deckDeps      *decks.ResolveDeps
 	deckSem       chan struct{}
+	launchers     func(systemID string) []platforms.Launcher
 	resolvePace   time.Duration
 	lastDeckPull  atomic.Int64
 	inventoryMu   syncutil.Mutex
@@ -120,6 +125,7 @@ func New(opts *Options) *Service {
 		pauser:        opts.Pauser,
 		sendHeartbeat: opts.SendHeartbeat,
 		now:           opts.Now,
+		launchers:     opts.Launchers,
 		resolvePace:   opts.ResolvePace,
 		notifications: opts.Notifications,
 		deckDeps:      opts.DeckResolveDeps,

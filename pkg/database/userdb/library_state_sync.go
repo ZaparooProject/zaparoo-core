@@ -30,7 +30,8 @@ import (
 )
 
 const libraryStateSyncColumns = `IdentityKey, MediaType, SystemID, CoreSlug, VariantTags, Title,
-	Favorite, Intent, Reaction, PreferredTags, Revision, Deleted, Unmatched, RejectedCode, RejectedHash, UpdatedAt`
+	Favorite, Intent, Reaction, PreferredTags, SentPreferredTags, Revision, Deleted, Unmatched, RejectedCode,
+	RejectedHash, UpdatedAt`
 
 // ListLibraryStateSync returns every personal state base row.
 func (db *UserDB) ListLibraryStateSync() ([]database.LibraryStateSyncRow, error) {
@@ -50,16 +51,18 @@ func (db *UserDB) ListLibraryStateSync() ([]database.LibraryStateSyncRow, error)
 			row       database.LibraryStateSyncRow
 			variants  string
 			preferred string
+			sent      string
 		)
 		if scanErr := rows.Scan(
 			&row.IdentityKey, &row.MediaType, &row.SystemID, &row.CoreSlug, &variants, &row.Title,
-			&row.Favorite, &row.Intent, &row.Reaction, &preferred, &row.Revision, &row.Deleted,
+			&row.Favorite, &row.Intent, &row.Reaction, &preferred, &sent, &row.Revision, &row.Deleted,
 			&row.Unmatched, &row.RejectedCode, &row.RejectedHash, &row.UpdatedAt,
 		); scanErr != nil {
 			return nil, fmt.Errorf("scan library state sync row: %w", scanErr)
 		}
 		row.VariantTags = decodeTagList(variants)
 		row.PreferredTags = decodeTagList(preferred)
+		row.SentPreferredTags = decodeTagList(sent)
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -84,7 +87,7 @@ func (db *UserDB) UpsertLibraryStateSync(rows []database.LibraryStateSyncRow) er
 	}
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(db.ctx, `insert or replace into LibraryStateSync (`+libraryStateSyncColumns+`)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare library state sync upsert: %w", err)
 	}
@@ -95,6 +98,7 @@ func (db *UserDB) UpsertLibraryStateSync(rows []database.LibraryStateSyncRow) er
 		if _, execErr := stmt.ExecContext(db.ctx,
 			row.IdentityKey, row.MediaType, row.SystemID, row.CoreSlug, encodeTagList(row.VariantTags),
 			row.Title, row.Favorite, row.Intent, row.Reaction, encodeTagList(row.PreferredTags),
+			encodeTagList(row.SentPreferredTags),
 			row.Revision, row.Deleted, row.Unmatched, row.RejectedCode, row.RejectedHash, now,
 		); execErr != nil {
 			return fmt.Errorf("upsert library state sync row: %w", execErr)
