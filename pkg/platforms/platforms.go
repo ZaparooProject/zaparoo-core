@@ -209,9 +209,9 @@ type CmdEnv struct {
 	// script is still free to run its own ZapScript. Nil when the hook must not
 	// run, such as inside a hook script.
 	BeforeExit func()
-	// RefreshOwnedDeck brings an owned deck up to date from wherever it
-	// syncs before it is opened. It is best-effort and bounded; nil when no
-	// sync is configured, in which case the local copy opens as it is.
+	// RefreshOwnedDeck asks wherever an owned deck syncs to look for changes
+	// in the background as the deck opens. It returns at once and never
+	// blocks the open; nil when no sync is configured.
 	RefreshOwnedDeck func(ctx context.Context, deckID string)
 	PlaybackManager  audio.PlaybackManager
 	// LauncherCache resolves the launcher behind the active media. It holds

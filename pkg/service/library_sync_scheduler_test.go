@@ -167,9 +167,9 @@ func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, accesses, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, accesses, func() bool { return false }, &libraryStateTimings{
 			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
 	}()
 	t.Cleanup(func() {

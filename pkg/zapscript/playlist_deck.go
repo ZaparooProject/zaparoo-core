@@ -115,25 +115,29 @@ func loadDeckPlaylist(
 	return pls, nil
 }
 
-// refreshDeck brings a deck up to date before it opens: an owned deck
-// through the sync hook, a cached copy of somebody else's deck by fetching
-// its ZapLink again. It returns the reloaded deck, or nil to use the copy
-// already loaded. Every failure, including being offline, is logged at debug
-// and leaves the local copy to open.
+// refreshDeck brings a deck up to date as it opens. An owned deck opens its
+// local copy at once and asks the sync hook to look for changes in the
+// background, since a tap never waits on the network; the open playlist is
+// refreshed in place if anything changed. A cached copy of somebody else's
+// deck is fetched from its ZapLink again first, within a short bound. It
+// returns the reloaded deck, or nil to use the copy already loaded. Every
+// failure, including being offline, is logged at debug and leaves the local
+// copy to open.
 func refreshDeck(pl platforms.Platform, env *platforms.CmdEnv, deck *database.Deck) *database.Deck {
 	parent := env.ServiceCtx
 	if parent == nil {
 		parent = context.Background()
 	}
+	if deck.Owned {
+		if env.RefreshOwnedDeck != nil {
+			env.RefreshOwnedDeck(parent, deck.DeckID)
+		}
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(parent, deckRefreshTimeout)
 	defer cancel()
 
 	switch {
-	case deck.Owned:
-		if env.RefreshOwnedDeck == nil {
-			return nil
-		}
-		env.RefreshOwnedDeck(ctx, deck.DeckID)
 	case deck.SourceURL != "":
 		if time.Since(time.Unix(deck.FetchedAt, 0)) < deckRefreshFreshFor {
 			return nil

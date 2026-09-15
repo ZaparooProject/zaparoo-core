@@ -22,6 +22,7 @@ package librarysync_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -264,7 +265,7 @@ func TestSyncDecks_RejectedDeckWaitsForAChange(t *testing.T) {
 	assert.Equal(t, 1, result.Pushed)
 }
 
-func TestRefreshDeckPullsBeforeOpening(t *testing.T) {
+func TestPullDecksIfStaleSkipsAFreshPull(t *testing.T) {
 	f := newSyncFixture(t)
 	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
 	f.syncDecks(t)
@@ -274,11 +275,56 @@ func TestRefreshDeckPullsBeforeOpening(t *testing.T) {
 	f.online.putDeck(remote)
 	f.online.resetCalls()
 
-	f.svc.RefreshDeck(f.ctx, "0123456789ab")
+	require.NoError(t, f.svc.PullDecksIfStale(f.ctx))
+	assert.Zero(t, f.online.count(getDecks), "a pull within the access window is not repeated")
+	assert.Equal(t, []string{"**a"}, itemScripts(f.localDeck(t, "0123456789ab")))
+
+	f.advance(time.Minute)
+	require.NoError(t, f.svc.PullDecksIfStale(f.ctx))
+	assert.Equal(t, 1, f.online.count(getDecks))
 	assert.Equal(t, []string{"**a", "**b"}, itemScripts(f.localDeck(t, "0123456789ab")))
-	assert.Zero(t, f.online.count(postDecks), "opening a deck never pushes")
+	assert.Zero(t, f.online.count(postDecks), "a pull for a client or an opening deck never pushes")
+}
+
+func TestSyncDecks_EditedDeckSurvivesAccountDelete(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.syncDecks(t)
+
+	// Edited here, deleted on the account before the edit was pushed.
+	require.NoError(t, f.db.UserDB.ReplaceDeckItems("0123456789ab",
+		[]database.DeckItem{scriptDeckItem("A", "**a"), scriptDeckItem("B", "**b")}))
+	remote := f.online.deck("0123456789ab")
+	remote.Deleted = true
+	remote.Items = nil
+	f.online.putDeck(remote)
+
+	f.syncDecks(t)
+	assert.Equal(t, []string{"**a", "**b"}, itemScripts(f.localDeck(t, "0123456789ab")), "the edits are kept")
+	revived := f.online.deck("0123456789ab")
+	require.NotNil(t, revived)
+	assert.False(t, revived.Deleted, "and the deck comes back on the account under its own ID")
+	assert.Equal(t, []string{"**a", "**b"}, fakeItemScripts(revived))
 
 	f.online.resetCalls()
-	require.NoError(t, f.svc.PullDecksIfStale(f.ctx))
-	assert.Zero(t, f.online.count(getDecks), "a fresh pull is not repeated for a client listing decks")
+	f.syncDecks(t)
+	assert.Zero(t, f.online.count(postDecks))
+}
+
+func TestSyncDecks_AccountEraseKeepsLocalDecks(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.createDeck(t, "bbbbbbbbbbbb", "Other", scriptDeckItem("B", "**b"))
+	f.syncDecks(t)
+	// A second pass moves the pull cursor past the device's own pushes; a
+	// pull from zero is never told to reset.
+	f.syncDecks(t)
+
+	f.online.eraseDecks()
+	result := f.syncDecks(t)
+	assert.Equal(t, "Mine", f.localDeck(t, "0123456789ab").Name, "an erase on the account never touches local decks")
+	assert.Equal(t, "Other", f.localDeck(t, "bbbbbbbbbbbb").Name)
+	assert.Equal(t, 2, result.Pushed, "local decks push again as new")
+	require.NotNil(t, f.online.deck("0123456789ab"))
+	require.NotNil(t, f.online.deck("bbbbbbbbbbbb"))
 }

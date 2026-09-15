@@ -1217,8 +1217,8 @@ type LibrarySyncSignals struct {
 	// DecksAccessed pulls decks when the last pull is stale, for a client
 	// listing them.
 	DecksAccessed func()
-	// RefreshDeck brings decks up to date before one opens, within a few
-	// seconds.
+	// RefreshDeck asks for a background pull of decks as one opens, when the
+	// last pull is stale. It returns at once.
 	RefreshDeck func(ctx context.Context, deckID string)
 }
 

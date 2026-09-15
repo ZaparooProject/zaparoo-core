@@ -60,6 +60,7 @@ type fakeOnline struct {
 	stateRevision int64
 	stateFloor    int64
 	deckRevision  int64
+	deckFloor     int64
 	limitFirst    int
 	mu            syncutil.Mutex
 	nextID        uint32
@@ -695,6 +696,8 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			result(i, "rejected", "unknown_card", nil)
 			continue
 		}
+		// An update against a tombstone's revision brings the deck back.
+		deck.Deleted = false
 		if record.Name != nil {
 			deck.Name = *record.Name
 		}
@@ -719,6 +722,11 @@ func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
 		writeFakeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
+	reset := false
+	if since > 0 && since < f.deckFloor {
+		reset = true
+		since = 0
+	}
 	decks := make([]*fakeDeck, 0)
 	for _, deck := range f.decks {
 		if deck.Revision > since && (since > 0 || !deck.Deleted) {
@@ -734,5 +742,15 @@ func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
 	if len(decks) > 0 {
 		next = decks[len(decks)-1].Revision
 	}
-	writeFakeJSON(w, map[string]any{"items": decks, "next_since": next, "has_more": hasMore, "reset": false})
+	writeFakeJSON(w, map[string]any{"items": decks, "next_since": next, "has_more": hasMore, "reset": reset})
+}
+
+// eraseDecks is the account-wide erase: every deck is gone and a pull from
+// an older cursor is told to reset.
+func (f *fakeOnline) eraseDecks() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckRevision++
+	f.deckFloor = f.deckRevision
+	f.decks = make(map[string]*fakeDeck)
 }
