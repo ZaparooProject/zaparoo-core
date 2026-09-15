@@ -83,7 +83,22 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 	assert.Equal(t, "Weekend", pls.Name)
 	require.Len(t, pls.Items, 2)
 	assert.Equal(t, "**launch.system:NES", pls.Items[0].ZapScript)
-	assert.Equal(t, int32(1), refreshed.Load(), "an owned deck is refreshed through the sync hook before it opens")
+	assert.Equal(t, int32(1), refreshed.Load(), "an owned deck asks the sync hook for a background refresh")
+	assert.False(t, pls.Unsafe, "the user's own deck is trusted")
+}
+
+func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
+	t.Parallel()
+	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
+	require.NoError(t, db.UserDB.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Theirs", Owned: false,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**input.keyboard:a"}},
+	}))
+
+	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	pls := <-queue
+	assert.True(t, pls.Unsafe, "a cached copy of somebody else's deck runs its items untrusted")
 }
 
 func TestCmdPlaylistLoad_DeckNotFound(t *testing.T) {

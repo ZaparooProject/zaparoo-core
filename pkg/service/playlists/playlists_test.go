@@ -69,6 +69,21 @@ func TestTransitions_PreserveSlot(t *testing.T) {
 	})
 }
 
+func TestTransitions_PreserveUnsafe(t *testing.T) {
+	t.Parallel()
+
+	items := []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}}
+	p := playlists.NewPlaylist("id", "name", items)
+	assert.False(t, p.Unsafe, "a playlist is trusted unless its source is not")
+	p.Unsafe = true
+
+	assert.True(t, playlists.Next(*p).Unsafe)
+	assert.True(t, playlists.Previous(*p).Unsafe)
+	assert.True(t, playlists.Goto(*p, 1).Unsafe)
+	assert.True(t, playlists.Play(*p).Unsafe)
+	assert.True(t, playlists.Pause(*p).Unsafe)
+}
+
 func TestTransitions_PreserveHoldToken(t *testing.T) {
 	t.Parallel()
 
