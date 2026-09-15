@@ -286,6 +286,7 @@ func advanceBackgroundPlaylist(svc *ServiceContext) {
 			Loop:          pls.Loop,
 			LoopOne:       pls.LoopOne,
 			ForceRelaunch: true,
+			Unsafe:        pls.Unsafe,
 		}
 	case pls.Index+1 < len(pls.Items):
 		// More tracks remain — advance normally.
