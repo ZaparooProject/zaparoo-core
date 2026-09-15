@@ -99,6 +99,12 @@ func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
 	require.NoError(t, err)
 	pls := <-queue
 	assert.True(t, pls.Unsafe, "a cached copy of somebody else's deck runs its items untrusted")
+
+	env.TrustedDeckID = "0123456789ab"
+	_, err = cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	pls = <-queue
+	assert.False(t, pls.Unsafe, "unless the account vouched for this link as the user's own deck")
 }
 
 func TestCmdPlaylistLoad_DeckNotFound(t *testing.T) {
