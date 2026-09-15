@@ -8,6 +8,7 @@ require (
 	github.com/KarpelesLab/gowebp v0.1.1
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/RoaringBitmap/roaring/v2 v2.27.0
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.26.0
 	github.com/ZaparooProject/go-zapscript v0.19.0
@@ -77,6 +78,7 @@ require (
 	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.1 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
@@ -117,6 +119,7 @@ require (
 	github.com/mewkiz/flac v1.0.12 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/nwaples/rardecode/v2 v2.2.2 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect

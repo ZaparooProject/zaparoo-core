@@ -21,6 +21,8 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -93,6 +95,14 @@ func (m *Manager) WithRateLimitWaits(minWait, defaultWait, maxWait time.Duration
 // BaseURL returns the endpoint the client talks to, without a trailing slash.
 func (o *OnlineClient) BaseURL() string {
 	return o.client.baseURL
+}
+
+// CredentialTag returns a short digest of the device credential, so sync
+// bookkeeping can tell that the device was linked again since it last synced
+// without keeping the credential itself.
+func (o *OnlineClient) CredentialTag() string {
+	sum := sha256.Sum256([]byte(o.client.bearer))
+	return hex.EncodeToString(sum[:8])
 }
 
 // DoJSON sends body encoded as JSON, or no body when it is nil, and decodes a

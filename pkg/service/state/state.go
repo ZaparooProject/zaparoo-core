@@ -91,6 +91,7 @@ type State struct {
 	launcherManager       *LauncherManager
 	uiEvents              *uievents.Service
 	remoteStatus          RemoteStatus
+	librarySyncRequest    func()
 	bootUUID              string
 	activeMediaReadyGen   uint64
 	activeMediaPublishMu  syncutil.RWMutex
@@ -1202,4 +1203,26 @@ func (s *State) Inbox() *inbox.Service {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.inbox
+}
+
+// SetLibrarySyncRequester installs the function that asks the Library sync
+// scheduler for a pass. Called once the scheduler is running.
+func (s *State) SetLibrarySyncRequester(request func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.librarySyncRequest = request
+}
+
+// RequestLibrarySync asks for a Library sync pass soon, for example after the
+// setting changed. It does nothing before the scheduler starts.
+func (s *State) RequestLibrarySync() {
+	if s == nil {
+		return
+	}
+	s.mu.RLock()
+	request := s.librarySyncRequest
+	s.mu.RUnlock()
+	if request != nil {
+		request()
+	}
 }
