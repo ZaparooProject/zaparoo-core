@@ -929,7 +929,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if waitErr := m.pauser.Wait(ctx); waitErr != nil {
 		return RemoteRunInfo{}, fmt.Errorf("creating remote backup snapshot: %w", waitErr)
 	}
-	heartbeatErr := client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL))
+	heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
 	}
@@ -1116,11 +1116,11 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 		}
 		return nil, errRemoteUnlinked
 	}
-	return m.newAuthenticatedRemoteClient(m.cfg.BackupRemoteBaseURL(), m.markRemoteUnlinkedIfCurrent)
+	return m.newAuthenticatedRemoteClient(m.cfg.OnlineBaseURL(), m.markRemoteUnlinkedIfCurrent)
 }
 
 func (m *Manager) newPlaytimeRemoteClient() (*remoteClient, error) {
-	return m.newAuthenticatedRemoteClient(m.cfg.PlaytimeBaseURL(), nil)
+	return m.newAuthenticatedRemoteClient(m.cfg.OnlineBaseURL(), nil)
 }
 
 func (m *Manager) newAuthenticatedRemoteClient(
@@ -1272,7 +1272,7 @@ func (m *Manager) SendCapabilityHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL))
+	return client.heartbeat(ctx, HeartbeatCapabilities(m.cfg))
 }
 
 // SendHeartbeat reports liveness (Core version + capabilities) when the
@@ -1283,7 +1283,7 @@ func (m *Manager) SendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if heartbeatErr := client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL)); heartbeatErr != nil {
+	if heartbeatErr := client.heartbeat(ctx, HeartbeatCapabilities(m.cfg)); heartbeatErr != nil {
 		return heartbeatErr
 	}
 	_, err = m.updateRemoteAvailability(ctx, client)
@@ -1416,8 +1416,8 @@ func (m *Manager) setRemoteAvailability(
 }
 
 func (m *Manager) markRemoteUnlinkedIfCurrent(rejectedBearer string) {
-	baseURL := strings.TrimRight(m.cfg.BackupRemoteBaseURL(), "/")
-	lookupURL := config.BackupAuthLookupURL(baseURL)
+	baseURL := strings.TrimRight(m.cfg.OnlineBaseURL(), "/")
+	lookupURL := config.RemoteAuthLookupURL(baseURL)
 	current := config.LookupAuth(config.GetAuthCfg(), lookupURL)
 	if current == nil || current.Bearer == "" || current.Bearer != rejectedBearer {
 		log.Debug().Msg("ignoring unauthorized response for superseded remote backup credential")
@@ -1571,16 +1571,16 @@ func (m *Manager) NotifyScheduleStale() {
 	}
 }
 
-func heartbeatCapabilities(cfg *config.Instance, baseURL string) map[string]any {
-	capabilities := make(map[string]any)
-	if sameRemoteEndpoint(baseURL, cfg.BackupRemoteBaseURL()) {
-		capabilities["backup"] = 1
+// HeartbeatCapabilities is the capability document every heartbeat carries:
+// what this Core can do for the linked account, and which optional features
+// the user has turned on.
+func HeartbeatCapabilities(cfg *config.Instance) map[string]any {
+	capabilities := map[string]any{
+		"backup":       1,
+		"library_sync": LibrarySyncCapability(cfg),
 	}
-	if cfg.RemoteControlEnabled() && sameRemoteEndpoint(baseURL, cfg.RemoteControlBaseURL()) {
+	if cfg.RemoteControlEnabled() {
 		capabilities["remote_operations"] = map[string]any{"version": 1, "enabled": true}
-	}
-	if sameRemoteEndpoint(baseURL, cfg.LibraryBaseURL()) {
-		capabilities["library_sync"] = LibrarySyncCapability(cfg)
 	}
 	return capabilities
 }
@@ -1591,19 +1591,6 @@ func heartbeatCapabilities(cfg *config.Instance, baseURL string) map[string]any 
 // sync off from one whose Core does not support it.
 func LibrarySyncCapability(cfg *config.Instance) map[string]any {
 	return map[string]any{"version": 1, "enabled": cfg.LibrarySyncEnabled()}
-}
-
-func sameRemoteEndpoint(first, second string) bool {
-	firstURL, firstErr := url.Parse(strings.TrimRight(first, "/"))
-	secondURL, secondErr := url.Parse(strings.TrimRight(second, "/"))
-	if firstErr != nil || secondErr != nil {
-		return false
-	}
-	firstURL.Scheme = strings.ToLower(firstURL.Scheme)
-	firstURL.Host = strings.ToLower(firstURL.Host)
-	secondURL.Scheme = strings.ToLower(secondURL.Scheme)
-	secondURL.Host = strings.ToLower(secondURL.Host)
-	return firstURL.String() == secondURL.String()
 }
 
 func (c *remoteClient) heartbeat(ctx context.Context, capabilities map[string]any) error {
@@ -1953,7 +1940,7 @@ func (c *remoteClient) doRawHeaders(
 		req.Header.Set("Content-Type", contentType)
 	}
 
-	//nolint:gosec // URL is validated backup.remote.base_url or HTTPS default.
+	//nolint:gosec // URL is the validated online base URL or the HTTPS default.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("contacting remote backup server: %w", err)

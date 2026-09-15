@@ -42,7 +42,7 @@ func TestHTTPError_Error(t *testing.T) {
 }
 
 // TestDecodeBoundedJSON pins the two guards that make this safe to call
-// against an attacker-controlled or misbehaving RemoteControlBaseURL: a
+// against an attacker-controlled or misbehaving online server: a
 // response is rejected once it exceeds the byte limit (bounding memory use)
 // and rejected if anything follows the first JSON value (no smuggled data).
 func TestDecodeBoundedJSON(t *testing.T) {

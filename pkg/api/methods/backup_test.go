@@ -283,9 +283,9 @@ func TestHandleBackupRemoteList_MapsOpaqueIDsAndSources(t *testing.T) {
 		assert.NoError(t, writeErr)
 	}))
 	defer server.Close()
-	require.NoError(t, env.Config.SetBackupRemoteBaseURL(server.URL))
+	require.NoError(t, env.Config.SetOnlineBaseURL(server.URL))
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.BackupAuthLookupURL(server.URL): {Bearer: "test-token"},
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
 	})
 	t.Cleanup(config.ClearAuthCfgForTesting)
 

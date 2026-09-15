@@ -1529,7 +1529,7 @@ func TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher(t *testing.T) {
 	assert.Equal(t, "echo bye", got[0].BeforeExit)
 }
 
-func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
+func TestHandleSettings_OnlineBaseURLGatedToLocal(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
@@ -1544,16 +1544,10 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
-	require.NotNil(t, resp.BackupRemoteBaseURL)
-	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
-	require.NotNil(t, resp.PlaytimeBaseURL)
-	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
-	require.NotNil(t, resp.RemoteControlBaseURL)
-	assert.Equal(t, config.DefaultRemoteControlBaseURL, *resp.RemoteControlBaseURL)
+	require.NotNil(t, resp.OnlineBaseURL)
+	assert.Equal(t, config.DefaultOnlineBaseURL, *resp.OnlineBaseURL)
 	require.NotNil(t, resp.PlaytimeSyncEnabled)
 	assert.False(t, *resp.PlaytimeSyncEnabled)
-	require.NotNil(t, resp.LibraryBaseURL)
-	assert.Equal(t, config.DefaultLibraryBaseURL, *resp.LibraryBaseURL)
 	require.NotNil(t, resp.LibrarySyncEnabled)
 	assert.False(t, *resp.LibrarySyncEnabled)
 
@@ -1562,24 +1556,20 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok = result.(models.SettingsResponse)
 	require.True(t, ok)
-	assert.Nil(t, resp.BackupRemoteBaseURL)
-	assert.Nil(t, resp.PlaytimeBaseURL)
-	assert.Nil(t, resp.RemoteControlBaseURL)
+	assert.Nil(t, resp.OnlineBaseURL)
 	assert.Nil(t, resp.PlaytimeSyncEnabled)
-	assert.Nil(t, resp.LibraryBaseURL)
 	assert.Nil(t, resp.LibrarySyncEnabled)
 }
 
-// TestHandleSettings_ReportsCustomOnlineEndpoints pins that settings
-// reflects a non-default endpoint for each of the three configurable
-// Online base URLs independently. The TUI's custom-server warning depends
-// on being able to see all three, not just backup's.
-func TestHandleSettings_ReportsCustomOnlineEndpoints(t *testing.T) {
+// TestHandleSettings_ReportsCustomOnlineServer pins that settings reflects
+// a non-default online base URL, which the TUI's custom-server warning
+// depends on.
+func TestHandleSettings_ReportsCustomOnlineServer(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://custom-remote.example.com"))
+	require.NoError(t, cfg.SetOnlineBaseURL("https://custom.example.com"))
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
@@ -1590,12 +1580,8 @@ func TestHandleSettings_ReportsCustomOnlineEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
-	require.NotNil(t, resp.RemoteControlBaseURL)
-	assert.Equal(t, "https://custom-remote.example.com", *resp.RemoteControlBaseURL)
-	require.NotNil(t, resp.BackupRemoteBaseURL)
-	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
-	require.NotNil(t, resp.PlaytimeBaseURL)
-	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
+	require.NotNil(t, resp.OnlineBaseURL)
+	assert.Equal(t, "https://custom.example.com", *resp.OnlineBaseURL)
 }
 
 func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {

@@ -1142,36 +1142,35 @@ func TestManagerNotifyScheduleStaleAddsInboxNotice(t *testing.T) {
 }
 
 func TestHeartbeatCapabilitiesWithdrawRemoteOperationsWithoutConsent(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Instance{}
-	capabilities := heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())
+	capabilities := HeartbeatCapabilities(cfg)
 	assert.Equal(t, 1, capabilities["backup"])
 	assert.NotContains(t, capabilities, "remote_operations")
 
 	cfg.SetRemoteControl(true)
-	assert.Contains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
+	capabilities = HeartbeatCapabilities(cfg)
+	assert.Equal(t, 1, capabilities["backup"])
+	assert.Equal(t, map[string]any{"version": 1, "enabled": true}, capabilities["remote_operations"])
 
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://remote.example.com"))
-	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
-	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "backup")
-	assert.Contains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "remote_operations")
+	// A custom server hears the same document: every online feature talks
+	// to the one configured host.
+	require.NoError(t, cfg.SetOnlineBaseURL("https://online.example.com"))
+	assert.Equal(t, capabilities, HeartbeatCapabilities(cfg))
 }
 
 func TestHeartbeatCapabilitiesReportLibrarySync(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Instance{}
-	librarySync, ok := heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())["library_sync"].(map[string]any)
+	librarySync, ok := HeartbeatCapabilities(cfg)["library_sync"].(map[string]any)
 	require.True(t, ok, "library sync is reported while off")
 	assert.Equal(t, 1, librarySync["version"])
 	assert.Equal(t, false, librarySync["enabled"])
 
 	cfg.SetLibrarySync(true)
-	librarySync, ok = heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())["library_sync"].(map[string]any)
+	librarySync, ok = HeartbeatCapabilities(cfg)["library_sync"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, librarySync["enabled"])
-
-	require.NoError(t, cfg.SetLibraryBaseURL("https://library.example.com"))
-	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "library_sync")
-	assert.Contains(t, heartbeatCapabilities(cfg, cfg.LibraryBaseURL()), "library_sync")
 }
 
 func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
@@ -1206,7 +1205,7 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
+	require.NoError(t, env.Manager.cfg.SetOnlineBaseURL(server.URL))
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 
 	require.NoError(t, env.Manager.SendHeartbeat(context.Background()))
@@ -1247,7 +1246,7 @@ func TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRef
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
-	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
+	require.NoError(t, env.Manager.cfg.SetOnlineBaseURL(server.URL))
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 
 	require.NoError(t, env.Manager.SendCapabilityHeartbeat(context.Background()))
@@ -3610,10 +3609,10 @@ func remotePackOrder(files []FileRef) []string {
 
 func configureRemoteTestAuth(t *testing.T, mgr *Manager, baseURL string) {
 	t.Helper()
-	require.NoError(t, mgr.cfg.SetBackupRemoteBaseURL(baseURL))
+	require.NoError(t, mgr.cfg.SetOnlineBaseURL(baseURL))
 	mgr.cfg.SetBackupRemoteEnabled(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.BackupAuthLookupURL(baseURL): {Bearer: "test-token"},
+		config.RemoteAuthLookupURL(baseURL): {Bearer: "test-token"},
 	})
 	t.Cleanup(func() { config.ClearAuthCfgForTesting() })
 }
@@ -4308,7 +4307,7 @@ func TestManagerRunRemoteMarksUnlinkedOn401(t *testing.T) {
 	assert.Equal(t, "device not linked", status.Remote.LastError)
 	assert.Equal(t, RemoteAvailabilityUnknown, status.Remote.Availability)
 	entry := config.LookupAuth(
-		config.GetAuthCfg(), config.BackupAuthLookupURL(env.Manager.cfg.BackupRemoteBaseURL()),
+		config.GetAuthCfg(), config.RemoteAuthLookupURL(env.Manager.cfg.OnlineBaseURL()),
 	)
 	require.NotNil(t, entry)
 	assert.Equal(t, "test-token", entry.Bearer, "revocation retains the credential for explicit relinking")
@@ -4330,7 +4329,7 @@ func TestUnauthorizedOldBearerDoesNotRevokeFreshCredential(t *testing.T) {
 	require.NoError(t, err)
 	env.Manager.coordinator.SetRemoteUnlinked(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
-		config.BackupAuthLookupURL(server.URL): {Bearer: "fresh-token"},
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "fresh-token"},
 	})
 	env.Manager.MarkRemoteLinked()
 
@@ -4338,7 +4337,7 @@ func TestUnauthorizedOldBearerDoesNotRevokeFreshCredential(t *testing.T) {
 	assert.False(t, env.Manager.coordinator.RemoteUnlinked())
 	status := env.Manager.Status()
 	assert.True(t, status.Remote.Linked)
-	entry := config.LookupAuth(config.GetAuthCfg(), config.BackupAuthLookupURL(server.URL))
+	entry := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(server.URL))
 	require.NotNil(t, entry)
 	assert.Equal(t, "fresh-token", entry.Bearer)
 }
