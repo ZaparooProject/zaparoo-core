@@ -27,18 +27,15 @@ import (
 )
 
 const (
-	// DefaultOnlineBaseURL is the official Zaparoo Online API host. Every
-	// per-feature base URL (backup, playtime, remote control) defaults to
-	// this same value; it exists as one shared constant so a check for
-	// "is this feature pointed at a custom server" has one place to live.
+	// DefaultOnlineBaseURL is the official Zaparoo Online API host, used
+	// when [service] online_base_url is not set.
 	DefaultOnlineBaseURL        = "https://api.zaparoo.com"
-	DefaultBackupRemoteBaseURL  = DefaultOnlineBaseURL
 	DefaultBackupRemoteSchedule = "daily"
 )
 
 // OfficialAuthHosts are the hosts of the official hosted API
 // services. settings.auth.status only answers link probes for these hosts
-// (over HTTPS) and the configured backup server; other URLs report
+// (over HTTPS) and the configured online server; other URLs report
 // linked=false without revealing whether a credential exists. The claim
 // flow's trusted-domain extension may store credentials under further
 // domains — those are found at unlink time by linked_via provenance tags,
@@ -66,7 +63,6 @@ type Backup struct {
 }
 
 type BackupRemote struct {
-	BaseURL  string `toml:"base_url,omitempty"`
 	Schedule string `toml:"schedule,omitempty"`
 	Enabled  bool   `toml:"enabled,omitempty"`
 }
@@ -126,29 +122,6 @@ func (c *Instance) SetBackupRemoteSchedule(schedule string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Backup.Remote.Schedule = schedule
-}
-
-func (c *Instance) BackupRemoteBaseURL() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.vals.Backup.Remote.BaseURL == "" {
-		return DefaultBackupRemoteBaseURL
-	}
-	return c.vals.Backup.Remote.BaseURL
-}
-
-func (c *Instance) SetBackupRemoteBaseURL(rawURL string) error {
-	if err := ValidateBackupRemoteBaseURL(rawURL); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Backup.Remote.BaseURL = normalizeRemoteBaseURL(rawURL)
-	return nil
-}
-
-func ValidateBackupRemoteBaseURL(rawURL string) error {
-	return validateRemoteBaseURL(rawURL, "backup remote")
 }
 
 func validateRemoteBaseURL(rawURL, setting string) error {
@@ -222,17 +195,13 @@ func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {
 }
 
 // IsDefaultOnlineBaseURL reports whether raw is empty or matches the
-// official Zaparoo Online host: the shared "is this a custom server"
-// check used by every configurable Online endpoint (backup, playtime,
-// remote control).
+// official Zaparoo Online host: the "is this a custom server" check.
 func IsDefaultOnlineBaseURL(raw string) bool {
 	return raw == "" || strings.EqualFold(strings.TrimRight(raw, "/"), DefaultOnlineBaseURL)
 }
 
-func BackupAuthLookupURL(rawURL string) string {
-	return RemoteAuthLookupURL(rawURL)
-}
-
+// RemoteAuthLookupURL reduces a base URL to the scheme and host the device
+// credential for that server is stored under.
 func RemoteAuthLookupURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

@@ -95,6 +95,7 @@ type Values struct {
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Library        Library   `toml:"library,omitempty"`
 	Profiles       Profiles  `toml:"profiles,omitempty"`
 	Media          Media     `toml:"media,omitempty"`
 	Scraper        Scraper   `toml:"scraper,omitempty"`
@@ -355,42 +356,16 @@ func (c *Instance) applyTOML(data string) error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	// Older releases persisted runtime fallbacks as though they were user
-	// overrides. Treat only those exact legacy values as unset so future saves omit them.
-	if c.vals.Backup.Remote.BaseURL == DefaultBackupRemoteBaseURL {
-		c.vals.Backup.Remote.BaseURL = ""
-	}
-	if c.vals.Playtime.BaseURL == DefaultPlaytimeBaseURL {
-		c.vals.Playtime.BaseURL = ""
-	}
-	if c.vals.Service.RemoteControl.BaseURL == DefaultRemoteControlBaseURL {
-		c.vals.Service.RemoteControl.BaseURL = ""
-	}
-
-	// A base URL only ever reaches config.toml by hand-editing it, since none
-	// of the Set*BaseURL validators have a production caller, so validate
-	// here instead. A bad value falls back to the default rather than
+	// The default written out as a value is treated as unset so future saves
+	// omit it. The URL only reaches config.toml by hand-editing it, so it is
+	// validated here; a bad value falls back to the official host rather than
 	// failing the whole config load.
-	if c.vals.Backup.Remote.BaseURL != "" {
-		if err := ValidateBackupRemoteBaseURL(c.vals.Backup.Remote.BaseURL); err != nil {
-			log.Warn().Err(err).Str("value", c.vals.Backup.Remote.BaseURL).
-				Msg("invalid backup remote base URL in config, falling back to default")
-			c.vals.Backup.Remote.BaseURL = ""
-		}
-	}
-	if c.vals.Playtime.BaseURL != "" {
-		if err := ValidatePlaytimeBaseURL(c.vals.Playtime.BaseURL); err != nil {
-			log.Warn().Err(err).Str("value", c.vals.Playtime.BaseURL).
-				Msg("invalid playtime base URL in config, falling back to default")
-			c.vals.Playtime.BaseURL = ""
-		}
-	}
-	if c.vals.Service.RemoteControl.BaseURL != "" {
-		if err := ValidateRemoteControlBaseURL(c.vals.Service.RemoteControl.BaseURL); err != nil {
-			log.Warn().Err(err).Str("value", c.vals.Service.RemoteControl.BaseURL).
-				Msg("invalid remote control base URL in config, falling back to default")
-			c.vals.Service.RemoteControl.BaseURL = ""
-		}
+	if IsDefaultOnlineBaseURL(c.vals.Service.OnlineBaseURL) {
+		c.vals.Service.OnlineBaseURL = ""
+	} else if err := ValidateOnlineBaseURL(c.vals.Service.OnlineBaseURL); err != nil {
+		log.Warn().Err(err).Str("value", c.vals.Service.OnlineBaseURL).
+			Msg("invalid online base URL in config, falling back to the official host")
+		c.vals.Service.OnlineBaseURL = ""
 	}
 
 	c.vals.Launchers.Custom = validateCustomLaunchers(

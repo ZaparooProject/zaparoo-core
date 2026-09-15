@@ -2784,11 +2784,10 @@ None.
 | updateInstall             | boolean                                   | Yes      | Whether the device downloads and installs updates on its own, rather than only telling the user one exists. Defaults to false, and is always false while `updateCheck` is off. |
 | backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and authenticated admin clients. |
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
+| librarySyncEnabled        | boolean                                   | No       | Whether the user explicitly enabled Library sync. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
-| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
-| playtimeBaseUrl           | string                                    | No       | Configured play history sync server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 | remoteControlEnabled      | boolean                                   | No       | Whether the device owner explicitly allowed a linked Zaparoo Online account to send remote commands to this device. Defaults to false, and is reset to false whenever the account is linked or unlinked. Only returned to localhost and authenticated admin clients. |
-| remoteControlBaseUrl      | string                                    | No       | Configured remote control server base URL (read-only). Only returned to localhost and authenticated admin clients. |
+| onlineBaseUrl             | string                                    | No       | Base URL of the Zaparoo Online service every online feature uses: account linking, cloud backup, play history sync, Library sync and remote control (read-only, set as `online_base_url` under `[service]` in the config file). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2879,6 +2878,7 @@ An object containing any of the following optional keys:
 | updateInstall             | boolean                                   | No       | Whether the device installs updates on its own. Setting it to true while update checking is off is refused; send `updateCheck: true` in the same call to turn both on. |
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
+| librarySyncEnabled        | boolean                                   | No       | Explicitly enable or disable Library sync, which uploads the list of games this device holds and keeps favorites, play-later, likes, dislikes and decks in step with the linked Zaparoo Online account. Disabling removes this device's game list from the account; local favorites and decks are kept. Requires localhost or an authenticated admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
 | remoteControlEnabled      | boolean                                   | No       | Allow or stop allowing the linked Zaparoo Online account to send remote commands to this device. Takes effect within a few seconds; the device advertises or withdraws the capability itself. Requires localhost or an authenticated admin client. |
 
@@ -3007,7 +3007,7 @@ An object:
 
 Report whether Core holds a stored bearer credential for an auth server URL. The check is local only: the token is never validated against the server and no token material is returned.
 
-Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured remote backup base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
+Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured online base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
 
 #### Parameters
 
@@ -3106,7 +3106,7 @@ An object (optional):
 
 | Key | Type   | Required | Description                                                                                          |
 | :-- | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
-| url | string | No       | Auth server base URL. Defaults to the official Zaparoo API. HTTP is allowed only for loopback, private, or link-local development endpoints. |
+| url | string | No       | Auth server base URL. Defaults to the configured online base URL, which is the official Zaparoo API unless changed. HTTP is allowed only for loopback, private, or link-local development endpoints. |
 
 #### Result
 

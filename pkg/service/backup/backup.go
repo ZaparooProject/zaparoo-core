@@ -519,7 +519,7 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 func (m *Manager) Status() models.BackupStatusResponse {
 	stored := m.readStatus()
 	remoteLinked := false
-	lookupURL := config.BackupAuthLookupURL(m.cfg.BackupRemoteBaseURL())
+	lookupURL := config.RemoteAuthLookupURL(m.cfg.OnlineBaseURL())
 	if entry := config.LookupAuth(config.GetAuthCfg(), lookupURL); entry != nil && entry.Bearer != "" {
 		// A recorded 401 means the token was revoked server-side: report
 		// unlinked so the UI prompts a re-link instead of silently failing.

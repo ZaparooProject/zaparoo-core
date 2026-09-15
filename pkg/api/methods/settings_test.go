@@ -713,11 +713,13 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	debugLogging := true
 	backupRemoteEnabled := true
 	playtimeSyncEnabled := true
+	librarySyncEnabled := true
 	remoteControlEnabled := true
 	params := models.UpdateSettingsParams{
 		DebugLogging:         &debugLogging,
 		BackupRemoteEnabled:  &backupRemoteEnabled,
 		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
+		LibrarySyncEnabled:   &librarySyncEnabled,
 		RemoteControlEnabled: &remoteControlEnabled,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -739,6 +741,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled(), "consent setting must not change on rejected request")
+	assert.False(t, cfg.LibrarySyncEnabled())
 	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A remote member client is rejected the same way.
@@ -747,6 +750,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.Error(t, err)
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled())
+	assert.False(t, cfg.LibrarySyncEnabled())
 	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A paired admin client is as privileged as a local connection.
@@ -755,7 +759,41 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.NoError(t, err)
 	assert.True(t, cfg.BackupRemoteEnabled())
 	assert.True(t, cfg.PlaytimeSyncEnabled())
+	assert.True(t, cfg.LibrarySyncEnabled())
 	assert.True(t, cfg.RemoteControlEnabled())
+}
+
+func TestHandleSettingsUpdate_LibrarySyncRequiresLocalOrAdmin(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{LibrarySyncEnabled: &enabled})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context:    context.Background(),
+		Platform:   mockPlatform,
+		Config:     cfg,
+		State:      appState,
+		Params:     paramsJSON,
+		PlatformID: platformids.Mister,
+		ClientRole: string(permissions.RoleMember),
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.False(t, cfg.LibrarySyncEnabled())
+
+	env.IsLocal = true
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.True(t, cfg.LibrarySyncEnabled())
 }
 
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
@@ -1491,7 +1529,7 @@ func TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher(t *testing.T) {
 	assert.Equal(t, "echo bye", got[0].BeforeExit)
 }
 
-func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
+func TestHandleSettings_OnlineBaseURLGatedToLocal(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
@@ -1506,36 +1544,32 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
-	require.NotNil(t, resp.BackupRemoteBaseURL)
-	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
-	require.NotNil(t, resp.PlaytimeBaseURL)
-	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
-	require.NotNil(t, resp.RemoteControlBaseURL)
-	assert.Equal(t, config.DefaultRemoteControlBaseURL, *resp.RemoteControlBaseURL)
+	require.NotNil(t, resp.OnlineBaseURL)
+	assert.Equal(t, config.DefaultOnlineBaseURL, *resp.OnlineBaseURL)
 	require.NotNil(t, resp.PlaytimeSyncEnabled)
 	assert.False(t, *resp.PlaytimeSyncEnabled)
+	require.NotNil(t, resp.LibrarySyncEnabled)
+	assert.False(t, *resp.LibrarySyncEnabled)
 
 	env.IsLocal = false
 	result, err = HandleSettings(env)
 	require.NoError(t, err)
 	resp, ok = result.(models.SettingsResponse)
 	require.True(t, ok)
-	assert.Nil(t, resp.BackupRemoteBaseURL)
-	assert.Nil(t, resp.PlaytimeBaseURL)
-	assert.Nil(t, resp.RemoteControlBaseURL)
+	assert.Nil(t, resp.OnlineBaseURL)
 	assert.Nil(t, resp.PlaytimeSyncEnabled)
+	assert.Nil(t, resp.LibrarySyncEnabled)
 }
 
-// TestHandleSettings_ReportsCustomOnlineEndpoints pins that settings
-// reflects a non-default endpoint for each of the three configurable
-// Online base URLs independently. The TUI's custom-server warning depends
-// on being able to see all three, not just backup's.
-func TestHandleSettings_ReportsCustomOnlineEndpoints(t *testing.T) {
+// TestHandleSettings_ReportsCustomOnlineServer pins that settings reflects
+// a non-default online base URL, which the TUI's custom-server warning
+// depends on.
+func TestHandleSettings_ReportsCustomOnlineServer(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://custom-remote.example.com"))
+	require.NoError(t, cfg.SetOnlineBaseURL("https://custom.example.com"))
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
@@ -1546,12 +1580,8 @@ func TestHandleSettings_ReportsCustomOnlineEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
-	require.NotNil(t, resp.RemoteControlBaseURL)
-	assert.Equal(t, "https://custom-remote.example.com", *resp.RemoteControlBaseURL)
-	require.NotNil(t, resp.BackupRemoteBaseURL)
-	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
-	require.NotNil(t, resp.PlaytimeBaseURL)
-	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
+	require.NotNil(t, resp.OnlineBaseURL)
+	assert.Equal(t, "https://custom.example.com", *resp.OnlineBaseURL)
 }
 
 func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {

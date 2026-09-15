@@ -88,18 +88,16 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	if isLocalOrAdmin(&env) {
 		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
 		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
-		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
 		playtimeSyncEnabled := env.Config.PlaytimeSyncEnabled()
-		playtimeBaseURL := env.Config.PlaytimeBaseURL()
+		librarySyncEnabled := env.Config.LibrarySyncEnabled()
 		remoteControlEnabled := env.Config.RemoteControlEnabled()
-		remoteControlBaseURL := env.Config.RemoteControlBaseURL()
+		onlineBaseURL := env.Config.OnlineBaseURL()
 		resp.BackupRemoteEnabled = &backupRemoteEnabled
 		resp.BackupRemoteSchedule = &backupRemoteSchedule
-		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
 		resp.PlaytimeSyncEnabled = &playtimeSyncEnabled
-		resp.PlaytimeBaseURL = &playtimeBaseURL
+		resp.LibrarySyncEnabled = &librarySyncEnabled
 		resp.RemoteControlEnabled = &remoteControlEnabled
-		resp.RemoteControlBaseURL = &remoteControlBaseURL
+		resp.OnlineBaseURL = &onlineBaseURL
 	}
 
 	return resp, nil
@@ -153,7 +151,8 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil ||
-		params.PlaytimeSyncEnabled != nil || params.RemoteControlEnabled != nil {
+		params.PlaytimeSyncEnabled != nil || params.LibrarySyncEnabled != nil ||
+		params.RemoteControlEnabled != nil {
 		if !isLocalOrAdmin(&env) {
 			return nil, models.ClientErrf("online settings require a local or admin client")
 		}
@@ -271,6 +270,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.PlaytimeSyncEnabled != nil {
 		log.Debug().Bool("playtimeSyncEnabled", *params.PlaytimeSyncEnabled).Msg("updating setting")
 		env.Config.SetPlaytimeSync(*params.PlaytimeSyncEnabled)
+	}
+
+	if params.LibrarySyncEnabled != nil {
+		log.Debug().Bool("librarySyncEnabled", *params.LibrarySyncEnabled).Msg("updating setting")
+		env.Config.SetLibrarySync(*params.LibrarySyncEnabled)
 	}
 
 	if params.RemoteControlEnabled != nil {

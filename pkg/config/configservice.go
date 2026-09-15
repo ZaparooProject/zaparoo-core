@@ -29,10 +29,9 @@ import (
 )
 
 const (
-	DefaultAPIPort              = 7497
-	MinAPIPort                  = 1024
-	MaxAPIPort                  = 65535
-	DefaultRemoteControlBaseURL = DefaultOnlineBaseURL
+	DefaultAPIPort = 7497
+	MinAPIPort     = 1024
+	MaxAPIPort     = 65535
 )
 
 func isValidAPIPort(port int) bool {
@@ -45,9 +44,13 @@ type Service struct {
 	Discovery     Discovery     `toml:"discovery,omitempty"`
 	RemoteControl RemoteControl `toml:"remote_control,omitempty"`
 	DeviceID      string        `toml:"device_id"`
-	APIListen     string        `toml:"api_listen,omitempty"`
-	OnBoot        string        `toml:"on_boot,omitempty"`
-	OnReady       string        `toml:"on_ready,omitempty"`
+	// OnlineBaseURL is the base URL of the Zaparoo Online service every
+	// online feature talks to: account linking, cloud backup, play history
+	// sync, Library sync and remote control. Empty means the official host.
+	OnlineBaseURL string `toml:"online_base_url,omitempty"`
+	APIListen     string `toml:"api_listen,omitempty"`
+	OnBoot        string `toml:"on_boot,omitempty"`
+	OnReady       string `toml:"on_ready,omitempty"`
 	// AllowRun is the list of allowed run patterns.
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
@@ -61,8 +64,7 @@ type Service struct {
 }
 
 type RemoteControl struct {
-	Enabled *bool  `toml:"enabled,omitempty"`
-	BaseURL string `toml:"base_url,omitempty"`
+	Enabled *bool `toml:"enabled,omitempty"`
 }
 
 type Publishers struct {
@@ -260,33 +262,38 @@ func (c *Instance) SetRemoteControl(enabled bool) {
 	c.vals.Service.RemoteControl.Enabled = &enabled
 }
 
-// RemoteControlBaseURL returns API base URL used for remote operations.
-func (c *Instance) RemoteControlBaseURL() string {
+// OnlineBaseURL returns the base URL of the Zaparoo Online service every
+// online feature uses, or the official host when none is configured.
+func (c *Instance) OnlineBaseURL() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.Service.RemoteControl.BaseURL == "" {
-		return DefaultRemoteControlBaseURL
+	if c.vals.Service.OnlineBaseURL == "" {
+		return DefaultOnlineBaseURL
 	}
-	return c.vals.Service.RemoteControl.BaseURL
+	return c.vals.Service.OnlineBaseURL
 }
 
-// SetRemoteControlBaseURL validates, normalizes, and stores remote operations API base URL.
-func (c *Instance) SetRemoteControlBaseURL(rawURL string) error {
-	if err := ValidateRemoteControlBaseURL(rawURL); err != nil {
+// SetOnlineBaseURL validates, normalizes, and stores the Zaparoo Online base
+// URL.
+func (c *Instance) SetOnlineBaseURL(rawURL string) error {
+	if err := ValidateOnlineBaseURL(rawURL); err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Service.RemoteControl.BaseURL = normalizeRemoteBaseURL(rawURL)
+	c.vals.Service.OnlineBaseURL = normalizeRemoteBaseURL(rawURL)
 	return nil
 }
 
-func ValidateRemoteControlBaseURL(rawURL string) error {
-	return validateRemoteBaseURL(rawURL, "remote control")
+// ValidateOnlineBaseURL reports whether rawURL may serve as the Zaparoo
+// Online base URL: https to any host, or http to localhost or a private IP
+// literal for a locally run server.
+func ValidateOnlineBaseURL(rawURL string) error {
+	return validateRemoteBaseURL(rawURL, "online")
 }
 
 // ResetOnlineConsent clears every Online feature's explicit consent flag:
-// remote control, cloud backup, and play history sync. Call this whenever
+// remote control, cloud backup, play history sync and Library sync. Call this whenever
 // the linked credential changes (a fresh claim, or unlink) since that is a
 // new "who is on the other end" event, and every consent must be
 // re-approved explicitly rather than silently carrying over to whoever
@@ -295,4 +302,5 @@ func (c *Instance) ResetOnlineConsent() {
 	c.SetRemoteControl(false)
 	c.SetBackupRemoteEnabled(false)
 	c.SetPlaytimeSync(false)
+	c.SetLibrarySync(false)
 }

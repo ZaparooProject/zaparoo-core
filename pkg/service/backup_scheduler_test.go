@@ -259,8 +259,7 @@ func TestRemoteBackupScheduler_PlaySyncRequestBypassesSuccessInterval(t *testing
 
 	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-	require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 	cfg.SetBackupRemoteEnabled(false)
 	cfg.SetPlaytimeSync(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
@@ -366,8 +365,7 @@ func TestRemoteBackupScheduler_PlaySyncExpectedInactivityResumes(t *testing.T) {
 
 			cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 			require.NoError(t, err)
-			require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-			require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+			require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 			cfg.SetBackupRemoteEnabled(false)
 			cfg.SetPlaytimeSync(tt.initiallyEnabled)
 			credentials := map[string]config.CredentialEntry{
@@ -466,8 +464,7 @@ func TestRemoteBackupScheduler_PlaySyncRemoteUnlinkedWaitsForCredentialChange(t 
 
 	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-	require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 	cfg.SetBackupRemoteEnabled(false)
 	cfg.SetPlaytimeSync(true)
 	lookupURL := config.RemoteAuthLookupURL(server.URL)
