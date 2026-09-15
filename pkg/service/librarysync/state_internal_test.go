@@ -99,6 +99,31 @@ func TestMergeFields(t *testing.T) {
 		"a new favorite here wins over a dislike there")
 }
 
+func TestAdoptedFieldsOnlyNameWhatTheAccountChangedAndWon(t *testing.T) {
+	t.Parallel()
+	held := fields(true, none, none)
+	server := fields(false, playLater, liked)
+	assert.Equal(t, fieldMask{Favorite: true, Intent: true, Reaction: true},
+		adoptedFields(held, server, server), "every account change the merge adopted")
+	assert.Equal(t, fieldMask{Intent: true, Reaction: true},
+		adoptedFields(held, server, fields(true, playLater, liked)), "a favorite kept here is not applied")
+	assert.Equal(t, fieldMask{}, adoptedFields(held, held, held), "nothing changed on the account")
+}
+
+func TestPresentFieldsNeverTurnAnythingOff(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, fieldMask{}, presentFields(defaultStateFields))
+	assert.Equal(t, fieldMask{Favorite: true, Reaction: true}, presentFields(fields(true, none, disliked)))
+}
+
+func TestSameStringsIgnoresOrder(t *testing.T) {
+	t.Parallel()
+	assert.True(t, sameStrings([]string{"region:us", "lang:en"}, []string{"lang:en", "region:us"}))
+	assert.True(t, sameStrings(nil, []string{}))
+	assert.False(t, sameStrings([]string{"region:us"}, []string{"region:eu"}))
+	assert.False(t, sameStrings([]string{"region:us"}, nil))
+}
+
 func TestDesiredFieldsForGameHeldNowhere(t *testing.T) {
 	t.Parallel()
 	base := &database.LibraryStateSyncRow{Favorite: true, Intent: none, Reaction: liked, Unmatched: true}

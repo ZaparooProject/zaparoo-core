@@ -36,7 +36,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -82,6 +84,35 @@ var defaultStateFields = stateFields{Intent: database.LibraryIntentNone, Reactio
 
 func (f stateFields) isDefault() bool {
 	return f == defaultStateFields
+}
+
+// fieldMask names the fields of a game's state a pull is allowed to touch on
+// this device's copies. Fields outside the mask are the device's own business.
+type fieldMask struct {
+	Favorite bool
+	Intent   bool
+	Reaction bool
+}
+
+// adoptedFields is the mask of fields the account changed since the base and
+// the merge adopted: a field the user changed here since the base keeps its
+// local value, so applying it would be a no-op at best and a revert at worst.
+func adoptedFields(held, server, target stateFields) fieldMask {
+	return fieldMask{
+		Favorite: server.Favorite != held.Favorite && target.Favorite == server.Favorite,
+		Intent:   server.Intent != held.Intent && target.Intent == server.Intent,
+		Reaction: server.Reaction != held.Reaction && target.Reaction == server.Reaction,
+	}
+}
+
+// presentFields is the mask of fields that hold a value, for a row the
+// device has never applied to a copy: nothing is turned off, only added.
+func presentFields(fields stateFields) fieldMask {
+	return fieldMask{
+		Favorite: fields.Favorite,
+		Intent:   fields.Intent != database.LibraryIntentNone,
+		Reaction: fields.Reaction != database.LibraryReactionNone,
+	}
 }
 
 // titleIdentity names a game the way both this device and the account do.
@@ -450,12 +481,16 @@ func (p *statePass) rematchUnmatched(ctx context.Context) error {
 		}
 		identity := newTitleIdentity(base.MediaType, base.SystemID, base.CoreSlug, base.VariantTags)
 		desired := desiredFields(p.games[key], base)
-		matched, applyErr := p.applyToCopies(ctx, &identity, desired, base.PreferredTags)
+		matched, starred, applyErr := p.applyDelta(
+			ctx, &identity, presentFields(desired), desired, base.PreferredTags)
 		if applyErr != nil {
 			return applyErr
 		}
 		if matched {
 			base.Unmatched = false
+			if starred != nil {
+				base.SentPreferredTags = starred
+			}
 			p.changed[key] = true
 		}
 	}
@@ -513,20 +548,11 @@ func (p *statePass) pull(ctx context.Context) error {
 	return nil
 }
 
-// dropSyncedState clears what the account erased: every game this device
-// had synced loses its state here too, and the bookkeeping starts over.
+// dropSyncedState forgets the bookkeeping after the account erased its
+// state. Nothing local is touched: the device's own flags are the user's
+// data, and they push again as new rows on the next push.
 func (p *statePass) dropSyncedState(ctx context.Context) error {
-	log.Info().Msg("library state was erased on the account; clearing synced state")
-	for key, base := range p.bases {
-		if base.Revision == 0 {
-			continue
-		}
-		identity := newTitleIdentity(base.MediaType, base.SystemID, base.CoreSlug, base.VariantTags)
-		if _, err := p.applyToCopies(ctx, &identity, defaultStateFields, nil); err != nil {
-			return err
-		}
-		delete(p.games, key)
-	}
+	log.Info().Msg("library state was erased on the account; forgetting sync bookkeeping, local state is kept")
 	if err := p.userDB().ClearLibraryStateSync(); err != nil {
 		return fmt.Errorf("clear library state bookkeeping: %w", err)
 	}
@@ -536,8 +562,9 @@ func (p *statePass) dropSyncedState(ctx context.Context) error {
 }
 
 // applyServerRow adopts one row from the account, keeping any field this
-// device changed since its base. conflict marks a row returned for a failed
-// push, which is applied whatever its revision.
+// device changed since its base, and applies only the fields the account
+// changed to this device's copies. conflict marks a row returned for a
+// failed push, which is applied whatever its revision.
 func (p *statePass) applyServerRow(ctx context.Context, row *stateRow, conflict bool) error {
 	identity := newTitleIdentity(row.MediaType, row.SystemID, row.CoreSlug, row.VariantTags)
 	key := identity.key()
@@ -554,19 +581,28 @@ func (p *statePass) applyServerRow(ctx context.Context, row *stateRow, conflict 
 		// A cleared game this device never held needs no bookkeeping.
 		return nil
 	}
+	held := baseFields(base)
 	desired := desiredFields(game, base)
-	target := mergeFields(desired, baseFields(base), server)
+	target := mergeFields(desired, held, server)
 
 	matched := false
+	var starred []string
 	if game != nil || !target.isDefault() {
 		var err error
-		matched, err = p.applyToCopies(ctx, &identity, target, row.PreferredTags)
+		matched, starred, err = p.applyDelta(
+			ctx, &identity, adoptedFields(held, server, target), target, row.PreferredTags)
 		if err != nil {
 			return err
 		}
 	}
 	next := row.bookkeeping(&identity)
 	next.Unmatched = !matched && !server.isDefault()
+	switch {
+	case starred != nil:
+		next.SentPreferredTags = starred
+	case base != nil:
+		next.SentPreferredTags = base.SentPreferredTags
+	}
 	p.bases[key] = next
 	p.changed[key] = true
 	return nil
@@ -651,19 +687,23 @@ func (p *statePass) handlePushResults(
 				identity := newTitleIdentity(item.MediaType, item.SystemID, item.CoreSlug, item.Tags)
 				next := result.State.bookkeeping(&identity)
 				next.Unmatched = p.games[key] == nil && p.bases[key] != nil && p.bases[key].Unmatched
+				switch {
+				case item.PreferredTags != nil:
+					next.SentPreferredTags = append([]string{}, (*item.PreferredTags)...)
+				case p.bases[key] != nil:
+					next.SentPreferredTags = p.bases[key].SentPreferredTags
+				}
 				p.bases[key] = next
 			}
 			p.changed[key] = true
 		case statusConflict:
 			p.result.Conflicts++
 			if result.State == nil {
-				// The account erased this game's state: drop it here too.
-				identity := newTitleIdentity(item.MediaType, item.SystemID, item.CoreSlug, item.Tags)
-				if _, err := p.applyToCopies(ctx, &identity, defaultStateFields, nil); err != nil {
-					return retry, err
-				}
+				// The account erased this game's state. Local flags stay:
+				// without a base the game pushes again as a new row.
 				delete(p.bases, key)
 				p.changed[key] = true
+				retry = true
 				continue
 			}
 			if err := p.applyServerRow(ctx, result.State, true); err != nil {
@@ -715,7 +755,18 @@ func (p *statePass) dirtyItems() (items []statePushItem, itemKeys []string) {
 		base := p.bases[key]
 		desired := desiredFields(game, base)
 		held := baseFields(base)
-		if desired == held {
+		// The starred copy names the version to launch. It is sent when the
+		// game becomes a favorite and whenever the star moves to another
+		// version while the game stays one. A version the account chose on
+		// its own is left alone until the star moves, and a star that
+		// already matches the account's choice has nothing to add.
+		var preferred []string
+		if game != nil && desired.Favorite {
+			preferred = game.preferredTags()
+		}
+		preferredChanged := preferred != nil && (base == nil ||
+			(!sameStrings(preferred, base.SentPreferredTags) && !sameStrings(preferred, base.PreferredTags)))
+		if desired == held && !preferredChanged {
 			continue
 		}
 		var identity titleIdentity
@@ -743,11 +794,9 @@ func (p *statePass) dirtyItems() (items []statePushItem, itemKeys []string) {
 		if desired.Favorite != held.Favorite {
 			favorite := desired.Favorite
 			item.Favorite = &favorite
-			if favorite && game != nil {
-				if preferred := game.preferredTags(); preferred != nil {
-					item.PreferredTags = &preferred
-				}
-			}
+		}
+		if preferredChanged {
+			item.PreferredTags = &preferred
 		}
 		if desired.Intent != held.Intent {
 			item.Intent = desired.Intent
@@ -764,6 +813,23 @@ func (p *statePass) dirtyItems() (items []statePushItem, itemKeys []string) {
 	return items, itemKeys
 }
 
+// sameStrings reports whether two tag lists hold the same tags, in any order.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortedA := append([]string{}, a...)
+	sortedB := append([]string{}, b...)
+	sort.Strings(sortedA)
+	sort.Strings(sortedB)
+	for i := range sortedA {
+		if sortedA[i] != sortedB[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func boundTitle(title string) string {
 	title = strings.TrimSpace(title)
 	if utf8.RuneCountInString(title) <= maxStateTitle {
@@ -774,15 +840,22 @@ func boundTitle(title string) string {
 
 // copyRef is one file of a game on this device.
 type copyRef struct {
-	systemID  string
-	path      string
-	name      string
-	slug      string
-	versions  []string
-	tags      []string
+	systemID string
+	path     string
+	name     string
+	slug     string
+	versions []string
+	tags     []string
+	// result is the indexed file as a title search sees it, for choosing
+	// the copy a launch would pick. Zero for a file that is not indexed.
+	result    database.SearchResultWithCursor
 	current   database.MediaUserData
 	mediaDBID int64
 	hasRow    bool
+}
+
+func (ref *copyRef) has(flag database.MediaUserFlag) bool {
+	return ref.hasRow && ref.current.Flag(flag)
 }
 
 // findCopies returns every copy of a game this device holds: indexed files
@@ -821,10 +894,12 @@ func (p *statePass) findCopies(ctx context.Context, identity *titleIdentity) ([]
 			if candidate.key() != key {
 				continue
 			}
+			result := results[i]
+			result.Tags = tagsByID[results[i].MediaID]
 			copies = append(copies, copyRef{
 				systemID: results[i].SystemID, path: results[i].Path, name: observed.DisplayName,
 				slug: observed.CoreSlug, mediaDBID: results[i].MediaID, tags: tagStrings,
-				versions: versionTags(tagStrings),
+				versions: versionTags(tagStrings), result: result,
 			})
 		}
 	}
@@ -848,57 +923,147 @@ func (p *statePass) findCopies(ctx context.Context, identity *titleIdentity) ([]
 	return copies, nil
 }
 
-// applyToCopies makes this device's copies of a game hold target: the copies
-// matching the preferred version when any do, otherwise every copy, carry
-// the state, and the rest carry none. It reports whether any copy exists.
-func (p *statePass) applyToCopies(
-	ctx context.Context, identity *titleIdentity, target stateFields, preferred []string,
-) (bool, error) {
+// applyDelta applies the masked fields of target to this device's copies of
+// a game. A field turned off is cleared on every copy. A field turned on is
+// left alone when any copy already holds it, and otherwise set on the copy
+// this device would launch for the game. A flag a copy holds is never moved
+// to another copy: the user put it there. It reports whether any copy
+// exists and, when it starred one copy, that copy's version, so the star it
+// placed is not mistaken for one the user moved.
+func (p *statePass) applyDelta(
+	ctx context.Context, identity *titleIdentity, mask fieldMask, target stateFields, preferred []string,
+) (matched bool, starred []string, err error) {
 	copies, err := p.findCopies(ctx, identity)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if len(copies) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
-	selected := make([]bool, len(copies))
-	anyPreferred := false
-	if len(preferred) > 0 {
-		for i := range copies {
-			if containsAll(copies[i].versions, preferred) {
-				selected[i] = true
-				anyPreferred = true
+	off := make([]database.MediaUserFlag, 0, 4)
+	on := make([]database.MediaUserFlag, 0, 3)
+	if mask.Favorite {
+		if target.Favorite {
+			on = append(on, database.MediaUserFlagFavorite)
+		} else {
+			off = append(off, database.MediaUserFlagFavorite)
+		}
+	}
+	if mask.Intent && knownIntent(target.Intent) {
+		if target.Intent == database.LibraryIntentPlayLater {
+			on = append(on, database.MediaUserFlagPlayLater)
+		} else {
+			off = append(off, database.MediaUserFlagPlayLater)
+		}
+	}
+	if mask.Reaction && knownReaction(target.Reaction) {
+		// The reaction is one value: the old one goes everywhere, the new
+		// one is added.
+		switch target.Reaction {
+		case database.LibraryReactionLiked:
+			off = append(off, database.MediaUserFlagDisliked)
+			on = append(on, database.MediaUserFlagLiked)
+		case database.LibraryReactionDisliked:
+			off = append(off, database.MediaUserFlagLiked)
+			on = append(on, database.MediaUserFlagDisliked)
+		default:
+			off = append(off, database.MediaUserFlagLiked, database.MediaUserFlagDisliked)
+		}
+	}
+
+	changes := make([]map[database.MediaUserFlag]bool, len(copies))
+	for i := range copies {
+		changes[i] = make(map[database.MediaUserFlag]bool)
+		for _, flag := range off {
+			changes[i][flag] = false
+		}
+	}
+	if len(on) > 0 {
+		targets := p.launchCopies(identity.SystemID, copies, preferred)
+		for _, flag := range on {
+			held := false
+			for i := range copies {
+				if copies[i].has(flag) && !changes[i][flag] {
+					held = true
+					break
+				}
+			}
+			if held {
+				continue
+			}
+			for _, i := range targets {
+				changes[i][flag] = true
+			}
+			if flag == database.MediaUserFlagFavorite && len(targets) == 1 {
+				starred = copies[targets[0]].versions
 			}
 		}
 	}
 	for i := range copies {
-		want := defaultStateFields
-		if !anyPreferred || selected[i] {
-			want = target
-		}
-		if err := p.applyToCopy(ctx, &copies[i], want); err != nil {
-			return true, err
+		if err := p.applyToCopy(ctx, &copies[i], changes[i]); err != nil {
+			return true, nil, err
 		}
 	}
-	return true, nil
+	return true, starred, nil
 }
 
-func (p *statePass) applyToCopy(ctx context.Context, ref *copyRef, want stateFields) error {
+// launchCopies returns the indexes of the copies a new flag goes on: the
+// copies of the account's preferred version when this device holds any,
+// narrowed to the one a title launch would pick when several remain. A game
+// whose files are all missing from the index has no launch choice, so every
+// copy takes the flag.
+func (p *statePass) launchCopies(systemID string, copies []copyRef, preferred []string) []int {
+	candidates := make([]int, 0, len(copies))
+	for i := range copies {
+		if copies[i].mediaDBID > 0 {
+			candidates = append(candidates, i)
+		}
+	}
+	if len(candidates) == 0 {
+		for i := range copies {
+			candidates = append(candidates, i)
+		}
+		return candidates
+	}
+	if len(preferred) > 0 {
+		matching := make([]int, 0, len(candidates))
+		for _, i := range candidates {
+			if containsAll(copies[i].versions, preferred) {
+				matching = append(matching, i)
+			}
+		}
+		if len(matching) > 0 {
+			candidates = matching
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates
+	}
+	results := make([]database.SearchResultWithCursor, 0, len(candidates))
+	for _, i := range candidates {
+		results = append(results, copies[i].result)
+	}
+	var launchers []platforms.Launcher
+	if p.svc.launchers != nil {
+		launchers = p.svc.launchers(systemID)
+	}
+	picked, _ := titles.SelectBestResult(results, nil, p.svc.cfg, 1, launchers)
+	for _, i := range candidates {
+		if picked.MediaID != 0 && copies[i].mediaDBID == picked.MediaID {
+			return []int{i}
+		}
+	}
+	return candidates[:1]
+}
+
+// applyToCopy sets the flags in changes on one copy, when they differ from
+// what the copy holds, and keeps the browse tags in step.
+func (p *statePass) applyToCopy(ctx context.Context, ref *copyRef, changes map[database.MediaUserFlag]bool) error {
 	current := ref.current
-	wanted := map[database.MediaUserFlag]bool{
-		database.MediaUserFlagFavorite: want.Favorite,
-	}
-	if knownIntent(want.Intent) {
-		wanted[database.MediaUserFlagPlayLater] = want.Intent == database.LibraryIntentPlayLater
-	}
-	if knownReaction(want.Reaction) {
-		wanted[database.MediaUserFlagLiked] = want.Reaction == database.LibraryReactionLiked
-		wanted[database.MediaUserFlagDisliked] = want.Reaction == database.LibraryReactionDisliked
-	}
 	var add, remove []database.MediaTagRef
 	for _, value := range []bool{false, true} {
 		for _, flag := range database.MediaUserFlags {
-			wantValue, ok := wanted[flag]
+			wantValue, ok := changes[flag]
 			if !ok || wantValue != value || current.Flag(flag) == value {
 				continue
 			}
