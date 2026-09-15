@@ -431,6 +431,10 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 
 		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
+		// A playlist written into a script inherits the trust of that
+		// script: one fetched from a ZapLink, or nested in an untrusted
+		// playlist's item, stays untrusted.
+		pls.Unsafe = env.Unsafe
 		slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 		if slotErr != nil {
 			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
@@ -475,6 +479,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
+	pls.Unsafe = env.Unsafe
 	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 	if slotErr != nil {
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)

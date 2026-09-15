@@ -363,6 +363,31 @@ func TestLaunchPlaylistMedia_DisabledRunZapScriptDoesNotPlayFailSoundOrRecordFai
 	mockUserDB.AssertExpectations(t)
 }
 
+// TestLaunchPlaylistMedia_UntrustedPlaylistRefusesInput pins that an item of
+// an untrusted playlist runs as an untrusted token: a command that drives
+// input is refused and recorded as a failed launch.
+func TestLaunchPlaylistMedia_UntrustedPlaylistRefusesInput(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.State.SetRunZapScript(true)
+	mockUserDB, ok := svc.DB.UserDB.(*testhelpers.MockUserDBI)
+	require.True(t, ok)
+	var recorded *database.HistoryEntry
+	mockUserDB.On("AddHistory", mock.Anything).Run(func(args mock.Arguments) {
+		recorded, ok = args.Get(0).(*database.HistoryEntry)
+		require.True(t, ok)
+	}).Return(nil).Once()
+
+	pls := playlists.NewPlaylist("ZON-shared", "Shared", []playlists.PlaylistItem{{ZapScript: "**input.keyboard:a"}})
+	pls.Unsafe = true
+	launchPlaylistMedia(svc, pls, mocks.NewMockPlayer())
+
+	require.NotNil(t, recorded)
+	assert.False(t, recorded.Success, "input from an untrusted playlist is refused")
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestHandlePlaylist_RefreshKeepsPositionAndPlayback(t *testing.T) {
 	t.Parallel()
 

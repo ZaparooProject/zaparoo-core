@@ -638,6 +638,7 @@ func launchPlaylistMedia(
 		Text:     pls.Current().ZapScript,
 		ScanTime: time.Now(),
 		Source:   tokens.SourcePlaylist,
+		Unsafe:   pls.Unsafe,
 	}
 	plsc := playlists.PlaylistController{
 		Active:     svc.State.GetActivePlaylist(),

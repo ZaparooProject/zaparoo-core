@@ -52,6 +52,11 @@ type Playlist struct {
 	// same ID in place, keeping its position and playback state and never
 	// launching anything. It is ignored when no such playlist is active.
 	Refresh bool
+	// Unsafe marks a playlist whose items came from a source this device
+	// does not trust: a fetched ZapLink, or a cached copy of somebody else's
+	// deck. Every item token carries it, so commands that drive input or run
+	// programs refuse, the same as the script that opened the playlist.
+	Unsafe bool
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
@@ -80,6 +85,7 @@ func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		Loop:      p.Loop,
 		LoopOne:   p.LoopOne,
 		HoldToken: p.HoldToken,
+		Unsafe:    p.Unsafe,
 	}
 }
 
@@ -98,6 +104,7 @@ func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves 
 		Loop:      p.Loop,
 		LoopOne:   p.LoopOne,
 		HoldToken: p.HoldToken,
+		Unsafe:    p.Unsafe,
 	}
 }
 
@@ -121,6 +128,7 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 		Loop:      p.Loop,
 		LoopOne:   p.LoopOne,
 		HoldToken: p.HoldToken,
+		Unsafe:    p.Unsafe,
 	}
 }
 
@@ -135,6 +143,7 @@ func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		Loop:      p.Loop,
 		LoopOne:   p.LoopOne,
 		HoldToken: p.HoldToken,
+		Unsafe:    p.Unsafe,
 	}
 }
 
@@ -149,6 +158,7 @@ func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves imm
 		Loop:      p.Loop,
 		LoopOne:   p.LoopOne,
 		HoldToken: p.HoldToken,
+		Unsafe:    p.Unsafe,
 	}
 }
 
