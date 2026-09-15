@@ -1736,3 +1736,77 @@ allow_run = ["["]
 	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.ZapScript.allowHTTPRe)
 	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.Service.allowRunRe)
 }
+
+func TestSave_PreservesInlineCustomLaunchersAndMappings(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(configDir, CfgFile)
+	data, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+	content := string(data) + `
+[[mappings.entry]]
+match_pattern = "04:AA:BB"
+zapscript = "**launch.system:SNES"
+
+[[launchers.custom]]
+id = "InlineTools"
+kind = "virtual_system"
+name = "Inline Tools"
+execute = "echo inline"
+
+[[launchers.custom]]
+id = "FutureLauncher"
+kind = "not_supported_yet"
+execute = "echo future"
+`
+	require.NoError(t, afero.WriteFile(memFs, cfgPath, []byte(content), 0o600))
+	require.NoError(t, cfg.Load())
+	require.Len(t, cfg.CustomLaunchers(), 1, "only the valid inline launcher is usable")
+
+	cfg.SetErrorReporting(true)
+	require.NoError(t, cfg.Save())
+
+	saved, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(saved), "InlineTools")
+	assert.Contains(t, string(saved), "FutureLauncher", "entries this version rejects must still be written back")
+	assert.Contains(t, string(saved), "04:AA:BB")
+
+	require.NoError(t, cfg.Load())
+	launchers := cfg.CustomLaunchers()
+	require.Len(t, launchers, 1)
+	assert.Equal(t, "InlineTools", launchers[0].ID)
+	require.Len(t, cfg.Mappings(), 1)
+	assert.Equal(t, "04:AA:BB", cfg.Mappings()[0].MatchPattern)
+	assert.True(t, cfg.ErrorReporting())
+}
+
+func TestLoad_DropsInlineMappingsRemovedFromFile(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(configDir, CfgFile)
+	original, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+	withMapping := string(original) + `
+[[mappings.entry]]
+match_pattern = "04:AA:BB"
+zapscript = "**launch.system:SNES"
+`
+	require.NoError(t, afero.WriteFile(memFs, cfgPath, []byte(withMapping), 0o600))
+	require.NoError(t, cfg.Load())
+	require.Len(t, cfg.Mappings(), 1)
+
+	require.NoError(t, afero.WriteFile(memFs, cfgPath, original, 0o600))
+	require.NoError(t, cfg.Load())
+	assert.Empty(t, cfg.Mappings(), "a mapping deleted from config.toml must not survive a reload")
+}

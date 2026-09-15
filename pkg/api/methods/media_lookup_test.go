@@ -49,6 +49,11 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
 	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorites"
+systems = ["NES"]
+`))
 
 	// Cache miss
 	mockMediaDB.On("GetCachedSlugResolution",
@@ -94,6 +99,7 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 	assert.Equal(t, "Super Mario Bros", resp.Match.Name)
 	assert.Equal(t, "/games/nes/smb.nes", resp.Match.Path)
 	assert.Equal(t, "NES", resp.Match.System.ID)
+	assert.Equal(t, []string{"Console", "Favorites"}, resp.Match.System.Categories)
 	assert.Greater(t, resp.Match.Confidence, 0.0)
 	assert.Contains(t, resp.Match.ZapScript, "@NES/Super Mario Bros")
 }

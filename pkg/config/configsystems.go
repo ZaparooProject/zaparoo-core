@@ -26,7 +26,13 @@ import (
 )
 
 type Systems struct {
-	Default []SystemsDefault `toml:"default,omitempty"`
+	Category []SystemsCategory `toml:"category,omitempty"`
+	Default  []SystemsDefault  `toml:"default,omitempty"`
+}
+
+type SystemsCategory struct {
+	Name    string   `toml:"name"`
+	Systems []string `toml:"systems,omitempty"`
 }
 
 type SystemsDefault struct {
@@ -34,6 +40,15 @@ type SystemsDefault struct {
 	System        string `toml:"system"`
 	Launcher      string `toml:"launcher,omitempty"`
 	BeforeExit    string `toml:"before_exit,omitempty"`
+}
+
+func cloneSystemCategories(categories []SystemsCategory) []SystemsCategory {
+	owned := make([]SystemsCategory, len(categories))
+	copy(owned, categories)
+	for i := range owned {
+		owned[i].Systems = append([]string(nil), owned[i].Systems...)
+	}
+	return owned
 }
 
 func cloneSystemDefaults(defaults []SystemsDefault) []SystemsDefault {

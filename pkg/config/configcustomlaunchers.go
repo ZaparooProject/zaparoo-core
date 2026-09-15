@@ -30,14 +30,6 @@ import (
 
 const defaultVirtualSystemCategory = "Other"
 
-var validVirtualSystemCategories = map[string]struct{}{
-	"Other":    {},
-	"Console":  {},
-	"Computer": {},
-	"Handheld": {},
-	"Arcade":   {},
-}
-
 func effectiveCustomLauncherKind(entry *LaunchersCustom) string {
 	if entry.Kind == "" {
 		return CustomLauncherKindLauncher
@@ -56,6 +48,7 @@ func validateCustomLaunchers(
 	raw []LaunchersCustom,
 	existing []LaunchersCustom,
 	source string,
+	categoryResolver CategoryResolver,
 ) []LaunchersCustom {
 	valid := make([]LaunchersCustom, 0, len(raw))
 	seenIDs := make(map[string]struct{}, len(existing)+len(raw))
@@ -69,6 +62,15 @@ func validateCustomLaunchers(
 			log.Warn().Err(err).Str("source", source).Str("id", entry.ID).
 				Msg("ignoring invalid custom launcher")
 			continue
+		}
+		// Categories resolve when a response is built, against whatever is
+		// declared then, so an undeclared one is reported but never removes
+		// the virtual system.
+		if undeclared := categoryResolver.undeclared(
+			append([]string{entry.Category}, entry.Categories...)...,
+		); len(undeclared) > 0 {
+			log.Warn().Str("source", source).Str("id", entry.ID).Strs("categories", undeclared).
+				Msg("custom launcher uses undeclared categories; primary falls back to Other and others are ignored")
 		}
 
 		canonicalID := strings.ToLower(entry.ID)
@@ -134,8 +136,8 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 
 	switch kind {
 	case CustomLauncherKindLauncher:
-		if entry.Name != "" || entry.Category != "" {
-			return fmt.Errorf("name and category require kind %q", CustomLauncherKindVirtualSystem)
+		if entry.Name != "" || entry.Category != "" || len(entry.Categories) > 0 {
+			return fmt.Errorf("name, category, and categories require kind %q", CustomLauncherKindVirtualSystem)
 		}
 		if backend == CustomLauncherBackendMisterCore {
 			return fmt.Errorf("backend %q currently requires kind %q",
@@ -160,9 +162,6 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 		}
 		if entry.Category == "" {
 			entry.Category = defaultVirtualSystemCategory
-		}
-		if _, ok := validVirtualSystemCategories[entry.Category]; !ok {
-			return fmt.Errorf("unsupported virtual_system category %q", entry.Category)
 		}
 		if entry.System != "" || len(entry.MediaDirs) > 0 || len(entry.FileExts) > 0 ||
 			len(entry.Groups) > 0 || len(entry.Schemes) > 0 || len(entry.Controls) > 0 ||
@@ -213,6 +212,7 @@ func cloneCustomLauncher(source *LaunchersCustom) LaunchersCustom {
 	entry.FileExts = append([]string(nil), entry.FileExts...)
 	entry.Groups = append([]string(nil), entry.Groups...)
 	entry.Schemes = append([]string(nil), entry.Schemes...)
+	entry.Categories = append([]string(nil), entry.Categories...)
 	return entry
 }
 

@@ -161,6 +161,27 @@ func TestValidateCustomLauncher_CommandVirtualSystem(t *testing.T) {
 	require.NoError(t, validateCustomLauncher(&entry))
 }
 
+func TestValidateCustomLauncher_KeepsCategoriesAsWritten(t *testing.T) {
+	entry := LaunchersCustom{
+		ID: "Tools", Kind: CustomLauncherKindVirtualSystem,
+		Backend: CustomLauncherBackendCommand, Name: "Tools",
+		Categories: []string{"KIDS", "Undeclared"}, Execute: "echo tools",
+	}
+
+	require.NoError(t, validateCustomLauncher(&entry))
+	assert.Equal(t, "Other", entry.Category)
+	assert.Equal(t, []string{"KIDS", "Undeclared"}, entry.Categories)
+}
+
+func TestValidateCustomLauncher_RejectsCategoriesOnMediaLauncher(t *testing.T) {
+	entry := LaunchersCustom{
+		ID: "Famicom", System: "NES", MediaDirs: []string{"Games"},
+		Categories: []string{"Console"},
+	}
+
+	require.ErrorContains(t, validateCustomLauncher(&entry), "categories require")
+}
+
 func TestValidateCustomLauncher_RejectsInvalidMisterLoadPath(t *testing.T) {
 	paths := []string{
 		"/media/fat/_Other/Arduboy",
@@ -193,7 +214,6 @@ func TestValidateCustomLauncher_RejectsInvalidVirtualSystem(t *testing.T) {
 		err    string
 	}{
 		{name: "missing name", mutate: func(e *LaunchersCustom) { e.Name = "" }, err: "requires name"},
-		{name: "unknown category", mutate: func(e *LaunchersCustom) { e.Category = "Homebrew" }, err: "category"},
 		{
 			name:   "pattern load path",
 			mutate: func(e *LaunchersCustom) { e.LoadPath = "_Other/Arduboy_<date>" },
@@ -246,6 +266,25 @@ excute = "misspelled"
 	require.Len(t, cfg.CustomLaunchers(), 1)
 }
 
+func TestLoadCustomLaunchers_RejectsCategoryDeclarations(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "invalid.toml"), []byte(`
+[[systems.category]]
+name = "Favorites"
+systems = ["SNES"]
+
+[[launchers.custom]]
+id = "Tools"
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.Error(t, cfg.LoadCustomLaunchers(launchersDir))
+	assert.Empty(t, cfg.CustomLaunchers())
+}
+
 func TestLoadCustomLaunchers_RetainsSnapshotWhenAllFilesFail(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	launchersDir := filepath.Join("data", "launchers")
@@ -291,6 +330,65 @@ execute = "echo inline"
 	assert.Equal(t, "echo inline", entries[0].Execute)
 }
 
+func TestLoadCustomLaunchers_ResolvesMainConfigCategories(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "favorite systems"
+categories = ["COMPUTER"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+`))
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	primary, categories := cfg.SystemCategoryResolver().VirtualSystem(entries[0].Category, entries[0].Categories)
+	assert.Equal(t, "Favorite Systems", primary)
+	assert.Equal(t, []string{"Favorite Systems", "Computer"}, categories)
+}
+
+func TestLoadCustomLaunchers_CategoriesFollowLaterConfigReloads(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "Kids"
+categories = ["Favorites"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Kids"
+
+[[systems.category]]
+name = "Favorites"
+`))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	primary, categories := cfg.SystemCategoryResolver().VirtualSystem(entries[0].Category, entries[0].Categories)
+	assert.Equal(t, "Kids", primary, "categories declared after launchers load still resolve")
+	assert.Equal(t, []string{"Kids", "Favorites"}, categories)
+}
+
 func TestCustomLaunchers_ReturnsDeepCopy(t *testing.T) {
 	cfg := &Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -308,4 +406,78 @@ menu = "**input.keyboard:{f1}"
 
 	second := cfg.CustomLaunchers()
 	assert.Equal(t, "**input.keyboard:{f1}", second[0].Controls["menu"])
+}
+
+func TestCustomLaunchers_ReturnsCategoryCopy(t *testing.T) {
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorites"
+
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+categories = ["Favorites"]
+execute = "echo tools"
+`))
+
+	first := cfg.CustomLaunchers()
+	require.Len(t, first, 1)
+	first[0].Categories[0] = "mutated"
+
+	second := cfg.CustomLaunchers()
+	assert.Equal(t, []string{"Favorites"}, second[0].Categories)
+}
+
+func TestLoadCustomLaunchers_KeepsVirtualSystemWithUndeclaredCategories(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "Removed Primary"
+categories = ["Removed Extra", "Computer"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1, "an undeclared category must not remove the virtual system")
+	assert.Equal(t, "Tools", entries[0].ID)
+}
+
+func TestCustomLaunchers_InlineReplacesExternalWithSameID(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "tools.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "External Tools"
+execute = "echo external"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	// A later config reload adds an inline launcher with the same ID without
+	// reloading the launcher files.
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.custom]]
+id = "tools"
+kind = "virtual_system"
+name = "Inline Tools"
+execute = "echo inline"
+`))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Inline Tools", entries[0].Name)
 }

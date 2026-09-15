@@ -84,6 +84,7 @@ type LaunchersCustom struct {
 	System     string            `toml:"system,omitempty"`
 	Name       string            `toml:"name,omitempty"`
 	Category   string            `toml:"category,omitempty"`
+	Categories []string          `toml:"categories,omitempty"`
 	Execute    string            `toml:"execute,omitempty"`
 	Lifecycle  string            `toml:"lifecycle,omitempty"`
 	LoadPath   string            `toml:"load_path,omitempty"`
@@ -318,6 +319,12 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 			continue
 		}
 
+		if len(newVals.Systems.Category) > 0 {
+			log.Warn().Str("file", launcherPath).
+				Msg("custom launcher file skipped: systems categories must be declared in config.toml")
+			continue
+		}
+
 		rawLaunchers = append(rawLaunchers, newVals.Launchers.Custom...)
 		filesCount++
 	}
@@ -329,7 +336,12 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		return errors.New("failed to parse any custom launcher files")
 	}
 
-	validated := validateCustomLaunchers(rawLaunchers, c.vals.Launchers.Custom, "external launcher files")
+	validated := validateCustomLaunchers(
+		rawLaunchers,
+		c.loaded.customLaunchersInline,
+		"external launcher files",
+		c.loaded.categoryResolver,
+	)
 	c.customLaunchersExternal = cloneCustomLaunchers(validated)
 
 	for i := range validated {
@@ -353,9 +365,19 @@ func (c *Instance) CustomLaunchers() []LaunchersCustom {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	entries := make([]LaunchersCustom, 0, len(c.vals.Launchers.Custom)+len(c.customLaunchersExternal))
-	entries = append(entries, c.vals.Launchers.Custom...)
-	entries = append(entries, c.customLaunchersExternal...)
+	entries := make([]LaunchersCustom, 0, len(c.loaded.customLaunchersInline)+len(c.customLaunchersExternal))
+	entries = append(entries, c.loaded.customLaunchersInline...)
+	// A config reload can add an inline launcher with an ID that a launcher
+	// file already uses. The inline entry wins, as it does when files load.
+	inlineIDs := make(map[string]struct{}, len(c.loaded.customLaunchersInline))
+	for i := range c.loaded.customLaunchersInline {
+		inlineIDs[strings.ToLower(c.loaded.customLaunchersInline[i].ID)] = struct{}{}
+	}
+	for i := range c.customLaunchersExternal {
+		if _, exists := inlineIDs[strings.ToLower(c.customLaunchersExternal[i].ID)]; !exists {
+			entries = append(entries, c.customLaunchersExternal[i])
+		}
+	}
 	return cloneCustomLaunchers(entries)
 }
 

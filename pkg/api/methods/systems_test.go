@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -62,9 +64,41 @@ func TestHandleSystems_IncludesIndexedAndAvailableLauncherSystems(t *testing.T) 
 	response, ok := result.(models.SystemsResponse)
 	require.True(t, ok)
 	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	require.Len(t, response.Systems, 2)
+	assert.Equal(t, []string{"Console"}, response.Systems[0].Categories)
+	assert.Equal(t, []string{"Console"}, response.Systems[1].Categories)
 	assert.Equal(t, map[string]int{"NES": 12, "SNES": 0}, systemResponseMediaCounts(response))
 	mockMediaDB.AssertNotCalled(t, "IndexedSystems")
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleSystems_IncludesLiteralCategoryMemberships(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+systems = ["SNES"]
+
+[[systems.category]]
+name = "Kids"
+systems = ["SNES"]
+`))
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "SNES", Count: 1}}, nil)
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Config:   cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	require.Len(t, response.Systems, 1)
+	assert.Equal(t, "Console", response.Systems[0].Category)
+	assert.Equal(t, []string{"Console", "Favorite Systems", "Kids"}, response.Systems[0].Categories)
 }
 
 func TestHandleSystems_IncludesUnindexedAvailable3DO(t *testing.T) {
@@ -284,4 +318,69 @@ func systemResponseMediaCounts(response models.SystemsResponse) map[string]int {
 		}
 	}
 	return counts
+}
+
+func TestHandleSystems_VirtualSystemCategoriesFollowConfigReload(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Kids"
+
+[[systems.category]]
+name = "Favorites"
+
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+backend = "command"
+name = "Tools"
+category = "kids"
+categories = ["FAVORITES", "Computer"]
+execute = "echo tools"
+`))
+	platform := mocks.NewMockPlatform()
+	platform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "Tools",
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, errors.New("not launched in this test")
+		},
+	}})
+	cache := &helpers.LauncherCache{}
+	cache.Initialize(platform, cfg)
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, nil, nil)
+	env := requests.RequestEnv{
+		Config:        cfg,
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+	}
+	toolsSystem := func() models.System {
+		result, err := HandleSystems(env)
+		require.NoError(t, err)
+		response, ok := result.(models.SystemsResponse)
+		require.True(t, ok)
+		for _, system := range response.Systems {
+			if system.Name == "Tools" {
+				return system
+			}
+		}
+		require.FailNow(t, "Tools virtual system missing")
+		return models.System{}
+	}
+
+	tools := toolsSystem()
+	assert.Equal(t, "Kids", tools.Category)
+	assert.Equal(t, []string{"Kids", "Favorites", "Computer"}, tools.Categories)
+
+	// A settings reload removes both custom categories without refreshing launchers.
+	require.NoError(t, cfg.LoadTOML(`
+[systems]
+category = []
+`))
+	tools = toolsSystem()
+	assert.Equal(t, "Other", tools.Category)
+	assert.Equal(t, []string{"Other", "Computer"}, tools.Categories)
 }

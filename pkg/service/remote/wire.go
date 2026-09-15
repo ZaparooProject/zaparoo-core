@@ -225,13 +225,14 @@ func encodeTags(tags []database.TagInfo) []wireTag {
 }
 
 type wireSystem struct {
-	ReleaseDate  *string `json:"release_date,omitempty"`
-	Manufacturer *string `json:"manufacturer,omitempty"`
-	MediaCount   *int    `json:"media_count,omitempty"`
-	ID           string  `json:"id,omitempty"`
-	Name         string  `json:"name,omitempty"`
-	Category     string  `json:"category,omitempty"`
-	ZapScript    string  `json:"zap_script,omitempty"`
+	ReleaseDate  *string  `json:"release_date,omitempty"`
+	Manufacturer *string  `json:"manufacturer,omitempty"`
+	MediaCount   *int     `json:"media_count,omitempty"`
+	ID           string   `json:"id,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Category     string   `json:"category,omitempty"`
+	ZapScript    string   `json:"zap_script,omitempty"`
+	Categories   []string `json:"categories,omitempty"`
 }
 
 func encodeSystem(system *models.System) wireSystem {
@@ -242,6 +243,7 @@ func encodeSystem(system *models.System) wireSystem {
 		ID:           system.ID,
 		Name:         system.Name,
 		Category:     system.Category,
+		Categories:   system.Categories,
 		ZapScript:    system.ZapScript,
 	}
 }

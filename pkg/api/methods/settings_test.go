@@ -949,6 +949,12 @@ func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
 	require.NoError(t, err)
 	content := strings.Replace(string(data),
 		"scan_feedback = false", "scan_feedback = false\nvolume = 42", 1)
+	content += `
+
+[[systems.category]]
+name = "Favorite Systems"
+systems = ["SNES"]
+`
 	require.NotEqual(t, string(data), content, "replacement should have occurred")
 	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path
 	require.NoError(t, err)
@@ -979,6 +985,9 @@ func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
 	// Both the external edit and the API change should be present
 	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should survive settings update")
 	assert.True(t, cfg.ErrorReporting(), "API change should be applied")
+	assert.Equal(t, []string{"Console", "Favorite Systems"},
+		cfg.SystemCategoryResolver().ForSystem("SNES", "Console"),
+		"external category edit should survive settings update")
 }
 
 func TestHandleSettings_AudioVolumeDefault(t *testing.T) {
@@ -2029,4 +2038,200 @@ func TestHandleSettingsUpdate_ReaderConnectionScanModeValidation(t *testing.T) {
 		require.Len(t, stored, 1)
 		assert.Empty(t, stored[0].ScanMode)
 	})
+}
+
+func TestHandleSettingsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	broken := []byte("debug_logging = true\n[audio\nvolume = 42\n")
+	require.NoError(t, os.WriteFile(cfgPath, broken, 0o600))
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{ErrorReporting: &enabled})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.Error(t, err)
+
+	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
+	assert.False(t, cfg.ErrorReporting(), "a refused update must not change the running config")
+}
+
+func TestHandlePlaytimeLimitsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	broken := []byte("debug_logging = true\n[playtime\n")
+	require.NoError(t, os.WriteFile(cfgPath, broken, 0o600))
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	retention := 30
+	paramsJSON, err := json.Marshal(models.UpdatePlaytimeLimitsParams{Retention: &retention})
+	require.NoError(t, err)
+
+	_, err = HandlePlaytimeLimitsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.Error(t, err)
+
+	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
+}
+
+func TestHandleSettingsUpdate_KeepsInlineCustomLaunchers(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	content := string(data) + `
+[[launchers.custom]]
+id = "InlineTools"
+kind = "virtual_system"
+name = "Inline Tools"
+execute = "echo inline"
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600)) //nolint:gosec // test path from t.TempDir()
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{ErrorReporting: &enabled})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, cfg.Load(), "reload as a restart would")
+	launchers := cfg.CustomLaunchers()
+	require.Len(t, launchers, 1, "settings.update must not delete inline custom launchers from config.toml")
+	assert.Equal(t, "InlineTools", launchers[0].ID)
+}
+
+func TestHandlePlaytimeLimitsUpdate_WaitsForSettingsUpdate(t *testing.T) {
+	t.Parallel()
+
+	fs := &configOpenTrackingFS{
+		Fs:    afero.NewMemMapFs(),
+		opens: make(chan struct{}, 1),
+	}
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, fs)
+	require.NoError(t, err)
+
+	volumeEntered := make(chan struct{})
+	releaseVolume := make(chan struct{})
+	player := mocks.NewMockPlayer()
+	player.On("SetVolume", 0.25).Run(func(mock.Arguments) {
+		close(volumeEntered)
+		<-releaseVolume
+	}).Return().Once()
+
+	volume := 25
+	settingsParams, err := json.Marshal(models.UpdateSettingsParams{AudioVolume: &volume})
+	require.NoError(t, err)
+	retention := 45
+	playtimeParams, err := json.Marshal(models.UpdatePlaytimeLimitsParams{Retention: &retention})
+	require.NoError(t, err)
+
+	settingsResult := make(chan error, 1)
+	go func() {
+		_, updateErr := HandleSettingsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Player: player, Params: settingsParams, IsLocal: true,
+		})
+		settingsResult <- updateErr
+	}()
+
+	select {
+	case <-volumeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("settings update did not reach its runtime side effect")
+	}
+
+	fs.track.Store(true)
+	playtimeStarted := make(chan struct{})
+	playtimeResult := make(chan error, 1)
+	go func() {
+		close(playtimeStarted)
+		_, updateErr := HandlePlaytimeLimitsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Params: playtimeParams, IsLocal: true,
+		})
+		playtimeResult <- updateErr
+	}()
+	<-playtimeStarted
+
+	select {
+	case <-fs.opens:
+		close(releaseVolume)
+		t.Fatal("playtime limits update loaded config before the settings update completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseVolume)
+
+	select {
+	case updateErr := <-settingsResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("settings update did not complete")
+	}
+	select {
+	case updateErr := <-playtimeResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("playtime limits update did not complete")
+	}
+
+	require.NoError(t, cfg.Load())
+	assert.Equal(t, volume, cfg.AudioVolume())
+	assert.Equal(t, retention, cfg.PlaytimeRetention())
+	player.AssertExpectations(t)
 }

@@ -75,11 +75,12 @@ func misterComputerCore(id uuid.UUID, name, coreName string) misterCoreLaunchabl
 }
 
 type misterOtherLaunchableDefinition struct {
-	ConfigID string
-	Name     string
-	Category string
-	LoadPath string
-	ID       uuid.UUID
+	ConfigID   string
+	Name       string
+	Category   string
+	LoadPath   string
+	Categories []string
+	ID         uuid.UUID
 }
 
 var (
@@ -168,14 +169,16 @@ func mergeOtherLaunchableDefinitions(
 		if i, ok := index[id]; ok {
 			merged[i].Name = entry.Name
 			merged[i].Category = entry.Category
+			merged[i].Categories = append([]string(nil), entry.Categories...)
 			merged[i].LoadPath = filepath.FromSlash(entry.LoadPath)
 			continue
 		}
 		merged = append(merged, misterOtherLaunchableDefinition{
-			ConfigID: entry.ID,
-			Name:     entry.Name,
-			Category: entry.Category,
-			LoadPath: filepath.FromSlash(entry.LoadPath),
+			ConfigID:   entry.ID,
+			Name:       entry.Name,
+			Category:   entry.Category,
+			Categories: append([]string(nil), entry.Categories...),
+			LoadPath:   filepath.FromSlash(entry.LoadPath),
 			ID: uuid.NewSHA1(
 				launchables.ZaparooLaunchableNamespace,
 				[]byte(config.CustomLauncherBackendMisterCore+":"+id),
@@ -208,11 +211,12 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 	)
 	for _, def := range otherDefs {
 		items = append(items, launchables.VirtualSystem{
-			ID:       def.ID,
-			Name:     def.Name,
-			Category: def.Category,
-			Launch:   p.launchCore(def.LoadPath),
-			Test:     testCore(def.LoadPath),
+			ID:         def.ID,
+			Name:       def.Name,
+			Category:   def.Category,
+			Categories: def.Categories,
+			Launch:     p.launchCore(def.LoadPath),
+			Test:       testCore(def.LoadPath),
 		})
 	}
 

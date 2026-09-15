@@ -310,3 +310,38 @@ load_path = "_Other/Arduboy"
 	assert.NotNil(t, found.Launch)
 	assert.NotNil(t, found.Test)
 }
+
+func TestLaunchables_PassesCustomCategories(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorites"
+
+[[launchers.custom]]
+id = "MisterOtherChess"
+kind = "virtual_system"
+backend = "mister_core"
+name = "Chess"
+categories = ["Favorites"]
+load_path = "_Other/Chess"
+
+[[launchers.custom]]
+id = "MisterOtherArduboy"
+kind = "virtual_system"
+backend = "mister_core"
+name = "Arduboy"
+categories = ["Favorites", "Handheld"]
+load_path = "_Other/Arduboy"
+`))
+
+	categories := make(map[string][]string)
+	for _, item := range (&Platform{}).Launchables(cfg) {
+		if system, ok := item.(launchables.VirtualSystem); ok {
+			categories[system.Name] = system.Categories
+		}
+	}
+
+	assert.Equal(t, []string{"Favorites"}, categories["Chess"], "override of a built-in keeps its categories")
+	assert.Equal(t, []string{"Favorites", "Handheld"}, categories["Arduboy"], "new entry keeps its categories")
+	assert.Empty(t, categories["Donut"])
+}

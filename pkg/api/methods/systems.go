@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
@@ -139,6 +140,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		}
 	}
 
+	categoryResolver := systemCategoryResolver(env.Config)
 	respSystems := make([]models.System, 0, len(systemIDs))
 	rendered := make(map[string]struct{}, len(systemIDs))
 	for _, id := range systemIDs {
@@ -166,6 +168,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 				sr.Manufacturer = &sm.Manufacturer
 			}
 		}
+		applyOrdinarySystemCategories(&sr, categoryResolver, system.ID)
 		respSystems = append(respSystems, sr)
 		rendered[id] = struct{}{}
 	}
@@ -187,13 +190,15 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 				mediaCount = &count
 			}
 			rendered[id] = struct{}{}
-			respSystems = append(respSystems, models.System{
+			responseSystem := models.System{
 				MediaCount: mediaCount,
 				ID:         id,
 				Name:       system.Name,
 				Category:   system.Category,
 				ZapScript:  system.ZapScript(),
-			})
+			}
+			applyVirtualSystemCategories(&responseSystem, categoryResolver, system.Categories)
+			respSystems = append(respSystems, responseSystem)
 		}
 	}
 
@@ -206,4 +211,27 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		Dur("totalDuration", time.Since(started)).
 		Msg("systems request completed")
 	return models.SystemsResponse{Systems: respSystems}, nil
+}
+
+func systemCategoryResolver(cfg *config.Instance) config.CategoryResolver {
+	if cfg == nil {
+		return config.CategoryResolver{}
+	}
+	return cfg.SystemCategoryResolver()
+}
+
+func applyOrdinarySystemCategories(
+	system *models.System,
+	resolver config.CategoryResolver,
+	systemID string,
+) {
+	system.Categories = resolver.ForSystem(systemID, system.Category)
+}
+
+func applyVirtualSystemCategories(
+	system *models.System,
+	resolver config.CategoryResolver,
+	additional []string,
+) {
+	system.Category, system.Categories = resolver.VirtualSystem(system.Category, additional)
 }
