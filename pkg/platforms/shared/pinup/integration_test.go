@@ -444,11 +444,12 @@ func TestIntegrationLaunchIsRepeatedWhenPopperDropsIt(t *testing.T) {
 	path := TablePath(10, "Attack from Mars")
 	require.NoError(t, h.integ.Launch(nil, path))
 	// Nothing appears for LaunchRetry, then the request is repeated and the
-	// fake starts the emulator.
-	for len(h.popper.launched()) < 2 {
+	// fake starts the emulator. The watcher only sees it on its next poll, so
+	// the clock must keep moving until the table is adopted, not just until
+	// the second request arrives.
+	for h.hooks.activeMedia() == nil {
 		h.tick(t, 1)
 	}
-	require.Eventually(t, func() bool { return h.hooks.activeMedia() != nil }, 2*time.Second, 5*time.Millisecond)
 	assert.Equal(t, []int{10, 10}, h.popper.launched())
 	assert.Equal(t, path, h.hooks.activeMedia().Path)
 }
