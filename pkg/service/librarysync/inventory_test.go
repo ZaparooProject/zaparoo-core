@@ -76,7 +76,7 @@ func newSyncFixture(t *testing.T, paths ...string) *syncFixture {
 	require.NoError(t, err)
 	f := &syncFixture{ctx: context.Background(), cfg: cfg, db: db, online: newFakeOnline(t)}
 	f.now.Store(time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC).Unix())
-	require.NoError(t, cfg.SetLibraryBaseURL(f.online.server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(f.online.server.URL))
 	cfg.SetLibrarySync(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL(f.online.server.URL): {Bearer: "library-token"},
@@ -379,7 +379,7 @@ func TestSyncInventory_EndpointChangeClearsOrdinalCache(t *testing.T) {
 	require.NoError(t, err)
 
 	other := newFakeOnline(t)
-	require.NoError(t, f.cfg.SetLibraryBaseURL(other.server.URL))
+	require.NoError(t, f.cfg.SetOnlineBaseURL(other.server.URL))
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
 		config.RemoteAuthLookupURL(other.server.URL): {Bearer: "library-token"},
 	})
