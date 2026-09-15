@@ -36,7 +36,7 @@ func TestLibraryStateSyncRoundTrip(t *testing.T) {
 		IdentityKey: "game|SNES|supermarioworld|unlicensed:hack", MediaType: "Game", SystemID: "SNES",
 		CoreSlug: "supermarioworld", VariantTags: []string{"unlicensed:hack"}, Title: "Super Mario World",
 		Favorite: true, Intent: database.LibraryIntentPlayLater, Reaction: database.LibraryReactionNone,
-		PreferredTags: []string{"lang:en"}, Revision: 12,
+		PreferredTags: []string{"lang:en"}, SentPreferredTags: []string{"region:us"}, Revision: 12,
 	}
 	plain := database.LibraryStateSyncRow{
 		IdentityKey: "game|NES|metroid|", MediaType: "Game", SystemID: "NES", CoreSlug: "metroid",
@@ -57,6 +57,7 @@ func TestLibraryStateSyncRoundTrip(t *testing.T) {
 	assert.Equal(t, hack, byKey[hack.IdentityKey])
 	plain.VariantTags = []string{}
 	plain.PreferredTags = []string{}
+	plain.SentPreferredTags = []string{}
 	assert.Equal(t, plain, byKey[plain.IdentityKey], "empty tag lists read back as empty, never nil")
 
 	hack.Revision = 13

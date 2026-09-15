@@ -217,7 +217,7 @@ func TestSyncState_ConflictMergesBothSides(t *testing.T) {
 	assert.True(t, f.localRow(t, metroidUSA).IsLiked, "and applied here")
 }
 
-func TestSyncState_AccountEraseClearsSyncedState(t *testing.T) {
+func TestSyncState_AccountEraseKeepsLocalState(t *testing.T) {
 	f := newSyncFixture(t, metroidUSA, zelda)
 	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
 	f.syncState(t)
@@ -226,10 +226,107 @@ func TestSyncState_AccountEraseClearsSyncedState(t *testing.T) {
 	f.syncState(t)
 
 	f.online.eraseState()
+	result := f.syncState(t)
+	assert.True(t, f.localRow(t, metroidUSA).IsFavorite, "an erase on the account never touches local state")
+	assert.True(t, f.localRow(t, zelda).IsLiked)
+	assert.Equal(t, 2, result.Pushed, "local state pushes again as new rows")
+	metroid := f.online.stateRow("Game", "NES", "metroid")
+	require.NotNil(t, metroid)
+	assert.True(t, metroid.Favorite)
+	assert.Nil(t, f.online.stateRow("Game", "NES", "kidicarus"), "state for a game this device never held is gone")
+}
+
+func TestSyncState_NullConflictKeepsLocalState(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
 	f.syncState(t)
-	assert.False(t, f.localRow(t, metroidUSA).IsFavorite, "an erase on the account clears what was synced")
-	assert.False(t, f.localRow(t, zelda).IsLiked)
-	assert.Nil(t, f.online.stateRow("Game", "NES", "metroid"), "nothing was pushed back after the erase")
+
+	// The account erased its state, and the pull cursor sits past the erase
+	// so the pull reports nothing; only the push finds the row gone.
+	f.online.eraseState()
+	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyStateSince, "999"))
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagLiked, true)
+
+	result := f.syncState(t)
+	assert.Equal(t, 1, result.Conflicts)
+	assert.True(t, f.localRow(t, metroidUSA).IsFavorite, "the local flags stay")
+	assert.True(t, f.localRow(t, metroidUSA).IsLiked)
+	row := f.online.stateRow("Game", "NES", "metroid")
+	require.NotNil(t, row, "and push again as a new row in the same pass")
+	assert.True(t, row.Favorite)
+	assert.Equal(t, "liked", row.Reaction)
+}
+
+func TestSyncState_PullKeepsPerCopyFlags(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA, metroidEU)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagLiked, true)
+	f.setLocalFlag(t, metroidEU, database.MediaUserFlagDisliked, true)
+	f.syncState(t)
+	require.Equal(t, "liked", f.online.stateRow("Game", "NES", "metroid").Reaction, "the copies roll up to liked")
+
+	// Another device puts the game on the play-later list.
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Reaction: "liked", Intent: "play_later",
+	})
+	f.syncState(t)
+
+	usa, eu := f.localRow(t, metroidUSA), f.localRow(t, metroidEU)
+	assert.True(t, usa.IsLiked, "a field the account did not change is not touched")
+	assert.True(t, eu.IsDisliked, "on any copy")
+	assert.True(t, usa.IsPlayLater, "the new flag lands on the copy a launch would pick")
+	assert.False(t, eu.IsPlayLater)
+
+	// The account clears the reaction: that goes on every copy.
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Reaction: "none", Intent: "play_later",
+	})
+	f.syncState(t)
+	assert.False(t, f.localRow(t, metroidUSA).IsLiked)
+	assert.False(t, f.localRow(t, metroidEU).IsDisliked)
+	assert.True(t, f.localRow(t, metroidUSA).IsPlayLater)
+}
+
+func TestSyncState_PullNeverMovesAStar(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA, metroidEU)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
+	f.syncState(t)
+
+	// The account picks the Europe version and adds a like.
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Favorite: true, Reaction: "liked",
+		PreferredTags: []string{"region:eu"},
+	})
+	f.syncState(t)
+	assert.True(t, f.localRow(t, metroidUSA).IsFavorite, "the star stays where the user put it")
+	assert.False(t, f.localRow(t, metroidEU).IsFavorite)
+	assert.True(t, f.localRow(t, metroidEU).IsLiked, "a new flag goes on the account's preferred version")
+	assert.False(t, f.localRow(t, metroidUSA).IsLiked)
+
+	f.online.resetCalls()
+	f.syncState(t)
+	assert.Zero(t, f.online.count(postState), "the account's version choice is not fought over")
+	assert.Equal(t, []string{"region:eu"}, f.online.stateRow("Game", "NES", "metroid").PreferredTags)
+}
+
+func TestSyncState_StarMoveResendsPreferredTags(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA, metroidEU)
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, true)
+	f.syncState(t)
+	require.Contains(t, f.online.stateRow("Game", "NES", "metroid").PreferredTags, "region:us")
+
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagFavorite, false)
+	f.setLocalFlag(t, metroidEU, database.MediaUserFlagFavorite, true)
+	result := f.syncState(t)
+	assert.Equal(t, 1, result.Pushed, "the game stays a favorite, only its version moved")
+	row := f.online.stateRow("Game", "NES", "metroid")
+	require.NotNil(t, row)
+	assert.True(t, row.Favorite)
+	assert.Contains(t, row.PreferredTags, "region:eu")
+	assert.NotContains(t, row.PreferredTags, "region:us")
+
+	f.online.resetCalls()
+	f.syncState(t)
+	assert.Zero(t, f.online.count(postState))
 }
 
 func TestSyncState_RejectedItemWaitsForAChange(t *testing.T) {
