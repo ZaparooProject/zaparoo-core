@@ -233,5 +233,5 @@ func applyVirtualSystemCategories(
 	resolver config.CategoryResolver,
 	additional []string,
 ) {
-	system.Categories = resolver.Combine(system.Category, additional)
+	system.Category, system.Categories = resolver.VirtualSystem(system.Category, additional)
 }

@@ -127,7 +127,7 @@ execute = "echo tools"
 	require.True(t, ok)
 	assert.Equal(t, "Tools", entry.Name)
 	assert.Equal(t, "Computer", entry.Category)
-	assert.Equal(t, []string{"Favorite Systems"}, entry.Categories)
+	assert.Equal(t, []string{"favorite systems"}, entry.Categories, "resolved when a response is built")
 	assert.Equal(t, uuid.NewSHA1(ZaparooLaunchableNamespace, []byte("command:tools")), entry.ID)
 }
 

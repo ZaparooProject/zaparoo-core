@@ -1320,3 +1320,26 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 	require.NotNil(t, searchResults.Results[0].RelPath)
 	assert.Equal(t, relPath, *searchResults.Results[0].RelPath)
 }
+
+func TestSearchResultSystem_DropsUndeclaredVirtualCategories(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Favorite Systems"
+`))
+	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352001")
+	encodedID := launchables.EncodeID(id)
+	result := searchResultSystem(encodedID, map[string]launchables.VirtualSystem{
+		encodedID: {
+			ID:         id,
+			Name:       "Tools",
+			Category:   "Removed Primary",
+			Categories: []string{"Removed Extra", "favorite systems"},
+		},
+	}, cfg.SystemCategoryResolver())
+
+	assert.Equal(t, "Other", result.Category)
+	assert.Equal(t, []string{"Other", "Favorite Systems"}, result.Categories)
+}

@@ -2039,3 +2039,121 @@ func TestHandleSettingsUpdate_ReaderConnectionScanModeValidation(t *testing.T) {
 		assert.Empty(t, stored[0].ScanMode)
 	})
 }
+
+func TestHandleSettingsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	broken := []byte("debug_logging = true\n[audio\nvolume = 42\n")
+	require.NoError(t, os.WriteFile(cfgPath, broken, 0o600))
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{ErrorReporting: &enabled})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.Error(t, err)
+
+	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
+	assert.False(t, cfg.ErrorReporting(), "a refused update must not change the running config")
+}
+
+func TestHandlePlaytimeLimitsUpdate_RefusesToOverwriteUnloadableConfig(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	broken := []byte("debug_logging = true\n[playtime\n")
+	require.NoError(t, os.WriteFile(cfgPath, broken, 0o600))
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	retention := 30
+	paramsJSON, err := json.Marshal(models.UpdatePlaytimeLimitsParams{Retention: &retention})
+	require.NoError(t, err)
+
+	_, err = HandlePlaytimeLimitsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.Error(t, err)
+
+	onDisk, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, string(broken), string(onDisk), "a config file that fails to load must not be overwritten")
+}
+
+func TestHandleSettingsUpdate_KeepsInlineCustomLaunchers(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(tmpDir, config.CfgFile)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	content := string(data) + `
+[[launchers.custom]]
+id = "InlineTools"
+kind = "virtual_system"
+name = "Inline Tools"
+execute = "echo inline"
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600)) //nolint:gosec // test path from t.TempDir()
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{ErrorReporting: &enabled})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, cfg.Load(), "reload as a restart would")
+	launchers := cfg.CustomLaunchers()
+	require.Len(t, launchers, 1, "settings.update must not delete inline custom launchers from config.toml")
+	assert.Equal(t, "InlineTools", launchers[0].ID)
+}

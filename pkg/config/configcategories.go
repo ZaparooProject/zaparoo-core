@@ -22,11 +22,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"golang.org/x/text/unicode/norm"
 )
 
 const maxSystemCategoryNameRunes = 100
@@ -41,41 +43,60 @@ var builtInSystemCategories = [...]string{
 	"Software",
 }
 
-// CategoryResolver is an immutable snapshot of configured category names and
-// ordinary-system memberships.
+// CategoryResolver is an immutable snapshot of the valid configured category
+// names and ordinary-system memberships.
 type CategoryResolver struct {
-	bySystem map[string][]string
-	custom   []string
+	bySystem   map[string][]string
+	custom     []string
+	customKeys []string
 }
 
-func validateSystemCategories(categories []SystemsCategory) error {
-	seenNames := make([]string, 0, len(categories))
+// newCategoryResolver builds a resolver from the valid declarations and
+// returns one problem for each entry it ignored. Invalid entries never fail the
+// config load, so a typo cannot stop Core from starting, and the declarations
+// stay in the config as written so a save does not discard them.
+func newCategoryResolver(categories []SystemsCategory) (CategoryResolver, []error) {
+	resolver := CategoryResolver{bySystem: make(map[string][]string)}
+	var problems []error
 	for i := range categories {
 		category := &categories[i]
 		if err := validateSystemCategoryName(category.Name); err != nil {
-			return fmt.Errorf("systems category %d: %w", i, err)
+			problems = append(problems, fmt.Errorf("systems category %d ignored: %w", i, err))
+			continue
 		}
-		if canonicalBuiltInCategory(category.Name) != "" {
-			return fmt.Errorf("systems category %d: name %q conflicts with a built-in category", i, category.Name)
+		key := categoryKey(category.Name)
+		if canonicalBuiltInCategory(key) != "" {
+			problems = append(problems,
+				fmt.Errorf("systems category %q ignored: name conflicts with a built-in category", category.Name))
+			continue
 		}
-		if containsFold(seenNames, category.Name) {
-			return fmt.Errorf("systems category %d: duplicate name %q", i, category.Name)
+		if slices.ContainsFunc(resolver.customKeys, func(existing string) bool {
+			return strings.EqualFold(existing, key)
+		}) {
+			problems = append(problems, fmt.Errorf("systems category %q ignored: duplicate name", category.Name))
+			continue
 		}
-		seenNames = append(seenNames, category.Name)
+		resolver.custom = append(resolver.custom, category.Name)
+		resolver.customKeys = append(resolver.customKeys, key)
 
-		seenSystems := make([]string, 0, len(category.Systems))
-		for _, systemID := range category.Systems {
-			system, err := systemdefs.LookupSystem(systemID)
+		members := make([]string, 0, len(category.Systems))
+		for _, configuredID := range category.Systems {
+			system, err := systemdefs.LookupSystem(configuredID)
 			if err != nil {
-				return fmt.Errorf("systems category %q: invalid system %q: %w", category.Name, systemID, err)
+				problems = append(problems,
+					fmt.Errorf("systems category %q: ignoring unknown system %q", category.Name, configuredID))
+				continue
 			}
-			if containsFold(seenSystems, system.ID) {
-				return fmt.Errorf("systems category %q: duplicate system %q", category.Name, systemID)
+			if slices.Contains(members, system.ID) {
+				problems = append(problems,
+					fmt.Errorf("systems category %q: ignoring duplicate system %q", category.Name, configuredID))
+				continue
 			}
-			seenSystems = append(seenSystems, system.ID)
+			members = append(members, system.ID)
+			resolver.bySystem[system.ID] = append(resolver.bySystem[system.ID], category.Name)
 		}
 	}
-	return nil
+	return resolver, problems
 }
 
 func validateSystemCategoryName(name string) error {
@@ -91,113 +112,109 @@ func validateSystemCategoryName(name string) error {
 	if utf8.RuneCountInString(name) > maxSystemCategoryNameRunes {
 		return fmt.Errorf("name must not exceed %d characters", maxSystemCategoryNameRunes)
 	}
-	if strings.ContainsAny(name, `/\`) {
+	if strings.ContainsAny(categoryKey(name), `/\`) {
 		return errors.New("name must not contain path separators")
 	}
+	visible := false
 	for _, r := range name {
 		if unicode.IsControl(r) {
 			return errors.New("name must not contain control characters")
 		}
+		// Zero-width joiners are part of emoji sequences and several scripts;
+		// every other format character is invisible or reorders the text.
+		if unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d' {
+			return errors.New("name must not contain invisible formatting characters")
+		}
+		if unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S) {
+			visible = true
+		}
+	}
+	if !visible {
+		return errors.New("name must contain a visible character")
 	}
 	return nil
 }
 
-func newCategoryResolver(categories []SystemsCategory) CategoryResolver {
-	resolver := CategoryResolver{
-		bySystem: make(map[string][]string),
-		custom:   make([]string, 0, len(categories)),
-	}
-	for i := range categories {
-		category := &categories[i]
-		resolver.custom = append(resolver.custom, category.Name)
-		for _, configuredID := range category.Systems {
-			system, err := systemdefs.LookupSystem(configuredID)
-			if err != nil {
-				continue
-			}
-			resolver.bySystem[system.ID] = append(resolver.bySystem[system.ID], category.Name)
-		}
-	}
-	return resolver
-}
-
-// SystemCategoryResolver returns a read-only snapshot for one API or validation operation.
+// SystemCategoryResolver returns the resolver built by the last successful load.
 func (c *Instance) SystemCategoryResolver() CategoryResolver {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return newCategoryResolver(c.vals.Systems.Category)
+	return c.loaded.categoryResolver
 }
 
 // Canonical resolves a built-in or configured category name case-insensitively.
 func (r CategoryResolver) Canonical(name string) (string, bool) {
-	if builtIn := canonicalBuiltInCategory(name); builtIn != "" {
+	if name == "" {
+		return "", false
+	}
+	key := categoryKey(name)
+	if builtIn := canonicalBuiltInCategory(key); builtIn != "" {
 		return builtIn, true
 	}
-	for _, custom := range r.custom {
-		if strings.EqualFold(custom, name) {
-			return custom, true
+	for i, customKey := range r.customKeys {
+		if strings.EqualFold(customKey, key) {
+			return r.custom[i], true
 		}
 	}
 	return "", false
 }
 
-// ForSystem combines a system's primary category with configured custom memberships.
+// ForSystem returns an ordinary system's full category membership: its primary
+// category first, then configured memberships. systemID must be a canonical
+// system ID.
 func (r CategoryResolver) ForSystem(systemID, primary string) []string {
-	categories := make([]string, 0, 1+len(r.bySystem[systemID]))
+	custom := r.bySystem[systemID]
+	categories := make([]string, 0, 1+len(custom))
 	if primary != "" {
 		categories = append(categories, primary)
 	}
-
-	canonicalID := systemID
-	if system, err := systemdefs.LookupSystem(systemID); err == nil {
-		canonicalID = system.ID
-	}
-	for _, category := range r.bySystem[canonicalID] {
-		categories = appendCanonicalCategory(categories, r, category)
-	}
-	return categories
+	// Custom names are unique and never match a built-in, so no deduplication.
+	return append(categories, custom...)
 }
 
-// Combine canonicalizes a primary category and ordered additional memberships.
-func (r CategoryResolver) Combine(primary string, additional []string) []string {
-	categories := make([]string, 0, 1+len(additional))
-	if primary != "" {
-		categories = append(categories, primary)
-	}
-	for _, category := range additional {
-		categories = appendCanonicalCategory(categories, r, category)
-	}
-	return categories
-}
-
-func appendCanonicalCategory(categories []string, resolver CategoryResolver, category string) []string {
-	if category == "" {
-		return categories
-	}
-	canonical, ok := resolver.Canonical(category)
+// VirtualSystem resolves a virtual system's primary and additional categories
+// against the current declarations, returning the primary category and the
+// full membership with the primary first. An undeclared primary falls back to
+// Other and undeclared additional memberships are dropped, so removing a
+// category never removes the system or breaks tokens that launch it.
+func (r CategoryResolver) VirtualSystem(primary string, additional []string) (resolved string, categories []string) {
+	resolved, ok := r.Canonical(primary)
 	if !ok {
-		canonical = category
+		resolved = defaultVirtualSystemCategory
 	}
-	if !containsFold(categories, canonical) {
-		categories = append(categories, canonical)
+	categories = make([]string, 0, 1+len(additional))
+	categories = append(categories, resolved)
+	for _, category := range additional {
+		canonical, found := r.Canonical(category)
+		if found && !slices.Contains(categories, canonical) {
+			categories = append(categories, canonical)
+		}
 	}
-	return categories
+	return resolved, categories
 }
 
-func canonicalBuiltInCategory(name string) string {
+// undeclared returns the configured category references that do not resolve.
+func (r CategoryResolver) undeclared(references ...string) []string {
+	var missing []string
+	for _, reference := range references {
+		if _, ok := r.Canonical(reference); !ok && reference != "" {
+			missing = append(missing, reference)
+		}
+	}
+	return missing
+}
+
+// categoryKey is the comparison form of a category name. Compatibility
+// normalization makes full-width and other lookalike spellings compare equal.
+func categoryKey(name string) string {
+	return norm.NFKC.String(name)
+}
+
+func canonicalBuiltInCategory(key string) string {
 	for _, category := range builtInSystemCategories {
-		if strings.EqualFold(category, name) {
+		if strings.EqualFold(category, key) {
 			return category
 		}
 	}
 	return ""
-}
-
-func containsFold(values []string, candidate string) bool {
-	for _, value := range values {
-		if strings.EqualFold(value, candidate) {
-			return true
-		}
-	}
-	return false
 }

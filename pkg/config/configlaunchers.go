@@ -336,12 +336,11 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		return errors.New("failed to parse any custom launcher files")
 	}
 
-	categoryResolver := newCategoryResolver(c.vals.Systems.Category)
 	validated := validateCustomLaunchers(
 		rawLaunchers,
-		c.vals.Launchers.Custom,
+		c.loaded.customLaunchersInline,
 		"external launcher files",
-		categoryResolver,
+		c.loaded.categoryResolver,
 	)
 	c.customLaunchersExternal = cloneCustomLaunchers(validated)
 
@@ -366,8 +365,8 @@ func (c *Instance) CustomLaunchers() []LaunchersCustom {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	entries := make([]LaunchersCustom, 0, len(c.vals.Launchers.Custom)+len(c.customLaunchersExternal))
-	entries = append(entries, c.vals.Launchers.Custom...)
+	entries := make([]LaunchersCustom, 0, len(c.loaded.customLaunchersInline)+len(c.customLaunchersExternal))
+	entries = append(entries, c.loaded.customLaunchersInline...)
 	entries = append(entries, c.customLaunchersExternal...)
 	return cloneCustomLaunchers(entries)
 }

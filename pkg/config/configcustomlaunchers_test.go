@@ -161,30 +161,16 @@ func TestValidateCustomLauncher_CommandVirtualSystem(t *testing.T) {
 	require.NoError(t, validateCustomLauncher(&entry))
 }
 
-func TestValidateCustomLauncher_CustomCategoryMemberships(t *testing.T) {
-	resolver := newCategoryResolver([]SystemsCategory{{Name: "Favorite Systems"}, {Name: "Kids"}})
+func TestValidateCustomLauncher_KeepsCategoriesAsWritten(t *testing.T) {
 	entry := LaunchersCustom{
 		ID: "Tools", Kind: CustomLauncherKindVirtualSystem,
 		Backend: CustomLauncherBackendCommand, Name: "Tools",
-		Category: "favorite systems", Categories: []string{"KIDS", "Favorite Systems", "kids"},
-		Execute: "echo tools",
+		Categories: []string{"KIDS", "Undeclared"}, Execute: "echo tools",
 	}
 
-	require.NoError(t, validateCustomLauncherWithCategories(&entry, resolver))
-	assert.Equal(t, "Favorite Systems", entry.Category)
-	assert.Equal(t, []string{"Kids"}, entry.Categories)
-}
-
-func TestValidateCustomLauncher_RejectsUndeclaredAdditionalCategory(t *testing.T) {
-	entry := LaunchersCustom{
-		ID: "Tools", Kind: CustomLauncherKindVirtualSystem,
-		Backend: CustomLauncherBackendCommand, Name: "Tools",
-		Categories: []string{"Favorites"}, Execute: "echo tools",
-	}
-
-	require.ErrorContains(t,
-		validateCustomLauncherWithCategories(&entry, newCategoryResolver(nil)),
-		`unsupported virtual_system category "Favorites"`)
+	require.NoError(t, validateCustomLauncher(&entry))
+	assert.Equal(t, "Other", entry.Category)
+	assert.Equal(t, []string{"KIDS", "Undeclared"}, entry.Categories)
 }
 
 func TestValidateCustomLauncher_RejectsCategoriesOnMediaLauncher(t *testing.T) {
@@ -228,7 +214,6 @@ func TestValidateCustomLauncher_RejectsInvalidVirtualSystem(t *testing.T) {
 		err    string
 	}{
 		{name: "missing name", mutate: func(e *LaunchersCustom) { e.Name = "" }, err: "requires name"},
-		{name: "unknown category", mutate: func(e *LaunchersCustom) { e.Category = "Homebrew" }, err: "category"},
 		{
 			name:   "pattern load path",
 			mutate: func(e *LaunchersCustom) { e.LoadPath = "_Other/Arduboy_<date>" },
@@ -368,8 +353,40 @@ name = "Favorite Systems"
 
 	entries := cfg.CustomLaunchers()
 	require.Len(t, entries, 1)
-	assert.Equal(t, "Favorite Systems", entries[0].Category)
-	assert.Equal(t, []string{"Computer"}, entries[0].Categories)
+	primary, categories := cfg.SystemCategoryResolver().VirtualSystem(entries[0].Category, entries[0].Categories)
+	assert.Equal(t, "Favorite Systems", primary)
+	assert.Equal(t, []string{"Favorite Systems", "Computer"}, categories)
+}
+
+func TestLoadCustomLaunchers_CategoriesFollowLaterConfigReloads(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "Kids"
+categories = ["Favorites"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.category]]
+name = "Kids"
+
+[[systems.category]]
+name = "Favorites"
+`))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1)
+	primary, categories := cfg.SystemCategoryResolver().VirtualSystem(entries[0].Category, entries[0].Categories)
+	assert.Equal(t, "Kids", primary, "categories declared after launchers load still resolve")
+	assert.Equal(t, []string{"Kids", "Favorites"}, categories)
 }
 
 func TestCustomLaunchers_ReturnsDeepCopy(t *testing.T) {
@@ -411,4 +428,26 @@ execute = "echo tools"
 
 	second := cfg.CustomLaunchers()
 	assert.Equal(t, []string{"Favorites"}, second[0].Categories)
+}
+
+func TestLoadCustomLaunchers_KeepsVirtualSystemWithUndeclaredCategories(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	launchersDir := filepath.Join("data", "launchers")
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "virtual.toml"), []byte(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+name = "Tools"
+category = "Removed Primary"
+categories = ["Removed Extra", "Computer"]
+execute = "echo tools"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+
+	entries := cfg.CustomLaunchers()
+	require.Len(t, entries, 1, "an undeclared category must not remove the virtual system")
+	assert.Equal(t, "Tools", entries[0].ID)
 }

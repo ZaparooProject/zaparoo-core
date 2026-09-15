@@ -58,10 +58,19 @@ func validateCustomLaunchers(
 
 	for i := range raw {
 		entry := cloneCustomLauncher(&raw[i])
-		if err := validateCustomLauncherWithCategories(&entry, categoryResolver); err != nil {
+		if err := validateCustomLauncher(&entry); err != nil {
 			log.Warn().Err(err).Str("source", source).Str("id", entry.ID).
 				Msg("ignoring invalid custom launcher")
 			continue
+		}
+		// Categories resolve when a response is built, against whatever is
+		// declared then, so an undeclared one is reported but never removes
+		// the virtual system.
+		if undeclared := categoryResolver.undeclared(
+			append([]string{entry.Category}, entry.Categories...)...,
+		); len(undeclared) > 0 {
+			log.Warn().Str("source", source).Str("id", entry.ID).Strs("categories", undeclared).
+				Msg("custom launcher uses undeclared categories; primary falls back to Other and others are ignored")
 		}
 
 		canonicalID := strings.ToLower(entry.ID)
@@ -77,10 +86,6 @@ func validateCustomLaunchers(
 }
 
 func validateCustomLauncher(entry *LaunchersCustom) error {
-	return validateCustomLauncherWithCategories(entry, newCategoryResolver(nil))
-}
-
-func validateCustomLauncherWithCategories(entry *LaunchersCustom, categoryResolver CategoryResolver) error {
 	if entry.ID == "" {
 		return errors.New("id is required")
 	}
@@ -158,22 +163,6 @@ func validateCustomLauncherWithCategories(entry *LaunchersCustom, categoryResolv
 		if entry.Category == "" {
 			entry.Category = defaultVirtualSystemCategory
 		}
-		canonicalCategory, ok := categoryResolver.Canonical(entry.Category)
-		if !ok {
-			return fmt.Errorf("unsupported virtual_system category %q", entry.Category)
-		}
-		entry.Category = canonicalCategory
-		categories := make([]string, 0, len(entry.Categories))
-		for _, category := range entry.Categories {
-			canonical, found := categoryResolver.Canonical(category)
-			if !found {
-				return fmt.Errorf("unsupported virtual_system category %q", category)
-			}
-			if !strings.EqualFold(entry.Category, canonical) && !containsFold(categories, canonical) {
-				categories = append(categories, canonical)
-			}
-		}
-		entry.Categories = categories
 		if entry.System != "" || len(entry.MediaDirs) > 0 || len(entry.FileExts) > 0 ||
 			len(entry.Groups) > 0 || len(entry.Schemes) > 0 || len(entry.Controls) > 0 ||
 			entry.Restricted {

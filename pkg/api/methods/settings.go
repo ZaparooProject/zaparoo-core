@@ -22,6 +22,7 @@ package methods
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -105,6 +106,23 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	return resp, nil
 }
 
+// reloadConfigBeforeSave reads config.toml back in ahead of a mutation. A file
+// that exists but cannot be loaded is left alone and the update refused:
+// saving the in-memory values over it would silently discard the user's edits.
+func reloadConfigBeforeSave(cfg *config.Instance, action string) error {
+	err := cfg.Load()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		log.Warn().Err(err).Str("action", action).Msg("config file missing, saving in-memory values")
+		return nil
+	}
+	log.Error().Err(err).Str("action", action).
+		Msg("config file could not be loaded; refusing to overwrite it")
+	return errors.New("error loading settings file")
+}
+
 //nolint:gocritic // single-use parameter in API handler
 func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings reload request")
@@ -186,8 +204,8 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save or
 	// validated against stale in-memory values.
-	if err := env.Config.Load(); err != nil {
-		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
+	if err := reloadConfigBeforeSave(env.Config, "settings update"); err != nil {
+		return nil, err
 	}
 
 	// Installing updates without checking for them is not a state the device
@@ -519,8 +537,8 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save.
-	if err := env.Config.Load(); err != nil {
-		log.Warn().Err(err).Msg("failed to reload config before playtime limits update, using in-memory values")
+	if err := reloadConfigBeforeSave(env.Config, "playtime limits update"); err != nil {
+		return nil, err
 	}
 
 	if params.Enabled != nil {

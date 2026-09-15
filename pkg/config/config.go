@@ -185,10 +185,19 @@ type Instance struct {
 	authPath                string
 	customLaunchersExternal []LaunchersCustom
 	mappingsExternal        []MappingsEntry
+	loaded                  loadedState
 	vals                    Values
 	defaults                Values
 	updateMu                syncutil.Mutex
 	mu                      syncutil.RWMutex
+}
+
+// loadedState is derived from vals by applyTOML. vals keeps config.toml as
+// written so Save writes it back unchanged; loadedState holds the validated
+// view, and is rolled back together with vals when a load fails.
+type loadedState struct {
+	categoryResolver      CategoryResolver
+	customLaunchersInline []LaunchersCustom
 }
 
 // getFs returns the instance's filesystem, defaulting to the OS filesystem
@@ -311,21 +320,13 @@ func (c *Instance) Load() error {
 	// Save old vals so we can restore on error (Load is called at runtime for
 	// config reloads — a bad file must not destroy the running config).
 	oldVals := c.vals
+	oldLoaded := c.loaded
 	c.vals = cloneEncryptionValue(c.defaults)
-
-	// Save mappings — they're normally loaded from separate files via
-	// LoadMappings, not config.toml. Save() strips them before marshal, so
-	// after a round-trip they'd be empty. Restore old values only when TOML
-	// did not provide new ones.
-	savedMappings := oldVals.Mappings
 
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
+		c.loaded = oldLoaded
 		return err
-	}
-
-	if len(c.vals.Mappings.Entry) == 0 {
-		c.vals.Mappings = savedMappings
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -335,6 +336,7 @@ func (c *Instance) Load() error {
 			SchemaVersion,
 		)
 		c.vals = oldVals
+		c.loaded = oldLoaded
 		return errors.New("schema version mismatch")
 	}
 
@@ -352,8 +354,11 @@ func (c *Instance) LoadTOML(data string) error {
 	defer c.mu.Unlock()
 	oldVals := c.vals
 	oldVals.Systems.Category = cloneSystemCategories(c.vals.Systems.Category)
+	oldVals.Launchers.Custom = cloneCustomLaunchers(c.vals.Launchers.Custom)
+	oldLoaded := c.loaded
 	if err := c.applyTOML(data); err != nil {
 		c.vals = oldVals
+		c.loaded = oldLoaded
 		return err
 	}
 	return nil
@@ -404,11 +409,12 @@ func (c *Instance) applyTOML(data string) error {
 		}
 	}
 
-	if err := validateSystemCategories(c.vals.Systems.Category); err != nil {
-		return fmt.Errorf("invalid systems categories: %w", err)
+	categoryResolver, categoryProblems := newCategoryResolver(c.vals.Systems.Category)
+	for _, problem := range categoryProblems {
+		log.Warn().Err(problem).Msg("invalid systems category entry in config.toml")
 	}
-	categoryResolver := newCategoryResolver(c.vals.Systems.Category)
-	c.vals.Launchers.Custom = validateCustomLaunchers(
+	c.loaded.categoryResolver = categoryResolver
+	c.loaded.customLaunchersInline = validateCustomLaunchers(
 		c.vals.Launchers.Custom,
 		nil,
 		"config.toml",
@@ -498,18 +504,12 @@ func (c *Instance) Save() error {
 		log.Info().Msgf("generated new device id: %s", newID)
 	}
 
-	tmpMappings := c.vals.Mappings
-	c.vals.Mappings = Mappings{}
-	tmpCustomLauncher := c.vals.Launchers.Custom
-	c.vals.Launchers.Custom = []LaunchersCustom{}
-
+	// Mappings and custom launchers from their own directories are kept outside
+	// vals, so everything marshaled here came from config.toml.
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-
-	c.vals.Mappings = tmpMappings
-	c.vals.Launchers.Custom = tmpCustomLauncher
 
 	output := append([]byte(configHeader), data...)
 	if err := writeConfigAtomically(c.getFs(), c.cfgPath, output); err != nil {
