@@ -48,14 +48,16 @@ const (
 	// bookkeeping belongs to.
 	DeviceStateKeyDecksLink = "library_decks_link"
 
-	pathDecks           = "/v1/device/decks"
-	deckPushBatch       = 200
-	deckPullLimit       = 500
-	deckPullMaxPages    = 200
-	deckPushMaxRounds   = 3
-	deckMaxConflicts    = 5
-	deckRefreshTimeout  = 3 * time.Second
-	deckAccessFreshness = 90 * time.Second
+	pathDecks         = "/v1/device/decks"
+	deckPushBatch     = 200
+	deckPullLimit     = 500
+	deckPullMaxPages  = 200
+	deckPushMaxRounds = 3
+	deckMaxConflicts  = 5
+	// deckAccessFreshness is how long a pull is trusted when a client looks
+	// at decks or opens one. It matches how often the link service learns
+	// about deck changes, so a tap is as fresh as a link.
+	deckAccessFreshness = 30 * time.Second
 
 	codeDeckLocked  = "deck_locked"
 	codeDeckIDTaken = "deck_id_taken"
@@ -263,18 +265,8 @@ func (s *Service) SyncDecks(ctx context.Context) (DecksResult, error) {
 	return pass.result, nil
 }
 
-// RefreshDeck brings decks up to date before one opens, within a few
-// seconds; a slow or failed pull opens the local copy.
-func (s *Service) RefreshDeck(ctx context.Context, deckID string) {
-	ctx, cancel := context.WithTimeout(ctx, deckRefreshTimeout)
-	defer cancel()
-	if err := s.PullDecks(ctx); err != nil && !IsIdleError(err) {
-		log.Debug().Err(err).Str("deck", deckID).Msg("deck not refreshed before opening")
-	}
-}
-
-// PullDecksIfStale pulls decks when the last pull is older than a minute
-// and a half, for a client listing them.
+// PullDecksIfStale pulls decks when the last pull is older than the access
+// window, for a client listing them or a deck that just opened.
 func (s *Service) PullDecksIfStale(ctx context.Context) error {
 	last := s.lastDeckPull.Load()
 	if last != 0 && s.now().Sub(time.Unix(0, last)) < deckAccessFreshness {
@@ -399,8 +391,19 @@ func (p *deckPass) pull(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("pull decks: %w", err)
 		}
+		if page.Reset {
+			// The account erased its decks. Local decks are the user's data
+			// and stay; only the bookkeeping starts over, so every owned
+			// deck pushes again as new.
+			log.Info().Msg("decks were erased on the account; forgetting sync bookkeeping, local decks are kept")
+			if err := p.userDB().ClearDeckSync(); err != nil {
+				return fmt.Errorf("clear deck sync rows: %w", err)
+			}
+			p.rows = make(map[string]*database.DeckSyncRow)
+			since = 0
+		}
 		for i := range page.Items {
-			if applyErr := p.applyPulled(ctx, &page.Items[i]); applyErr != nil {
+			if applyErr := p.applyPulled(&page.Items[i]); applyErr != nil {
 				return applyErr
 			}
 		}
@@ -420,8 +423,9 @@ func (p *deckPass) pull(ctx context.Context) error {
 
 // applyPulled adopts one deck from the account. A deck unchanged here takes
 // the account's copy; a deck changed on both sides is merged and stays to be
-// pushed; a deck deleted on the account is deleted here, whatever changed.
-func (p *deckPass) applyPulled(ctx context.Context, remote *deckSync) error {
+// pushed; a deck deleted on the account is deleted here when it is clean,
+// and kept to be brought back when it holds edits made here.
+func (p *deckPass) applyPulled(remote *deckSync) error {
 	deckID, err := database.NormalizeDeckID(remote.DeckID)
 	if err != nil {
 		log.Debug().Err(err).Str("deck", remote.DeckID).Msg("skipping deck with an ID this Core cannot hold")
@@ -438,15 +442,7 @@ func (p *deckPass) applyPulled(ctx context.Context, remote *deckSync) error {
 	}
 
 	if remote.Deleted {
-		if local != nil && local.Owned {
-			if row != nil && localDeckContent(local).encode() != row.Snapshot {
-				log.Warn().Str("deck", deckID).Msg("deck deleted on the account discards changes made here")
-			}
-			if err := p.deleteLocal(deckID); err != nil {
-				return err
-			}
-		}
-		return p.dropRow(deckID)
+		return p.applyTombstone(deckID, local, row, remote.Revision)
 	}
 
 	server := serverDeckContent(remote)
@@ -462,7 +458,7 @@ func (p *deckPass) applyPulled(ctx context.Context, remote *deckSync) error {
 			target = mergeDeck(&base, &content, &server)
 		}
 	}
-	if err := p.writeLocal(ctx, deckID, remote, &target, local); err != nil {
+	if err := p.writeLocal(deckID, remote, &target, local); err != nil {
 		return err
 	}
 	next := &database.DeckSyncRow{
@@ -475,7 +471,7 @@ func (p *deckPass) applyPulled(ctx context.Context, remote *deckSync) error {
 // name and display data from the account's copy and keeping each game item's
 // link to a local file.
 func (p *deckPass) writeLocal(
-	ctx context.Context, deckID string, remote *deckSync, content *deckContent, local *database.Deck,
+	deckID string, remote *deckSync, content *deckContent, local *database.Deck,
 ) error {
 	if len(content.Items) > database.DeckMaxItems {
 		// A merge of two full decks can outgrow the limit both sides keep.
@@ -546,6 +542,28 @@ func (p *deckPass) writeLocal(
 	return nil
 }
 
+// applyTombstone acts on a deck the account deleted. A clean local copy,
+// one that still matches the last agreed content, is deleted here too. A
+// copy with edits made here since is the user's work: it stays, and is
+// pushed against the tombstone's revision so the account brings it back
+// under its own ID and the cards written for it keep working.
+func (p *deckPass) applyTombstone(
+	deckID string, local *database.Deck, row *database.DeckSyncRow, revision int64,
+) error {
+	if local == nil || !local.Owned {
+		return p.dropRow(deckID)
+	}
+	clean := row != nil && localDeckContent(local).encode() == row.Snapshot
+	if clean {
+		if err := p.deleteLocal(deckID); err != nil {
+			return err
+		}
+		return p.dropRow(deckID)
+	}
+	log.Info().Str("deck", deckID).Msg("deck deleted on the account holds edits made here; keeping it")
+	return p.saveRow(&database.DeckSyncRow{DeckID: deckID, Revision: revision})
+}
+
 func (p *deckPass) deleteLocal(deckID string) error {
 	if _, err := p.userDB().DeleteDeck(deckID); err != nil {
 		return fmt.Errorf("delete deck %s: %w", deckID, err)
@@ -583,7 +601,7 @@ func (p *deckPass) push(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("push decks: %w", err)
 			}
-			again, handleErr := p.handlePushResults(ctx, batch, &response)
+			again, handleErr := p.handlePushResults(batch, &response)
 			if handleErr != nil {
 				return handleErr
 			}
@@ -661,9 +679,7 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 	return pending, nil
 }
 
-func (p *deckPass) handlePushResults(
-	ctx context.Context, batch []pendingDeck, response *deckPushResponse,
-) (bool, error) {
+func (p *deckPass) handlePushResults(batch []pendingDeck, response *deckPushResponse) (bool, error) {
 	retry := false
 	for _, result := range response.Items {
 		if result.Index < 0 || result.Index >= len(batch) {
@@ -674,14 +690,14 @@ func (p *deckPass) handlePushResults(
 		switch result.Status {
 		case statusApplied:
 			p.result.Pushed++
-			err = p.handleApplied(ctx, pending, result.Deck)
+			err = p.handleApplied(pending, result.Deck)
 		case statusConflict:
 			p.result.Conflicts++
 			retry = true
-			err = p.handleConflict(ctx, pending, result.Deck)
+			err = p.handleConflict(pending, result.Deck)
 		case statusRejected:
 			var again bool
-			again, err = p.handleRejected(ctx, pending, &result)
+			again, err = p.handleRejected(pending, &result)
 			retry = retry || again
 		}
 		if err != nil {
@@ -691,15 +707,17 @@ func (p *deckPass) handlePushResults(
 	return retry, nil
 }
 
-func (p *deckPass) handleApplied(ctx context.Context, pending *pendingDeck, remote *deckSync) error {
-	if pending.record.Deleted || remote == nil || remote.Deleted {
-		if remote != nil && remote.Deleted && !pending.record.Deleted {
-			// A retried create for a deck deleted on the account since.
-			if err := p.deleteLocal(pending.deckID); err != nil {
-				return err
-			}
-		}
+func (p *deckPass) handleApplied(pending *pendingDeck, remote *deckSync) error {
+	if pending.record.Deleted || remote == nil {
 		return p.dropRow(pending.deckID)
+	}
+	if remote.Deleted {
+		// A retried create for a deck deleted on the account since.
+		local, err := p.userDB().GetDeck(pending.deckID)
+		if err != nil && !errors.Is(err, database.ErrDeckNotFound) {
+			return fmt.Errorf("read deck %s: %w", pending.deckID, err)
+		}
+		return p.applyTombstone(pending.deckID, local, p.rows[pending.deckID], remote.Revision)
 	}
 	server := serverDeckContent(remote)
 	row := &database.DeckSyncRow{
@@ -718,13 +736,13 @@ func (p *deckPass) handleApplied(ctx context.Context, pending *pendingDeck, remo
 		empty := deckContent{Name: server.Name, Description: server.Description}
 		target = mergeDeck(&empty, pending.content, &server)
 	}
-	if err := p.writeLocal(ctx, pending.deckID, remote, &target, local); err != nil {
+	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
 	return p.saveRow(row)
 }
 
-func (p *deckPass) handleConflict(ctx context.Context, pending *pendingDeck, remote *deckSync) error {
+func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error {
 	row := p.rows[pending.deckID]
 	if remote == nil {
 		// The account holds no such deck: create it again next round.
@@ -735,10 +753,14 @@ func (p *deckPass) handleConflict(ctx context.Context, pending *pendingDeck, rem
 		return p.saveRow(next)
 	}
 	if remote.Deleted {
-		if err := p.deleteLocal(pending.deckID); err != nil {
-			return err
+		if pending.record.Deleted {
+			return p.dropRow(pending.deckID)
 		}
-		return p.dropRow(pending.deckID)
+		local, err := p.userDB().GetDeck(pending.deckID)
+		if err != nil && !errors.Is(err, database.ErrDeckNotFound) {
+			return fmt.Errorf("read deck %s: %w", pending.deckID, err)
+		}
+		return p.applyTombstone(pending.deckID, local, row, remote.Revision)
 	}
 	if pending.record.Deleted {
 		// Deleted here, changed there: the delete stands, against the new
@@ -765,7 +787,7 @@ func (p *deckPass) handleConflict(ctx context.Context, pending *pendingDeck, rem
 		log.Warn().Str("deck", pending.deckID).Msg("deck keeps conflicting; taking the account's copy")
 		conflicts = 0
 	}
-	if err := p.writeLocal(ctx, pending.deckID, remote, &target, local); err != nil {
+	if err := p.writeLocal(pending.deckID, remote, &target, local); err != nil {
 		return err
 	}
 	next := &database.DeckSyncRow{
@@ -782,10 +804,10 @@ func snapshotOf(row *database.DeckSyncRow) string {
 	return row.Snapshot
 }
 
-func (p *deckPass) handleRejected(ctx context.Context, pending *pendingDeck, result *deckPushResult) (bool, error) {
+func (p *deckPass) handleRejected(pending *pendingDeck, result *deckPushResult) (bool, error) {
 	switch result.Code {
 	case codeDeckIDTaken:
-		return true, p.remint(ctx, pending)
+		return true, p.remint(pending)
 	case codeDeckLocked:
 		if result.Deck == nil {
 			break
@@ -795,7 +817,7 @@ func (p *deckPass) handleRejected(ctx context.Context, pending *pendingDeck, res
 			return false, fmt.Errorf("read deck %s: %w", pending.deckID, err)
 		}
 		server := serverDeckContent(result.Deck)
-		if err := p.writeLocal(ctx, pending.deckID, result.Deck, &server, local); err != nil {
+		if err := p.writeLocal(pending.deckID, result.Deck, &server, local); err != nil {
 			return false, err
 		}
 		p.svc.notifyInbox("Deck locked on Zaparoo Online", fmt.Sprintf(
@@ -828,7 +850,7 @@ func (p *deckPass) handleRejected(ctx context.Context, pending *pendingDeck, res
 
 // remint gives a deck whose ID another account holds a new one. Cards
 // already written with the old ID stop opening it, so the user is told.
-func (p *deckPass) remint(ctx context.Context, pending *pendingDeck) error {
+func (p *deckPass) remint(pending *pendingDeck) error {
 	newID, err := database.NewDeckID()
 	if err != nil {
 		return fmt.Errorf("mint deck id: %w", err)
@@ -847,7 +869,8 @@ func (p *deckPass) remint(ctx context.Context, pending *pendingDeck) error {
 	p.svc.db.QueueDeckTags(pending.deckID, newID)
 	log.Warn().Str("old", pending.deckID).Str("new", newID).Msg("deck ID was already taken; minted a new one")
 	p.svc.notifyInbox("Deck given a new ID", fmt.Sprintf(
-		"%q needed a new ID to sync. Cards written for it before need to be written again.", pending.name),
+		"%q needed a new ID to sync. Cards written for it before need to be written again; "+
+			"they still open the copy the other account keeps.", pending.name),
 		inbox.CategoryNone)
 	p.svc.notifyDecks(pending.deckID, models.DecksChangedDeleted)
 	p.svc.notifyDecks(newID, models.DecksChangedCreated)
@@ -909,6 +932,7 @@ type deckPullResponse struct {
 	Items     []deckSync `json:"items"`
 	NextSince int64      `json:"next_since"`
 	HasMore   bool       `json:"has_more"`
+	Reset     bool       `json:"reset"`
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.

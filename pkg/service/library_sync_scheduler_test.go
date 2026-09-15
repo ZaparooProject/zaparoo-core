@@ -320,9 +320,9 @@ func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, accesses, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, accesses, func() bool { return false }, &libraryStateTimings{
 			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
 	}()
 	t.Cleanup(func() {
@@ -357,9 +357,9 @@ func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, make(chan struct{}), &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, make(chan struct{}), func() bool { return false }, &libraryStateTimings{
 			check: 10 * time.Millisecond, startup: time.Hour, debounce: 10 * time.Millisecond,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
 	}()
 	t.Cleanup(func() {
@@ -391,10 +391,11 @@ func TestLibraryStateLoop_DeferredStartupPassKeepsAsking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, make(chan struct{}), make(chan struct{}), &libraryStateTimings{
-			check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
-		})
+		libraryStateLoop(ctx, runner, make(chan struct{}), make(chan struct{}), func() bool { return false },
+			&libraryStateTimings{
+				check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
+				interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			})
 	}()
 	t.Cleanup(func() {
 		cancel()

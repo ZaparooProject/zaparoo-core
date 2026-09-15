@@ -812,6 +812,7 @@ func startService(
 	)
 	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
+	go watchDecksForPlaylistRefresh(st.GetContext(), notifBroker, svc)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
 	go watchForCorruptMediaDBRecovery(
