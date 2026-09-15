@@ -36,7 +36,7 @@ func onlineTestSettings(baseURL string) *models.SettingsResponse {
 	playtimeSyncEnabled := true
 	remoteControlEnabled := true
 	return &models.SettingsResponse{
-		BackupRemoteBaseURL:  &baseURL,
+		OnlineBaseURL:        &baseURL,
 		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
 		RemoteControlEnabled: &remoteControlEnabled,
 	}
@@ -56,7 +56,7 @@ func TestOnlineServerHost(t *testing.T) {
 
 	assert.Empty(t, onlineServerHost(nil))
 	assert.Empty(t, onlineServerHost(&models.SettingsResponse{}))
-	assert.Empty(t, onlineServerHost(onlineTestSettings(config.DefaultBackupRemoteBaseURL)))
+	assert.Empty(t, onlineServerHost(onlineTestSettings(config.DefaultOnlineBaseURL)))
 	assert.Equal(t, "backup.example.com:8787",
 		onlineServerHost(onlineTestSettings("https://backup.example.com:8787")))
 }
@@ -68,13 +68,6 @@ func TestCustomBaseURLHost(t *testing.T) {
 	assert.Empty(t, customBaseURLHost(config.DefaultOnlineBaseURL))
 	assert.Equal(t, "self-hosted.example.com", customBaseURLHost("https://self-hosted.example.com"))
 	assert.Equal(t, "not-a-url", customBaseURLHost("not-a-url"))
-}
-
-func TestCustomEndpointWarning(t *testing.T) {
-	t.Parallel()
-
-	assert.Empty(t, customEndpointWarning(""))
-	assert.Contains(t, customEndpointWarning("self-hosted.example.com"), "Custom server: self-hosted.example.com.")
 }
 
 func TestRemoteStatusValue(t *testing.T) {
@@ -106,27 +99,7 @@ func TestRemoteStatusDetail(t *testing.T) {
 	assert.Contains(t, detail, "Last contact: 30 Aug 01:02")
 }
 
-// onlineTestSettingsWithEndpoints builds a settings response with all four
-// configurable Online endpoints set explicitly, for pinning per-feature
-// custom-server warnings independently.
-func onlineTestSettingsWithEndpoints(
-	backupURL, playtimeURL, libraryURL, remoteControlURL string,
-) *models.SettingsResponse {
-	playtimeSyncEnabled := true
-	librarySyncEnabled := true
-	remoteControlEnabled := true
-	return &models.SettingsResponse{
-		BackupRemoteBaseURL:  &backupURL,
-		PlaytimeBaseURL:      &playtimeURL,
-		LibraryBaseURL:       &libraryURL,
-		RemoteControlBaseURL: &remoteControlURL,
-		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
-		LibrarySyncEnabled:   &librarySyncEnabled,
-		RemoteControlEnabled: &remoteControlEnabled,
-	}
-}
-
-func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *testing.T) {
+func TestBuildOnlineSettingsMenu_CustomServerShowsWarning_Integration(t *testing.T) {
 	t.Parallel()
 
 	runner := NewTestAppRunner(t, 80, 25)
@@ -134,12 +107,7 @@ func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *test
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettingsWithEndpoints(
-		config.DefaultBackupRemoteBaseURL,
-		"https://custom-playtime.example.com",
-		"https://custom-library.example.com",
-		"https://custom-remote.example.com",
-	))
+	mockSvc.SetupGetSettings(onlineTestSettings("https://custom.example.com"))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -148,30 +116,10 @@ func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *test
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText(
-		"One or more Zaparoo Online endpoints are set to a custom server.", uiSettleTimeout))
-
-	// Row descriptions only show in the help line for the currently
-	// selected row (dynamic help mode). Account, Warp, Unlink account,
-	// then Remote control.
-	require.True(t, runner.WaitForText("Remote control", uiSettleTimeout))
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	assert.True(t, runner.WaitForText("Custom server: custom-remote.example.com.", uiSettleTimeout))
-
-	// Three more down: past Remote status and Remote control activity, to
-	// Play history sync.
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	assert.True(t, runner.WaitForText("Custom server: custom-playtime.example.com.", uiSettleTimeout))
-
-	runner.SimulateArrowDown()
-	assert.True(t, runner.WaitForText("Custom server: custom-library.example.com.", uiSettleTimeout))
+	require.True(t, runner.WaitForText("Custom server: custom.example.com.", uiSettleTimeout))
 }
 
-func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *testing.T) {
+func TestBuildOnlineSettingsMenu_DefaultServerShowsNoWarning_Integration(t *testing.T) {
 	t.Parallel()
 
 	runner := NewTestAppRunner(t, 80, 25)
@@ -179,10 +127,7 @@ func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *te
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettingsWithEndpoints(
-		config.DefaultBackupRemoteBaseURL, config.DefaultPlaytimeBaseURL,
-		config.DefaultLibraryBaseURL, config.DefaultRemoteControlBaseURL,
-	))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -203,7 +148,7 @@ func TestBuildOnlineSettingsMenu_NotLinkedShowsLinkAction_Integration(t *testing
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateUnlinked))
 
 	runner.Start(pages)
@@ -228,7 +173,7 @@ func TestBuildOnlineSettingsMenu_LinkedShowsAccountControls_Integration(t *testi
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -261,7 +206,7 @@ func TestBuildOnlineSettingsMenu_RemoteStatusExplainsSlot_Integration(t *testing
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	activity := onlineTestActivity(state.RemoteStateNotRemoteDevice)
 	activity.Status.LastErrorCode = "remote_slot_required"
 	mockSvc.SetupGetRemoteActivity(activity)
@@ -294,7 +239,7 @@ func TestBuildOnlineSettingsMenu_RemoteStatusLoadFailureIsNotFatal_Integration(t
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.On("GetRemoteActivity", mock.Anything).Return(nil, errors.New("api unavailable"))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -315,7 +260,7 @@ func TestBuildOnlineSettingsMenu_RemoteControlToggleUpdatesConsent_Integration(t
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -353,7 +298,7 @@ func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -395,7 +340,7 @@ func TestBuildOnlineSettingsMenu_LibrarySyncToggleUpdatesConsent_Integration(t *
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 
@@ -437,7 +382,7 @@ func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T)
 	deviceName := "Living Room MiSTer"
 	status.Remote.DeviceName = &deviceName
 	mockSvc.SetupGetBackupStatus(status)
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 
 	runner.Start(pages)
@@ -480,7 +425,7 @@ func TestBuildOnlineSettingsMenu_UnlinkConfirmFlow_Integration(t *testing.T) {
 	// First build: linked. After unlinking the page rebuilds: not linked.
 	mockSvc.On("GetBackupStatus", mock.Anything).Return(backupTestStatus(true), nil).Once()
 	mockSvc.On("GetBackupStatus", mock.Anything).Return(backupTestStatus(false), nil)
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.On("Unlink", mock.Anything).Return(nil).Once()
 
@@ -514,7 +459,7 @@ func TestBuildOnlineSettingsMenu_CloudBackupNavigatesToBackupPage_Integration(t 
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(onlineTestActivity(state.RemoteStateWaiting))
 	mockSvc.SetupUpdateSettingsSuccess()
 

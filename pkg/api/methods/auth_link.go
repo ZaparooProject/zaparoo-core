@@ -51,11 +51,6 @@ import (
 // token that goes through the same redemption pipeline as the forward flow.
 
 const (
-	// deviceLinkDefaultBaseURL is the auth server the link flow targets when
-	// no explicit url param is given. Linking is an account concern, so this
-	// is fixed to the official API rather than inheriting the backup base
-	// URL from config; local development passes url explicitly.
-	deviceLinkDefaultBaseURL  = "https://api.zaparoo.com"
 	deviceLinkCreatePath      = "/v1/device-link-requests"
 	deviceLinkPollPath        = "/v1/device-link-requests/poll"
 	deviceLinkDefaultInterval = 5 * time.Second
@@ -130,11 +125,13 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 	}
+	// Linking targets the configured online service unless the caller names
+	// another server explicitly.
 	baseURL := params.URL
 	if baseURL == "" {
-		baseURL = deviceLinkDefaultBaseURL
+		baseURL = env.Config.OnlineBaseURL()
 	}
-	if err := config.ValidateBackupRemoteBaseURL(baseURL); err != nil {
+	if err := config.ValidateOnlineBaseURL(baseURL); err != nil {
 		return nil, models.ClientErr(remoteRequestError("invalid link URL", err))
 	}
 	baseURL = strings.TrimRight(baseURL, "/")

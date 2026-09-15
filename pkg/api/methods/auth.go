@@ -99,15 +99,16 @@ func HandleSettingsAuthStatus(env requests.RequestEnv) (any, error) {
 	if params.URL == "" {
 		return nil, models.ClientErrf("invalid params: url is required")
 	}
-	configuredBackupURL := env.Config.BackupRemoteBaseURL()
-	if !authStatusProbeAllowed(params.URL, configuredBackupURL) {
+	if !authStatusProbeAllowed(params.URL, env.Config.OnlineBaseURL()) {
 		return models.SettingsAuthStatusResponse{Linked: false}, nil
 	}
-	entry := config.LookupAuth(config.GetAuthCfg(), config.BackupAuthLookupURL(params.URL))
+	entry := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(params.URL))
 	return models.SettingsAuthStatusResponse{Linked: entry != nil && entry.Bearer != ""}, nil
 }
 
-func authStatusProbeAllowed(rawURL, configuredBackupURL string) bool {
+// authStatusProbeAllowed reports whether a link probe may answer for rawURL:
+// the official hosts over HTTPS, or the configured online server.
+func authStatusProbeAllowed(rawURL, configuredOnlineURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return false
@@ -116,7 +117,7 @@ func authStatusProbeAllowed(rawURL, configuredBackupURL string) bool {
 	if parsed.Scheme == "https" && slices.Contains(config.OfficialAuthHosts, host) {
 		return true
 	}
-	configured, err := url.Parse(configuredBackupURL)
+	configured, err := url.Parse(configuredOnlineURL)
 	if err != nil || configured.Scheme == "" || configured.Host == "" {
 		return false
 	}
@@ -147,7 +148,7 @@ func HandleSettingsAuthUnlink(env requests.RequestEnv) (any, error) {
 	}
 
 	creds := config.GetAuthCfg()
-	lookup := config.BackupAuthLookupURL(env.Config.BackupRemoteBaseURL())
+	lookup := config.RemoteAuthLookupURL(env.Config.OnlineBaseURL())
 	removed := []string{}
 	for domain, stored := range creds {
 		switch {
@@ -228,11 +229,11 @@ func performClaim(
 	if err != nil {
 		return nil, models.ClientErr(remoteRequestError("invalid claim URL", err))
 	}
-	// HTTPS only, with the same private/localhost HTTP allowance the backup
+	// HTTPS only, with the same private/localhost HTTP allowance the online
 	// base URL gets — for developing against a locally-run API.
 	if claimURL.Scheme != "https" {
 		rootURL := claimURL.Scheme + "://" + claimURL.Host
-		if validateErr := config.ValidateBackupRemoteBaseURL(rootURL); validateErr != nil {
+		if validateErr := config.ValidateOnlineBaseURL(rootURL); validateErr != nil {
 			return nil, models.ClientErr(remoteRequestError("claim URL must use HTTPS", validateErr))
 		}
 	}
@@ -308,9 +309,9 @@ func performClaim(
 		}
 	}
 
-	// A fresh credential for the backup API supersedes any recorded
+	// A fresh credential for the online service supersedes any recorded
 	// revocation (a 401-triggered unlinked marker).
-	backupLookup := config.BackupAuthLookupURL(cfg.BackupRemoteBaseURL())
+	backupLookup := config.RemoteAuthLookupURL(cfg.OnlineBaseURL())
 	for _, domain := range storedDomains {
 		if !strings.EqualFold(domain, backupLookup) {
 			continue

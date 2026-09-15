@@ -55,24 +55,13 @@ func customBaseURLHost(value string) string {
 	return parsed.Host
 }
 
-// onlineServerHost returns the backup server host to display when a custom
+// onlineServerHost returns the online server host to display when a custom
 // server is configured, or "" when using the official default.
 func onlineServerHost(settings *models.SettingsResponse) string {
-	if settings == nil || settings.BackupRemoteBaseURL == nil {
+	if settings == nil || settings.OnlineBaseURL == nil {
 		return ""
 	}
-	return customBaseURLHost(*settings.BackupRemoteBaseURL)
-}
-
-// customEndpointWarning returns a warning-styled note to prepend to a
-// feature's description when its endpoint is non-default (host != ""), or
-// "" otherwise.
-func customEndpointWarning(host string) string {
-	if host == "" {
-		return ""
-	}
-	t := CurrentTheme()
-	return fmt.Sprintf("[%s]Custom server: %s.[-] ", t.WarningColorName, host)
+	return customBaseURLHost(*settings.OnlineBaseURL)
 }
 
 // buildOnlineSettingsMenu loads account status in the background, then shows
@@ -127,26 +116,10 @@ func renderOnlineSettingsMenu(
 	rebuild := func() { buildOnlineSettingsMenu(svc, pages, app, goBack) }
 	status := data.status
 	serverHost := onlineServerHost(data.settings)
-
-	remoteControlHost, playtimeHost, libraryHost, backupHost := "", "", "", ""
-	if data.settings != nil {
-		if data.settings.RemoteControlBaseURL != nil {
-			remoteControlHost = customBaseURLHost(*data.settings.RemoteControlBaseURL)
-		}
-		if data.settings.PlaytimeBaseURL != nil {
-			playtimeHost = customBaseURLHost(*data.settings.PlaytimeBaseURL)
-		}
-		if data.settings.LibraryBaseURL != nil {
-			libraryHost = customBaseURLHost(*data.settings.LibraryBaseURL)
-		}
-		if data.settings.BackupRemoteBaseURL != nil {
-			backupHost = customBaseURLHost(*data.settings.BackupRemoteBaseURL)
-		}
-	}
-	if remoteControlHost != "" || playtimeHost != "" || libraryHost != "" || backupHost != "" {
+	if serverHost != "" {
 		frame.SetInfoText(fmt.Sprintf(
-			"[%s]One or more Zaparoo Online endpoints are set to a custom server. Review below.[-]",
-			CurrentTheme().WarningColorName,
+			"[%s]Custom server: %s. All online features use it.[-]",
+			CurrentTheme().WarningColorName, serverHost,
 		))
 	}
 
@@ -175,7 +148,6 @@ func renderOnlineSettingsMenu(
 	if !status.Remote.Linked {
 		remoteControlDesc = "Allow approved remote commands after this device is linked to Zaparoo Online"
 	}
-	remoteControlDesc = customEndpointWarning(remoteControlHost) + remoteControlDesc
 	menu.AddToggle("Remote control", remoteControlDesc, &remoteControlEnabled, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -209,7 +181,6 @@ func renderOnlineSettingsMenu(
 	if !status.Remote.Linked {
 		playtimeSyncDesc = "Upload play history when this device is linked to Zaparoo Online"
 	}
-	playtimeSyncDesc = customEndpointWarning(playtimeHost) + playtimeSyncDesc
 	menu.AddToggle("Play history sync", playtimeSyncDesc, &playtimeSyncEnabled, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -230,7 +201,6 @@ func renderOnlineSettingsMenu(
 	if !status.Remote.Linked {
 		librarySyncDesc = "Sync your game list, favorites, likes and decks when this device is linked to Zaparoo Online"
 	}
-	librarySyncDesc = customEndpointWarning(libraryHost) + librarySyncDesc
 	menu.AddToggle("Library sync", librarySyncDesc, &librarySyncEnabled, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -247,7 +217,6 @@ func renderOnlineSettingsMenu(
 	if !status.Remote.Linked {
 		cloudDesc = "Keep this device backed up to the cloud, included with Zaparoo Warp"
 	}
-	cloudDesc = customEndpointWarning(backupHost) + cloudDesc
 	menu.AddNavAction("Cloud backup", cloudDesc, func() {
 		buildBackupSettingsMenu(svc, pages, app, rebuild)
 	})

@@ -32,7 +32,6 @@ func TestLibrarySyncDefaultsDisabled(t *testing.T) {
 	t.Parallel()
 	cfg := &Instance{}
 	assert.False(t, cfg.LibrarySyncEnabled())
-	assert.Equal(t, DefaultLibraryBaseURL, cfg.LibraryBaseURL())
 }
 
 func TestLibrarySyncPersists(t *testing.T) {
@@ -54,39 +53,5 @@ func TestLibrarySyncPersists(t *testing.T) {
 	library, ok := persisted["library"].(map[string]any)
 	require.True(t, ok, "library sync is written under [library]")
 	assert.Equal(t, true, library["sync"])
-	_, hasBaseURL := library["base_url"]
-	assert.False(t, hasBaseURL, "the default endpoint is never written")
-}
-
-func TestSetLibraryBaseURL(t *testing.T) {
-	t.Parallel()
-
-	fs := afero.NewMemMapFs()
-	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
-	require.NoError(t, err)
-
-	require.NoError(t, cfg.SetLibraryBaseURL("https://library.example.com/api/"))
-	assert.Equal(t, "https://library.example.com/api", cfg.LibraryBaseURL())
-	require.Error(t, cfg.SetLibraryBaseURL("http://example.com"))
-	assert.Equal(t, "https://library.example.com/api", cfg.LibraryBaseURL())
-
-	require.NoError(t, cfg.Save())
-	require.NoError(t, cfg.Load())
-	assert.Equal(t, "https://library.example.com/api", cfg.LibraryBaseURL())
-}
-
-func TestLibraryBaseURLInvalidInConfigFallsBack(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Instance{}
-	require.NoError(t, cfg.LoadTOML(`[library]
-base_url = "http://example.com"
-`))
-	assert.Empty(t, cfg.vals.Library.BaseURL)
-	assert.Equal(t, DefaultLibraryBaseURL, cfg.LibraryBaseURL())
-
-	require.NoError(t, cfg.LoadTOML(`[library]
-base_url = "http://127.0.0.1:8787"
-`))
-	assert.Equal(t, "http://127.0.0.1:8787", cfg.LibraryBaseURL())
+	assert.Len(t, library, 1, "only the sync flag is written under [library]")
 }
