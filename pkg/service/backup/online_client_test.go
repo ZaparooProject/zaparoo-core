@@ -61,6 +61,7 @@ func TestOnlineClientRequests(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/device/json":
 			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			assert.Equal(t, "7", r.URL.Query().Get("since"), "a query after the path reaches the server")
 			body, err := io.ReadAll(r.Body)
 			assert.NoError(t, err)
 			assert.JSONEq(t, `{"hello":"world"}`, string(body))
@@ -104,7 +105,7 @@ func TestOnlineClientRequests(t *testing.T) {
 		Answer string `json:"answer"`
 	}
 	payload := map[string]string{"hello": "world"}
-	require.NoError(t, client.DoJSON(ctx, http.MethodPost, "/v1/device/json", payload, &out))
+	require.NoError(t, client.DoJSON(ctx, http.MethodPost, "/v1/device/json?since=7", payload, &out))
 	assert.Equal(t, "ok", out.Answer)
 
 	headers := http.Header{}

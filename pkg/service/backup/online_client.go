@@ -106,7 +106,8 @@ func (o *OnlineClient) CredentialTag() string {
 }
 
 // DoJSON sends body encoded as JSON, or no body when it is nil, and decodes a
-// successful JSON response into out unless out is nil.
+// successful JSON response into out unless out is nil. path may end in a
+// query string.
 func (o *OnlineClient) DoJSON(ctx context.Context, method, path string, body, out any) error {
 	return o.client.doJSON(ctx, method, path, body, out)
 }

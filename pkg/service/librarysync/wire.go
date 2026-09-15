@@ -24,6 +24,7 @@ import "github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 // Device routes and headers of the Library sync contract.
 const (
 	pathResolve         = "/v1/device/library/resolve"
+	pathState           = "/v1/device/library/state"
 	pathInventory       = "/v1/device/library/inventory"
 	headerGeneration    = "X-Zaparoo-Library-Generation"
 	headerSchemaVersion = "X-Zaparoo-Library-Schema-Version"

@@ -136,3 +136,39 @@ func TestLibrarySyncLoop_FailureBacksOffButIdleDoesNot(t *testing.T) {
 	require.Eventually(t, func() bool { return runner.passes.Load() == 3 }, time.Second, 5*time.Millisecond,
 		"being off is not a failure, so the next index change runs a pass")
 }
+
+type fakeLibraryStateRunner struct {
+	passes atomic.Int32
+}
+
+func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateResult, error) {
+	r.passes.Add(1)
+	return librarysync.StateResult{}, nil
+}
+
+func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, requests, &libraryStateTimings{
+			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
+			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	for range 3 {
+		requests <- struct{}{}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), runner.passes.Load(), "a burst of edits is pushed in one pass")
+}
