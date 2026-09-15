@@ -2121,7 +2121,7 @@ An object identifying a media row by `mediaId` or by `(system, path)`.
 | path      | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
 | assetType | string | Yes      | Allowlisted asset type. Currently only `manual`. Raw property tags are not accepted. |
 | offset    | number | No       | Zero-based raw byte offset. Defaults to `0`. Nonzero offsets require `etag`. An offset equal to `size` returns an empty complete chunk; larger offsets are rejected. |
-| length    | number | No       | Requested raw bytes. Defaults to and cannot exceed 524288 (512 KiB). |
+| length    | number | No       | Requested raw bytes. Defaults to and cannot exceed 131072 (128 KiB). |
 | etag      | string | No       | Opaque asset version from a prior response. Required when `offset` is nonzero. |
 
 #### Result
@@ -2152,7 +2152,7 @@ An object identifying a media row by `mediaId` or by `(system, path)`.
   "params": {
     "mediaId": 123,
     "assetType": "manual",
-    "length": 524288
+    "length": 131072
   }
 }
 ```
@@ -2171,9 +2171,9 @@ An object identifying a media row by `mediaId` or by `(system, path)`.
     "size": 7340032,
     "etag": "43e47c399d35d8be...",
     "offset": 0,
-    "length": 524288,
+    "length": 131072,
     "data": "JVBERi0xLjcK...",
-    "nextOffset": 524288,
+    "nextOffset": 131072,
     "complete": false
   }
 }
@@ -2189,8 +2189,8 @@ An object identifying a media row by `mediaId` or by `(system, path)`.
   "params": {
     "mediaId": 123,
     "assetType": "manual",
-    "offset": 524288,
-    "length": 524288,
+    "offset": 131072,
+    "length": 131072,
     "etag": "43e47c399d35d8be..."
   }
 }

@@ -40,7 +40,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 )
 
-const mediaAssetMaxChunkBytes = int64(512 * 1024)
+// mediaAssetMaxChunkBytes bounds one chunk. It is deliberately small: a chunk
+// is base64-encoded into the response (about 1.33x) and buffered in the
+// per-session response queue, so the response backlog a client can pin in
+// memory is this size times the queue depth. A slow or non-reading client
+// then costs tens of MB rather than hundreds, at the price of more round
+// trips for a large asset.
+const mediaAssetMaxChunkBytes = int64(128 * 1024)
 
 const mediaAssetPDFProbeBytes = int64(1024)
 
