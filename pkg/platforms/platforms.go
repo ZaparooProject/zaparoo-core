@@ -222,7 +222,11 @@ type CmdEnv struct {
 	// in the background as the deck opens. It returns at once and never
 	// blocks the open; nil when no sync is configured.
 	RefreshOwnedDeck func(ctx context.Context, deckID string)
-	PlaybackManager  audio.PlaybackManager
+	// TrustedDeckID names a deck whose link the linked account vouched for
+	// as the user's own for this command, so a cached copy of it opens
+	// trusted this once. Empty otherwise.
+	TrustedDeckID   string
+	PlaybackManager audio.PlaybackManager
 	// LauncherCache resolves the launcher behind the active media. It holds
 	// launchers the platform cannot build itself, so it is the only complete
 	// source; never resolve a launcher ID from Platform.Launchers alone.

@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -840,12 +841,47 @@ func TestCheckZapLinkFetchesSupportedRemoteScript(t *testing.T) {
 	platform := mocks.NewMockPlatform()
 	platform.On("ID").Return("mister")
 
-	target, err := checkZapLink(nil, platform, db, gozapscript.Command{Args: []string{server.URL + "/token"}})
+	target, owned, err := checkZapLink(nil, platform, db, gozapscript.Command{Args: []string{server.URL + "/token"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, expected, target)
+	assert.False(t, owned, "a host that got no credential cannot vouch for ownership")
 	mockUserDB.AssertExpectations(t)
 	platform.AssertExpectations(t)
+}
+
+// TestGetRemoteZapScriptOwnedNeedsACredential pins the trust rule for the
+// owned header: it is honoured only from a host this device sent its own
+// credential to, and absent means not owned.
+func TestGetRemoteZapScriptOwnedNeedsACredential(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sendHeader atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		if sendHeader.Load() {
+			w.Header().Set(HeaderZaparooOwned, "1")
+		}
+		_, _ = w.Write([]byte("**launch.system:snes"))
+	}))
+	defer server.Close()
+
+	sendHeader.Store(true)
+	_, owned, err := getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.False(t, owned, "no credential was sent, so the claim is ignored")
+
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	_, owned, err = getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.True(t, owned, "the credentialed host vouched for the link")
+
+	sendHeader.Store(false)
+	_, owned, err = getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.False(t, owned, "absent means not owned")
 }
 
 // FetchWellKnown Tests

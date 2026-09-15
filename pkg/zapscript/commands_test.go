@@ -23,8 +23,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -1000,6 +1003,49 @@ func TestRunCommandCountsZapLinkExpansionInTotalCommands(t *testing.T) {
 // TestRunCommandAppliesZapLinkForNonRemoteSource pins that every other
 // token source still goes through ZapLink resolution as before. The
 // remote-source skip in RunCommand must not become a blanket skip.
+// TestRunCommandZapLinkTrustFollowsTheOwnedAnswer pins that a link body runs
+// untrusted unless a credentialed link service vouched for it as the user's
+// own, in which case it runs trusted like a card the user wrote.
+func TestRunCommandZapLinkTrustFollowsTheOwnedAnswer(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sendHeader atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		if sendHeader.Load() {
+			w.Header().Set(HeaderZaparooOwned, "1")
+		}
+		// A command skipped by its own condition answers with the trust it
+		// would have run under, without running anything.
+		_, _ = w.Write([]byte("**input.keyboard:a?when=false"))
+	}))
+	defer server.Close()
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", server.URL).Return(true, true, nil)
+	mockUserDB.On("UpdateZapLinkCache", server.URL+"/c1", mock.Anything).Return(nil)
+	db := &database.Database{UserDB: mockUserDB}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	run := func() platforms.CmdResult {
+		result, err := RunCommand(
+			t.Context(), mockPlatform, &config.Instance{}, playlists.PlaylistController{},
+			tokens.Token{Source: tokens.SourceReader},
+			zapscript.Command{Name: "launch", Args: []string{server.URL + "/c1"}},
+			1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
+		)
+		require.NoError(t, err)
+		return result
+	}
+	assert.True(t, run().Unsafe, "a link body runs untrusted by default")
+	sendHeader.Store(true)
+	assert.False(t, run().Unsafe, "a link the account vouched for runs trusted")
+}
+
 func TestRunCommandAppliesZapLinkForNonRemoteSource(t *testing.T) {
 	t.Parallel()
 
