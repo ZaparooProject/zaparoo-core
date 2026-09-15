@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,8 +69,12 @@ func TestOnlineClientRequests(t *testing.T) {
 			assert.Equal(t, http.MethodPut, r.Method)
 			assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 			assert.Equal(t, "7", r.Header.Get("X-Test-Count"))
-			assert.Equal(t, "Bearer online-token", r.Header.Get("Authorization"),
+			assert.Equal(t, []string{"Bearer online-token"}, r.Header.Values("Authorization"),
 				"extra headers cannot replace the credential")
+			assert.Equal(t, []string{"application/octet-stream"}, r.Header.Values("Content-Type"),
+				"extra headers cannot replace the content type")
+			assert.Equal(t, []string{"mister"}, r.Header.Values(zapscript.HeaderZaparooPlatform),
+				"extra headers cannot replace the device headers")
 			body, err := io.ReadAll(r.Body)
 			assert.NoError(t, err)
 			assert.Equal(t, []byte{1, 2, 3}, body)
@@ -103,6 +108,8 @@ func TestOnlineClientRequests(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("X-Test-Count", "7")
 	headers.Set("Authorization", "Bearer spoofed")
+	headers.Set("Content-Type", "text/plain")
+	headers.Add(zapscript.HeaderZaparooPlatform, "spoofed")
 	require.NoError(t, client.DoBytes(ctx, http.MethodPut, "/v1/device/bytes", []byte{1, 2, 3}, headers, nil))
 
 	err = client.DoJSON(ctx, http.MethodGet, "/v1/device/missing", nil, nil)
