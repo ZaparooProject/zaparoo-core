@@ -68,8 +68,14 @@ func TestTapRelaunch_SameTargetPreservesStateAndChainedCommands(t *testing.T) {
 	env.waitForSoftwareToken(t)
 	active := env.st.ActiveMedia()
 	owner := env.st.GetSoftwareToken()
+	// The first launch queued a playlist clear that the worker may not have
+	// handled yet. Setting the playlist through the same queue orders it after
+	// that clear, so the stale clear cannot empty it later in the test.
 	playlist := &playlists.Playlist{ID: "keep-this-playlist"}
-	env.st.SetActivePlaylist(playlist)
+	env.svc.PlaylistQueue <- playlist
+	require.Eventually(t, func() bool {
+		return env.st.GetActivePlaylist() == playlist
+	}, behaviorTimeout, time.Millisecond)
 
 	var exits atomic.Int32
 	env.st.SetBeforeExitHook(func() { exits.Add(1) })
