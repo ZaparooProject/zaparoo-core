@@ -553,6 +553,7 @@ func TestMediaDBLockModeForAPIMethod(t *testing.T) {
 		{"tags update takes exclusive lock", models.MethodMediaTagsUpdate, mediaDBLockWrite},
 		{"meta update takes exclusive lock", models.MethodMediaMetaUpdate, mediaDBLockWrite},
 		{"image takes no lock", models.MethodMediaImage, mediaDBLockNone},
+		{"asset takes no lock", models.MethodMediaAsset, mediaDBLockNone},
 		{"other method takes read lock", models.MethodMediaMeta, mediaDBLockRead},
 	}
 
@@ -561,6 +562,17 @@ func TestMediaDBLockModeForAPIMethod(t *testing.T) {
 			assert.Equal(t, tt.wantMode, mediaDBLockModeForAPIMethod(tt.method), "method %q", tt.method)
 		})
 	}
+}
+
+// TestGlobalSlotPoolForAPIMethod pins that the heavy blob/file-backed reads
+// carry a global concurrency gate and everything else runs ungated.
+func TestGlobalSlotPoolForAPIMethod(t *testing.T) {
+	assert.Equal(t, wsGlobalImageSlots, globalSlotPoolForAPIMethod(models.MethodMediaImage))
+	assert.Equal(t, wsGlobalAssetSlots, globalSlotPoolForAPIMethod(models.MethodMediaAsset))
+	assert.NotEqual(t, wsGlobalImageSlots, wsGlobalAssetSlots,
+		"image and asset must not share one pool")
+	assert.Nil(t, globalSlotPoolForAPIMethod(models.MethodMediaMeta))
+	assert.Nil(t, globalSlotPoolForAPIMethod(models.MethodMediaSearch))
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {

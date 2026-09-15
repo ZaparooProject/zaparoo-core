@@ -143,6 +143,10 @@ func isImageAPIMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodMediaImage)
 }
 
+func isAssetAPIMethod(method string) bool {
+	return strings.EqualFold(method, models.MethodMediaAsset)
+}
+
 func isMediaDBTransactionAPIMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodMediaTagsUpdate) ||
 		strings.EqualFold(method, models.MethodMediaMetaUpdate)
