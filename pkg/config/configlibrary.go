@@ -19,14 +19,11 @@
 
 package config
 
-const DefaultLibraryBaseURL = DefaultOnlineBaseURL
-
 // Library configures Library sync: uploading which games this device holds
 // and keeping favorites, play-later, reactions and decks converged with the
 // linked Zaparoo Online account.
 type Library struct {
-	Sync    *bool  `toml:"sync,omitempty"`
-	BaseURL string `toml:"base_url,omitempty"`
+	Sync *bool `toml:"sync,omitempty"`
 }
 
 // LibrarySyncEnabled reports whether the user explicitly consented to Library
@@ -42,30 +39,4 @@ func (c *Instance) SetLibrarySync(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Library.Sync = &enabled
-}
-
-// LibraryBaseURL returns the API base URL used for Library sync.
-func (c *Instance) LibraryBaseURL() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.vals.Library.BaseURL == "" {
-		return DefaultLibraryBaseURL
-	}
-	return c.vals.Library.BaseURL
-}
-
-// SetLibraryBaseURL validates, normalizes, and stores the Library sync API
-// base URL.
-func (c *Instance) SetLibraryBaseURL(rawURL string) error {
-	if err := ValidateLibraryBaseURL(rawURL); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Library.BaseURL = normalizeRemoteBaseURL(rawURL)
-	return nil
-}
-
-func ValidateLibraryBaseURL(rawURL string) error {
-	return validateRemoteBaseURL(rawURL, "library")
 }

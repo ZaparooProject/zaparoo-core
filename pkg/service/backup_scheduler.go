@@ -103,7 +103,7 @@ func onlineFailureRequiresWarning(err error, expected bool) bool {
 // delay the first upload after the user enables sync or links the device.
 func currentPlaySyncConfiguration(cfg *config.Instance) playSyncConfiguration {
 	configuration := playSyncConfiguration{enabled: cfg.PlaytimeSyncEnabled()}
-	lookupURL := config.RemoteAuthLookupURL(cfg.PlaytimeBaseURL())
+	lookupURL := config.RemoteAuthLookupURL(cfg.OnlineBaseURL())
 	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
 	if entry != nil {
 		configuration.bearer = entry.Bearer

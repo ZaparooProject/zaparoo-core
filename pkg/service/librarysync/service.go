@@ -138,7 +138,7 @@ func (s *Service) client() (*backup.OnlineClient, error) {
 	if s.newClient == nil {
 		return nil, errors.New("library sync has no online client")
 	}
-	return s.newClient(s.cfg.LibraryBaseURL())
+	return s.newClient(s.cfg.OnlineBaseURL())
 }
 
 // ApplySetting acts on a change of the Library sync setting since the last

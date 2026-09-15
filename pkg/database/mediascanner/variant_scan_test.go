@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,11 +44,11 @@ func TestScanRecomputesLoneVariantTitle(t *testing.T) {
 	plainPath := filepath.Join("roms", "NES", "Metroid (USA).nes")
 	indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath)
 
-	hackTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", hackPath)
+	hackTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", pathutil.CanonicalMediaPath(hackPath))
 	require.NoError(t, err)
 	assert.Contains(t, hackTags, database.TagInfo{Type: "unlicensed", Tag: "hack"})
 
-	plainTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", plainPath)
+	plainTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", pathutil.CanonicalMediaPath(plainPath))
 	require.NoError(t, err)
 	assert.Empty(t, plainTags, "a lone plain release still has nothing to disambiguate")
 
@@ -55,7 +56,7 @@ func TestScanRecomputesLoneVariantTitle(t *testing.T) {
 	// marks it too.
 	newHack := filepath.Join("roms", "NES", "Metroid (USA) (Hack).nes")
 	indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath, newHack)
-	newTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", newHack)
+	newTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", pathutil.CanonicalMediaPath(newHack))
 	require.NoError(t, err)
 	assert.Contains(t, newTags, database.TagInfo{Type: "unlicensed", Tag: "hack"})
 }

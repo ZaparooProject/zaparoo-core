@@ -150,7 +150,7 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
-	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
 	mockSvc.SetupGetRemoteActivity(&models.RemoteActivityResponse{Entries: []models.RemoteActivityEntry{}})
 
 	runner.Start(pages)

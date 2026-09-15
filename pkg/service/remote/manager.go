@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,7 +182,7 @@ func (m *manager) run(ctx context.Context) {
 						continue
 					}
 					m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
-					m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
+					m.markUnlinkedIfCurrent(rejectedBearer(err))
 					m.sleepWhileEligible(ctx, time.Minute, true)
 					continue
 				}
@@ -221,7 +220,7 @@ func (m *manager) run(ctx context.Context) {
 					break
 				}
 				m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
-				m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
+				m.markUnlinkedIfCurrent(rejectedBearer(err))
 				m.sleepWhileEligible(ctx, time.Minute, true)
 			case errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound:
 				// The server answers 404 both when the feature is dark and
@@ -276,7 +275,7 @@ func (m *manager) run(ctx context.Context) {
 // round trip (a DB write or two plus one or two HTTP posts), and handling it
 // inline naturally caps how fast the next dispatch can happen to that round
 // trip's own duration. A server that answers /wait instantly every time (a
-// misbehaving or compromised RemoteControlBaseURL, squarely within this
+// misbehaving or compromised online server, squarely within this
 // feature's threat model) would otherwise let busy dispatches spawn
 // goroutines without bound, since executionSlot only gates the one real
 // execution slot, not dispatch itself.
@@ -296,18 +295,7 @@ func (m *manager) dispatchOperation(ctx context.Context, workers *sync.WaitGroup
 }
 
 func (m *manager) sendCapabilityHeartbeat(ctx context.Context) error {
-	capabilities := make(map[string]any)
-	if sameEndpoint(
-		m.deps.Config.RemoteControlBaseURL(), m.deps.Config.BackupRemoteBaseURL(),
-	) {
-		capabilities["backup"] = 1
-	}
-	if m.deps.Config.RemoteControlEnabled() {
-		capabilities["remote_operations"] = map[string]any{"version": 1, "enabled": true}
-	}
-	if sameEndpoint(m.deps.Config.RemoteControlBaseURL(), m.deps.Config.LibraryBaseURL()) {
-		capabilities["library_sync"] = backup.LibrarySyncCapability(m.deps.Config)
-	}
+	capabilities := backup.HeartbeatCapabilities(m.deps.Config)
 	body := map[string]any{
 		"core_version": config.AppVersion,
 		"capabilities": capabilities,
@@ -327,20 +315,14 @@ func (m *manager) supersededRejection(err error) bool {
 	return rejected != "" && rejected != m.deviceBearer()
 }
 
-// markUnlinkedIfSharedEndpoint records a rejected device credential as an
-// unlinked account, when remote control shares the backup service's
-// endpoint (and so its credential). rejected is the bearer the server
-// refused: a 401 for a credential that a re-link has since replaced is a
-// late answer about the old token, not a verdict on the new one, so it is
-// ignored rather than flagging the fresh link as unlinked.
-func (m *manager) markUnlinkedIfSharedEndpoint(rejected string) {
+// markUnlinkedIfCurrent records a rejected device credential as an unlinked
+// account. rejected is the bearer the server refused: a 401 for a credential
+// that a re-link has since replaced is a late answer about the old token,
+// not a verdict on the new one, so it is ignored rather than flagging the
+// fresh link as unlinked.
+func (m *manager) markUnlinkedIfCurrent(rejected string) {
 	if rejected != "" && rejected != m.deviceBearer() {
 		log.Debug().Msg("ignoring unauthorized response for superseded remote credential")
-		return
-	}
-	if !sameEndpoint(
-		m.deps.Config.RemoteControlBaseURL(), m.deps.Config.BackupRemoteBaseURL(),
-	) {
 		return
 	}
 	if m.markUnlinked != nil {
@@ -389,21 +371,8 @@ func isUnauthorized(err error) bool {
 	return errors.As(err, &httpErr) && httpErr.status == http.StatusUnauthorized
 }
 
-func sameEndpoint(first, second string) bool {
-	firstURL, firstErr := url.Parse(strings.TrimRight(first, "/"))
-	secondURL, secondErr := url.Parse(strings.TrimRight(second, "/"))
-	if firstErr != nil || secondErr != nil {
-		return false
-	}
-	firstURL.Scheme = strings.ToLower(firstURL.Scheme)
-	firstURL.Host = strings.ToLower(firstURL.Host)
-	secondURL.Scheme = strings.ToLower(secondURL.Scheme)
-	secondURL.Host = strings.ToLower(secondURL.Host)
-	return firstURL.String() == secondURL.String()
-}
-
 func (m *manager) deviceBearer() string {
-	baseURL := strings.TrimRight(m.deps.Config.RemoteControlBaseURL(), "/")
+	baseURL := strings.TrimRight(m.deps.Config.OnlineBaseURL(), "/")
 	entry := config.LookupAuth(config.GetAuthCfg(), config.RemoteAuthLookupURL(baseURL))
 	if entry == nil {
 		return ""
@@ -439,7 +408,7 @@ func (m *manager) waitOnce(
 		cancel()
 	}()
 	endpoint, err := buildEndpoint(
-		m.deps.Config.RemoteControlBaseURL(),
+		m.deps.Config.OnlineBaseURL(),
 		"/v1/device/remote-sessions/wait?timeout="+strconv.Itoa(waitTimeoutSeconds),
 	)
 	if err != nil {

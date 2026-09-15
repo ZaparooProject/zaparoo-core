@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -536,48 +537,82 @@ func TestRemoteControlPersistsInServiceConfig(t *testing.T) {
 	assert.NotContains(t, string(data), "[online]")
 }
 
-func TestRemoteControlBaseURL(t *testing.T) {
+func TestOnlineBaseURL(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()
 	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
 	require.NoError(t, err)
-	assert.Equal(t, DefaultRemoteControlBaseURL, cfg.RemoteControlBaseURL())
+	assert.Equal(t, DefaultOnlineBaseURL, cfg.OnlineBaseURL())
 
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://remote.example.com/api/"))
-	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
-	require.Error(t, cfg.SetRemoteControlBaseURL("http://example.com"))
-	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
+	require.NoError(t, cfg.SetOnlineBaseURL("https://online.example.com/api/"))
+	assert.Equal(t, "https://online.example.com/api", cfg.OnlineBaseURL())
+	require.Error(t, cfg.SetOnlineBaseURL("http://example.com"))
+	assert.Equal(t, "https://online.example.com/api", cfg.OnlineBaseURL())
 
 	require.NoError(t, cfg.Save())
-	require.NoError(t, cfg.SetRemoteControlBaseURL("https://other.example.com"))
+	require.NoError(t, cfg.SetOnlineBaseURL("https://other.example.com"))
 	require.NoError(t, cfg.Load())
-	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
+	assert.Equal(t, "https://online.example.com/api", cfg.OnlineBaseURL())
+
+	data, err := afero.ReadFile(fs, cfg.cfgPath)
+	require.NoError(t, err)
+	var persisted map[string]any
+	require.NoError(t, toml.Unmarshal(data, &persisted))
+	service, ok := persisted["service"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "https://online.example.com/api", service["online_base_url"])
 }
 
-// TestOnlineBaseURLsValidatedOnLoad pins that a hand-edited config.toml
-// containing an invalid base URL (the only way one gets there in practice,
-// since none of the Set*BaseURL validators has a production caller) falls
-// back to the default rather than silently loading unvalidated, and does
-// not fail the whole config load.
-func TestOnlineBaseURLsValidatedOnLoad(t *testing.T) {
+// TestOnlineBaseURLDefaultIsNeverWritten pins that the official host is
+// never persisted as a value: an unset URL stays unset across a save, and a
+// config that spells the default out explicitly loads as unset.
+func TestOnlineBaseURLDefaultIsNeverWritten(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Save())
+	data, err := afero.ReadFile(fs, cfg.cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "online_base_url")
+
+	cfg = &Instance{}
+	require.NoError(t, cfg.LoadTOML(`[service]
+online_base_url = "`+DefaultOnlineBaseURL+`"
+`))
+	assert.Empty(t, cfg.vals.Service.OnlineBaseURL)
+	assert.Equal(t, DefaultOnlineBaseURL, cfg.OnlineBaseURL())
+}
+
+// TestOnlineBaseURLValidatedOnLoad pins that a hand-edited config.toml
+// containing an invalid online base URL (the only way one gets there in
+// practice) falls back to the official host rather than loading
+// unvalidated, and does not fail the whole config load.
+func TestOnlineBaseURLValidatedOnLoad(t *testing.T) {
 	t.Parallel()
 	cfg := &Instance{}
 	require.NoError(t, cfg.LoadTOML(`
-[backup.remote]
-base_url = "http://evil.example.com"
-
-[playtime]
-base_url = "ftp://not-a-web-url.example.com"
-
-[service.remote_control]
-base_url = "http://public.example.com"
+[service]
+online_base_url = "http://evil.example.com"
 `))
-	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
-	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
-	assert.Equal(t, DefaultRemoteControlBaseURL, cfg.RemoteControlBaseURL())
+	assert.Equal(t, DefaultOnlineBaseURL, cfg.OnlineBaseURL())
+
+	require.NoError(t, cfg.LoadTOML(`
+[service]
+online_base_url = "https://custom.example.com"
+`))
+	assert.Equal(t, "https://custom.example.com", cfg.OnlineBaseURL())
+
+	require.NoError(t, cfg.LoadTOML(`
+[service]
+online_base_url = "http://127.0.0.1:8787"
+`))
+	assert.Equal(t, "http://127.0.0.1:8787", cfg.OnlineBaseURL())
 }
 
-func TestOnlineBaseURLsValidOnLoadArePreserved(t *testing.T) {
+// TestPerFeatureBaseURLsAreIgnored pins that the retired per-feature base
+// URL keys have no effect: only [service] online_base_url is read.
+func TestPerFeatureBaseURLsAreIgnored(t *testing.T) {
 	t.Parallel()
 	cfg := &Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -587,12 +622,13 @@ base_url = "https://custom-backup.example.com"
 [playtime]
 base_url = "https://custom-playtime.example.com"
 
+[library]
+base_url = "https://custom-library.example.com"
+
 [service.remote_control]
 base_url = "https://custom-remote.example.com"
 `))
-	assert.Equal(t, "https://custom-backup.example.com", cfg.BackupRemoteBaseURL())
-	assert.Equal(t, "https://custom-playtime.example.com", cfg.PlaytimeBaseURL())
-	assert.Equal(t, "https://custom-remote.example.com", cfg.RemoteControlBaseURL())
+	assert.Equal(t, DefaultOnlineBaseURL, cfg.OnlineBaseURL())
 }
 
 func TestIsDefaultOnlineBaseURL(t *testing.T) {
