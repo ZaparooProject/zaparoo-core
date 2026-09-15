@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/boolutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -491,9 +492,11 @@ func RunCommand(
 	// substitute in server-fetched ZapScript would bypass the remote
 	// operation allowlist entirely.
 	linkValue := ""
+	linkOwned := false
+	trustedDeckID := ""
 	if token.Source != tokens.SourceRemote {
 		var linkErr error
-		linkValue, linkErr = checkZapLink(cfg, pl, db, cmd)
+		linkValue, linkOwned, linkErr = checkZapLink(cfg, pl, db, cmd)
 		if linkErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
 		}
@@ -520,7 +523,15 @@ func RunCommand(
 		}
 
 		cmd = script.Cmds[0]
-		unsafe = true
+		// A link the account vouched for as the user's own card or deck runs
+		// trusted, the way a card the user wrote does; any other link body
+		// runs untrusted.
+		unsafe = !linkOwned
+		if linkOwned && cmd.Name == zapscript.ZapScriptCmdPlaylistOpen && len(cmd.Args) == 1 {
+			if deckID, isDeck := decks.ParseDeckURI(cmd.Args[0]); isDeck {
+				trustedDeckID = deckID
+			}
+		}
 	}
 
 	for i, arg := range cmd.Args {
@@ -565,6 +576,7 @@ func RunCommand(
 		PrepareMediaLaunch: opts.PrepareMediaLaunch,
 		BeforeExit:         opts.BeforeExit,
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
+		TrustedDeckID:      trustedDeckID,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
 		UI:                 opts.UI,
