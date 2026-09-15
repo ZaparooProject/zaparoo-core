@@ -141,6 +141,7 @@ type fakeLibraryStateRunner struct {
 	passes     atomic.Int32
 	deckPasses atomic.Int32
 	deckPulls  atomic.Int32
+	cursor     atomic.Int64
 }
 
 func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateResult, error) {
@@ -158,6 +159,69 @@ func (r *fakeLibraryStateRunner) PullDecksIfStale(context.Context) error {
 	return nil
 }
 
+// HintNeedsPull treats revisions above the fake cursor as unseen.
+func (r *fakeLibraryStateRunner) HintNeedsPull(_ string, revision int64) bool {
+	return revision > r.cursor.Load()
+}
+
+func runTestLibraryStateLoop(
+	t *testing.T, runner *fakeLibraryStateRunner, pipe *atomic.Bool, timings *libraryStateTimings,
+) (requests, accesses chan struct{}, hints chan libraryHint) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	requestCh := make(chan struct{}, 1)
+	accessCh := make(chan struct{}, 1)
+	hintCh := make(chan libraryHint, 4)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, requestCh, accessCh, hintCh, pipe.Load, timings)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return requestCh, accessCh, hintCh
+}
+
+func TestLibraryStateLoop_HintRunsAPassWhenItNamesAnUnseenWrite(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	runner.cursor.Store(5)
+	var pipe atomic.Bool
+	_, _, hints := runTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+		check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
+		interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+	})
+
+	hints <- libraryHint{kinds: []string{"state"}, revision: 3}
+	time.Sleep(60 * time.Millisecond)
+	assert.Zero(t, runner.passes.Load(), "a hint at or below the cursor is an echo")
+
+	hints <- libraryHint{kinds: []string{"decks", "state"}, revision: 9}
+	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
+}
+
+func TestLibraryStateLoop_PipeStateSelectsTheTimer(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	var pipe atomic.Bool
+	pipe.Store(true)
+	// The timer only runs passes once the startup pass has happened.
+	runTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+		check: 5 * time.Millisecond, startup: 5 * time.Millisecond, debounce: 5 * time.Millisecond,
+		interval: time.Hour, intervalNoPipe: 30 * time.Millisecond, initialBackoff: time.Hour, maxBackoff: time.Hour,
+	})
+
+	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int32(1), runner.passes.Load(), "with the pipe held the long timer applies")
+
+	pipe.Store(false)
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 2 }, time.Second, 5*time.Millisecond,
+		"without the pipe the short timer applies")
+}
+
 func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	t.Parallel()
 	runner := &fakeLibraryStateRunner{}
@@ -167,7 +231,7 @@ func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, accesses, func() bool { return false }, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, accesses, nil, func() bool { return false }, &libraryStateTimings{
 			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
 			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
