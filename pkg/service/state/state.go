@@ -1220,6 +1220,11 @@ type LibrarySyncSignals struct {
 	// RefreshDeck asks for a background pull of decks as one opens, when the
 	// last pull is stale. It returns at once.
 	RefreshDeck func(ctx context.Context, deckID string)
+	// Hint passes on a change hint from the account: which kinds of library
+	// data moved (state, decks) and the revision of the write.
+	Hint func(kinds []string, revision int64)
+	// PipeState reports whether the wait that delivers hints is held.
+	PipeState func(connected bool)
 }
 
 // SetLibrarySyncSignals installs the Library sync scheduler's signals.
@@ -1270,10 +1275,25 @@ func (s *State) NotifyLibraryDecksAccessed() {
 	}
 }
 
-// RefreshLibraryDeck brings an owned deck up to date before it opens. It
-// returns at once when Library sync is not running.
+// RefreshLibraryDeck asks Library sync for a background pull as an owned
+// deck opens. It returns at once.
 func (s *State) RefreshLibraryDeck(ctx context.Context, deckID string) {
 	if refresh := s.librarySync().RefreshDeck; refresh != nil {
 		refresh(ctx, deckID)
+	}
+}
+
+// NotifyLibraryHint passes a change hint from the account to Library sync.
+func (s *State) NotifyLibraryHint(kinds []string, revision int64) {
+	if hint := s.librarySync().Hint; hint != nil {
+		hint(kinds, revision)
+	}
+}
+
+// SetLibraryPipeState tells Library sync whether the wait that delivers
+// change hints is held.
+func (s *State) SetLibraryPipeState(connected bool) {
+	if pipe := s.librarySync().PipeState; pipe != nil {
+		pipe(connected)
 	}
 }

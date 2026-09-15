@@ -142,7 +142,7 @@ func TestWaitUsesContractRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawRequest = true
 		assert.Equal(t, "/v1/device/remote-sessions/wait", r.URL.Path)
-		assert.Equal(t, "25", r.URL.Query().Get("timeout"))
+		assert.Equal(t, "300", r.URL.Query().Get("timeout"), "the device asks for the longest hold the contract allows")
 		assert.Equal(t, "Bearer zpd1_test", r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -464,6 +464,93 @@ func TestRunRecordsDisabledStatus(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 	cancel()
 	<-done
+}
+
+// TestRunHoldsThePipeForLibrarySyncWithRemoteControlOff pins the shared
+// wait: with remote control off and Library sync on, the wait is still held,
+// change hints are passed on, an operation the account still sends is
+// dropped, the owner sees remote control as off, and losing the wait route
+// reports the pipe as gone.
+func TestRunHoldsThePipeForLibrarySyncWithRemoteControlOff(t *testing.T) {
+	var waits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/remote-sessions/wait":
+			w.Header().Set("Content-Type", "application/json")
+			switch atomic.AddInt32(&waits, 1) {
+			case 1:
+				_, _ = w.Write([]byte(`{"type":"library_changed","kinds":["decks","state"],"revision":42}`))
+			case 2:
+				_, _ = w.Write([]byte(`{"type":"operation_target","operation":{"command_id":"cmd_1",` +
+					`"operation_id":"op_1","operation_type":"echo","protocol_version":1,"params":{}}}`))
+			case 3:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"no wait here"}}`))
+			default:
+				<-r.Context().Done()
+			}
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetRemoteControl(false)
+	m.deps.Config.SetLibrarySync(true)
+	m.execute = func(context.Context, *operationEnvelope) operationResult {
+		t.Error("an operation must not run while remote control is off")
+		return operationResult{}
+	}
+	st, notifications := state.NewState(m.deps.Platform, "")
+	t.Cleanup(func() {
+		for len(notifications) > 0 {
+			<-notifications
+		}
+	})
+	m.deps.State = st
+	var hintKinds []string
+	var hintRevision int64
+	var hints, pipeUps, pipeDowns int32
+	m.deps.LibraryHint = func(kinds []string, revision int64) {
+		hintKinds, hintRevision = kinds, revision
+		atomic.AddInt32(&hints, 1)
+	}
+	m.deps.PipeState = func(connected bool) {
+		if connected {
+			atomic.AddInt32(&pipeUps, 1)
+		} else {
+			atomic.AddInt32(&pipeDowns, 1)
+		}
+	}
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&pipeDowns) >= 1 },
+		3*time.Second, 10*time.Millisecond, "the 404 never reported the pipe as gone")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hints), "the hint was passed on once")
+	assert.Equal(t, []string{"decks", "state"}, hintKinds)
+	assert.Equal(t, int64(42), hintRevision)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&pipeUps), "the first answer reported the pipe held")
+	assert.Equal(t, state.RemoteStateDisabled, st.RemoteStatus().State,
+		"the owner sees remote control as off while the pipe is held for Library sync")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
+	userDB.AssertExpectations(t)
 }
 
 // TestJitter pins the backoff jitter contract: the result always falls in

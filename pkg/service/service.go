@@ -947,7 +947,8 @@ func startService(
 		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
 		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
 		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
-		Methods: api.NewMethodMap(),
+		Methods:     api.NewMethodMap(),
+		LibraryHint: svc.State.NotifyLibraryHint, PipeState: svc.State.SetLibraryPipeState,
 		RunZapScript: func(
 			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
