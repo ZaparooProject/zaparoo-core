@@ -391,6 +391,20 @@ func (d *MediaUserData) ValidateFlags() error {
 	return nil
 }
 
+// MediaTagUpdate is one file's tag edit in a batch: removals run before
+// additions, as in MediaDBI.UpdateMediaTags.
+type MediaTagUpdate struct {
+	Remove    []MediaTagRef
+	Add       []MediaTagRef
+	MediaDBID int64
+}
+
+// MediaTagBatchUpdater is optional batch tag editing layered over MediaDBI
+// without expanding that interface. It applies every edit in one transaction.
+type MediaTagBatchUpdater interface {
+	UpdateMediaTagsBatch(ctx context.Context, updates []MediaTagUpdate) error
+}
+
 // MediaPathID identifies a Media row and its title by system ID and path, used
 // for batch API response enrichment.
 type MediaPathID struct {

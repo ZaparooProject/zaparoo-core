@@ -330,6 +330,61 @@ func TestUpdateMediaTagsRejectsMissingMedia(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+// A batch spanning two systems writes every edit in one transaction and keeps
+// each ready system tag cache in step.
+func TestUpdateMediaTagsBatchAppliesAllEdits(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertTaggedGame(t, mediaDB, "NES", "Mega Man", "nes/megaman.nes", "genre", "action")
+	insertTaggedGame(t, mediaDB, "NES", "Mega Man 2", "nes/megaman2.nes", "genre", "action")
+	insertTaggedGame(t, mediaDB, "SNES", "Super Metroid", "snes/supermetroid.sfc", "genre", "action")
+
+	ctx := context.Background()
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	idFor := func(systemID string) []int64 {
+		rows, err := mediaDB.GetMediaBySystemID(systemID)
+		require.NoError(t, err)
+		ids := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.DBID)
+		}
+		return ids
+	}
+	nesIDs := idFor("NES")
+	require.Len(t, nesIDs, 2)
+	snesIDs := idFor("SNES")
+	require.Len(t, snesIDs, 1)
+
+	liked := database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserLiked)}
+	later := database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserPlayLater)}
+	require.NoError(t, mediaDB.UpdateMediaTagsBatch(ctx, []database.MediaTagUpdate{
+		{MediaDBID: nesIDs[0], Add: []database.MediaTagRef{liked}},
+		{MediaDBID: nesIDs[1], Add: []database.MediaTagRef{liked, later}},
+		{MediaDBID: snesIDs[0], Add: []database.MediaTagRef{later}},
+		{MediaDBID: snesIDs[0]},
+	}))
+	assertMediaHasTag(t, mediaDB, nesIDs[0], liked, true)
+	assertMediaHasTag(t, mediaDB, nesIDs[1], later, true)
+	assertMediaHasTag(t, mediaDB, snesIDs[0], later, true)
+	assertMediaHasTag(t, mediaDB, snesIDs[0], liked, false)
+	assert.Equal(t, int64(2), cachedTagCount(t, rawDB, "NES", liked.Type, liked.Tag))
+	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", later.Type, later.Tag))
+	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "SNES", later.Type, later.Tag))
+	assert.Zero(t, cachedTagCount(t, rawDB, "SNES", liked.Type, liked.Tag))
+
+	require.NoError(t, mediaDB.UpdateMediaTagsBatch(ctx, nil), "an empty batch is a no-op")
+
+	// One bad edit rolls back the whole batch.
+	err := mediaDB.UpdateMediaTagsBatch(ctx, []database.MediaTagUpdate{
+		{MediaDBID: nesIDs[0], Remove: []database.MediaTagRef{liked}},
+		{MediaDBID: 999, Add: []database.MediaTagRef{liked}},
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	assertMediaHasTag(t, mediaDB, nesIDs[0], liked, true)
+	assert.Equal(t, int64(2), cachedTagCount(t, rawDB, "NES", liked.Type, liked.Tag))
+}
+
 func cachedTagCount(t *testing.T, rawDB *sql.DB, systemID, tagType, tag string) int64 {
 	t.Helper()
 	var count int64
