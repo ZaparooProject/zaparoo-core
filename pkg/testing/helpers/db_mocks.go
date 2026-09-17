@@ -332,18 +332,15 @@ func (m *MockUserDBI) ListDecks() ([]database.Deck, error) {
 	return nil, nil
 }
 
-func (m *MockUserDBI) UpdateDeckMeta(deckID, name, description string, metadata json.RawMessage) error {
-	if err := m.Called(deckID, name, description, metadata).Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI update deck meta failed: %w", err)
+func (m *MockUserDBI) UpdateDeck(deckID string, edit func(deck *database.Deck) error) (*database.Deck, error) {
+	args := m.Called(deckID, edit)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI update deck failed: %w", err)
 	}
-	return nil
-}
-
-func (m *MockUserDBI) ReplaceDeckItems(deckID string, items []database.DeckItem) error {
-	if err := m.Called(deckID, items).Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI replace deck items failed: %w", err)
+	if deck, ok := args.Get(0).(*database.Deck); ok {
+		return deck, nil
 	}
-	return nil
+	return nil, nil //nolint:nilnil // a nil deck with no error is the mock's "not stubbed" answer
 }
 
 func (m *MockUserDBI) DeleteDeck(deckID string) (bool, error) {

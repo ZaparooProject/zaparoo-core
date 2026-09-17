@@ -4154,7 +4154,7 @@ Returns `null` on success.
 
 A deck is a persistent, ordered list of games and cards the user keeps on the device. It is the one list type Zaparoo syncs with a linked online account, and everything about it works with no account: the ID is minted on the device, and a deck reached through a ZapLink is cached in the same list as a read-only copy.
 
-Every deck has a twelve-character ID drawn from the Crockford base32 alphabet (digits and letters without I, L, O and U). Core stores and shows it lower-case and matches it without regard to case; IDs of eight characters from older decks are also accepted. The same ID names the deck on the device, in its `user:deck:<id>` tag, on a card and on the account.
+Every deck has a twelve-character ID drawn from the Crockford base32 alphabet (digits and letters without I, L, O and U). Core stores and shows it lower-case and matches it without regard to case; IDs of eight characters from older decks are also accepted, and may use any digit or letter. The same ID names the deck on the device, in its `user:deck:<id>` tag, on a card and on the account.
 
 A deck item is either a `script` (a name and the ZapScript it runs) or a `card` (an online card by ID, with its scripts and display metadata as pulled). A game added from the local library is stored as a script item: Core composes `**launch.title:<system>/<title>` with the file's disambiguating tags, so the item names the same game on any device, and keeps the file it was added from as the item's `media` so this device launches exactly that file. Card and deck `metadata` are stored as received and returned verbatim.
 
@@ -4169,7 +4169,7 @@ Decks are private to the device. Creating, editing and deleting them is open to 
 | description | string                           | Yes      | Description, at most 1000 characters. Empty when unset.              |
 | owned       | boolean                          | Yes      | True for decks made on this device or its account; false for a cached copy of somebody else's deck, which cannot be edited. |
 | itemCount   | number                           | Yes      | Number of items in the deck.                                         |
-| items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order. Omitted by `decks`.                     |
+| items       | [DeckItem](#deck-item-object)[]  | No       | The deck's members in order, `[]` when empty. Omitted by `decks`.    |
 | metadata    | object                           | No       | Display metadata as received from the account, verbatim.             |
 | createdAt   | number                           | Yes      | Unix timestamp of creation.                                          |
 | updatedAt   | number                           | Yes      | Unix timestamp of the last change.                                   |
@@ -4178,7 +4178,7 @@ Decks are private to the device. Creating, editing and deleting them is open to 
 
 | Key       | Type     | Required | Description                                                                                 |
 | :-------- | :------- | :------- | :------------------------------------------------------------------------------------------ |
-| id        | number   | Yes      | Item ID, stable for the item's lifetime. Used by `removeItemIds`.                           |
+| id        | number   | Yes      | Item ID, kept while the item stays in the deck, including when other items are added, removed or moved. Used by `removeItemIds`. |
 | position  | number   | Yes      | 1-based position in the deck.                                                               |
 | kind      | string   | Yes      | `script` or `card`.                                                                         |
 | name      | string   | Yes      | Display name.                                                                               |
@@ -4190,11 +4190,12 @@ Decks are private to the device. Creating, editing and deleting them is open to 
 
 ### Deck item input
 
-Items are supplied to `decks.new` and `decks.update` in this shape. A deck holds at most 120 items.
+Items are supplied to `decks.new` and `decks.update` in this shape. A deck holds at most 120 items. In the `items` of `decks.update` only, an entry may instead be just `{"id": <item id>}`, which keeps that existing item unchanged at its place in the new list.
 
 | Key       | Type     | Required | Description                                                                                  |
 | :-------- | :------- | :------- | :------------------------------------------------------------------------------------------- |
-| kind      | string   | Yes      | `media`, `script` or `card`.                                                                 |
+| kind      | string   | No       | `media`, `script` or `card`. Required for every entry except an `id` entry.                  |
+| id        | number   | No       | In `decks.update` `items` only: an item already in the deck to keep. Takes no other fields. |
 | mediaId   | number   | No       | For `media`: the indexed media to add. Cannot be mixed with system/path.                    |
 | system    | string   | No       | For `media`: system ID for path-based lookup. Required with `path`.                          |
 | path      | string   | No       | For `media`: media path. Required with `system`.                                             |
@@ -4318,7 +4319,7 @@ The created [Deck](#deck-object) with `items`.
 
 **Access:** All clients.
 
-Edit an owned deck. A cached copy of somebody else's deck is read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items.
+Edit an owned deck. A cached copy of somebody else's deck is read-only. Item edits are applied in the order remove, replace, append, and the result must hold at most 120 items. The whole edit is applied at once, to the deck as it is at that moment: if any part fails, nothing changes. A request with no changes returns the deck as it is and sends no notification.
 
 #### Parameters
 
@@ -4327,9 +4328,9 @@ Edit an owned deck. A cached copy of somebody else's deck is read-only. Item edi
 | deckId        | string                               | Yes      | The deck ID.                                                   |
 | name          | string                               | No       | New display name.                                              |
 | description   | string                               | No       | New description.                                               |
-| items         | [DeckItemInput](#deck-item-input)[]  | No       | Replaces the whole item list, in order.                        |
+| items         | [DeckItemInput](#deck-item-input)[]  | No       | Replaces the whole item list, in order. Entries given as `{"id": …}` keep that existing item and its ID, so a reorder is `items` listing the current IDs in the new order; any other entry is a new item. An ID the deck does not hold, or one listed twice, is an error. |
 | addItems      | [DeckItemInput](#deck-item-input)[]  | No       | Items to append.                                               |
-| removeItemIds | number[]                             | No       | Item IDs to remove.                                            |
+| removeItemIds | number[]                             | No       | Item IDs to remove. An ID not in the deck is ignored.          |
 
 #### Result
 

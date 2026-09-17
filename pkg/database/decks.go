@@ -44,6 +44,10 @@ const (
 	// without I, L, O and U. Core stores and shows IDs lower-case; matching
 	// is case-insensitive everywhere.
 	DeckIDAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	// DeckIDLegacyAlphabet is the alphabet of legacy IDs, which encoded a row
+	// number over every digit and letter. I, L, O and U are distinct
+	// characters in them, not misreadings of 1 and 0.
+	DeckIDLegacyAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 	DeckMaxItems          = 120
 	DeckMaxLive           = 200
@@ -56,9 +60,13 @@ var (
 	ErrDeckNotFound  = errors.New("deck not found")
 	ErrDeckLimit     = errors.New("deck limit reached")
 	ErrDeckItemLimit = errors.New("deck item limit reached")
-	ErrDeckOwned     = errors.New("deck is owned by this device")
-	ErrDeckReadOnly  = errors.New("deck is read-only")
-	ErrInvalidDeckID = errors.New("invalid deck id")
+	// ErrDeckItemNotFound and ErrDeckItemRepeated reject an edit that keeps
+	// an existing item the deck does not hold, or keeps one twice.
+	ErrDeckItemNotFound = errors.New("deck item not found")
+	ErrDeckItemRepeated = errors.New("deck item listed more than once")
+	ErrDeckOwned        = errors.New("deck is owned by this device")
+	ErrDeckReadOnly     = errors.New("deck is read-only")
+	ErrInvalidDeckID    = errors.New("invalid deck id")
 )
 
 // DeckCardScript is one script a card item runs.
@@ -141,21 +149,27 @@ func NewDeckID() (string, error) {
 }
 
 // NormalizeDeckID trims and lower-cases a deck ID and checks it is a minted
-// or legacy-length ID drawn from DeckIDAlphabet. Characters the alphabet
-// omits are refused rather than folded, so the stored ID is always the one
-// that was minted.
+// ID drawn from DeckIDAlphabet or a legacy ID drawn from
+// DeckIDLegacyAlphabet. Characters an alphabet omits are refused rather than
+// folded, so the stored ID is always the one that was issued.
 func NormalizeDeckID(raw string) (string, error) {
-	id := strings.ToLower(strings.TrimSpace(raw))
-	if len(id) != DeckIDLength && len(id) != DeckIDLegacyLength {
+	id := strings.ToUpper(strings.TrimSpace(raw))
+	var alphabet string
+	switch len(id) {
+	case DeckIDLength:
+		alphabet = DeckIDAlphabet
+	case DeckIDLegacyLength:
+		alphabet = DeckIDLegacyAlphabet
+	default:
 		return "", fmt.Errorf("%w: %q must be %d or %d characters",
 			ErrInvalidDeckID, raw, DeckIDLength, DeckIDLegacyLength)
 	}
 	for _, r := range id {
-		if !strings.ContainsRune(strings.ToLower(DeckIDAlphabet), r) {
+		if !strings.ContainsRune(alphabet, r) {
 			return "", fmt.Errorf("%w: %q holds a character outside the deck alphabet", ErrInvalidDeckID, raw)
 		}
 	}
-	return id, nil
+	return strings.ToLower(id), nil
 }
 
 // EncodeDeckCardScripts serializes a card item's scripts for a UserDB TEXT

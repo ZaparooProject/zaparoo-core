@@ -21,8 +21,11 @@ package userdb
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -88,6 +91,27 @@ func TestDeckCreateGetRoundTrip(t *testing.T) {
 	assert.Equal(t, 2, list[0].ItemCount)
 }
 
+func renameDeck(name, description string) func(*database.Deck) error {
+	return func(deck *database.Deck) error {
+		deck.Name, deck.Description = name, description
+		return nil
+	}
+}
+
+func setDeckItems(items ...database.DeckItem) func(*database.Deck) error {
+	return func(deck *database.Deck) error {
+		deck.Items = items
+		return nil
+	}
+}
+
+func preferencesRevision(t *testing.T, db *UserDB) string {
+	t.Helper()
+	revision, _, err := db.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
+	require.NoError(t, err)
+	return revision
+}
+
 func TestDeckEditsAndDelete(t *testing.T) {
 	t.Parallel()
 	db, cleanup := setupTempUserDB(t)
@@ -97,32 +121,36 @@ func TestDeckEditsAndDelete(t *testing.T) {
 	deck.Metadata = json.RawMessage(`{"a":1}`)
 	require.NoError(t, db.CreateDeck(deck))
 
-	before, _, err := db.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
-	require.NoError(t, err)
+	before := preferencesRevision(t, db)
 
-	require.NoError(t, db.UpdateDeckMeta("0123456789ab", "Renamed", "desc", nil))
+	updated, err := db.UpdateDeck("0123456789ab", renameDeck("Renamed", "desc"))
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", updated.Name)
 	got, err := db.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.Equal(t, "Renamed", got.Name)
 	assert.Equal(t, "desc", got.Description)
-	assert.JSONEq(t, `{"a":1}`, string(got.Metadata), "nil metadata keeps the stored value")
-	require.NoError(t, db.UpdateDeckMeta("0123456789ab", "Renamed", "desc", json.RawMessage(`{"a":2}`)))
+	assert.JSONEq(t, `{"a":1}`, string(got.Metadata), "an edit that leaves metadata alone keeps it")
+	_, err = db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Metadata = json.RawMessage(`{"a":2}`)
+		return nil
+	})
+	require.NoError(t, err)
 	got, err = db.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"a":2}`, string(got.Metadata))
-	require.ErrorIs(t, db.UpdateDeckMeta("zzzzzzzzzzzz", "x", "", nil), database.ErrDeckNotFound)
+	_, err = db.UpdateDeck("zzzzzzzzzzzz", renameDeck("x", ""))
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
 
-	require.NoError(t, db.ReplaceDeckItems("0123456789ab",
-		[]database.DeckItem{scriptItem("C", "**c"), scriptItem("A", "**a")}))
+	_, err = db.UpdateDeck("0123456789ab", setDeckItems(scriptItem("C", "**c"), scriptItem("A", "**a")))
+	require.NoError(t, err)
 	got, err = db.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	require.Len(t, got.Items, 2)
 	assert.Equal(t, []int{1, 2}, []int{got.Items[0].Position, got.Items[1].Position})
 	assert.Equal(t, "C", got.Items[0].Name)
 
-	after, _, err := db.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
-	require.NoError(t, err)
-	assert.NotEqual(t, before, after, "deck edits invalidate browse cursors")
+	assert.NotEqual(t, before, preferencesRevision(t, db), "deck edits invalidate browse cursors")
 
 	existed, err := db.DeleteDeck("0123456789ab")
 	require.NoError(t, err)
@@ -132,9 +160,168 @@ func TestDeckEditsAndDelete(t *testing.T) {
 	var orphans int
 	require.NoError(t, db.sql.Load().QueryRowContext(t.Context(), `select count(*) from DeckItems`).Scan(&orphans))
 	assert.Zero(t, orphans, "items go with their deck")
+
+	afterDelete := preferencesRevision(t, db)
 	existed, err = db.DeleteDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.False(t, existed)
+	assert.Equal(t, afterDelete, preferencesRevision(t, db), "deleting nothing changes nothing")
+}
+
+// Item IDs are what clients remove items by, so an edit must keep the rows of
+// the items it keeps: their IDs and creation times survive moves, removals of
+// other items and appends. Only content changes move an item's UpdatedAt.
+func TestUpdateDeckKeepsItemRows(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+
+	anchored := scriptItem("Metroid", "**launch.title:NES/Metroid")
+	anchored.Anchor = database.DeckItemAnchor{
+		SystemID: "NES", Path: "roms/NES/Metroid (USA).nes", MediaName: "Metroid", Tags: []string{"region:us"},
+	}
+	deck := testDeck("0123456789ab", "Keep", scriptItem("A", "**a"), scriptItem("B", "**b"), anchored)
+	require.NoError(t, db.CreateDeck(deck))
+	original, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	idA, idB, idM := original.Items[0].DBID, original.Items[1].DBID, original.Items[2].DBID
+	_, err = db.sql.Load().ExecContext(t.Context(), `update DeckItems set CreatedAt = 1, UpdatedAt = 1;`)
+	require.NoError(t, err)
+
+	// Move the anchored item to the front, drop A, rename B and append D.
+	updated, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		b, m := deck.Items[1], deck.Items[2]
+		b.Name = "B renamed"
+		deck.Items = []database.DeckItem{m, b, scriptItem("D", "**d")}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, updated.Items, 3)
+
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	require.Len(t, got.Items, 3)
+	assert.Equal(t, updated.Items, got.Items, "the returned deck is the stored deck")
+
+	assert.Equal(t, idM, got.Items[0].DBID, "a moved item keeps its ID")
+	assert.Equal(t, 1, got.Items[0].Position)
+	assert.Equal(t, int64(1), got.Items[0].CreatedAt)
+	assert.Equal(t, int64(1), got.Items[0].UpdatedAt, "a move is not a content change")
+	assert.Equal(t, "roms/NES/Metroid (USA).nes", got.Items[0].Anchor.Path, "a kept item keeps its file link")
+	assert.Equal(t, []string{"region:us"}, got.Items[0].Anchor.Tags)
+
+	assert.Equal(t, idB, got.Items[1].DBID, "an edited item keeps its ID")
+	assert.Equal(t, "B renamed", got.Items[1].Name)
+	assert.Equal(t, int64(1), got.Items[1].CreatedAt)
+	assert.NotEqual(t, int64(1), got.Items[1].UpdatedAt, "a content change moves UpdatedAt")
+
+	assert.NotContains(t, []int64{idA, idB, idM}, got.Items[2].DBID, "an appended item gets a new ID")
+	assert.Equal(t, "D", got.Items[2].Name)
+
+	// Reversing the list moves every item and still keeps every ID.
+	ids := []int64{got.Items[0].DBID, got.Items[1].DBID, got.Items[2].DBID}
+	_, err = db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		slices.Reverse(deck.Items)
+		return nil
+	})
+	require.NoError(t, err)
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, []int64{ids[2], ids[1], ids[0]},
+		[]int64{got.Items[0].DBID, got.Items[1].DBID, got.Items[2].DBID})
+	assert.Equal(t, []int{1, 2, 3}, []int{got.Items[0].Position, got.Items[1].Position, got.Items[2].Position})
+
+	// An item listed twice keeps its row once; the copy is a new item. An
+	// ID from another deck is never taken over.
+	other := testDeck("aaaaaaaaaaaa", "Other", scriptItem("X", "**x"))
+	require.NoError(t, db.CreateDeck(other))
+	foreign := other.Items[0]
+	_, err = db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Items = []database.DeckItem{deck.Items[0], deck.Items[0], foreign}
+		return nil
+	})
+	require.NoError(t, err)
+	got, err = db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	require.Len(t, got.Items, 3)
+	assert.Equal(t, ids[2], got.Items[0].DBID)
+	assert.NotEqual(t, ids[2], got.Items[1].DBID)
+	assert.Equal(t, got.Items[0].Name, got.Items[1].Name)
+	assert.NotEqual(t, foreign.DBID, got.Items[2].DBID)
+	otherGot, err := db.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err)
+	require.Len(t, otherGot.Items, 1)
+	assert.Equal(t, foreign.DBID, otherGot.Items[0].DBID, "the other deck is untouched")
+}
+
+// A failed edit writes nothing: not the name it also asked for, not the
+// items, and not the preferences revision.
+func TestUpdateDeckFailureWritesNothing(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, db.CreateDeck(testDeck("0123456789ab", "Before", scriptItem("A", "**a"))))
+	revision := preferencesRevision(t, db)
+
+	editErr := errors.New("edit refused")
+	_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Name = "After"
+		deck.Items = nil
+		return editErr
+	})
+	require.ErrorIs(t, err, editErr)
+
+	tooMany := make([]database.DeckItem, database.DeckMaxItems+1)
+	for i := range tooMany {
+		tooMany[i] = scriptItem("x", "**x")
+	}
+	_, err = db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Name = "After"
+		deck.Items = tooMany
+		return nil
+	})
+	require.ErrorIs(t, err, database.ErrDeckItemLimit)
+
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, "Before", got.Name)
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, revision, preferencesRevision(t, db))
+}
+
+// Edits made at the same moment each apply to the deck as the other left it,
+// so none is lost, and none fails because an unrelated write committed
+// between its read and its write.
+func TestUpdateDeckConcurrentEdits(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(testDeck("0123456789ab", "Shared")))
+
+	const editors = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, editors*2)
+	for i := range editors {
+		wg.Go(func() {
+			_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+				deck.Items = append(deck.Items, scriptItem(fmt.Sprintf("item %d", i), "**x"))
+				return nil
+			})
+			errs <- err
+		})
+		wg.Go(func() {
+			errs <- db.SetMediaUserFavorite("NES", fmt.Sprintf("roms/NES/%d.nes", i), true)
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	got, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Len(t, got.Items, editors, "every concurrent append is kept")
 }
 
 func TestDeckCaps(t *testing.T) {
@@ -148,7 +335,8 @@ func TestDeckCaps(t *testing.T) {
 	}
 	require.ErrorIs(t, db.CreateDeck(testDeck("0123456789ab", "Big", tooMany...)), database.ErrDeckItemLimit)
 	require.NoError(t, db.CreateDeck(testDeck("0123456789ab", "Small")))
-	require.ErrorIs(t, db.ReplaceDeckItems("0123456789ab", tooMany), database.ErrDeckItemLimit)
+	_, err := db.UpdateDeck("0123456789ab", setDeckItems(tooMany...))
+	require.ErrorIs(t, err, database.ErrDeckItemLimit)
 
 	for i := 1; i < database.DeckMaxLive; i++ {
 		require.NoError(t, db.CreateDeck(testDeck(fmt.Sprintf("%012d", i), "Deck")))
@@ -200,6 +388,14 @@ func TestUpsertRemoteDeck(t *testing.T) {
 	got, err = db.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine", got.Name)
+
+	// An ID from elsewhere is stored normalized, so the API finds it.
+	require.NoError(t, db.UpsertRemoteDeck(&database.Deck{DeckID: " KQ7RIL0U ", Name: "Legacy", Owned: false}))
+	got, err = db.GetDeck("kq7ril0u")
+	require.NoError(t, err)
+	assert.Equal(t, "Legacy", got.Name)
+	require.ErrorIs(t, db.UpsertRemoteDeck(&database.Deck{DeckID: "not-an-id", Name: "Bad"}),
+		database.ErrInvalidDeckID)
 
 	// A sync pull of an owned deck may replace it.
 	mine := &database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine (server)", Owned: true}

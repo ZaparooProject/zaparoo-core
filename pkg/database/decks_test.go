@@ -65,6 +65,12 @@ func TestNormalizeDeckID(t *testing.T) {
 		{"0123456789AU", "", false},
 		{"0123456789A-", "", false},
 		{"", "", false},
+		// Legacy eight-character IDs used every letter, so I, L, O and U are
+		// their own characters there and are kept, never folded.
+		{"KQ7RIL0U", "kq7ril0u", true},
+		{" iloU1234 ", "ilou1234", true},
+		{"KQ7RIL0-", "", false},
+		{"KQ7RÍL0U", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.raw, func(t *testing.T) {

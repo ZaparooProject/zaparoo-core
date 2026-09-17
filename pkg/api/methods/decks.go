@@ -20,10 +20,10 @@
 package methods
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -54,7 +54,7 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
-		resp.Decks = append(resp.Decks, deckResponse(&list[i], nil))
+		resp.Decks = append(resp.Decks, deckSummary(&list[i]))
 	}
 	return resp, nil
 }
@@ -87,7 +87,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
-	items, err := buildDeckItems(&env, params.Items)
+	items, err := buildDeckItems(&env, params.Items, false)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,10 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
 
-// HandleDecksUpdate edits an owned deck's name, description or items.
+// HandleDecksUpdate edits an owned deck's name, description or items. The
+// edit is applied in one transaction to the deck as stored at that moment, so
+// a failed edit changes nothing and concurrent edits do not overwrite each
+// other. A request that asks for no change returns the deck as it is.
 //
 //nolint:gocritic // single-use parameter in API handler
 func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
@@ -125,39 +128,56 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if params.Name == nil && params.Description == nil && params.Items == nil &&
+		len(params.AddItems) == 0 && len(params.RemoveItemIDs) == 0 {
+		return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
+	}
 	if !deck.Owned {
 		return nil, models.ClientErr(database.ErrDeckReadOnly)
 	}
 
-	if params.Name != nil || params.Description != nil {
-		name, description := deck.Name, deck.Description
-		if params.Name != nil {
-			name = strings.TrimSpace(*params.Name)
-		}
-		if params.Description != nil {
-			description = strings.TrimSpace(*params.Description)
-		}
-		if name == "" {
+	var name, description *string
+	if params.Name != nil {
+		trimmed := strings.TrimSpace(*params.Name)
+		if trimmed == "" {
 			return nil, models.ClientErrf("invalid params: name cannot be empty")
 		}
-		if metaErr := env.Database.UserDB.UpdateDeckMeta(deck.DeckID, name, description, nil); metaErr != nil {
-			return nil, deckError(metaErr)
+		name = &trimmed
+	}
+	if params.Description != nil {
+		trimmed := strings.TrimSpace(*params.Description)
+		description = &trimmed
+	}
+	var replaced []database.DeckItem
+	if params.Items != nil {
+		if replaced, err = buildDeckItems(&env, *params.Items, true); err != nil {
+			return nil, err
 		}
 	}
-
-	if params.Items != nil || len(params.AddItems) > 0 || len(params.RemoveItemIDs) > 0 {
-		items, buildErr := editedDeckItems(&env, deck.Items, &params)
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		if itemsErr := env.Database.UserDB.ReplaceDeckItems(deck.DeckID, items); itemsErr != nil {
-			return nil, deckError(itemsErr)
-		}
-	}
-
-	updated, err := loadDeck(&env, deck.DeckID)
+	added, err := buildDeckItems(&env, params.AddItems, false)
 	if err != nil {
 		return nil, err
+	}
+
+	updated, err := env.Database.UserDB.UpdateDeck(deck.DeckID, func(stored *database.Deck) error {
+		if !stored.Owned {
+			return database.ErrDeckReadOnly
+		}
+		if name != nil {
+			stored.Name = *name
+		}
+		if description != nil {
+			stored.Description = *description
+		}
+		items, editErr := editedDeckItems(stored.Items, &params, replaced, added)
+		if editErr != nil {
+			return editErr
+		}
+		stored.Items = items
+		return nil
+	})
+	if err != nil {
+		return nil, deckError(err)
 	}
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
 	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
@@ -211,6 +231,8 @@ func deckError(err error) error {
 	case errors.Is(err, database.ErrDeckNotFound),
 		errors.Is(err, database.ErrDeckLimit),
 		errors.Is(err, database.ErrDeckItemLimit),
+		errors.Is(err, database.ErrDeckItemNotFound),
+		errors.Is(err, database.ErrDeckItemRepeated),
 		errors.Is(err, database.ErrDeckReadOnly),
 		errors.Is(err, database.ErrInvalidDeckID):
 		return models.ClientErr(err)
@@ -228,59 +250,101 @@ func notifyDecksChanged(env *requests.RequestEnv, deckID, action string) {
 	})
 }
 
-// editedDeckItems applies an update's item edits to the current list in the
-// order remove, replace, append.
+// editedDeckItems applies an update's item edits to the stored list in the
+// order remove, replace, append. Stored items that stay keep their IDs, as do
+// the items the replacement names by id; every other item is new.
 func editedDeckItems(
-	env *requests.RequestEnv, current []database.DeckItem, params *models.DecksUpdateParams,
+	current []database.DeckItem, params *models.DecksUpdateParams, replaced, added []database.DeckItem,
 ) ([]database.DeckItem, error) {
-	items := make([]database.DeckItem, 0, len(current))
-	if len(params.RemoveItemIDs) > 0 {
+	items := current
+	switch {
+	case params.Items != nil:
+		kept, err := resolveDeckItemReferences(current, replaced)
+		if err != nil {
+			return nil, err
+		}
+		items = kept
+	case len(params.RemoveItemIDs) > 0:
 		remove := make(map[int64]struct{}, len(params.RemoveItemIDs))
 		for _, id := range params.RemoveItemIDs {
 			remove[id] = struct{}{}
 		}
+		items = make([]database.DeckItem, 0, len(current))
 		for i := range current {
 			if _, drop := remove[current[i].DBID]; !drop {
 				items = append(items, current[i])
 			}
 		}
-	} else {
-		items = append(items, current...)
 	}
-	if params.Items != nil {
-		replaced, err := buildDeckItems(env, *params.Items)
-		if err != nil {
-			return nil, err
+	return slices.Concat(items, added), nil
+}
+
+// resolveDeckItemReferences swaps each reference in items for the stored item
+// it names. A reference is an item with no kind, built by deckItemReference.
+func resolveDeckItemReferences(stored, items []database.DeckItem) ([]database.DeckItem, error) {
+	byID := make(map[int64]int, len(stored))
+	for i := range stored {
+		byID[stored[i].DBID] = i
+	}
+	kept := make(map[int64]struct{})
+	out := make([]database.DeckItem, 0, len(items))
+	for i := range items {
+		if items[i].Kind != "" {
+			out = append(out, items[i])
+			continue
 		}
-		items = replaced
-	}
-	if len(params.AddItems) > 0 {
-		added, err := buildDeckItems(env, params.AddItems)
-		if err != nil {
-			return nil, err
+		id := items[i].DBID
+		index, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("%w: item %d", database.ErrDeckItemNotFound, id)
 		}
-		items = append(items, added...)
+		if _, repeated := kept[id]; repeated {
+			return nil, fmt.Errorf("%w: item %d", database.ErrDeckItemRepeated, id)
+		}
+		kept[id] = struct{}{}
+		out = append(out, stored[index])
 	}
-	if len(items) > database.DeckMaxItems {
-		return nil, models.ClientErr(database.ErrDeckItemLimit)
-	}
-	return items, nil
+	return out, nil
 }
 
 // buildDeckItems turns client item inputs into stored items. A media item is
 // resolved through the media database and composed into a title launch with
-// its anchor; script and card items are stored as written.
-func buildDeckItems(env *requests.RequestEnv, inputs []models.DeckItemInput) ([]database.DeckItem, error) {
+// its anchor; script and card items are stored as written. An input naming
+// an existing item by id is only accepted where references are allowed, and
+// becomes a reference for editedDeckItems to resolve.
+func buildDeckItems(
+	env *requests.RequestEnv, inputs []models.DeckItemInput, allowReferences bool,
+) ([]database.DeckItem, error) {
 	items := make([]database.DeckItem, 0, len(inputs))
 	for i := range inputs {
 		input := &inputs[i]
-		item, err := buildDeckItem(env, input)
+		var item database.DeckItem
+		var err error
+		if input.ID != nil {
+			item, err = deckItemReference(input, allowReferences)
+		} else {
+			item, err = buildDeckItem(env, input)
+		}
 		if err != nil {
 			return nil, models.ClientErrf("invalid item %d: %w", i+1, err)
 		}
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+// deckItemReference is the placeholder for an input that keeps an existing
+// item: an item with only its DBID set.
+func deckItemReference(input *models.DeckItemInput, allowed bool) (database.DeckItem, error) {
+	if !allowed {
+		return database.DeckItem{}, errors.New("only the items of decks.update can name an existing item by id")
+	}
+	if input.Kind != "" || input.MediaID != nil || input.System != "" || input.Path != "" ||
+		input.Name != "" || input.ZapScript != "" || input.CardID != "" ||
+		len(input.Scripts) > 0 || len(input.Metadata) > 0 {
+		return database.DeckItem{}, errors.New("an item named by id takes no other fields")
+	}
+	return database.DeckItem{DBID: *input.ID}, nil
 }
 
 func buildDeckItem(env *requests.RequestEnv, input *models.DeckItemInput) (database.DeckItem, error) {
@@ -310,6 +374,8 @@ func buildDeckItem(env *requests.RequestEnv, input *models.DeckItemInput) (datab
 			Kind: database.DeckItemKindCard, Name: strings.TrimSpace(input.Name), CardID: cardID,
 			Scripts: scripts, Metadata: input.Metadata,
 		}, nil
+	case "":
+		return database.DeckItem{}, errors.New("an item needs a kind, or an id to keep an existing item")
 	default:
 		return database.DeckItem{}, fmt.Errorf("unknown item kind %q", input.Kind)
 	}
@@ -373,9 +439,7 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 		for _, i := range indexes {
 			paths = append(paths, items[i].Anchor.Path)
 		}
-		found, err := env.Database.MediaDB.FindMediaBySystemAndPaths(
-			context.WithoutCancel(env.Context), system.DBID, paths,
-		)
+		found, err := env.Database.MediaDB.FindMediaBySystemAndPaths(env.Context, system.DBID, paths)
 		if err != nil {
 			log.Debug().Err(err).Str("system", systemID).Msg("deck anchor media lookup failed")
 			continue
@@ -388,8 +452,9 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 	return available
 }
 
-func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResponse {
-	resp := models.DeckResponse{
+// deckSummary is a deck as the decks list shows it, without items.
+func deckSummary(deck *database.Deck) models.DeckResponse {
+	return models.DeckResponse{
 		Metadata:    deck.Metadata,
 		DeckID:      deck.DeckID,
 		Name:        deck.Name,
@@ -399,9 +464,12 @@ func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResp
 		ItemCount:   deck.ItemCount,
 		Owned:       deck.Owned,
 	}
-	if deck.Items == nil {
-		return resp
-	}
+}
+
+// deckResponse is a deck with its items, which are never omitted: an empty
+// deck has an empty list.
+func deckResponse(deck *database.Deck, available map[int64]bool) models.DeckResponse {
+	resp := deckSummary(deck)
 	resp.ItemCount = len(deck.Items)
 	resp.Items = make([]models.DeckItemResponse, 0, len(deck.Items))
 	for i := range deck.Items {

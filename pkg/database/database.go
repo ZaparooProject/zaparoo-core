@@ -1132,8 +1132,7 @@ type UserDBI interface {
 	CreateDeck(deck *Deck) error
 	GetDeck(deckID string) (*Deck, error)
 	ListDecks() ([]Deck, error)
-	UpdateDeckMeta(deckID, name, description string, metadata json.RawMessage) error
-	ReplaceDeckItems(deckID string, items []DeckItem) error
+	UpdateDeck(deckID string, edit func(deck *Deck) error) (*Deck, error)
 	DeleteDeck(deckID string) (bool, error)
 	UpsertRemoteDeck(deck *Deck) error
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error

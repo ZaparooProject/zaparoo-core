@@ -295,11 +295,14 @@ type DeleteProfileParams struct {
 // DeckItemInput names one deck member as a client supplies it. kind "media"
 // names an indexed game by mediaId or system plus path and is stored as a
 // script item Core composes; "script" carries a name and ZapScript; "card"
-// names an online card by ID with its scripts and metadata as pulled.
+// names an online card by ID with its scripts and metadata as pulled. In the
+// items of decks.update, an input with only an id instead keeps that existing
+// item as it is.
 type DeckItemInput struct {
+	ID        *int64                `json:"id,omitempty"`
 	MediaID   *int64                `json:"mediaId,omitempty"`
 	Metadata  json.RawMessage       `json:"metadata,omitempty"`
-	Kind      string                `json:"kind" validate:"required,oneof=media script card"`
+	Kind      string                `json:"kind" validate:"omitempty,oneof=media script card"`
 	Name      string                `json:"name" validate:"max=100"`
 	ZapScript string                `json:"zapscript" validate:"max=5000"`
 	CardID    string                `json:"cardId" validate:"max=64"`
@@ -324,9 +327,9 @@ type DecksNewParams struct {
 	Items       []DeckItemInput `json:"items" validate:"max=120,dive"`
 }
 
-// DecksUpdateParams edits a deck. items replaces the whole list; addItems
-// appends; removeItemIds drops members by their item id. They are applied
-// as remove, replace, then append.
+// DecksUpdateParams edits a deck. items replaces the whole list and may keep
+// existing items by id; addItems appends; removeItemIds drops members by
+// their item id. They are applied as remove, replace, then append.
 type DecksUpdateParams struct {
 	Name          *string          `json:"name" validate:"omitempty,min=1,max=100"`
 	Description   *string          `json:"description" validate:"omitempty,max=1000"`

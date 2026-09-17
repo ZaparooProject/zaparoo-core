@@ -921,14 +921,14 @@ type DeckItemResponse struct {
 	Position  int                   `json:"position"`
 }
 
-// DeckResponse is a deck. Items is present on decks.get and decks.new and
-// omitted by the decks list.
+// DeckResponse is a deck. Items is present, as [] for an empty deck, on
+// decks.get, decks.new and decks.update, and omitted by the decks list.
 type DeckResponse struct {
 	Metadata    json.RawMessage    `json:"metadata,omitempty"`
 	DeckID      string             `json:"deckId"`
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
-	Items       []DeckItemResponse `json:"items,omitempty"`
+	Items       []DeckItemResponse `json:"items,omitzero"`
 	CreatedAt   int64              `json:"createdAt"`
 	UpdatedAt   int64              `json:"updatedAt"`
 	ItemCount   int                `json:"itemCount"`
