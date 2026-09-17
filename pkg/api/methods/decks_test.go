@@ -500,15 +500,16 @@ func TestHandleDecksUpdate_NoChange(t *testing.T) {
 func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	t.Parallel()
 	e := newDecksTestEnv(t)
-	require.NoError(t, e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
+	_, err := e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "0123456789ab", Name: "Theirs", Owned: false,
 		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
-	}))
+	})
+	require.NoError(t, err)
 	got, ok := e.call(t, HandleDecksGet, `{"deckId":"0123456789AB"}`).(models.DeckResponse)
 	require.True(t, ok)
 	assert.False(t, got.Owned)
 
-	_, err := HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Mine now"}`))
+	_, err = HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Mine now"}`))
 	require.ErrorIs(t, err, database.ErrDeckReadOnly)
 
 	_, err = HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "removeItemIds": [1]}`))
@@ -519,9 +520,10 @@ func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	assert.True(t, isNoContent)
 
 	// A legacy eight-character ID may hold I, L, O and U.
-	require.NoError(t, e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
+	_, err = e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "KQ7RIL0U", Name: "Old deck", Owned: false,
-	}))
+	})
+	require.NoError(t, err)
 	legacy, ok := e.call(t, HandleDecksGet, `{"deckId":"kq7riL0u"}`).(models.DeckResponse)
 	require.True(t, ok)
 	assert.Equal(t, "kq7ril0u", legacy.DeckID)

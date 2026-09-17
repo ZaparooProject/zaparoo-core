@@ -108,7 +108,7 @@ func TestStoreFetchedDeck(t *testing.T) {
 		{Name: "Card", ZapScript: nested},
 		{Name: "Empty", ZapScript: "  "},
 	}}
-	require.NoError(t, decks.StoreFetchedDeck(f.userDB, "https://zpr.au/d0123456789ab", "0123456789ab", &arg))
+	require.NoError(t, decks.StoreFetchedDeck(f.db, "https://zpr.au/d0123456789ab", "0123456789ab", &arg))
 	stored, err := f.userDB.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.False(t, stored.Owned)
@@ -117,13 +117,81 @@ func TestStoreFetchedDeck(t *testing.T) {
 	require.Len(t, stored.Items, 2, "entries with no script are dropped")
 	assert.Equal(t, nested, stored.Items[1].ZapScript, "a multi-script card is kept as its nested playlist")
 
+	assert.Equal(t, []string{"0123456789ab"}, f.tagQueue.queued(),
+		"a newly cached deck is queued so its tags and file links follow")
+
 	// An owned deck of the same ID is left alone without an error.
 	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
-	require.NoError(t, decks.StoreFetchedDeck(f.userDB, "https://zpr.au/daaaaaaaaaaaa", "aaaaaaaaaaaa", &arg))
+	require.NoError(t, decks.StoreFetchedDeck(f.db, "https://zpr.au/daaaaaaaaaaaa", "aaaaaaaaaaaa", &arg))
 	mine, err := f.userDB.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine", mine.Name)
 	assert.True(t, mine.Owned)
+	assert.Equal(t, []string{"0123456789ab"}, f.tagQueue.queued(), "an owned deck is not re-tagged by a fetch")
+}
+
+// A deck that is fetched again keeps the rows of the items it still holds, so
+// the file each one is linked to on this device survives the refresh and the
+// deck goes on launching the files the user has. Only a fetch that brings
+// something new costs a write.
+func TestStoreFetchedDeckKeepsLocalLinksAcrossRefresh(t *testing.T) {
+	t.Parallel()
+	present := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid (USA).nes"))
+	f := newProjectFixture(t, present)
+	const deckID = "0123456789ab"
+	const src = "https://zpr.au/d0123456789ab"
+
+	arg := decks.PlaylistArg{ID: "ZON-0123456789AB", Name: "Theirs", Items: []decks.PlaylistArgItem{
+		{Name: "Metroid", ZapScript: decks.TitleLaunchScript("NES", "Metroid", nil)},
+		{Name: "Other", ZapScript: "**launch.system:NES"},
+	}}
+	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+
+	// The tagger links the item to the file this device matched.
+	relinked, err := decks.ProjectDeck(f.ctx, f.deps, deckID)
+	require.NoError(t, err)
+	require.Equal(t, 1, relinked)
+	linked, err := f.userDB.GetDeck(deckID)
+	require.NoError(t, err)
+	require.Equal(t, present, linked.Items[0].Anchor.Path)
+	itemID := linked.Items[0].DBID
+	launch := decks.PlaylistItems(f.ctx, f.mediaDB, linked)
+	require.Len(t, launch, 2)
+	require.Contains(t, launch[0].ZapScript, present, "the linked file is what plays")
+
+	// The same deck served again changes nothing but the fetch time.
+	before := preferencesRevision(t, f)
+	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	same, err := f.userDB.GetDeck(deckID)
+	require.NoError(t, err)
+	assert.Equal(t, itemID, same.Items[0].DBID, "an unchanged item keeps its row")
+	assert.Equal(t, present, same.Items[0].Anchor.Path, "an unchanged item keeps its local file")
+	assert.GreaterOrEqual(t, same.FetchedAt, linked.FetchedAt, "the deck is still recorded as fetched")
+	assert.Equal(t, before, preferencesRevision(t, f), "a fetch that changes nothing invalidates no browse cursor")
+	assert.Equal(t, []string{deckID}, f.tagQueue.queued(), "an unchanged deck is not queued again")
+
+	// A deck that reorders and adds an item keeps the links of the items it
+	// still holds, and is queued because it changed.
+	arg.Items = []decks.PlaylistArgItem{
+		{Name: "Other", ZapScript: "**launch.system:NES"},
+		{Name: "New", ZapScript: "**launch.system:SNES"},
+		{Name: "Metroid", ZapScript: decks.TitleLaunchScript("NES", "Metroid", nil)},
+	}
+	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	moved, err := f.userDB.GetDeck(deckID)
+	require.NoError(t, err)
+	require.Len(t, moved.Items, 3)
+	assert.Equal(t, itemID, moved.Items[2].DBID, "a reordered item keeps its row")
+	assert.Equal(t, present, moved.Items[2].Anchor.Path, "a reordered item keeps its local file")
+	assert.Equal(t, []string{deckID, deckID}, f.tagQueue.queued(), "a deck that changed is queued again")
+
+	// An item the source dropped takes its row and link with it.
+	arg.Items = []decks.PlaylistArgItem{{Name: "Other", ZapScript: "**launch.system:NES"}}
+	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	shrunk, err := f.userDB.GetDeck(deckID)
+	require.NoError(t, err)
+	require.Len(t, shrunk.Items, 1)
+	assert.Equal(t, "Other", shrunk.Items[0].Name)
 }
 
 func TestPlaylistItems(t *testing.T) {

@@ -144,10 +144,14 @@ func TestRefreshDeck_CachedCopy(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	env, db, _ := deckTestEnv(t, "deck://0123456789ab")
-	require.NoError(t, db.UserDB.UpsertRemoteDeck(&database.Deck{
+	// The source is fetched only when it is a host ZapLinks are served from,
+	// the same gate the tap that cached the deck passed.
+	require.NoError(t, db.UserDB.UpdateZapLinkHost(server.URL, 1))
+	_, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "0123456789ab", Name: "Old", Owned: false, SourceURL: server.URL,
 		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
-	}))
+	})
+	require.NoError(t, err)
 	stale, err := db.UserDB.GetDeck("0123456789ab")
 	require.NoError(t, err)
 
@@ -167,4 +171,35 @@ func TestRefreshDeck_CachedCopy(t *testing.T) {
 	cached, err := db.UserDB.GetZapLinkCache(server.URL)
 	require.NoError(t, err)
 	assert.Contains(t, cached, `"ZON-0123456789AB"`, "the link cache follows the refresh for offline taps")
+}
+
+// A stored source that is not a ZapLink host is never fetched, so a user
+// database holding an address from somewhere else cannot turn opening a deck
+// into a request to it.
+func TestRefreshDeck_SourceMustBeAZapLink(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		_, _ = w.Write([]byte(servedDeckBody(t, "0123456789AB", "Theirs",
+			decks.PlaylistArgItem{Name: "B", ZapScript: "**b"})))
+	}))
+	t.Cleanup(server.Close)
+
+	env, db, _ := deckTestEnv(t, "deck://0123456789ab")
+	_, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Old", Owned: false, SourceURL: server.URL,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
+	})
+	require.NoError(t, err)
+	stale, err := db.UserDB.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	stale.FetchedAt = 0
+
+	assert.Nil(t, refreshDeck(newPlaylistTestPlatform(), &env, stale), "the cached copy opens")
+	assert.Zero(t, hits.Load(), "the unknown source is never fetched")
+	unchanged, err := db.UserDB.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, "Old", unchanged.Name)
 }

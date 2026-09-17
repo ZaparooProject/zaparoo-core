@@ -44,6 +44,9 @@ const (
 	PlaylistIDPrefix = "ZON-"
 )
 
+// ErrNoUserDB reports a deck store reached with no user database open.
+var ErrNoUserDB = errors.New("no user database")
+
 // PlaylistItem is one entry of a deck as a playlist runs it.
 type PlaylistItem struct {
 	Name      string
@@ -141,9 +144,13 @@ func ParseDeckPlaylist(body, deckID string) (PlaylistArg, bool) {
 // StoreFetchedDeck caches a deck served through a ZapLink as a read-only
 // copy. Every served entry becomes a script item: a card with several
 // scripts is served as a nested playlist command and is kept as that script.
-// A deck this device owns is left alone and reported as nil, since the owned
-// copy is the one to open.
-func StoreFetchedDeck(userDB database.UserDBI, sourceURL, deckID string, arg *PlaylistArg) error {
+// A deck this device owns is left alone, since the owned copy is the one to
+// open. A deck that changed has its membership tags queued, so the tags and
+// the files its items link to follow the fetch in the background.
+func StoreFetchedDeck(db *database.Database, sourceURL, deckID string, arg *PlaylistArg) error {
+	if db == nil || db.UserDB == nil {
+		return ErrNoUserDB
+	}
 	items := make([]database.DeckItem, 0, len(arg.Items))
 	for _, item := range arg.Items {
 		if strings.TrimSpace(item.ZapScript) == "" {
@@ -160,7 +167,7 @@ func StoreFetchedDeck(userDB database.UserDBI, sourceURL, deckID string, arg *Pl
 	if name == "" {
 		name = strings.ToUpper(deckID)
 	}
-	err := userDB.UpsertRemoteDeck(&database.Deck{
+	changed, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: deckID, Name: name, Owned: false, SourceURL: sourceURL, Items: items,
 	})
 	if errors.Is(err, database.ErrDeckOwned) {
@@ -168,6 +175,9 @@ func StoreFetchedDeck(userDB database.UserDBI, sourceURL, deckID string, arg *Pl
 	}
 	if err != nil {
 		return fmt.Errorf("store fetched deck %s: %w", deckID, err)
+	}
+	if changed {
+		db.QueueDeckTags(deckID)
 	}
 	return nil
 }

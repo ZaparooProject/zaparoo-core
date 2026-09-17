@@ -4362,7 +4362,7 @@ None.
 
 Open a deck as the active playlist. This runs `**playlist.open:deck://<id>`, the same command a card can carry, and returns once it has run, like [`run`](#run).
 
-Before a deck opens it is brought up to date when that is quick: a cached copy of somebody else's deck is fetched again from its link, and a deck that syncs with an online account is pulled. Either way a slow or offline service never delays the open for more than a few seconds, and the local copy opens when the refresh fails. A game item whose linked file is still indexed launches that exact file; any other game item runs its title launch. A card item runs its script, or opens its scripts as a nested playlist when it has several, the way the card's own link does.
+Before a deck opens it is brought up to date when that is quick: a cached copy of somebody else's deck is fetched again from its link, and a deck that syncs with an online account is pulled. Either way a slow or offline service never delays the open for more than a few seconds, and the local copy opens when the refresh fails. A fetch that brings nothing new costs no write, and an item a fetch leaves unchanged keeps the file it is linked to on this device, so a refreshed deck goes on launching the files the user picked. A game item whose linked file is still indexed launches that exact file; any other game item runs its title launch. A card item runs its script, or opens its scripts as a nested playlist when it has several, the way the card's own link does.
 
 #### Parameters
 

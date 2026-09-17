@@ -1167,7 +1167,7 @@ type UserDBI interface {
 	ListDecks() ([]Deck, error)
 	UpdateDeck(deckID string, edit func(deck *Deck) error) (*Deck, error)
 	DeleteDeck(deckID string) (bool, error)
-	UpsertRemoteDeck(deck *Deck) error
+	UpsertRemoteDeck(deck *Deck) (bool, error)
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	CountOwnedDecks() (int, error)
 	UpdateZapLinkHost(host string, zapscript int) error

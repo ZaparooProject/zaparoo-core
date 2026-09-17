@@ -63,7 +63,7 @@ func adoptZapLinkDeck(db *database.Database, link, body string) string {
 	if !ok {
 		return body
 	}
-	if err := decks.StoreFetchedDeck(db.UserDB, link, deckID, &arg); err != nil {
+	if err := decks.StoreFetchedDeck(db, link, deckID, &arg); err != nil {
 		log.Warn().Err(err).Str("deck", deckID).Msg("failed to cache deck from zap link; playing it as served")
 		return body
 	}
@@ -138,6 +138,16 @@ func refreshDeck(pl platforms.Platform, env *platforms.CmdEnv, deck *database.De
 		if time.Since(time.Unix(deck.FetchedAt, 0)) < deckRefreshFreshFor {
 			return nil
 		}
+		// The stored source is only ever written by a ZapLink tap, but it is
+		// checked again here rather than trusted: a refresh fetches it on
+		// every open, so anything that later writes the column, such as a
+		// restored user database, must not turn opening a deck into a request
+		// to an address of somebody else's choosing. The check asks only what
+		// this device already knows, so an unfamiliar host is never contacted.
+		if !isKnownZapLinkHost(deck.SourceURL, env.Database) {
+			log.Debug().Str("deck", deck.DeckID).Msg("deck source is not a zap link; opening cached copy")
+			return nil
+		}
 		platformID := ""
 		if pl != nil {
 			platformID = pl.ID()
@@ -152,7 +162,7 @@ func refreshDeck(pl platforms.Platform, env *platforms.CmdEnv, deck *database.De
 			log.Debug().Str("deck", deck.DeckID).Msg("deck source no longer serves the deck; opening cached copy")
 			return nil
 		}
-		if storeErr := decks.StoreFetchedDeck(env.Database.UserDB, deck.SourceURL, deck.DeckID, &arg); storeErr != nil {
+		if storeErr := decks.StoreFetchedDeck(env.Database, deck.SourceURL, deck.DeckID, &arg); storeErr != nil {
 			log.Debug().Err(storeErr).Str("deck", deck.DeckID).Msg("failed to store refreshed deck")
 			return nil
 		}
