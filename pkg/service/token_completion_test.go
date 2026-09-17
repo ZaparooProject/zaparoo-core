@@ -301,6 +301,10 @@ func TestTokenCompletion_AbandonedCallerNeverBlocksWorker(t *testing.T) {
 	first := env.gamePath("abandoned.gba")
 	env.sendAPIToken(t, first)
 	assert.Equal(t, first, env.waitForLaunch(t))
+	// LaunchMedia is observed while the first run still holds the launch
+	// guard, and a launch arriving before it is released is refused as
+	// already in progress. History is written only after the run returns.
+	assert.True(t, env.waitForHistory(t, first).Success)
 
 	second := env.gamePath("game2.gba")
 	c := env.sendAPIToken(t, second)
