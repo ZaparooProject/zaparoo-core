@@ -192,3 +192,41 @@ func TestSetMediaUserSnapshotStoresSlug(t *testing.T) {
 	assert.Equal(t, "supermetroid", row.Slug)
 	assert.Equal(t, "Super Metroid", row.MediaName)
 }
+
+// Full-row writes change listings too, so they must invalidate browse cursors
+// like the column-scoped writers do, including when the row is pruned, and a
+// refused row must leave the revision alone.
+func TestFullRowMediaUserDataWritesAdvanceRevision(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	path := filepath.Join("roms", "NES", "Game.nes")
+	revision := func() string {
+		t.Helper()
+		value, _, err := db.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
+		require.NoError(t, err)
+		return value
+	}
+
+	before := revision()
+	require.NoError(t, db.UpsertMediaUserData(&database.MediaUserData{SystemID: "NES", Path: path, IsFavorite: true}))
+	afterInsert := revision()
+	assert.NotEqual(t, before, afterInsert, "an imported favorite must invalidate cursors")
+
+	require.ErrorIs(t, db.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "NES", Path: path, IsLiked: true, IsDisliked: true,
+	}), database.ErrMediaUserFlagConflict)
+	assert.Equal(t, afterInsert, revision(), "a refused row writes nothing")
+
+	require.NoError(t, db.UpsertMediaUserData(&database.MediaUserData{SystemID: "NES", Path: path}))
+	_, found, err := db.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.False(t, found, "a row with no intent is pruned")
+	afterPrune := revision()
+	assert.NotEqual(t, afterInsert, afterPrune)
+
+	require.NoError(t, db.SetMediaUserFlag("NES", path, database.MediaUserFlagHidden, true))
+	afterHide := revision()
+	require.NoError(t, db.DeleteMediaUserData("NES", path))
+	assert.NotEqual(t, afterHide, revision(), "deleting a hidden row must invalidate cursors")
+}

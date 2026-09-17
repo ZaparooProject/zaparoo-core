@@ -74,10 +74,13 @@ func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 	if err := normalized.ValidateFlags(); err != nil {
 		return fmt.Errorf("media user data for %q: %w", normalized.Path, err)
 	}
-	if !normalized.HasIntent() {
-		return sqlDeleteMediaUserData(db.ctx, conn, normalized.SystemID, normalized.Path)
-	}
-	return sqlUpsertMediaUserData(db.ctx, conn, &normalized, time.Now().Unix())
+	now := time.Now().Unix()
+	return mediaUserDataTx(db.ctx, conn, now, func(tx *sql.Tx) error {
+		if !normalized.HasIntent() {
+			return sqlDeleteMediaUserData(db.ctx, tx, normalized.SystemID, normalized.Path)
+		}
+		return sqlUpsertMediaUserData(db.ctx, tx, &normalized, now)
+	})
 }
 
 // SetMediaUserFlag records (or clears) one preference flag for a media path
@@ -145,7 +148,9 @@ func (db *UserDB) SetMediaUserSnapshot(systemID, path, mediaName, slug string, t
 // DeleteMediaUserData removes the user-data row for (SystemID, Path). Deleting a
 // row that does not exist is not an error.
 func (db *UserDB) DeleteMediaUserData(systemID, path string) error {
-	return sqlDeleteMediaUserData(db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path))
+	return mediaUserDataTx(db.ctx, db.sql.Load(), time.Now().Unix(), func(tx *sql.Tx) error {
+		return sqlDeleteMediaUserData(db.ctx, tx, systemID, pathutil.CanonicalMediaPath(path))
+	})
 }
 
 // ListMediaUserData returns every user-data row, used by the reindex re-apply
@@ -154,6 +159,7 @@ func (db *UserDB) ListMediaUserData() ([]database.MediaUserData, error) {
 	return sqlListMediaUserData(db.ctx, db.sql.Load())
 }
 
+// scanMediaUserData reads one row selected with mediaUserDataColumns.
 func scanMediaUserData(scan func(dest ...any) error) (database.MediaUserData, error) {
 	var row database.MediaUserData
 	var rawTags string
@@ -181,6 +187,8 @@ func scanMediaUserData(scan func(dest ...any) error) (database.MediaUserData, er
 	return row, nil
 }
 
+// sqlGetMediaUserData reads the row for one canonical path; the bool is false
+// when there is none.
 func sqlGetMediaUserData(
 	ctx context.Context, db *sql.DB, systemID, path string,
 ) (database.MediaUserData, bool, error) {
@@ -207,10 +215,12 @@ func sqlGetMediaUserData(
 	return row, true, nil
 }
 
+// sqlUpsertMediaUserData writes every flag and the override for one row, and
+// keeps the stored identity snapshot when the new one is empty.
 func sqlUpsertMediaUserData(
-	ctx context.Context, db *sql.DB, data *database.MediaUserData, now int64,
+	ctx context.Context, tx *sql.Tx, data *database.MediaUserData, now int64,
 ) error {
-	stmt, err := db.PrepareContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		insert into MediaUserData(
 			SystemID, Path, IsFavorite, IsHidden, IsLiked, IsDisliked, IsPlayLater,
 			LauncherOverride, MediaName, Slug, Tags, CreatedAt, UpdatedAt
@@ -226,16 +236,7 @@ func sqlUpsertMediaUserData(
 			Slug = case when excluded.Slug != '' then excluded.Slug else MediaUserData.Slug end,
 			Tags = case when excluded.Tags != '' then excluded.Tags else MediaUserData.Tags end,
 			UpdatedAt = excluded.UpdatedAt;
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare media user data upsert statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	_, err = stmt.ExecContext(ctx,
+	`,
 		data.SystemID,
 		data.Path,
 		data.IsFavorite,
@@ -256,6 +257,7 @@ func sqlUpsertMediaUserData(
 	return nil
 }
 
+// sqlSetMediaUserSnapshot replaces the identity snapshot on an existing row.
 func sqlSetMediaUserSnapshot(
 	ctx context.Context, db *sql.DB, systemID, path, mediaName, slug, encodedTags string,
 ) error {
@@ -275,31 +277,38 @@ func sqlSetMediaUserSnapshot(
 // (preference bool or launcher ID string).
 func mediaUserDataColumnWrite(
 	ctx context.Context, db *sql.DB, upsert, systemID, path string, value any, now int64,
-) (err error) {
+) error {
+	return mediaUserDataTx(ctx, db, now, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
+			return fmt.Errorf("failed to upsert media user data column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`delete from MediaUserData where SystemID = ? and Path = ? and `+mediaUserNoIntent+`;`,
+			systemID, path,
+		); err != nil {
+			return fmt.Errorf("failed to prune empty media user data row: %w", err)
+		}
+		return nil
+	})
+}
+
+// mediaUserDataTx runs a MediaUserData write and advances the preferences
+// revision in one transaction, so every listing-affecting write invalidates
+// browse cursors atomically with the data it changes.
+func mediaUserDataTx(ctx context.Context, db *sql.DB, now int64, write func(tx *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin media user data transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	if _, err = tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
-		return fmt.Errorf("failed to upsert media user data column: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx,
-		`delete from MediaUserData where SystemID = ? and Path = ? and `+mediaUserNoIntent+`;`,
-		systemID, path,
-	); err != nil {
-		return fmt.Errorf("failed to prune empty media user data row: %w", err)
-	}
-	if revErr := sqlAdvanceMediaPreferencesRevision(ctx, tx, now); revErr != nil {
-		err = revErr
+	if err := write(tx); err != nil {
+		_ = tx.Rollback()
 		return err
 	}
-	if err = tx.Commit(); err != nil {
+	if err := sqlAdvanceMediaPreferencesRevision(ctx, tx, now); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit media user data transaction: %w", err)
 	}
 	return nil
@@ -318,8 +327,9 @@ func sqlAdvanceMediaPreferencesRevision(ctx context.Context, tx *sql.Tx, now int
 	return nil
 }
 
-func sqlDeleteMediaUserData(ctx context.Context, db *sql.DB, systemID, path string) error {
-	_, err := db.ExecContext(ctx,
+// sqlDeleteMediaUserData removes the row for one canonical path, if any.
+func sqlDeleteMediaUserData(ctx context.Context, tx *sql.Tx, systemID, path string) error {
+	_, err := tx.ExecContext(ctx,
 		`delete from MediaUserData where SystemID = ? and Path = ?;`, systemID, path)
 	if err != nil {
 		return fmt.Errorf("failed to execute media user data delete: %w", err)
@@ -327,6 +337,7 @@ func sqlDeleteMediaUserData(ctx context.Context, db *sql.DB, systemID, path stri
 	return nil
 }
 
+// sqlListMediaUserData reads every row.
 func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUserData, error) {
 	list := make([]database.MediaUserData, 0)
 
