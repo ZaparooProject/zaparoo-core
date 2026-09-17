@@ -27,6 +27,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Hacks, homebrew and public-domain works are distinct games; regions,
+// translations, bootlegs, hacked or modified dumps and other versions of one
+// game are not.
 func TestIsGameVariantTag(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -35,10 +38,6 @@ func TestIsGameVariantTag(t *testing.T) {
 		want    bool
 	}{
 		{"unlicensed", "hack", true},
-		{"dump", "hacked", true},
-		{"dump", "hacked:ffe", true},
-		{"dump", "hacked:intro-removed", true},
-		{"dump", "modified", true},
 		{"release", "homebrew", true},
 		{"release", "public-domain", true},
 		{"copyright", "pd", true},
@@ -46,10 +45,13 @@ func TestIsGameVariantTag(t *testing.T) {
 		{"unlicensed", "translation", false},
 		{"unlicensed", "bootleg", false},
 		{"unlicensed", "pirate", false},
+		{"dump", "hacked", false},
+		{"dump", "hacked:ffe", false},
+		{"dump", "hacked:intro-removed", false},
+		{"dump", "modified", false},
 		{"dump", "fixed", false},
 		{"dump", "bad", false},
 		{"dump", "translated", false},
-		{"dump", "hackedx", false},
 		{"region", "us", false},
 		{"unfinished", "beta", false},
 		// Values that belong to another type do not cross over.
@@ -66,35 +68,32 @@ func TestIsGameVariantTag(t *testing.T) {
 	}
 }
 
+// Only variant "type:value" strings survive, in input order and deduplicated.
+// Only the first colon separates the type, so a value holding a colon is kept
+// whole and never matches a shorter variant value.
 func TestGameVariantTagStrings(t *testing.T) {
 	t.Parallel()
 	got := GameVariantTagStrings([]string{
-		"region:us", "unlicensed:hack", "dump:hacked:ffe", "unlicensed:hack", "lang:en", "notatag", "release:homebrew",
+		"region:us", "unlicensed:hack", "dump:hacked:ffe", "unlicensed:hack:extra", "unlicensed:hack",
+		"lang:en", "notatag", "release:homebrew",
 	})
-	assert.Equal(t, []string{"unlicensed:hack", "dump:hacked:ffe", "release:homebrew"}, got)
+	assert.Equal(t, []string{"unlicensed:hack", "release:homebrew"}, got)
 	assert.Empty(t, GameVariantTagStrings(nil))
 	assert.Empty(t, GameVariantTagStrings([]string{"region:us"}))
 }
 
-// The SQL predicate carries one bind per comparison, and the prefix rule
-// escapes LIKE metacharacters so a value cannot widen the match.
+// The SQL predicate is one bound (type, value) pair per rule, in rule order.
 func TestGameVariantTagSQLPredicate(t *testing.T) {
 	t.Parallel()
 	clause, args := GameVariantTagSQLPredicate("tt.Type", "t.Tag")
+	require.NotEmpty(t, GameVariantTags)
+	assert.Equal(t, len(GameVariantTags), strings.Count(clause, "(tt.Type = ? AND t.Tag = ?)"))
 	assert.True(t, strings.HasPrefix(clause, "("))
 	assert.True(t, strings.HasSuffix(clause, ")"))
 	assert.Len(t, args, strings.Count(clause, "?"))
-	assert.Contains(t, clause, "t.Tag LIKE ? ESCAPE '\\'")
-	assert.Contains(t, args, "hacked:%")
+	want := make([]any, 0, 2*len(GameVariantTags))
 	for _, rule := range GameVariantTags {
-		assert.Contains(t, args, string(rule.Type))
-		assert.Contains(t, args, string(rule.Value))
+		want = append(want, string(rule.Type), string(rule.Value))
 	}
-	require.NotEmpty(t, args)
-}
-
-func TestEscapeLikePattern(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "hacked", escapeLikePattern("hacked"))
-	assert.Equal(t, `a\%b\_c\\d`, escapeLikePattern(`a%b_c\d`))
+	assert.Equal(t, want, args)
 }

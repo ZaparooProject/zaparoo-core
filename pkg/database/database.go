@@ -30,7 +30,6 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
@@ -718,18 +717,6 @@ var TagTypeDisplayPriority = []string{
 // membership), so it aliases the priority list to keep the two in sync. "unknown" is
 // deliberately absent — unclassified tokens never disambiguate.
 var ZapScriptTagTypes = TagTypeDisplayPriority
-
-// GameVariantTagInfos returns the subset of tags that make a file a distinct
-// game (tags.GameVariantTags), in input order.
-func GameVariantTagInfos(infos []TagInfo) []TagInfo {
-	out := make([]TagInfo, 0, 2)
-	for i := range infos {
-		if mediatags.IsGameVariantTag(infos[i].Type, infos[i].Tag) {
-			out = append(out, infos[i])
-		}
-	}
-	return out
-}
 
 // TagTypeDisplayRank returns the display-importance rank of a tag type (lower is more
 // important). Unknown types sort last. Used to order emitted disambiguating tags.

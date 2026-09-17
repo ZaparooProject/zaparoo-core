@@ -39,8 +39,12 @@ func TestScanRecomputesLoneVariantTitle(t *testing.T) {
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	hackPath := filepath.Join("roms", "NES", "Contra (USA) (Hack).nes")
-	plainPath := filepath.Join("roms", "NES", "Metroid (USA).nes")
+	// Stored paths use forward slashes on every OS, so look them up that way.
+	nesPath := func(name string) string {
+		return filepath.ToSlash(filepath.Join("roms", "NES", name))
+	}
+	hackPath := nesPath("Contra (USA) (Hack).nes")
+	plainPath := nesPath("Metroid (USA).nes")
 	indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath)
 
 	hackTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", hackPath)
@@ -51,11 +55,22 @@ func TestScanRecomputesLoneVariantTitle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, plainTags, "a lone plain release still has nothing to disambiguate")
 
-	// A later incremental scan that adds a hack to an existing lone title
-	// marks it too.
-	newHack := filepath.Join("roms", "NES", "Metroid (USA) (Hack).nes")
-	indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath, newHack)
-	newTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", newHack)
+	// A later scan that adds a hack beside an existing lone title marks it.
+	siblingHack := nesPath("Metroid (USA) (Hack).nes")
+	indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath, siblingHack)
+	siblingTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", siblingHack)
 	require.NoError(t, err)
-	assert.Contains(t, newTags, database.TagInfo{Type: "unlicensed", Tag: "hack"})
+	assert.Contains(t, siblingTags, database.TagInfo{Type: "unlicensed", Tag: "hack"})
+
+	// So does a later scan that adds a hack with no sibling at all.
+	loneHack := nesPath("Kid Icarus (USA) (Hack).nes")
+	stats := indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath, siblingHack, loneHack)
+	assert.Equal(t, int64(1), stats.TouchedTitles)
+	loneTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", loneHack)
+	require.NoError(t, err)
+	assert.Contains(t, loneTags, database.TagInfo{Type: "unlicensed", Tag: "hack"})
+
+	// Rescanning the same files refreshes nothing.
+	stats = indexMediaPaths(t, mediaDB, "NES", hackPath, plainPath, siblingHack, loneHack)
+	assert.Equal(t, int64(0), stats.TouchedTitles)
 }

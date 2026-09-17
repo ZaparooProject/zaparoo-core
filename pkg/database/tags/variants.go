@@ -23,24 +23,22 @@ import "strings"
 
 // GameVariantTag names a scanner file tag whose presence makes a file a
 // different game from the plain release that shares its title, rather than a
-// version of it. Prefix also matches every "value:*" sub-variant.
+// version of it.
 type GameVariantTag struct {
-	Type   TagType
-	Value  TagValue
-	Prefix bool
+	Type  TagType
+	Value TagValue
 }
 
 // GameVariantTags is the rule for which tags make a file its own game: ROM
-// hacks, hacked or modified dumps, homebrew and public-domain works. Regions,
-// revisions, translations, fix patches and bootlegs are versions of one game
-// and are deliberately absent. A title launch must always carry these tags,
-// even on a device that holds no plain sibling, or another device resolves the
-// plain release instead. Changing the set changes which games are distinct
-// everywhere the rule is read, so it is defined once here.
+// hacks, homebrew and public-domain works. Regions, revisions, translations,
+// fix patches, bootlegs and hacked or modified dumps (mostly trainers, removed
+// intros and copier headers) are versions of one game and are deliberately
+// absent. A title launch must always carry these tags, even on a device that
+// holds no plain sibling, or another device resolves the plain release
+// instead. Changing the set changes which games are distinct everywhere the
+// rule is read, so it is defined once here.
 var GameVariantTags = []GameVariantTag{
 	{Type: TagTypeUnlicensed, Value: TagUnlicensedHack},
-	{Type: TagTypeDump, Value: TagDumpHacked, Prefix: true},
-	{Type: TagTypeDump, Value: TagDumpModified},
 	{Type: TagTypeRelease, Value: TagReleaseHomebrew},
 	{Type: TagTypeRelease, Value: TagReleasePublicDomain},
 	{Type: TagTypeCopyright, Value: TagCopyrightPD},
@@ -51,13 +49,7 @@ var GameVariantTags = []GameVariantTag{
 func IsGameVariantTag(tagType, value string) bool {
 	for i := range GameVariantTags {
 		rule := &GameVariantTags[i]
-		if string(rule.Type) != tagType {
-			continue
-		}
-		if string(rule.Value) == value {
-			return true
-		}
-		if rule.Prefix && strings.HasPrefix(value, string(rule.Value)+":") {
+		if string(rule.Type) == tagType && string(rule.Value) == value {
 			return true
 		}
 	}
@@ -71,14 +63,9 @@ func IsGameVariantTag(tagType, value string) bool {
 // the returned args after any parameters that precede the clause.
 func GameVariantTagSQLPredicate(typeCol, tagCol string) (clause string, args []any) {
 	parts := make([]string, 0, len(GameVariantTags))
-	args = make([]any, 0, 3*len(GameVariantTags))
+	args = make([]any, 0, 2*len(GameVariantTags))
 	for i := range GameVariantTags {
 		rule := &GameVariantTags[i]
-		if rule.Prefix {
-			parts = append(parts, "("+typeCol+" = ? AND ("+tagCol+" = ? OR "+tagCol+" LIKE ? ESCAPE '\\'))")
-			args = append(args, string(rule.Type), string(rule.Value), escapeLikePattern(string(rule.Value))+":%")
-			continue
-		}
 		parts = append(parts, "("+typeCol+" = ? AND "+tagCol+" = ?)")
 		args = append(args, string(rule.Type), string(rule.Value))
 	}
@@ -104,16 +91,4 @@ func GameVariantTagStrings(typeValues []string) []string {
 		out = append(out, tv)
 	}
 	return out
-}
-
-func escapeLikePattern(s string) string {
-	var sb strings.Builder
-	for _, r := range s {
-		switch r {
-		case '\\', '%', '_':
-			_, _ = sb.WriteRune('\\')
-		}
-		_, _ = sb.WriteRune(r)
-	}
-	return sb.String()
 }
