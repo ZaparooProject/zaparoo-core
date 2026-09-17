@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -39,10 +40,11 @@ import (
 )
 
 type decksTestEnv struct {
-	ns    <-chan models.Notification
-	paths []string
-	ids   []int64
-	env   requests.RequestEnv
+	ns     <-chan models.Notification
+	tagger *decks.Tagger
+	paths  []string
+	ids    []int64
+	env    requests.RequestEnv
 }
 
 func newDecksTestEnv(t *testing.T) *decksTestEnv {
@@ -61,16 +63,24 @@ func newDecksTestEnv(t *testing.T) *decksTestEnv {
 		filepath.Join("roms", "NES", "Contra (USA) (Hack).nes"),
 	}
 	ids := addTestMediaPaths(t, mediaDB, paths...)
+	tagger := decks.NewTagger(&decks.ResolveDeps{MediaDB: mediaDB, UserDB: userDB}, nil)
 	return &decksTestEnv{
 		env: requests.RequestEnv{
 			Context:  context.Background(),
-			Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+			Database: &database.Database{MediaDB: mediaDB, UserDB: userDB, DeckTags: tagger},
 			State:    st,
 		},
-		ns:    ns,
-		paths: paths,
-		ids:   ids,
+		ns:     ns,
+		tagger: tagger,
+		paths:  paths,
+		ids:    ids,
 	}
+}
+
+// tagDecks does the deck tag work the handlers queued.
+func (e *decksTestEnv) tagDecks(t *testing.T) {
+	t.Helper()
+	require.False(t, e.tagger.Drain(context.Background()), "every queued deck is tagged")
 }
 
 func (e *decksTestEnv) call(t *testing.T, handler func(requests.RequestEnv) (any, error), params string) any {
@@ -151,9 +161,22 @@ func TestHandleDecks_CreateGetListDelete(t *testing.T) {
 	assert.Nil(t, list.Decks[0].Items)
 	assert.Equal(t, 4, list.Decks[0].ItemCount)
 
+	// Both game items carry the deck's membership tag, so the deck can be
+	// browsed and searched like any other tag.
+	e.tagDecks(t)
+	tagged := searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID})
+	taggedIDs := make([]int64, 0, len(tagged.Results))
+	for _, r := range tagged.Results {
+		taggedIDs = append(taggedIDs, r.MediaID)
+	}
+	assert.ElementsMatch(t, e.ids, taggedIDs)
+
 	_, isNoContent := e.call(t, HandleDecksDelete, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)).(NoContent)
 	assert.True(t, isNoContent)
 	e.expectNotification(t, created.DeckID, models.DecksChangedDeleted)
+	e.tagDecks(t)
+	assert.Empty(t, searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID}).Results,
+		"deleting a deck removes its membership tags")
 	_, err := HandleDecksGet(withParams(&e.env, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)))
 	require.ErrorIs(t, err, database.ErrDeckNotFound)
 	_, err = HandleDecksDelete(withParams(&e.env, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)))
@@ -182,12 +205,20 @@ func TestHandleDecksUpdate(t *testing.T) {
 	assert.Equal(t, 2, updated.Items[1].Position)
 	e.expectNotification(t, created.DeckID, models.DecksChangedUpdated)
 
+	e.tagDecks(t)
+	tagged := searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID})
+	require.Len(t, tagged.Results, 1, "the media item added by the update carries the tag")
+	assert.Equal(t, e.ids[0], tagged.Results[0].MediaID)
+
 	replaced, ok := e.call(t, HandleDecksUpdate, fmt.Sprintf(`{"deckId":%q, "items": [
 		{"kind": "script", "name": "Only", "zapscript": "**only"}]}`, created.DeckID)).(models.DeckResponse)
 	require.True(t, ok)
 	require.Len(t, replaced.Items, 1)
 	assert.Equal(t, "Only", replaced.Items[0].Name)
 	assert.Equal(t, "Edited", replaced.Name, "an items-only update keeps the name")
+	e.tagDecks(t)
+	assert.Empty(t, searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID}).Results,
+		"replacing the items moves the tag with them")
 
 	_, err := HandleDecksUpdate(withParams(&e.env, fmt.Sprintf(`{"deckId":%q, "name": "  "}`, created.DeckID)))
 	require.Error(t, err)
@@ -214,6 +245,38 @@ func deckItemIDs(items []models.DeckItemResponse) []int64 {
 		ids = append(ids, items[i].ID)
 	}
 	return ids
+}
+
+// A title item that resolves on this device is tagged and linked to the file
+// it matched once the queued deck tag work runs. A linked file that a later
+// scan did not find is reported unavailable.
+func TestHandleDecks_TitleItemLinkedByTagger(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+
+	created, ok := e.call(t, HandleDecksNew, `{"name": "Titles", "items": [
+		{"kind": "script", "name": "Metroid", "zapscript": "**launch.title:NES/Metroid"}]}`).(models.DeckResponse)
+	require.True(t, ok)
+	require.Len(t, created.Items, 1)
+	assert.Nil(t, created.Items[0].Media, "the reply does not wait for title matching")
+	assert.Empty(t, searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID}).Results)
+
+	e.tagDecks(t)
+	tagged := searchByTags(t, &e.env, []string{"user:deck:" + created.DeckID})
+	require.Len(t, tagged.Results, 1)
+	assert.Equal(t, e.ids[0], tagged.Results[0].MediaID)
+	got, ok := e.call(t, HandleDecksGet, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)).(models.DeckResponse)
+	require.True(t, ok)
+	require.NotNil(t, got.Items[0].Media, "the item is linked to the file its title matched")
+	assert.Equal(t, filepath.ToSlash(e.paths[0]), got.Items[0].Media.Path)
+	assert.True(t, got.Items[0].Media.Available)
+
+	addTestMediaPaths(t, e.env.Database.MediaDB, e.paths[1])
+	got, ok = e.call(t, HandleDecksGet, fmt.Sprintf(`{"deckId":%q}`, created.DeckID)).(models.DeckResponse)
+	require.True(t, ok)
+	require.NotNil(t, got.Items[0].Media)
+	assert.Equal(t, filepath.ToSlash(e.paths[0]), got.Items[0].Media.Path, "a missing file keeps the link")
+	assert.False(t, got.Items[0].Media.Available, "a missing file is not available")
 }
 
 // A request that renames a deck and adds an item that cannot be resolved
@@ -485,6 +548,17 @@ func TestHandleDecksNew_Validation(t *testing.T) {
 	require.Error(t, err)
 	_, err = HandleDecksNew(withParams(&e.env, `{"name": "Bad card", "items": [{"kind": "card"}]}`))
 	require.Error(t, err)
+	_, err = HandleDecksNew(withParams(&e.env, `{"name": "Blank card script", "items": [
+		{"kind": "card", "cardId": "abcd1234", "scripts": [{"name": "Play", "zapscript": "   "}]}]}`))
+	require.Error(t, err, "a card script that is only whitespace is rejected")
+	card, ok := e.call(t, HandleDecksNew, `{"name": "Trimmed card", "items": [
+		{"kind": "card", "cardId": "abcd1234",
+		 "scripts": [{"name": " Play ", "zapscript": " **launch.random:NES "}]}]}`,
+	).(models.DeckResponse)
+	require.True(t, ok)
+	require.Len(t, card.Items[0].Scripts, 1)
+	assert.Equal(t, "Play", card.Items[0].Scripts[0].Name)
+	assert.Equal(t, "**launch.random:NES", card.Items[0].Scripts[0].ZapScript)
 	_, err = HandleDecksNew(withParams(&e.env, `{"name": "Bad media", "items": [{"kind": "media", "system": "NES"}]}`))
 	require.Error(t, err, "a media item needs a mediaId or system plus path")
 	_, err = HandleDecksGet(withParams(&e.env, `{"deckId": "not-an-id"}`))

@@ -582,7 +582,7 @@ data side.
 
 ### decks.changed
 
-Sent when a deck is created, edited or deleted on the device, or refreshed from its source, so clients reload their deck lists. Deck edits also change media preferences, so open browse cursors should be discarded.
+Sent when a deck is created, edited or deleted on the device, refreshed from its source, or when Core links its title items to local files after matching them, so clients reload their deck lists. Deck edits also change media preferences, so open browse cursors should be discarded.
 
 #### Parameters
 

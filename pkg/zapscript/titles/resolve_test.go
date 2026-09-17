@@ -206,7 +206,7 @@ func TestResolveTitle_EmptySlug(t *testing.T) {
 		MediaType: slugs.MediaTypeGame,
 	})
 
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoMatch, "a title with nothing to match is a miss, not a failure")
 	assert.Contains(t, err.Error(), "slugified to empty string")
 	assert.Nil(t, result)
 }

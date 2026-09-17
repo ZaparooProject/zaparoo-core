@@ -123,16 +123,6 @@ type Deck struct {
 	Owned       bool
 }
 
-// DeckItemLink is the flat view of a deck's game items used to re-apply the
-// deck membership tags after a reindex.
-type DeckItemLink struct {
-	DeckID    string
-	Kind      string
-	ZapScript string
-	Anchor    DeckItemAnchor
-	ItemDBID  int64
-}
-
 // NewDeckID mints a deck ID from the operating system's random source:
 // DeckIDLength characters of DeckIDAlphabet, lower-cased. One byte per
 // character modulo 32 is unbiased because 256 is a multiple of 32.

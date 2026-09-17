@@ -141,6 +141,8 @@ func TestHandleGenerateMedia_RebuildRecreatesDatabaseBeforeIndexing(t *testing.T
 
 	db, cleanup := helpers.NewTestDatabase(t)
 	defer cleanup()
+	deckTags := &recordingDeckTags{}
+	db.DeckTags = deckTags
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Plant a media row the rebuild must discard. A plain (non-rebuild) reindex
@@ -183,6 +185,7 @@ func TestHandleGenerateMedia_RebuildRecreatesDatabaseBeforeIndexing(t *testing.T
 	count, err = db.MediaDB.GetTotalMediaCount()
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "rebuild must discard the existing media database, not upsert into it")
+	assert.Equal(t, int32(1), deckTags.all.Load(), "a finished index re-tags every deck")
 }
 
 func TestHandleGenerateMedia_RebuildRecreateFailureAbortsIndexing(t *testing.T) {

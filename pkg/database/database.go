@@ -40,6 +40,34 @@ import (
 type Database struct {
 	UserDB  UserDBI
 	MediaDB MediaDBI
+	// DeckTags brings deck membership tags up to date in the background. It
+	// is nil where nothing runs that work, such as in tools and most tests.
+	DeckTags DeckTagQueue
+}
+
+// DeckTagQueue brings the deck membership tags in MediaDB in line with the
+// decks in UserDB. Queueing returns at once; the work happens later.
+type DeckTagQueue interface {
+	// QueueDeckTags schedules the tags of the given decks, including decks
+	// that were just deleted.
+	QueueDeckTags(deckIDs ...string)
+	// QueueAllDeckTags schedules every deck's tags, and the removal of tags
+	// belonging to decks that no longer exist, as after a reindex.
+	QueueAllDeckTags()
+}
+
+// QueueDeckTags schedules the given decks' tags when a queue is attached.
+func (db *Database) QueueDeckTags(deckIDs ...string) {
+	if db != nil && db.DeckTags != nil {
+		db.DeckTags.QueueDeckTags(deckIDs...)
+	}
+}
+
+// QueueAllDeckTags schedules every deck's tags when a queue is attached.
+func (db *Database) QueueAllDeckTags() {
+	if db != nil && db.DeckTags != nil {
+		db.DeckTags.QueueAllDeckTags()
+	}
 }
 
 // ScrapeJob is shared by explicit requests, index-triggered requests, and recovery.
@@ -242,6 +270,11 @@ const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
 // unexpired per-profile day waivers, as versioned JSON. It stores resolved
 // profile IDs only, never the switch IDs used to authorize a grant.
 const DeviceStateKeyPlaytimeExtensions = "playtime_extensions"
+
+// DeviceStateKeyDeckTagsQueue is the DeviceState key holding the decks whose
+// membership tags still have to be brought up to date, as JSON, so the work
+// survives a restart.
+const DeviceStateKeyDeckTagsQueue = "deck_tags_queue"
 
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
@@ -1136,7 +1169,6 @@ type UserDBI interface {
 	DeleteDeck(deckID string) (bool, error)
 	UpsertRemoteDeck(deck *Deck) error
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
-	ListDeckItemLinks() ([]DeckItemLink, error)
 	CountOwnedDecks() (int, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
@@ -1369,6 +1401,8 @@ type MediaDBI interface {
 		remove []MediaTagRef,
 		add []MediaTagRef,
 	) error
+	SetMediaTagMembership(ctx context.Context, ref MediaTagRef, mediaDBIDs []int64) (bool, error)
+	ListMediaTagValues(ctx context.Context, tagType, valuePrefix string) ([]string, error)
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)

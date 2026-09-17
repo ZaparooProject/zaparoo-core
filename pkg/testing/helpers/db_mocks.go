@@ -365,17 +365,6 @@ func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckIte
 	return nil
 }
 
-func (m *MockUserDBI) ListDeckItemLinks() ([]database.DeckItemLink, error) {
-	args := m.Called()
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI list deck item links failed: %w", err)
-	}
-	if links, ok := args.Get(0).([]database.DeckItemLink); ok {
-		return links, nil
-	}
-	return nil, nil
-}
-
 func (m *MockUserDBI) CountOwnedDecks() (int, error) {
 	args := m.Called()
 	if err := args.Error(1); err != nil {
@@ -1877,6 +1866,27 @@ func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) SetMediaTagMembership(
+	ctx context.Context, ref database.MediaTagRef, mediaDBIDs []int64,
+) (bool, error) {
+	args := m.Called(ctx, ref, mediaDBIDs)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
+func (m *MockMediaDBI) ListMediaTagValues(ctx context.Context, tagType, valuePrefix string) ([]string, error) {
+	args := m.Called(ctx, tagType, valuePrefix)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if values, ok := args.Get(0).([]string); ok {
+		return values, nil
+	}
+	return nil, nil
 }
 
 func (m *MockMediaDBI) UpdateMediaTags(

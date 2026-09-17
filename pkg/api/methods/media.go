@@ -855,6 +855,8 @@ func startMediaDBGeneration(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		// Rebuilt rows lost their deck tags, and files may have moved.
+		db.QueueAllDeckTags()
 		if indexCtx.Err() == nil {
 			jobs := scrapeJobsForSources(availableScrapers, indexedSources)
 			if queueErr := enqueueScrapeJobs(db.MediaDB, jobs); queueErr != nil {

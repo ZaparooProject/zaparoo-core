@@ -108,6 +108,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	if err := env.Database.UserDB.CreateDeck(deck); err != nil {
 		return nil, deckError(err)
 	}
+	env.Database.QueueDeckTags(deck.DeckID)
 	notifyDecksChanged(&env, deck.DeckID, models.DecksChangedCreated)
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
@@ -179,6 +180,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, deckError(err)
 	}
+	env.Database.QueueDeckTags(updated.DeckID)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
 	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
 }
@@ -206,6 +208,7 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	if !existed {
 		return nil, models.ClientErr(database.ErrDeckNotFound)
 	}
+	env.Database.QueueDeckTags(deckID)
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
 	return NoContent{}, nil
 }
@@ -368,7 +371,11 @@ func buildDeckItem(env *requests.RequestEnv, input *models.DeckItemInput) (datab
 		}
 		scripts := make([]database.DeckCardScript, 0, len(input.Scripts))
 		for _, s := range input.Scripts {
-			scripts = append(scripts, database.DeckCardScript{Name: s.Name, ZapScript: s.ZapScript})
+			script := strings.TrimSpace(s.ZapScript)
+			if script == "" {
+				return database.DeckItem{}, errors.New("a card script needs a zapscript")
+			}
+			scripts = append(scripts, database.DeckCardScript{Name: strings.TrimSpace(s.Name), ZapScript: script})
 		}
 		return database.DeckItem{
 			Kind: database.DeckItemKindCard, Name: strings.TrimSpace(input.Name), CardID: cardID,
@@ -445,8 +452,8 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 			continue
 		}
 		for _, i := range indexes {
-			_, ok := found[items[i].Anchor.Path]
-			available[items[i].DBID] = ok
+			media, ok := found[items[i].Anchor.Path]
+			available[items[i].DBID] = ok && !media.IsMissing
 		}
 	}
 	return available

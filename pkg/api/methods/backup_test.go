@@ -192,6 +192,8 @@ func TestHandleBackupRestore_Success(t *testing.T) {
 	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
 	require.NoError(t, err)
 	env.Params = params
+	deckTags := &recordingDeckTags{}
+	env.Database.DeckTags = deckTags
 
 	result, err := HandleBackupRestore(env)
 	require.NoError(t, err)
@@ -200,6 +202,7 @@ func TestHandleBackupRestore_Success(t *testing.T) {
 	assert.Equal(t, backupInfo.Name, info.RestoredFrom.Name)
 	require.NotNil(t, info.PreRestoreBackup)
 	assert.Equal(t, backupsvc.IntegrityValid, info.PreRestoreBackup.Integrity)
+	assert.Equal(t, int32(1), deckTags.all.Load(), "the restored decks are re-tagged")
 }
 
 func TestHandleBackupRestore_RejectsActiveMedia(t *testing.T) {

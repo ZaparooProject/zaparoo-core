@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,15 +35,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// recordingDeckTags counts the deck tag work queued through it.
+type recordingDeckTags struct {
+	decks atomic.Int64
+	all   atomic.Int32
+}
+
+func (r *recordingDeckTags) QueueDeckTags(deckIDs ...string) { r.decks.Add(int64(len(deckIDs))) }
+
+func (r *recordingDeckTags) QueueAllDeckTags() { r.all.Add(1) }
+
 func TestHandleMediaCleanOrphans_Success(t *testing.T) {
 	t.Parallel()
 
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("CleanMediaOrphans", mock.Anything).Return(int64(5), nil)
 
+	deckTags := &recordingDeckTags{}
 	env := requests.RequestEnv{
 		Context:  context.Background(),
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Database: &database.Database{MediaDB: mockMediaDB, DeckTags: deckTags},
 	}
 
 	result, err := HandleMediaCleanOrphans(env)
@@ -51,6 +63,8 @@ func TestHandleMediaCleanOrphans_Success(t *testing.T) {
 	resp, ok := result.(models.MediaCleanOrphansResponse)
 	require.True(t, ok)
 	assert.Equal(t, int64(5), resp.Deleted)
+	assert.Equal(t, int32(1), deckTags.all.Load(), "deck items linked to removed files are re-resolved")
+	assert.Zero(t, deckTags.decks.Load())
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -60,9 +74,10 @@ func TestHandleMediaCleanOrphans_NoneDeleted(t *testing.T) {
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("CleanMediaOrphans", mock.Anything).Return(int64(0), nil)
 
+	deckTags := &recordingDeckTags{}
 	env := requests.RequestEnv{
 		Context:  context.Background(),
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Database: &database.Database{MediaDB: mockMediaDB, DeckTags: deckTags},
 	}
 
 	result, err := HandleMediaCleanOrphans(env)
@@ -71,6 +86,7 @@ func TestHandleMediaCleanOrphans_NoneDeleted(t *testing.T) {
 	resp, ok := result.(models.MediaCleanOrphansResponse)
 	require.True(t, ok)
 	assert.Equal(t, int64(0), resp.Deleted)
+	assert.Zero(t, deckTags.all.Load(), "nothing removed, nothing to re-tag")
 	mockMediaDB.AssertExpectations(t)
 }
 

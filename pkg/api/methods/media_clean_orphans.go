@@ -48,5 +48,10 @@ func HandleMediaCleanOrphans(env requests.RequestEnv) (any, error) { //nolint:go
 		return nil, fmt.Errorf("failed to clean media orphans: %w", err)
 	}
 
+	if deleted > 0 {
+		// Deck items linked to a removed file now resolve by title instead.
+		env.Database.QueueAllDeckTags()
+	}
+
 	return models.MediaCleanOrphansResponse{Deleted: deleted}, nil
 }
