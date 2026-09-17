@@ -113,3 +113,46 @@ func TestComposeMediaItem(t *testing.T) {
 	_, err = ComposeMediaItem(ctx, mediaDB, "SNES", filepath.Join("roms", "SNES", "Missing.sfc"))
 	require.ErrorIs(t, err, ErrMediaNotIndexed)
 }
+
+// Right after an upgrade that changed the variant rule, a title's stored
+// disambiguating types can still be the old ones until the one-time recompute
+// runs. The old rule only marked types that differ between a title's files, so
+// a lone homebrew, or a hack kept in two folders, had none. A game added to a
+// deck in that window must still carry its variant tag, because the deck keeps
+// the script.
+func TestComposeMediaItem_StaleDisambiguation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	hackPath := filepath.Join("roms", "SNES", "Hacks", "Super Mario World (USA) (Hack).sfc")
+	hackCopyPath := filepath.Join("roms", "SNES", "All", "Super Mario World (USA) (Hack).sfc")
+	homebrewPath := filepath.Join("roms", "SNES", "Nova the Squirrel (World) (Homebrew).sfc")
+	plainPath := filepath.Join("roms", "SNES", "Donkey Kong Country (USA).sfc")
+	paths := []string{hackPath, hackCopyPath, homebrewPath, plainPath}
+	scantest.IndexMediaPaths(t, mediaDB, "SNES", paths...)
+
+	current := make(map[string]string, len(paths))
+	for _, path := range paths {
+		item, err := ComposeMediaItem(ctx, mediaDB, "SNES", path)
+		require.NoError(t, err)
+		current[path] = item.ZapScript
+	}
+	assert.Equal(t, `**launch.title:"SNES/Super Mario World (unlicensed:hack)"`, current[hackPath])
+	assert.Equal(t, current[hackPath], current[hackCopyPath])
+	assert.Contains(t, current[homebrewPath], "(release:homebrew)")
+	assert.Equal(t, "**launch.title:SNES/Donkey Kong Country", current[plainPath])
+
+	_, err := mediaDB.UnsafeGetSQLDb().ExecContext(ctx, `update MediaTitles set DisambiguationTypes = '';`)
+	require.NoError(t, err)
+	stale, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "SNES", hackPath)
+	require.NoError(t, err)
+	require.Empty(t, stale, "the stored types are stale")
+
+	for _, path := range paths {
+		item, composeErr := ComposeMediaItem(ctx, mediaDB, "SNES", path)
+		require.NoError(t, composeErr)
+		assert.Equal(t, current[path], item.ZapScript, "stale stored types still compose the current script")
+	}
+}

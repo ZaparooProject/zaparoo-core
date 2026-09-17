@@ -23,13 +23,16 @@
 package decks
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 )
 
@@ -68,6 +71,7 @@ func ComposeMediaItem(
 	if err != nil {
 		return database.DeckItem{}, fmt.Errorf("resolve title tags: %w", err)
 	}
+	tags = withGameVariantTags(tags, identity.Tags)
 	return database.DeckItem{
 		Kind:      database.DeckItemKindScript,
 		Name:      identity.DisplayName,
@@ -79,4 +83,45 @@ func ComposeMediaItem(
 			Tags:      identity.LegacyTags(),
 		},
 	}, nil
+}
+
+// withGameVariantTags adds to a file's title tags every tag of a type the file
+// carries a game-variant tag of, when the type is not already there. Once the
+// media database is current those types are always stored for the title, so
+// this changes nothing. After an upgrade that changed the rule they can be
+// missing until the one-time recompute has run, which is paused while a game
+// is running, and a deck keeps the script it is given.
+func withGameVariantTags(tags []database.TagInfo, fileTags []database.MediaIdentityTag) []database.TagInfo {
+	present := make(map[string]struct{}, len(tags))
+	for i := range tags {
+		present[tags[i].Type] = struct{}{}
+	}
+	missing := make(map[string]struct{})
+	for i := range fileTags {
+		if _, ok := present[fileTags[i].Type]; ok {
+			continue
+		}
+		if mediatags.IsGameVariantTag(fileTags[i].Type, fileTags[i].Value) {
+			missing[fileTags[i].Type] = struct{}{}
+		}
+	}
+	if len(missing) == 0 {
+		return tags
+	}
+	out := slices.Clone(tags)
+	for i := range fileTags {
+		if _, ok := missing[fileTags[i].Type]; ok {
+			out = append(out, database.TagInfo{
+				Type: fileTags[i].Type, Tag: mediatags.UnpadTagValue(fileTags[i].Value),
+			})
+		}
+	}
+	// The same order the media database returns title tags in.
+	slices.SortStableFunc(out, func(a, b database.TagInfo) int {
+		if rank := cmp.Compare(database.TagTypeDisplayRank(a.Type), database.TagTypeDisplayRank(b.Type)); rank != 0 {
+			return rank
+		}
+		return strings.Compare(a.Tag, b.Tag)
+	})
+	return out
 }
