@@ -36,7 +36,12 @@ func TestDiscoveryVisibilityFilters(t *testing.T) {
 		{"user:favorite", true},
 		{"+user:favorite", true},
 		{"user:hidden", true},
+		{"user:liked", true},
+		{"+user:disliked", true},
+		{"user:playlater", true},
 		{"-user:favorite", false},
+		{"-user:liked", false},
+		{"~user:playlater", false},
 		{"~user:favorite", false},
 		{"genre:action", false},
 	} {

@@ -574,7 +574,7 @@ None.
 
 **Access:** All clients.
 
-Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required `user:favorite` and `user:hidden` tag filters also include hidden entries; OR/NOT favorites filters do not enable this exception.
+Query the media database and return matching indexed media. Hidden entries are excluded before pagination unless `includeHidden` is true. Explicit required user tag filters (`user:favorite`, `user:liked`, `user:hidden` and the other user tags) also include hidden entries; OR/NOT user tag filters do not enable this exception.
 
 **Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope. Changing `includeHidden` or editing media preferences invalidates existing search cursors; restart without a cursor when Core reports `library visibility changed`.
 
@@ -786,7 +786,7 @@ A directory holding media for more than one system also stays plain, because its
 
 Tags filter direct media files in the current path. Directories remain visible for navigation with tag-unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
-Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required `user:favorite` or `user:hidden` filters also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
+Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required user tag filters, such as `user:favorite`, `user:liked` or `user:hidden`, also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
 
 #### Parameters
 
@@ -1172,7 +1172,7 @@ Add or remove user tags for an indexed media item.
 
 Mutable tags are `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`. All are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the others, except for the pairs the model forbids: adding `user:disliked` clears `user:liked` and `user:favorite`, and adding `user:liked` or `user:favorite` clears `user:disliked`. A request that adds both sides of such a pair at once is rejected. Deck membership tags (`user:deck:<id>`) are read-only here and managed through the decks methods.
 
-Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
+Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites, the other user tag lists and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
 
 All flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer any preference; the old path's preferences remain stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
 
@@ -2798,7 +2798,7 @@ Set `tags` to return only systems containing matching non-missing media. Tagged 
 
 | Key  | Type     | Required | Description                                                                                     |
 | :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
-| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required favorites/hidden tag filters also include hidden entries. |
+| includeHidden | boolean | No | Include hidden media in system counts. Defaults to `false`; required user tag filters also include hidden entries. |
 | all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 | tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 

@@ -4069,9 +4069,9 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	// separately, so an untagged random keeps the cached per-system totals
 	// instead of re-aggregating Media behind the injected NOT filter.
 	weightTags := query.Tags
-	// A required user:hidden or user:favorite filter is an explicit ask for
-	// those entries, the same exception browse and search make. Without it a
-	// random over hidden media would be a query that cannot match.
+	// A required user tag filter (user:hidden, user:favorite, user:liked, ...)
+	// is an explicit ask for the user's own list, the same exception browse and
+	// search make. Without it a random over hidden media could never match.
 	excludeHidden := discoveryExcludesHidden(query.Tags)
 	scoped := *query
 	var visibilityErr error

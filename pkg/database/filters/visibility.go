@@ -26,15 +26,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
-// IncludesHidden identifies an explicit favorites/hidden view. An OR term does
-// not qualify: other branches of that query are still ordinary discovery.
+// IncludesHidden identifies an explicit view of the user's own lists: a
+// required user tag such as user:favorite, user:liked or user:hidden. Hidden
+// entries stay in those lists, as they do in favorites. An OR term does not
+// qualify: other branches of that query are still ordinary discovery.
 func IncludesHidden(filters []zapscript.TagFilter, includeHidden bool) bool {
 	if includeHidden {
 		return true
 	}
 	for _, filter := range filters {
-		if filter.Type == string(tags.TagTypeUser) && filter.Operator == zapscript.TagOperatorAND &&
-			(filter.Value == string(tags.TagUserFavorite) || filter.Value == string(tags.TagUserHidden)) {
+		if filter.Type == string(tags.TagTypeUser) && filter.Operator == zapscript.TagOperatorAND {
 			return true
 		}
 	}
