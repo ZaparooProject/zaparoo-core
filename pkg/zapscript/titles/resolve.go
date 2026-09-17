@@ -58,6 +58,10 @@ type ResolveParams struct {
 	MediaType      slugs.MediaType
 	AdditionalTags []zapscript.TagFilter
 	Launchers      []platforms.Launcher
+	// SkipCachedResult resolves through the database even when the slug
+	// resolution cache holds an answer. A cached answer reports confidence
+	// 1.0 whatever it scored, so a caller that gates on confidence sets this.
+	SkipCachedResult bool
 }
 
 // cacheSlugResolution writes the resolution result to the cache in the
@@ -233,24 +237,26 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 	title := remainingTitle
 	slug := slugs.Slugify(mediaType, title)
 	if slug == "" {
-		return nil, fmt.Errorf("game name slugified to empty string: %s", gameName)
+		return nil, fmt.Errorf("%w: game name slugified to empty string: %s", ErrNoMatch, gameName)
 	}
 
 	log.Info().Msgf("resolving title slug '%s' in system '%s'", slug, systemID)
 
 	// Check slug resolution cache first
-	cachedMediaID, cachedStrategy, cacheHit := mediadb.GetCachedSlugResolution(
-		ctx, systemID, slug, tagFilters)
-	if cacheHit {
-		result, cacheErr := mediadb.GetMediaByDBID(ctx, cachedMediaID)
-		if cacheErr == nil {
-			return &ResolveResult{
-				Result:     result,
-				Strategy:   cachedStrategy,
-				Confidence: 1.0,
-			}, nil
+	if !params.SkipCachedResult {
+		cachedMediaID, cachedStrategy, cacheHit := mediadb.GetCachedSlugResolution(
+			ctx, systemID, slug, tagFilters)
+		if cacheHit {
+			result, cacheErr := mediadb.GetMediaByDBID(ctx, cachedMediaID)
+			if cacheErr == nil {
+				return &ResolveResult{
+					Result:     result,
+					Strategy:   cachedStrategy,
+					Confidence: 1.0,
+				}, nil
+			}
+			log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
 		}
-		log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
 	}
 
 	matchInfo := GenerateMatchInfo(mediaType, title)

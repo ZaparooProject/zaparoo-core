@@ -183,6 +183,9 @@ func HandleBackupRestore(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, backupMethodError("restore backup", err)
 	}
+	// The restored decks may differ from the tagged ones. The queue is kept
+	// in the restored user database, so the restart below still runs it.
+	env.Database.QueueAllDeckTags()
 	return backupRestoreResponse(&env, restore), nil
 }
 
@@ -232,5 +235,6 @@ func HandleBackupRemoteRestore(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, backupMethodError("restore remote backup", err)
 	}
+	env.Database.QueueAllDeckTags()
 	return backupRestoreResponse(&env, restore), nil
 }

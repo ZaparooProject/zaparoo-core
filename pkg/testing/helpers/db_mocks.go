@@ -365,17 +365,6 @@ func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckIte
 	return nil
 }
 
-func (m *MockUserDBI) ListDeckItemLinks() ([]database.DeckItemLink, error) {
-	args := m.Called()
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI list deck item links failed: %w", err)
-	}
-	if links, ok := args.Get(0).([]database.DeckItemLink); ok {
-		return links, nil
-	}
-	return nil, nil
-}
-
 func (m *MockUserDBI) CountOwnedDecks() (int, error) {
 	args := m.Called()
 	if err := args.Error(1); err != nil {
@@ -1889,6 +1878,17 @@ func (m *MockMediaDBI) SetMediaTagMembership(
 	return args.Bool(0), nil
 }
 
+func (m *MockMediaDBI) ListMediaTagValues(ctx context.Context, tagType, valuePrefix string) ([]string, error) {
+	args := m.Called(ctx, tagType, valuePrefix)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if values, ok := args.Get(0).([]string); ok {
+		return values, nil
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) UpdateMediaTags(
 	ctx context.Context,
 	mediaDBID int64,
@@ -2857,7 +2857,6 @@ func NewMockUserDBI() *MockUserDBI {
 	// projection. Default to an empty list so tests exercising NewNamesIndex
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
-	m.On("ListDeckItemLinks").Return([]database.DeckItemLink{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
 	return m
 }

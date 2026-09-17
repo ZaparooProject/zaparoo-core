@@ -498,3 +498,47 @@ func projectionRevision(t *testing.T, rawDB *sql.DB) string {
 	require.NoError(t, err)
 	return value
 }
+
+// ListMediaTagValues lists one type's tag values under a prefix that some
+// file carries, missing files included, and nothing else.
+func TestListMediaTagValues(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, _, mediaIDs := setupDisambTitle(t, mediaDB, "NES", "Listed", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "a.nes"), tags: map[string]string{"region": "us"}},
+		{path: browseTestPath("roms", "nes", "b.nes"), tags: map[string]string{"region": "eu"}},
+	})
+	user := string(tags.TagTypeUser)
+	for _, value := range []string{"deck:bbbbbbbbbbbb", "deck:aaaaaaaaaaaa", "deckx", "favorite"} {
+		_, err := mediaDB.SetMediaTagMembership(ctx, database.MediaTagRef{Type: user, Tag: value}, mediaIDs[:1])
+		require.NoError(t, err)
+	}
+	// A deck tag whose files all lost it is no longer listed, though its tag
+	// row stays.
+	cleared := database.MediaTagRef{Type: user, Tag: "deck:cccccccccccc"}
+	_, err := mediaDB.SetMediaTagMembership(ctx, cleared, mediaIDs[1:])
+	require.NoError(t, err)
+	_, err = mediaDB.SetMediaTagMembership(ctx, cleared, nil)
+	require.NoError(t, err)
+	// A deck tag on a missing file still counts.
+	onMissing := database.MediaTagRef{Type: user, Tag: "deck:dddddddddddd"}
+	_, err = mediaDB.SetMediaTagMembership(ctx, onMissing, mediaIDs[1:])
+	require.NoError(t, err)
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx, `UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, mediaIDs[1])
+	require.NoError(t, err)
+
+	values, err := mediaDB.ListMediaTagValues(ctx, user, tags.TagUserDeckPrefix)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deck:aaaaaaaaaaaa", "deck:bbbbbbbbbbbb", "deck:dddddddddddd"}, values)
+
+	values, err = mediaDB.ListMediaTagValues(ctx, "region", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"eu", "us"}, values)
+
+	values, err = mediaDB.ListMediaTagValues(ctx, "nosuchtype", "deck:")
+	require.NoError(t, err)
+	assert.Empty(t, values)
+}

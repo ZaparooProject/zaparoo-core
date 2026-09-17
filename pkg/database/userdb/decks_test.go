@@ -406,7 +406,7 @@ func TestUpsertRemoteDeck(t *testing.T) {
 	assert.True(t, got.Owned)
 }
 
-func TestDeckItemAnchorsAndLinks(t *testing.T) {
+func TestSetDeckItemAnchor(t *testing.T) {
 	t.Parallel()
 	db, cleanup := setupTempUserDB(t)
 	t.Cleanup(cleanup)
@@ -425,13 +425,12 @@ func TestDeckItemAnchorsAndLinks(t *testing.T) {
 	require.NoError(t, db.SetDeckItemAnchor(999999, &database.DeckItemAnchor{SystemID: "X", Path: "y"}),
 		"anchoring a missing item is a no-op, never an insert")
 
-	links, err := db.ListDeckItemLinks()
+	stored, err := db.GetDeck("0123456789ab")
 	require.NoError(t, err)
-	require.Len(t, links, 2)
-	assert.Equal(t, "0123456789ab", links[0].DeckID)
-	assert.Equal(t, itemID, links[0].ItemDBID)
-	assert.Equal(t, "roms/SNES/Unresolved.sfc", links[0].Anchor.Path, "anchor paths are stored canonical")
-	assert.Equal(t, []string{"region:eu"}, links[0].Anchor.Tags)
-	assert.Equal(t, database.DeckItemKindCard, links[1].Kind)
-	assert.Empty(t, links[1].Anchor.Path)
+	require.Len(t, stored.Items, 2)
+	assert.Equal(t, itemID, stored.Items[0].DBID)
+	assert.Equal(t, "roms/SNES/Unresolved.sfc", stored.Items[0].Anchor.Path, "anchor paths are stored canonical")
+	assert.Equal(t, []string{"region:eu"}, stored.Items[0].Anchor.Tags)
+	assert.Equal(t, database.DeckItemKindCard, stored.Items[1].Kind)
+	assert.Empty(t, stored.Items[1].Anchor.Path)
 }

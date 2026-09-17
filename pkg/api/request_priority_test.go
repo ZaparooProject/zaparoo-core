@@ -196,10 +196,6 @@ func TestIsMediaDBTransactionAPIMethod(t *testing.T) {
 		{"tags update exact", models.MethodMediaTagsUpdate, true},
 		{"tags update case insensitive", "MEDIA.TAGS.UPDATE", true},
 		{"meta update exact", models.MethodMediaMetaUpdate, true},
-		{"deck create", models.MethodDecksNew, true},
-		{"deck update", models.MethodDecksUpdate, true},
-		{"deck delete", models.MethodDecksDelete, true},
-		{"deck list", models.MethodDecks, false},
 		{"image false", models.MethodMediaImage, false},
 		{"empty", "", false},
 	}

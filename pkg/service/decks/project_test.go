@@ -21,15 +21,21 @@ package decks_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,9 +145,9 @@ func TestProjectDeck(t *testing.T) {
 	}
 	require.NoError(t, f.userDB.CreateDeck(deck))
 
-	count, err := decks.ProjectDeck(f.ctx, f.deps, deck)
+	relinked, err := decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 1, relinked)
 	assert.ElementsMatch(t, []string{metroid, contra}, f.taggedPaths(t, deck.DeckID))
 
 	stored, err := f.userDB.GetDeck(deck.DeckID)
@@ -152,24 +158,30 @@ func TestProjectDeck(t *testing.T) {
 	assert.False(t, stored.Items[2].HasAnchor())
 	assert.False(t, stored.Items[4].HasAnchor())
 
-	// Editing the deck down to one item moves the tag with it.
-	stored, err = f.userDB.UpdateDeck(deck.DeckID, func(edit *database.Deck) error {
+	// The projection reads the deck as stored, so an edit moves the tag with
+	// the items.
+	_, err = f.userDB.UpdateDeck(deck.DeckID, func(edit *database.Deck) error {
 		edit.Items = []database.DeckItem{edit.Items[1]}
 		return nil
 	})
 	require.NoError(t, err)
-	count, err = decks.ProjectDeck(f.ctx, f.deps, stored)
+	_, err = decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
 	assert.Equal(t, []string{contra}, f.taggedPaths(t, deck.DeckID))
 
-	require.NoError(t, decks.ClearDeckProjection(f.ctx, f.mediaDB, deck.DeckID))
+	// A deck that no longer exists keeps no tags.
+	existed, err := f.userDB.DeleteDeck(deck.DeckID)
+	require.NoError(t, err)
+	require.True(t, existed)
+	relinked, err = decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Zero(t, relinked)
 	assert.Empty(t, f.taggedPaths(t, deck.DeckID))
 }
 
 // An anchor to a file that is no longer indexed falls back to the title and
 // re-links to the file that matches now.
-func TestProjectDeckRelinksMissingAnchor(t *testing.T) {
+func TestProjectDeckRelinksGoneAnchor(t *testing.T) {
 	t.Parallel()
 	moved := filepath.ToSlash(filepath.Join("roms", "NES", "Moved", "Metroid (USA).nes"))
 	f := newProjectFixture(t, moved)
@@ -185,44 +197,193 @@ func TestProjectDeckRelinksMissingAnchor(t *testing.T) {
 		}},
 	}
 	require.NoError(t, f.userDB.CreateDeck(deck))
-	count, err := decks.ProjectDeck(f.ctx, f.deps, deck)
+	_, err := decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
 	assert.Equal(t, []string{moved}, f.taggedPaths(t, deck.DeckID))
 	stored, err := f.userDB.GetDeck(deck.DeckID)
 	require.NoError(t, err)
 	assert.Equal(t, moved, stored.Items[0].Anchor.Path)
 }
 
-// After the media database is rebuilt no deck tags exist; re-applying puts
-// every deck's tags back.
-func TestReapplyDeckTags(t *testing.T) {
+// A file that is only marked missing, like one on a drive that was unplugged
+// for a scan, keeps the item's anchor. Its title match carries the tag
+// meanwhile, and the tag returns to the file when it is indexed again. The
+// item is only re-linked once the file's row is gone.
+func TestProjectDeckKeepsMissingAnchor(t *testing.T) {
 	t.Parallel()
-	metroid := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid (USA).nes"))
+	europe := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid (Europe).nes"))
+	usa := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid (USA).nes"))
+	f := newProjectFixture(t, europe)
+	item, err := decks.ComposeMediaItem(f.ctx, f.mediaDB, "NES", europe)
+	require.NoError(t, err)
+	deck := &database.Deck{DeckID: "0123456789ab", Name: "Missing", Owned: true, Items: []database.DeckItem{item}}
+	require.NoError(t, f.userDB.CreateDeck(deck))
+
+	scantest.IndexMediaPaths(t, f.mediaDB, "NES", usa)
+	relinked, err := decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Zero(t, relinked)
+	assert.Equal(t, []string{usa}, f.taggedPaths(t, deck.DeckID), "the title match stands in")
+	stored, err := f.userDB.GetDeck(deck.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, europe, stored.Items[0].Anchor.Path, "the missing file keeps the anchor")
+
+	scantest.IndexMediaPaths(t, f.mediaDB, "NES", europe, usa)
+	_, err = decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{europe}, f.taggedPaths(t, deck.DeckID), "the tag returns with the file")
+
+	scantest.IndexMediaPaths(t, f.mediaDB, "NES", usa)
+	_, err = f.mediaDB.CleanMediaOrphans(f.ctx)
+	require.NoError(t, err)
+	relinked, err = decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, relinked)
+	assert.Equal(t, []string{usa}, f.taggedPaths(t, deck.DeckID))
+	stored, err = f.userDB.GetDeck(deck.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, usa, stored.Items[0].Anchor.Path, "a file removed for good is re-linked")
+}
+
+// A title match the resolver cached from an earlier launch reports full
+// confidence. The projection must score the match itself, so a weak match is
+// never tagged just because it was launched once.
+func TestProjectDeckIgnoresCachedWeakMatch(t *testing.T) {
+	t.Parallel()
+	plain := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid.nes"))
+	f := newProjectFixture(t, plain)
+	// Five of the six requested tags match and region conflicts, which scores
+	// the only candidate 5/6 - 0.2: above the launch minimum, below acceptable.
+	require.NoError(t, f.mediaDB.UpdateMediaTags(f.ctx, f.idByPath[plain], nil, []database.MediaTagRef{
+		{Type: "developer", Tag: "a"},
+		{Type: "publisher", Tag: "b"},
+		{Type: "year", Tag: "1986"},
+		{Type: "video", Tag: "ntsc"},
+		{Type: "edition", Tag: "x"},
+		{Type: "region", Tag: "us"},
+	}))
+	game := "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:x) (region:eu)"
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	launched, err := titles.ResolveTitle(f.ctx, &titles.ResolveParams{
+		MediaDB: f.mediaDB, Cfg: f.deps.Cfg, SystemID: nes.ID, GameName: game, MediaType: nes.GetMediaType(),
+	})
+	require.NoError(t, err)
+	require.Less(t, launched.Confidence, titles.ConfidenceAcceptable)
+	require.GreaterOrEqual(t, launched.Confidence, titles.ConfidenceMinimum)
+	filters, _ := titles.ExtractCanonicalTagsFromParens(game)
+	require.Eventually(t, func() bool {
+		_, _, hit := f.mediaDB.GetCachedSlugResolution(f.ctx, nes.ID, "metroid", filters)
+		return hit
+	}, 5*time.Second, 10*time.Millisecond, "the launch caches its match")
+
+	deck := &database.Deck{DeckID: "0123456789ab", Name: "Weak", Owned: true, Items: []database.DeckItem{{
+		Kind: database.DeckItemKindScript, Name: "Metroid",
+		ZapScript: `**launch.title:"NES/` + game + `"`,
+	}}}
+	require.NoError(t, f.userDB.CreateDeck(deck))
+	relinked, err := decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Zero(t, relinked)
+	assert.Empty(t, f.taggedPaths(t, deck.DeckID))
+}
+
+// failingSlugSearch is a media database whose title lookups fail.
+type failingSlugSearch struct {
+	database.MediaDBI
+}
+
+func (failingSlugSearch) SearchMediaBySlug(
+	context.Context, string, string, []zapscript.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	return nil, errors.New("disk I/O error")
+}
+
+// A title lookup that fails says nothing about where the item's file is, so
+// the projection stops and the deck keeps the tags it had, rather than
+// dropping the item's file from the deck.
+func TestProjectDeckKeepsTagsWhenLookupFails(t *testing.T) {
+	t.Parallel()
 	contra := filepath.ToSlash(filepath.Join("roms", "NES", "Contra (USA).nes"))
-	f := newProjectFixture(t, metroid, contra)
+	f := newProjectFixture(t, contra)
+	deck := &database.Deck{DeckID: "0123456789ab", Name: "Lookup", Owned: true, Items: []database.DeckItem{{
+		Kind: database.DeckItemKindScript, Name: "Contra", ZapScript: decks.TitleLaunchScript("NES", "Contra", nil),
+	}}}
+	require.NoError(t, f.userDB.CreateDeck(deck))
+	_, err := decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	require.Equal(t, []string{contra}, f.taggedPaths(t, deck.DeckID))
 
-	first, err := decks.ComposeMediaItem(f.ctx, f.mediaDB, "NES", metroid)
+	// The item is linked now, so drop the link to make it resolve by title.
+	stored, err := f.userDB.GetDeck(deck.DeckID)
 	require.NoError(t, err)
-	second, err := decks.ComposeMediaItem(f.ctx, f.mediaDB, "NES", contra)
-	require.NoError(t, err)
-	require.NoError(t, f.userDB.CreateDeck(&database.Deck{
-		DeckID: "aaaaaaaaaaaa", Name: "A", Owned: true, Items: []database.DeckItem{first},
-	}))
-	require.NoError(t, f.userDB.CreateDeck(&database.Deck{
-		DeckID: "bbbbbbbbbbbb", Name: "B", Owned: true, Items: []database.DeckItem{first, second},
-	}))
-	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "cccccccccccc", Name: "Empty", Owned: true}))
+	require.NoError(t, f.userDB.SetDeckItemAnchor(stored.Items[0].DBID, &database.DeckItemAnchor{}))
 
-	projected, err := decks.ReapplyDeckTags(f.ctx, f.deps)
-	require.NoError(t, err)
-	assert.Equal(t, 2, projected, "decks with no items have nothing to project")
-	assert.Equal(t, []string{metroid}, f.taggedPaths(t, "aaaaaaaaaaaa"))
-	assert.ElementsMatch(t, []string{metroid, contra}, f.taggedPaths(t, "bbbbbbbbbbbb"))
+	failing := *f.deps
+	failing.MediaDB = failingSlugSearch{MediaDBI: f.mediaDB}
+	_, err = decks.ProjectDeck(f.ctx, &failing, deck.DeckID)
+	require.ErrorContains(t, err, "disk I/O error")
+	assert.Equal(t, []string{contra}, f.taggedPaths(t, deck.DeckID))
 
-	// Idempotent: a second pass changes nothing.
-	projected, err = decks.ReapplyDeckTags(f.ctx, f.deps)
+	// A title with nothing to match is a miss, not a failure.
+	_, err = f.userDB.UpdateDeck(deck.DeckID, func(edit *database.Deck) error {
+		edit.Items = []database.DeckItem{{
+			Kind: database.DeckItemKindScript, Name: "Blank", ZapScript: `**launch.title:"NES/!!!"`,
+		}}
+		return nil
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, projected)
-	assert.ElementsMatch(t, []string{metroid, contra}, f.taggedPaths(t, "bbbbbbbbbbbb"))
+	_, err = decks.ProjectDeck(f.ctx, f.deps, deck.DeckID)
+	require.NoError(t, err)
+	assert.Empty(t, f.taggedPaths(t, deck.DeckID))
+}
+
+// Projections of one deck that race with its edits end on the deck as last
+// stored, whatever order they ran in. Items resolve by title through a slow
+// launcher lookup, which widens the window between reading a deck and writing
+// its tags.
+func TestProjectDeckConcurrentEditsEndOnStoredDeck(t *testing.T) {
+	t.Parallel()
+	names := []string{"Metroid", "Contra", "Kid Icarus", "Gradius", "Castlevania", "Excitebike"}
+	paths := make([]string, 0, len(names))
+	items := make([]database.DeckItem, 0, len(names))
+	for _, name := range names {
+		paths = append(paths, filepath.ToSlash(filepath.Join("roms", "NES", name+" (USA).nes")))
+		items = append(items, database.DeckItem{
+			Kind: database.DeckItemKindScript, Name: name, ZapScript: decks.TitleLaunchScript("NES", name, nil),
+		})
+	}
+	f := newProjectFixture(t, paths...)
+	deps := *f.deps
+	var calls atomic.Int64
+	deps.LaunchersForSystem = func(string) []platforms.Launcher {
+		time.Sleep(time.Duration(calls.Add(1)%3) * time.Millisecond)
+		return nil
+	}
+	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Race", Owned: true}))
+
+	var wg sync.WaitGroup
+	for worker := range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for round := range 5 {
+				pick := (worker + round) % len(items)
+				_, err := f.userDB.UpdateDeck("0123456789ab", func(edit *database.Deck) error {
+					edit.Items = []database.DeckItem{items[pick]}
+					return nil
+				})
+				assert.NoError(t, err)
+				_, err = decks.ProjectDeck(f.ctx, &deps, "0123456789ab")
+				assert.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	stored, err := f.userDB.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	require.Len(t, stored.Items, 1)
+	want := filepath.ToSlash(filepath.Join("roms", "NES", stored.Items[0].Name+" (USA).nes"))
+	assert.Equal(t, []string{want}, f.taggedPaths(t, "0123456789ab"))
 }

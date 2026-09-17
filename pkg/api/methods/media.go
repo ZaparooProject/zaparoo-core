@@ -52,7 +52,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/rs/zerolog/log"
 )
 
@@ -743,17 +742,6 @@ func startMediaDBGeneration(
 		sourceOptions := mediascanner.IndexSourceOptions{
 			LauncherIDs: scrapeSourceLaunchers(availableScrapers),
 			Completed:   func(sources []mediascanner.IndexedSource) { indexedSources = sources },
-			ReapplyDeckTags: func(ctx context.Context) (int, error) {
-				if db.UserDB == nil {
-					return 0, nil
-				}
-				deps := deckResolveDeps(db, cfg, platformLaunchers(pl, cfg))
-				projected, reapplyErr := decks.ReapplyDeckTags(ctx, deps)
-				if reapplyErr != nil {
-					return projected, fmt.Errorf("re-apply deck tags: %w", reapplyErr)
-				}
-				return projected, nil
-			},
 		}
 		total, err := mediascanner.NewNamesIndexWithSources(
 			indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
@@ -867,6 +855,8 @@ func startMediaDBGeneration(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		// Rebuilt rows lost their deck tags, and files may have moved.
+		db.QueueAllDeckTags()
 		if indexCtx.Err() == nil {
 			jobs := scrapeJobsForSources(availableScrapers, indexedSources)
 			if queueErr := enqueueScrapeJobs(db.MediaDB, jobs); queueErr != nil {

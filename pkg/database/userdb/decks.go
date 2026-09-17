@@ -239,44 +239,6 @@ func (db *UserDB) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnc
 	return nil
 }
 
-// ListDeckItemLinks returns every script item across all decks with its
-// anchor, for re-applying deck membership tags after a reindex.
-func (db *UserDB) ListDeckItemLinks() ([]database.DeckItemLink, error) {
-	if db.sql.Load() == nil {
-		return nil, ErrNullSQL
-	}
-	rows, err := db.sql.Load().QueryContext(db.ctx, `
-		select d.DeckID, i.DBID, i.Kind, i.ZapScript, i.SystemID, i.Path, i.MediaName, i.Tags
-		from DeckItems i join Decks d on d.DBID = i.DeckDBID
-		order by d.DBID, i.Position;`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query deck item links: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql rows")
-		}
-	}()
-	links := make([]database.DeckItemLink, 0)
-	for rows.Next() {
-		var link database.DeckItemLink
-		var rawTags string
-		if scanErr := rows.Scan(
-			&link.DeckID, &link.ItemDBID, &link.Kind, &link.ZapScript,
-			&link.Anchor.SystemID, &link.Anchor.Path, &link.Anchor.MediaName, &rawTags,
-		); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan deck item link: %w", scanErr)
-		}
-		link.Anchor.Path = pathutil.CanonicalMediaPath(link.Anchor.Path)
-		link.Anchor.Tags = database.DecodeTagStrings(rawTags)
-		links = append(links, link)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate deck item links: %w", err)
-	}
-	return links, nil
-}
-
 // CountOwnedDecks returns how many decks this device owns.
 func (db *UserDB) CountOwnedDecks() (int, error) {
 	if db.sql.Load() == nil {

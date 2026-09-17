@@ -2198,23 +2198,6 @@ func NewNamesIndexWithSources(
 	}
 	logPhaseMetrics("reapply_media_user_data")
 
-	// Re-materialize deck membership tags the same way, through the caller's
-	// hook: resolving deck items needs title matching, which lives above the
-	// scanner.
-	if sourceOptions != nil && sourceOptions.ReapplyDeckTags != nil {
-		t0 = time.Now()
-		if projected, deckErr := sourceOptions.ReapplyDeckTags(ctx); deckErr != nil {
-			if maintenanceErr := bestEffortMaintenanceError(
-				deckErr, "failed to re-apply deck tags",
-			); maintenanceErr != nil {
-				return 0, maintenanceErr
-			}
-		} else {
-			log.Info().Dur("elapsed", time.Since(t0)).Int("decks", projected).Msg("re-apply deck tags complete")
-		}
-		logPhaseMetrics("reapply_deck_tags")
-	}
-
 	status.Phase = PhaseBuildingCaches
 	update(status)
 

@@ -47,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -475,6 +476,19 @@ func startService(
 		return nil, fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr)
 	}
 	closeHangingMediaHistoryOnStartup(db)
+	deckTagger := decks.NewTagger(&decks.ResolveDeps{
+		MediaDB: db.MediaDB,
+		UserDB:  db.UserDB,
+		Cfg:     cfg,
+		LaunchersForSystem: func(systemID string) []platforms.Launcher {
+			return helpers.GlobalLauncherCache.GetLaunchersBySystem(systemID)
+		},
+	}, func(deckID string) {
+		notifications.DecksChanged(st.Notifications, models.DecksChangedNotification{
+			DeckID: deckID, Action: models.DecksChangedUpdated,
+		})
+	})
+	db.DeckTags = deckTagger
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
@@ -780,6 +794,11 @@ func startService(
 		default:
 		}
 	}
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		deckTagger.Run(st.GetContext())
+	}()
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()

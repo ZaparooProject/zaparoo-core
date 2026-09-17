@@ -30,9 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/rs/zerolog/log"
 )
@@ -110,7 +108,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	if err := env.Database.UserDB.CreateDeck(deck); err != nil {
 		return nil, deckError(err)
 	}
-	projectDeck(&env, deck)
+	env.Database.QueueDeckTags(deck.DeckID)
 	notifyDecksChanged(&env, deck.DeckID, models.DecksChangedCreated)
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
@@ -182,7 +180,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, deckError(err)
 	}
-	projectDeck(&env, updated)
+	env.Database.QueueDeckTags(updated.DeckID)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
 	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
 }
@@ -210,59 +208,9 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	if !existed {
 		return nil, models.ClientErr(database.ErrDeckNotFound)
 	}
-	if env.Database.MediaDB != nil {
-		if clearErr := decks.ClearDeckProjection(env.Context, env.Database.MediaDB, deckID); clearErr != nil {
-			log.Warn().Err(clearErr).Str("deck", deckID).Msg("failed to clear deck membership tags")
-		}
-	}
+	env.Database.QueueDeckTags(deckID)
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
 	return NoContent{}, nil
-}
-
-// projectDeck tags the media a deck's game items resolve to with the deck's
-// membership tag. The deck itself is already stored, so a failure only means
-// the tag is missing until the next reindex re-applies it; it is logged, not
-// returned.
-func projectDeck(env *requests.RequestEnv, deck *database.Deck) {
-	if env.Database == nil || env.Database.MediaDB == nil {
-		return
-	}
-	launchers := func(systemID string) []platforms.Launcher {
-		if env.LauncherCache == nil {
-			return nil
-		}
-		return env.LauncherCache.GetLaunchersBySystem(systemID)
-	}
-	deps := deckResolveDeps(env.Database, env.Config, launchers)
-	if _, err := decks.ProjectDeck(env.Context, deps, deck); err != nil {
-		log.Warn().Err(err).Str("deck", deck.DeckID).Msg("failed to project deck membership tags")
-	}
-}
-
-func deckResolveDeps(
-	db *database.Database, cfg *config.Instance, launchers func(string) []platforms.Launcher,
-) *decks.ResolveDeps {
-	return &decks.ResolveDeps{
-		MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg, LaunchersForSystem: launchers,
-	}
-}
-
-// platformLaunchers returns a lookup of a platform's launchers for one
-// system, the set a title launch ranks matches with.
-func platformLaunchers(pl platforms.Platform, cfg *config.Instance) func(string) []platforms.Launcher {
-	return func(systemID string) []platforms.Launcher {
-		if pl == nil {
-			return nil
-		}
-		all := pl.Launchers(cfg)
-		out := make([]platforms.Launcher, 0, len(all))
-		for i := range all {
-			if all[i].SystemID == systemID {
-				out = append(out, all[i])
-			}
-		}
-		return out
-	}
 }
 
 func loadDeck(env *requests.RequestEnv, rawID string) (*database.Deck, error) {
@@ -423,7 +371,11 @@ func buildDeckItem(env *requests.RequestEnv, input *models.DeckItemInput) (datab
 		}
 		scripts := make([]database.DeckCardScript, 0, len(input.Scripts))
 		for _, s := range input.Scripts {
-			scripts = append(scripts, database.DeckCardScript{Name: s.Name, ZapScript: s.ZapScript})
+			script := strings.TrimSpace(s.ZapScript)
+			if script == "" {
+				return database.DeckItem{}, errors.New("a card script needs a zapscript")
+			}
+			scripts = append(scripts, database.DeckCardScript{Name: strings.TrimSpace(s.Name), ZapScript: script})
 		}
 		return database.DeckItem{
 			Kind: database.DeckItemKindCard, Name: strings.TrimSpace(input.Name), CardID: cardID,
@@ -500,8 +452,8 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 			continue
 		}
 		for _, i := range indexes {
-			_, ok := found[items[i].Anchor.Path]
-			available[items[i].DBID] = ok
+			media, ok := found[items[i].Anchor.Path]
+			available[items[i].DBID] = ok && !media.IsMissing
 		}
 	}
 	return available

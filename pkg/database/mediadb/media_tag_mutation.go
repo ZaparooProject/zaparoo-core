@@ -504,6 +504,42 @@ func (db *MediaDB) applyMediaTagMembership(
 	return true, nil
 }
 
+// ListMediaTagValues returns the values of the file-level tags of one type
+// that start with valuePrefix and that at least one media row carries,
+// missing rows included.
+func (db *MediaDB) ListMediaTagValues(ctx context.Context, tagType, valuePrefix string) ([]string, error) {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return nil, ErrNullSQL
+	}
+	// A half-open range on the (TypeDBID, Tag) index stands in for a prefix
+	// match; LIKE is case-insensitive and could not use the index.
+	upper := valuePrefix + string(rune(0x10FFFF))
+	rows, err := sqlDB.QueryContext(ctx, `
+		SELECT t.Tag
+		FROM TagTypes tt
+		JOIN Tags t ON t.TypeDBID = tt.DBID
+		WHERE tt.Type = ? AND t.Tag >= ? AND t.Tag < ?
+		  AND EXISTS (SELECT 1 FROM MediaTags mt WHERE mt.TagDBID = t.DBID)
+		ORDER BY t.Tag`, tagType, valuePrefix, upper)
+	if err != nil {
+		return nil, fmt.Errorf("list media tag values: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err = rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan media tag value: %w", err)
+		}
+		values = append(values, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate media tag values: %w", err)
+	}
+	return values, nil
+}
+
 func mediaDBIDsWithTag(ctx context.Context, tx *sql.Tx, tagDBID int64) (map[int64]struct{}, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT MediaDBID FROM MediaTags WHERE TagDBID = ?", tagDBID)
 	if err != nil {
