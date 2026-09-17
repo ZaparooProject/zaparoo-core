@@ -35,6 +35,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// HandleMediaTagsUpdate adds or removes the mutable user tags on one indexed
+// file, recording them in UserDB before updating the MediaDB tags, and returns
+// the file's tags afterwards.
 func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
 	started := time.Now()
 	log.Info().Msg("received media tags update request")
@@ -81,34 +84,27 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	resolveDuration := time.Since(resolveStarted)
 
 	// Record changed preferences before their disposable projection. Adds win
-	// over removes, matching UpdateMediaTags; unrelated flags stay intact.
-	changes := make(map[string]bool)
-	for _, tag := range remove {
-		changes[tag.Tag] = false
-	}
-	for _, tag := range add {
-		changes[tag.Tag] = true
-	}
-	if favorite, changed := changes[string(tags.TagUserFavorite)]; changed {
-		if udErr := setMediaUserFavorite(&env, row.System.SystemID, row.Path, favorite); udErr != nil {
-			return nil, udErr
-		}
-	}
-	if hidden, changed := changes[string(tags.TagUserHidden)]; changed {
-		if udErr := env.Database.UserDB.SetMediaUserHidden(row.System.SystemID, row.Path, hidden); udErr != nil {
-			return nil, fmt.Errorf("failed to set media user hidden: %w", udErr)
-		}
-		snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
+	// over removes, matching UpdateMediaTags; unrelated flags stay intact, and
+	// UserDB clears a flag the model forbids beside a requested one.
+	changes, err := requestedUserFlagChanges(add, remove)
+	if err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	updateStarted := time.Now()
-	if updateErr := env.Database.MediaDB.UpdateMediaTags(
-		env.Context, row.DBID, remove, add,
-	); updateErr != nil {
-		return nil, fmt.Errorf("failed to update media tag projection: %w", updateErr)
+	projected, applyErr := database.ApplyMediaUserFlags(
+		env.Context, env.Database, row.System.SystemID, row.Path, row.DBID, changes,
+	)
+	// The snapshot never inserts, so it is safe even when the write failed,
+	// and it keeps the identity of a recorded flag when only the projection did.
+	snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
+	if applyErr != nil {
+		return nil, fmt.Errorf("failed to apply media user flags: %w", applyErr)
 	}
 	updateDuration := time.Since(updateStarted)
-	if _, changed := changes[string(tags.TagUserHidden)]; changed && env.State != nil {
+	_, hiddenRequested := changes[database.MediaUserFlagHidden]
+	_, hiddenProjected := projected[database.MediaUserFlagHidden]
+	if (hiddenRequested || hiddenProjected) && env.State != nil {
 		notifications.MediaVisibility(env.State.Notifications)
 	}
 
@@ -134,6 +130,8 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	return models.TagsResponse{Tags: append(fileTags, titleTags...)}, nil
 }
 
+// parseMutableUserTags parses a request's tag list, refusing search operators,
+// deck membership and any tag a client may not set.
 func parseMutableUserTags(rawTags []string) ([]database.MediaTagRef, error) {
 	if len(rawTags) == 0 {
 		return nil, nil
@@ -154,12 +152,48 @@ func parseMutableUserTags(rawTags []string) ([]database.MediaTagRef, error) {
 	}
 	refs := make([]database.MediaTagRef, 0, len(parsed))
 	for _, tag := range parsed {
-		if tag.Type != string(tags.TagTypeUser) ||
-			(tag.Value != string(tags.TagUserFavorite) && tag.Value != string(tags.TagUserHidden)) {
-			return nil, errors.New("only user:favorite and user:hidden can be mutated")
+		if tag.Type == string(tags.TagTypeUser) {
+			if _, isDeck := tags.ParseDeckTag(tags.TagValue(tag.Value)); isDeck {
+				return nil, errors.New("deck membership is managed through the decks methods")
+			}
+		}
+		if tag.Type != string(tags.TagTypeUser) || !tags.IsMutableUserTag(tags.TagValue(tag.Value)) {
+			return nil, fmt.Errorf("only these user tags can be mutated: %s", mutableUserTagList())
 		}
 		refs = append(refs, database.MediaTagRef{Type: tag.Type, Tag: tag.Value})
 	}
 
 	return refs, nil
+}
+
+// mutableUserTagList names the settable user tags for error messages.
+func mutableUserTagList() string {
+	names := make([]string, 0, len(tags.MutableUserTags))
+	for _, v := range tags.MutableUserTags {
+		names = append(names, string(tags.TagTypeUser)+":"+string(v))
+	}
+	return strings.Join(names, ", ")
+}
+
+// requestedUserFlagChanges turns parsed add and remove tag lists into the
+// flag changes to record. Adds win over removes. A request that adds both
+// sides of a forbidden pair is contradictory and refused; adding one side
+// alone is how a client switches a reaction, and UserDB clears the other.
+func requestedUserFlagChanges(add, remove []database.MediaTagRef) (map[database.MediaUserFlag]bool, error) {
+	changes := make(map[database.MediaUserFlag]bool, len(add)+len(remove))
+	for _, tag := range remove {
+		changes[database.MediaUserFlag(tag.Tag)] = false
+	}
+	for _, tag := range add {
+		changes[database.MediaUserFlag(tag.Tag)] = true
+	}
+	if changes[database.MediaUserFlagDisliked] {
+		if changes[database.MediaUserFlagLiked] {
+			return nil, errors.New("a game cannot be liked and disliked at once")
+		}
+		if changes[database.MediaUserFlagFavorite] {
+			return nil, errors.New("a favorite cannot be disliked")
+		}
+	}
+	return changes, nil
 }

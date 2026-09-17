@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -456,5 +457,48 @@ func TestRandomHonoursExplicitHiddenFilter(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, root+"Concealed.nes", game.Path)
+	}
+}
+
+// A required filter on any user list (liked, play later, ...) is an explicit
+// view of that list, so its hidden entries stay eligible for random selection,
+// as they do for favorites. An OR term is still ordinary discovery.
+func TestRandomFromUserListIncludesHiddenEntries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, cleanup := setupMergeFixture(t, 1)
+	t.Cleanup(cleanup)
+	root := f.roots[0]
+	f.insert("Visible", root+"Visible.nes")
+	f.insert("LikedHidden", root+"LikedHidden.nes")
+	f.commit(t, true)
+	system, err := f.mediaDB.FindSystemBySystemID("NES")
+	require.NoError(t, err)
+	media, err := f.mediaDB.FindMediaBySystemAndPath(ctx, system.DBID, root+"LikedHidden.nes")
+	require.NoError(t, err)
+	require.NoError(t, f.mediaDB.UpdateMediaTags(ctx, media.DBID, nil, []database.MediaTagRef{
+		{Type: "user", Tag: "hidden"}, {Type: "user", Tag: "liked"},
+	}))
+
+	liked := []zapscript.TagFilter{{Type: "user", Value: "liked", Operator: zapscript.TagOperatorAND}}
+	for range 5 {
+		game, randErr := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{
+			Systems: []string{"NES"}, Tags: liked,
+		})
+		require.NoError(t, randErr)
+		assert.Equal(t, root+"LikedHidden.nes", game.Path)
+	}
+
+	likedOr := []zapscript.TagFilter{
+		{Type: "user", Value: "liked", Operator: zapscript.TagOperatorOR},
+		{Type: "user", Value: "playlater", Operator: zapscript.TagOperatorOR},
+	}
+	_, err = f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}, Tags: likedOr})
+	require.ErrorIs(t, err, sql.ErrNoRows, "an OR view is ordinary discovery and skips hidden media")
+
+	for range 5 {
+		game, randErr := f.mediaDB.RandomGameWithQuery(ctx, &database.MediaQuery{Systems: []string{"NES"}})
+		require.NoError(t, randErr)
+		assert.Equal(t, root+"Visible.nes", game.Path)
 	}
 }

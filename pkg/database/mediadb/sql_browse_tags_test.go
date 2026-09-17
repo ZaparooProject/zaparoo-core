@@ -127,6 +127,8 @@ func TestHasRequiredFavoriteFilter(t *testing.T) {
 			Type: "user", Value: "favorite", Operator: zapscript.TagOperatorNOT,
 		}},
 		{name: "other tag", filter: zapscript.TagFilter{Type: "genre", Value: "action"}},
+		{name: "liked", filter: zapscript.TagFilter{Type: "user", Value: "liked"}, want: true},
+		{name: "deck", filter: zapscript.TagFilter{Type: "user", Value: "deck:0123456789ab"}, want: true},
 	}
 
 	for _, testCase := range tests {

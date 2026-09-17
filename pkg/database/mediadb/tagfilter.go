@@ -88,15 +88,15 @@ func candidateTagExistsSQL(condition, mediaRef string) string {
 	))`, mediaRef, condition, mediaRef, condition)
 }
 
-// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
-// media candidates. Probing tag indexes for each candidate avoids materializing
-// every media ID carrying a common tag across the full database.
-func isRequiredFavoriteFilter(filter zapscript.TagFilter) bool {
+// isRequiredUserTagFilter reports a required filter on a user tag (favorite,
+// liked, playlater, a deck membership, ...). Such tags are sparse against
+// the library, so resolving them from the tag side is the better plan.
+func isRequiredUserTagFilter(filter zapscript.TagFilter) bool {
 	if filter.Operator == zapscript.TagOperatorNOT || filter.Operator == zapscript.TagOperatorOR {
 		return false
 	}
-	tagType, tagValue := resolveFilter(filter.Type, filter.Value)
-	return tagType == string(tags.TagTypeUser) && tagValue == string(tags.TagUserFavorite)
+	tagType, _ := resolveFilter(filter.Type, filter.Value)
+	return tagType == string(tags.TagTypeUser)
 }
 
 // browseTagPlan names the required tag filter, if any, that a browse should
@@ -110,7 +110,7 @@ func isRequiredFavoriteFilter(filter zapscript.TagFilter) bool {
 // 0.5 ms probed and 3.9 ms as a set.
 //
 // The zero value means "no measurement available", and then a required
-// user:favorite is still assumed sparse, which is the rule this used before
+// user tag is still assumed sparse, which is the rule this used before
 // there was anything to measure.
 type browseTagPlan struct {
 	driveFromTag *zapscript.TagFilter
@@ -122,7 +122,7 @@ func (p browseTagPlan) driver(filters []zapscript.TagFilter) (driver zapscript.T
 		return *p.driveFromTag, true
 	}
 	for _, filter := range filters {
-		if isRequiredFavoriteFilter(filter) {
+		if isRequiredUserTagFilter(filter) {
 			return filter, true
 		}
 	}
@@ -160,6 +160,9 @@ func buildBrowseTagFilterSQL(
 	return clauses, args
 }
 
+// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
+// media candidates. Probing tag indexes for each candidate avoids materializing
+// every media ID carrying a common tag across the full database.
 func buildCandidateTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
 	return buildCandidateTagFilterSQLForRef(filters, "Media")
 }

@@ -65,6 +65,7 @@ func TestHandleMediaTagsUpdate_AddsFavoriteTag(t *testing.T) {
 	}
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: row}, nil).Once()
+	expectProjectedTags(mockDB)
 	mockDB.On(
 		"UpdateMediaTags",
 		mock.Anything,
@@ -112,7 +113,7 @@ func TestHandleMediaTagsUpdate_RejectsUnsupportedTags(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only user:favorite and user:hidden can be mutated")
+	assert.Contains(t, err.Error(), "only these user tags can be mutated")
 	mockDB.AssertExpectations(t)
 }
 
@@ -122,6 +123,7 @@ func TestHandleMediaTagsUpdate_ReturnsProjectionError(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB)
 	mockDB.On(
 		"UpdateMediaTags",
 		mock.Anything,
@@ -142,6 +144,7 @@ func TestHandleMediaTagsUpdate_RemovesFavoriteTag(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB, tags.TagUserFavorite)
 	mockDB.On(
 		"UpdateMediaTags",
 		mock.Anything,
@@ -295,4 +298,194 @@ func hasFavoriteTag(tagList []database.TagInfo) bool {
 		}
 	}
 	return false
+}
+
+func TestHandleMediaTagsUpdate_DislikeClearsFavorite(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB, tags.TagUserFavorite)
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserDisliked)}},
+	).Return(nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
+		Return([]database.TagInfo{{Type: "user", Tag: "disliked"}}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:disliked"]}`)
+	require.NoError(t, env.Database.UserDB.SetMediaUserFavorite("NES", "", true))
+	_, err := HandleMediaTagsUpdate(env)
+	require.NoError(t, err)
+
+	row, found, err := env.Database.UserDB.GetMediaUserData("NES", "")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.True(t, row.IsDisliked)
+	assert.False(t, row.IsFavorite, "a favorite cannot stay disliked")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTagsUpdate_ProjectsOnlyDifferences(t *testing.T) {
+	t.Parallel()
+
+	// Nothing else is set, so adding play later projects no removal.
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB)
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef(nil),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserPlayLater)}},
+	).Return(nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
+		Return([]database.TagInfo{}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, nil).Once()
+
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:playlater"]}`))
+	require.NoError(t, err)
+	mockDB.AssertExpectations(t)
+}
+
+// expectProjectedTags queues the file's user tags as the projection sees them
+// before it writes.
+func expectProjectedTags(mockDB *testhelpers.MockMediaDBI, values ...tags.TagValue) {
+	current := make([]database.TagInfo, 0, len(values))
+	for _, v := range values {
+		current = append(current, database.TagInfo{Type: string(tags.TagTypeUser), Tag: string(v)})
+	}
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return(current, nil).Once()
+}
+
+// A dislike whose projection failed left user:favorite in MediaDB while UserDB
+// already dropped the favorite. Retrying the same request must remove it.
+func TestHandleMediaTagsUpdate_RetryRemovesStaleProjection(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB, tags.TagUserFavorite)
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserDisliked)}},
+	).Return(nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
+		Return([]database.TagInfo{{Type: "user", Tag: "disliked"}}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:disliked"]}`)
+	require.NoError(t, env.Database.UserDB.SetMediaUserFlag("NES", "", database.MediaUserFlagDisliked, true))
+	_, err := HandleMediaTagsUpdate(env)
+	require.NoError(t, err)
+	mockDB.AssertExpectations(t)
+}
+
+// A request that changes nothing writes no projection.
+func TestHandleMediaTagsUpdate_UnchangedSkipsProjection(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	expectProjectedTags(mockDB, tags.TagUserFavorite)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
+		Return([]database.TagInfo{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`)
+	require.NoError(t, env.Database.UserDB.SetMediaUserFavorite("NES", "", true))
+	_, err := HandleMediaTagsUpdate(env)
+	require.NoError(t, err)
+	mockDB.AssertNotCalled(t, "UpdateMediaTags", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTagsUpdate_RejectsContradictoryFlags(t *testing.T) {
+	t.Parallel()
+
+	for _, params := range []string{
+		`{"mediaId":1,"add":["user:liked","user:disliked"]}`,
+		`{"mediaId":1,"add":["user:favorite","user:disliked"]}`,
+	} {
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+			Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+		_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, params))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid params")
+	}
+}
+
+func TestHandleMediaTagsUpdate_RejectsDeckTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:deck:0123456789ab"]}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decks methods")
+}
+
+func TestHandleMediaTagsUpdate_RealMediaDBReactionFlow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	likedPath := filepath.Join("roms", "NES", "Liked Game.nes")
+	otherPath := filepath.Join("roms", "NES", "Other Game.nes")
+	mediaIDs := addTestMediaPaths(t, mediaDB, likedPath, otherPath)
+	likedID := mediaIDs[0]
+
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	baseEnv := requests.RequestEnv{
+		Context:  ctx,
+		Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+	}
+
+	_, err := HandleMediaTagsUpdate(withParams(&baseEnv,
+		fmt.Sprintf(`{"mediaId":%d,"add":["user:liked","user:playlater"]}`, likedID)))
+	require.NoError(t, err)
+
+	searchResult := searchByTags(t, &baseEnv, []string{"user:liked"})
+	require.Len(t, searchResult.Results, 1)
+	assert.Equal(t, likedID, searchResult.Results[0].MediaID)
+	assert.Contains(t, searchResult.Results[0].Tags, database.TagInfo{
+		Type: string(tags.TagTypeUser), Tag: string(tags.TagUserPlayLater),
+	})
+
+	// Disliking flips the reaction in both the truth and the projection.
+	_, err = HandleMediaTagsUpdate(withParams(&baseEnv, fmt.Sprintf(`{"mediaId":%d,"add":["user:disliked"]}`, likedID)))
+	require.NoError(t, err)
+	assert.Empty(t, searchByTags(t, &baseEnv, []string{"user:liked"}).Results)
+	disliked := searchByTags(t, &baseEnv, []string{"user:disliked"})
+	require.Len(t, disliked.Results, 1)
+	assert.Contains(t, disliked.Results[0].Tags, database.TagInfo{
+		Type: string(tags.TagTypeUser), Tag: string(tags.TagUserPlayLater),
+	}, "play later survives a reaction change")
+
+	row, found, err := userDB.GetMediaUserData("NES", likedPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.True(t, row.IsDisliked)
+	assert.False(t, row.IsLiked)
+	assert.True(t, row.IsPlayLater)
+	assert.NotEmpty(t, row.Slug, "the snapshot records the indexed slug")
 }

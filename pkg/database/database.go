@@ -309,28 +309,100 @@ type MediaSource struct {
 	Unique     bool
 }
 
+// MediaUserFlag names one boolean preference a user can set on a media path.
+type MediaUserFlag string
+
+const (
+	MediaUserFlagFavorite  MediaUserFlag = "favorite"
+	MediaUserFlagHidden    MediaUserFlag = "hidden"
+	MediaUserFlagLiked     MediaUserFlag = "liked"
+	MediaUserFlagDisliked  MediaUserFlag = "disliked"
+	MediaUserFlagPlayLater MediaUserFlag = "playlater"
+)
+
+// MediaUserFlags lists every flag in a stable order.
+var MediaUserFlags = []MediaUserFlag{
+	MediaUserFlagFavorite, MediaUserFlagHidden, MediaUserFlagLiked, MediaUserFlagDisliked, MediaUserFlagPlayLater,
+}
+
+// ErrMediaUserFlagConflict reports a user-data row that holds two flags the
+// model forbids together: liked with disliked, or favorite with disliked.
+var ErrMediaUserFlagConflict = errors.New("media user flags conflict")
+
 // MediaUserData is the source-of-truth record for user-authored data about a
-// single media path: favourite/hidden preferences and any per-game launcher
-// override. It lives in UserDB (durable, power-loss safe) and is materialized
-// into media.db's MediaTags/MediaProperties projection both on edit and on
-// reindex. Keyed by (SystemID, Path) because a Media row's DBID is not stable
-// across a full media.db rebuild. A row with neither favourite nor hidden
-// intent and an empty LauncherOverride should be deleted rather than kept.
+// single media path: the favorite, hidden, liked, disliked and play later
+// flags and any per-game launcher override. It lives in UserDB (durable,
+// power-loss safe) and is materialized into media.db's MediaTags/
+// MediaProperties projection both on edit and on reindex. Keyed by
+// (SystemID, Path) because a Media row's DBID is not stable across a full
+// media.db rebuild. A row with no flag set and an empty LauncherOverride
+// should be deleted rather than kept.
 type MediaUserData struct {
 	SystemID         string
 	Path             string
 	LauncherOverride string
-	// MediaName and Tags snapshot the scanner's identity for this path at
-	// write time (display name + complete canonical type:value tags), so the
-	// row stays matchable to a canonical game after MediaDB is rebuilt or
-	// the file disappears. Empty when no scanner entry existed.
-	MediaName  string
-	Tags       []string
-	DBID       int64
-	CreatedAt  int64
-	UpdatedAt  int64
-	IsFavorite bool
-	IsHidden   bool
+	// MediaName, Slug and Tags snapshot the scanner's identity for this path
+	// at write time (display name, title slug and complete canonical
+	// type:value tags), so the row stays matchable to a canonical game after
+	// MediaDB is rebuilt or the file disappears. Empty when no scanner entry
+	// existed.
+	MediaName   string
+	Slug        string
+	Tags        []string
+	DBID        int64
+	CreatedAt   int64
+	UpdatedAt   int64
+	IsFavorite  bool
+	IsHidden    bool
+	IsLiked     bool
+	IsDisliked  bool
+	IsPlayLater bool
+}
+
+// HasIntent reports whether the row records any preference worth keeping.
+func (d *MediaUserData) HasIntent() bool {
+	return d.IsFavorite || d.IsHidden || d.IsLiked || d.IsDisliked || d.IsPlayLater || d.LauncherOverride != ""
+}
+
+// Flag reports the value of one flag.
+func (d *MediaUserData) Flag(flag MediaUserFlag) bool {
+	switch flag {
+	case MediaUserFlagFavorite:
+		return d.IsFavorite
+	case MediaUserFlagHidden:
+		return d.IsHidden
+	case MediaUserFlagLiked:
+		return d.IsLiked
+	case MediaUserFlagDisliked:
+		return d.IsDisliked
+	case MediaUserFlagPlayLater:
+		return d.IsPlayLater
+	}
+	return false
+}
+
+// ValidateFlags reports ErrMediaUserFlagConflict when the row holds a
+// forbidden pair. A game cannot be liked and disliked, and a favorite cannot
+// be disliked.
+func (d *MediaUserData) ValidateFlags() error {
+	if d.IsDisliked && (d.IsLiked || d.IsFavorite) {
+		return ErrMediaUserFlagConflict
+	}
+	return nil
+}
+
+// MediaTagUpdate is one file's tag edit in a batch: removals run before
+// additions, as in MediaDBI.UpdateMediaTags.
+type MediaTagUpdate struct {
+	Remove    []MediaTagRef
+	Add       []MediaTagRef
+	MediaDBID int64
+}
+
+// MediaTagBatchUpdater is optional batch tag editing layered over MediaDBI
+// without expanding that interface. It applies every edit in one transaction.
+type MediaTagBatchUpdater interface {
+	UpdateMediaTagsBatch(ctx context.Context, updates []MediaTagUpdate) error
 }
 
 // MediaPathID identifies a Media row and its title by system ID and path, used
@@ -1049,8 +1121,9 @@ type UserDBI interface {
 	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
 	SetMediaUserHidden(systemID, path string, hidden bool) error
+	SetMediaUserFlag(systemID, path string, flag MediaUserFlag, value bool) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
-	SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error
+	SetMediaUserSnapshot(systemID, path, mediaName, slug string, tags []string) error
 	UpsertMediaUserData(data *MediaUserData) error
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)

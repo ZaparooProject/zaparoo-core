@@ -69,11 +69,25 @@ func (db *MediaDB) UpdateMediaTags(
 	remove []database.MediaTagRef,
 	add []database.MediaTagRef,
 ) error {
-	if len(remove) == 0 && len(add) == 0 {
+	return db.UpdateMediaTagsBatch(ctx, []database.MediaTagUpdate{
+		{MediaDBID: mediaDBID, Remove: remove, Add: add},
+	})
+}
+
+// UpdateMediaTagsBatch applies several files' tag edits in one transaction,
+// with the cache invalidation UpdateMediaTags does run once for the batch.
+func (db *MediaDB) UpdateMediaTagsBatch(ctx context.Context, updates []database.MediaTagUpdate) error {
+	pending := make([]database.MediaTagUpdate, 0, len(updates))
+	for i := range updates {
+		if len(updates[i].Remove) > 0 || len(updates[i].Add) > 0 {
+			pending = append(pending, updates[i])
+		}
+	}
+	if len(pending) == 0 {
 		return nil
 	}
 
-	systemID, cacheChanged, err := db.applyMediaTagMutations(ctx, mediaDBID, remove, add)
+	systemIDs, cacheChanged, err := db.applyMediaTagMutations(ctx, pending)
 	if err != nil {
 		return err
 	}
@@ -86,7 +100,7 @@ func (db *MediaDB) UpdateMediaTags(
 	db.inMemoryTagCache.Store(nil)
 	clearUtilityTagCache()
 	if persistErr := db.PersistTagCache(); persistErr != nil {
-		log.Warn().Err(persistErr).Str("system", systemID).
+		log.Warn().Err(persistErr).Strs("systems", systemIDs).
 			Msg("failed to remove stale persisted tag cache after media tag update")
 	}
 	return nil
@@ -94,27 +108,25 @@ func (db *MediaDB) UpdateMediaTags(
 
 func (db *MediaDB) applyMediaTagMutations(
 	ctx context.Context,
-	mediaDBID int64,
-	remove []database.MediaTagRef,
-	add []database.MediaTagRef,
-) (systemID string, cacheChanged bool, err error) {
+	updates []database.MediaTagUpdate,
+) (systemIDs []string, cacheChanged bool, err error) {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
 	sqlDB := db.sql.Load()
 	if sqlDB == nil {
-		return "", false, ErrNullSQL
+		return nil, false, ErrNullSQL
 	}
 	if db.inTransaction {
-		return "", false, ErrTransactionActive
+		return nil, false, ErrTransactionActive
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", false, ctxErr
+		return nil, false, ctxErr
 	}
 
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
-		return "", false, fmt.Errorf("begin media tag transaction: %w", err)
+		return nil, false, fmt.Errorf("begin media tag transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -123,57 +135,77 @@ func (db *MediaDB) applyMediaTagMutations(
 		}
 	}()
 
-	var systemDBID int64
-	if err = tx.QueryRowContext(ctx, `
-		SELECT m.SystemDBID, s.SystemID
-		FROM Media m
-		JOIN Systems s ON s.DBID = m.SystemDBID
-		WHERE m.DBID = ?`, mediaDBID).Scan(&systemDBID, &systemID); err != nil {
-		return "", false, fmt.Errorf("resolve media tag system: %w", err)
-	}
-
-	affectedTagDBIDs := make(map[int64]struct{}, len(remove)+len(add))
-	if removeErr := removeMediaTags(ctx, tx, mediaDBID, remove, affectedTagDBIDs); removeErr != nil {
-		return "", false, removeErr
-	}
-	if addErr := addMediaTags(ctx, tx, mediaDBID, add, affectedTagDBIDs); addErr != nil {
-		return "", false, addErr
-	}
-	if len(affectedTagDBIDs) == 0 {
-		return systemID, false, nil
-	}
-
-	cacheReady, cacheErr := systemTagCacheReady(ctx, tx, systemDBID)
-	if cacheErr != nil {
-		return "", false, cacheErr
-	}
-	if cacheReady {
-		for tagDBID := range affectedTagDBIDs {
-			if refreshErr := refreshMediaTagCache(ctx, tx, systemDBID, tagDBID); refreshErr != nil {
-				return "", false, refreshErr
-			}
+	// Affected tags per system, and each system's ID for the slug cache.
+	affected := make(map[int64]map[int64]struct{})
+	systemIDByDBID := make(map[int64]string)
+	for i := range updates {
+		update := &updates[i]
+		var systemDBID int64
+		var systemID string
+		if err = tx.QueryRowContext(ctx, `
+			SELECT m.SystemDBID, s.SystemID
+			FROM Media m
+			JOIN Systems s ON s.DBID = m.SystemDBID
+			WHERE m.DBID = ?`, update.MediaDBID).Scan(&systemDBID, &systemID); err != nil {
+			return nil, false, fmt.Errorf("resolve media tag system: %w", err)
+		}
+		tagDBIDs, ok := affected[systemDBID]
+		if !ok {
+			tagDBIDs = make(map[int64]struct{}, len(update.Remove)+len(update.Add))
+			affected[systemDBID] = tagDBIDs
+			systemIDByDBID[systemDBID] = systemID
+		}
+		if removeErr := removeMediaTags(ctx, tx, update.MediaDBID, update.Remove, tagDBIDs); removeErr != nil {
+			return nil, false, removeErr
+		}
+		if addErr := addMediaTags(ctx, tx, update.MediaDBID, update.Add, tagDBIDs); addErr != nil {
+			return nil, false, addErr
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM MediaCountCache"); err != nil {
-		return "", false, fmt.Errorf("invalidate media count cache after tag update: %w", err)
+
+	for systemDBID, tagDBIDs := range affected {
+		if len(tagDBIDs) == 0 {
+			continue
+		}
+		cacheReady, cacheErr := systemTagCacheReady(ctx, tx, systemDBID)
+		if cacheErr != nil {
+			return nil, false, cacheErr
+		}
+		if cacheReady {
+			for tagDBID := range tagDBIDs {
+				if refreshErr := refreshMediaTagCache(ctx, tx, systemDBID, tagDBID); refreshErr != nil {
+					return nil, false, refreshErr
+				}
+			}
+		}
+		systemIDs = append(systemIDs, systemIDByDBID[systemDBID])
 	}
-	if _, err = tx.ExecContext(ctx,
-		"DELETE FROM SlugResolutionCache WHERE SystemID = ?", systemID,
-	); err != nil {
-		return "", false, fmt.Errorf("invalidate slug cache after tag update: %w", err)
+	if len(systemIDs) == 0 {
+		return nil, false, nil
+	}
+
+	if _, err = tx.ExecContext(ctx, "DELETE FROM MediaCountCache"); err != nil {
+		return nil, false, fmt.Errorf("invalidate media count cache after tag update: %w", err)
+	}
+	for _, systemID := range systemIDs {
+		if _, err = tx.ExecContext(ctx,
+			"DELETE FROM SlugResolutionCache WHERE SystemID = ?", systemID,
+		); err != nil {
+			return nil, false, fmt.Errorf("invalidate slug cache after tag update: %w", err)
+		}
 	}
 
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO DBConfig(Name, Value) VALUES (?, '1')
 		ON CONFLICT(Name) DO UPDATE SET Value = CAST(DBConfig.Value AS INTEGER) + 1
 	`, database.DeviceStateKeyMediaPreferencesRevision); err != nil {
-		return "", false, fmt.Errorf("advance media projection revision: %w", err)
+		return nil, false, fmt.Errorf("advance media projection revision: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return "", false, fmt.Errorf("commit media tag transaction: %w", err)
+		return nil, false, fmt.Errorf("commit media tag transaction: %w", err)
 	}
 	committed = true
-	return systemID, true, nil
+	return systemIDs, true, nil
 }
 
 func removeMediaTags(

@@ -24,21 +24,27 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
-// reapplyMediaUserData re-materializes the media.db projection (favourite/hidden
-// tags and launcher-override properties) from the UserDB source of truth after the
-// media rows have been (re)built. UserDB owns this data so that a wiped or
-// rebuilt media.db can be reconstructed; on an incremental reindex the rows
-// already exist and the writes are idempotent no-ops.
+// reapplyMediaUserData re-materializes the media.db projection (the user's
+// favourite, hidden, liked, disliked and playlater tags and launcher-override
+// properties) from the UserDB source of truth after the media rows have been
+// (re)built. UserDB owns this data so that a wiped or rebuilt media.db can be
+// reconstructed.
+//
+// Each system's current user tags are read in one batch first, and only the
+// missing ones are written, so an incremental reindex, where the tags already
+// exist, writes nothing. Missing tags are written in one transaction when the
+// database supports it; one write per file costs about 50 ms on MiSTer storage.
 //
 // Writes use the same media.db primitives as the live edit handlers, so the
 // projection is identical. It is add-only: live edits keep media.db in sync when
-// a favourite/override is removed, so re-apply never needs to delete. Rows whose
+// a flag or override is removed, so re-apply never needs to delete. Rows whose
 // system or path is not currently indexed are harmless orphans and are skipped.
 func reapplyMediaUserData(
 	ctx context.Context, db database.MediaDBI, userDB database.UserDBI,
@@ -51,21 +57,18 @@ func reapplyMediaUserData(
 		return 0, nil
 	}
 
-	favTagDBID, err := ensureFavoriteTag(db)
-	if err != nil {
-		return 0, err
-	}
 	if err := ensureLauncherOverrideTag(db); err != nil {
 		return 0, err
 	}
 	overrideTypeTag := tags.PropertyTypeTag(tags.TagPropertyLauncherOverride)
 
 	bySystem := make(map[string][]database.MediaUserData)
-	for _, row := range rows {
-		bySystem[row.SystemID] = append(bySystem[row.SystemID], row)
+	for i := range rows {
+		bySystem[rows[i].SystemID] = append(bySystem[rows[i].SystemID], rows[i])
 	}
 
 	applied := 0
+	var tagUpdates []database.MediaTagUpdate
 	for systemID, items := range bySystem {
 		system, sysErr := db.FindSystemBySystemID(systemID)
 		if errors.Is(sysErr, sql.ErrNoRows) {
@@ -83,6 +86,16 @@ func reapplyMediaUserData(
 		if mErr != nil {
 			return applied, fmt.Errorf("failed to look up media for system %q: %w", systemID, mErr)
 		}
+		mediaIDs := make([]int64, 0, len(mediaByPath))
+		for i := range items {
+			if media, ok := mediaByPath[items[i].Path]; ok && hasProjectedFlag(&items[i]) {
+				mediaIDs = append(mediaIDs, media.DBID)
+			}
+		}
+		existing, tErr := db.GetMediaTagsByMediaDBIDs(ctx, mediaIDs)
+		if tErr != nil {
+			return applied, fmt.Errorf("failed to read user tags for system %q: %w", systemID, tErr)
+		}
 
 		for i := range items {
 			item := items[i]
@@ -90,23 +103,12 @@ func reapplyMediaUserData(
 			if !ok {
 				continue // path not indexed; harmless orphan
 			}
-			wrote := false
-			if item.IsFavorite {
-				if _, fErr := db.FindOrInsertMediaTag(database.MediaTag{
-					MediaDBID: media.DBID,
-					TagDBID:   favTagDBID,
-				}); fErr != nil {
-					return applied, fmt.Errorf("failed to re-apply favourite for %q: %w", item.Path, fErr)
-				}
-				wrote = true
+			if !hasProjectedFlag(&item) && item.LauncherOverride == "" {
+				continue
 			}
-			if item.IsHidden {
-				if hErr := db.UpdateMediaTags(ctx, media.DBID, nil, []database.MediaTagRef{{
-					Type: string(tags.TagTypeUser), Tag: string(tags.TagUserHidden),
-				}}); hErr != nil {
-					return applied, fmt.Errorf("failed to re-apply hidden preference for %q: %w", item.Path, hErr)
-				}
-				wrote = true
+			applied++
+			if refs := missingUserFlagTagRefs(&item, existing[media.DBID]); len(refs) > 0 {
+				tagUpdates = append(tagUpdates, database.MediaTagUpdate{MediaDBID: media.DBID, Add: refs})
 			}
 			if item.LauncherOverride != "" {
 				if pErr := db.UpsertMediaProperties(ctx, media.DBID, []database.MediaProperty{{
@@ -115,36 +117,62 @@ func reapplyMediaUserData(
 				}}); pErr != nil {
 					return applied, fmt.Errorf("failed to re-apply launcher override for %q: %w", item.Path, pErr)
 				}
-				wrote = true
-			}
-			if wrote {
-				applied++
 			}
 		}
 	}
 
-	log.Debug().Int("rows", len(rows)).Int("applied", applied).Msg("re-applied media user data")
+	if err := writeMediaTagUpdates(ctx, db, tagUpdates); err != nil {
+		return applied, err
+	}
+
+	log.Debug().Int("rows", len(rows)).Int("applied", applied).Int("tagWrites", len(tagUpdates)).
+		Msg("re-applied media user data")
 	return applied, nil
 }
 
-// ensureFavoriteTag finds or inserts the canonical user:favorite tag and returns
-// its DBID so per-media favourite tags can be written.
-func ensureFavoriteTag(db database.MediaDBI) (int64, error) {
-	tagType, err := db.FindOrInsertTagType(database.TagType{
-		Type:        string(tags.TagTypeUser),
-		IsExclusive: tags.IsExclusiveType(tags.TagTypeUser),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to find or insert user tag type: %w", err)
+// writeMediaTagUpdates writes the edits in one transaction when the database
+// supports batches, and one file at a time otherwise.
+func writeMediaTagUpdates(ctx context.Context, db database.MediaDBI, updates []database.MediaTagUpdate) error {
+	if len(updates) == 0 {
+		return nil
 	}
-	tagRow, err := db.FindOrInsertTag(database.Tag{
-		TypeDBID: tagType.DBID,
-		Tag:      string(tags.TagUserFavorite),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to find or insert favourite tag: %w", err)
+	if batcher, ok := db.(database.MediaTagBatchUpdater); ok {
+		if err := batcher.UpdateMediaTagsBatch(ctx, updates); err != nil {
+			return fmt.Errorf("failed to re-apply user flags for %d files: %w", len(updates), err)
+		}
+		return nil
 	}
-	return tagRow.DBID, nil
+	for i := range updates {
+		if err := db.UpdateMediaTags(ctx, updates[i].MediaDBID, nil, updates[i].Add); err != nil {
+			return fmt.Errorf("failed to re-apply user flags for media %d: %w", updates[i].MediaDBID, err)
+		}
+	}
+	return nil
+}
+
+// hasProjectedFlag reports whether the row sets any flag projected as a tag.
+func hasProjectedFlag(item *database.MediaUserData) bool {
+	for _, flag := range database.MediaUserFlags {
+		if item.Flag(flag) {
+			return true
+		}
+	}
+	return false
+}
+
+// missingUserFlagTagRefs lists the user tags a row's flags project to that the
+// file does not carry yet.
+func missingUserFlagTagRefs(item *database.MediaUserData, current []database.TagInfo) []database.MediaTagRef {
+	var refs []database.MediaTagRef
+	for _, flag := range database.MediaUserFlags {
+		if !item.Flag(flag) || slices.ContainsFunc(current, func(tag database.TagInfo) bool {
+			return tag.Type == string(tags.TagTypeUser) && tag.Tag == string(flag)
+		}) {
+			continue
+		}
+		refs = append(refs, database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(flag)})
+	}
+	return refs
 }
 
 // ensureLauncherOverrideTag finds or inserts the canonical

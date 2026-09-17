@@ -24,12 +24,37 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
+
+const mediaUserDataColumns = `
+	DBID, SystemID, Path, IsFavorite, IsHidden, IsLiked, IsDisliked, IsPlayLater,
+	LauncherOverride, MediaName, Slug, Tags, CreatedAt, UpdatedAt`
+
+// mediaUserNoIntent is the predicate for a row that records nothing and is
+// pruned rather than kept.
+const mediaUserNoIntent = `IsFavorite = 0 and IsHidden = 0 and IsLiked = 0 and IsDisliked = 0` +
+	` and IsPlayLater = 0 and LauncherOverride = ''`
+
+// mediaUserFlagColumn maps a preference flag to its column and the columns a
+// true value clears, so an exclusive pair can never be written together.
+type mediaUserFlagColumn struct {
+	column string
+	clears []string
+}
+
+var mediaUserFlagColumns = map[database.MediaUserFlag]mediaUserFlagColumn{
+	database.MediaUserFlagFavorite:  {column: "IsFavorite", clears: []string{"IsDisliked"}},
+	database.MediaUserFlagHidden:    {column: "IsHidden"},
+	database.MediaUserFlagLiked:     {column: "IsLiked", clears: []string{"IsDisliked"}},
+	database.MediaUserFlagDisliked:  {column: "IsDisliked", clears: []string{"IsLiked", "IsFavorite"}},
+	database.MediaUserFlagPlayLater: {column: "IsPlayLater"},
+}
 
 // GetMediaUserData returns the user-data row for a media path. The bool is false
 // when no row exists for the (systemID, path) key, in which case the media has no
@@ -40,63 +65,92 @@ func (db *UserDB) GetMediaUserData(systemID, path string) (database.MediaUserDat
 
 // UpsertMediaUserData inserts or updates the user-data row for (SystemID, Path).
 // CreatedAt is set on insert only; UpdatedAt is set on every write. A row with no
-// favourite, hidden preference, or launcher override carries no user intent,
-// so it is deleted rather than persisted.
+// flag set and no launcher override carries no user intent, so it is deleted
+// rather than persisted. A row holding a forbidden flag pair is refused.
 func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 	conn := db.sql.Load()
 	normalized := *data
 	normalized.Path = pathutil.CanonicalMediaPath(data.Path)
-	if !normalized.IsFavorite && !normalized.IsHidden && normalized.LauncherOverride == "" {
-		return sqlDeleteMediaUserData(db.ctx, conn, normalized.SystemID, normalized.Path)
+	if err := normalized.ValidateFlags(); err != nil {
+		return fmt.Errorf("media user data for %q: %w", normalized.Path, err)
 	}
-	return sqlUpsertMediaUserData(db.ctx, conn, &normalized, time.Now().Unix())
+	now := time.Now().Unix()
+	return mediaUserDataTx(db.ctx, conn, now, func(tx *sql.Tx) error {
+		if !normalized.HasIntent() {
+			return sqlDeleteMediaUserData(db.ctx, tx, normalized.SystemID, normalized.Path)
+		}
+		return sqlUpsertMediaUserData(db.ctx, tx, &normalized, now)
+	})
 }
 
-// SetMediaUserFavorite records (or clears) the favourite intent for a media
-// path without disturbing any launcher override on the same row. The write is a
-// column-scoped upsert plus a conditional delete, run in one transaction so two
-// concurrent edits to the same path (e.g. a favourite toggle and a launcher
-// override) cannot read-modify-write over each other.
-func (db *UserDB) SetMediaUserFavorite(systemID, path string, favorite bool) error {
-	return sqlSetMediaUserFavorite(
-		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path), favorite, time.Now().Unix(),
+// SetMediaUserFlag records (or clears) one preference flag for a media path
+// without disturbing the other columns on the same row, except for the flags
+// the model forbids beside it: liked clears disliked and the reverse, and
+// disliked clears favorite. The write is a column-scoped upsert plus a
+// conditional delete, run in one transaction so two concurrent edits to the
+// same path cannot read-modify-write over each other.
+func (db *UserDB) SetMediaUserFlag(systemID, path string, flag database.MediaUserFlag, value bool) error {
+	spec, ok := mediaUserFlagColumns[flag]
+	if !ok {
+		return fmt.Errorf("unknown media user flag %q", flag)
+	}
+	var sb strings.Builder
+	_, _ = sb.WriteString("insert into MediaUserData(SystemID, Path, ")
+	_, _ = sb.WriteString(spec.column)
+	_, _ = sb.WriteString(", LauncherOverride, CreatedAt, UpdatedAt) values (?, ?, ?, '', ?, ?)\n")
+	_, _ = sb.WriteString("on conflict(SystemID, Path) do update set\n\t")
+	_, _ = sb.WriteString(spec.column + " = excluded." + spec.column + ",\n")
+	for _, cleared := range spec.clears {
+		_, _ = sb.WriteString("\t" + cleared + " = case when excluded." + spec.column +
+			" = 1 then 0 else MediaUserData." + cleared + " end,\n")
+	}
+	_, _ = sb.WriteString("\tUpdatedAt = excluded.UpdatedAt;")
+	return mediaUserDataColumnWrite(
+		db.ctx, db.sql.Load(), sb.String(), systemID, pathutil.CanonicalMediaPath(path), value, time.Now().Unix(),
 	)
+}
+
+// SetMediaUserFavorite records (or clears) the favourite flag for a media path.
+func (db *UserDB) SetMediaUserFavorite(systemID, path string, favorite bool) error {
+	return db.SetMediaUserFlag(systemID, path, database.MediaUserFlagFavorite, favorite)
 }
 
 // SetMediaUserHidden changes visibility without disturbing other preferences.
 func (db *UserDB) SetMediaUserHidden(systemID, path string, hidden bool) error {
-	return mediaUserDataColumnWrite(db.ctx, db.sql.Load(), `
-		insert into MediaUserData(SystemID, Path, IsHidden, CreatedAt, UpdatedAt)
-		values (?, ?, ?, ?, ?)
-		on conflict(SystemID, Path) do update set
-			IsHidden = excluded.IsHidden, UpdatedAt = excluded.UpdatedAt;
-	`, systemID, pathutil.CanonicalMediaPath(path), hidden, time.Now().Unix())
+	return db.SetMediaUserFlag(systemID, path, database.MediaUserFlagHidden, hidden)
 }
 
 // SetMediaUserLauncherOverride records (or clears, when launcherID is empty) the
-// launcher-override intent for a media path without disturbing the favourite
-// flag on the same row. See SetMediaUserFavorite for the concurrency guarantee.
+// launcher-override intent for a media path without disturbing the flags on the
+// same row. See SetMediaUserFlag for the concurrency guarantee.
 func (db *UserDB) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
-	return sqlSetMediaUserLauncherOverride(
-		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path), launcherID, time.Now().Unix(),
-	)
+	return mediaUserDataColumnWrite(db.ctx, db.sql.Load(), `
+		insert into MediaUserData(
+			SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
+		) values (?, ?, 0, ?, ?, ?)
+		on conflict(SystemID, Path) do update set
+			LauncherOverride = excluded.LauncherOverride,
+			UpdatedAt = excluded.UpdatedAt;
+	`, systemID, pathutil.CanonicalMediaPath(path), launcherID, time.Now().Unix())
 }
 
 // SetMediaUserSnapshot records a successfully resolved scanner identity
 // snapshot on an existing user-data row. It never inserts: a snapshot without
-// user intent (favourite/hidden/override) is meaningless. Empty tags are significant
-// and replace stale tags; callers must skip this method when lookup fails.
-func (db *UserDB) SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error {
+// user intent is meaningless. Empty tags are significant and replace stale
+// tags; callers must skip this method when lookup fails.
+func (db *UserDB) SetMediaUserSnapshot(systemID, path, mediaName, slug string, tags []string) error {
 	return sqlSetMediaUserSnapshot(
 		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path),
-		mediaName, database.EncodeTagStrings(tags),
+		mediaName, slug, database.EncodeTagStrings(tags),
 	)
 }
 
 // DeleteMediaUserData removes the user-data row for (SystemID, Path). Deleting a
 // row that does not exist is not an error.
 func (db *UserDB) DeleteMediaUserData(systemID, path string) error {
-	return sqlDeleteMediaUserData(db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path))
+	return mediaUserDataTx(db.ctx, db.sql.Load(), time.Now().Unix(), func(tx *sql.Tx) error {
+		return sqlDeleteMediaUserData(db.ctx, tx, systemID, pathutil.CanonicalMediaPath(path))
+	})
 }
 
 // ListMediaUserData returns every user-data row, used by the reindex re-apply
@@ -105,78 +159,94 @@ func (db *UserDB) ListMediaUserData() ([]database.MediaUserData, error) {
 	return sqlListMediaUserData(db.ctx, db.sql.Load())
 }
 
+// scanMediaUserData reads one row selected with mediaUserDataColumns.
+func scanMediaUserData(scan func(dest ...any) error) (database.MediaUserData, error) {
+	var row database.MediaUserData
+	var rawTags string
+	err := scan(
+		&row.DBID,
+		&row.SystemID,
+		&row.Path,
+		&row.IsFavorite,
+		&row.IsHidden,
+		&row.IsLiked,
+		&row.IsDisliked,
+		&row.IsPlayLater,
+		&row.LauncherOverride,
+		&row.MediaName,
+		&row.Slug,
+		&rawTags,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		return row, err
+	}
+	row.Path = pathutil.CanonicalMediaPath(row.Path)
+	row.Tags = database.DecodeTagStrings(rawTags)
+	return row, nil
+}
+
+// sqlGetMediaUserData reads the row for one canonical path; the bool is false
+// when there is none.
 func sqlGetMediaUserData(
 	ctx context.Context, db *sql.DB, systemID, path string,
 ) (database.MediaUserData, bool, error) {
-	var row database.MediaUserData
-	var rawTags string
-	q, err := db.PrepareContext(ctx, `
-		select
-		DBID, SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
+	q, err := db.PrepareContext(ctx, `select`+mediaUserDataColumns+`
 		from MediaUserData
 		where SystemID = ? and Path = ?;
 	`)
 	if err != nil {
-		return row, false, fmt.Errorf("failed to prepare media user data select statement: %w", err)
+		return database.MediaUserData{}, false,
+			fmt.Errorf("failed to prepare media user data select statement: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	err = q.QueryRowContext(ctx, systemID, path).Scan(
-		&row.DBID,
-		&row.SystemID,
-		&row.Path,
-		&row.IsFavorite,
-		&row.IsHidden,
-		&row.LauncherOverride,
-		&row.MediaName,
-		&rawTags,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := scanMediaUserData(q.QueryRowContext(ctx, systemID, path).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return database.MediaUserData{}, false, nil
 	}
 	if err != nil {
 		return row, false, fmt.Errorf("failed to scan media user data row: %w", err)
 	}
-	row.Path = pathutil.CanonicalMediaPath(row.Path)
-	row.Tags = database.DecodeTagStrings(rawTags)
 	return row, true, nil
 }
 
+// sqlUpsertMediaUserData writes every flag and the override for one row, and
+// keeps the stored identity snapshot when the new one is empty.
 func sqlUpsertMediaUserData(
-	ctx context.Context, db *sql.DB, data *database.MediaUserData, now int64,
+	ctx context.Context, tx *sql.Tx, data *database.MediaUserData, now int64,
 ) error {
-	stmt, err := db.PrepareContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		insert into MediaUserData(
-			SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			SystemID, Path, IsFavorite, IsHidden, IsLiked, IsDisliked, IsPlayLater,
+			LauncherOverride, MediaName, Slug, Tags, CreatedAt, UpdatedAt
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(SystemID, Path) do update set
 			IsFavorite = excluded.IsFavorite,
 			IsHidden = excluded.IsHidden,
+			IsLiked = excluded.IsLiked,
+			IsDisliked = excluded.IsDisliked,
+			IsPlayLater = excluded.IsPlayLater,
 			LauncherOverride = excluded.LauncherOverride,
 			MediaName = case when excluded.MediaName != '' then excluded.MediaName else MediaUserData.MediaName end,
+			Slug = case when excluded.Slug != '' then excluded.Slug else MediaUserData.Slug end,
 			Tags = case when excluded.Tags != '' then excluded.Tags else MediaUserData.Tags end,
 			UpdatedAt = excluded.UpdatedAt;
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare media user data upsert statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	_, err = stmt.ExecContext(ctx,
+	`,
 		data.SystemID,
 		data.Path,
 		data.IsFavorite,
 		data.IsHidden,
+		data.IsLiked,
+		data.IsDisliked,
+		data.IsPlayLater,
 		data.LauncherOverride,
 		data.MediaName,
+		data.Slug,
 		database.EncodeTagStrings(data.Tags),
 		now,
 		now,
@@ -187,39 +257,14 @@ func sqlUpsertMediaUserData(
 	return nil
 }
 
-func sqlSetMediaUserFavorite(
-	ctx context.Context, db *sql.DB, systemID, path string, favorite bool, now int64,
-) error {
-	return mediaUserDataColumnWrite(ctx, db, `
-		insert into MediaUserData(
-			SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
-		) values (?, ?, ?, '', ?, ?)
-		on conflict(SystemID, Path) do update set
-			IsFavorite = excluded.IsFavorite,
-			UpdatedAt = excluded.UpdatedAt;
-	`, systemID, path, favorite, now)
-}
-
-func sqlSetMediaUserLauncherOverride(
-	ctx context.Context, db *sql.DB, systemID, path, launcherID string, now int64,
-) error {
-	return mediaUserDataColumnWrite(ctx, db, `
-		insert into MediaUserData(
-			SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
-		) values (?, ?, 0, ?, ?, ?)
-		on conflict(SystemID, Path) do update set
-			LauncherOverride = excluded.LauncherOverride,
-			UpdatedAt = excluded.UpdatedAt;
-	`, systemID, path, launcherID, now)
-}
-
+// sqlSetMediaUserSnapshot replaces the identity snapshot on an existing row.
 func sqlSetMediaUserSnapshot(
-	ctx context.Context, db *sql.DB, systemID, path, mediaName, encodedTags string,
+	ctx context.Context, db *sql.DB, systemID, path, mediaName, slug, encodedTags string,
 ) error {
 	_, err := db.ExecContext(ctx, `
-		update MediaUserData set MediaName = ?, Tags = ?
+		update MediaUserData set MediaName = ?, Slug = ?, Tags = ?
 		where SystemID = ? and Path = ?;
-	`, mediaName, encodedTags, systemID, path)
+	`, mediaName, slug, encodedTags, systemID, path)
 	if err != nil {
 		return fmt.Errorf("failed to update media user data snapshot: %w", err)
 	}
@@ -227,46 +272,64 @@ func sqlSetMediaUserSnapshot(
 }
 
 // mediaUserDataColumnWrite applies a single-column upsert and then deletes the
-// row if no user intent remains (neither favourite nor hidden and no launcher override),
-// both inside one transaction so the pair is atomic against concurrent writers.
-// value is the column-specific bind (preference bool or launcher ID string).
+// row if no user intent remains, both inside one transaction so the pair is
+// atomic against concurrent writers. value is the column-specific bind
+// (preference bool or launcher ID string).
 func mediaUserDataColumnWrite(
 	ctx context.Context, db *sql.DB, upsert, systemID, path string, value any, now int64,
-) (err error) {
+) error {
+	return mediaUserDataTx(ctx, db, now, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
+			return fmt.Errorf("failed to upsert media user data column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`delete from MediaUserData where SystemID = ? and Path = ? and `+mediaUserNoIntent+`;`,
+			systemID, path,
+		); err != nil {
+			return fmt.Errorf("failed to prune empty media user data row: %w", err)
+		}
+		return nil
+	})
+}
+
+// mediaUserDataTx runs a MediaUserData write and advances the preferences
+// revision in one transaction, so every listing-affecting write invalidates
+// browse cursors atomically with the data it changes.
+func mediaUserDataTx(ctx context.Context, db *sql.DB, now int64, write func(tx *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin media user data transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	if err := write(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := sqlAdvanceMediaPreferencesRevision(ctx, tx, now); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit media user data transaction: %w", err)
+	}
+	return nil
+}
 
-	if _, err = tx.ExecContext(ctx, upsert, systemID, path, value, now, now); err != nil {
-		return fmt.Errorf("failed to upsert media user data column: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, `
-		delete from MediaUserData
-		where SystemID = ? and Path = ? and IsFavorite = 0 and IsHidden = 0 and LauncherOverride = '';
-	`, systemID, path); err != nil {
-		return fmt.Errorf("failed to prune empty media user data row: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, `
+// sqlAdvanceMediaPreferencesRevision bumps the counter that invalidates cached
+// browse cursor totals whenever a listing-affecting preference changes.
+func sqlAdvanceMediaPreferencesRevision(ctx context.Context, tx *sql.Tx, now int64) error {
+	if _, err := tx.ExecContext(ctx, `
 		insert into DeviceState(Key, Value, UpdatedAt) values (?, '1', ?)
 		on conflict(Key) do update set Value = cast(DeviceState.Value as integer) + 1,
 			UpdatedAt = excluded.UpdatedAt;
 	`, database.DeviceStateKeyMediaPreferencesRevision, now); err != nil {
 		return fmt.Errorf("failed to advance media preferences revision: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit media user data transaction: %w", err)
-	}
 	return nil
 }
 
-func sqlDeleteMediaUserData(ctx context.Context, db *sql.DB, systemID, path string) error {
-	_, err := db.ExecContext(ctx,
+// sqlDeleteMediaUserData removes the row for one canonical path, if any.
+func sqlDeleteMediaUserData(ctx context.Context, tx *sql.Tx, systemID, path string) error {
+	_, err := tx.ExecContext(ctx,
 		`delete from MediaUserData where SystemID = ? and Path = ?;`, systemID, path)
 	if err != nil {
 		return fmt.Errorf("failed to execute media user data delete: %w", err)
@@ -274,14 +337,11 @@ func sqlDeleteMediaUserData(ctx context.Context, db *sql.DB, systemID, path stri
 	return nil
 }
 
+// sqlListMediaUserData reads every row.
 func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUserData, error) {
 	list := make([]database.MediaUserData, 0)
 
-	q, err := db.PrepareContext(ctx, `
-		select
-		DBID, SystemID, Path, IsFavorite, IsHidden, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
-		from MediaUserData;
-	`)
+	q, err := db.PrepareContext(ctx, `select`+mediaUserDataColumns+` from MediaUserData;`)
 	if err != nil {
 		return list, fmt.Errorf("failed to prepare list media user data statement: %w", err)
 	}
@@ -301,25 +361,10 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 		}
 	}()
 	for rows.Next() {
-		row := database.MediaUserData{}
-		var rawTags string
-		scanErr := rows.Scan(
-			&row.DBID,
-			&row.SystemID,
-			&row.Path,
-			&row.IsFavorite,
-			&row.IsHidden,
-			&row.LauncherOverride,
-			&row.MediaName,
-			&rawTags,
-			&row.CreatedAt,
-			&row.UpdatedAt,
-		)
+		row, scanErr := scanMediaUserData(rows.Scan)
 		if scanErr != nil {
 			return list, fmt.Errorf("failed to scan media user data row: %w", scanErr)
 		}
-		row.Path = pathutil.CanonicalMediaPath(row.Path)
-		row.Tags = database.DecodeTagStrings(rawTags)
 		list = append(list, row)
 	}
 	if err = rows.Err(); err != nil {

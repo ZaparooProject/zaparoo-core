@@ -333,9 +333,9 @@ func sqlAnyVisibleMedia(
 }
 
 // discoveryExcludesHidden is the shared rule for whether a query counts as
-// ordinary discovery. A required user:hidden or user:favorite filter is an
-// explicit ask for those entries and opts out of the exclusion, matching what
-// browse and search do with the same filters.
+// ordinary discovery. A required user tag filter (user:favorite, user:liked,
+// user:hidden, ...) is an explicit ask for the user's own list and opts out of
+// the exclusion, matching what browse and search do with the same filters.
 func discoveryExcludesHidden(tags []zapscript.TagFilter) bool {
 	return !filters.IncludesHidden(tags, false)
 }
