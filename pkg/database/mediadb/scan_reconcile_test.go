@@ -506,3 +506,141 @@ func TestSeedCanonicalTagDefinitions_RestoresCanonicalTypeExclusivity(t *testing
 	assert.Equal(t, typeDBID, restoredDBID, "upsert must preserve the existing type row")
 	assert.Equal(t, expectedExclusive, restoredExclusive)
 }
+
+// stageVariantTestMedia reconciles one staged file per entry for systemID,
+// with explicit tags, so a test can change a file's tags without renaming it.
+func stageVariantTestMedia(
+	t *testing.T, mediaDB *mediadb.MediaDB, systemID string, files map[string][]database.ScanStagedTag,
+) database.ScanReconcileStats {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	require.NoError(t, mediaDB.ClearScanStage())
+	for slug, stagedTags := range files {
+		path := "/roms/" + systemID + "/" + slug + ".bin"
+		require.NoError(t, mediaDB.StageScannedMedia(&database.ScanStagedMedia{
+			Path:          path,
+			ParentDir:     mediadb.ParentDirForMediaPath(path),
+			Slug:          slug,
+			TitleName:     slug,
+			SortName:      slug,
+			SlugLength:    len(slug),
+			SlugWordCount: 1,
+			Tags:          stagedTags,
+		}))
+	}
+	stats, err := mediaDB.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	return stats
+}
+
+// zapScriptTagsForVariantTestMedia returns the "type:value" tags a title launch
+// for the file staged under slug would carry.
+func zapScriptTagsForVariantTestMedia(t *testing.T, mediaDB *mediadb.MediaDB, systemID, slug string) []string {
+	t.Helper()
+	tagList, err := mediaDB.GetZapScriptTagsBySystemAndPath(
+		context.Background(), systemID, "/roms/"+systemID+"/"+slug+".bin")
+	require.NoError(t, err)
+	out := make([]string, 0, len(tagList))
+	for _, tag := range tagList {
+		out = append(out, tag.Type+":"+tag.Tag)
+	}
+	return out
+}
+
+var (
+	variantTestHack = database.ScanStagedTag{
+		Type: string(tags.TagTypeUnlicensed), Value: string(tags.TagUnlicensedHack),
+	}
+	variantTestTranslation = database.ScanStagedTag{
+		Type: string(tags.TagTypeUnlicensed), Value: string(tags.TagUnlicensedTranslation),
+	}
+	variantTestHomebrew = database.ScanStagedTag{
+		Type: string(tags.TagTypeRelease), Value: string(tags.TagReleaseHomebrew),
+	}
+	variantTestRegion = database.ScanStagedTag{Type: string(tags.TagTypeRegion), Value: "us"}
+)
+
+// A rescan that changes nothing must not refresh single-file variant titles:
+// with two or more touched titles the refresh covers the whole system, which
+// costs tens of seconds per system on MiSTer storage.
+func TestReconcileStagedSystem_UnchangedLoneVariantsTouchNothing(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	files := map[string][]database.ScanStagedTag{
+		"hackone":  {variantTestHack, variantTestRegion},
+		"hacktwo":  {variantTestHack},
+		"homebrew": {variantTestHomebrew},
+		"plain":    {variantTestRegion},
+	}
+	first := stageVariantTestMedia(t, mediaDB, "NES", files)
+	assert.Equal(t, int64(3), first.TouchedTitles, "a fresh system refreshes its new variant titles")
+	assert.Equal(t, []string{"unlicensed:hack"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "hackone"))
+	assert.Equal(t, []string{"release:homebrew"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "homebrew"))
+	assert.Empty(t, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "plain"))
+
+	again := stageVariantTestMedia(t, mediaDB, "NES", files)
+	assert.Equal(t, int64(0), again.TouchedTitles)
+	assert.Equal(t, []string{"unlicensed:hack"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "hackone"))
+}
+
+// A new single-file hack in an already indexed system is refreshed on its own
+// and emits its variant tag.
+func TestReconcileStagedSystem_NewLoneVariantOnExistingSystem(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	files := map[string][]database.ScanStagedTag{"plain": {variantTestRegion}}
+	stageVariantTestMedia(t, mediaDB, "NES", files)
+
+	files["newhack"] = []database.ScanStagedTag{variantTestHack}
+	stats := stageVariantTestMedia(t, mediaDB, "NES", files)
+	assert.Equal(t, int64(1), stats.TouchedTitles)
+	assert.Equal(t, []string{"unlicensed:hack"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "newhack"))
+	assert.Empty(t, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "plain"))
+}
+
+// An existing single file whose staged tags gain a variant value (a parser
+// change, since the path is the file's identity) is refreshed.
+func TestReconcileStagedSystem_ExistingLoneFileGainsVariantTag(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	stageVariantTestMedia(t, mediaDB, "NES", map[string][]database.ScanStagedTag{
+		"game": {variantTestRegion}, "other": {variantTestRegion},
+	})
+	assert.Empty(t, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "game"))
+
+	stats := stageVariantTestMedia(t, mediaDB, "NES", map[string][]database.ScanStagedTag{
+		"game": {variantTestRegion, variantTestHack}, "other": {variantTestRegion},
+	})
+	assert.Equal(t, int64(1), stats.TouchedTitles)
+	assert.Equal(t, []string{"unlicensed:hack"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "game"))
+}
+
+// An existing single file that loses its variant value is refreshed too, or
+// its title keeps the stale type and emits whatever other value of that type
+// the file still carries.
+func TestReconcileStagedSystem_ExistingLoneFileLosesVariantTag(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	stageVariantTestMedia(t, mediaDB, "NES", map[string][]database.ScanStagedTag{
+		"game": {variantTestHack}, "other": {variantTestRegion},
+	})
+	require.Equal(t, []string{"unlicensed:hack"}, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "game"))
+
+	stats := stageVariantTestMedia(t, mediaDB, "NES", map[string][]database.ScanStagedTag{
+		"game": {variantTestTranslation}, "other": {variantTestRegion},
+	})
+	assert.Equal(t, int64(1), stats.TagLinksDeleted)
+	assert.Equal(t, int64(1), stats.TouchedTitles)
+	assert.Empty(t, zapScriptTagsForVariantTestMedia(t, mediaDB, "NES", "game"))
+}

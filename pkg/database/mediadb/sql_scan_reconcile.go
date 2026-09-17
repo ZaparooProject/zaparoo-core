@@ -902,6 +902,30 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 	}
 
+	// A game-variant tag (a hack, homebrew or public-domain work) disambiguates
+	// its title whatever the title's file count, so a lone hack still emits it in
+	// its title launch. The captures above only see multi-file titles; this one
+	// catches the rest, but only where a variant link is about to be added (a new
+	// file, or an existing file gaining the tag). Capturing every staged variant
+	// title instead would force a system-wide recompute on each rescan of a
+	// system holding two or more hacks, even when nothing changed. Runs on fresh
+	// systems too, where every staged file is new.
+	variantAddClause, variantAddArgs := tags.GameVariantTagSQLPredicate("st.TagType", "st.Tag")
+	//nolint:gosec // variantAddClause is a parameterized predicate built from constants.
+	if _, err = execStep("capture variant tag additions", `
+		INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
+		SELECT m.MediaTitleDBID
+		FROM ScanStageTags st
+		JOIN Media m ON m.SystemDBID = ? AND m.Path = st.Path
+		JOIN TagTypes tt ON tt.Type = st.TagType
+		JOIN Tags t ON t.TypeDBID = tt.DBID AND t.Tag = st.Tag
+		WHERE `+variantAddClause+`
+		  AND NOT EXISTS (
+			SELECT 1 FROM MediaTags mt WHERE mt.MediaDBID = m.DBID AND mt.TagDBID = t.DBID
+		  )`, append([]any{systemDBID}, variantAddArgs...)...); err != nil {
+		return stats, err
+	}
+
 	stats.TagLinksAdded, err = execStep("insert tag links", `
 		INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID)
 		SELECT m.DBID, t.DBID
@@ -923,14 +947,20 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// A fresh system has no other source of MediaTags rows: the scraper's
 	// writers cannot have touched media that did not exist, and reconcile holds
 	// the only write transaction.
+	//
+	// A lone title only disambiguates on game-variant tags, so losing one of
+	// those is the only stale link that changes a single-file title.
 	if !freshSystem {
+		staleVariantClause, staleVariantArgs := tags.GameVariantTagSQLPredicate("tt.Type", "t.Tag")
 		staleTagTitleArgs := append([]any{systemDBID}, scanNonScannerTypeArgs(systemDBID)...)
+		staleTagTitleArgs = append(staleTagTitleArgs, staleVariantArgs...)
 		if _, err = execStep("capture stale tag titles",
 			"WITH multi_titles AS ("+
 				"SELECT MediaTitleDBID FROM Media WHERE SystemDBID = ? AND IsMissing = 0 "+
 				"GROUP BY MediaTitleDBID HAVING COUNT(*) > 1) "+
 				"INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID) SELECT m.MediaTitleDBID"+scanStaleLinkFilter+
-				" AND EXISTS (SELECT 1 FROM multi_titles mtit WHERE mtit.MediaTitleDBID = m.MediaTitleDBID)",
+				" AND (EXISTS (SELECT 1 FROM multi_titles mtit WHERE mtit.MediaTitleDBID = m.MediaTitleDBID)"+
+				" OR "+staleVariantClause+")",
 			staleTagTitleArgs...); err != nil {
 			return stats, err
 		}

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -270,16 +271,11 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		return nil
 	}
 
-	// Allowlist of tag types eligible for disambiguation, rendered as an IN clause.
-	typeArgs := make([]any, len(database.ZapScriptTagTypes))
-	for i, t := range database.ZapScriptTagTypes {
-		typeArgs[i] = t
-	}
-	typeClause := " AND tt.Type IN (" + prepareVariadic("?", ",", len(database.ZapScriptTagTypes)) + ")"
+	fixedArgs := disambiguationRecomputeArgs()
 
 	// Chunk IDs so bound parameters stay under SQLite's limit; leave room for the
-	// type params the set statement appends.
-	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
+	// variant and type params the set statement appends.
+	chunkSize := sqliteMaxParams - len(fixedArgs)
 	chunkCount := (len(ids) + chunkSize - 1) / chunkSize
 	log.Debug().
 		Str("filter", filterCol).
@@ -297,84 +293,13 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			end = len(ids)
 		}
 		chunk := ids[start:end]
-		holders := prepareVariadic("?", ",", len(chunk))
-		chunkArgs := make([]any, len(chunk))
-		for i, id := range chunk {
-			chunkArgs[i] = id
+
+		setArgs := make([]any, 0, len(chunk)+len(fixedArgs))
+		for _, id := range chunk {
+			setArgs = append(setArgs, id)
 		}
-
-		// Compute disambiguating types for the in-scope multi-media titles in one
-		// set-based pass (a single global sort + aggregate, no per-title correlated
-		// subquery), then LEFT JOIN the full in-scope set back so titles that no longer
-		// qualify COALESCE to '' — the reset and the set land in one atomic UPDATE. A
-		// type disambiguates when its sibling media disagree: either two media carry
-		// different per-media value-sets (COUNT(DISTINCT vs) > 1), or some media carry
-		// the type and others lack it (mtc < the title's total non-missing media count)
-		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored
-		// comma-joined in alphabetical order; read paths reorder them by display rank.
-		// The IS NOT guard skips rows already holding the computed value.
-		//
-		// tot and mvs use CROSS JOIN (SQLite's manual join-order override) so the
-		// scoped title set always drives the lookups through
-		// media_title_present_idx and the MediaTags primary key. Left to the
-		// planner, databases without fresh statistics instead sweep all of
-		// Media/MediaTags on every call, making a single-system recompute cost as
-		// much as a whole-database one — ~3 minutes per system on a large library
-		// on SD-card storage, repeated for every system.
-		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
-		setQuery := fmt.Sprintf(`
-			WITH scope AS MATERIALIZED (
-				SELECT DBID AS tid FROM MediaTitles WHERE %s IN (%s)
-			),
-			tot AS MATERIALIZED (
-				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm
-				FROM scope
-				CROSS JOIN Media m ON m.MediaTitleDBID = scope.tid
-				WHERE m.IsMissing = 0
-				GROUP BY m.MediaTitleDBID
-				HAVING COUNT(*) > 1
-			),
-			mvs AS MATERIALIZED (
-				SELECT tid, typ, mid, group_concat(tag ORDER BY tag) AS vs
-				FROM (
-					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
-					FROM tot
-					CROSS JOIN Media m ON m.MediaTitleDBID = tot.tid
-					CROSS JOIN MediaTags x ON x.MediaDBID = m.DBID
-					CROSS JOIN Tags t ON t.DBID = x.TagDBID
-					CROSS JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-					WHERE m.IsMissing = 0%s
-				)
-				GROUP BY tid, typ, mid
-			),
-			agg AS MATERIALIZED (
-				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc
-				FROM mvs GROUP BY tid, typ
-			),
-			qual AS MATERIALIZED (
-				SELECT agg.tid AS tid, agg.typ AS typ
-				FROM agg JOIN tot ON tot.tid = agg.tid
-				WHERE agg.dv > 1 OR agg.mtc < tot.tm
-			),
-			grp AS MATERIALIZED (
-				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
-				FROM qual
-				GROUP BY tid
-			),
-			result AS MATERIALIZED (
-				SELECT scope.tid AS tid, COALESCE(grp.types, '') AS types
-				FROM scope LEFT JOIN grp ON grp.tid = scope.tid
-			)
-			UPDATE MediaTitles SET DisambiguationTypes = result.types
-			FROM result
-			WHERE MediaTitles.DBID = result.tid
-			  AND MediaTitles.DisambiguationTypes IS NOT result.types
-		`, filterCol, holders, typeClause)
-
-		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))
-		setArgs = append(setArgs, chunkArgs...)
-		setArgs = append(setArgs, typeArgs...)
-		res, err := db.ExecContext(ctx, setQuery, setArgs...)
+		setArgs = append(setArgs, fixedArgs...)
+		res, err := db.ExecContext(ctx, disambiguationRecomputeQuery(filterCol, len(chunk)), setArgs...)
 		if err != nil {
 			return fmt.Errorf("failed to recompute disambiguation: %w", err)
 		}
@@ -397,6 +322,124 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			Msg("disambiguation recompute chunk completed")
 	}
 	return nil
+}
+
+// disambiguationRecomputeArgs returns the parameters that follow the scope IDs
+// in disambiguationRecomputeQuery: the game-variant predicate's, then the
+// eligible tag types'.
+func disambiguationRecomputeArgs() []any {
+	_, variantArgs := tags.GameVariantTagSQLPredicate("tt.Type", "t.Tag")
+	args := make([]any, 0, len(variantArgs)+len(database.ZapScriptTagTypes))
+	args = append(args, variantArgs...)
+	for _, t := range database.ZapScriptTagTypes {
+		args = append(args, t)
+	}
+	return args
+}
+
+// disambiguationRecomputeQuery builds the recompute UPDATE for idCount scope
+// IDs matched against filterCol ("DBID" or "SystemDBID").
+//
+// It computes disambiguating types for the in-scope multi-media titles in one
+// set-based pass (a single global sort + aggregate, no per-title correlated
+// subquery), then LEFT JOINs the full in-scope set back so titles that no
+// longer qualify COALESCE to an empty list — the reset and the set land in one
+// atomic UPDATE. A type disambiguates when its sibling media disagree: either
+// two media carry different per-media value-sets (COUNT(DISTINCT vs) > 1), or
+// some media carry the type and others lack it (mtc < the title's total
+// non-missing media count) — the latter tells "Jackal (W)" apart from
+// "Jackal (W) [bl]". A type also disambiguates whenever any present media of
+// the title carries a game-variant value (tags.GameVariantTags: hacks,
+// homebrew, public domain), sibling or not, so a device holding only
+// "Game (Hack)" still emits the tag and another device does not resolve the
+// plain release. mvs flags those values on multi-media titles (gv) without
+// reading anything extra; lone seeks the links of single-media titles, which
+// the sibling pass never reads. Types are stored comma-joined in alphabetical
+// order; read paths reorder them by display rank. The IS NOT guard skips rows
+// already holding the computed value.
+//
+// titles, mvs and lone use CROSS JOIN (SQLite's manual join-order override) so
+// the scoped title set always drives the lookups through
+// media_title_present_idx and the MediaTags primary key. Left to the planner,
+// databases without fresh statistics instead sweep all of Media/MediaTags on
+// every call, making a single-system recompute cost as much as a
+// whole-database one — ~3 minutes per system on a large library on SD-card
+// storage, repeated for every system. Reading the variant links from
+// mediatags_tag_media_idx instead would skip lone's seeks, but nothing bounds
+// that read to the scope: a system's media IDs stop being contiguous after its
+// first incremental scan, so it tends towards every variant link in the
+// database on each call.
+func disambiguationRecomputeQuery(filterCol string, idCount int) string {
+	variantClause, _ := tags.GameVariantTagSQLPredicate("tt.Type", "t.Tag")
+	typeClause := " AND tt.Type IN (" + prepareVariadic("?", ",", len(database.ZapScriptTagTypes)) + ")"
+
+	//nolint:gosec // filterCol is a trusted constant; values are parameterized.
+	return fmt.Sprintf(`
+			WITH scope AS MATERIALIZED (
+				SELECT DBID AS tid FROM MediaTitles WHERE %s IN (%s)
+			),
+			vtags AS MATERIALIZED (
+				SELECT t.DBID AS tagid, tt.Type AS typ
+				FROM TagTypes tt
+				CROSS JOIN Tags t ON t.TypeDBID = tt.DBID
+				WHERE %s
+			),
+			titles AS MATERIALIZED (
+				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm, MIN(m.DBID) AS mid
+				FROM scope
+				CROSS JOIN Media m ON m.MediaTitleDBID = scope.tid
+				WHERE m.IsMissing = 0
+				GROUP BY m.MediaTitleDBID
+			),
+			tot AS MATERIALIZED (
+				SELECT tid, tm FROM titles WHERE tm > 1
+			),
+			mvs AS MATERIALIZED (
+				SELECT tid, typ, mid, group_concat(tag ORDER BY tag) AS vs, MAX(gv) AS gv
+				FROM (
+					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag,
+						x.TagDBID IN (SELECT tagid FROM vtags) AS gv
+					FROM tot
+					CROSS JOIN Media m ON m.MediaTitleDBID = tot.tid
+					CROSS JOIN MediaTags x ON x.MediaDBID = m.DBID
+					CROSS JOIN Tags t ON t.DBID = x.TagDBID
+					CROSS JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					WHERE m.IsMissing = 0%s
+				)
+				GROUP BY tid, typ, mid
+			),
+			agg AS MATERIALIZED (
+				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc, MAX(gv) AS gv
+				FROM mvs GROUP BY tid, typ
+			),
+			lone AS MATERIALIZED (
+				SELECT DISTINCT titles.tid AS tid, vtags.typ AS typ
+				FROM titles
+				CROSS JOIN MediaTags x ON x.MediaDBID = titles.mid
+				CROSS JOIN vtags ON vtags.tagid = x.TagDBID
+				WHERE titles.tm = 1
+			),
+			qual AS MATERIALIZED (
+				SELECT agg.tid AS tid, agg.typ AS typ
+				FROM agg JOIN tot ON tot.tid = agg.tid
+				WHERE agg.dv > 1 OR agg.mtc < tot.tm OR agg.gv
+				UNION ALL
+				SELECT tid, typ FROM lone
+			),
+			grp AS MATERIALIZED (
+				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
+				FROM qual
+				GROUP BY tid
+			),
+			result AS MATERIALIZED (
+				SELECT scope.tid AS tid, COALESCE(grp.types, '') AS types
+				FROM scope LEFT JOIN grp ON grp.tid = scope.tid
+			)
+			UPDATE MediaTitles SET DisambiguationTypes = result.types
+			FROM result
+			WHERE MediaTitles.DBID = result.tid
+			  AND MediaTitles.DisambiguationTypes IS NOT result.types
+		`, filterCol, prepareVariadic("?", ",", idCount), variantClause, typeClause)
 }
 
 // PreFilterQuery represents pre-filter parameters for efficient fuzzy matching candidate reduction.
