@@ -90,7 +90,7 @@ func TestSetMediaUserFlagExclusivity(t *testing.T) {
 			want:  database.MediaUserData{IsFavorite: true},
 		},
 		{
-			name: "play-later and hidden disturb nothing",
+			name: "play later and hidden disturb nothing",
 			steps: []step{
 				{database.MediaUserFlagFavorite, true},
 				{database.MediaUserFlagLiked, true},

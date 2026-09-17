@@ -347,7 +347,7 @@ func TestHandleMediaTagsUpdate_ImpliedClearOnlyWhenSet(t *testing.T) {
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
 		Return([]database.TagInfo{}, nil).Once()
 
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:play-later"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:playlater"]}`))
 	require.NoError(t, err)
 	mockDB.AssertExpectations(t)
 }
@@ -397,7 +397,7 @@ func TestHandleMediaTagsUpdate_RealMediaDBReactionFlow(t *testing.T) {
 	}
 
 	_, err := HandleMediaTagsUpdate(withParams(&baseEnv,
-		fmt.Sprintf(`{"mediaId":%d,"add":["user:liked","user:play-later"]}`, likedID)))
+		fmt.Sprintf(`{"mediaId":%d,"add":["user:liked","user:playlater"]}`, likedID)))
 	require.NoError(t, err)
 
 	searchResult := searchByTags(t, &baseEnv, []string{"user:liked"})
@@ -415,7 +415,7 @@ func TestHandleMediaTagsUpdate_RealMediaDBReactionFlow(t *testing.T) {
 	require.Len(t, disliked.Results, 1)
 	assert.Contains(t, disliked.Results[0].Tags, database.TagInfo{
 		Type: string(tags.TagTypeUser), Tag: string(tags.TagUserPlayLater),
-	}, "play-later survives a reaction change")
+	}, "play later survives a reaction change")
 
 	row, found, err := userDB.GetMediaUserData("NES", likedPath)
 	require.NoError(t, err)

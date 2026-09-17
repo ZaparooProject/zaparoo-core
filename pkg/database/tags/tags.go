@@ -161,7 +161,7 @@ const (
 	TagUserHidden    TagValue = "hidden"
 	TagUserLiked     TagValue = "liked"
 	TagUserDisliked  TagValue = "disliked"
-	TagUserPlayLater TagValue = "play-later"
+	TagUserPlayLater TagValue = "playlater"
 	// TagUserDeckPrefix leads a deck membership tag: user:deck:<deck id>.
 	TagUserDeckPrefix = "deck:"
 )

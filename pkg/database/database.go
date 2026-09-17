@@ -317,7 +317,7 @@ const (
 	MediaUserFlagHidden    MediaUserFlag = "hidden"
 	MediaUserFlagLiked     MediaUserFlag = "liked"
 	MediaUserFlagDisliked  MediaUserFlag = "disliked"
-	MediaUserFlagPlayLater MediaUserFlag = "play-later"
+	MediaUserFlagPlayLater MediaUserFlag = "playlater"
 )
 
 // MediaUserFlags lists every flag in a stable order.
@@ -330,7 +330,7 @@ var MediaUserFlags = []MediaUserFlag{
 var ErrMediaUserFlagConflict = errors.New("media user flags conflict")
 
 // MediaUserData is the source-of-truth record for user-authored data about a
-// single media path: the favorite, hidden, liked, disliked and play-later
+// single media path: the favorite, hidden, liked, disliked and play later
 // flags and any per-game launcher override. It lives in UserDB (durable,
 // power-loss safe) and is materialized into media.db's MediaTags/
 // MediaProperties projection both on edit and on reindex. Keyed by

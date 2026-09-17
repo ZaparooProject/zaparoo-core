@@ -1170,11 +1170,11 @@ have finite vocabularies per system and are always returned in full without trun
 
 Add or remove user tags for an indexed media item.
 
-Mutable tags are `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:play-later`. All are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the others, except for the pairs the model forbids: adding `user:disliked` clears `user:liked` and `user:favorite`, and adding `user:liked` or `user:favorite` clears `user:disliked`. A request that adds both sides of such a pair at once is rejected. Deck membership tags (`user:deck:<id>`) are read-only here and managed through the decks methods.
+Mutable tags are `user:favorite`, `user:hidden`, `user:liked`, `user:disliked` and `user:playlater`. All are installation-wide preferences available to all clients, not security restrictions. Add `user:hidden` to hide an entry; remove it to unhide. When the same tag appears in both lists, addition wins. Editing one flag preserves the others, except for the pairs the model forbids: adding `user:disliked` clears `user:liked` and `user:favorite`, and adding `user:liked` or `user:favorite` clears `user:disliked`. A request that adds both sides of such a pair at once is rejected. Deck membership tags (`user:deck:<id>`) are read-only here and managed through the decks methods.
 
 Hidden entries disappear from normal discovery and random selection, but remain launchable through direct NFC, ZapScript, playlists, and explicit API launches. Favorites and history retain hidden entries and include the `user:hidden` tag when their current media tags are available. `includeHidden: true` on browse/search enables recovery.
 
-All flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer either flag; the old path's preference remains stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
+All flags persist in UserDB and are restored to MediaDB on reindex/rebuild by canonical system/path, like existing favorites. Moving a file does not transfer any preference; the old path's preferences remain stored. Automatic reassociation is deferred. Successful hide/unhide emits [`media.visibility`](notifications.md#mediavisibility), prompting connected clients to refresh their lists and discard old cursors.
 
 #### Parameters
 

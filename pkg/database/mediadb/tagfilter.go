@@ -88,11 +88,8 @@ func candidateTagExistsSQL(condition, mediaRef string) string {
 	))`, mediaRef, condition, mediaRef, condition)
 }
 
-// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
-// media candidates. Probing tag indexes for each candidate avoids materializing
-// every media ID carrying a common tag across the full database.
 // isRequiredUserTagFilter reports a required filter on a user tag (favorite,
-// liked, play-later, a deck membership, ...). Such tags are sparse against
+// liked, playlater, a deck membership, ...). Such tags are sparse against
 // the library, so resolving them from the tag side is the better plan.
 func isRequiredUserTagFilter(filter zapscript.TagFilter) bool {
 	if filter.Operator == zapscript.TagOperatorNOT || filter.Operator == zapscript.TagOperatorOR {
@@ -163,6 +160,9 @@ func buildBrowseTagFilterSQL(
 	return clauses, args
 }
 
+// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
+// media candidates. Probing tag indexes for each candidate avoids materializing
+// every media ID carrying a common tag across the full database.
 func buildCandidateTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
 	return buildCandidateTagFilterSQLForRef(filters, "Media")
 }

@@ -878,7 +878,7 @@ func TestFetchAndAttachUtilityTags_NoFavorites(t *testing.T) {
 		ExpectQuery().
 		WillReturnRows(tagRows)
 
-	// The remaining utility tags (hidden, liked, disliked, play-later) find no
+	// The remaining utility tags (hidden, liked, disliked, playlater) find no
 	// tag type in this fixture.
 	for range len(tags.UtilityTags) - 1 {
 		mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
@@ -920,7 +920,7 @@ func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
 		ExpectQuery().
 		WillReturnRows(tagRows)
 
-	// The remaining utility tags (hidden, liked, disliked, play-later) find no
+	// The remaining utility tags (hidden, liked, disliked, playlater) find no
 	// tag type in this fixture.
 	for range len(tags.UtilityTags) - 1 {
 		mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
