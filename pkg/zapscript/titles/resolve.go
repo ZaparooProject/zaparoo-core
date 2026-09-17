@@ -226,7 +226,12 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 	autoExtractedTags := MergeTagFilters(filenameTagFilters, canonicalTagFilters)
 	tagFilters := MergeTagFilters(autoExtractedTags, params.AdditionalTags)
 
-	slug := slugs.Slugify(mediaType, gameName)
+	// Match on the title without its canonical tag groups. A tag group holds a
+	// colon, which title splitting takes for the main/secondary separator, so
+	// "1943 - The Battle of Midway - 2011 Update (unlicensed:hack)" would keep
+	// the article after " - " and miss the indexed slug.
+	title := remainingTitle
+	slug := slugs.Slugify(mediaType, title)
 	if slug == "" {
 		return nil, fmt.Errorf("game name slugified to empty string: %s", gameName)
 	}
@@ -248,7 +253,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
 	}
 
-	matchInfo := GenerateMatchInfo(mediaType, gameName)
+	matchInfo := GenerateMatchInfo(mediaType, title)
 
 	type candidate struct {
 		strategy   string
@@ -358,7 +363,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 	// Strategy 5: Advanced fuzzy matching
 	if bestCandidate == nil {
 		fuzzyResult, strategyErr := TryAdvancedFuzzyMatching(
-			ctx, mediadb, systemID, gameName, slug, nil, mediaType)
+			ctx, mediadb, systemID, title, slug, nil, mediaType)
 		if strategyErr != nil {
 			return nil, fmt.Errorf("advanced fuzzy matching failed: %w", strategyErr)
 		}
@@ -404,7 +409,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = TryProgressiveTrim(
-			ctx, mediadb, systemID, gameName, slug, nil, mediaType)
+			ctx, mediadb, systemID, title, slug, nil, mediaType)
 		if strategyErr != nil {
 			return nil, fmt.Errorf("progressive trim strategy failed: %w", strategyErr)
 		}

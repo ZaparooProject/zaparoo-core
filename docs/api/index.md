@@ -350,6 +350,11 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | profiles.active                 | Return active profile.                                                                | All clients |
 | profiles.switch                 | Switch active profile.                                                                | All clients |
 | profiles.verify                 | Verify profile PIN.                                                                   | All clients |
+| decks                           | List decks.                                                                           | All clients |
+| decks.get                       | Return one deck with its items.                                                       | All clients |
+| decks.new                       | Create a deck.                                                                        | All clients |
+| decks.update                    | Edit a deck's name, description or items.                                             | All clients |
+| decks.delete                    | Delete a deck.                                                                        | All clients |
 | settings.auth.claim             | Claim API credentials from remote server.                                             | All clients |
 | settings.auth.status            | Return credential link status.                                                        | All clients |
 | settings.auth.unlink            | Remove online account credentials.                                                    | Local/admin |
@@ -381,4 +386,5 @@ Notifications let a server or client know an event has occurred. See the [API No
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
 | playtime.extended      | Extra playtime was granted to the session currently being limited.                |
 | inbox.added            | A new inbox message was added to the server.                                      |
+| decks.changed          | A deck was created, edited, deleted or refreshed from its source.                 |
 | update.state           | Progress of an update being applied.                                              |

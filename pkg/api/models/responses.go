@@ -20,6 +20,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -895,6 +896,63 @@ type ProfilesDataNotification struct {
 	ProfileID string `json:"profileId"`
 	Status    string `json:"status"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+// DeckItemMedia is the local file a deck's game item is linked to on this
+// device, and whether that file is currently indexed.
+type DeckItemMedia struct {
+	System    string   `json:"system"`
+	Path      string   `json:"path"`
+	Name      string   `json:"name"`
+	Tags      []string `json:"tags,omitempty"`
+	Available bool     `json:"available"`
+}
+
+// DeckItemResponse is one member of a deck.
+type DeckItemResponse struct {
+	Media     *DeckItemMedia        `json:"media,omitempty"`
+	Metadata  json.RawMessage       `json:"metadata,omitempty"`
+	Kind      string                `json:"kind"`
+	Name      string                `json:"name"`
+	ZapScript string                `json:"zapscript,omitempty"`
+	CardID    string                `json:"cardId,omitempty"`
+	Scripts   []DeckCardScriptInput `json:"scripts,omitempty"`
+	ID        int64                 `json:"id"`
+	Position  int                   `json:"position"`
+}
+
+// DeckResponse is a deck. Items is present, as [] for an empty deck, on
+// decks.get, decks.new and decks.update, and omitted by the decks list.
+type DeckResponse struct {
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
+	DeckID      string             `json:"deckId"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Items       []DeckItemResponse `json:"items,omitzero"`
+	CreatedAt   int64              `json:"createdAt"`
+	UpdatedAt   int64              `json:"updatedAt"`
+	ItemCount   int                `json:"itemCount"`
+	Owned       bool               `json:"owned"`
+}
+
+// DecksResponse is the response for the decks RPC method.
+type DecksResponse struct {
+	Decks []DeckResponse `json:"decks"`
+}
+
+// Deck change actions carried by the decks.changed notification.
+const (
+	DecksChangedCreated   = "created"
+	DecksChangedUpdated   = "updated"
+	DecksChangedDeleted   = "deleted"
+	DecksChangedRefreshed = "refreshed"
+)
+
+// DecksChangedNotification is the payload for the decks.changed
+// notification.
+type DecksChangedNotification struct {
+	DeckID string `json:"deckId"`
+	Action string `json:"action"`
 }
 
 type SettingsAuthClaimResponse struct {

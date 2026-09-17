@@ -578,6 +578,32 @@ data side.
 }
 ```
 
+## Decks
+
+### decks.changed
+
+Sent when a deck is created, edited or deleted on the device, or refreshed from its source, so clients reload their deck lists. Deck edits also change media preferences, so open browse cursors should be discarded.
+
+#### Parameters
+
+| Key    | Type   | Required | Description                                                |
+| :----- | :----- | :------- | :--------------------------------------------------------- |
+| deckId | string | Yes      | The deck's ID.                                             |
+| action | string | Yes      | `created`, `updated`, `deleted` or `refreshed`.            |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "decks.changed",
+  "params": {
+    "deckId": "0k3v9x2rq7bm",
+    "action": "updated"
+  }
+}
+```
+
 ## Auth
 
 ### auth.link.status
