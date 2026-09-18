@@ -279,3 +279,116 @@ type failingSettingRunner struct {
 func (*failingSettingRunner) ApplySetting(context.Context) (bool, error) {
 	return false, errors.New("user database is gone")
 }
+
+type fakeLibraryStateRunner struct {
+	err    error
+	passes atomic.Int32
+	mu     syncutil.Mutex
+}
+
+func (r *fakeLibraryStateRunner) setErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
+}
+
+func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateResult, error) {
+	r.passes.Add(1)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return librarysync.StateResult{}, r.err
+}
+
+func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, requests, &libraryStateTimings{
+			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
+			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	for range 3 {
+		requests <- struct{}{}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), runner.passes.Load(), "a burst of edits is pushed in one pass")
+}
+
+// TestLibraryStateLoop_DeferredPassKeepsAsking pins that an edit made while the
+// media database is being indexed still goes out soon after the index finishes.
+// A deferred pass is not a failure, so it must not start the hourly interval
+// over and leave the edit sitting for an hour.
+func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	runner.setErr(librarysync.ErrNotSettled)
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, requests, &libraryStateTimings{
+			check: 10 * time.Millisecond, startup: time.Hour, debounce: 10 * time.Millisecond,
+			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	requests <- struct{}{}
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
+		"an edit deferred by indexing keeps asking rather than waiting out the hour")
+
+	// The index finishes and the edit goes out, after which the loop settles.
+	runner.setErr(nil)
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 4 }, 2*time.Second, 5*time.Millisecond)
+	settled := runner.passes.Load()
+	time.Sleep(100 * time.Millisecond)
+	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a pushed edit stops the retries")
+}
+
+// TestLibraryStateLoop_DeferredStartupPassKeepsAsking pins the first pass after
+// a boot that runs straight into indexing. Nothing was edited, so there is no
+// request to keep the loop honest, and a deferred pass that counted as a
+// success would leave the device unsynced for the whole hourly interval.
+func TestLibraryStateLoop_DeferredStartupPassKeepsAsking(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	runner.setErr(librarysync.ErrNotSettled)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, make(chan struct{}), &libraryStateTimings{
+			check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
+			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
+		"a startup pass deferred by indexing keeps asking without an edit to prompt it")
+
+	runner.setErr(nil)
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 4 }, 2*time.Second, 5*time.Millisecond)
+	settled := runner.passes.Load()
+	time.Sleep(100 * time.Millisecond)
+	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a synced pass stops the retries")
+}

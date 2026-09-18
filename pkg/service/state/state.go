@@ -91,7 +91,7 @@ type State struct {
 	launcherManager       *LauncherManager
 	uiEvents              *uievents.Service
 	remoteStatus          RemoteStatus
-	librarySyncRequest    func()
+	librarySyncSignals    LibrarySyncSignals
 	bootUUID              string
 	activeMediaReadyGen   uint64
 	activeMediaPublishMu  syncutil.RWMutex
@@ -1205,24 +1205,43 @@ func (s *State) Inbox() *inbox.Service {
 	return s.inbox
 }
 
-// SetLibrarySyncRequester installs the function that asks the Library sync
-// scheduler for a pass. Called once the scheduler is running.
-func (s *State) SetLibrarySyncRequester(request func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.librarySyncRequest = request
+// LibrarySyncSignals are the functions the Library sync scheduler installs
+// so the rest of the service can ask it for a pass.
+type LibrarySyncSignals struct {
+	// SettingChanged runs every Library sync pass soon.
+	SettingChanged func()
+	// StateChanged pushes personal state soon, after a local edit.
+	StateChanged func()
 }
 
-// RequestLibrarySync asks for a Library sync pass soon, for example after the
-// setting changed. It does nothing before the scheduler starts.
-func (s *State) RequestLibrarySync() {
+// SetLibrarySyncSignals installs the Library sync scheduler's signals.
+func (s *State) SetLibrarySyncSignals(signals LibrarySyncSignals) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.librarySyncSignals = signals
+}
+
+func (s *State) librarySync() LibrarySyncSignals {
 	if s == nil {
-		return
+		return LibrarySyncSignals{}
 	}
 	s.mu.RLock()
-	request := s.librarySyncRequest
-	s.mu.RUnlock()
-	if request != nil {
-		request()
+	defer s.mu.RUnlock()
+	return s.librarySyncSignals
+}
+
+// RequestLibrarySync asks for every Library sync pass soon, for example after
+// the setting changed. It does nothing before the scheduler starts.
+func (s *State) RequestLibrarySync() {
+	if signal := s.librarySync().SettingChanged; signal != nil {
+		signal()
+	}
+}
+
+// NotifyLibraryStateChanged tells Library sync that a favorite, reaction or
+// play-later flag changed on this device.
+func (s *State) NotifyLibraryStateChanged() {
+	if signal := s.librarySync().StateChanged; signal != nil {
+		signal()
 	}
 }

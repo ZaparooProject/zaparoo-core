@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
@@ -81,6 +82,9 @@ type Options struct {
 	SendHeartbeat func(context.Context) error
 	// Now returns the current time. Optional.
 	Now func() time.Time
+	// Launchers returns the launchers of a system, used to pick the copy a
+	// launch would start when a pulled flag needs a home. Optional.
+	Launchers func(systemID string) []platforms.Launcher
 	// ResolvePace is the least time between resolve requests. Zero uses
 	// the default.
 	ResolvePace time.Duration
@@ -95,8 +99,10 @@ type Service struct {
 	pauser        *syncutil.Pauser
 	sendHeartbeat func(context.Context) error
 	now           func() time.Time
+	launchers     func(systemID string) []platforms.Launcher
 	resolvePace   time.Duration
 	inventoryMu   syncutil.Mutex
+	stateMu       syncutil.Mutex
 }
 
 // New returns a Service.
@@ -109,6 +115,7 @@ func New(opts *Options) *Service {
 		pauser:        opts.Pauser,
 		sendHeartbeat: opts.SendHeartbeat,
 		now:           opts.Now,
+		launchers:     opts.Launchers,
 		resolvePace:   opts.ResolvePace,
 	}
 	if s.now == nil {

@@ -489,3 +489,13 @@ func TestHandleMediaTagsUpdate_RealMediaDBReactionFlow(t *testing.T) {
 	assert.True(t, row.IsPlayLater)
 	assert.NotEmpty(t, row.Slug, "the snapshot records the indexed slug")
 }
+
+func TestSyncedFlagChanged(t *testing.T) {
+	t.Parallel()
+	assert.False(t, syncedFlagChanged(map[database.MediaUserFlag]bool{database.MediaUserFlagHidden: true}),
+		"hiding a game stays on the device")
+	assert.True(t, syncedFlagChanged(map[database.MediaUserFlag]bool{
+		database.MediaUserFlagHidden: true, database.MediaUserFlagPlayLater: false,
+	}))
+	assert.False(t, syncedFlagChanged(nil))
+}
