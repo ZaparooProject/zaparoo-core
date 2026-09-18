@@ -174,3 +174,76 @@ func TestLibraryInventoryState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
+
+func TestLibraryOrdinalCacheRejectsMalformedFingerprints(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	for _, fingerprint := range []string{"", "nothex", "sha256:zz", "sha1:" + strings.Repeat("a", 40)} {
+		_, err := mediaDB.GetLibraryOrdinals(ctx, []string{fingerprint})
+		require.Error(t, err, "fingerprint %q", fingerprint)
+
+		err = mediaDB.PutLibraryOrdinals(ctx, []database.LibraryOrdinal{
+			{Fingerprint: fingerprint, Ordinal: 7, ResolvedAt: time.Now(), SeenGeneration: 1},
+		})
+		require.Error(t, err, "fingerprint %q", fingerprint)
+
+		err = mediaDB.MarkLibraryOrdinalsSeen(ctx, []string{fingerprint}, 1)
+		require.Error(t, err, "fingerprint %q", fingerprint)
+	}
+}
+
+func TestLibrarySyncWritesRefuseToJoinABatchTransaction(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	t.Cleanup(func() { _ = mediaDB.CommitTransaction() })
+
+	// A Library sync pass must never wait on the scanner for the write lock,
+	// so every cache write refuses while a batch is open.
+	err := mediaDB.PutLibraryOrdinals(ctx, []database.LibraryOrdinal{
+		{Fingerprint: testLibraryFingerprint(1), Ordinal: 11, ResolvedAt: time.Now(), SeenGeneration: 1},
+	})
+	require.ErrorIs(t, err, ErrTransactionActive)
+
+	require.ErrorIs(t, mediaDB.MarkLibraryOrdinalsSeen(ctx, []string{testLibraryFingerprint(1)}, 2),
+		ErrTransactionActive)
+	_, err = mediaDB.PruneLibraryOrdinals(ctx, 2)
+	require.ErrorIs(t, err, ErrTransactionActive)
+	require.ErrorIs(t, mediaDB.ClearLibraryOrdinalCache(ctx), ErrTransactionActive)
+	require.ErrorIs(t, mediaDB.SetLibraryInventoryState(ctx, &database.LibraryInventoryState{}),
+		ErrTransactionActive)
+}
+
+func TestLibraryInventoryStateIgnoresAnUnreadableRecord(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	sqlDB := mediaDB.sql.Load()
+	require.NotNil(t, sqlDB)
+	_, err := sqlDB.ExecContext(ctx, "INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigLibraryInventoryState, "not json")
+	require.NoError(t, err)
+
+	// A record this Core cannot read costs one rebuild, not a failed pass.
+	state, err := mediaDB.GetLibraryInventoryState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, database.LibraryInventoryState{}, state)
+}
+
+func TestLibraryMediaPageWithoutLimitReturnsNothing(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+
+	page, err := mediaDB.LibraryMediaPage(context.Background(), 0, 0)
+	require.NoError(t, err)
+	assert.Empty(t, page)
+}

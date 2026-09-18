@@ -38,20 +38,23 @@ import (
 // fakeOnline implements the device side of the Library sync contract in
 // memory, closely enough to exercise every path Core takes.
 type fakeOnline struct {
-	t          *testing.T
-	ordinals   map[string]uint32
-	rejected   map[string]string
-	issued     map[uint32]bool
-	held       *fakeInventory
-	server     *httptest.Server
-	token      string
-	calls      map[string]int
-	putError   string
-	edgeRefuse map[string]bool
-	resolved   [][]database.MediaIdentity
-	limitFirst int
-	mu         syncutil.Mutex
-	nextID     uint32
+	t             *testing.T
+	ordinals      map[string]uint32
+	rejected      map[string]string
+	issued        map[uint32]bool
+	calls         map[string]int
+	edgeRefuse    map[string]bool
+	omitAnswer    map[string]bool
+	held          *fakeInventory
+	server        *httptest.Server
+	token         string
+	putError      string
+	resolveCode   string
+	resolved      [][]database.MediaIdentity
+	mu            syncutil.Mutex
+	resolveStatus int
+	limitFirst    int
+	nextID        uint32
 }
 
 //nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
@@ -78,6 +81,7 @@ func newFakeOnline(t *testing.T) *fakeOnline {
 		issued:     make(map[uint32]bool),
 		calls:      make(map[string]int),
 		edgeRefuse: make(map[string]bool),
+		omitAnswer: make(map[string]bool),
 		nextID:     100,
 		token:      "library-token",
 	}
@@ -96,6 +100,26 @@ func (f *fakeOnline) setPutError(code string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.putError = code
+}
+
+// setResolveStatus makes the fake account answer resolve with an API error of
+// its own, as opposed to the edge refusing the request.
+func (f *fakeOnline) setResolveStatus(status int, code string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveStatus, f.resolveCode = status, code
+}
+
+// setOmitAnswer makes the fake account return no answer at all for a title,
+// the way a partial response would arrive.
+func (f *fakeOnline) setOmitAnswer(title string, omit bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if omit {
+		f.omitAnswer[title] = true
+		return
+	}
+	delete(f.omitAnswer, title)
 }
 
 // setEdgeRefused makes the fake edge refuse any request carrying this title,
@@ -169,6 +193,10 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeOnline) handleResolve(w http.ResponseWriter, r *http.Request) {
+	if f.resolveStatus != 0 {
+		writeFakeError(w, f.resolveStatus, f.resolveCode)
+		return
+	}
 	if f.limitFirst > 0 {
 		f.limitFirst--
 		w.Header().Set("Retry-After", "1")
@@ -196,6 +224,9 @@ func (f *fakeOnline) handleResolve(w http.ResponseWriter, r *http.Request) {
 	for i := range request.Items {
 		identity := request.Items[i].MediaIdentity
 		batch = append(batch, identity)
+		if f.omitAnswer[identity.DisplayName] {
+			continue
+		}
 		fingerprint, err := database.ComputeMediaIdentityFingerprint(&identity)
 		if err != nil || fingerprint != identity.ObservationFingerprint {
 			items = append(items, map[string]any{"index": i, "status": "rejected", "code": "invalid_fingerprint"})

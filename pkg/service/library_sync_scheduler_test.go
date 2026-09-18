@@ -37,10 +37,13 @@ import (
 )
 
 type fakeLibrarySyncRunner struct {
-	err      error
-	passes   atomic.Int32
-	disabled atomic.Bool
-	mu       syncutil.Mutex
+	err       error
+	delay     time.Duration
+	passes    atomic.Int32
+	disabled  atomic.Bool
+	lastStart atomic.Int64
+	lastEnd   atomic.Int64
+	mu        syncutil.Mutex
 }
 
 func (r *fakeLibrarySyncRunner) Enabled() bool { return !r.disabled.Load() }
@@ -51,9 +54,21 @@ func (*fakeLibrarySyncRunner) DeleteInventory(context.Context) (bool, error) { r
 
 func (r *fakeLibrarySyncRunner) SyncInventory(context.Context, bool) (librarysync.InventoryResult, error) {
 	r.passes.Add(1)
+	r.lastStart.Store(time.Now().UnixMicro())
+	r.mu.Lock()
+	delay, err := r.delay, r.err
+	r.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	r.lastEnd.Store(time.Now().UnixMicro())
+	return librarysync.InventoryResult{Outcome: librarysync.InventoryUploaded}, err
+}
+
+func (r *fakeLibrarySyncRunner) setDelay(d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return librarysync.InventoryResult{Outcome: librarysync.InventoryUploaded}, r.err
+	r.delay = d
 }
 
 func (r *fakeLibrarySyncRunner) setErr(err error) {
@@ -165,4 +180,102 @@ func TestLibrarySyncPass_OffDoesNotWaitForIdle(t *testing.T) {
 		t.Fatal("a pass with Library sync off waited for the device to fall idle")
 	}
 	assert.Zero(t, runner.passes.Load(), "an upload is not attempted while sync is off")
+}
+
+// TestLibrarySyncLoop_BackoffRunsFromTheEndOfThePass covers a pass that takes
+// longer than the backoff, which a first sync of a large library does by a wide
+// margin. Measured from when the pass started, the next attempt would already
+// be in the past by the time it failed, so the backoff would not hold at all.
+func TestLibrarySyncLoop_BackoffRunsFromTheEndOfThePass(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibrarySyncRunner{}
+	runner.setErr(errors.New("server exploded"))
+	runner.setDelay(800 * time.Millisecond)
+	timings := testLibrarySyncTimings(time.Millisecond)
+	timings.initialBackoff = 500 * time.Millisecond
+	timings.maxBackoff = 500 * time.Millisecond
+	runTestLibrarySyncLoop(t, runner, timings)
+
+	require.Eventually(t, func() bool { return runner.lastEnd.Load() > 0 }, 5*time.Second, 5*time.Millisecond,
+		"the first pass should finish")
+	firstEnd := runner.lastEnd.Load()
+
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, int32(1), runner.passes.Load(), "a failed pass waits out its backoff from when it ended")
+
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 2 }, 3*time.Second, 5*time.Millisecond,
+		"the backoff should elapse and another pass should run")
+	assert.Greater(t, runner.lastStart.Load(), firstEnd+400_000,
+		"the second pass starts a backoff after the first one ended")
+}
+
+// TestWaitForQuietDevice_GivesUpWhenSyncIsTurnedOff pins that a pass waiting for
+// a busy device to fall quiet notices the setting being turned off. The loop
+// cannot hand the pass the setting request, and on a device with an app polling
+// it the wait otherwise runs for its full limit before the opt-out is acted on.
+func TestWaitForQuietDevice_GivesUpWhenSyncIsTurnedOff(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibrarySyncRunner{}
+	idleSched := idle.New()
+	idleSched.RequestStarted() // never ended: the device is never idle
+	timings := testLibrarySyncTimings(time.Millisecond)
+	timings.idleQuiet = time.Second
+	timings.idleSlice = 50 * time.Millisecond
+	timings.idleMaxWait = 30 * time.Second
+
+	done := make(chan error, 1)
+	go func() { done <- waitForQuietDevice(context.Background(), runner, idleSched, timings) }()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the wait ended while the device was busy and sync was still on")
+	default:
+	}
+	runner.disabled.Store(true)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the wait did not give up after Library sync was turned off")
+	}
+}
+
+// TestWaitForQuietDevice_GivesUpAtTheLimit pins that a device that never falls
+// quiet does not hold a pass forever: the wait ends at its limit and the pass
+// reads the library anyway.
+func TestWaitForQuietDevice_GivesUpAtTheLimit(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibrarySyncRunner{}
+	idleSched := idle.New()
+	idleSched.RequestStarted()
+	timings := testLibrarySyncTimings(time.Millisecond)
+	timings.idleQuiet = time.Second
+	timings.idleSlice = 30 * time.Millisecond
+	timings.idleMaxWait = 120 * time.Millisecond
+
+	start := time.Now()
+	require.NoError(t, waitForQuietDevice(context.Background(), runner, idleSched, timings))
+	assert.GreaterOrEqual(t, time.Since(start), timings.idleMaxWait,
+		"the wait runs to its limit before giving up on a busy device")
+}
+
+// TestLibrarySyncPass_SettingFailureStopsThePass pins that a pass which cannot
+// even read the setting reports a failure rather than carrying on to upload.
+func TestLibrarySyncPass_SettingFailureStopsThePass(t *testing.T) {
+	t.Parallel()
+	runner := &failingSettingRunner{}
+	err := runLibrarySyncPass(context.Background(), runner, nil, testLibrarySyncTimings(time.Millisecond))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apply library sync setting")
+	assert.Zero(t, runner.passes.Load(), "no upload is attempted")
+}
+
+type failingSettingRunner struct {
+	fakeLibrarySyncRunner
+}
+
+func (*failingSettingRunner) ApplySetting(context.Context) (bool, error) {
+	return false, errors.New("user database is gone")
 }

@@ -44,6 +44,9 @@ import (
 type librarySyncTimings struct {
 	// check paces how often the loop looks at its triggers.
 	check time.Duration
+	// idleSlice is how long the pass waits for the device to fall quiet before
+	// looking at the Library sync setting again.
+	idleSlice time.Duration
 	// startup delays the first pass past the boot burst.
 	startup time.Duration
 	// recheck is how long a quiet pass is trusted before the next one.
@@ -56,6 +59,7 @@ type librarySyncTimings struct {
 
 var defaultLibrarySyncTimings = librarySyncTimings{
 	check:          time.Minute,
+	idleSlice:      5 * time.Second,
 	startup:        2 * time.Minute,
 	recheck:        15 * time.Minute,
 	initialBackoff: time.Minute,
@@ -158,16 +162,62 @@ func librarySyncLoop(
 
 		err := runLibrarySyncPass(ctx, runner, idleSched, timings)
 		indexChanged = false
+		// A first sync of a large library runs for far longer than the first
+		// backoff, so the interval is measured from when the pass finished. From
+		// when it started, a failure's next attempt would already be in the past
+		// and the backoff would not hold at all.
+		finished := time.Now()
 		switch {
 		case ctx.Err() != nil:
 			return
 		case err == nil || librarysync.IsIdleError(err):
 			// An index still being written notifies again when it finishes,
 			// and the recheck covers the runs that do not.
-			retry.recordSuccess(now, timings.initialBackoff)
+			retry.recordSuccess(finished, timings.initialBackoff)
 		default:
-			retry.recordFailure(now, timings.initialBackoff, timings.maxBackoff)
-			log.Warn().Err(err).Dur("retry_in", retry.nextAttempt.Sub(now)).Msg("library sync pass failed")
+			retry.recordFailure(finished, timings.initialBackoff, timings.maxBackoff)
+			log.Warn().Err(err).Dur("retry_in", retry.nextAttempt.Sub(finished)).Msg("library sync pass failed")
+		}
+	}
+}
+
+// waitForQuietDevice waits for the device to stop serving requests before a
+// pass reads the whole library, giving up after idleMaxWait.
+//
+// The wait is taken in slices so that turning Library sync off is acted on
+// without waiting out a device that is busy: the loop cannot deliver the
+// setting request while a pass is running, and on a device with an app polling
+// it the wait runs to its limit. Between slices the setting is read again, and
+// a pass that is no longer wanted returns to the loop, which has the request
+// buffered and starts the pass that removes the inventory.
+func waitForQuietDevice(
+	ctx context.Context,
+	runner librarySyncRunner,
+	idleSched *idle.Scheduler,
+	timings *librarySyncTimings,
+) error {
+	if idleSched == nil {
+		return nil
+	}
+	slice := timings.idleSlice
+	if slice <= 0 {
+		slice = timings.idleMaxWait
+	}
+	deadline := time.Now().Add(timings.idleMaxWait)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		err := idleSched.WaitForIdle(ctx, timings.idleQuiet, min(slice, remaining))
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, idle.ErrMaxWaitElapsed) {
+			return err //nolint:wrapcheck // only context cancellation reaches here
+		}
+		if !runner.Enabled() {
+			return nil
 		}
 	}
 }
@@ -190,11 +240,11 @@ func runLibrarySyncPass(
 	if !runner.Enabled() {
 		return nil
 	}
-	if idleSched != nil {
-		if err := idleSched.WaitForIdle(ctx, timings.idleQuiet, timings.idleMaxWait); err != nil &&
-			!errors.Is(err, idle.ErrMaxWaitElapsed) {
-			return err //nolint:wrapcheck // only context cancellation reaches here
-		}
+	if err := waitForQuietDevice(ctx, runner, idleSched, timings); err != nil {
+		return err
+	}
+	if !runner.Enabled() {
+		return nil
 	}
 	result, err := runner.SyncInventory(ctx, false)
 	if err != nil {

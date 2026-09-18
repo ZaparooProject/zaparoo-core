@@ -22,15 +22,18 @@ package librarysync_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -48,6 +51,7 @@ const (
 
 type syncFixture struct {
 	ctx        context.Context
+	newClient  librarysync.ClientFactory
 	cfg        *config.Instance
 	db         *database.Database
 	online     *fakeOnline
@@ -95,6 +99,7 @@ func newSyncFixtureWithPace(t *testing.T, pace time.Duration, paths ...string) *
 	platform.On("ID").Return("test-platform")
 	manager := backup.NewManager(cfg, platform, db).
 		WithRateLimitWaits(time.Millisecond, time.Millisecond, 5*time.Millisecond)
+	f.newClient = manager.NewOnlineClient
 	f.svc = librarysync.New(&librarysync.Options{
 		Config:      cfg,
 		DB:          db,
@@ -575,4 +580,110 @@ func TestSyncInventory_EdgeRefusedTitleDoesNotStopTheWalk(t *testing.T) {
 	_, err = f.svc.SyncInventory(f.ctx, false)
 	require.NoError(t, err)
 	assert.Positive(t, f.online.count(postResolve), "a refused title is retried after a week")
+}
+
+// TestSyncInventory_UnansweredIdentityKeepsTheGenerationOpen covers a resolve
+// response that leaves an identity out. The games that did resolve are still
+// worth uploading, but the generation must not be recorded as committed, or the
+// hourly confirmation would trust an inventory that is missing titles until the
+// index changes.
+func TestSyncInventory_UnansweredIdentityKeepsTheGenerationOpen(t *testing.T) {
+	f := newSyncFixture(t,
+		nesPath("Metroid (USA).nes"),
+		nesPath("Zelda (USA).nes"),
+		nesPath("Kid Icarus (USA).nes"),
+	)
+	f.online.setOmitAnswer("Zelda", true)
+
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 2, result.ItemCount, "the two answered games are uploaded")
+	assert.Equal(t, 1, result.Unanswered)
+
+	state, err := f.db.MediaDB.GetLibraryInventoryState(f.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, state.Generation, "an incomplete inventory does not close the generation")
+
+	// The next pass asks again for the title that went unanswered, without the
+	// index having changed, and closes the generation once it is answered.
+	f.online.setOmitAnswer("Zelda", false)
+	f.online.resetCalls()
+	result, err = f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Positive(t, f.online.count(postResolve), "the unanswered title is asked for again")
+	assert.Equal(t, 3, result.ItemCount)
+	assert.Zero(t, result.Unanswered)
+
+	state, err = f.db.MediaDB.GetLibraryInventoryState(f.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), state.Generation, "a complete inventory closes the generation")
+}
+
+func TestSyncInventory_TooLargeTellsTheUser(t *testing.T) {
+	f := newSyncFixture(t, nesPath("Metroid (USA).nes"))
+	notifications := make(chan models.Notification, 8)
+	t.Cleanup(func() { close(notifications) })
+	inboxSvc := inbox.NewService(f.db.UserDB, notifications)
+	svc := librarysync.New(&librarysync.Options{
+		Config: f.cfg, DB: f.db, NewClient: f.newClient, Inbox: inboxSvc,
+		Now: func() time.Time { return time.Unix(f.now.Load(), 0).UTC() }, ResolvePace: time.Millisecond,
+	})
+	f.online.setPutError("inventory_too_large")
+
+	result, err := svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, librarysync.InventoryTooLarge, result.Outcome)
+
+	messages, err := f.db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.NotEmpty(t, messages, "the user is told their library is too large to sync")
+	found := false
+	for i := range messages {
+		if messages[i].Category == inbox.CategoryLibraryInventoryTooLarge {
+			found = true
+			assert.Contains(t, messages[i].Title, "too large")
+		}
+	}
+	assert.True(t, found, "a message carries the library-too-large category")
+}
+
+func TestSyncInventory_TwoRefusedTitlesInOnePage(t *testing.T) {
+	f := newSyncFixture(t,
+		nesPath("Metroid (USA).nes"),
+		nesPath("Zelda (USA).nes"),
+		nesPath("Kid Icarus (USA).nes"),
+		nesPath("Punch-Out (USA).nes"),
+		nesPath("Excitebike (USA).nes"),
+	)
+	f.online.setEdgeRefused("Zelda")
+	f.online.setEdgeRefused("Excitebike")
+
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.ItemCount, "both refused titles are isolated and the rest upload")
+	assert.Equal(t, 2, result.Rejected)
+	assert.Zero(t, result.Unanswered, "an isolated refusal is an answer, not a gap")
+}
+
+func TestServiceEnabledFollowsTheSetting(t *testing.T) {
+	f := newSyncFixture(t)
+	assert.True(t, f.svc.Enabled())
+	f.cfg.SetLibrarySync(false)
+	assert.False(t, f.svc.Enabled())
+}
+
+// TestSyncInventory_ServerErrorIsNotTreatedAsARefusal pins that only the edge's
+// own refusal is narrowed down. An error from the account itself fails the pass,
+// so the scheduler backs off instead of splitting the batch against a server
+// that is already struggling.
+func TestSyncInventory_ServerErrorIsNotTreatedAsARefusal(t *testing.T) {
+	f := newSyncFixture(t, nesPath("Metroid (USA).nes"), nesPath("Zelda (USA).nes"))
+	f.online.setResolveStatus(http.StatusInternalServerError, "internal_error")
+
+	_, err := f.svc.SyncInventory(f.ctx, false)
+	require.Error(t, err)
+	assert.False(t, librarysync.IsIdleError(err), "a failing account is a failure, not an idle state")
+	assert.Equal(t, 1, f.online.count(postResolve), "the batch is not split against a server error")
+	assert.Zero(t, f.online.count(putInventory), "nothing is committed")
 }

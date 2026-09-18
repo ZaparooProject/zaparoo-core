@@ -77,6 +77,8 @@ var errUnknownOrdinal = errors.New("inventory names an ordinal the account never
 // InventoryResult summarizes one inventory pass. Skipped counts present files
 // the walk could not describe at all, so a library whose inventory is smaller
 // than its file count has an answer in the log rather than only a discrepancy.
+// Unanswered counts identities the account returned nothing usable for, which
+// makes the inventory an incomplete description of the library.
 type InventoryResult struct {
 	Outcome    string
 	Generation int64
@@ -84,6 +86,7 @@ type InventoryResult struct {
 	Resolved   int
 	Rejected   int
 	Skipped    int
+	Unanswered int
 }
 
 // SyncInventory brings the account's copy of this device's inventory up to
@@ -223,11 +226,21 @@ func (s *Service) buildAndCommit(
 	}
 
 	now := s.now()
+	committedGeneration := generation
+	if result.Unanswered > 0 {
+		// The account left some identities unanswered, so this inventory does
+		// not describe the whole library. Record no generation: the account
+		// keeps what was built, and the next pass builds it again and asks for
+		// the rest instead of trusting this one for the hour.
+		committedGeneration = 0
+		log.Warn().Int("unanswered", result.Unanswered).Int("items", result.ItemCount).
+			Msg("library inventory is missing titles the account did not answer; it will be built again")
+	}
 	*state = database.LibraryInventoryState{
 		Endpoint:    state.Endpoint,
 		Credential:  state.Credential,
 		SHA256:      digest,
-		Generation:  generation,
+		Generation:  committedGeneration,
 		ItemCount:   result.ItemCount,
 		CommittedAt: now,
 		ConfirmedAt: now,
@@ -243,7 +256,7 @@ func (s *Service) buildAndCommit(
 	result.Outcome = InventoryUploaded
 	log.Info().Int("items", result.ItemCount).Int("bytes", len(body)).Int64("generation", generation).
 		Int("resolved", result.Resolved).Int("rejected", result.Rejected).Int("skipped", result.Skipped).
-		Msg("library inventory committed")
+		Int("unanswered", result.Unanswered).Msg("library inventory committed")
 	return result, nil
 }
 
@@ -297,6 +310,12 @@ func (s *Service) buildInventory(
 		answers, err := s.resolvePending(ctx, client, pending, generation, &lastResolve)
 		if err != nil {
 			return nil, result, err
+		}
+		// An identity the account did not answer is not cached, so the next
+		// walk asks again. The generation must not be recorded as committed
+		// meanwhile, or that walk never happens.
+		if unanswered := len(pending) - len(answers); unanswered > 0 {
+			result.Unanswered += unanswered
 		}
 		if err := mediaDB.PutLibraryOrdinals(ctx, answers); err != nil {
 			return nil, result, fmt.Errorf("store library ordinals: %w", err)
