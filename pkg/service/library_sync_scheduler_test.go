@@ -30,16 +30,20 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeLibrarySyncRunner struct {
-	err    error
-	passes atomic.Int32
-	mu     syncutil.Mutex
+	err      error
+	passes   atomic.Int32
+	disabled atomic.Bool
+	mu       syncutil.Mutex
 }
+
+func (r *fakeLibrarySyncRunner) Enabled() bool { return !r.disabled.Load() }
 
 func (*fakeLibrarySyncRunner) ApplySetting(context.Context) (bool, error) { return false, nil }
 
@@ -135,4 +139,30 @@ func TestLibrarySyncLoop_FailureBacksOffButIdleDoesNot(t *testing.T) {
 	loop.indexing <- models.Notification{Method: models.NotificationMediaIndexing}
 	require.Eventually(t, func() bool { return runner.passes.Load() == 3 }, time.Second, 5*time.Millisecond,
 		"being off is not a failure, so the next index change runs a pass")
+}
+
+// TestLibrarySyncPass_OffDoesNotWaitForIdle pins that a pass with Library sync
+// off returns as soon as it has applied the setting. The idle scheduler here
+// never falls idle, so a pass that waits for it before checking the setting
+// blocks for the whole max wait on a device that is merely busy.
+func TestLibrarySyncPass_OffDoesNotWaitForIdle(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibrarySyncRunner{}
+	runner.disabled.Store(true)
+	idleSched := idle.New()
+	idleSched.RequestStarted() // never ended: the device is never idle
+	timings := testLibrarySyncTimings(time.Millisecond)
+	timings.idleQuiet = time.Second
+	timings.idleMaxWait = 30 * time.Second
+
+	done := make(chan error, 1)
+	go func() { done <- runLibrarySyncPass(context.Background(), runner, idleSched, timings) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a pass with Library sync off waited for the device to fall idle")
+	}
+	assert.Zero(t, runner.passes.Load(), "an upload is not attempted while sync is off")
 }

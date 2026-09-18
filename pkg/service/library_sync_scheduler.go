@@ -67,6 +67,7 @@ var defaultLibrarySyncTimings = librarySyncTimings{
 // librarySyncRunner is the part of the Library sync service the scheduler
 // drives.
 type librarySyncRunner interface {
+	Enabled() bool
 	ApplySetting(ctx context.Context) (bool, error)
 	DeleteInventory(ctx context.Context) (bool, error)
 	SyncInventory(ctx context.Context, force bool) (librarysync.InventoryResult, error)
@@ -182,6 +183,12 @@ func runLibrarySyncPass(
 	}
 	if _, err := runner.DeleteInventory(ctx); err != nil {
 		return fmt.Errorf("remove library inventory: %w", err)
+	}
+	// Applying the setting and removing a dropped inventory are the whole
+	// pass while sync is off. Everything below serves an upload, so waiting
+	// for the device to fall idle first would be a wait for nothing.
+	if !runner.Enabled() {
+		return nil
 	}
 	if idleSched != nil {
 		if err := idleSched.WaitForIdle(ctx, timings.idleQuiet, timings.idleMaxWait); err != nil &&

@@ -57,10 +57,13 @@ var (
 )
 
 // IsIdleError reports an error that means there is nothing to do right now
-// rather than a failure: sync is off, the device is not linked, or the index
-// is still being written.
+// rather than a failure: sync is off, the device is not linked, or the media
+// database is busy or between connections. None of these deserve the failure
+// backoff, because waiting for the next pass is the whole remedy.
 func IsIdleError(err error) bool {
-	return errors.Is(err, ErrDisabled) || errors.Is(err, ErrNotSettled) || backup.IsRemoteUnlinkedError(err)
+	return errors.Is(err, ErrDisabled) || errors.Is(err, ErrNotSettled) ||
+		errors.Is(err, mediadb.ErrTransactionActive) || errors.Is(err, mediadb.ErrNullSQL) ||
+		backup.IsRemoteUnlinkedError(err)
 }
 
 // ClientFactory returns a client for the Library sync endpoint.
@@ -115,6 +118,12 @@ func New(opts *Options) *Service {
 		s.resolvePace = defaultResolvePace
 	}
 	return s
+}
+
+// Enabled reports whether the user has Library sync turned on, so a caller
+// can skip work that only exists to serve it.
+func (s *Service) Enabled() bool {
+	return s.cfg.LibrarySyncEnabled()
 }
 
 func (s *Service) client() (*backup.OnlineClient, error) {
