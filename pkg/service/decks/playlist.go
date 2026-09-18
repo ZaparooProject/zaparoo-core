@@ -123,6 +123,13 @@ type PlaylistArgItem struct {
 // served as: one playlist.open command whose JSON argument carries the
 // deck's own playlist ID. Anything else is not that deck.
 func ParseDeckPlaylist(body, deckID string) (PlaylistArg, bool) {
+	// The ID is checked here rather than trusted from the caller: this is what
+	// decides a fetched body is a given deck, so a body must never be able to
+	// match an ID that is not one a deck could have.
+	normalized, err := database.NormalizeDeckID(deckID)
+	if err != nil {
+		return PlaylistArg{}, false
+	}
 	parsed, err := zapscript.NewParser(body).ParseScript()
 	if err != nil || len(parsed.Cmds) != 1 {
 		return PlaylistArg{}, false
@@ -135,7 +142,7 @@ func ParseDeckPlaylist(body, deckID string) (PlaylistArg, bool) {
 	if jsonErr := json.Unmarshal([]byte(cmd.Args[0]), &arg); jsonErr != nil {
 		return PlaylistArg{}, false
 	}
-	if !strings.EqualFold(arg.ID, PlaylistID(deckID)) {
+	if !strings.EqualFold(arg.ID, PlaylistID(normalized)) {
 		return PlaylistArg{}, false
 	}
 	return arg, true
