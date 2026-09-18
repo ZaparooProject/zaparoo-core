@@ -8,7 +8,7 @@ require (
 	github.com/KarpelesLab/gowebp v0.1.1
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/RoaringBitmap/roaring/v2 v2.27.0
+	github.com/RoaringBitmap/roaring/v2 v2.28.0
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.26.0
 	github.com/ZaparooProject/go-zapscript v0.19.0

@@ -33,8 +33,8 @@ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAw
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/RoaringBitmap/roaring/v2 v2.27.0 h1:rTzs+cuH9YBj6j4L9GF2DcK2NmOfdUvLI+ZFhyLy8g8=
-github.com/RoaringBitmap/roaring/v2 v2.27.0/go.mod h1:BZufmFbox589n3j5eOmyTaLSGXbRLc2LmQvjKjzSEGU=
+github.com/RoaringBitmap/roaring/v2 v2.28.0 h1:DgbDUowq/upwAdbVCuH+aDrQ3dHonkRcRqn1TkCp/Xg=
+github.com/RoaringBitmap/roaring/v2 v2.28.0/go.mod h1:BZufmFbox589n3j5eOmyTaLSGXbRLc2LmQvjKjzSEGU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/ZaparooProject/expr v0.0.0-20260908220811-a8b095283612 h1:djwJgc45dnDiDNRHP0Buqz8ta6kE/1dcr6efQeSVBQA=
