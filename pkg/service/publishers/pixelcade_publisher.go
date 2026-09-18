@@ -71,8 +71,22 @@ func NewPixelCadePublisher(host string, port int, mode string, filter []string) 
 		filter:  filter,
 		client: &http.Client{
 			Timeout: pixelCadeRequestTimeout,
+			// The publisher keeps its own connection pool rather than
+			// sharing http.DefaultTransport: anything else in the process
+			// closing the shared pool's idle connections can break a request
+			// this publisher already has in flight on a reused connection.
+			Transport: defaultTransportClone(),
 		},
 	}
+}
+
+// defaultTransportClone copies the standard transport's settings (proxy,
+// dial and TLS timeouts, HTTP/2) into a pool of its own.
+func defaultTransportClone() *http.Transport {
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
+		return transport.Clone()
+	}
+	return &http.Transport{}
 }
 
 // Start initializes the PixelCade publisher. Returns an error if the
@@ -119,6 +133,7 @@ func (p *PixelCadePublisher) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.client.CloseIdleConnections()
 	log.Debug().Msg("pixelcade publisher: stopped")
 }
 

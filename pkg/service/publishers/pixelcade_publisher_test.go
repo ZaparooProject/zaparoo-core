@@ -404,3 +404,20 @@ func splitHostPort(t *testing.T, rawURL string) (host string, port int) {
 	host = parts[0]
 	return host, port
 }
+
+// TestPixelCadePublisherOwnsItsConnectionPool pins that the publisher does not
+// send through http.DefaultTransport. Sharing the process-wide pool made these
+// tests flaky: httptest.Server.Close closes the default transport's idle
+// connections for the whole process, which breaks a request another parallel
+// test already has in flight on a reused connection.
+func TestPixelCadePublisherOwnsItsConnectionPool(t *testing.T) {
+	t.Parallel()
+
+	pub := NewPixelCadePublisher("pixelcade.local", 0, PixelCadeModeStream, nil)
+	require.NotNil(t, pub.client.Transport)
+	assert.NotSame(t, http.DefaultTransport, pub.client.Transport)
+
+	other := NewPixelCadePublisher("pixelcade.local", 0, PixelCadeModeStream, nil)
+	assert.NotSame(t, pub.client.Transport, other.client.Transport,
+		"two publishers must not share one pool either")
+}
