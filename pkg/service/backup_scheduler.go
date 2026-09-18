@@ -24,6 +24,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,7 +54,9 @@ const (
 	// retried, instead of waiting out the full daily/weekly interval.
 	remoteBackupFailureRetryInterval = 1 * time.Hour
 	// remoteHeartbeatInterval paces liveness reports to the remote API. A
-	// heartbeat is also sent when the service starts. Heartbeats run for any
+	// heartbeat is also sent when the service starts, and whenever the
+	// capability document changes, so a consent the user just turned off
+	// does not keep being advertised until tomorrow. Heartbeats run for any
 	// linked device, independent of whether remote backup is enabled.
 	remoteHeartbeatInterval       = 24 * time.Hour
 	remoteHeartbeatInitialBackoff = 1 * time.Minute
@@ -90,6 +93,14 @@ func (s *staleNoticeState) shouldNotify(now time.Time, stale bool) bool {
 	}
 	s.notifiedAt = now
 	return true
+}
+
+// capabilityFingerprint renders the heartbeat capability document in a
+// comparable form, so a pass can tell a consent the user just changed from a
+// repeat of what the account already knows. fmt sorts map keys, so the same
+// document always renders the same way.
+func capabilityFingerprint(cfg *config.Instance) string {
+	return fmt.Sprintf("%v", backupsvc.HeartbeatCapabilities(cfg))
 }
 
 // onlineFailureRequiresWarning separates expected inactivity (disabled,
@@ -190,9 +201,20 @@ func remoteBackupSchedulerLoop(
 	}
 
 	heartbeatState := intervalState{backoff: remoteHeartbeatInitialBackoff}
+	reportedCapabilities := ""
 	tryHeartbeat := func() {
 		now := time.Now()
-		if !heartbeatState.due(now, remoteHeartbeatInterval) {
+		capabilities := capabilityFingerprint(cfg)
+		// A consent switch the user just flipped is worth a heartbeat now:
+		// the account otherwise keeps showing the old state until tomorrow.
+		// A zero interval clears the success check while keeping the failure
+		// backoff, so a changed document cannot retry faster than a failure
+		// is allowed to.
+		interval := remoteHeartbeatInterval
+		if capabilities != reportedCapabilities {
+			interval = 0
+		}
+		if !heartbeatState.due(now, interval) {
 			return
 		}
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
@@ -209,6 +231,7 @@ func remoteBackupSchedulerLoop(
 			return
 		}
 		heartbeatState.recordSuccess(now, remoteHeartbeatInitialBackoff)
+		reportedCapabilities = capabilities
 	}
 
 	staleState := staleNoticeState{}
