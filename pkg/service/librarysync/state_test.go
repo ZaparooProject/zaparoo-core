@@ -188,7 +188,9 @@ func TestSyncState_GameNotOnDeviceKeepsAccountState(t *testing.T) {
 	f.online.resetCalls()
 	f.syncState(t)
 	assert.Zero(t, f.online.count(postState), "holding no copy is not the same as clearing the favorite")
-	require.True(t, f.online.stateRow("Game", "NES", "zelda").Favorite)
+	zeldaRow := f.online.stateRow("Game", "NES", "zelda")
+	require.NotNil(t, zeldaRow)
+	require.True(t, zeldaRow.Favorite)
 
 	// The game turns up in a later index and picks the favorite up.
 	scantest.IndexMediaPaths(t, f.db.MediaDB, "NES", metroidUSA, zelda)
@@ -283,7 +285,9 @@ func TestSyncState_PullKeepsPerCopyFlags(t *testing.T) {
 	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagLiked, true)
 	f.setLocalFlag(t, metroidEU, database.MediaUserFlagDisliked, true)
 	f.syncState(t)
-	require.Equal(t, "liked", f.online.stateRow("Game", "NES", "metroid").Reaction, "the copies roll up to liked")
+	metroid := f.online.stateRow("Game", "NES", "metroid")
+	require.NotNil(t, metroid)
+	require.Equal(t, "liked", metroid.Reaction, "the copies roll up to liked")
 
 	// Another device puts the game on the play-later list.
 	f.online.putStateRow(&fakeStateRow{
@@ -326,7 +330,9 @@ func TestSyncState_PullNeverMovesAStar(t *testing.T) {
 	f.online.resetCalls()
 	f.syncState(t)
 	assert.Zero(t, f.online.count(postState), "the account's version choice is not fought over")
-	assert.Equal(t, []string{"region:eu"}, f.online.stateRow("Game", "NES", "metroid").PreferredTags)
+	metroid := f.online.stateRow("Game", "NES", "metroid")
+	require.NotNil(t, metroid)
+	assert.Equal(t, []string{"region:eu"}, metroid.PreferredTags)
 }
 
 func TestSyncState_StarMoveResendsPreferredTags(t *testing.T) {

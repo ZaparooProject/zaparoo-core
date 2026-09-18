@@ -193,13 +193,13 @@ func libraryStateLoop(
 		switch {
 		case ctx.Err() != nil:
 		case errors.Is(err, librarysync.ErrNotSettled):
-			// The index is being written, so the pass deferred. Not a
-			// failure, but an edit still has to go out: keep asking at the
-			// check interval instead of waiting for the next hour.
-			retry.recordSuccess(now, timings.initialBackoff)
-			if pending {
-				retry.nextAttempt = now.Add(timings.check)
-			}
+			// The media database is being written, so the pass deferred.
+			// Nothing synced, so recording a success would hold the device
+			// back for the whole interval once the index finishes, edit or
+			// no edit. Nothing failed either, so the failure backoff is left
+			// as it was: just ask again at the check interval.
+			pending = true
+			retry.nextAttempt = now.Add(timings.check)
 		case err == nil || librarysync.IsIdleError(err):
 			pending = false
 			retry.recordSuccess(now, timings.initialBackoff)

@@ -360,3 +360,35 @@ func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a pushed edit stops the retries")
 }
+
+// TestLibraryStateLoop_DeferredStartupPassKeepsAsking pins the first pass after
+// a boot that runs straight into indexing. Nothing was edited, so there is no
+// request to keep the loop honest, and a deferred pass that counted as a
+// success would leave the device unsynced for the whole hourly interval.
+func TestLibraryStateLoop_DeferredStartupPassKeepsAsking(t *testing.T) {
+	t.Parallel()
+	runner := &fakeLibraryStateRunner{}
+	runner.setErr(librarysync.ErrNotSettled)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		libraryStateLoop(ctx, runner, make(chan struct{}), &libraryStateTimings{
+			check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
+			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
+		"a startup pass deferred by indexing keeps asking without an edit to prompt it")
+
+	runner.setErr(nil)
+	require.Eventually(t, func() bool { return runner.passes.Load() >= 4 }, 2*time.Second, 5*time.Millisecond)
+	settled := runner.passes.Load()
+	time.Sleep(100 * time.Millisecond)
+	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a synced pass stops the retries")
+}
