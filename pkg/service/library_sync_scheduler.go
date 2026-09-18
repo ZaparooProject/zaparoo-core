@@ -192,6 +192,14 @@ func libraryStateLoop(
 		_, err := runner.SyncState(ctx)
 		switch {
 		case ctx.Err() != nil:
+		case errors.Is(err, librarysync.ErrNotSettled):
+			// The index is being written, so the pass deferred. Not a
+			// failure, but an edit still has to go out: keep asking at the
+			// check interval instead of waiting for the next hour.
+			retry.recordSuccess(now, timings.initialBackoff)
+			if pending {
+				retry.nextAttempt = now.Add(timings.check)
+			}
 		case err == nil || librarysync.IsIdleError(err):
 			pending = false
 			retry.recordSuccess(now, timings.initialBackoff)
