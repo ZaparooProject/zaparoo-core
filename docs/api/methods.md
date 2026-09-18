@@ -4245,7 +4245,7 @@ A [Deck](#deck-object) with `items`.
 
 **Access:** All clients.
 
-Create a deck owned by this device. Core mints the ID. A device holds at most 200 owned decks.
+Create a deck owned by this device. Core mints the ID. A deck holds at most 120 items; how many decks a device holds is not limited.
 
 #### Parameters
 

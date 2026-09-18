@@ -49,8 +49,10 @@ const (
 	// characters in them, not misreadings of 1 and 0.
 	DeckIDLegacyAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+	// DeckMaxItems bounds one deck. How many decks a device holds is not
+	// bounded: a deck costs well under ten kilobytes, and the background work
+	// a deck creates is per item, so this is the limit that matters.
 	DeckMaxItems          = 120
-	DeckMaxLive           = 200
 	DeckNameMaxLen        = 100
 	DeckDescriptionMaxLen = 1000
 	DeckZapScriptMaxLen   = 5000

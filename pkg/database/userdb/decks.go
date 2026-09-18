@@ -41,9 +41,10 @@ const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
 
 // CreateDeck inserts a deck with its items. The deck's DeckID must already be
-// minted and normalized. An owned deck fails with ErrDeckLimit when the
-// device already holds DeckMaxLive owned decks, and any deck fails with
-// ErrDeckItemLimit past DeckMaxItems.
+// minted and normalized. A deck fails with ErrDeckItemLimit past
+// DeckMaxItems. How many decks a device holds is not capped: a deck costs
+// well under ten kilobytes, and the work a deck creates is bounded per deck
+// by DeckMaxItems rather than by their number.
 func (db *UserDB) CreateDeck(deck *database.Deck) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
@@ -52,15 +53,6 @@ func (db *UserDB) CreateDeck(deck *database.Deck) error {
 		return database.ErrDeckItemLimit
 	}
 	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
-		if deck.Owned {
-			count, err := sqlCountOwnedDecks(ctx, tx)
-			if err != nil {
-				return false, err
-			}
-			if count >= database.DeckMaxLive {
-				return false, database.ErrDeckLimit
-			}
-		}
 		deck.CreatedAt, deck.UpdatedAt = now, now
 		if err := sqlInsertDeck(ctx, tx, deck); err != nil {
 			return false, err

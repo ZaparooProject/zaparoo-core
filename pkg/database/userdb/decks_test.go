@@ -338,21 +338,22 @@ func TestDeckCaps(t *testing.T) {
 	_, err := db.UpdateDeck("0123456789ab", setDeckItems(tooMany...))
 	require.ErrorIs(t, err, database.ErrDeckItemLimit)
 
-	for i := 1; i < database.DeckMaxLive; i++ {
+	// Only a deck's own size is bounded. How many decks a device holds is not,
+	// so a library of them, owned or cached, keeps working.
+	const many = 250
+	for i := 1; i < many; i++ {
 		require.NoError(t, db.CreateDeck(testDeck(fmt.Sprintf("%012d", i), "Deck")))
 	}
 	count, err := db.CountOwnedDecks()
 	require.NoError(t, err)
-	assert.Equal(t, database.DeckMaxLive, count)
-	require.ErrorIs(t, db.CreateDeck(testDeck("zzzzzzzzzzzz", "One too many")), database.ErrDeckLimit)
+	assert.Equal(t, many, count)
 
-	// A cached copy of somebody else's deck does not count against the cap.
 	remote := &database.Deck{DeckID: "yyyyyyyyyyyy", Name: "Theirs", Owned: false}
 	_, err = db.UpsertRemoteDeck(remote)
 	require.NoError(t, err)
 	count, err = db.CountOwnedDecks()
 	require.NoError(t, err)
-	assert.Equal(t, database.DeckMaxLive, count)
+	assert.Equal(t, many, count, "a cached copy is not one of this device's own")
 }
 
 func TestUpsertRemoteDeck(t *testing.T) {
