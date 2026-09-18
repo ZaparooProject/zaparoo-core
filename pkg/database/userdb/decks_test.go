@@ -338,20 +338,22 @@ func TestDeckCaps(t *testing.T) {
 	_, err := db.UpdateDeck("0123456789ab", setDeckItems(tooMany...))
 	require.ErrorIs(t, err, database.ErrDeckItemLimit)
 
-	for i := 1; i < database.DeckMaxLive; i++ {
+	// Only a deck's own size is bounded. How many decks a device holds is not,
+	// so a library of them, owned or cached, keeps working.
+	const many = 250
+	for i := 1; i < many; i++ {
 		require.NoError(t, db.CreateDeck(testDeck(fmt.Sprintf("%012d", i), "Deck")))
 	}
 	count, err := db.CountOwnedDecks()
 	require.NoError(t, err)
-	assert.Equal(t, database.DeckMaxLive, count)
-	require.ErrorIs(t, db.CreateDeck(testDeck("zzzzzzzzzzzz", "One too many")), database.ErrDeckLimit)
+	assert.Equal(t, many, count)
 
-	// A cached copy of somebody else's deck does not count against the cap.
 	remote := &database.Deck{DeckID: "yyyyyyyyyyyy", Name: "Theirs", Owned: false}
-	require.NoError(t, db.UpsertRemoteDeck(remote))
+	_, err = db.UpsertRemoteDeck(remote)
+	require.NoError(t, err)
 	count, err = db.CountOwnedDecks()
 	require.NoError(t, err)
-	assert.Equal(t, database.DeckMaxLive, count)
+	assert.Equal(t, many, count, "a cached copy is not one of this device's own")
 }
 
 func TestUpsertRemoteDeck(t *testing.T) {
@@ -363,7 +365,9 @@ func TestUpsertRemoteDeck(t *testing.T) {
 		DeckID: "0123456789ab", Name: "Theirs", Owned: false, SourceURL: "https://zpr.au/x",
 		Items: []database.DeckItem{scriptItem("A", "**a")},
 	}
-	require.NoError(t, db.UpsertRemoteDeck(remote))
+	changed, err := db.UpsertRemoteDeck(remote)
+	require.NoError(t, err)
+	assert.True(t, changed, "a deck the device did not hold is new")
 	got, err := db.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.False(t, got.Owned)
@@ -373,7 +377,9 @@ func TestUpsertRemoteDeck(t *testing.T) {
 	// A refresh replaces the whole deck and keeps the row.
 	remote.Name = "Theirs v2"
 	remote.Items = []database.DeckItem{scriptItem("B", "**b"), scriptItem("C", "**c")}
-	require.NoError(t, db.UpsertRemoteDeck(remote))
+	changed, err = db.UpsertRemoteDeck(remote)
+	require.NoError(t, err)
+	assert.True(t, changed)
 	got, err = db.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.Equal(t, firstDBID, got.DBID)
@@ -384,22 +390,25 @@ func TestUpsertRemoteDeck(t *testing.T) {
 	// An owned deck is never clobbered by a cached copy of the same ID.
 	require.NoError(t, db.CreateDeck(testDeck("aaaaaaaaaaaa", "Mine", scriptItem("M", "**m"))))
 	theirs := &database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Impostor", Owned: false}
-	require.ErrorIs(t, db.UpsertRemoteDeck(theirs), database.ErrDeckOwned)
+	_, err = db.UpsertRemoteDeck(theirs)
+	require.ErrorIs(t, err, database.ErrDeckOwned)
 	got, err = db.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine", got.Name)
 
 	// An ID from elsewhere is stored normalized, so the API finds it.
-	require.NoError(t, db.UpsertRemoteDeck(&database.Deck{DeckID: " KQ7RIL0U ", Name: "Legacy", Owned: false}))
+	_, err = db.UpsertRemoteDeck(&database.Deck{DeckID: " KQ7RIL0U ", Name: "Legacy", Owned: false})
+	require.NoError(t, err)
 	got, err = db.GetDeck("kq7ril0u")
 	require.NoError(t, err)
 	assert.Equal(t, "Legacy", got.Name)
-	require.ErrorIs(t, db.UpsertRemoteDeck(&database.Deck{DeckID: "not-an-id", Name: "Bad"}),
-		database.ErrInvalidDeckID)
+	_, err = db.UpsertRemoteDeck(&database.Deck{DeckID: "not-an-id", Name: "Bad"})
+	require.ErrorIs(t, err, database.ErrInvalidDeckID)
 
 	// A sync pull of an owned deck may replace it.
 	mine := &database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine (server)", Owned: true}
-	require.NoError(t, db.UpsertRemoteDeck(mine))
+	_, err = db.UpsertRemoteDeck(mine)
+	require.NoError(t, err)
 	got, err = db.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine (server)", got.Name)

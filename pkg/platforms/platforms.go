@@ -217,8 +217,12 @@ type CmdEnv struct {
 	// media launch gate, so a launch that never happens cannot fire it and the
 	// script is still free to run its own ZapScript. Nil when the hook must not
 	// run, such as inside a hook script.
-	BeforeExit      func()
-	PlaybackManager audio.PlaybackManager
+	BeforeExit func()
+	// RefreshOwnedDeck brings an owned deck up to date from wherever it
+	// syncs before it is opened. It is best-effort and bounded; nil when no
+	// sync is configured, in which case the local copy opens as it is.
+	RefreshOwnedDeck func(ctx context.Context, deckID string)
+	PlaybackManager  audio.PlaybackManager
 	// LauncherCache resolves the launcher behind the active media. It holds
 	// launchers the platform cannot build itself, so it is the only complete
 	// source; never resolve a launcher ID from Platform.Launchers alone.

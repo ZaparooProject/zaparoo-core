@@ -41,9 +41,10 @@ const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
 
 // CreateDeck inserts a deck with its items. The deck's DeckID must already be
-// minted and normalized. An owned deck fails with ErrDeckLimit when the
-// device already holds DeckMaxLive owned decks, and any deck fails with
-// ErrDeckItemLimit past DeckMaxItems.
+// minted and normalized. A deck fails with ErrDeckItemLimit past
+// DeckMaxItems. How many decks a device holds is not capped: a deck costs
+// well under ten kilobytes, and the work a deck creates is bounded per deck
+// by DeckMaxItems rather than by their number.
 func (db *UserDB) CreateDeck(deck *database.Deck) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
@@ -52,15 +53,6 @@ func (db *UserDB) CreateDeck(deck *database.Deck) error {
 		return database.ErrDeckItemLimit
 	}
 	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
-		if deck.Owned {
-			count, err := sqlCountOwnedDecks(ctx, tx)
-			if err != nil {
-				return false, err
-			}
-			if count >= database.DeckMaxLive {
-				return false, database.ErrDeckLimit
-			}
-		}
 		deck.CreatedAt, deck.UpdatedAt = now, now
 		if err := sqlInsertDeck(ctx, tx, deck); err != nil {
 			return false, err
@@ -176,21 +168,34 @@ func (db *UserDB) DeleteDeck(deckID string) (bool, error) {
 // elsewhere (a ZapLink fetch or a sync pull), keeping the stored DBID and
 // creation time. The deck's ID is normalized first. A cached copy of somebody
 // else's deck never overwrites an owned deck of the same ID (ErrDeckOwned),
-// so a tap on your own deck's ZapLink opens the editable local copy. Items
-// keep rows the way UpdateDeck's do. FetchedAt is set to now.
-func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) error {
+// so a tap on your own deck's ZapLink opens the editable local copy. A deck
+// fails with ErrDeckItemLimit past DeckMaxItems.
+//
+// An arriving item carries no row of its own, so one that matches a stored
+// item exactly adopts that row and the local file it is linked to. Only what
+// really changed is written, and a fetch that brings nothing new records that
+// the deck was checked and nothing else. It reports whether the stored deck
+// changed, so the caller can queue the deck's tags only when it did.
+func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 	if db.sql.Load() == nil {
-		return ErrNullSQL
+		return false, ErrNullSQL
 	}
 	if len(deck.Items) > database.DeckMaxItems {
-		return database.ErrDeckItemLimit
+		return false, database.ErrDeckItemLimit
 	}
 	deckID, err := database.NormalizeDeckID(deck.DeckID)
 	if err != nil {
-		return fmt.Errorf("remote deck: %w", err)
+		return false, fmt.Errorf("remote deck: %w", err)
 	}
 	deck.DeckID = deckID
-	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
+
+	unchanged, err := db.touchUnchangedRemoteDeck(deck)
+	if err != nil || unchanged {
+		return false, err
+	}
+
+	changed := false
+	err = db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
 		existing, getErr := sqlGetDeckWithItems(ctx, tx, deck.DeckID)
 		var stored []database.DeckItem
 		switch {
@@ -206,6 +211,7 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) error {
 		default:
 			deck.DBID, deck.CreatedAt, deck.UpdatedAt, deck.FetchedAt = existing.DBID, existing.CreatedAt, now, now
 			stored = existing.Items
+			adoptRemoteDeckItemRows(stored, deck.Items)
 			if _, execErr := tx.ExecContext(ctx, `
 				update Decks set Name = ?, Description = ?, Owned = ?, Metadata = ?, SourceURL = ?,
 					FetchedAt = ?, UpdatedAt = ?
@@ -218,8 +224,89 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) error {
 		if saveErr := sqlSaveDeckItems(ctx, tx, deck.DBID, stored, deck.Items, now); saveErr != nil {
 			return false, saveErr
 		}
+		changed = true
 		return true, nil
 	})
+	return changed, err
+}
+
+// touchUnchangedRemoteDeck records that a deck was fetched when the arriving
+// copy holds nothing the stored one does not. Rewriting the unchanged rows
+// would move every item to a new row, drop the local file each item is linked
+// to, and advance the media preferences revision for a listing that did not
+// change; taking the fetch time alone keeps the next open from fetching
+// again. It reports whether the deck was left alone.
+func (db *UserDB) touchUnchangedRemoteDeck(deck *database.Deck) (bool, error) {
+	existing, err := db.GetDeck(deck.DeckID)
+	if errors.Is(err, database.ErrDeckNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if existing.Owned && !deck.Owned {
+		return true, database.ErrDeckOwned
+	}
+	if !sameRemoteDeck(existing, deck) {
+		return false, nil
+	}
+	if _, err = db.sql.Load().ExecContext(db.ctx,
+		`update Decks set FetchedAt = ? where DBID = ?;`, time.Now().Unix(), existing.DBID,
+	); err != nil {
+		return false, fmt.Errorf("failed to record deck fetch: %w", err)
+	}
+	return true, nil
+}
+
+// sameRemoteDeck reports whether an arriving deck holds nothing the stored
+// one does not. The arriving items carry no rows or local file links, so they
+// are compared on what the source actually serves.
+func sameRemoteDeck(stored, arriving *database.Deck) bool {
+	if stored.Name != arriving.Name || stored.Description != arriving.Description ||
+		stored.SourceURL != arriving.SourceURL || stored.Owned != arriving.Owned ||
+		!bytes.Equal(stored.Metadata, arriving.Metadata) ||
+		len(stored.Items) != len(arriving.Items) {
+		return false
+	}
+	for i := range stored.Items {
+		if !sameServedDeckItem(&stored.Items[i], &arriving.Items[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameServedDeckItem compares the part of an item its source serves, leaving
+// out the row and the local file the item is linked to, which are this
+// device's own.
+func sameServedDeckItem(a, b *database.DeckItem) bool {
+	return a.Kind == b.Kind && a.Name == b.Name && a.ZapScript == b.ZapScript && a.CardID == b.CardID &&
+		database.EncodeDeckCardScripts(a.Scripts) == database.EncodeDeckCardScripts(b.Scripts) &&
+		bytes.Equal(a.Metadata, b.Metadata)
+}
+
+// adoptRemoteDeckItemRows gives each arriving item the row of the stored item
+// it matches, along with the local file that row is linked to, so an item
+// that survived the fetch keeps the file this device picked for it. Each
+// stored row is claimed once, in order, so a deck that only reorders its
+// items carries every link across.
+func adoptRemoteDeckItemRows(stored, arriving []database.DeckItem) {
+	claimed := make([]bool, len(stored))
+	for i := range arriving {
+		item := &arriving[i]
+		if item.DBID != 0 {
+			continue
+		}
+		for j := range stored {
+			if claimed[j] || !sameServedDeckItem(&stored[j], item) {
+				continue
+			}
+			claimed[j] = true
+			item.DBID = stored[j].DBID
+			item.Anchor = stored[j].Anchor
+			break
+		}
+	}
 }
 
 // SetDeckItemAnchor records the local file a game item resolved to. It never

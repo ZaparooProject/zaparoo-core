@@ -64,10 +64,17 @@ func startNotificationAuthServer(
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	require.Eventually(t, func() bool {
-		active, sessionsErr := sessions.Sessions()
-		return sessionsErr == nil && len(active) == 1
-	}, time.Second, time.Millisecond)
+	// Wait for the session to register, so a broadcast below reaches it. An
+	// armed deadline closes the session on its own, and on a loaded machine
+	// that can happen before the first poll, so waiting to see it would be a
+	// race the caller does not need: those tests only read from the
+	// connection and expect the deadline to close it.
+	if deadline == 0 {
+		require.Eventually(t, func() bool {
+			active, sessionsErr := sessions.Sessions()
+			return sessionsErr == nil && len(active) == 1
+		}, time.Second, time.Millisecond)
+	}
 	return sessions, conn
 }
 

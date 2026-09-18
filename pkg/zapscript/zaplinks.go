@@ -256,8 +256,36 @@ func isZapLink(link string, db *database.Database) bool {
 	return true
 }
 
+// isKnownZapLinkHost reports whether a URL is served by a host this device has
+// already learned serves ZapScript. Unlike isZapLink it never asks an unknown
+// host, so it is the check to use before fetching a URL that was stored
+// earlier rather than tapped now: an address the device does not already know
+// is not contacted at all. A host pruned for age simply stops matching, which
+// costs a stored copy its refresh until the next tap teaches the host again.
+func isKnownZapLinkHost(link string, db *database.Database) bool {
+	if db == nil || db.UserDB == nil {
+		return false
+	}
+	u, err := url.Parse(link)
+	if err != nil || validateZapLinkURL(u) != nil {
+		return false
+	}
+	_, supported, err := db.UserDB.GetZapLinkHost(u.Scheme + "://" + u.Host)
+	if err != nil {
+		log.Debug().Err(err).Msg("error checking db for zap link host")
+		return false
+	}
+	return supported
+}
+
 func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return getRemoteZapScriptContext(context.Background(), urlStr, platform)
+}
+
+// getRemoteZapScriptContext fetches a ZapLink body within ctx, bounded by the
+// same ten-second ceiling a plain fetch uses.
+func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)

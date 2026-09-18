@@ -351,11 +351,12 @@ func (m *MockUserDBI) DeleteDeck(deckID string) (bool, error) {
 	return args.Bool(0), nil
 }
 
-func (m *MockUserDBI) UpsertRemoteDeck(deck *database.Deck) error {
-	if err := m.Called(deck).Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI upsert remote deck failed: %w", err)
+func (m *MockUserDBI) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
+	args := m.Called(deck)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock UserDBI upsert remote deck failed: %w", err)
 	}
-	return nil
+	return args.Bool(0), nil
 }
 
 func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {

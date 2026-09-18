@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -499,15 +500,16 @@ func TestHandleDecksUpdate_NoChange(t *testing.T) {
 func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	t.Parallel()
 	e := newDecksTestEnv(t)
-	require.NoError(t, e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
+	_, err := e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "0123456789ab", Name: "Theirs", Owned: false,
 		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
-	}))
+	})
+	require.NoError(t, err)
 	got, ok := e.call(t, HandleDecksGet, `{"deckId":"0123456789AB"}`).(models.DeckResponse)
 	require.True(t, ok)
 	assert.False(t, got.Owned)
 
-	_, err := HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Mine now"}`))
+	_, err = HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Mine now"}`))
 	require.ErrorIs(t, err, database.ErrDeckReadOnly)
 
 	_, err = HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "removeItemIds": [1]}`))
@@ -518,9 +520,10 @@ func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	assert.True(t, isNoContent)
 
 	// A legacy eight-character ID may hold I, L, O and U.
-	require.NoError(t, e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
+	_, err = e.env.Database.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "KQ7RIL0U", Name: "Old deck", Owned: false,
-	}))
+	})
+	require.NoError(t, err)
 	legacy, ok := e.call(t, HandleDecksGet, `{"deckId":"kq7riL0u"}`).(models.DeckResponse)
 	require.True(t, ok)
 	assert.Equal(t, "kq7ril0u", legacy.DeckID)
@@ -563,4 +566,39 @@ func TestHandleDecksNew_Validation(t *testing.T) {
 	require.Error(t, err, "a media item needs a mediaId or system plus path")
 	_, err = HandleDecksGet(withParams(&e.env, `{"deckId": "not-an-id"}`))
 	require.ErrorIs(t, err, database.ErrInvalidDeckID)
+}
+
+// decks.open runs the playlist command that names the deck through the same
+// path as run, so it waits for the result the way a run request does.
+func TestHandleDecksOpen(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	run := newRunTestEnv(t)
+	created, ok := e.call(t, HandleDecksNew, `{"name": "Open me", "items": [
+		{"kind": "script", "name": "A", "zapscript": "**launch.system:NES"}]}`).(models.DeckResponse)
+	require.True(t, ok)
+	e.expectNotification(t, created.DeckID, models.DecksChangedCreated)
+
+	env := e.env
+	env.State = run.st
+	env.TokenQueue = run.queue
+	env.Params = []byte(fmt.Sprintf(`{"deckId":%q, "slot":"background"}`, strings.ToUpper(created.DeckID)))
+	out := make(chan runOutcome, 1)
+	go func() {
+		result, err := HandleDecksOpen(env)
+		out <- runOutcome{result: result, err: err}
+	}()
+	tok := run.receiveToken(t)
+	parsed, err := zapscript.NewParser(tok.Text).ParseScript()
+	require.NoError(t, err)
+	require.Len(t, parsed.Cmds, 1)
+	assert.Equal(t, zapscript.ZapScriptCmdPlaylistOpen, parsed.Cmds[0].Name)
+	assert.Equal(t, []string{"deck://" + created.DeckID}, parsed.Cmds[0].Args)
+	assert.Equal(t, "background", parsed.Cmds[0].AdvArgs.Get(zapscript.KeySlot))
+	require.True(t, tok.Completion.Complete(nil))
+	o := waitRun(t, out)
+	require.NoError(t, o.err)
+
+	_, err = HandleDecksOpen(withParams(&e.env, `{"deckId":"zzzzzzzzzzzz"}`))
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
 }

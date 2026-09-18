@@ -80,7 +80,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 	switch method {
 	case models.MethodInputKeyboard, models.MethodInputGamepad:
 		return apiPriorityInput
-	case models.MethodRun, models.MethodLaunch, models.MethodRunScript:
+	case models.MethodRun, models.MethodLaunch, models.MethodRunScript, models.MethodDecksOpen:
 		// run waits for ZapScript execution, which takes as long as the
 		// script does (delays, hooks, slow launchers). It gets its own lane
 		// so a long script never holds up stop, confirm or media.control.
@@ -169,6 +169,7 @@ func isMediaDBTransactionAPIMethod(method string) bool {
 // without being rejected by isControlAllowed.
 func isMediaDBFreeInstantMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodRun) ||
+		strings.EqualFold(method, models.MethodDecksOpen) ||
 		strings.EqualFold(method, models.MethodLaunch) ||
 		strings.EqualFold(method, models.MethodStop) ||
 		strings.EqualFold(method, models.MethodMediaControl)

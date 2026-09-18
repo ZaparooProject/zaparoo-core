@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -60,10 +62,38 @@ func TestParseTitleLaunch(t *testing.T) {
 	}
 }
 
+// recordingTagQueue stands in for the background tagger so a test can see
+// which decks a write queued.
+type recordingTagQueue struct {
+	decks []string
+	mu    syncutil.Mutex
+	all   int
+}
+
+func (q *recordingTagQueue) QueueDeckTags(deckIDs ...string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.decks = append(q.decks, deckIDs...)
+}
+
+func (q *recordingTagQueue) QueueAllDeckTags() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.all++
+}
+
+func (q *recordingTagQueue) queued() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return slices.Clone(q.decks)
+}
+
 type projectFixture struct {
 	ctx      context.Context
 	mediaDB  database.MediaDBI
 	userDB   database.UserDBI
+	db       *database.Database
+	tagQueue *recordingTagQueue
 	deps     *decks.ResolveDeps
 	pathByID map[int64]string
 	idByPath map[string]int64
@@ -80,10 +110,13 @@ func newProjectFixture(t *testing.T, paths ...string) *projectFixture {
 	scantest.IndexMediaPaths(t, mediaDB, "NES", paths...)
 	rows, err := mediaDB.GetMediaBySystemID("NES")
 	require.NoError(t, err)
+	tagQueue := &recordingTagQueue{}
 	f := &projectFixture{
 		ctx:      context.Background(),
 		mediaDB:  mediaDB,
 		userDB:   userDB,
+		db:       &database.Database{MediaDB: mediaDB, UserDB: userDB, DeckTags: tagQueue},
+		tagQueue: tagQueue,
 		deps:     &decks.ResolveDeps{MediaDB: mediaDB, UserDB: userDB, Cfg: cfg},
 		pathByID: make(map[int64]string),
 		idByPath: make(map[string]int64),
@@ -93,6 +126,15 @@ func newProjectFixture(t *testing.T, paths ...string) *projectFixture {
 		f.idByPath[rows[i].Path] = rows[i].DBID
 	}
 	return f
+}
+
+// preferencesRevision returns the token that invalidates browse cursors, so a
+// test can tell a write that changed a listing from one that did not.
+func preferencesRevision(t *testing.T, f *projectFixture) string {
+	t.Helper()
+	revision, _, err := f.userDB.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
+	require.NoError(t, err)
+	return revision
 }
 
 // taggedPaths returns the paths carrying a deck's membership tag, found

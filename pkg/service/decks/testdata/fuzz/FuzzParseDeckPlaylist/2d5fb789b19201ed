@@ -1,0 +1,3 @@
+go test fuzz v1
+string("**plAYlist.open:{\"id\":\"ZON-\xd60\"}")
+string("\xdb0")
