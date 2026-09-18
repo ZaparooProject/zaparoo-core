@@ -40,6 +40,9 @@ import (
 // fakeOnline implements the device side of the Library sync contract in
 // memory, closely enough to exercise every path Core takes.
 type fakeOnline struct {
+	decks         map[string]*fakeDeck
+	cards         map[string]fakeCard
+	takenDeckIDs  map[string]bool
 	t             *testing.T
 	stateRows     map[string]*fakeStateRow
 	ordinals      map[string]uint32
@@ -55,12 +58,16 @@ type fakeOnline struct {
 	resolveCode   string
 	rejectState   string
 	resolved      [][]database.MediaIdentity
+	deckPushHook  func(*fakeOnline)
 	statePushes   [][]fakeStatePushItem
+	deckPushes    [][]fakeDeckPushRecord
 	mu            syncutil.Mutex
 	resolveStatus int
 	limitFirst    int
 	stateRevision int64
 	stateFloor    int64
+	deckRevision  int64
+	deckFloor     int64
 	nextID        uint32
 }
 
@@ -108,6 +115,49 @@ type fakeStatePushItem struct {
 	BaseRevision  int64     `json:"base_revision"`
 }
 
+// fakeDeck is one deck as the fake account holds it.
+//
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeDeck struct {
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	DeckID      string          `json:"deck_id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Visibility  string          `json:"visibility"`
+	Items       []fakeDeckItem  `json:"items,omitempty"`
+	Revision    int64           `json:"revision"`
+	ItemCount   int             `json:"item_count"`
+	IsLocked    bool            `json:"is_locked"`
+	Deleted     bool            `json:"deleted"`
+}
+
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeDeckItem struct {
+	Metadata  json.RawMessage           `json:"metadata,omitempty"`
+	Kind      string                    `json:"kind"`
+	CardID    string                    `json:"card_id,omitempty"`
+	Name      string                    `json:"name,omitempty"`
+	ZapScript string                    `json:"zapscript,omitempty"`
+	Scripts   []database.DeckCardScript `json:"scripts,omitempty"`
+	Position  int                       `json:"position"`
+}
+
+type fakeCard struct {
+	metadata json.RawMessage
+	name     string
+	scripts  []database.DeckCardScript
+}
+
+//nolint:tagliatelle // Wire shape follows the Zaparoo Online API contract.
+type fakeDeckPushRecord struct {
+	Name         *string         `json:"name"`
+	Description  *string         `json:"description"`
+	Items        *[]fakeDeckItem `json:"items"`
+	DeckID       string          `json:"deck_id"`
+	BaseRevision int64           `json:"base_revision"`
+	Deleted      bool            `json:"deleted"`
+}
+
 type fakeInventory struct {
 	sha        string
 	ordinals   []uint32
@@ -117,16 +167,19 @@ type fakeInventory struct {
 func newFakeOnline(t *testing.T) *fakeOnline {
 	t.Helper()
 	f := &fakeOnline{
-		t:          t,
-		ordinals:   make(map[string]uint32),
-		rejected:   make(map[string]string),
-		issued:     make(map[uint32]bool),
-		calls:      make(map[string]int),
-		edgeRefuse: make(map[string]bool),
-		omitAnswer: make(map[string]bool),
-		stateRows:  make(map[string]*fakeStateRow),
-		nextID:     100,
-		token:      "library-token",
+		t:            t,
+		ordinals:     make(map[string]uint32),
+		rejected:     make(map[string]string),
+		issued:       make(map[uint32]bool),
+		calls:        make(map[string]int),
+		edgeRefuse:   make(map[string]bool),
+		omitAnswer:   make(map[string]bool),
+		stateRows:    make(map[string]*fakeStateRow),
+		decks:        make(map[string]*fakeDeck),
+		cards:        make(map[string]fakeCard),
+		takenDeckIDs: make(map[string]bool),
+		nextID:       100,
+		token:        "library-token",
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
@@ -233,6 +286,10 @@ func (f *fakeOnline) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleStatePush(w, r)
 	case "GET /v1/device/library/state":
 		f.handleStatePull(w, r)
+	case "POST /v1/device/decks":
+		f.handleDeckPush(w, r)
+	case "GET /v1/device/decks":
+		f.handleDeckPull(w, r)
 	default:
 		f.t.Errorf("unexpected request %s", key)
 		w.WriteHeader(http.StatusTeapot)
@@ -538,4 +595,278 @@ func (f *fakeOnline) handleStatePull(w http.ResponseWriter, r *http.Request) {
 		next = rows[len(rows)-1].Revision
 	}
 	writeFakeJSON(w, map[string]any{"items": rows, "next_since": next, "has_more": hasMore, "reset": reset})
+}
+
+// putDeck writes a deck as Zaparoo Online would, filling card items from the
+// account's cards.
+func (f *fakeOnline) putDeck(deck *fakeDeck) *fakeDeck {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := *deck
+	stored.DeckID = strings.ToUpper(deck.DeckID)
+	stored.Items = f.enrichDeckItems(deck.Items)
+	stored.ItemCount = len(stored.Items)
+	f.deckRevision++
+	stored.Revision = f.deckRevision
+	f.decks[stored.DeckID] = &stored
+	copied := stored
+	return &copied
+}
+
+func (f *fakeOnline) deck(deckID string) *fakeDeck {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	deck, ok := f.decks[strings.ToUpper(deckID)]
+	if !ok {
+		return nil
+	}
+	copied := *deck
+	return &copied
+}
+
+func (f *fakeOnline) addCard(cardID, name string, metadata json.RawMessage, scripts ...database.DeckCardScript) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cards[cardID] = fakeCard{name: name, scripts: scripts, metadata: metadata}
+}
+
+func (f *fakeOnline) takeDeckID(deckID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.takenDeckIDs[strings.ToUpper(deckID)] = true
+}
+
+func (f *fakeOnline) enrichDeckItems(items []fakeDeckItem) []fakeDeckItem {
+	out := make([]fakeDeckItem, 0, len(items))
+	for i, item := range items {
+		item.Position = i + 1
+		if item.Kind == "card" {
+			if card, ok := f.cards[item.CardID]; ok {
+				item.Name = card.name
+				item.Scripts = card.scripts
+				item.Metadata = card.metadata
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func (f *fakeOnline) unknownCard(items []fakeDeckItem) bool {
+	for _, item := range items {
+		if item.Kind == "card" {
+			if _, ok := f.cards[item.CardID]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mintedFakeDeckID mirrors the account's rule for a create: twelve
+// characters of Crockford base32.
+func mintedFakeDeckID(deckID string) bool {
+	if len(deckID) != 12 {
+		return false
+	}
+	for _, r := range strings.ToUpper(deckID) {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", r) {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Items []fakeDeckPushRecord `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Items) == 0 ||
+		len(request.Items) > 200 {
+		writeFakeError(w, http.StatusBadRequest, "validation_error")
+		return
+	}
+	// The account reads a create's deck ID as one a device minted and
+	// refuses the whole request over a single bad record, before it applies
+	// any of them.
+	for i := range request.Items {
+		if request.Items[i].BaseRevision == 0 && !mintedFakeDeckID(request.Items[i].DeckID) {
+			writeFakeError(w, http.StatusBadRequest, "validation_error")
+			return
+		}
+	}
+	if hook := f.deckPushHook; hook != nil {
+		f.deckPushHook = nil
+		hook(f)
+	}
+	f.deckPushes = append(f.deckPushes, request.Items)
+	results := make([]map[string]any, 0, len(request.Items))
+	result := func(i int, status, code string, deck *fakeDeck) {
+		entry := map[string]any{"index": i, "status": status, "deck": deck}
+		if code != "" {
+			entry["code"] = code
+		}
+		results = append(results, entry)
+	}
+	for i := range request.Items {
+		record := &request.Items[i]
+		deckID := strings.ToUpper(record.DeckID)
+		if f.takenDeckIDs[deckID] {
+			result(i, "rejected", "deck_id_taken", nil)
+			continue
+		}
+		deck := f.decks[deckID]
+		if record.BaseRevision == 0 {
+			if deck != nil {
+				if deck.Deleted {
+					result(i, "conflict", "", deck)
+				} else {
+					result(i, "applied", "", deck)
+				}
+				continue
+			}
+			if record.Name == nil || *record.Name == "" {
+				writeFakeError(w, http.StatusBadRequest, "validation_error")
+				return
+			}
+			var items []fakeDeckItem
+			if record.Items != nil {
+				items = *record.Items
+			}
+			if f.unknownCard(items) {
+				result(i, "rejected", "unknown_card", nil)
+				continue
+			}
+			description := ""
+			if record.Description != nil {
+				description = *record.Description
+			}
+			f.deckRevision++
+			created := &fakeDeck{
+				DeckID: deckID, Name: *record.Name, Description: description, Visibility: "private",
+				Items: f.enrichDeckItems(items), Revision: f.deckRevision,
+				Metadata: json.RawMessage(`{"zaps":0}`),
+			}
+			created.ItemCount = len(created.Items)
+			f.decks[deckID] = created
+			result(i, "applied", "", created)
+			continue
+		}
+		switch {
+		case deck == nil:
+			result(i, "conflict", "", nil)
+			continue
+		case deck.Revision != record.BaseRevision:
+			result(i, "conflict", "", deck)
+			continue
+		case deck.IsLocked:
+			result(i, "rejected", "deck_locked", deck)
+			continue
+		}
+		if record.Deleted {
+			f.deckRevision++
+			deck.Deleted = true
+			deck.Items = nil
+			deck.Revision = f.deckRevision
+			result(i, "applied", "", deck)
+			continue
+		}
+		if record.Items != nil && f.unknownCard(*record.Items) {
+			result(i, "rejected", "unknown_card", nil)
+			continue
+		}
+		// An update against a tombstone's revision brings the deck back.
+		deck.Deleted = false
+		if record.Name != nil {
+			deck.Name = *record.Name
+		}
+		if record.Description != nil {
+			deck.Description = *record.Description
+		}
+		if record.Items != nil {
+			deck.Items = f.enrichDeckItems(*record.Items)
+			deck.ItemCount = len(deck.Items)
+		}
+		f.deckRevision++
+		deck.Revision = f.deckRevision
+		result(i, "applied", "", deck)
+	}
+	writeFakeJSON(w, map[string]any{"items": results, "applied": 0, "conflicts": 0, "rejected": 0})
+}
+
+func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 500 {
+		writeFakeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	reset := false
+	if since > 0 && since < f.deckFloor {
+		reset = true
+		since = 0
+	}
+	decks := make([]*fakeDeck, 0)
+	for _, deck := range f.decks {
+		if deck.Revision > since && (since > 0 || !deck.Deleted) {
+			decks = append(decks, deck)
+		}
+	}
+	sort.Slice(decks, func(i, j int) bool { return decks[i].Revision < decks[j].Revision })
+	hasMore := len(decks) > limit
+	if hasMore {
+		decks = decks[:limit]
+	}
+	next := since
+	if len(decks) > 0 {
+		next = decks[len(decks)-1].Revision
+	}
+	writeFakeJSON(w, map[string]any{"items": decks, "next_since": next, "has_more": hasMore, "reset": reset})
+}
+
+// onDeckPush runs fn once, inside the next deck push, to act out a race with
+// whatever the device does between building the push and reading its answer.
+func (f *fakeOnline) onDeckPush(fn func(*fakeOnline)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckPushHook = fn
+}
+
+// moveDeckOn gives a deck a new revision the way another device's edit
+// would. It takes no lock: it is called from inside a request.
+func (f *fakeOnline) moveDeckOn(deckID, name string) {
+	deck, ok := f.decks[deckID]
+	if !ok {
+		return
+	}
+	f.deckRevision++
+	deck.Revision = f.deckRevision
+	deck.Name = name
+}
+
+// lockDeck locks a deck without moving its revision, the way the account
+// does when its owner locks it.
+func (f *fakeOnline) lockDeck(deckID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if deck, ok := f.decks[strings.ToUpper(deckID)]; ok {
+		deck.IsLocked = true
+	}
+}
+
+// forgetDeck drops a deck from the account entirely, without a tombstone.
+func (f *fakeOnline) forgetDeck(deckID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.decks, strings.ToUpper(deckID))
+}
+
+// eraseDecks is the account-wide erase: every deck is gone and a pull from
+// an older cursor is told to reset.
+func (f *fakeOnline) eraseDecks() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckRevision++
+	f.deckFloor = f.deckRevision
+	f.decks = make(map[string]*fakeDeck)
 }

@@ -50,13 +50,20 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	if env.Database == nil || env.Database.UserDB == nil {
 		return nil, errors.New(errDecksNoUserDB)
 	}
+	env.State.NotifyLibraryDecksAccessed()
 	list, err := env.Database.UserDB.ListDecks()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list decks: %w", err)
 	}
+	locked, err := lockedDecks(&env)
+	if err != nil {
+		return nil, err
+	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
-		resp.Decks = append(resp.Decks, deckSummary(&list[i]))
+		deck := deckSummary(&list[i])
+		deck.Locked = locked[deck.DeckID]
+		resp.Decks = append(resp.Decks, deck)
 	}
 	return resp, nil
 }
@@ -70,11 +77,12 @@ func HandleDecksGet(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
+	env.State.NotifyLibraryDecksAccessed()
 	deck, err := loadDeck(&env, params.DeckID)
 	if err != nil {
 		return nil, err
 	}
-	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
+	return lockedDeckResponse(&env, deck)
 }
 
 // HandleDecksNew creates a deck owned by this device.
@@ -112,6 +120,7 @@ func HandleDecksNew(env requests.RequestEnv) (any, error) {
 	}
 	env.Database.QueueDeckTags(deck.DeckID)
 	notifyDecksChanged(&env, deck.DeckID, models.DecksChangedCreated)
+	env.State.NotifyLibraryDecksChanged()
 	return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
 }
 
@@ -133,7 +142,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	}
 	if params.Name == nil && params.Description == nil && params.Items == nil &&
 		len(params.AddItems) == 0 && len(params.RemoveItemIDs) == 0 {
-		return deckResponse(deck, anchorAvailability(&env, deck.Items)), nil
+		return lockedDeckResponse(&env, deck)
 	}
 	if !deck.Owned {
 		return nil, models.ClientErr(database.ErrDeckReadOnly)
@@ -184,6 +193,7 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	}
 	env.Database.QueueDeckTags(updated.DeckID)
 	notifyDecksChanged(&env, updated.DeckID, models.DecksChangedUpdated)
+	env.State.NotifyLibraryDecksChanged()
 	return deckResponse(updated, anchorAvailability(&env, updated.Items)), nil
 }
 
@@ -212,6 +222,7 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	}
 	env.Database.QueueDeckTags(deckID)
 	notifyDecksChanged(&env, deckID, models.DecksChangedDeleted)
+	env.State.NotifyLibraryDecksChanged()
 	return NoContent{}, nil
 }
 
@@ -486,6 +497,45 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 		}
 	}
 	return available
+}
+
+// isDeckLocked reports whether the linked account locked a deck, which keeps
+// it read-only here. A sync row that cannot be read is an error rather than
+// an unlocked deck, so a failure never opens a locked deck up to edits.
+// Mutations are refused inside their own transaction as well; this answers
+// the clients that ask.
+func isDeckLocked(env *requests.RequestEnv, deckID string) (bool, error) {
+	row, found, err := env.Database.UserDB.GetDeckSync(deckID)
+	if err != nil {
+		return false, fmt.Errorf("failed to read deck sync state: %w", err)
+	}
+	return found && row.Locked, nil
+}
+
+// lockedDecks names every deck the account locked, for the decks list.
+func lockedDecks(env *requests.RequestEnv) (map[string]bool, error) {
+	rows, err := env.Database.UserDB.ListDeckSync()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read deck sync state: %w", err)
+	}
+	locked := make(map[string]bool, len(rows))
+	for i := range rows {
+		if rows[i].Locked {
+			locked[rows[i].DeckID] = true
+		}
+	}
+	return locked, nil
+}
+
+// lockedDeckResponse is a deck with its items and its lock state.
+func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.DeckResponse, error) {
+	resp := deckResponse(deck, anchorAvailability(env, deck.Items))
+	locked, err := isDeckLocked(env, deck.DeckID)
+	if err != nil {
+		return models.DeckResponse{}, err
+	}
+	resp.Locked = locked
+	return resp, nil
 }
 
 // deckSummary is a deck as the decks list shows it, without items.

@@ -281,9 +281,11 @@ func (*failingSettingRunner) ApplySetting(context.Context) (bool, error) {
 }
 
 type fakeLibraryStateRunner struct {
-	err    error
-	passes atomic.Int32
-	mu     syncutil.Mutex
+	err        error
+	passes     atomic.Int32
+	deckPasses atomic.Int32
+	deckPulls  atomic.Int32
+	mu         syncutil.Mutex
 }
 
 func (r *fakeLibraryStateRunner) setErr(err error) {
@@ -299,17 +301,28 @@ func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateRe
 	return librarysync.StateResult{}, r.err
 }
 
+func (r *fakeLibraryStateRunner) SyncDecks(context.Context) (librarysync.DecksResult, error) {
+	r.deckPasses.Add(1)
+	return librarysync.DecksResult{}, nil
+}
+
+func (r *fakeLibraryStateRunner) PullDecksIfStale(context.Context) error {
+	r.deckPulls.Add(1)
+	return nil
+}
+
 func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	t.Parallel()
 	runner := &fakeLibraryStateRunner{}
 	ctx, cancel := context.WithCancel(context.Background())
 	requests := make(chan struct{}, 1)
+	accesses := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, accesses, func() bool { return false }, &libraryStateTimings{
 			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
 	}()
 	t.Cleanup(func() {
@@ -324,6 +337,11 @@ func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
 	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), runner.passes.Load(), "a burst of edits is pushed in one pass")
+	assert.Equal(t, int32(1), runner.deckPasses.Load(), "decks sync in the same pass")
+
+	accesses <- struct{}{}
+	require.Eventually(t, func() bool { return runner.deckPulls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, int32(1), runner.passes.Load(), "looking at decks does not push")
 }
 
 // TestLibraryStateLoop_DeferredPassKeepsAsking pins that an edit made while the
@@ -339,9 +357,9 @@ func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, requests, make(chan struct{}), func() bool { return false }, &libraryStateTimings{
 			check: 10 * time.Millisecond, startup: time.Hour, debounce: 10 * time.Millisecond,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
 	}()
 	t.Cleanup(func() {
@@ -373,10 +391,11 @@ func TestLibraryStateLoop_DeferredStartupPassKeepsAsking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, make(chan struct{}), &libraryStateTimings{
-			check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
-			interval: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
-		})
+		libraryStateLoop(ctx, runner, make(chan struct{}), make(chan struct{}), func() bool { return false },
+			&libraryStateTimings{
+				check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
+				interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+			})
 	}()
 	t.Cleanup(func() {
 		cancel()

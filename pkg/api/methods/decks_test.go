@@ -22,9 +22,11 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -532,6 +534,47 @@ func TestHandleDecksUpdate_CachedDeckIsReadOnly(t *testing.T) {
 	assert.True(t, isNoContent)
 }
 
+func TestHandleDecks_LockedDeckIsReadOnly(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	require.NoError(t, e.env.Database.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Locked", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
+	}))
+	require.NoError(t, e.env.Database.UserDB.UpsertDeckSync([]database.DeckSyncRow{
+		{DeckID: "0123456789ab", Revision: 3, Locked: true},
+	}))
+
+	var signals atomic.Int32
+	e.env.State.SetLibrarySyncSignals(state.LibrarySyncSignals{
+		DecksAccessed: func() { signals.Add(1) },
+		DecksChanged:  func() { t.Error("a refused edit must not signal a push") },
+	})
+
+	got, ok := e.call(t, HandleDecksGet, `{"deckId":"0123456789ab"}`).(models.DeckResponse)
+	require.True(t, ok)
+	assert.True(t, got.Locked)
+	list, ok := e.call(t, HandleDecks, `{}`).(models.DecksResponse)
+	require.True(t, ok)
+	require.Len(t, list.Decks, 1)
+	assert.True(t, list.Decks[0].Locked)
+	assert.Equal(t, int32(2), signals.Load(), "looking at decks asks for a pull")
+
+	_, err := HandleDecksUpdate(withParams(&e.env, `{"deckId":"0123456789ab", "name": "Changed"}`))
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+	_, err = HandleDecksDelete(withParams(&e.env, `{"deckId":"0123456789ab"}`))
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+}
+
+func TestHandleDecksNew_SignalsSync(t *testing.T) {
+	t.Parallel()
+	e := newDecksTestEnv(t)
+	var changed atomic.Int32
+	e.env.State.SetLibrarySyncSignals(state.LibrarySyncSignals{DecksChanged: func() { changed.Add(1) }})
+	e.call(t, HandleDecksNew, `{"name":"Weekend"}`)
+	assert.Equal(t, int32(1), changed.Load())
+}
+
 func TestHandleDecksNew_Validation(t *testing.T) {
 	t.Parallel()
 	e := newDecksTestEnv(t)
@@ -601,4 +644,42 @@ func TestHandleDecksOpen(t *testing.T) {
 
 	_, err = HandleDecksOpen(withParams(&e.env, `{"deckId":"zzzzzzzzzzzz"}`))
 	require.ErrorIs(t, err, database.ErrDeckNotFound)
+}
+
+// TestHandleDecks_SyncStateReadFailureIsReported pins that a deck's lock is
+// never reported as "unlocked" because the sync bookkeeping could not be
+// read. Answering false would show a locked deck as editable.
+func TestHandleDecks_SyncStateReadFailureIsReported(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	readErr := errors.New("deck sync unavailable")
+	mockUserDB.On("ListDecks").Return([]database.Deck{
+		{DeckID: "0123456789ab", Name: "Weekend", Owned: true},
+	}, nil)
+	mockUserDB.On("ListDeckSync").Return(nil, readErr)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+	}
+	_, err := HandleDecks(withParams(&env, `{}`))
+	require.ErrorIs(t, err, readErr, "the list fails rather than showing every deck as unlocked")
+}
+
+// TestHandleDecksGet_SyncStateReadFailureIsReported is the same for one deck.
+func TestHandleDecksGet_SyncStateReadFailureIsReported(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	readErr := errors.New("deck sync unavailable")
+	mockUserDB.On("GetDeck", "0123456789ab").Return(&database.Deck{
+		DeckID: "0123456789ab", Name: "Weekend", Owned: true,
+	}, nil)
+	mockUserDB.On("GetDeckSync", "0123456789ab").Return(database.DeckSyncRow{}, false, readErr)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+	}
+	_, err := HandleDecksGet(withParams(&env, `{"deckId":"0123456789ab"}`))
+	require.ErrorIs(t, err, readErr)
 }

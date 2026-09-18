@@ -112,15 +112,23 @@ func startLibrarySyncScheduler(
 		Pauser:        pauser,
 		SendHeartbeat: manager.SendCapabilityHeartbeat,
 		Launchers:     systemLaunchers(cfg, pl),
+		Notifications: st.Notifications,
 	})
 	requests := make(chan struct{}, 1)
 	stateRequests := make(chan struct{}, 1)
+	accessRequests := make(chan struct{}, 1)
 	st.SetLibrarySyncSignals(state.LibrarySyncSignals{
 		SettingChanged: func() {
 			signalLibrarySync(requests)
 			signalLibrarySync(stateRequests)
 		},
-		StateChanged: func() { signalLibrarySync(stateRequests) },
+		StateChanged:  func() { signalLibrarySync(stateRequests) },
+		DecksChanged:  func() { signalLibrarySync(stateRequests) },
+		DecksAccessed: func() { signalLibrarySync(accessRequests) },
+		// A deck opens its local copy at once; the loop pulls in the
+		// background when the last pull is stale and refreshes the open
+		// playlist in place if the deck changed.
+		RefreshDeck: func(context.Context, string) { signalLibrarySync(accessRequests) },
 	})
 	indexing, subID := notifBroker.Subscribe(32, models.NotificationMediaIndexing)
 	wg.Add(2)
@@ -131,7 +139,10 @@ func startLibrarySyncScheduler(
 	}()
 	go func() {
 		defer wg.Done()
-		libraryStateLoop(ctx, svc, stateRequests, &defaultLibraryStateTimings)
+		// The wait pipe that delivers change hints is not built yet, so the
+		// loop always runs on the shorter timer.
+		libraryStateLoop(ctx, svc, stateRequests, accessRequests, func() bool { return false },
+			&defaultLibraryStateTimings)
 	}()
 }
 
@@ -143,10 +154,13 @@ func signalLibrarySync(requests chan<- struct{}) {
 }
 
 type libraryStateTimings struct {
-	check          time.Duration
-	startup        time.Duration
-	debounce       time.Duration
+	check    time.Duration
+	startup  time.Duration
+	debounce time.Duration
+	// interval is the backstop between passes while change hints arrive
+	// over the wait pipe; intervalNoPipe applies while they do not.
 	interval       time.Duration
+	intervalNoPipe time.Duration
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 }
@@ -155,25 +169,50 @@ var defaultLibraryStateTimings = libraryStateTimings{
 	check:          time.Minute,
 	startup:        2 * time.Minute,
 	debounce:       2 * time.Second,
-	interval:       time.Hour,
+	interval:       15 * time.Minute,
+	intervalNoPipe: 5 * time.Minute,
 	initialBackoff: time.Minute,
 	maxBackoff:     time.Hour,
 }
 
 // libraryStateRunner is the part of the Library sync service that keeps
-// personal state converged.
+// personal state and decks converged.
 type libraryStateRunner interface {
 	SyncState(ctx context.Context) (librarysync.StateResult, error)
+	SyncDecks(ctx context.Context) (librarysync.DecksResult, error)
+	PullDecksIfStale(ctx context.Context) error
 }
 
-// libraryStateLoop pulls and pushes personal state apart from the inventory,
-// so an edit is pushed within seconds even while a large first inventory is
-// still being resolved. Edits are coalesced over a short debounce; otherwise
-// a pass runs after startup and hourly.
+// passError reports the outcome of one pass over both halves. A real failure
+// wins, so it is backed off; otherwise a half that deferred keeps the pass
+// pending, so an edit waiting on the index is asked for again rather than
+// counted as pushed.
+func passError(stateErr, decksErr error) error {
+	switch {
+	case stateErr != nil && !librarysync.IsIdleError(stateErr):
+		return stateErr
+	case decksErr != nil && !librarysync.IsIdleError(decksErr):
+		return decksErr
+	case stateErr != nil:
+		return stateErr
+	default:
+		return decksErr
+	}
+}
+
+// libraryStateLoop pulls and pushes personal state and decks apart from the
+// inventory, so an edit is pushed within seconds even while a large first
+// inventory is still being resolved. Edits are coalesced over a short
+// debounce; otherwise a pass runs after startup and on a timer whose length
+// depends on whether change hints arrive over the wait pipe. A client
+// looking at decks, or a deck opening, pulls them when the last pull is
+// stale.
 func libraryStateLoop(
 	ctx context.Context,
 	runner libraryStateRunner,
 	requests <-chan struct{},
+	accesses <-chan struct{},
+	pipeConnected func() bool,
 	timings *libraryStateTimings,
 ) {
 	startup := time.NewTimer(timings.startup)
@@ -189,7 +228,9 @@ func libraryStateLoop(
 	retry := intervalState{backoff: timings.initialBackoff}
 	run := func() {
 		now := time.Now()
-		_, err := runner.SyncState(ctx)
+		_, stateErr := runner.SyncState(ctx)
+		_, decksErr := runner.SyncDecks(ctx)
+		err := passError(stateErr, decksErr)
 		switch {
 		case ctx.Err() != nil:
 		case errors.Is(err, librarysync.ErrNotSettled):
@@ -218,13 +259,21 @@ func libraryStateLoop(
 		case <-requests:
 			pending = true
 			debounce.Reset(timings.debounce)
+		case <-accesses:
+			if err := runner.PullDecksIfStale(ctx); err != nil && !librarysync.IsIdleError(err) {
+				log.Debug().Err(err).Msg("decks not pulled for a client")
+			}
 		case <-debounce.C:
 			if retry.nextAttempt.IsZero() || !time.Now().Before(retry.nextAttempt) {
 				run()
 			}
 		case <-ticker.C:
 			now := time.Now()
-			intervalDue := (pending || started) && retry.due(now, timings.interval)
+			interval := timings.intervalNoPipe
+			if pipeConnected() {
+				interval = timings.interval
+			}
+			intervalDue := (pending || started) && retry.due(now, interval)
 			retryDue := pending && !retry.nextAttempt.IsZero() && !now.Before(retry.nextAttempt)
 			if intervalDue || retryDue {
 				run()

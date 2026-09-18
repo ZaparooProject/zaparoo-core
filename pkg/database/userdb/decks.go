@@ -110,6 +110,9 @@ func (db *UserDB) UpdateDeck(deckID string, edit func(deck *database.Deck) error
 		if err != nil {
 			return false, err
 		}
+		if lockErr := refuseLockedDeck(ctx, tx, deckID); lockErr != nil {
+			return false, lockErr
+		}
 		stored := deck.Items
 		deck.Items = slices.Clone(stored)
 		if editErr := edit(deck); editErr != nil {
@@ -152,6 +155,9 @@ func (db *UserDB) DeleteDeck(deckID string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		if lockErr := refuseLockedDeck(ctx, tx, deckID); lockErr != nil {
+			return false, lockErr
+		}
 		if _, err = tx.ExecContext(ctx, `delete from DeckItems where DeckDBID = ?;`, deck.DBID); err != nil {
 			return false, fmt.Errorf("failed to delete deck items: %w", err)
 		}
@@ -162,6 +168,27 @@ func (db *UserDB) DeleteDeck(deckID string) (bool, error) {
 		return true, nil
 	})
 	return existed, err
+}
+
+// refuseLockedDeck fails with ErrDeckReadOnly when the linked account locked
+// the deck. It reads the sync row inside the caller's transaction, so a lock
+// arriving from a sync pass cannot land between the check and the write, and
+// a row that cannot be read refuses the edit rather than allowing it. Sync
+// writes its own copy of a locked deck through UpsertRemoteDeck, which does
+// not come this way.
+func refuseLockedDeck(ctx context.Context, tx *sql.Tx, deckID string) error {
+	var locked bool
+	err := tx.QueryRowContext(ctx, `select Locked from DeckSync where DeckID = ?;`, deckID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read deck sync state: %w", err)
+	}
+	if locked {
+		return database.ErrDeckReadOnly
+	}
+	return nil
 }
 
 // UpsertRemoteDeck inserts or fully replaces a deck that arrived from
@@ -307,6 +334,32 @@ func adoptRemoteDeckItemRows(stored, arriving []database.DeckItem) {
 			break
 		}
 	}
+}
+
+// RenameDeck moves a deck and its sync row to a new ID. Fails with
+// ErrDeckNotFound when no deck holds oldID.
+func (db *UserDB) RenameDeck(oldID, newID string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return db.deckTx(func(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
+		res, err := tx.ExecContext(ctx, `update Decks set DeckID = ?, UpdatedAt = ? where DeckID = ?;`,
+			newID, now, oldID)
+		if err != nil {
+			return false, fmt.Errorf("failed to rename deck: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("failed to count renamed decks: %w", err)
+		}
+		if affected == 0 {
+			return false, fmt.Errorf("%w: %s", database.ErrDeckNotFound, oldID)
+		}
+		if _, err = tx.ExecContext(ctx, `update DeckSync set DeckID = ? where DeckID = ?;`, newID, oldID); err != nil {
+			return false, fmt.Errorf("failed to rename deck sync row: %w", err)
+		}
+		return true, nil
+	})
 }
 
 // SetDeckItemAnchor records the local file a game item resolved to. It never

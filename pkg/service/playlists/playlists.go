@@ -48,6 +48,10 @@ type Playlist struct {
 	// ForceRelaunch bypasses playlistNeedsUpdate dedup so the same track can be
 	// relaunched for LoopOne and single-item Loop.
 	ForceRelaunch bool
+	// Refresh replaces the items and name of the active playlist with the
+	// same ID in place, keeping its position and playback state and never
+	// launching anything. It is ignored when no such playlist is active.
+	Refresh bool
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {

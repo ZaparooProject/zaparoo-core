@@ -334,8 +334,9 @@ func runTokenZapScriptWithContext(
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
 				},
-				PlaybackManager: svc.PlaybackManager,
-				UI:              svc.UI,
+				PlaybackManager:  svc.PlaybackManager,
+				UI:               svc.UI,
+				RefreshOwnedDeck: svc.State.RefreshLibraryDeck,
 			},
 			&cmdEnv,
 		)
@@ -701,6 +702,22 @@ func launchPlaylistMedia(
 	}
 }
 
+// clearPlaylistSlot closes the playlist in one slot, stopping background
+// playback with it.
+func clearPlaylistSlot(svc *ServiceContext, slot string) {
+	if slot == mediaslot.Background {
+		if svc.PlaybackManager != nil {
+			if err := svc.PlaybackManager.Stop(mediaslot.Background); err != nil {
+				log.Warn().Err(err).Msg("failed to stop background playlist playback")
+			}
+		}
+		svc.State.SetBackgroundPlaylist(nil)
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+	svc.State.SetActivePlaylist(nil)
+}
+
 func handlePlaylist(
 	svc *ServiceContext,
 	pls *playlists.Playlist,
@@ -726,16 +743,40 @@ func handlePlaylist(
 		if activePlaylist != nil {
 			log.Info().Str("slot", slot).Msg("clearing playlist")
 		}
+		clearPlaylistSlot(svc, slot)
+		return
+	case pls.Refresh:
+		// The content of the active playlist changed underneath it, such as a
+		// deck edited elsewhere: swap the items in and keep the position and
+		// playback as they are.
+		if activePlaylist == nil || activePlaylist.ID != pls.ID {
+			log.Debug().Str("id", pls.ID).Msg("playlist refresh ignored; it is not the active playlist")
+			return
+		}
+		if len(pls.Items) == 0 {
+			// Everything was taken out of the deck elsewhere. Keeping an
+			// empty playlist open would let a loop advance into an item
+			// that is not there, so it closes instead.
+			log.Info().Str("id", pls.ID).Str("slot", slot).Msg("clearing playlist; its deck is now empty")
+			clearPlaylistSlot(svc, slot)
+			return
+		}
+		refreshed := *activePlaylist
+		refreshed.Name = pls.Name
+		refreshed.Items = pls.Items
+		refreshed.Loop = pls.Loop
+		refreshed.LoopOne = pls.LoopOne
+		if refreshed.Index >= len(refreshed.Items) {
+			refreshed.Index = len(refreshed.Items) - 1
+		}
+		if refreshed.Index < 0 {
+			refreshed.Index = 0
+		}
+		log.Info().Any("pls", playlistForLog(&refreshed)).Msg("refreshing playlist in place")
 		if slot == mediaslot.Background {
-			if svc.PlaybackManager != nil {
-				if err := svc.PlaybackManager.Stop(mediaslot.Background); err != nil {
-					log.Warn().Err(err).Msg("failed to stop background playlist playback")
-				}
-			}
-			svc.State.SetBackgroundPlaylist(nil)
-			svc.State.SetBackgroundMedia(nil)
+			svc.State.SetBackgroundPlaylist(&refreshed)
 		} else {
-			svc.State.SetActivePlaylist(nil)
+			svc.State.SetActivePlaylist(&refreshed)
 		}
 		return
 	case activePlaylist == nil:

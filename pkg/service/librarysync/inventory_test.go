@@ -32,7 +32,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -50,14 +52,17 @@ const (
 )
 
 type syncFixture struct {
-	ctx        context.Context
-	newClient  librarysync.ClientFactory
-	cfg        *config.Instance
-	db         *database.Database
-	online     *fakeOnline
-	svc        *librarysync.Service
-	now        atomic.Int64
-	heartbeats atomic.Int32
+	ctx       context.Context
+	newClient librarysync.ClientFactory
+	cfg       *config.Instance
+	db        *database.Database
+	online    *fakeOnline
+	svc       *librarysync.Service
+	// svcWithInbox is the same service with an inbox attached, for the
+	// paths that tell the user something could not be synced.
+	svcWithInbox *librarysync.Service
+	now          atomic.Int64
+	heartbeats   atomic.Int32
 }
 
 func nesPath(name string) string {
@@ -100,6 +105,13 @@ func newSyncFixtureWithPace(t *testing.T, pace time.Duration, paths ...string) *
 	manager := backup.NewManager(cfg, platform, db).
 		WithRateLimitWaits(time.Millisecond, time.Millisecond, 5*time.Millisecond)
 	f.newClient = manager.NewOnlineClient
+	db.DeckTags = &syncDeckTags{
+		db: db,
+		deps: &decks.ResolveDeps{
+			MediaDB: db.MediaDB, UserDB: db.UserDB, Cfg: cfg,
+			LaunchersForSystem: func(string) []platforms.Launcher { return nil },
+		},
+	}
 	f.svc = librarysync.New(&librarysync.Options{
 		Config:      cfg,
 		DB:          db,
