@@ -55,7 +55,10 @@ func HandleDecks(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list decks: %w", err)
 	}
-	locked := lockedDecks(&env)
+	locked, err := lockedDecks(&env)
+	if err != nil {
+		return nil, err
+	}
 	resp := models.DecksResponse{Decks: make([]models.DeckResponse, 0, len(list))}
 	for i := range list {
 		deck := deckSummary(&list[i])
@@ -79,7 +82,7 @@ func HandleDecksGet(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return lockedDeckResponse(&env, deck), nil
+	return lockedDeckResponse(&env, deck)
 }
 
 // HandleDecksNew creates a deck owned by this device.
@@ -139,9 +142,9 @@ func HandleDecksUpdate(env requests.RequestEnv) (any, error) {
 	}
 	if params.Name == nil && params.Description == nil && params.Items == nil &&
 		len(params.AddItems) == 0 && len(params.RemoveItemIDs) == 0 {
-		return lockedDeckResponse(&env, deck), nil
+		return lockedDeckResponse(&env, deck)
 	}
-	if !deck.Owned || isDeckLocked(&env, deck.DeckID) {
+	if !deck.Owned {
 		return nil, models.ClientErr(database.ErrDeckReadOnly)
 	}
 
@@ -209,9 +212,6 @@ func HandleDecksDelete(env requests.RequestEnv) (any, error) {
 	deckID, err := database.NormalizeDeckID(params.DeckID)
 	if err != nil {
 		return nil, models.ClientErr(err)
-	}
-	if isDeckLocked(&env, deckID) {
-		return nil, models.ClientErr(database.ErrDeckReadOnly)
 	}
 	existed, err := env.Database.UserDB.DeleteDeck(deckID)
 	if err != nil {
@@ -500,21 +500,23 @@ func anchorAvailability(env *requests.RequestEnv, items []database.DeckItem) map
 }
 
 // isDeckLocked reports whether the linked account locked a deck, which keeps
-// it read-only here.
-func isDeckLocked(env *requests.RequestEnv, deckID string) bool {
+// it read-only here. A sync row that cannot be read is an error rather than
+// an unlocked deck, so a failure never opens a locked deck up to edits.
+// Mutations are refused inside their own transaction as well; this answers
+// the clients that ask.
+func isDeckLocked(env *requests.RequestEnv, deckID string) (bool, error) {
 	row, found, err := env.Database.UserDB.GetDeckSync(deckID)
 	if err != nil {
-		log.Warn().Err(err).Str("deck", deckID).Msg("failed to read deck sync state")
-		return false
+		return false, fmt.Errorf("failed to read deck sync state: %w", err)
 	}
-	return found && row.Locked
+	return found && row.Locked, nil
 }
 
-func lockedDecks(env *requests.RequestEnv) map[string]bool {
+// lockedDecks names every deck the account locked, for the decks list.
+func lockedDecks(env *requests.RequestEnv) (map[string]bool, error) {
 	rows, err := env.Database.UserDB.ListDeckSync()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to read deck sync state")
-		return nil
+		return nil, fmt.Errorf("failed to read deck sync state: %w", err)
 	}
 	locked := make(map[string]bool, len(rows))
 	for i := range rows {
@@ -522,13 +524,18 @@ func lockedDecks(env *requests.RequestEnv) map[string]bool {
 			locked[rows[i].DeckID] = true
 		}
 	}
-	return locked
+	return locked, nil
 }
 
-func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) models.DeckResponse {
+// lockedDeckResponse is a deck with its items and its lock state.
+func lockedDeckResponse(env *requests.RequestEnv, deck *database.Deck) (models.DeckResponse, error) {
 	resp := deckResponse(deck, anchorAvailability(env, deck.Items))
-	resp.Locked = isDeckLocked(env, deck.DeckID)
-	return resp
+	locked, err := isDeckLocked(env, deck.DeckID)
+	if err != nil {
+		return models.DeckResponse{}, err
+	}
+	resp.Locked = locked
+	return resp, nil
 }
 
 // deckSummary is a deck as the decks list shows it, without items.

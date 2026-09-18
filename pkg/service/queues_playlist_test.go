@@ -1026,3 +1026,53 @@ func TestRunTokenZapScript_PlaylistHoldTokenCarriesTraitOverride(t *testing.T) {
 	require.NotNil(t, updated.HoldToken)
 	assert.Equal(t, config.ScanModeTap, updated.HoldToken.Traits.ScanMode())
 }
+
+// TestHandlePlaylist_RefreshToEmptyClosesPlaylist pins that a deck emptied
+// elsewhere closes the playlist instead of leaving one open with nothing in
+// it, which a loop would advance into and try to launch as an empty script.
+func TestHandlePlaylist_RefreshToEmptyClosesPlaylist(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	active.Index = 1
+	active.Playing = true
+	active.LoopOne = true
+	svc.State.SetActivePlaylist(active)
+
+	handlePlaylist(svc, &playlists.Playlist{ID: active.ID, Refresh: true, Items: nil}, nil)
+	assert.Nil(t, svc.State.GetActivePlaylist(), "an emptied deck closes its playlist")
+}
+
+// TestHandlePlaylist_RefreshToEmptyIgnoresOtherIDs pins that the empty case
+// still only touches the playlist it names.
+func TestHandlePlaylist_RefreshToEmptyIgnoresOtherIDs(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	svc.State.SetActivePlaylist(active)
+
+	handlePlaylist(svc, &playlists.Playlist{ID: "other", Refresh: true, Items: nil}, nil)
+	assert.Same(t, active, svc.State.GetActivePlaylist(), "another deck emptying leaves this one open")
+}
+
+// TestHandlePlaylist_BackgroundRefreshToEmptyStopsPlayback pins that closing
+// an emptied background playlist stops its playback, as an ordinary clear
+// does.
+func TestHandlePlaylist_BackgroundRefreshToEmptyStopsPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	active := makeServicePlaylist()
+	active.Slot = mediaslot.Background
+	svc.State.SetBackgroundPlaylist(active)
+
+	handlePlaylist(svc, &playlists.Playlist{
+		ID: active.ID, Slot: mediaslot.Background, Refresh: true, Items: nil,
+	}, nil)
+	assert.Nil(t, svc.State.GetBackgroundPlaylist())
+	assert.Contains(t, recorder.stopped, mediaslot.Background, "background playback is stopped")
+}

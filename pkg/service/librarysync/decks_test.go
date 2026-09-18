@@ -114,6 +114,21 @@ func (f *syncFixture) editDeck(t *testing.T, deckID string, edit func(deck *data
 	require.NoError(t, err)
 }
 
+// deckSyncRow is the bookkeeping the device holds for one deck.
+func (f *syncFixture) deckSyncRow(t *testing.T, deckID string) database.DeckSyncRow {
+	t.Helper()
+	row, found, err := f.deckSyncRowLookup(t, deckID)
+	require.NoError(t, err)
+	require.True(t, found, "no sync row for deck %s", deckID)
+	return row
+}
+
+func (f *syncFixture) deckSyncRowLookup(t *testing.T, deckID string) (database.DeckSyncRow, bool, error) {
+	t.Helper()
+	row, found, err := f.db.UserDB.GetDeckSync(deckID)
+	return row, found, err //nolint:wrapcheck // test helper passes the error through
+}
+
 func (f *syncFixture) localDeck(t *testing.T, deckID string) *database.Deck {
 	t.Helper()
 	deck, err := f.db.UserDB.GetDeck(deckID)
@@ -392,6 +407,9 @@ func TestSyncDecks_AccountEraseKeepsLocalDecks(t *testing.T) {
 	assert.Equal(t, 2, result.Pushed, "local decks push again as new")
 	require.NotNil(t, f.online.deck("0123456789ab"))
 	require.NotNil(t, f.online.deck("bbbbbbbbbbbb"))
+	tags, ok := f.db.DeckTags.(*syncDeckTags)
+	require.True(t, ok)
+	assert.Positive(t, tags.all, "an erase reprojects every deck, including ones this pass did not write")
 }
 
 // TestSyncDecks_LegacyIDDeckIsHeldBack pins that one deck the account cannot
@@ -456,4 +474,169 @@ func TestSyncDecks_OverLongMergeTellsTheUser(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].Title, "too long")
+}
+
+// TestSyncDecks_DeckDeletedDuringConflictingPush pins the race where a client
+// deletes a deck while its push is in flight and the account answers with a
+// conflict. Reloading the deck then finds nothing, which must not fail the
+// pass and back every other deck off with it.
+func TestSyncDecks_DeckDeletedDuringConflictingPush(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Racy", scriptDeckItem("A", "**a"))
+	f.createDeck(t, "bbbbbbbbbbbb", "Calm", scriptDeckItem("B", "**b"))
+	f.syncDecks(t)
+
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) { deck.Name = "Changed Here" })
+
+	// The account moves the deck on after the pull, so the push conflicts,
+	// and the deck is deleted here in the same window.
+	f.online.onDeckPush(func(online *fakeOnline) {
+		online.moveDeckOn("0123456789AB", "Changed There")
+		_, err := f.db.UserDB.DeleteDeck("0123456789ab")
+		require.NoError(t, err)
+	})
+
+	result, err := f.svc.SyncDecks(f.ctx)
+	require.NoError(t, err, "a deck deleted mid-push does not fail the pass")
+	assert.Positive(t, result.Conflicts)
+
+	_, err = f.db.UserDB.GetDeck("bbbbbbbbbbbb")
+	require.NoError(t, err, "the other deck is untouched")
+}
+
+// TestSyncDecks_RepeatedConflictsTakeTheAccountCopy pins the escape hatch for
+// a deck that will not converge: after deckMaxConflicts merges in a row the
+// device stops merging and adopts the account's copy, so a deck cannot keep
+// conflicting forever.
+func TestSyncDecks_RepeatedConflictsTakeTheAccountCopy(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.syncDecks(t)
+	require.NoError(t, f.db.UserDB.UpsertDeckSync([]database.DeckSyncRow{{
+		DeckID: "0123456789ab", Revision: f.online.deck("0123456789ab").Revision,
+		Snapshot: f.deckSyncRow(t, "0123456789ab").Snapshot, Conflicts: 5,
+	}}))
+
+	// The account moves on after the pull, so the push conflicts.
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) {
+		deck.Items = append(deck.Items, scriptDeckItem("Mine Only", "**mine"))
+	})
+	f.online.onDeckPush(func(online *fakeOnline) { online.moveDeckOn("0123456789AB", "Changed There") })
+
+	result, err := f.svc.SyncDecks(f.ctx)
+	require.NoError(t, err)
+	assert.Positive(t, result.Conflicts)
+
+	local := f.localDeck(t, "0123456789ab")
+	assert.Equal(t, "Changed There", local.Name, "the account's copy wins once merging keeps failing")
+	assert.Equal(t, []string{"**a"}, itemScripts(local), "the local addition is dropped with it")
+	assert.Equal(t, 0, f.deckSyncRow(t, "0123456789ab").Conflicts, "the conflict count starts over")
+}
+
+// TestSyncDecks_DeleteStandsOverAnAccountEdit pins that deleting a deck here
+// while the account edits it keeps the delete: the push conflicts, is sent
+// again against the revision the account moved to, and lands in the same
+// pass rather than waiting for the next one.
+func TestSyncDecks_DeleteStandsOverAnAccountEdit(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.syncDecks(t)
+
+	_, err := f.db.UserDB.DeleteDeck("0123456789ab")
+	require.NoError(t, err)
+	f.online.onDeckPush(func(online *fakeOnline) { online.moveDeckOn("0123456789AB", "Changed There") })
+
+	result, err := f.svc.SyncDecks(f.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Conflicts, "the account had moved the deck on")
+	assert.Equal(t, 1, result.Pushed, "the delete is sent again against the new revision")
+	assert.True(t, f.online.deck("0123456789ab").Deleted, "the delete stands")
+
+	_, found, err := f.deckSyncRowLookup(t, "0123456789ab")
+	require.NoError(t, err)
+	assert.False(t, found, "a deck gone from both sides keeps no bookkeeping")
+}
+
+// TestSyncDecks_PushRejectedByALock pins the lock arriving as a push
+// rejection rather than through a pull: the device takes the account's copy,
+// marks the deck locked and tells the user its changes were replaced.
+func TestSyncDecks_PushRejectedByALock(t *testing.T) {
+	f := newSyncFixtureWithInbox(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	_, err := f.svcWithInbox.SyncDecks(f.ctx)
+	require.NoError(t, err)
+
+	// Locked on the account at the same revision, so the push is answered
+	// with a rejection instead of a conflict, and the pull does not run.
+	f.online.lockDeck("0123456789AB")
+	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyDecksSince, "999999"))
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) { deck.Name = "Changed Here" })
+
+	result, err := f.svcWithInbox.SyncDecks(f.ctx)
+	require.NoError(t, err)
+	assert.Zero(t, result.Pushed)
+
+	local := f.localDeck(t, "0123456789ab")
+	assert.Equal(t, "Mine", local.Name, "the account's copy replaces the local edit")
+	row := f.deckSyncRow(t, "0123456789ab")
+	assert.True(t, row.Locked, "the deck is read-only from now on")
+
+	messages, err := f.db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Title, "locked")
+}
+
+// TestSyncDecks_ConflictWithNoAccountDeckCreatesItAgain pins the conflict
+// that names no deck, which is the account saying it holds nothing under
+// that ID: the device creates it again rather than dropping it.
+func TestSyncDecks_ConflictWithNoAccountDeckCreatesItAgain(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.syncDecks(t)
+
+	f.online.forgetDeck("0123456789AB")
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) { deck.Name = "Changed Here" })
+
+	result := f.syncDecks(t)
+	assert.Equal(t, 1, result.Conflicts)
+	require.NotNil(t, f.online.deck("0123456789ab"), "the deck is created again in the same pass")
+	assert.Equal(t, "Changed Here", f.online.deck("0123456789ab").Name)
+	assert.Positive(t, f.deckSyncRow(t, "0123456789ab").Revision)
+}
+
+// TestSyncDecks_CreateAnsweredWithADifferentDeck pins a create the account
+// answers with a deck it already held under that ID: both sides' items
+// survive, since nothing was ever agreed between them.
+func TestSyncDecks_CreateAnsweredWithADifferentDeck(t *testing.T) {
+	f := newSyncFixture(t)
+	f.createDeck(t, "0123456789ab", "Mine", scriptDeckItem("A", "**a"))
+	f.online.putDeck(&fakeDeck{
+		DeckID: "0123456789ab", Name: "Theirs",
+		Items: []fakeDeckItem{{Kind: "script", Name: "B", ZapScript: "**b"}},
+	})
+	// The pull is skipped, so the deck is offered as a create.
+	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyDecksSince, "999999"))
+
+	f.syncDecks(t)
+	local := f.localDeck(t, "0123456789ab")
+	assert.ElementsMatch(t, []string{"**a", "**b"}, itemScripts(local), "neither side's items are lost")
+}
+
+// TestSyncDecks_SkipsADeckIDThisCoreCannotHold pins that a deck the account
+// names with an ID this Core cannot store is skipped, leaving the rest of
+// the page to apply.
+func TestSyncDecks_SkipsADeckIDThisCoreCannotHold(t *testing.T) {
+	f := newSyncFixture(t)
+	f.online.putDeck(&fakeDeck{DeckID: "SHORT", Name: "Unusable"})
+	f.online.putDeck(&fakeDeck{
+		DeckID: "ABCDEFGHJKMN", Name: "Fine",
+		Items: []fakeDeckItem{{Kind: "script", Name: "A", ZapScript: "**a"}},
+	})
+
+	f.syncDecks(t)
+	assert.Equal(t, "Fine", f.localDeck(t, "abcdefghjkmn").Name, "the usable deck still arrives")
+	list, err := f.db.UserDB.ListDecks()
+	require.NoError(t, err)
+	assert.Len(t, list, 1, "the unusable deck is skipped")
 }

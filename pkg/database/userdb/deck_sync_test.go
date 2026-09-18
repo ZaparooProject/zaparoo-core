@@ -82,3 +82,40 @@ func TestRenameDeckMovesItsSyncRow(t *testing.T) {
 
 	require.ErrorIs(t, db.RenameDeck("0123456789ab", "yyyyyyyyyyyy"), database.ErrDeckNotFound)
 }
+
+// Deck sync bookkeeping is read on every pass and on API requests that report
+// a deck's lock. Without a connection each entry point has to say so rather
+// than answer as though the device had no locked or synced decks.
+func TestDeckSync_WithoutAConnection(t *testing.T) {
+	t.Parallel()
+	db := &UserDB{}
+
+	rows, err := db.ListDeckSync()
+	require.ErrorIs(t, err, ErrNullSQL)
+	assert.Nil(t, rows)
+
+	_, found, err := db.GetDeckSync("0123456789ab")
+	require.ErrorIs(t, err, ErrNullSQL)
+	assert.False(t, found)
+
+	require.ErrorIs(t, db.UpsertDeckSync([]database.DeckSyncRow{{DeckID: "0123456789ab"}}), ErrNullSQL)
+	require.ErrorIs(t, db.DeleteDeckSync([]string{"0123456789ab"}), ErrNullSQL)
+	require.ErrorIs(t, db.ClearDeckSync(), ErrNullSQL)
+}
+
+// An empty write is what a pass with nothing to record asks for, and it must
+// not open a transaction to do nothing.
+func TestDeckSync_EmptyWritesDoNothing(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.UpsertDeckSync([]database.DeckSyncRow{{DeckID: "0123456789ab", Revision: 4}}))
+
+	require.NoError(t, (&UserDB{}).UpsertDeckSync(nil), "an empty upsert needs no connection")
+	require.NoError(t, (&UserDB{}).DeleteDeckSync(nil), "an empty delete needs no connection")
+
+	rows, err := db.ListDeckSync()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "the stored row is untouched")
+	assert.Equal(t, int64(4), rows[0].Revision)
+}

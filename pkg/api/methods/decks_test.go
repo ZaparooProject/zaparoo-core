@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -643,4 +644,42 @@ func TestHandleDecksOpen(t *testing.T) {
 
 	_, err = HandleDecksOpen(withParams(&e.env, `{"deckId":"zzzzzzzzzzzz"}`))
 	require.ErrorIs(t, err, database.ErrDeckNotFound)
+}
+
+// TestHandleDecks_SyncStateReadFailureIsReported pins that a deck's lock is
+// never reported as "unlocked" because the sync bookkeeping could not be
+// read. Answering false would show a locked deck as editable.
+func TestHandleDecks_SyncStateReadFailureIsReported(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	readErr := errors.New("deck sync unavailable")
+	mockUserDB.On("ListDecks").Return([]database.Deck{
+		{DeckID: "0123456789ab", Name: "Weekend", Owned: true},
+	}, nil)
+	mockUserDB.On("ListDeckSync").Return(nil, readErr)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+	}
+	_, err := HandleDecks(withParams(&env, `{}`))
+	require.ErrorIs(t, err, readErr, "the list fails rather than showing every deck as unlocked")
+}
+
+// TestHandleDecksGet_SyncStateReadFailureIsReported is the same for one deck.
+func TestHandleDecksGet_SyncStateReadFailureIsReported(t *testing.T) {
+	t.Parallel()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	readErr := errors.New("deck sync unavailable")
+	mockUserDB.On("GetDeck", "0123456789ab").Return(&database.Deck{
+		DeckID: "0123456789ab", Name: "Weekend", Owned: true,
+	}, nil)
+	mockUserDB.On("GetDeckSync", "0123456789ab").Return(database.DeckSyncRow{}, false, readErr)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+	}
+	_, err := HandleDecksGet(withParams(&env, `{"deckId":"0123456789ab"}`))
+	require.ErrorIs(t, err, readErr)
 }

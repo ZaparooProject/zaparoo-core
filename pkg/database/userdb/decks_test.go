@@ -443,3 +443,68 @@ func TestSetDeckItemAnchor(t *testing.T) {
 	assert.Equal(t, database.DeckItemKindCard, stored.Items[1].Kind)
 	assert.Empty(t, stored.Items[1].Anchor.Path)
 }
+
+// TestUpdateDeck_RefusesLockedDeck pins that the lock is enforced where the
+// deck is written, not only where a request is checked. A sync pass can lock
+// a deck between an API handler's check and its write, and a sync row that
+// cannot be read must refuse the edit rather than allow it.
+func TestUpdateDeck_RefusesLockedDeck(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Locked", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**a"}},
+	}))
+	require.NoError(t, db.UpsertDeckSync([]database.DeckSyncRow{
+		{DeckID: "0123456789ab", Revision: 3, Locked: true},
+	}))
+
+	_, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Name = "Changed"
+		return nil
+	})
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+
+	_, err = db.DeleteDeck("0123456789ab")
+	require.ErrorIs(t, err, database.ErrDeckReadOnly)
+
+	stored, err := db.GetDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.Equal(t, "Locked", stored.Name, "the refused edit changed nothing")
+
+	// Sync still writes the account's own copy of a locked deck.
+	changed, err := db.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "From Online", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "B", ZapScript: "**b"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, changed)
+}
+
+// TestUpdateDeck_UnlockedDeckStillEdits pins that an unsynced deck, which has
+// no sync row at all, is not caught by the lock check.
+func TestUpdateDeck_UnlockedDeckStillEdits(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "0123456789ab", Name: "Mine", Owned: true}))
+
+	updated, err := db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Name = "Renamed"
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", updated.Name)
+
+	require.NoError(t, db.UpsertDeckSync([]database.DeckSyncRow{{DeckID: "0123456789ab", Revision: 1}}))
+	_, err = db.UpdateDeck("0123456789ab", func(deck *database.Deck) error {
+		deck.Name = "Renamed Again"
+		return nil
+	})
+	require.NoError(t, err, "a synced but unlocked deck still edits")
+
+	existed, err := db.DeleteDeck("0123456789ab")
+	require.NoError(t, err)
+	assert.True(t, existed)
+}

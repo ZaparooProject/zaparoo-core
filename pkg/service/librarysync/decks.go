@@ -403,6 +403,10 @@ func (p *deckPass) pull(ctx context.Context) error {
 				return fmt.Errorf("clear deck sync rows: %w", err)
 			}
 			p.rows = make(map[string]*database.DeckSyncRow)
+			// Every deck is about to be pushed again as new, and decks the
+			// account no longer holds may lose their rows, so reproject the
+			// lot rather than only the decks this pass touches.
+			p.svc.db.QueueAllDeckTags()
 			since = 0
 		}
 		for i := range page.Items {
@@ -814,7 +818,7 @@ func (p *deckPass) handleConflict(pending *pendingDeck, remote *deckSync) error 
 		return p.saveRow(next)
 	}
 	local, err := p.userDB().GetDeck(pending.deckID)
-	if err != nil {
+	if err != nil && !errors.Is(err, database.ErrDeckNotFound) {
 		return fmt.Errorf("read deck %s: %w", pending.deckID, err)
 	}
 	server := serverDeckContent(remote)

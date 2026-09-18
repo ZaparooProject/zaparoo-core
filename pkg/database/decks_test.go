@@ -94,3 +94,38 @@ func TestDeckCardScriptsRoundTrip(t *testing.T) {
 	scripts := []DeckCardScript{{Name: "Play", ZapScript: "**launch.system:SNES"}, {ZapScript: "**delay:100"}}
 	assert.Equal(t, scripts, DecodeDeckCardScripts(EncodeDeckCardScripts(scripts)))
 }
+
+func TestIsMintedDeckID(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		deckID string
+		want   bool
+	}{
+		{name: "minted", deckID: "0123456789ab", want: true},
+		{name: "minted upper case", deckID: "ABCDEFGHJKMN", want: true},
+		{name: "legacy eight characters", deckID: "abcd1234", want: false},
+		{name: "empty", deckID: "", want: false},
+		{name: "too short", deckID: "0123456789a", want: false},
+		{name: "too long", deckID: "0123456789abc", want: false},
+		{name: "letter the minted alphabet leaves out", deckID: "0123456789ai", want: false},
+		{name: "punctuation", deckID: "0123456789a-", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsMintedDeckID(tt.deckID))
+		})
+	}
+}
+
+// TestIsMintedDeckIDMatchesNewDeckID pins that what this device mints is
+// always accepted, since only a minted ID can create a deck on an account.
+func TestIsMintedDeckIDMatchesNewDeckID(t *testing.T) {
+	t.Parallel()
+	for range 50 {
+		id, err := NewDeckID()
+		require.NoError(t, err)
+		assert.True(t, IsMintedDeckID(id), "minted %q must be accepted", id)
+	}
+}

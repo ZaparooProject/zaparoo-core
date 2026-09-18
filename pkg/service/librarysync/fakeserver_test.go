@@ -58,6 +58,7 @@ type fakeOnline struct {
 	resolveCode   string
 	rejectState   string
 	resolved      [][]database.MediaIdentity
+	deckPushHook  func(*fakeOnline)
 	statePushes   [][]fakeStatePushItem
 	deckPushes    [][]fakeDeckPushRecord
 	mu            syncutil.Mutex
@@ -694,6 +695,10 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if hook := f.deckPushHook; hook != nil {
+		f.deckPushHook = nil
+		hook(f)
+	}
 	f.deckPushes = append(f.deckPushes, request.Items)
 	results := make([]map[string]any, 0, len(request.Items))
 	result := func(i int, status, code string, deck *fakeDeck) {
@@ -817,6 +822,43 @@ func (f *fakeOnline) handleDeckPull(w http.ResponseWriter, r *http.Request) {
 		next = decks[len(decks)-1].Revision
 	}
 	writeFakeJSON(w, map[string]any{"items": decks, "next_since": next, "has_more": hasMore, "reset": reset})
+}
+
+// onDeckPush runs fn once, inside the next deck push, to act out a race with
+// whatever the device does between building the push and reading its answer.
+func (f *fakeOnline) onDeckPush(fn func(*fakeOnline)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deckPushHook = fn
+}
+
+// moveDeckOn gives a deck a new revision the way another device's edit
+// would. It takes no lock: it is called from inside a request.
+func (f *fakeOnline) moveDeckOn(deckID, name string) {
+	deck, ok := f.decks[deckID]
+	if !ok {
+		return
+	}
+	f.deckRevision++
+	deck.Revision = f.deckRevision
+	deck.Name = name
+}
+
+// lockDeck locks a deck without moving its revision, the way the account
+// does when its owner locks it.
+func (f *fakeOnline) lockDeck(deckID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if deck, ok := f.decks[strings.ToUpper(deckID)]; ok {
+		deck.IsLocked = true
+	}
+}
+
+// forgetDeck drops a deck from the account entirely, without a tombstone.
+func (f *fakeOnline) forgetDeck(deckID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.decks, strings.ToUpper(deckID))
 }
 
 // eraseDecks is the account-wide erase: every deck is gone and a pull from
