@@ -259,8 +259,7 @@ func TestRemoteBackupScheduler_PlaySyncRequestBypassesSuccessInterval(t *testing
 
 	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-	require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 	cfg.SetBackupRemoteEnabled(false)
 	cfg.SetPlaytimeSync(true)
 	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
@@ -366,8 +365,7 @@ func TestRemoteBackupScheduler_PlaySyncExpectedInactivityResumes(t *testing.T) {
 
 			cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 			require.NoError(t, err)
-			require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-			require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+			require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 			cfg.SetBackupRemoteEnabled(false)
 			cfg.SetPlaytimeSync(tt.initiallyEnabled)
 			credentials := map[string]config.CredentialEntry{
@@ -466,8 +464,7 @@ func TestRemoteBackupScheduler_PlaySyncRemoteUnlinkedWaitsForCredentialChange(t 
 
 	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
-	require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
 	cfg.SetBackupRemoteEnabled(false)
 	cfg.SetPlaytimeSync(true)
 	lookupURL := config.RemoteAuthLookupURL(server.URL)
@@ -625,4 +622,98 @@ func TestRunScheduledRemoteBackupSkipsWhilePaused(t *testing.T) {
 	// The pause gate must be checked before anything else: the nil platform
 	// and database would panic if the run proceeded past it.
 	runScheduledRemoteBackup(context.Background(), nil, nil, nil, nil, pauser)
+}
+
+// TestRemoteHeartbeatResendsOnCapabilityChange pins that a consent switch the
+// user just flipped reaches the account on the next scheduler pass. Waiting
+// out the daily heartbeat interval would leave the account showing Library
+// sync as on for up to a day after it was turned off.
+func TestRemoteHeartbeatResendsOnCapabilityChange(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	rootDir := t.TempDir()
+	heartbeats := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			var body struct {
+				Capabilities map[string]any `json:"capabilities"`
+			}
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			heartbeats <- body.Capabilities
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "device-1", "name": "test", "backup_active": false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetOnlineBaseURL(server.URL))
+	cfg.SetBackupRemoteEnabled(false)
+	cfg.SetPlaytimeSync(false)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: rootDir, ConfigDir: rootDir,
+	}).Maybe()
+	st, _ := stateservice.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+	db := &database.Database{UserDB: testhelpers.NewMockUserDBI()}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		remoteBackupSchedulerLoop(
+			ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), make(chan struct{}),
+			func(time.Duration) *time.Ticker { return time.NewTicker(5 * time.Millisecond) },
+		)
+		close(done)
+	}()
+
+	waitForHeartbeat := func() map[string]any {
+		t.Helper()
+		select {
+		case capabilities := <-heartbeats:
+			return capabilities
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for heartbeat")
+			return nil
+		}
+	}
+
+	startup := waitForHeartbeat()
+	assert.Equal(t, map[string]any{"version": float64(1), "enabled": false}, startup["library_sync"],
+		"the startup heartbeat reports Library sync as off")
+
+	// Many passes with nothing changed must not re-send: the daily interval
+	// still holds while the capability document is the one already reported.
+	require.Never(t, func() bool { return len(heartbeats) > 0 }, 200*time.Millisecond, 10*time.Millisecond,
+		"an unchanged capability document is not re-sent every pass")
+
+	cfg.SetLibrarySync(true)
+	enabled := waitForHeartbeat()
+	assert.Equal(t, map[string]any{"version": float64(1), "enabled": true}, enabled["library_sync"],
+		"turning Library sync on is reported without waiting out the daily interval")
+
+	cfg.SetLibrarySync(false)
+	disabled := waitForHeartbeat()
+	assert.Equal(t, map[string]any{"version": float64(1), "enabled": false}, disabled["library_sync"],
+		"turning Library sync off is reported just as promptly")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backup scheduler did not stop after cancellation")
+	}
 }

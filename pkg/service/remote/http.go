@@ -95,7 +95,7 @@ func (m *manager) doJSON(
 	if bearer == "" {
 		return errUnauthorized
 	}
-	endpoint, err := buildEndpoint(m.deps.Config.RemoteControlBaseURL(), requestPath)
+	endpoint, err := buildEndpoint(m.deps.Config.OnlineBaseURL(), requestPath)
 	if err != nil {
 		return err
 	}
