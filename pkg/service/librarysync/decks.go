@@ -61,6 +61,9 @@ const (
 
 	codeDeckLocked  = "deck_locked"
 	codeDeckIDTaken = "deck_id_taken"
+	// codeDeckIDUncreatable is this device's own note that a deck was never
+	// offered to the account, because only a minted ID can be created there.
+	codeDeckIDUncreatable = "deck_id_uncreatable"
 )
 
 // DecksResult summarizes one deck pass.
@@ -478,6 +481,10 @@ func (p *deckPass) writeLocal(
 		log.Warn().Str("deck", deckID).Int("items", len(content.Items)).
 			Msg("merged deck is over the item limit; taking the account's copy")
 		server := serverDeckContent(remote)
+		p.svc.notifyInbox("Deck too long to merge", fmt.Sprintf(
+			"%q holds %d items on Zaparoo Online and cannot take the ones added here as well, "+
+				"so the account's copy was kept. The limit is %d items.",
+			server.Name, len(server.Items), database.DeckMaxItems), inbox.CategoryNone)
 		content = &server
 	}
 	serverCards := make(map[string]*deckSyncItem)
@@ -649,6 +656,16 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 		if row != nil && row.RejectedHash != "" && row.RejectedHash == content.hash() {
 			continue
 		}
+		if pushIsCreate(row) && !database.IsMintedDeckID(deckID) {
+			// The account only takes a minted ID on a create, and refuses
+			// the whole batch over one record, so holding this deck back
+			// keeps every other deck syncing. Nothing about the deck is
+			// stored as rejected, so a later Core that can create it will.
+			if err := p.reportUncreatableDeck(deckID, deck.Name); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		record := deckPushRecord{DeckID: deckID, Name: &content.Name, Description: &content.Description}
 		items := make([]deckPushItemInput, 0, len(content.Items))
 		for _, item := range content.Items {
@@ -677,6 +694,31 @@ func (p *deckPass) dirtyRecords() ([]pendingDeck, error) {
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].deckID < pending[j].deckID })
 	return pending, nil
+}
+
+// pushIsCreate reports whether pushing this deck would be a create, the only
+// push where the account reads the deck's ID as one a device minted.
+func pushIsCreate(row *database.DeckSyncRow) bool { return row == nil || row.Revision == 0 }
+
+// reportUncreatableDeck tells the user, once, that a deck stays on the
+// device. It is held back rather than marked rejected: the deck is fine, it
+// is its older ID the account will not take on a create.
+func (p *deckPass) reportUncreatableDeck(deckID, name string) error {
+	row := p.rows[deckID]
+	if row != nil && row.RejectedCode == codeDeckIDUncreatable {
+		return nil
+	}
+	log.Warn().Str("deck", deckID).Msg("deck cannot be created on the account under its ID; keeping it here")
+	p.svc.notifyInbox("Deck not synced", fmt.Sprintf(
+		"%q stays on this device: its ID is older than the ones Zaparoo Online issues, "+
+			"and the account cannot take it as a new deck.", name), inbox.CategoryNone)
+	next := &database.DeckSyncRow{DeckID: deckID, RejectedCode: codeDeckIDUncreatable}
+	if row != nil {
+		copied := *row
+		copied.RejectedCode = codeDeckIDUncreatable
+		next = &copied
+	}
+	return p.saveRow(next)
 }
 
 func (p *deckPass) handlePushResults(batch []pendingDeck, response *deckPushResponse) (bool, error) {

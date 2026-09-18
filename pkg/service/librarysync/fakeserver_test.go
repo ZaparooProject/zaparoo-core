@@ -662,6 +662,20 @@ func (f *fakeOnline) unknownCard(items []fakeDeckItem) bool {
 	return false
 }
 
+// mintedFakeDeckID mirrors the account's rule for a create: twelve
+// characters of Crockford base32.
+func mintedFakeDeckID(deckID string) bool {
+	if len(deckID) != 12 {
+		return false
+	}
+	for _, r := range strings.ToUpper(deckID) {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", r) {
+			return false
+		}
+	}
+	return true
+}
+
 func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Items []fakeDeckPushRecord `json:"items"`
@@ -670,6 +684,15 @@ func (f *fakeOnline) handleDeckPush(w http.ResponseWriter, r *http.Request) {
 		len(request.Items) > 200 {
 		writeFakeError(w, http.StatusBadRequest, "validation_error")
 		return
+	}
+	// The account reads a create's deck ID as one a device minted and
+	// refuses the whole request over a single bad record, before it applies
+	// any of them.
+	for i := range request.Items {
+		if request.Items[i].BaseRevision == 0 && !mintedFakeDeckID(request.Items[i].DeckID) {
+			writeFakeError(w, http.StatusBadRequest, "validation_error")
+			return
+		}
 	}
 	f.deckPushes = append(f.deckPushes, request.Items)
 	results := make([]map[string]any, 0, len(request.Items))

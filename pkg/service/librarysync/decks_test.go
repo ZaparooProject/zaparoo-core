@@ -22,13 +22,16 @@ package librarysync_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +41,24 @@ const (
 	postDecks = "POST /v1/device/decks"
 	getDecks  = "GET /v1/device/decks"
 )
+
+// newSyncFixtureWithInbox is newSyncFixture with an inbox attached, for the
+// paths that tell the user a deck could not be synced. syncDecks on the
+// fixture uses the service without one, so tests that want the messages call
+// svcWithInbox.
+func newSyncFixtureWithInbox(t *testing.T) *syncFixture {
+	t.Helper()
+	f := newSyncFixture(t)
+	notifications := make(chan models.Notification, 16)
+	t.Cleanup(func() { close(notifications) })
+	f.svcWithInbox = librarysync.New(&librarysync.Options{
+		Config: f.cfg, DB: f.db, NewClient: f.newClient,
+		Inbox: inbox.NewService(f.db.UserDB, notifications),
+		Now:   func() time.Time { return time.Unix(f.now.Load(), 0).UTC() }, ResolvePace: time.Millisecond,
+	})
+	f.svc = f.svcWithInbox
+	return f
+}
 
 // syncDeckTags projects queued decks then and there, so a test sees the tags
 // a pass asks for without running the background tagger.
@@ -371,4 +392,68 @@ func TestSyncDecks_AccountEraseKeepsLocalDecks(t *testing.T) {
 	assert.Equal(t, 2, result.Pushed, "local decks push again as new")
 	require.NotNil(t, f.online.deck("0123456789ab"))
 	require.NotNil(t, f.online.deck("bbbbbbbbbbbb"))
+}
+
+// TestSyncDecks_LegacyIDDeckIsHeldBack pins that one deck the account cannot
+// create never stops the others. A deck the account issued before devices
+// minted IDs keeps its shorter ID; offering it as a create is refused for the
+// whole batch, so it is held back and the user is told.
+func TestSyncDecks_LegacyIDDeckIsHeldBack(t *testing.T) {
+	f := newSyncFixtureWithInbox(t)
+	f.createDeck(t, "abcd1234", "Old One", scriptDeckItem("A", "**a"))
+	f.createDeck(t, "0123456789ab", "New One", scriptDeckItem("B", "**b"))
+
+	result := f.syncDecks(t)
+	assert.Equal(t, 1, result.Pushed, "the deck with a minted ID still syncs")
+	assert.NotNil(t, f.online.deck("0123456789ab"), "the minted deck reached the account")
+	assert.Nil(t, f.online.deck("ABCD1234"), "the legacy deck was never offered")
+	assert.NotNil(t, f.localDeck(t, "abcd1234"), "the legacy deck is kept on the device")
+
+	messages, err := f.db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1, "the user is told once that a deck stays here")
+	assert.Contains(t, messages[0].Body, "Old One")
+
+	// A second pass says nothing more and still syncs everything else.
+	f.online.resetCalls()
+	_, err = f.svcWithInbox.SyncDecks(f.ctx)
+	require.NoError(t, err)
+	messages, err = f.db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	assert.Len(t, messages, 1, "the message is not repeated every pass")
+}
+
+// TestSyncDecks_OverLongMergeTellsTheUser pins that when a merge cannot hold
+// both sides' items, the user learns their additions were dropped rather than
+// finding them silently gone.
+func TestSyncDecks_OverLongMergeTellsTheUser(t *testing.T) {
+	f := newSyncFixtureWithInbox(t)
+	full := make([]database.DeckItem, 0, database.DeckMaxItems)
+	for i := range database.DeckMaxItems {
+		full = append(full, scriptDeckItem(fmt.Sprintf("S%d", i), fmt.Sprintf("**s%d", i)))
+	}
+	f.createDeck(t, "0123456789ab", "Full", full...)
+	_, err := f.svcWithInbox.SyncDecks(f.ctx)
+	require.NoError(t, err)
+
+	// The account replaces every item; this device adds one of its own.
+	remote := f.online.deck("0123456789ab")
+	remote.Items = make([]fakeDeckItem, 0, database.DeckMaxItems)
+	for i := range database.DeckMaxItems {
+		remote.Items = append(remote.Items,
+			fakeDeckItem{Kind: "script", Name: fmt.Sprintf("T%d", i), ZapScript: fmt.Sprintf("**t%d", i)})
+	}
+	f.online.putDeck(remote)
+	f.editDeck(t, "0123456789ab", func(deck *database.Deck) {
+		deck.Items[len(deck.Items)-1] = scriptDeckItem("Mine", "**mine")
+	})
+
+	_, err = f.svcWithInbox.SyncDecks(f.ctx)
+	require.NoError(t, err)
+	local := f.localDeck(t, "0123456789ab")
+	assert.Len(t, local.Items, database.DeckMaxItems, "the deck stays within the limit")
+	messages, err := f.db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Title, "too long")
 }

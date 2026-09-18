@@ -52,14 +52,17 @@ const (
 )
 
 type syncFixture struct {
-	ctx        context.Context
-	newClient  librarysync.ClientFactory
-	cfg        *config.Instance
-	db         *database.Database
-	online     *fakeOnline
-	svc        *librarysync.Service
-	now        atomic.Int64
-	heartbeats atomic.Int32
+	ctx       context.Context
+	newClient librarysync.ClientFactory
+	cfg       *config.Instance
+	db        *database.Database
+	online    *fakeOnline
+	svc       *librarysync.Service
+	// svcWithInbox is the same service with an inbox attached, for the
+	// paths that tell the user something could not be synced.
+	svcWithInbox *librarysync.Service
+	now          atomic.Int64
+	heartbeats   atomic.Int32
 }
 
 func nesPath(name string) string {

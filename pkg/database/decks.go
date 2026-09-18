@@ -164,6 +164,22 @@ func NormalizeDeckID(raw string) (string, error) {
 	return strings.ToLower(id), nil
 }
 
+// IsMintedDeckID reports whether an ID is one a device minted, rather than a
+// legacy ID issued before minting moved to devices. Only a minted ID can be
+// used to create a deck on an account, so a legacy one is never offered as a
+// create. The ID must already be normalized.
+func IsMintedDeckID(deckID string) bool {
+	if len(deckID) != DeckIDLength {
+		return false
+	}
+	for _, r := range strings.ToUpper(deckID) {
+		if !strings.ContainsRune(DeckIDAlphabet, r) {
+			return false
+		}
+	}
+	return true
+}
+
 // EncodeDeckCardScripts serializes a card item's scripts for a UserDB TEXT
 // column. Nil or empty input encodes to the empty string.
 func EncodeDeckCardScripts(scripts []DeckCardScript) string {
