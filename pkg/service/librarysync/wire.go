@@ -32,6 +32,11 @@ const (
 	resolveStatusResolved = "resolved"
 	resolveStatusRejected = "rejected"
 
+	// codeEdgeRefused is Core's own cache marker for a title the account's
+	// edge refused to pass on, so it is not offered again until the rejection
+	// retry window lapses. The account never issues it.
+	codeEdgeRefused = "edge_refused"
+
 	codeUnknownOrdinal    = "unknown_ordinal"
 	codeInventoryTooLarge = "inventory_too_large"
 	codePayloadTooLarge   = "payload_too_large"

@@ -47,6 +47,7 @@ type fakeOnline struct {
 	token      string
 	calls      map[string]int
 	putError   string
+	edgeRefuse map[string]bool
 	resolved   [][]database.MediaIdentity
 	limitFirst int
 	mu         syncutil.Mutex
@@ -71,13 +72,14 @@ type fakeInventory struct {
 func newFakeOnline(t *testing.T) *fakeOnline {
 	t.Helper()
 	f := &fakeOnline{
-		t:        t,
-		ordinals: make(map[string]uint32),
-		rejected: make(map[string]string),
-		issued:   make(map[uint32]bool),
-		calls:    make(map[string]int),
-		nextID:   100,
-		token:    "library-token",
+		t:          t,
+		ordinals:   make(map[string]uint32),
+		rejected:   make(map[string]string),
+		issued:     make(map[uint32]bool),
+		calls:      make(map[string]int),
+		edgeRefuse: make(map[string]bool),
+		nextID:     100,
+		token:      "library-token",
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
@@ -94,6 +96,15 @@ func (f *fakeOnline) setPutError(code string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.putError = code
+}
+
+// setEdgeRefused makes the fake edge refuse any request carrying this title,
+// the way the filter in front of the account answers a body it dislikes: a 403
+// HTML page rather than an answer from the account.
+func (f *fakeOnline) setEdgeRefused(title string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.edgeRefuse[title] = true
 }
 
 func (f *fakeOnline) setRejected(fingerprint, code string) {
@@ -169,6 +180,15 @@ func (f *fakeOnline) handleResolve(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Items) == 0 ||
 		len(request.Items) > 500 {
 		writeFakeError(w, http.StatusBadRequest, "validation_error")
+		return
+	}
+	for i := range request.Items {
+		if !f.edgeRefuse[request.Items[i].MediaIdentity.DisplayName] {
+			continue
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<!DOCTYPE html>\n<html><head><title>403 Forbidden</title></head></html>"))
 		return
 	}
 	batch := make([]database.MediaIdentity, 0, len(request.Items))

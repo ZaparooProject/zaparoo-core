@@ -42,14 +42,15 @@ import (
 const (
 	inventoryPageSize      = 500
 	inventorySchemaVersion = 1
-	// maxInventoryItems and maxInventoryBytes are the largest inventory the
-	// account accepts.
-	maxInventoryItems = 1_000_000
-	maxInventoryBytes = 8 << 20
-	// defaultResolvePace spaces resolve requests so a first sync of a large
-	// library stays inside the per-address request budget the devices of
-	// one household share.
-	defaultResolvePace = time.Second
+	// defaultResolvePace spaces resolve requests to the budget the account
+	// allows one device on the resolve route, 600 an hour. A first sync of a
+	// large library is the only thing that ever approaches it: at a page of
+	// 500 files per request, this paces about 250,000 files an hour, and
+	// later passes answer from the ordinal cache without asking at all.
+	// Going faster does not help. The budget is a sliding hour, so a burst
+	// only borrows from the same hour, and the edge in front of the account
+	// sheds a sustained burst with a plain 403 that no retry recovers.
+	defaultResolvePace = 6 * time.Second
 	// rejectedRetryAfter is how long a rejected fingerprint is trusted
 	// before it is offered to the account again.
 	rejectedRetryAfter = 7 * 24 * time.Hour
@@ -73,13 +74,16 @@ const (
 
 var errUnknownOrdinal = errors.New("inventory names an ordinal the account never issued")
 
-// InventoryResult summarizes one inventory pass.
+// InventoryResult summarizes one inventory pass. Skipped counts present files
+// the walk could not describe at all, so a library whose inventory is smaller
+// than its file count has an answer in the log rather than only a discrepancy.
 type InventoryResult struct {
 	Outcome    string
 	Generation int64
 	ItemCount  int
 	Resolved   int
 	Rejected   int
+	Skipped    int
 }
 
 // SyncInventory brings the account's copy of this device's inventory up to
@@ -191,12 +195,12 @@ func (s *Service) buildAndCommit(
 	if err != nil {
 		return InventoryResult{}, fmt.Errorf("encode library inventory: %w", err)
 	}
-	cardinality := bitmap.GetCardinality()
-	if cardinality > maxInventoryItems || len(body) > maxInventoryBytes {
-		result.ItemCount = int(min(cardinality, math.MaxInt32))
-		return s.recordTooLarge(ctx, state, &result)
-	}
-	result.ItemCount = int(cardinality)
+	// Core does not second-guess how large an inventory the account accepts:
+	// its limits are policy that can be raised without updating every device,
+	// and a copy of them here would hold the installed base at the old number.
+	// An inventory over them comes back rejected and is recorded as too large.
+	// Ordinals are 1..MaxInt32 by contract, so the cardinality is an int.
+	result.ItemCount = int(min(bitmap.GetCardinality(), math.MaxInt32))
 	sum := sha256.Sum256(body)
 	digest := hex.EncodeToString(sum[:])
 
@@ -238,7 +242,7 @@ func (s *Service) buildAndCommit(
 	}
 	result.Outcome = InventoryUploaded
 	log.Info().Int("items", result.ItemCount).Int("bytes", len(body)).Int64("generation", generation).
-		Int("resolved", result.Resolved).Int("rejected", result.Rejected).
+		Int("resolved", result.Resolved).Int("rejected", result.Rejected).Int("skipped", result.Skipped).
 		Msg("library inventory committed")
 	return result, nil
 }
@@ -257,6 +261,12 @@ func (s *Service) buildInventory(
 	var lastResolve time.Time
 	after := int64(0)
 	for {
+		// A first sync of a large library runs for a long time at the pace the
+		// account allows, so the walk stops asking the moment the user turns
+		// sync off rather than carrying on until the upload.
+		if !s.cfg.LibrarySyncEnabled() {
+			return nil, result, ErrDisabled
+		}
 		if err := s.pauser.Wait(ctx); err != nil {
 			return nil, result, fmt.Errorf("library inventory walk: %w", err)
 		}
@@ -269,10 +279,11 @@ func (s *Service) buildInventory(
 		}
 		after = page[len(page)-1].MediaDBID
 
-		identities, err := pageIdentities(ctx, mediaDB, page)
+		identities, skipped, err := pageIdentities(ctx, mediaDB, page)
 		if err != nil {
 			return nil, result, err
 		}
+		result.Skipped += skipped
 		if len(identities) == 0 {
 			continue
 		}
@@ -283,11 +294,7 @@ func (s *Service) buildInventory(
 		if len(pending) == 0 {
 			continue
 		}
-		if waitErr := s.waitResolvePace(ctx, lastResolve); waitErr != nil {
-			return nil, result, waitErr
-		}
-		lastResolve = s.now()
-		answers, err := resolveIdentities(ctx, client, pending, s.now(), generation)
+		answers, err := s.resolvePending(ctx, client, pending, generation, &lastResolve)
 		if err != nil {
 			return nil, result, err
 		}
@@ -305,19 +312,84 @@ func (s *Service) buildInventory(
 	}
 }
 
+// resolvePending resolves one page's worth of identities at the account's
+// pace.
+//
+// The edge in front of the account filters request bodies, and some ordinary
+// titles trip it: it answers the whole request with a 403 page of its own
+// instead of passing it to the account, which no retry recovers. A walk that
+// treated that as a failure would stop at the first such title and never
+// upload an inventory at all, so the batch is split until the titles it
+// objects to are alone, and those are cached as rejections. They are offered
+// again a week later, in case the filter changed its mind, and everything
+// around them syncs now.
+func (s *Service) resolvePending(
+	ctx context.Context,
+	client *backup.OnlineClient,
+	pending []*database.MediaIdentity,
+	generation int64,
+	lastResolve *time.Time,
+) ([]database.LibraryOrdinal, error) {
+	if waitErr := s.waitResolvePace(ctx, *lastResolve); waitErr != nil {
+		return nil, waitErr
+	}
+	if !s.cfg.LibrarySyncEnabled() {
+		return nil, ErrDisabled
+	}
+	*lastResolve = s.now()
+	answers, err := resolveIdentities(ctx, client, pending, s.now(), generation)
+	if err == nil {
+		return answers, nil
+	}
+	if !isEdgeRefusal(err) {
+		return nil, err
+	}
+	if len(pending) == 1 {
+		log.Warn().Str("system", pending[0].CanonicalSystemID).Str("title", pending[0].DisplayName).
+			Msg("the account's edge refused a title; leaving it out of the inventory for now")
+		return []database.LibraryOrdinal{{
+			Fingerprint:    pending[0].ObservationFingerprint,
+			Code:           codeEdgeRefused,
+			ResolvedAt:     s.now(),
+			SeenGeneration: generation,
+		}}, nil
+	}
+	mid := len(pending) / 2
+	first, err := s.resolvePending(ctx, client, pending[:mid], generation, lastResolve)
+	if err != nil {
+		return nil, err
+	}
+	second, err := s.resolvePending(ctx, client, pending[mid:], generation, lastResolve)
+	if err != nil {
+		return nil, err
+	}
+	return append(first, second...), nil
+}
+
+// isEdgeRefusal reports a request the account never answered because the edge
+// in front of it refused the body. An answer from the account itself carries
+// an error code; this does not.
+func isEdgeRefusal(err error) bool {
+	apiErr, ok := backup.AsAPIError(err)
+	return ok && apiErr.Status == http.StatusForbidden && apiErr.Code == ""
+}
+
 // pageIdentities builds the identity observation of each file in a page
-// whose system holds a synced media type, keyed by fingerprint.
+// whose system holds a synced media type, keyed by fingerprint. It also
+// reports how many files of a synced media type it could not describe.
 func pageIdentities(
 	ctx context.Context, mediaDB database.MediaDBI, page []database.LibraryMediaRow,
-) (map[string]*database.MediaIdentity, error) {
+) (identities map[string]*database.MediaIdentity, skipped int, err error) {
 	kept := make([]database.LibraryMediaRow, 0, len(page))
 	ids := make([]int64, 0, len(page))
 	mediaTypes := make(map[string]slugs.MediaType)
 	for i := range page {
 		mediaType, ok := mediaTypes[page[i].SystemID]
 		if !ok {
-			system, err := systemdefs.GetSystem(page[i].SystemID)
-			if err != nil {
+			system, systemErr := systemdefs.GetSystem(page[i].SystemID)
+			if systemErr != nil {
+				// An indexed system this Core does not know cannot be
+				// classified, so it is not a game as far as sync goes.
 				continue
 			}
 			mediaType = system.GetMediaType()
@@ -329,28 +401,29 @@ func pageIdentities(
 		kept = append(kept, page[i])
 		ids = append(ids, page[i].MediaDBID)
 	}
-	identities := make(map[string]*database.MediaIdentity, len(kept))
+	identities = make(map[string]*database.MediaIdentity, len(kept))
 	if len(kept) == 0 {
-		return identities, nil
+		return identities, 0, nil
 	}
 	tags, err := mediaDB.GetMediaTagsByMediaDBIDs(context.WithoutCancel(ctx), ids)
 	if err != nil {
-		return nil, fmt.Errorf("read library media tags: %w", err)
+		return nil, 0, fmt.Errorf("read library media tags: %w", err)
 	}
 	for i := range kept {
 		row := &kept[i]
-		identity, err := database.BuildMediaIdentity(
+		identity, buildErr := database.BuildMediaIdentity(
 			mediaTypes[row.SystemID], row.SystemID, row.Name, row.Slug, tags[row.MediaDBID],
 		)
-		if err != nil {
+		if buildErr != nil {
 			// A title whose name slugifies to nothing cannot name a game.
+			skipped++
 			continue
 		}
 		if _, seen := identities[identity.ObservationFingerprint]; !seen {
 			identities[identity.ObservationFingerprint] = &identity
 		}
 	}
-	return identities, nil
+	return identities, skipped, nil
 }
 
 // addCachedOrdinals adds every usable cached answer to the bitmap, records

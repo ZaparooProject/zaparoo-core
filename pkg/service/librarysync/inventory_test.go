@@ -21,6 +21,7 @@ package librarysync_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"sync/atomic"
@@ -64,6 +65,13 @@ func nesPath(name string) string {
 // device credentials are process-wide.
 func newSyncFixture(t *testing.T, paths ...string) *syncFixture {
 	t.Helper()
+	return newSyncFixtureWithPace(t, time.Millisecond, paths...)
+}
+
+// newSyncFixtureWithPace is newSyncFixture with an explicit resolve pace, for
+// tests that need a page boundary to be observable.
+func newSyncFixtureWithPace(t *testing.T, pace time.Duration, paths ...string) *syncFixture {
+	t.Helper()
 	db, cleanup := testhelpers.NewTestDatabase(t)
 	t.Cleanup(cleanup)
 	if len(paths) > 0 {
@@ -92,7 +100,7 @@ func newSyncFixture(t *testing.T, paths ...string) *syncFixture {
 		DB:          db,
 		NewClient:   manager.NewOnlineClient,
 		Now:         func() time.Time { return time.Unix(f.now.Load(), 0).UTC() },
-		ResolvePace: time.Millisecond,
+		ResolvePace: pace,
 		SendHeartbeat: func(context.Context) error {
 			f.heartbeats.Add(1)
 			return nil
@@ -349,6 +357,23 @@ func TestSyncInventory_IdleStates(t *testing.T) {
 	assert.Zero(t, f.online.count(postResolve))
 }
 
+// TestSyncInventory_BusyDatabaseDefers covers a batch transaction held open
+// without the indexing status being set, which the settled check cannot see.
+// The ordinal cache write refuses to join it, and that refusal must read as
+// "come back later" rather than a failure that backs the scheduler off for an
+// hour.
+func TestSyncInventory_BusyDatabaseDefers(t *testing.T) {
+	f := newSyncFixture(t, nesPath("Metroid (USA).nes"))
+
+	require.NoError(t, f.db.MediaDB.BeginTransaction(true))
+	t.Cleanup(func() { _ = f.db.MediaDB.CommitTransaction() })
+
+	_, err := f.svc.SyncInventory(f.ctx, false)
+	require.Error(t, err)
+	assert.True(t, librarysync.IsIdleError(err),
+		"a busy media database defers a pass instead of failing it: %v", err)
+}
+
 func TestSyncInventory_RelinkChecksAccountAgain(t *testing.T) {
 	f := newSyncFixture(t, nesPath("Metroid (USA).nes"))
 	_, err := f.svc.SyncInventory(f.ctx, false)
@@ -476,4 +501,78 @@ func TestBuildMediaIdentityMatchesPathLookup(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, looked, built)
+}
+
+// TestSyncInventory_TurningOffMidWalkStopsAsking covers the first sync of a
+// library too large for one page. Turning Library sync off part way through
+// must stop the walk where it is: at the account's pace a large library takes
+// tens of minutes, and a user who withdraws consent should not have the rest
+// of their library offered up before the pass notices.
+func TestSyncInventory_TurningOffMidWalkStopsAsking(t *testing.T) {
+	paths := make([]string, 0, 501)
+	for i := range 501 {
+		paths = append(paths, nesPath(fmt.Sprintf("Game %04d (USA).nes", i)))
+	}
+	f := newSyncFixtureWithPace(t, 3*time.Second, paths...)
+
+	type outcome struct {
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		_, err := f.svc.SyncInventory(f.ctx, false)
+		done <- outcome{err: err}
+	}()
+
+	require.Eventually(t, func() bool { return f.online.count(postResolve) == 1 }, 20*time.Second, 10*time.Millisecond,
+		"the first page should be resolved before the setting changes")
+	f.cfg.SetLibrarySync(false)
+
+	select {
+	case got := <-done:
+		require.ErrorIs(t, got.err, librarysync.ErrDisabled)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the walk kept going after Library sync was turned off")
+	}
+	assert.Equal(t, 1, f.online.count(postResolve), "no further page is offered to the account")
+	assert.Zero(t, f.online.count(putInventory), "nothing is uploaded for a user who turned sync off")
+}
+
+// TestSyncInventory_EdgeRefusedTitleDoesNotStopTheWalk covers a title the
+// filter in front of the account refuses to pass on, answering the whole
+// request with its own 403 page. One such title in a library must not stop the
+// inventory: the batch is split until that title is alone, it is left out, and
+// everything else is uploaded.
+func TestSyncInventory_EdgeRefusedTitleDoesNotStopTheWalk(t *testing.T) {
+	f := newSyncFixture(t,
+		nesPath("Metroid (USA).nes"),
+		nesPath("Zelda (USA).nes"),
+		nesPath("Kid Icarus (USA).nes"),
+		nesPath("Punch-Out (USA).nes"),
+	)
+	f.online.setEdgeRefused("Zelda")
+
+	result, err := f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err, "one refused title is not a failed pass")
+	assert.Equal(t, librarysync.InventoryUploaded, result.Outcome)
+	assert.Equal(t, 3, result.ItemCount, "the other three games still reach the account")
+	assert.Equal(t, 1, result.Rejected, "the refused title counts as rejected")
+	assert.Len(t, f.heldOrdinals(), 3)
+	assert.Greater(t, f.online.count(postResolve), 1, "the batch was split to find it")
+
+	// The refused title is remembered, so the next pass does not pay to find
+	// it again, and the inventory stays the same.
+	f.online.resetCalls()
+	f.bumpGeneration(t)
+	result, err = f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.ItemCount)
+	assert.Zero(t, f.online.count(postResolve), "the refusal is cached like any other rejection")
+
+	// A week later it is offered again, in case the filter changed its mind.
+	f.advance(8 * 24 * time.Hour)
+	f.bumpGeneration(t)
+	_, err = f.svc.SyncInventory(f.ctx, false)
+	require.NoError(t, err)
+	assert.Positive(t, f.online.count(postResolve), "a refused title is retried after a week")
 }

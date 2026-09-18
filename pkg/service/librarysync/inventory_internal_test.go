@@ -37,19 +37,21 @@ var testTime = time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 func TestPageIdentitiesKeepsOnlySyncedMediaTypes(t *testing.T) {
 	t.Parallel()
 	mediaDB := testhelpers.NewMockMediaDBI()
-	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{1, 4}).Return(map[int64][]database.TagInfo{
+	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{1, 4, 5}).Return(map[int64][]database.TagInfo{
 		1: {{Type: "region", Tag: "us"}},
 		4: {{Type: "region", Tag: "us"}},
 	}, nil).Once()
 
-	identities, err := pageIdentities(context.Background(), mediaDB, []database.LibraryMediaRow{
+	identities, skipped, err := pageIdentities(context.Background(), mediaDB, []database.LibraryMediaRow{
 		{MediaDBID: 1, SystemID: systemdefs.SystemNES, Name: "Metroid", Slug: "metroid"},
 		{MediaDBID: 2, SystemID: systemdefs.SystemMusicTrack, Name: "Song", Slug: "song"},
 		{MediaDBID: 3, SystemID: "NotASystem", Name: "Thing", Slug: "thing"},
 		{MediaDBID: 4, SystemID: systemdefs.SystemNES, Name: "Metroid", Slug: "metroid"},
+		{MediaDBID: 5, SystemID: systemdefs.SystemNES, Name: "...", Slug: ""},
 	})
 	require.NoError(t, err)
 	require.Len(t, identities, 1, "only games are listed, and one game once")
+	assert.Equal(t, 1, skipped, "a game whose name describes nothing is counted, not silently dropped")
 	for _, identity := range identities {
 		assert.Equal(t, "Game", identity.MediaType)
 		assert.Equal(t, systemdefs.SystemNES, identity.CanonicalSystemID)
