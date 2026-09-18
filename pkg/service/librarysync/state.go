@@ -326,6 +326,14 @@ func (s *Service) SyncState(ctx context.Context) (StateResult, error) {
 	if !s.cfg.LibrarySyncEnabled() {
 		return StateResult{}, ErrDisabled
 	}
+	// A half-built index cannot say which copies of a game this device has,
+	// so a pulled flag would land on whichever copy happened to be indexed
+	// already and stay there: flags are never moved afterwards. Wait for the
+	// index instead. Local edits are already recorded; only their trip to the
+	// account waits.
+	if !mediaDBSettled(s.db.MediaDB) {
+		return StateResult{}, ErrNotSettled
+	}
 	client, err := s.client()
 	if err != nil {
 		return StateResult{}, err
@@ -364,7 +372,10 @@ type statePass struct {
 	bases   map[string]*database.LibraryStateSyncRow
 	games   map[string]*localGame
 	changed map[string]bool
-	result  StateResult
+	// unresolved remembers the rows this pass could not name from the index,
+	// so a row whose file is gone is not looked up again on every reload.
+	unresolved map[string]struct{}
+	result     StateResult
 }
 
 func (p *statePass) userDB() database.UserDBI {
@@ -444,8 +455,16 @@ func (p *statePass) loadGames(ctx context.Context) error {
 }
 
 func (p *statePass) fillSnapshot(ctx context.Context, row *database.MediaUserData) bool {
+	key := row.SystemID + "\x00" + row.Path
+	if p.unresolved == nil {
+		p.unresolved = make(map[string]struct{})
+	}
+	if _, skip := p.unresolved[key]; skip {
+		return false
+	}
 	identity, found, err := database.LookupMediaIdentity(ctx, p.svc.db.MediaDB, row.SystemID, row.Path)
 	if err != nil || !found {
+		p.unresolved[key] = struct{}{}
 		return false
 	}
 	tagStrings := identity.LegacyTags()
@@ -1026,13 +1045,27 @@ func (p *statePass) launchCopies(systemID string, copies []copyRef, preferred []
 		return candidates
 	}
 	if len(preferred) > 0 {
+		// A copy holding every preferred tag and more of its own, a
+		// translation of the named release say, is a different version. Take
+		// those only when the device holds no copy of the version itself,
+		// rather than leaving the choice to the launch ranking, which has
+		// nothing to separate interchangeable copies and can land on the
+		// extra tags instead.
 		matching := make([]int, 0, len(candidates))
+		exact := make([]int, 0, len(candidates))
 		for _, i := range candidates {
-			if containsAll(copies[i].versions, preferred) {
-				matching = append(matching, i)
+			if !containsAll(copies[i].versions, preferred) {
+				continue
+			}
+			matching = append(matching, i)
+			if len(copies[i].versions) == len(preferred) {
+				exact = append(exact, i)
 			}
 		}
-		if len(matching) > 0 {
+		switch {
+		case len(exact) > 0:
+			candidates = exact
+		case len(matching) > 0:
 			candidates = matching
 		}
 	}
@@ -1057,28 +1090,20 @@ func (p *statePass) launchCopies(systemID string, copies []copyRef, preferred []
 }
 
 // applyToCopy sets the flags in changes on one copy, when they differ from
-// what the copy holds, and keeps the browse tags in step.
+// what the copy holds. The write goes through ApplyMediaUserFlags, so it takes
+// the same lock as an edit from the API and brings the file's browse tags in
+// line with the row UserDB stores afterwards, forbidden-pair clears included:
+// starring a copy clears its dislike, and the dislike tag goes with it.
 func (p *statePass) applyToCopy(ctx context.Context, ref *copyRef, changes map[database.MediaUserFlag]bool) error {
-	current := ref.current
-	var add, remove []database.MediaTagRef
-	for _, value := range []bool{false, true} {
-		for _, flag := range database.MediaUserFlags {
-			wantValue, ok := changes[flag]
-			if !ok || wantValue != value || current.Flag(flag) == value {
-				continue
-			}
-			if err := p.userDB().SetMediaUserFlag(ref.systemID, ref.path, flag, value); err != nil {
-				return fmt.Errorf("set %s on %s: %w", flag, ref.path, err)
-			}
-			tagRef := database.MediaTagRef{Type: string(tags.TagTypeUser), Tag: string(flag)}
-			if value {
-				add = append(add, tagRef)
-			} else {
-				remove = append(remove, tagRef)
-			}
+	wanted := make(map[database.MediaUserFlag]bool, len(changes))
+	for _, flag := range database.MediaUserFlags {
+		value, ok := changes[flag]
+		if !ok || ref.current.Flag(flag) == value {
+			continue
 		}
+		wanted[flag] = value
 	}
-	if len(add) == 0 && len(remove) == 0 {
+	if len(wanted) == 0 {
 		return nil
 	}
 	if !ref.hasRow && ref.mediaDBID > 0 {
@@ -1088,10 +1113,10 @@ func (p *statePass) applyToCopy(ctx context.Context, ref *copyRef, changes map[d
 			log.Debug().Err(err).Str("path", ref.path).Msg("failed to store media user identity snapshot")
 		}
 	}
-	if ref.mediaDBID > 0 {
-		if err := p.svc.db.MediaDB.UpdateMediaTags(ctx, ref.mediaDBID, remove, add); err != nil {
-			log.Debug().Err(err).Str("path", ref.path).Msg("failed to update media tag projection for synced state")
-		}
+	if _, err := database.ApplyMediaUserFlags(
+		ctx, p.svc.db, ref.systemID, ref.path, ref.mediaDBID, wanted,
+	); err != nil {
+		return fmt.Errorf("apply synced state to %s: %w", ref.path, err)
 	}
 	return nil
 }

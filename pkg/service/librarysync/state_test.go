@@ -20,10 +20,13 @@
 package librarysync_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/librarysync"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
@@ -41,19 +44,37 @@ var (
 	contraHack = nesPath("Contra (USA) (Hack).nes")
 	contra     = nesPath("Contra (USA).nes")
 	zelda      = nesPath("Zelda (USA).nes")
+	metroidFre = nesPath("Metroid (USA) [T-Fre].nes")
 )
 
-// setLocalFlag sets a flag the way the tags API does, with the identity
-// snapshot the API records beside it.
+// setLocalFlag sets a flag the way the tags API does: through
+// ApplyMediaUserFlags, so the media.db projection and the identity snapshot
+// are recorded beside it.
 func (f *syncFixture) setLocalFlag(t *testing.T, path string, flag database.MediaUserFlag, value bool) {
 	t.Helper()
-	require.NoError(t, f.db.UserDB.SetMediaUserFlag("NES", path, flag, value))
+	mediaDBID := f.mediaDBID(t, path)
+	_, err := database.ApplyMediaUserFlags(
+		f.ctx, f.db, "NES", path, mediaDBID, map[database.MediaUserFlag]bool{flag: value})
+	require.NoError(t, err)
 	identity, found, err := database.LookupMediaIdentity(f.ctx, f.db.MediaDB, "NES", path)
 	require.NoError(t, err)
 	if found {
 		require.NoError(t, f.db.UserDB.SetMediaUserSnapshot(
 			"NES", path, identity.DisplayName, identity.CoreSlug, identity.LegacyTags()))
 	}
+}
+
+// mediaDBID returns the indexed row ID for a path, or 0 when it is not indexed.
+func (f *syncFixture) mediaDBID(t *testing.T, path string) int64 {
+	t.Helper()
+	system, err := systemdefs.LookupSystem("NES")
+	require.NoError(t, err)
+	results, err := f.db.MediaDB.SearchMediaPathExact(f.ctx, []systemdefs.System{*system}, path)
+	require.NoError(t, err)
+	if len(results) == 0 {
+		return 0
+	}
+	return results[0].MediaID
 }
 
 func (f *syncFixture) localRow(t *testing.T, path string) database.MediaUserData {
@@ -369,4 +390,78 @@ func TestSyncState_Disabled(t *testing.T) {
 	f.cfg.SetLibrarySync(false)
 	_, err := f.svc.SyncState(f.ctx)
 	require.ErrorIs(t, err, librarysync.ErrDisabled)
+}
+
+func TestSyncState_PulledFavoriteClearsTheDislikedTag(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA, metroidEU)
+	// One copy is disliked and another liked, so the game reads as liked and
+	// a pulled favorite touches only the favorite field.
+	f.setLocalFlag(t, metroidUSA, database.MediaUserFlagDisliked, true)
+	f.setLocalFlag(t, metroidEU, database.MediaUserFlagLiked, true)
+	f.syncState(t)
+	require.True(t, f.hasUserTag(t, metroidUSA, "disliked"))
+
+	// The account stars the game and names the version this device disliked.
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Title: "Metroid",
+		Favorite: true, Reaction: "liked", PreferredTags: []string{"region:us"},
+	})
+	f.syncState(t)
+
+	usa := f.localRow(t, metroidUSA)
+	require.True(t, usa.IsFavorite, "the preferred version takes the star")
+	require.False(t, usa.IsDisliked, "a favorite cannot stay disliked")
+	assert.False(t, f.hasUserTag(t, metroidUSA, "disliked"),
+		"browse must not still list a favorite under disliked")
+	assert.True(t, f.hasUserTag(t, metroidUSA, "favorite"))
+}
+
+func TestSyncState_PullWaitsForTheIndexToSettle(t *testing.T) {
+	// Only the European copy is indexed so far, as during a first index.
+	f := newSyncFixture(t, metroidEU)
+	require.NoError(t, f.db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Title: "Metroid",
+		Favorite: true, PreferredTags: []string{"region:us"},
+	})
+
+	_, err := f.svc.SyncState(f.ctx)
+	require.ErrorIs(t, err, librarysync.ErrNotSettled)
+	assert.False(t, f.localRow(t, metroidEU).IsFavorite,
+		"a half-built index must not decide which copy the star lands on")
+	assert.Zero(t, f.online.count(getState), "the account is not even asked")
+
+	// The index finishes and the copy the account asked for exists.
+	scantest.IndexMediaPaths(t, f.db.MediaDB, "NES", metroidEU, metroidUSA)
+	require.NoError(t, f.db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCompleted))
+	f.bumpGeneration(t)
+	f.syncState(t)
+
+	assert.True(t, f.localRow(t, metroidUSA).IsFavorite, "the preferred version takes the star")
+	assert.False(t, f.localRow(t, metroidEU).IsFavorite)
+}
+
+func TestSyncState_PreferredVersionPrefersAnExactMatch(t *testing.T) {
+	// A translation carries the plain release's tags plus its own, so holding
+	// every preferred tag does not make it the version the account named. Two
+	// interchangeable copies of the plain release leave the launch ranking
+	// with nothing to separate them, which is when the extra tags used to win.
+	usaA := filepath.ToSlash(filepath.Join("roms", "NES", "collection a", "Metroid (USA).nes"))
+	usaB := filepath.ToSlash(filepath.Join("roms", "NES", "collection b", "Metroid (USA).nes"))
+	f := newSyncFixture(t, usaA, usaB, metroidFre)
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Title: "Metroid",
+		Favorite: true, PreferredTags: []string{"lang:en", "region:us"},
+	})
+
+	f.syncState(t)
+
+	assert.False(t, f.localRow(t, metroidFre).IsFavorite, "a translation of a version is not that version")
+	starred := 0
+	for _, path := range []string{usaA, usaB} {
+		if f.localRow(t, path).IsFavorite {
+			starred++
+		}
+	}
+	assert.Equal(t, 1, starred, "exactly one copy of the version the account named is starred")
 }
