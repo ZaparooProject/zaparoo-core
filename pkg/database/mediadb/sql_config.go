@@ -52,6 +52,7 @@ const (
 	DBConfigDisambiguationVersion           = "DisambiguationVersion"
 	DBConfigDisambiguationBackfillCursor    = "DisambiguationBackfillCursor"
 	DBConfigCanonicalTagVocabHash           = "CanonicalTagVocabHash"
+	DBConfigLibraryInventoryState           = "LibraryInventoryState"
 
 	temporaryRepairParentDirVersion = "1"
 

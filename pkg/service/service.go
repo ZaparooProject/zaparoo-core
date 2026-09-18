@@ -807,6 +807,9 @@ func startService(
 	startRemoteBackupScheduler(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
 	)
+	startLibrarySyncScheduler(
+		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, notifBroker, backgroundWG,
+	)
 	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)

@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -569,4 +570,23 @@ func TestClearActiveMediaIf_ConditionSeesConcurrentPublication(t *testing.T) {
 	assert.False(t, cleared)
 	require.NotNil(t, st.ActiveMedia())
 	assert.Equal(t, "Game", st.ActiveMedia().Name)
+}
+
+func TestRequestLibrarySync_ReachesTheScheduler(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	// Before the scheduler starts there is nobody to ask, and a settings
+	// update must not fall over because of it.
+	state.RequestLibrarySync()
+
+	var requests atomic.Int32
+	state.SetLibrarySyncRequester(func() { requests.Add(1) })
+	state.RequestLibrarySync()
+	state.RequestLibrarySync()
+	assert.Equal(t, int32(2), requests.Load())
+
+	var nilState *State
+	nilState.RequestLibrarySync()
 }
