@@ -62,6 +62,7 @@ type playlistLogEntry struct {
 	Loop          bool                     `json:"loop,omitempty"`
 	LoopOne       bool                     `json:"loopOne,omitempty"`
 	ForceRelaunch bool                     `json:"forceRelaunch,omitempty"`
+	Unsafe        bool                     `json:"unsafe,omitempty"`
 	Playing       bool                     `json:"playing"`
 }
 
@@ -80,6 +81,7 @@ func playlistForLog(pls *playlists.Playlist) any {
 		Loop:          pls.Loop,
 		LoopOne:       pls.LoopOne,
 		ForceRelaunch: pls.ForceRelaunch,
+		Unsafe:        pls.Unsafe,
 		Total:         len(pls.Items),
 		Showing:       showing,
 		Truncated:     len(pls.Items) - showing,
