@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
@@ -49,9 +51,25 @@ type parsedInputMacro struct {
 	action   inputMacroAction
 }
 
+// heldInputState is the input one session holds across requests. A keyboard
+// hold is a list of keys pressed together, such as Shift and a letter, and is
+// identified by that list. keyboard counts how many of the session's holds
+// need each key, so a shared modifier stays down until the last one lets go.
 type heldInputState struct {
-	keyboard map[int]struct{}
-	gamepad  map[int]struct{}
+	keyboardHolds map[string][]int
+	keyboard      map[int]int
+	gamepad       map[int]struct{}
+}
+
+func keyboardHoldID(codes []int) string {
+	var b strings.Builder
+	for i, code := range codes {
+		if i > 0 {
+			_ = b.WriteByte('+')
+		}
+		_, _ = b.WriteString(strconv.Itoa(code))
+	}
+	return b.String()
 }
 
 type inputSession struct {
@@ -181,8 +199,9 @@ func (l *InputManager) sessionStateLocked(session *inputSession) *heldInputState
 	state, ok := l.inputSessions[session]
 	if !ok {
 		state = &heldInputState{
-			keyboard: make(map[int]struct{}),
-			gamepad:  make(map[int]struct{}),
+			keyboardHolds: make(map[string][]int),
+			keyboard:      make(map[int]int),
+			gamepad:       make(map[int]struct{}),
 		}
 		l.inputSessions[session] = state
 	}
@@ -259,22 +278,32 @@ func (l *InputManager) gamepadUpLocked(code int) error {
 	return nil
 }
 
-func (l *InputManager) sessionKeyboardDownLocked(session *inputSession, code int) error {
+func (l *InputManager) sessionKeyboardDownLocked(session *inputSession, codes []int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
 	state := l.sessionStateLocked(session)
-	if _, ok := state.keyboard[code]; ok {
+	id := keyboardHoldID(codes)
+	if _, ok := state.keyboardHolds[id]; ok {
 		return nil
 	}
-	if err := l.keyboardDownLocked(code); err != nil {
-		return err
+	for i, code := range codes {
+		if state.keyboard[code] == 0 {
+			if err := l.keyboardDownLocked(code); err != nil {
+				for j := i - 1; j >= 0; j-- {
+					err = errors.Join(err, l.sessionKeyboardCodeUpLocked(state, codes[j]))
+				}
+				l.removeEmptySessionStateLocked(session, state)
+				return err
+			}
+		}
+		state.keyboard[code]++
 	}
-	state.keyboard[code] = struct{}{}
+	state.keyboardHolds[id] = codes
 	return nil
 }
 
-func (l *InputManager) sessionKeyboardUpLocked(session *inputSession, code int) error {
+func (l *InputManager) sessionKeyboardUpLocked(session *inputSession, codes []int) error {
 	if session.closed {
 		return errors.New("input session is closed")
 	}
@@ -282,14 +311,36 @@ func (l *InputManager) sessionKeyboardUpLocked(session *inputSession, code int) 
 	if !ok {
 		return nil
 	}
-	if _, ok := state.keyboard[code]; !ok {
+	id := keyboardHoldID(codes)
+	held, ok := state.keyboardHolds[id]
+	if !ok {
+		return nil
+	}
+	delete(state.keyboardHolds, id)
+	var upErr error
+	for i := len(held) - 1; i >= 0; i-- {
+		upErr = errors.Join(upErr, l.sessionKeyboardCodeUpLocked(state, held[i]))
+	}
+	l.removeEmptySessionStateLocked(session, state)
+	return upErr
+}
+
+// sessionKeyboardCodeUpLocked drops one of the session's claims on a key and
+// releases the key with the last one. A key that fails to release stays
+// claimed, so releasing the session tries it again.
+func (l *InputManager) sessionKeyboardCodeUpLocked(state *heldInputState, code int) error {
+	count := state.keyboard[code]
+	if count == 0 {
+		return nil
+	}
+	if count > 1 {
+		state.keyboard[code] = count - 1
 		return nil
 	}
 	if err := l.keyboardUpLocked(code); err != nil {
 		return err
 	}
 	delete(state.keyboard, code)
-	l.removeEmptySessionStateLocked(session, state)
 	return nil
 }
 
@@ -340,6 +391,7 @@ func (l *InputManager) releaseInputSessionLocked(session *inputSession) error {
 	}
 
 	var cleanupErr error
+	clear(state.keyboardHolds)
 	for code := range state.keyboard {
 		if err := l.keyboardUpLocked(code); err != nil {
 			cleanupErr = errors.Join(cleanupErr, err)
@@ -400,16 +452,16 @@ func (l *InputManager) releaseGamepadLocals(held map[int]int) error {
 	return l.releaseGamepadLocalsLocked(held)
 }
 
-func (l *InputManager) sessionKeyboardDown(session *inputSession, code int) error {
+func (l *InputManager) sessionKeyboardDown(session *inputSession, codes []int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
-	return l.sessionKeyboardDownLocked(session, code)
+	return l.sessionKeyboardDownLocked(session, codes)
 }
 
-func (l *InputManager) sessionKeyboardUp(session *inputSession, code int) error {
+func (l *InputManager) sessionKeyboardUp(session *inputSession, codes []int) error {
 	l.inputMu.Lock()
 	defer l.inputMu.Unlock()
-	return l.sessionKeyboardUpLocked(session, code)
+	return l.sessionKeyboardUpLocked(session, codes)
 }
 
 func (l *InputManager) sessionGamepadDown(session *inputSession, code int) error {
@@ -513,10 +565,8 @@ func (l *InputManager) pressKeyboardToken(arg string) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to parse key combo: %w", err)
 	}
-	if !isCombo && codes[0] < 0 {
-		codes = []int{42, -codes[0]}
-		isCombo = true
-	}
+	codes = keyboardmap.ExpandShift(codes)
+	isCombo = isCombo || len(codes) > 1
 
 	l.sequenceMu.Lock()
 	defer l.sequenceMu.Unlock()
@@ -607,7 +657,7 @@ func (l *InputManager) keyboardPressSequenceLocked(
 		interKeyDelay = DefaultInterKeyDelay
 	}
 
-	const shiftCode = 42
+	const shiftCode = keyboardmap.LeftShiftCode
 	localHeld := make(map[int]int)
 	defer func() {
 		retErr = errors.Join(retErr, l.releaseKeyboardLocals(localHeld))
@@ -619,17 +669,33 @@ func (l *InputManager) keyboardPressSequenceLocked(
 	localUp := func(code int) error {
 		return l.keyboardLocalUp(localHeld, code)
 	}
-	persistentDown := func(code int) error {
-		if session == nil {
-			return localDown(code)
+	localDownAll := func(codes []int) error {
+		for _, code := range codes {
+			if err := localDown(code); err != nil {
+				return err
+			}
 		}
-		return l.sessionKeyboardDown(session, code)
+		return nil
 	}
-	persistentUp := func(code int) error {
-		if session == nil {
-			return localUp(code)
+	localUpAll := func(codes []int) error {
+		for i := len(codes) - 1; i >= 0; i-- {
+			if err := localUp(codes[i]); err != nil {
+				return err
+			}
 		}
-		return l.sessionKeyboardUp(session, code)
+		return nil
+	}
+	persistentDown := func(codes []int) error {
+		if session == nil {
+			return localDownAll(codes)
+		}
+		return l.sessionKeyboardDown(session, codes)
+	}
+	persistentUp := func(codes []int) error {
+		if session == nil {
+			return localUpAll(codes)
+		}
+		return l.sessionKeyboardUp(session, codes)
 	}
 
 	for i := 0; i < len(args); {
@@ -650,7 +716,7 @@ func (l *InputManager) keyboardPressSequenceLocked(
 					return fmt.Errorf("delay token %q: %w", token, err)
 				}
 			case inputMacroPress, inputMacroRelease, inputMacroHold:
-				code, err := resolveHoldKeyCode(macro.name)
+				codes, err := resolveHoldKeyCodes(macro.name)
 				if err != nil {
 					return fmt.Errorf("token %q: %w", token, err)
 				}
@@ -658,11 +724,11 @@ func (l *InputManager) keyboardPressSequenceLocked(
 				case inputMacroNone, inputMacroDelay:
 					return fmt.Errorf("unsupported input macro token %q", token)
 				case inputMacroPress:
-					if downErr := persistentDown(code); downErr != nil {
+					if downErr := persistentDown(codes); downErr != nil {
 						return fmt.Errorf("token %q: %w", token, downErr)
 					}
 				case inputMacroRelease:
-					if upErr := persistentUp(code); upErr != nil {
+					if upErr := persistentUp(codes); upErr != nil {
 						return fmt.Errorf("token %q: %w", token, upErr)
 					}
 				case inputMacroHold:
@@ -673,13 +739,13 @@ func (l *InputManager) keyboardPressSequenceLocked(
 							return fmt.Errorf("invalid hold duration in %q: %w", token, err)
 						}
 					}
-					if err := localDown(code); err != nil {
+					if err := localDownAll(codes); err != nil {
 						return fmt.Errorf("token %q key down: %w", token, err)
 					}
 					if err := sleepInputContext(ctx, holdDuration); err != nil {
 						return fmt.Errorf("token %q hold: %w", token, err)
 					}
-					if err := localUp(code); err != nil {
+					if err := localUpAll(codes); err != nil {
 						return fmt.Errorf("token %q key up: %w", token, err)
 					}
 				}
@@ -730,18 +796,15 @@ func (l *InputManager) keyboardPressSequenceLocked(
 		if err != nil {
 			return fmt.Errorf("failed to parse key %q: %w", token, err)
 		}
-		for _, code := range codes {
-			if err := localDown(code); err != nil {
-				return fmt.Errorf("failed to press key %q down: %w", token, err)
-			}
+		codes = keyboardmap.ExpandShift(codes)
+		if err := localDownAll(codes); err != nil {
+			return fmt.Errorf("failed to press key %q down: %w", token, err)
 		}
 		if err := sleepInputContext(ctx, l.keyboardDelay); err != nil {
 			return fmt.Errorf("press key %q: %w", token, err)
 		}
-		for j := len(codes) - 1; j >= 0; j-- {
-			if err := localUp(codes[j]); err != nil {
-				return fmt.Errorf("failed to release key %q: %w", token, err)
-			}
+		if err := localUpAll(codes); err != nil {
+			return fmt.Errorf("failed to release key %q: %w", token, err)
 		}
 		if err := sleepInputContext(ctx, interKeyDelay); err != nil {
 			return fmt.Errorf("inter-key delay: %w", err)

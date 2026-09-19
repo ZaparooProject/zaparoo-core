@@ -699,9 +699,9 @@ func TestKeyboardPressSequence_LongFormPressReleaseHoldSpecial(t *testing.T) {
 	}, rec.events)
 }
 
-// TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode verifies press/release
-// tokens can hold shifted characters by their base keycode without a shift run.
-func TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode(t *testing.T) {
+// TestKeyboardPressSequence_MacroShiftedKeyHoldsShift verifies press/release
+// tokens hold Shift along with a shifted character.
+func TestKeyboardPressSequence_MacroShiftedKeyHoldsShift(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingKeyboard{}
@@ -710,24 +710,72 @@ func TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode(t *testing.T) {
 	require.NoError(t, input.KeyboardPressSequence([]string{"{press:M}", "{release:M}"}, 0))
 
 	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
 		{kind: "down", code: 50},
 		{kind: "up", code: 50},
+		{kind: "up", code: 42},
 	}, rec.events)
 }
 
-// TestKeyboardPressSequence_RejectsComboHoldToken verifies hold-style macros do
-// not accept combos, because releasing partially-held chords is ambiguous.
-func TestKeyboardPressSequence_RejectsComboHoldToken(t *testing.T) {
+// TestKeyboardPressSequence_HoldTokenCombos verifies hold tokens accept combos
+// and shifted characters, releasing the keys in reverse order.
+func TestKeyboardPressSequence_HoldTokenCombos(t *testing.T) {
 	t.Parallel()
+
+	tests := []struct {
+		name  string
+		macro string
+		codes []int
+	}{
+		{name: "combo", macro: "{hold:ctrl+a:0}", codes: []int{29, 30}},
+		{name: "shifted character", macro: "{hold:M:0}", codes: []int{42, 50}},
+		{name: "combo with shifted member", macro: "{~ctrl+A:0}", codes: []int{29, 42, 30}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &recordingKeyboard{}
+			input := newRecordingInputManager(rec)
+
+			require.NoError(t, input.KeyboardPressSequence([]string{tt.macro}, 0))
+
+			want := make([]keyEvent, 0, len(tt.codes)*2)
+			for _, code := range tt.codes {
+				want = append(want, keyEvent{kind: "down", code: code})
+			}
+			for i := len(tt.codes) - 1; i >= 0; i-- {
+				want = append(want, keyEvent{kind: "up", code: tt.codes[i]})
+			}
+			assert.Equal(t, want, rec.events)
+		})
+	}
+}
+
+// TestKeyboardPress_ComboWithShiftedMember verifies a shifted character inside
+// a combo presses Shift rather than sending its negative map code.
+func TestKeyboardPress_ComboWithShiftedMember(t *testing.T) {
+	t.Parallel()
+
+	want := []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 42},
+		{kind: "down", code: 30},
+		{kind: "up", code: 30},
+		{kind: "up", code: 42},
+		{kind: "up", code: 29},
+	}
 
 	rec := &recordingKeyboard{}
 	input := newRecordingInputManager(rec)
+	require.NoError(t, input.KeyboardPress("{ctrl+A}"))
+	assert.Equal(t, want, rec.events)
 
-	err := input.KeyboardPressSequence([]string{"{hold:ctrl+a:0}"}, 0)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not support combos")
-	assert.Empty(t, rec.events)
+	rec = &recordingKeyboard{}
+	input = newRecordingInputManager(rec)
+	require.NoError(t, input.KeyboardPressSequence([]string{"{ctrl+A}"}, 0))
+	assert.Equal(t, want, rec.events)
 }
 
 // TestKeyboardPressSequence_InvalidDelayToken verifies malformed inline delays
