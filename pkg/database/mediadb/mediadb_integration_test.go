@@ -1816,11 +1816,12 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 	err = mediaDB.PopulateSystemTagsCache(ctx)
 	require.NoError(t, err)
 
-	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil,
+		database.SlugResolution{MediaDBID: insertedMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Verify caches are populated
-	_, _, slugCacheFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, slugCacheFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, slugCacheFound, "slug cache should be populated")
 
 	tags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
@@ -1837,7 +1838,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify slug cache was invalidated (InsertMediaTitle uses AllSystems scope)
-	_, _, slugCacheAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, slugCacheAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.False(t, slugCacheAfter, "slug cache should be invalidated after InsertMediaTitle")
 }
 
@@ -1887,11 +1888,12 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache a slug resolution
-	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil,
+		database.SlugResolution{MediaDBID: insertedMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Verify cache exists
-	_, _, found := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, found := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, found, "cache should exist before transaction")
 
 	// Start new transaction and insert more data
@@ -1908,7 +1910,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache should still exist during transaction
-	_, _, foundDuring := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, foundDuring := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, foundDuring, "cache should NOT be invalidated during transaction")
 
 	// Commit transaction
@@ -1916,7 +1918,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// After commit, caches are invalidated
-	_, _, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.False(t, foundAfter, "cache should be invalidated after transaction commit")
 }
 
@@ -1991,17 +1993,19 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 	require.NoError(t, err)
 
 	// Cache slug resolutions for both systems
-	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedNESMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil,
+		database.SlugResolution{MediaDBID: insertedNESMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
-	err = mediaDB.SetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil, insertedSNESMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil,
+		database.SlugResolution{MediaDBID: insertedSNESMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Verify both caches exist
-	_, _, nesFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, nesFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, nesFound, "NES cache should exist")
 
-	_, _, snesFound := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
+	_, snesFound := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
 	assert.True(t, snesFound, "SNES cache should exist")
 
 	// Truncate NES system only
@@ -2009,10 +2013,10 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 	require.NoError(t, err)
 
 	// Verify NES cache is gone but SNES cache remains
-	_, _, nesAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, nesAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.False(t, nesAfter, "NES cache should be invalidated")
 
-	_, _, snesAfter := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
+	_, snesAfter := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
 	assert.True(t, snesAfter, "SNES cache should remain")
 }
 
@@ -2064,14 +2068,15 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	err = mediaDB.PopulateSystemTagsCache(ctx)
 	require.NoError(t, err)
 
-	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil,
+		database.SlugResolution{MediaDBID: insertedMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	err = mediaDB.PopulateBrowseCache(ctx)
 	require.NoError(t, err)
 
 	// Verify caches are populated
-	_, _, slugFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, slugFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, slugFound, "slug cache should be populated")
 
 	var browseDirCount int
@@ -2084,7 +2089,7 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify slug cache is cleared
-	_, _, slugAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	_, slugAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.False(t, slugAfter, "slug cache should be cleared after truncate")
 
 	// Verify system tags cache is cleared
@@ -4829,4 +4834,62 @@ func TestMigrations_PurgesSlugResolutionsCachedBeforeContainerPromotion(t *testi
 	require.NoError(t, sqlDB.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM SlugResolutionCache").Scan(&remaining))
 	assert.Zero(t, remaining, "entries cached before container promotion must not survive the upgrade")
+}
+
+// slugResolutionConfidenceVersion is 20260920120000_slug_resolution_confidence,
+// which rebuilds the cache with the confidence each resolution scored.
+const slugResolutionConfidenceVersion = 20260920120000
+
+// TestMigrations_SlugResolutionConfidenceRetiresUnscoredEntries covers the
+// upgrade path: an entry cached before confidence was stored has no score to
+// report, so it must not survive to be served as a cache hit.
+func TestMigrations_SlugResolutionConfidenceRetiresUnscoredEntries(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.MigrateUp())
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	require.NoError(t, goose.DownTo(sqlDB, "migrations", slugResolutionConfidenceVersion-1))
+
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (900, 'NES', 'NES');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (900, 900, 'metroid', 'Metroid');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir)
+		VALUES (900, 900, 900, '/roms/NES/Metroid.nes', '/roms/NES/');
+		INSERT INTO SlugResolutionCache
+			(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
+		VALUES ('legacy', 'NES', 'metroid', '[]', 900, 'strategy_exact_match', 0);
+	`)
+	require.NoError(t, err, "the rolled-back table has the shape released builds wrote")
+
+	require.NoError(t, goose.Up(sqlDB, "migrations"))
+
+	var remaining int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM SlugResolutionCache").Scan(&remaining))
+	assert.Zero(t, remaining, "entries cached without a confidence must not survive the upgrade")
+
+	want := database.SlugResolution{MediaDBID: 900, Strategy: "strategy_exact_match", Confidence: 0.633}
+	require.NoError(t, mediaDB.SetCachedSlugResolution(ctx, "NES", "metroid", nil, want))
+	got, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "metroid", nil)
+	require.True(t, found)
+	assert.Equal(t, want, got)
+
+	// A write that carries no confidence is refused rather than given a score.
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO SlugResolutionCache
+			(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
+		VALUES ('unscored', 'NES', 'metroid', '[]', 900, 'strategy_exact_match', 0)`)
+	require.Error(t, err)
+
+	// The indexes invalidation relies on are rebuilt with the table.
+	var indexes int
+	require.NoError(t, sqlDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND tbl_name = 'SlugResolutionCache'
+		  AND name IN ('idx_slug_cache_system', 'idx_slug_cache_media')`).Scan(&indexes))
+	assert.Equal(t, 2, indexes)
 }

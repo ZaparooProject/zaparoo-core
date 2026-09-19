@@ -109,7 +109,7 @@ func TestResolveTitle_PromotesTrackToContainerCue(t *testing.T) {
 	// The promoted ID must be what gets cached, or the next launch of this
 	// title replays the wrong pick straight out of the cache.
 	mockMediaDB.AssertCalled(t, "SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, int64(99), mock.Anything)
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, helpers.SlugResolutionMatcher(99))
 }
 
 // TestResolveTitle_PromotesDiscToPlaylist covers the multi-disc layout that ES-DE
@@ -407,7 +407,7 @@ func TestResolveTitle_CacheHitSkipsContainerLookup(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return(int64(99), StrategyExactMatch, true)
+	).Return(database.SlugResolution{MediaDBID: 99, Strategy: StrategyExactMatch, Confidence: 1.0}, true)
 	mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(99)).
 		Return(database.SearchResultWithCursor{
 			SystemID: "PSX",

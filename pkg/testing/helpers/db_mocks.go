@@ -2828,22 +2828,18 @@ func (m *MockMediaDBI) RefreshSlugSearchCacheForSystems(ctx context.Context, sys
 // Slug resolution cache methods
 func (m *MockMediaDBI) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
-) (mediaDBID int64, strategy string, found bool) {
+) (database.SlugResolution, bool) {
 	args := m.Called(ctx, systemID, slug, tagFilters)
-	if mediaID, ok := args.Get(0).(int64); ok {
-		if strat, ok := args.Get(1).(string); ok {
-			strategy = strat
-		}
-		hit := args.Bool(2)
-		return mediaID, strategy, hit
+	if resolution, ok := args.Get(0).(database.SlugResolution); ok {
+		return resolution, args.Bool(1)
 	}
-	return 0, "", false
+	return database.SlugResolution{}, false
 }
 
 func (m *MockMediaDBI) SetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, resolution database.SlugResolution,
 ) error {
-	args := m.Called(ctx, systemID, slug, tagFilters, mediaDBID, strategy)
+	args := m.Called(ctx, systemID, slug, tagFilters, resolution)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -3126,6 +3122,19 @@ func SystemMatcher() any {
 	return mock.MatchedBy(func(s database.System) bool {
 		// Basic validation - system has required fields
 		return s.Name != ""
+	})
+}
+
+// SlugResolutionMatcher returns a testify matcher for a cached
+// database.SlugResolution naming the given media.
+//
+// Example usage:
+//
+//	mediaDB.On("SetCachedSlugResolution", mock.Anything, "NES", "mario", mock.Anything,
+//		helpers.SlugResolutionMatcher(1)).Return(nil)
+func SlugResolutionMatcher(mediaDBID int64) any {
+	return mock.MatchedBy(func(r database.SlugResolution) bool {
+		return r.MediaDBID == mediaDBID
 	})
 }
 
