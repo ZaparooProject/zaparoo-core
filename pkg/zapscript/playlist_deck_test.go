@@ -90,12 +90,13 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
 	t.Parallel()
 	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
-	require.NoError(t, db.UserDB.UpsertRemoteDeck(&database.Deck{
+	_, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
 		DeckID: "0123456789ab", Name: "Theirs", Owned: false,
 		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**input.keyboard:a"}},
-	}))
+	})
+	require.NoError(t, err)
 
-	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	_, err = cmdPlaylistLoad(newPlaylistTestPlatform(), env)
 	require.NoError(t, err)
 	pls := <-queue
 	assert.True(t, pls.Unsafe, "a cached copy of somebody else's deck runs its items untrusted")

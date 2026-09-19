@@ -70,23 +70,28 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 	}
 }
 
+// transition copies a playlist for a move to a new position or playback
+// state. Every field carries across, so one added later — Unsafe above, which
+// decides whether items run with input and program rights — cannot be dropped
+// by a copy that forgot to list it. Clear, ForceRelaunch and Refresh are the
+// exception: they describe the single update that delivered them to the queue
+// handler, not the playlist, so they never outlive it.
+func transition(p *Playlist) *Playlist {
+	out := *p
+	out.Clear = false
+	out.ForceRelaunch = false
+	out.Refresh = false
+	return &out
+}
+
 func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index + 1
 	if idx >= len(p.Items) {
 		idx = 0
 	}
-	return &Playlist{
-		ID:        p.ID,
-		Name:      p.Name,
-		Slot:      p.Slot,
-		Items:     p.Items,
-		Index:     idx,
-		Playing:   p.Playing,
-		Loop:      p.Loop,
-		LoopOne:   p.LoopOne,
-		HoldToken: p.HoldToken,
-		Unsafe:    p.Unsafe,
-	}
+	out := transition(&p)
+	out.Index = idx
+	return out
 }
 
 func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
@@ -94,18 +99,9 @@ func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves 
 	if idx < 0 {
 		idx = len(p.Items) - 1
 	}
-	return &Playlist{
-		ID:        p.ID,
-		Name:      p.Name,
-		Slot:      p.Slot,
-		Items:     p.Items,
-		Index:     idx,
-		Playing:   p.Playing,
-		Loop:      p.Loop,
-		LoopOne:   p.LoopOne,
-		HoldToken: p.HoldToken,
-		Unsafe:    p.Unsafe,
-	}
+	out := transition(&p)
+	out.Index = idx
+	return out
 }
 
 func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
@@ -118,48 +114,21 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 	case idx < 0:
 		idx = 0
 	}
-	return &Playlist{
-		ID:        p.ID,
-		Name:      p.Name,
-		Slot:      p.Slot,
-		Items:     p.Items,
-		Index:     idx,
-		Playing:   p.Playing,
-		Loop:      p.Loop,
-		LoopOne:   p.LoopOne,
-		HoldToken: p.HoldToken,
-		Unsafe:    p.Unsafe,
-	}
+	out := transition(&p)
+	out.Index = idx
+	return out
 }
 
 func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
-	return &Playlist{
-		ID:        p.ID,
-		Name:      p.Name,
-		Slot:      p.Slot,
-		Items:     p.Items,
-		Index:     p.Index,
-		Playing:   true,
-		Loop:      p.Loop,
-		LoopOne:   p.LoopOne,
-		HoldToken: p.HoldToken,
-		Unsafe:    p.Unsafe,
-	}
+	out := transition(&p)
+	out.Playing = true
+	return out
 }
 
 func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
-	return &Playlist{
-		ID:        p.ID,
-		Name:      p.Name,
-		Slot:      p.Slot,
-		Items:     p.Items,
-		Index:     p.Index,
-		Playing:   false,
-		Loop:      p.Loop,
-		LoopOne:   p.LoopOne,
-		HoldToken: p.HoldToken,
-		Unsafe:    p.Unsafe,
-	}
+	out := transition(&p)
+	out.Playing = false
+	return out
 }
 
 func (p *Playlist) Current() PlaylistItem {

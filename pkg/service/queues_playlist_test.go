@@ -388,6 +388,63 @@ func TestLaunchPlaylistMedia_UntrustedPlaylistRefusesInput(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+// TestLaunchPlaylistMedia_NestedPlaylistStaysUntrusted pins that a playlist
+// opened by an item of an untrusted playlist is untrusted too, so nesting is
+// not a way for a fetched script to reach input and program commands.
+func TestLaunchPlaylistMedia_NestedPlaylistStaysUntrusted(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.State.SetRunZapScript(true)
+	mockUserDB, ok := svc.DB.UserDB.(*testhelpers.MockUserDBI)
+	require.True(t, ok)
+	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Once()
+
+	nested := `**playlist.load:{"id":"ZON-nested","name":"Nested",` +
+		`"items":[{"name":"A","zapscript":"**input.keyboard:a"}]}`
+	outer := playlists.NewPlaylist("ZON-outer", "Outer", []playlists.PlaylistItem{{ZapScript: nested}})
+	outer.Unsafe = true
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		launchPlaylistMedia(svc, outer, mocks.NewMockPlayer())
+	}()
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		require.NotNil(t, got)
+		assert.Equal(t, "ZON-nested", got.ID)
+		assert.True(t, got.Unsafe, "a playlist nested in an untrusted playlist stays untrusted")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: expected the nested playlist on the queue")
+	}
+	<-done
+}
+
+// TestHandlePlaylist_RefreshKeepsUnsafe pins that an open playlist keeps its
+// own trust across an in-place refresh. A shared deck edited elsewhere is
+// refreshed while it plays, and the refresh carries no trust of its own, so
+// the items must stay untrusted afterwards.
+func TestHandlePlaylist_RefreshKeepsUnsafe(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.PlaybackManager = &servicePlaybackRecorder{}
+	active := makeServicePlaylist()
+	active.Unsafe = true
+	svc.State.SetActivePlaylist(active)
+
+	handlePlaylist(svc, &playlists.Playlist{
+		ID: active.ID, Name: "renamed", Refresh: true,
+		Items: []playlists.PlaylistItem{{Name: "Item 9", ZapScript: "**test9"}},
+	}, nil)
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.True(t, got.Unsafe, "a refresh must not make an untrusted playlist trusted")
+}
+
 func TestHandlePlaylist_RefreshKeepsPositionAndPlayback(t *testing.T) {
 	t.Parallel()
 

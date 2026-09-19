@@ -277,18 +277,8 @@ func advanceBackgroundPlaylist(svc *ServiceContext) {
 	switch {
 	case pls.LoopOne:
 		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
-		next = &playlists.Playlist{
-			ID:            pls.ID,
-			Name:          pls.Name,
-			Slot:          pls.Slot,
-			Items:         pls.Items,
-			Index:         pls.Index,
-			Playing:       true,
-			Loop:          pls.Loop,
-			LoopOne:       pls.LoopOne,
-			ForceRelaunch: true,
-			Unsafe:        pls.Unsafe,
-		}
+		next = playlists.Play(*pls)
+		next.ForceRelaunch = true
 	case pls.Index+1 < len(pls.Items):
 		// More tracks remain — advance normally.
 		next = playlists.Next(*pls)
