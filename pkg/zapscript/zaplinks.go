@@ -297,9 +297,10 @@ func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) 
 
 // getRemoteZapScriptOwned fetches a ZapLink body and reports whether the
 // link service said the linked account owns what the link names. The answer
-// is trusted only from a host this device sent its own credential to: a
-// host that got no credential cannot know who asked, so its claim is
-// ignored. Absent means not owned.
+// is trusted only from a host this device sent its own credential to, and
+// only when that host is the one the link names: a host that got no
+// credential cannot know who asked, and an answer reached through a redirect
+// is not for this link. Absent means not owned.
 func getRemoteZapScriptOwned(parent context.Context, urlStr, platform string) (body []byte, owned bool, err error) {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
@@ -358,14 +359,14 @@ func getRemoteZapScriptOwned(parent context.Context, urlStr, platform string) (b
 		return nil, false, errors.New("invalid content type")
 	}
 
-	// The host that answered is the one that must have been sent the
-	// credential. After a redirect that is not the host the link names, and
-	// a host that never saw the credential cannot vouch for anything.
-	answeredBy := urlStr
-	if resp.Request != nil && resp.Request.URL != nil {
-		answeredBy = resp.Request.URL.String()
-	}
-	owned = resp.Header.Get(HeaderZaparooOwned) == "1" && credentialSentTo(answeredBy)
+	// The answer only counts for the link that was tapped. Once a redirect
+	// is followed, whoever wrote the link chose where it led: a host that
+	// never saw the credential cannot vouch, and a linked host reached that
+	// way vouches for a card the link did not name. The body is still
+	// served; it just runs untrusted. Request.Response is set only on a
+	// request the client made to follow a redirect.
+	redirected := resp.Request != nil && resp.Request.Response != nil
+	owned = resp.Header.Get(HeaderZaparooOwned) == "1" && !redirected && credentialSentTo(urlStr)
 	log.Debug().Int("size", len(body)).Bool("owned", owned).Msg("received zap link body")
 
 	return body, owned, nil

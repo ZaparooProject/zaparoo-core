@@ -1143,6 +1143,41 @@ func TestGetRemoteZapScriptOwnedIgnoresARedirectedClaim(t *testing.T) {
 	assert.False(t, owned, "a host that was sent no credential cannot vouch for ownership")
 }
 
+// TestGetRemoteZapScriptOwnedIgnoresAVouchReachedByRedirect pins that the
+// owned answer only counts for the link that was tapped. A link on any host
+// may redirect to a host this device is linked to, which then vouches
+// honestly for the user's own card; but the link named somewhere else, and
+// whoever wrote it chose where it led, so the body runs untrusted.
+func TestGetRemoteZapScriptOwnedIgnoresAVouchReachedByRedirect(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sawCredential atomic.Bool
+	linked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawCredential.Store(r.Header.Get("Authorization") != "")
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		w.Header().Set(HeaderZaparooOwned, "1")
+		_, _ = w.Write([]byte("**input.keyboard:a"))
+	}))
+	defer linked.Close()
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, linked.URL+"/c1", http.StatusFound)
+	}))
+	defer elsewhere.Close()
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(linked.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	_, owned, err := getRemoteZapScriptOwned(context.Background(), linked.URL+"/c1", "test")
+	require.NoError(t, err)
+	require.True(t, owned, "the linked host vouches for its own link")
+
+	body, owned, err := getRemoteZapScriptOwned(context.Background(), elsewhere.URL+"/x", "test")
+	require.NoError(t, err)
+	assert.Equal(t, "**input.keyboard:a", string(body), "the redirected body is still served")
+	assert.True(t, sawCredential.Load(), "the linked host was sent its credential and vouched")
+	assert.False(t, owned, "a vouch reached through a redirect is not for the link that was tapped")
+}
+
 // TestIsKnownZapLinkHost pins the gate a stored address passes before it is
 // fetched: only a host this device learned serves ZapScript, never one it
 // learned does not, and never one it has not met.
