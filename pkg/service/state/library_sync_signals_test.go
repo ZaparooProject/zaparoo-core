@@ -45,15 +45,22 @@ func TestLibrarySyncSignals(t *testing.T) {
 	st.NotifyLibraryDecksChanged()
 	st.NotifyLibraryDecksAccessed()
 	st.RefreshLibraryDeck(context.Background(), "0123456789ab")
+	st.NotifyLibraryHint([]string{"state"}, 7)
+	st.SetLibraryPipeState(true)
 
 	settings, edits, deckEdits, accesses := 0, 0, 0, 0
 	refreshed := ""
+	var hintKinds []string
+	var hintRevision int64
+	pipeHeld := false
 	st.SetLibrarySyncSignals(LibrarySyncSignals{
 		SettingChanged: func() { settings++ },
 		StateChanged:   func() { edits++ },
 		DecksChanged:   func() { deckEdits++ },
 		DecksAccessed:  func() { accesses++ },
 		RefreshDeck:    func(_ context.Context, deckID string) { refreshed = deckID },
+		Hint:           func(kinds []string, revision int64) { hintKinds, hintRevision = kinds, revision },
+		PipeState:      func(connected bool) { pipeHeld = connected },
 	})
 	st.RequestLibrarySync()
 	st.NotifyLibraryStateChanged()
@@ -66,4 +73,12 @@ func TestLibrarySyncSignals(t *testing.T) {
 	assert.Equal(t, 1, deckEdits)
 	assert.Equal(t, 1, accesses)
 	assert.Equal(t, "0123456789ab", refreshed)
+
+	st.NotifyLibraryHint([]string{"decks", "state"}, 42)
+	st.SetLibraryPipeState(true)
+	assert.Equal(t, []string{"decks", "state"}, hintKinds)
+	assert.Equal(t, int64(42), hintRevision)
+	assert.True(t, pipeHeld)
+	st.SetLibraryPipeState(false)
+	assert.False(t, pipeHeld)
 }

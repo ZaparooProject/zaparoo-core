@@ -132,15 +132,8 @@ func startLibrarySyncScheduler(
 		// background when the last pull is stale and refreshes the open
 		// playlist in place if the deck changed.
 		RefreshDeck: func(context.Context, string) { signalLibrarySync(accessRequests) },
-		Hint: func(kinds []string, revision int64) {
-			// Hints are best effort: one that finds the channel full is
-			// covered by the timer.
-			select {
-			case hints <- libraryHint{kinds: kinds, revision: revision}:
-			default:
-			}
-		},
-		PipeState: pipe.Store,
+		Hint:        func(kinds []string, revision int64) { offerLibraryHint(hints, kinds, revision) },
+		PipeState:   pipe.Store,
 	})
 	indexing, subID := notifBroker.Subscribe(32, models.NotificationMediaIndexing)
 	wg.Add(2)
@@ -160,6 +153,16 @@ func startLibrarySyncScheduler(
 type libraryHint struct {
 	kinds    []string
 	revision int64
+}
+
+// offerLibraryHint hands a change hint to the state loop without waiting
+// for it. Hints are best effort: one that finds the channel full is covered
+// by the timer.
+func offerLibraryHint(hints chan<- libraryHint, kinds []string, revision int64) {
+	select {
+	case hints <- libraryHint{kinds: kinds, revision: revision}:
+	default:
+	}
 }
 
 func signalLibrarySync(requests chan<- struct{}) {
