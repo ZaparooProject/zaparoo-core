@@ -281,7 +281,7 @@ func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
 	return sqlUpdateZapLinkHost(db.ctx, db.sql.Load(), host, zapscript)
 }
 
-func (db *UserDB) GetZapLinkHost(host string) (found, zapScript bool, err error) {
+func (db *UserDB) GetZapLinkHost(host string) (supported, found bool, err error) {
 	return sqlGetZapLinkHost(db.ctx, db.sql.Load(), host)
 }
 

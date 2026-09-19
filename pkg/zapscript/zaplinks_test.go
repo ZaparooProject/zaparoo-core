@@ -1112,3 +1112,51 @@ func zapLinkCertPEM(t *testing.T, cert *x509.Certificate) []byte {
 		Bytes: cert.Raw,
 	})
 }
+
+// TestGetRemoteZapScriptOwnedIgnoresARedirectedClaim pins that only the host
+// that was sent the credential can vouch. A credentialed host that redirects
+// elsewhere hands the answer to a host that never saw the credential, and
+// that host cannot know who asked.
+func TestGetRemoteZapScriptOwnedIgnoresARedirectedClaim(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sawCredential atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawCredential.Store(r.Header.Get("Authorization") != "")
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		w.Header().Set(HeaderZaparooOwned, "1")
+		_, _ = w.Write([]byte("**input.keyboard:a"))
+	}))
+	defer elsewhere.Close()
+	linked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/c1", http.StatusFound)
+	}))
+	defer linked.Close()
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(linked.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	body, owned, err := getRemoteZapScriptOwned(context.Background(), linked.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.Equal(t, "**input.keyboard:a", string(body))
+	assert.False(t, sawCredential.Load(), "the credential stays with the host it belongs to")
+	assert.False(t, owned, "a host that was sent no credential cannot vouch for ownership")
+}
+
+// TestIsKnownZapLinkHost pins the gate a stored address passes before it is
+// fetched: only a host this device learned serves ZapScript, never one it
+// learned does not, and never one it has not met.
+func TestIsKnownZapLinkHost(t *testing.T) {
+	t.Parallel()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.UserDB.UpdateZapLinkHost("https://serves.example", 1))
+	require.NoError(t, db.UserDB.UpdateZapLinkHost("https://refuses.example", 0))
+
+	assert.True(t, isKnownZapLinkHost("https://serves.example/any/path", db))
+	assert.False(t, isKnownZapLinkHost("https://refuses.example/any/path", db),
+		"a host recorded as not serving ZapScript is never fetched")
+	assert.False(t, isKnownZapLinkHost("https://stranger.example/any/path", db))
+	assert.False(t, isKnownZapLinkHost("http://serves.example/any/path", db), "a public link must be HTTPS")
+	assert.False(t, isKnownZapLinkHost("https://serves.example/any/path", nil))
+}

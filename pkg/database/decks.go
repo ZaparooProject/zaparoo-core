@@ -115,14 +115,28 @@ type Deck struct {
 	Name        string
 	Description string
 	SourceURL   string
-	Metadata    json.RawMessage
-	Items       []DeckItem
-	DBID        int64
-	CreatedAt   int64
-	UpdatedAt   int64
-	FetchedAt   int64
-	ItemCount   int
-	Owned       bool
+	// PlaylistID is the playlist ID the deck's source served it under, kept
+	// verbatim so the local copy and the served playlist are one playlist.
+	// Empty for a deck that was not fetched from a link.
+	PlaylistID string
+	Metadata   json.RawMessage
+	Items      []DeckItem
+	DBID       int64
+	CreatedAt  int64
+	UpdatedAt  int64
+	FetchedAt  int64
+	ItemCount  int
+	Owned      bool
+}
+
+// FetchedDeckResult reports what keeping a deck fetched from a link did.
+type FetchedDeckResult struct {
+	// DeckID is the ID the copy is kept under on this device.
+	DeckID string
+	// Evicted lists the fetched decks removed to make room.
+	Evicted []string
+	// Changed reports whether the stored deck changed.
+	Changed bool
 }
 
 // NewDeckID mints a deck ID from the operating system's random source:

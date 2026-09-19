@@ -490,6 +490,12 @@ func TestHandlePlaylist_RefreshClampsIndexAndIgnoresOtherIDs(t *testing.T) {
 	assert.Same(t, active, svc.State.GetActivePlaylist(), "a refresh for another playlist is ignored")
 
 	handlePlaylist(svc, &playlists.Playlist{
+		ID: active.ID, DeckID: "0123456789ab", Refresh: true, Items: active.Items[:1],
+	}, nil)
+	assert.Same(t, active, svc.State.GetActivePlaylist(),
+		"a deck's refresh is ignored by a playlist that only shares its ID")
+
+	handlePlaylist(svc, &playlists.Playlist{
 		ID: active.ID, Refresh: true, Items: []playlists.PlaylistItem{{Name: "Only", ZapScript: "**only"}},
 	}, nil)
 	got := svc.State.GetActivePlaylist()

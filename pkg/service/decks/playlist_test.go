@@ -34,7 +34,6 @@ import (
 func TestDeckURI(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "deck://0123456789ab", decks.DeckURI("0123456789ab"))
-	assert.Equal(t, "ZON-0123456789ab", decks.PlaylistID("0123456789AB"))
 
 	for raw, want := range map[string]string{
 		"deck://0123456789ab":   "0123456789ab",
@@ -52,82 +51,134 @@ func TestDeckURI(t *testing.T) {
 	}
 }
 
-func TestDeckIDFromZapLinkURL(t *testing.T) {
+// The links a deck is reached through. One is a real link on the hosted
+// service and the other belongs to nobody in particular: nothing about a host
+// or a link's shape may decide how its playlist is treated.
+const (
+	hostedDeckLink     = "https://zpr.au/d$lhm6n9t8"
+	thirdPartyDeckLink = "https://decks.example/shelf/anything/at/all?ref=1"
+)
+
+func servedPlaylist(t *testing.T, cmdName, id string, items ...decks.PlaylistArgItem) string {
+	t.Helper()
+	encoded, err := json.Marshal(decks.PlaylistArg{ID: id, Name: "Served", Items: items})
+	require.NoError(t, err)
+	return "**" + cmdName + ":" + string(encoded)
+}
+
+func TestParseServedPlaylist(t *testing.T) {
 	t.Parallel()
-	for raw, want := range map[string]string{
-		"https://zpr.au/d0123456789ab":           "0123456789ab",
-		"https://zpr.au/DABCDEFGH":               "abcdefgh",
-		"https://edge.zaparoo.com/d0123456789ab": "0123456789ab",
-		"https://zpr.au/c0123456789ab":           "",
-		"https://zpr.au/0123456789ab":            "",
-		"https://zpr.au/d0123456789ab/extra":     "",
-		"http://zpr.au/d0123456789ab":            "",
-		"https://example.com/d0123456789ab":      "",
-		"https://zpr.au/dIIIIIIIIIII":            "",
-		"not a url %%":                           "",
+	item := decks.PlaylistArgItem{Name: "A", ZapScript: "**launch.system:SNES"}
+
+	// The body the hosted service serves for a deck, as fetched.
+	hosted := `**playlist.open:{"id":"ZON-LHM6N9T8","name":"My Favourites","items":[` +
+		`{"name":"Gunstar Heroes","zapscript":"@Genesis/Gunstar Heroes (year:1993)"}]}`
+	cmd, arg, ok := decks.ParseServedPlaylist(hosted)
+	require.True(t, ok)
+	assert.Equal(t, zapscript.ZapScriptCmdPlaylistOpen, cmd.Name)
+	assert.Equal(t, "ZON-LHM6N9T8", arg.ID, "the served ID is kept as it is, whatever it looks like")
+	assert.Equal(t, "My Favourites", arg.Name)
+	require.Len(t, arg.Items, 1)
+
+	for _, id := range []string{"party-list", "", "deck://0123456789ab"} {
+		_, arg, ok = decks.ParseServedPlaylist(servedPlaylist(t, zapscript.ZapScriptCmdPlaylistOpen, id, item))
+		require.True(t, ok, "a playlist is kept whatever it calls itself: %q", id)
+		assert.Equal(t, id, arg.ID)
+	}
+	for _, name := range []string{zapscript.ZapScriptCmdPlaylistPlay, zapscript.ZapScriptCmdPlaylistLoad} {
+		cmd, _, ok = decks.ParseServedPlaylist(servedPlaylist(t, name, "p", item) + "?mode=shuffle")
+		require.True(t, ok, name)
+		assert.Equal(t, name, cmd.Name, "the command is returned as served")
+		assert.Equal(t, "shuffle", cmd.AdvArgs.Get(zapscript.KeyMode))
+	}
+
+	for name, body := range map[string]string{
+		"not a playlist":       "**launch.system:SNES",
+		"more than a playlist": servedPlaylist(t, zapscript.ZapScriptCmdPlaylistOpen, "p", item) + "||**stop",
+		"a playlist file":      "**playlist.open:/roms/list.pls",
+		"a local deck":         "**playlist.open:deck://0123456789ab",
+		"nothing to run": servedPlaylist(t, zapscript.ZapScriptCmdPlaylistOpen, "p",
+			decks.PlaylistArgItem{Name: "Empty", ZapScript: "  "}),
+		"no items":         servedPlaylist(t, zapscript.ZapScriptCmdPlaylistOpen, "p"),
+		"another command":  "**playlist.goto:" + `{"id":"p","items":[{"zapscript":"**stop"}]}`,
+		"unparseable json": "**playlist.open:{not json",
 	} {
-		got, ok := decks.DeckIDFromZapLinkURL(raw)
-		assert.Equal(t, want != "", ok, raw)
-		assert.Equal(t, want, got, raw)
+		_, _, ok = decks.ParseServedPlaylist(body)
+		assert.False(t, ok, name)
 	}
 }
 
-func servedDeck(t *testing.T, id string, items ...decks.PlaylistArgItem) string {
-	t.Helper()
-	encoded, err := json.Marshal(decks.PlaylistArg{ID: "ZON-" + id, Name: "Served", Items: items})
-	require.NoError(t, err)
-	return "**playlist.open:" + string(encoded)
-}
-
-func TestParseDeckPlaylist(t *testing.T) {
-	t.Parallel()
-	body := servedDeck(t, "0123456789AB", decks.PlaylistArgItem{Name: "A", ZapScript: "**launch.system:SNES"})
-	arg, ok := decks.ParseDeckPlaylist(body, "0123456789ab")
-	require.True(t, ok, "the served ID matches regardless of case")
-	assert.Equal(t, "Served", arg.Name)
-	require.Len(t, arg.Items, 1)
-
-	_, ok = decks.ParseDeckPlaylist(body, "zzzzzzzzzzzz")
-	assert.False(t, ok, "a playlist for another ID is not this deck")
-	_, ok = decks.ParseDeckPlaylist("**launch.system:SNES", "0123456789ab")
-	assert.False(t, ok)
-	_, ok = decks.ParseDeckPlaylist(body+"||**stop", "0123456789ab")
-	assert.False(t, ok, "a body with more than the playlist is not a served deck")
-	_, ok = decks.ParseDeckPlaylist("**playlist.open:/roms/list.pls", "0123456789ab")
-	assert.False(t, ok)
-}
-
+// Every host's playlist is kept the same way, and what it is kept under comes
+// from this device alone.
 func TestStoreFetchedDeck(t *testing.T) {
 	t.Parallel()
+	for name, link := range map[string]string{"hosted": hostedDeckLink, "third party": thirdPartyDeckLink} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newProjectFixture(t)
+			nested := servedPlaylist(t, zapscript.ZapScriptCmdPlaylistOpen, "card1234",
+				decks.PlaylistArgItem{ZapScript: "**a"}, decks.PlaylistArgItem{ZapScript: "**b"})
+			arg := decks.PlaylistArg{ID: "party-list", Name: " Theirs ", Items: []decks.PlaylistArgItem{
+				{Name: "Game", ZapScript: "**launch.title:SNES/Game"},
+				{Name: "Card", ZapScript: nested},
+				{Name: "Empty", ZapScript: "  "},
+			}}
+			deckID, err := decks.StoreFetchedDeck(f.db, link, &arg)
+			require.NoError(t, err)
+			assert.True(t, database.IsMintedDeckID(deckID), "the deck ID is minted here, not taken from the link")
+
+			stored, err := f.userDB.GetDeck(deckID)
+			require.NoError(t, err)
+			assert.False(t, stored.Owned)
+			assert.Equal(t, "Theirs", stored.Name)
+			assert.Equal(t, link, stored.SourceURL)
+			assert.Equal(t, "party-list", stored.PlaylistID)
+			assert.Equal(t, "party-list", decks.PlaylistID(stored), "the copy opens as the playlist it was served as")
+			require.Len(t, stored.Items, 2, "entries with no script are dropped")
+			assert.Equal(t, nested, stored.Items[1].ZapScript, "a multi-script card is kept as its nested playlist")
+			assert.Equal(t, []string{deckID}, f.tagQueue.queued(),
+				"a newly kept deck is queued so its tags and file links follow")
+
+			again, err := decks.StoreFetchedDeck(f.db, link, &arg)
+			require.NoError(t, err)
+			assert.Equal(t, deckID, again, "the same link is the same deck")
+		})
+	}
+}
+
+// A served playlist can never stand in for, or be hidden by, a deck the user
+// owns, whatever ID it serves or link it sits at.
+func TestStoreFetchedDeckNeverTouchesAnOwnedDeck(t *testing.T) {
+	t.Parallel()
 	f := newProjectFixture(t)
-
-	nested := servedDeck(t, "card1234",
-		decks.PlaylistArgItem{ZapScript: "**a"}, decks.PlaylistArgItem{ZapScript: "**b"})
-	arg := decks.PlaylistArg{ID: "ZON-0123456789AB", Name: " Theirs ", Items: []decks.PlaylistArgItem{
-		{Name: "Game", ZapScript: "**launch.title:SNES/Game"},
-		{Name: "Card", ZapScript: nested},
-		{Name: "Empty", ZapScript: "  "},
-	}}
-	require.NoError(t, decks.StoreFetchedDeck(f.db, "https://zpr.au/d0123456789ab", "0123456789ab", &arg))
-	stored, err := f.userDB.GetDeck("0123456789ab")
-	require.NoError(t, err)
-	assert.False(t, stored.Owned)
-	assert.Equal(t, "Theirs", stored.Name)
-	assert.Equal(t, "https://zpr.au/d0123456789ab", stored.SourceURL)
-	require.Len(t, stored.Items, 2, "entries with no script are dropped")
-	assert.Equal(t, nested, stored.Items[1].ZapScript, "a multi-script card is kept as its nested playlist")
-
-	assert.Equal(t, []string{"0123456789ab"}, f.tagQueue.queued(),
-		"a newly cached deck is queued so its tags and file links follow")
-
-	// An owned deck of the same ID is left alone without an error.
 	require.NoError(t, f.userDB.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
-	require.NoError(t, decks.StoreFetchedDeck(f.db, "https://zpr.au/daaaaaaaaaaaa", "aaaaaaaaaaaa", &arg))
 	mine, err := f.userDB.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err)
+
+	arg := decks.PlaylistArg{ID: decks.PlaylistID(mine), Name: "Theirs", Items: []decks.PlaylistArgItem{
+		{Name: "Game", ZapScript: "**launch.system:SNES"},
+	}}
+	deckID, err := decks.StoreFetchedDeck(f.db, "https://decks.example/daaaaaaaaaaaa", &arg)
+	require.NoError(t, err)
+	assert.NotEqual(t, "aaaaaaaaaaaa", deckID)
+
+	mine, err = f.userDB.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine", mine.Name)
 	assert.True(t, mine.Owned)
-	assert.Equal(t, []string{"0123456789ab"}, f.tagQueue.queued(), "an owned deck is not re-tagged by a fetch")
+	assert.Empty(t, mine.Items)
+	theirs, err := f.userDB.GetDeck(deckID)
+	require.NoError(t, err)
+	assert.Equal(t, "Theirs", theirs.Name)
+	assert.False(t, theirs.Owned)
+}
+
+func TestPlaylistID(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "deck://0123456789ab", decks.PlaylistID(&database.Deck{DeckID: "0123456789AB"}),
+		"a deck made on this device opens as its own URI")
+	kept := &database.Deck{DeckID: "0123456789ab", PlaylistID: "ZON-LHM6N9T8"}
+	assert.Equal(t, "ZON-LHM6N9T8", decks.PlaylistID(kept), "a deck kept from a link opens as it was served")
 }
 
 // A deck that is fetched again keeps the rows of the items it still holds, so
@@ -138,14 +189,14 @@ func TestStoreFetchedDeckKeepsLocalLinksAcrossRefresh(t *testing.T) {
 	t.Parallel()
 	present := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid (USA).nes"))
 	f := newProjectFixture(t, present)
-	const deckID = "0123456789ab"
-	const src = "https://zpr.au/d0123456789ab"
+	const src = hostedDeckLink
 
 	arg := decks.PlaylistArg{ID: "ZON-0123456789AB", Name: "Theirs", Items: []decks.PlaylistArgItem{
 		{Name: "Metroid", ZapScript: decks.TitleLaunchScript("NES", "Metroid", nil)},
 		{Name: "Other", ZapScript: "**launch.system:NES"},
 	}}
-	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	deckID, err := decks.StoreFetchedDeck(f.db, src, &arg)
+	require.NoError(t, err)
 
 	// The tagger links the item to the file this device matched.
 	relinked, err := decks.ProjectDeck(f.ctx, f.deps, deckID)
@@ -161,7 +212,8 @@ func TestStoreFetchedDeckKeepsLocalLinksAcrossRefresh(t *testing.T) {
 
 	// The same deck served again changes nothing but the fetch time.
 	before := preferencesRevision(t, f)
-	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	_, err = decks.StoreFetchedDeck(f.db, src, &arg)
+	require.NoError(t, err)
 	same, err := f.userDB.GetDeck(deckID)
 	require.NoError(t, err)
 	assert.Equal(t, itemID, same.Items[0].DBID, "an unchanged item keeps its row")
@@ -177,7 +229,8 @@ func TestStoreFetchedDeckKeepsLocalLinksAcrossRefresh(t *testing.T) {
 		{Name: "New", ZapScript: "**launch.system:SNES"},
 		{Name: "Metroid", ZapScript: decks.TitleLaunchScript("NES", "Metroid", nil)},
 	}
-	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	_, err = decks.StoreFetchedDeck(f.db, src, &arg)
+	require.NoError(t, err)
 	moved, err := f.userDB.GetDeck(deckID)
 	require.NoError(t, err)
 	require.Len(t, moved.Items, 3)
@@ -187,7 +240,8 @@ func TestStoreFetchedDeckKeepsLocalLinksAcrossRefresh(t *testing.T) {
 
 	// An item the source dropped takes its row and link with it.
 	arg.Items = []decks.PlaylistArgItem{{Name: "Other", ZapScript: "**launch.system:NES"}}
-	require.NoError(t, decks.StoreFetchedDeck(f.db, src, deckID, &arg))
+	_, err = decks.StoreFetchedDeck(f.db, src, &arg)
+	require.NoError(t, err)
 	shrunk, err := f.userDB.GetDeck(deckID)
 	require.NoError(t, err)
 	require.Len(t, shrunk.Items, 1)
@@ -238,7 +292,7 @@ func TestPlaylistItems(t *testing.T) {
 	assert.Equal(t, zapscript.ZapScriptCmdPlaylistOpen, nested.Cmds[0].Name)
 	var arg decks.PlaylistArg
 	require.NoError(t, json.Unmarshal([]byte(nested.Cmds[0].Args[0]), &arg))
-	assert.Equal(t, "ZON-card0002", arg.ID)
+	assert.Equal(t, "deck://0123456789ab/card0002", arg.ID)
 	require.Len(t, arg.Items, 2)
 	assert.Equal(t, "**b", arg.Items[1].ZapScript)
 }

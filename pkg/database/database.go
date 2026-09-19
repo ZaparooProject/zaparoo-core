@@ -1174,6 +1174,7 @@ type UserDBI interface {
 	UpdateDeck(deckID string, edit func(deck *Deck) error) (*Deck, error)
 	DeleteDeck(deckID string) (bool, error)
 	UpsertRemoteDeck(deck *Deck) (bool, error)
+	UpsertFetchedDeck(deck *Deck, maxCopies int) (FetchedDeckResult, error)
 	SetDeckItemAnchor(itemDBID int64, anchor *DeckItemAnchor) error
 	CountOwnedDecks() (int, error)
 	RenameDeck(oldID, newID string) error
@@ -1185,7 +1186,7 @@ type UserDBI interface {
 	DeleteDeckSync(deckIDs []string) error
 	ClearDeckSync() error
 	UpdateZapLinkHost(host string, zapscript int) error
-	GetZapLinkHost(host string) (bool, bool, error)
+	GetZapLinkHost(host string) (supported, found bool, err error)
 	GetSupportedZapLinkHosts() ([]string, error)
 	PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error)
 	UpdateZapLinkCache(url string, zapscript string) error

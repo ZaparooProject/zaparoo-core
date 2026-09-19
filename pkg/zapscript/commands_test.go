@@ -1075,3 +1075,78 @@ func TestRunCommandAppliesZapLinkForNonRemoteSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown command")
 	mockUserDB.AssertCalled(t, "GetZapLinkHost", "https://zaplink.example.com")
 }
+
+// ownedLinkServer answers every request as a credentialed link service that
+// vouches for the link, and registers the credential it is sent.
+func ownedLinkServer(t *testing.T, body string) (link string, db *database.Database) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		w.Header().Set(HeaderZaparooOwned, "1")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.UserDB.UpdateZapLinkHost(server.URL, 1))
+	return server.URL + "/c1", db
+}
+
+// TestRunCommandOwnedZapLinkNeverRestoresTrust pins that the owned answer is
+// one-way. It keeps a tap the user made trusted; it never makes trusted a
+// token that was already untrusted, such as an item of somebody else's deck
+// that names the user's own card. Owning a script says who wrote it, not who
+// chose to run it.
+func TestRunCommandOwnedZapLinkNeverRestoresTrust(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	link, db := ownedLinkServer(t, "**input.keyboard:a?when=false")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	run := func(token tokens.Token) platforms.CmdResult {
+		result, err := RunCommand(
+			t.Context(), mockPlatform, &config.Instance{}, playlists.PlaylistController{}, token,
+			zapscript.Command{Name: "launch", Args: []string{link}},
+			1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
+		)
+		require.NoError(t, err)
+		return result
+	}
+	assert.False(t, run(tokens.Token{Source: tokens.SourceReader}).Unsafe,
+		"the user's own tap on their own card runs trusted")
+	assert.True(t, run(tokens.Token{Source: tokens.SourcePlaylist, Unsafe: true}).Unsafe,
+		"an untrusted token stays untrusted whoever owns the link it names")
+}
+
+// TestRunCommandOwnedDeckZapLinkPlaysAsServed pins that a playlist the
+// account vouched for runs trusted as it was served, and is not kept as a
+// read-only copy beside the deck the user already holds.
+func TestRunCommandOwnedDeckZapLinkPlaysAsServed(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	link, db := ownedLinkServer(t,
+		`**playlist.open:{"id":"ZON-LHM6N9T8","name":"Mine","items":[{"name":"A","zapscript":"**input.keyboard:a"}]}`)
+
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := RunCommand(
+		t.Context(), newPlaylistTestPlatform(), &config.Instance{},
+		playlists.PlaylistController{Queue: queue},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{Name: "launch", Args: []string{link}},
+		1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Unsafe)
+
+	pls := <-queue
+	assert.Equal(t, "ZON-LHM6N9T8", pls.ID)
+	assert.Empty(t, pls.DeckID, "the served playlist runs as served")
+	assert.False(t, pls.Unsafe, "the user's own deck runs its items trusted")
+	all, err := db.UserDB.ListDecks()
+	require.NoError(t, err)
+	assert.Empty(t, all, "no read-only copy of the user's own deck is kept")
+}

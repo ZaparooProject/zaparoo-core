@@ -270,12 +270,12 @@ func isKnownZapLinkHost(link string, db *database.Database) bool {
 	if err != nil || validateZapLinkURL(u) != nil {
 		return false
 	}
-	_, supported, err := db.UserDB.GetZapLinkHost(u.Scheme + "://" + u.Host)
+	supported, found, err := db.UserDB.GetZapLinkHost(u.Scheme + "://" + u.Host)
 	if err != nil {
 		log.Debug().Err(err).Msg("error checking db for zap link host")
 		return false
 	}
-	return supported
+	return found && supported
 }
 
 // HeaderZaparooOwned is set by a link service on a response to a request
@@ -358,7 +358,14 @@ func getRemoteZapScriptOwned(parent context.Context, urlStr, platform string) (b
 		return nil, false, errors.New("invalid content type")
 	}
 
-	owned = resp.Header.Get(HeaderZaparooOwned) == "1" && credentialSentTo(urlStr)
+	// The host that answered is the one that must have been sent the
+	// credential. After a redirect that is not the host the link names, and
+	// a host that never saw the credential cannot vouch for anything.
+	answeredBy := urlStr
+	if resp.Request != nil && resp.Request.URL != nil {
+		answeredBy = resp.Request.URL.String()
+	}
+	owned = resp.Header.Get(HeaderZaparooOwned) == "1" && credentialSentTo(answeredBy)
 	log.Debug().Int("size", len(body)).Bool("owned", owned).Msg("received zap link body")
 
 	return body, owned, nil

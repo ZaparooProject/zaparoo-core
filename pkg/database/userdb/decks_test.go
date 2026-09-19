@@ -508,3 +508,95 @@ func TestUpdateDeck_UnlockedDeckStillEdits(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, existed)
 }
+
+func TestUpsertFetchedDeck(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
+
+	fetched := func(source, playlistID string) *database.Deck {
+		return &database.Deck{
+			// Whatever a caller or a source puts here is never used as the key.
+			DeckID: "aaaaaaaaaaaa", Owned: true,
+			Name: "Theirs", SourceURL: source, PlaylistID: playlistID,
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}
+	}
+	const link = "https://decks.example/shelf/1?ref=a"
+
+	first, err := db.UpsertFetchedDeck(fetched(link, "party-list"), 10)
+	require.NoError(t, err)
+	assert.True(t, first.Changed)
+	assert.Empty(t, first.Evicted)
+	assert.True(t, database.IsMintedDeckID(first.DeckID))
+	assert.NotEqual(t, "aaaaaaaaaaaa", first.DeckID, "the ID is minted here, never taken from the fetch")
+	got, err := db.GetDeck(first.DeckID)
+	require.NoError(t, err)
+	assert.False(t, got.Owned, "a fetched deck is never an owned one")
+	assert.Equal(t, link, got.SourceURL)
+	assert.Equal(t, "party-list", got.PlaylistID)
+	mine, err := db.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err)
+	assert.Equal(t, "Mine", mine.Name)
+	assert.True(t, mine.Owned)
+
+	// The same link is the same deck; a fetch that brings nothing new is not a change.
+	again, err := db.UpsertFetchedDeck(fetched(link, "party-list"), 10)
+	require.NoError(t, err)
+	assert.Equal(t, first.DeckID, again.DeckID)
+	assert.False(t, again.Changed)
+
+	// A playlist ID the source changed follows the fetch.
+	again, err = db.UpsertFetchedDeck(fetched(link, "renamed"), 10)
+	require.NoError(t, err)
+	assert.Equal(t, first.DeckID, again.DeckID)
+	assert.True(t, again.Changed)
+	got, err = db.GetDeck(first.DeckID)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", got.PlaylistID)
+
+	// Any other link, however alike, is another deck.
+	other, err := db.UpsertFetchedDeck(fetched(link+"b", "party-list"), 10)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.DeckID, other.DeckID)
+
+	_, err = db.UpsertFetchedDeck(fetched("", "p"), 10)
+	require.Error(t, err, "a fetched deck is known by its source")
+}
+
+func TestUpsertFetchedDeckEvictsTheLongestUnfetched(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
+
+	ids := make([]string, 0, 3)
+	for i := range 3 {
+		result, err := db.UpsertFetchedDeck(&database.Deck{
+			Name: "Theirs", SourceURL: fmt.Sprintf("https://decks.example/%d", i),
+			Items: []database.DeckItem{scriptItem("A", "**a")},
+		}, 3)
+		require.NoError(t, err)
+		require.Empty(t, result.Evicted)
+		ids = append(ids, result.DeckID)
+		// Fetch times are whole seconds; order the copies explicitly.
+		_, err = db.sql.Load().ExecContext(t.Context(),
+			`update Decks set FetchedAt = ? where DeckID = ?;`, 100+i, result.DeckID)
+		require.NoError(t, err)
+	}
+
+	result, err := db.UpsertFetchedDeck(&database.Deck{
+		Name: "Theirs", SourceURL: "https://decks.example/new",
+		Items: []database.DeckItem{scriptItem("A", "**a")},
+	}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ids[0]}, result.Evicted, "the copy fetched longest ago makes room")
+	_, err = db.GetDeck(ids[0])
+	require.ErrorIs(t, err, database.ErrDeckNotFound)
+	_, err = db.GetDeck("aaaaaaaaaaaa")
+	require.NoError(t, err, "an owned deck is never evicted")
+	all, err := db.ListDecks()
+	require.NoError(t, err)
+	assert.Len(t, all, 4)
+}

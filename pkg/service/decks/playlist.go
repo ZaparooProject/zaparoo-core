@@ -24,11 +24,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
@@ -37,11 +35,11 @@ const (
 	// URIScheme names a local deck in a playlist command:
 	// **playlist.open:deck://<id>.
 	URIScheme = "deck"
-	// PlaylistIDPrefix leads the playlist ID a deck opens as. It is the
-	// prefix the online service uses when it serves a deck as a playlist, so
-	// a deck opened locally and one opened from its ZapLink are the same
-	// playlist.
-	PlaylistIDPrefix = "ZON-"
+	// MaxFetchedDecks bounds how many decks kept from links a device holds.
+	// Any link that serves a playlist is kept, so the bound is what stops
+	// taps piling decks up without end; the ones fetched longest ago go
+	// first.
+	MaxFetchedDecks = 200
 )
 
 // ErrNoUserDB reports a deck store reached with no user database open.
@@ -71,42 +69,17 @@ func ParseDeckURI(arg string) (string, bool) {
 	return deckID, true
 }
 
-// PlaylistID returns the ID a deck opens as.
-func PlaylistID(deckID string) string {
-	return PlaylistIDPrefix + strings.ToLower(deckID)
+// PlaylistID returns the ID a deck opens as. A deck kept from a link opens as
+// the playlist ID its source served, so the local copy and the served
+// playlist are one playlist; any other deck opens as its own deck:// URI.
+func PlaylistID(deck *database.Deck) string {
+	if deck.PlaylistID != "" {
+		return deck.PlaylistID
+	}
+	return DeckURI(strings.ToLower(deck.DeckID))
 }
 
-// DeckIDFromZapLinkURL returns the deck a ZapLink URL names. Only the
-// official hosts serve decks, under a path of "d" followed by the deck ID;
-// any other URL, including a card link, is not a deck.
-func DeckIDFromZapLinkURL(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || !strings.EqualFold(u.Scheme, "https") {
-		return "", false
-	}
-	official := false
-	for _, host := range config.OfficialAuthHosts {
-		if strings.EqualFold(u.Hostname(), host) {
-			official = true
-			break
-		}
-	}
-	if !official {
-		return "", false
-	}
-	path := strings.TrimPrefix(u.Path, "/")
-	if len(path) < 2 || (path[0] != 'd' && path[0] != 'D') || strings.Contains(path, "/") {
-		return "", false
-	}
-	deckID, err := database.NormalizeDeckID(path[1:])
-	if err != nil {
-		return "", false
-	}
-	return deckID, true
-}
-
-// PlaylistArg is the JSON argument of a playlist command, the shape the
-// online service serves a deck in.
+// PlaylistArg is the JSON argument of a playlist command.
 type PlaylistArg struct {
 	ID    string            `json:"id"`
 	Name  string            `json:"name"`
@@ -119,44 +92,47 @@ type PlaylistArgItem struct {
 	ZapScript string `json:"zapscript"`
 }
 
-// ParseDeckPlaylist reads a fetched ZapLink body as the playlist a deck is
-// served as: one playlist.open command whose JSON argument carries the
-// deck's own playlist ID. Anything else is not that deck.
-func ParseDeckPlaylist(body, deckID string) (PlaylistArg, bool) {
-	// The ID is checked here rather than trusted from the caller: this is what
-	// decides a fetched body is a given deck, so a body must never be able to
-	// match an ID that is not one a deck could have.
-	normalized, err := database.NormalizeDeckID(deckID)
-	if err != nil {
-		return PlaylistArg{}, false
-	}
+// ParseServedPlaylist reads a fetched ZapLink body as a playlist to keep: one
+// playlist.open, playlist.play or playlist.load command whose only argument
+// is a JSON playlist with at least one item to run. It returns the command as
+// served and its playlist. What the link looks like and what the playlist
+// calls itself play no part, so every host's playlist is kept alike.
+func ParseServedPlaylist(body string) (zapscript.Command, PlaylistArg, bool) {
 	parsed, err := zapscript.NewParser(body).ParseScript()
 	if err != nil || len(parsed.Cmds) != 1 {
-		return PlaylistArg{}, false
+		return zapscript.Command{}, PlaylistArg{}, false
 	}
 	cmd := parsed.Cmds[0]
-	if cmd.Name != zapscript.ZapScriptCmdPlaylistOpen || len(cmd.Args) != 1 {
-		return PlaylistArg{}, false
+	switch cmd.Name {
+	case zapscript.ZapScriptCmdPlaylistOpen, zapscript.ZapScriptCmdPlaylistPlay, zapscript.ZapScriptCmdPlaylistLoad:
+	default:
+		return zapscript.Command{}, PlaylistArg{}, false
+	}
+	if len(cmd.Args) != 1 {
+		return zapscript.Command{}, PlaylistArg{}, false
 	}
 	var arg PlaylistArg
 	if jsonErr := json.Unmarshal([]byte(cmd.Args[0]), &arg); jsonErr != nil {
-		return PlaylistArg{}, false
+		return zapscript.Command{}, PlaylistArg{}, false
 	}
-	if !strings.EqualFold(arg.ID, PlaylistID(normalized)) {
-		return PlaylistArg{}, false
+	for _, item := range arg.Items {
+		if strings.TrimSpace(item.ZapScript) != "" {
+			return cmd, arg, true
+		}
 	}
-	return arg, true
+	return zapscript.Command{}, PlaylistArg{}, false
 }
 
-// StoreFetchedDeck caches a deck served through a ZapLink as a read-only
-// copy. Every served entry becomes a script item: a card with several
-// scripts is served as a nested playlist command and is kept as that script.
-// A deck this device owns is left alone, since the owned copy is the one to
-// open. A deck that changed has its membership tags queued, so the tags and
-// the files its items link to follow the fetch in the background.
-func StoreFetchedDeck(db *database.Database, sourceURL, deckID string, arg *PlaylistArg) error {
+// StoreFetchedDeck keeps a playlist served through a ZapLink as a read-only
+// deck and returns the deck's ID on this device. The copy is known by the
+// link it came from and nothing else, so it never stands in for, or is hidden
+// by, a deck the user owns. Every served entry becomes a script item: a card
+// with several scripts is served as a nested playlist command and is kept as
+// that script. A deck that changed has its membership tags queued, so the
+// tags and the files its items link to follow the fetch in the background.
+func StoreFetchedDeck(db *database.Database, sourceURL string, arg *PlaylistArg) (string, error) {
 	if db == nil || db.UserDB == nil {
-		return ErrNoUserDB
+		return "", ErrNoUserDB
 	}
 	items := make([]database.DeckItem, 0, len(arg.Items))
 	for _, item := range arg.Items {
@@ -168,25 +144,25 @@ func StoreFetchedDeck(db *database.Database, sourceURL, deckID string, arg *Play
 		})
 	}
 	if len(items) > database.DeckMaxItems {
-		return fmt.Errorf("%w: fetched deck %s has %d items", database.ErrDeckItemLimit, deckID, len(items))
+		return "", fmt.Errorf("%w: fetched deck has %d items", database.ErrDeckItemLimit, len(items))
 	}
 	name := strings.TrimSpace(arg.Name)
 	if name == "" {
-		name = strings.ToUpper(deckID)
+		name = sourceURL
 	}
-	changed, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
-		DeckID: deckID, Name: name, Owned: false, SourceURL: sourceURL, Items: items,
-	})
-	if errors.Is(err, database.ErrDeckOwned) {
-		return nil
-	}
+	result, err := db.UserDB.UpsertFetchedDeck(&database.Deck{
+		Name: name, SourceURL: sourceURL, PlaylistID: arg.ID, Items: items,
+	}, MaxFetchedDecks)
 	if err != nil {
-		return fmt.Errorf("store fetched deck %s: %w", deckID, err)
+		return "", fmt.Errorf("store fetched deck: %w", err)
 	}
-	if changed {
-		db.QueueDeckTags(deckID)
+	if result.Changed {
+		db.QueueDeckTags(result.DeckID)
 	}
-	return nil
+	if len(result.Evicted) > 0 {
+		db.QueueDeckTags(result.Evicted...)
+	}
+	return result.DeckID, nil
 }
 
 // PlaylistItems turns a deck into the entries a playlist runs. A game item
@@ -214,7 +190,7 @@ func PlaylistItems(ctx context.Context, mediaDB database.MediaDBI, deck *databas
 			}
 			out = append(out, PlaylistItem{Name: item.Name, ZapScript: script})
 		case database.DeckItemKindCard:
-			if script, ok := cardPlaylistScript(item); ok {
+			if script, ok := cardPlaylistScript(deck, item); ok {
 				out = append(out, PlaylistItem{Name: item.Name, ZapScript: script})
 			}
 		}
@@ -222,7 +198,7 @@ func PlaylistItems(ctx context.Context, mediaDB database.MediaDBI, deck *databas
 	return out
 }
 
-func cardPlaylistScript(item *database.DeckItem) (string, bool) {
+func cardPlaylistScript(deck *database.Deck, item *database.DeckItem) (string, bool) {
 	switch len(item.Scripts) {
 	case 0:
 		return "", false
@@ -230,7 +206,9 @@ func cardPlaylistScript(item *database.DeckItem) (string, bool) {
 		return item.Scripts[0].ZapScript, item.Scripts[0].ZapScript != ""
 	}
 	nested := PlaylistArg{
-		ID: PlaylistID(item.CardID), Name: item.Name, Items: make([]PlaylistArgItem, 0, len(item.Scripts)),
+		ID:    DeckURI(strings.ToLower(deck.DeckID)) + "/" + item.CardID,
+		Name:  item.Name,
+		Items: make([]PlaylistArgItem, 0, len(item.Scripts)),
 	}
 	for _, s := range item.Scripts {
 		nested.Items = append(nested.Items, PlaylistArgItem{Name: s.Name, ZapScript: s.ZapScript})

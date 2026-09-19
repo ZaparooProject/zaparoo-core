@@ -53,8 +53,9 @@ func TestRefreshOpenDeckPlaylist_QueuesRefreshForTheOpenDeck(t *testing.T) {
 			{Kind: database.DeckItemKindScript, Name: "Second", ZapScript: "**b"},
 		},
 	}, nil).Once()
-	active := playlists.NewPlaylist("ZON-0123456789ab", "Weekend",
+	active := playlists.NewPlaylist("deck://0123456789ab", "Weekend",
 		[]playlists.PlaylistItem{{Name: "First", ZapScript: "**a"}})
+	active.DeckID = "0123456789ab"
 	active.Index = 0
 	active.Playing = true
 	svc.State.SetActivePlaylist(active)
@@ -65,7 +66,7 @@ func TestRefreshOpenDeckPlaylist_QueuesRefreshForTheOpenDeck(t *testing.T) {
 	select {
 	case queued := <-svc.PlaylistQueue:
 		assert.True(t, queued.Refresh)
-		assert.Equal(t, "ZON-0123456789ab", queued.ID)
+		assert.Equal(t, "deck://0123456789ab", queued.ID)
 		assert.Equal(t, "Weekend Plus", queued.Name)
 		assert.Len(t, queued.Items, 2)
 	default:
@@ -77,7 +78,8 @@ func TestRefreshOpenDeckPlaylist_QueuesRefreshForTheOpenDeck(t *testing.T) {
 func TestRefreshOpenDeckPlaylist_IgnoresOtherDecksAndActions(t *testing.T) {
 	t.Parallel()
 	svc := setupPlaylistTestEnv(t)
-	active := playlists.NewPlaylist("ZON-0123456789ab", "Weekend", []playlists.PlaylistItem{{ZapScript: "**a"}})
+	active := playlists.NewPlaylist("deck://0123456789ab", "Weekend", []playlists.PlaylistItem{{ZapScript: "**a"}})
+	active.DeckID = "0123456789ab"
 	svc.State.SetActivePlaylist(active)
 
 	other := decksChangedNotification(t, "bbbbbbbbbbbb", models.DecksChangedRefreshed)
@@ -105,8 +107,9 @@ func TestWatchDecksForPlaylistRefresh_RefreshesOnNotification(t *testing.T) {
 		DeckID: "0123456789ab", Name: "Weekend Plus", Owned: true,
 		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "First", ZapScript: "**a"}},
 	}, nil).Once()
-	active := playlists.NewPlaylist("ZON-0123456789ab", "Weekend",
+	active := playlists.NewPlaylist("deck://0123456789ab", "Weekend",
 		[]playlists.PlaylistItem{{Name: "First", ZapScript: "**a"}})
+	active.DeckID = "0123456789ab"
 	svc.State.SetActivePlaylist(active)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -133,7 +136,7 @@ func TestWatchDecksForPlaylistRefresh_RefreshesOnNotification(t *testing.T) {
 
 	require.NotNil(t, queued)
 	assert.True(t, queued.Refresh)
-	assert.Equal(t, "ZON-0123456789ab", queued.ID)
+	assert.Equal(t, "deck://0123456789ab", queued.ID)
 	assert.Equal(t, "Weekend Plus", queued.Name)
 
 	cancel()
@@ -149,13 +152,34 @@ func TestWatchDecksForPlaylistRefresh_RefreshesOnNotification(t *testing.T) {
 func TestWatchDecksForPlaylistRefresh_IgnoresMalformedNotification(t *testing.T) {
 	t.Parallel()
 	svc := setupPlaylistTestEnv(t)
-	svc.State.SetActivePlaylist(playlists.NewPlaylist("ZON-0123456789ab", "Weekend",
+	svc.State.SetActivePlaylist(playlists.NewPlaylist("deck://0123456789ab", "Weekend",
 		[]playlists.PlaylistItem{{ZapScript: "**a"}}))
 
 	bad := models.Notification{Method: models.NotificationDecksChanged, Params: []byte("not json")}
 	refreshOpenDeckPlaylist(context.Background(), svc, &bad)
 	unreadable := decksChangedNotification(t, "not a deck id", models.DecksChangedRefreshed)
 	refreshOpenDeckPlaylist(context.Background(), svc, &unreadable)
+
+	select {
+	case queued := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected playlist update queued: %+v", queued)
+	default:
+	}
+}
+
+// TestRefreshOpenDeckPlaylist_IgnoresAPlaylistNamedAfterTheDeck pins that a
+// playlist is tied to a deck by having been opened from it, never by its ID.
+// Any served playlist may call itself what a deck on this device opens as,
+// and a change to that deck must not swap its items in.
+func TestRefreshOpenDeckPlaylist_IgnoresAPlaylistNamedAfterTheDeck(t *testing.T) {
+	t.Parallel()
+	svc := setupPlaylistTestEnv(t)
+	served := playlists.NewPlaylist("deck://0123456789ab", "Somebody else's",
+		[]playlists.PlaylistItem{{ZapScript: "**a"}})
+	svc.State.SetActivePlaylist(served)
+
+	notification := decksChangedNotification(t, "0123456789ab", models.DecksChangedUpdated)
+	refreshOpenDeckPlaylist(context.Background(), svc, &notification)
 
 	select {
 	case queued := <-svc.PlaylistQueue:

@@ -35,7 +35,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const deckColumns = `DBID, DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt`
+const deckColumns = `DBID, DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
+	PlaylistID`
 
 const deckItemColumns = `DBID, DeckDBID, Position, Kind, Name, ZapScript, CardID, Scripts, Metadata,
 	SystemID, Path, MediaName, Tags, CreatedAt, UpdatedAt`
@@ -241,10 +242,10 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 			adoptRemoteDeckItemRows(stored, deck.Items)
 			if _, execErr := tx.ExecContext(ctx, `
 				update Decks set Name = ?, Description = ?, Owned = ?, Metadata = ?, SourceURL = ?,
-					FetchedAt = ?, UpdatedAt = ?
+					PlaylistID = ?, FetchedAt = ?, UpdatedAt = ?
 				where DBID = ?;`,
 				deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-				now, now, existing.DBID); execErr != nil {
+				deck.PlaylistID, now, now, existing.DBID); execErr != nil {
 				return false, fmt.Errorf("failed to update remote deck: %w", execErr)
 			}
 		}
@@ -255,6 +256,102 @@ func (db *UserDB) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 		return true, nil
 	})
 	return changed, err
+}
+
+// UpsertFetchedDeck stores a deck fetched from a link as a read-only copy.
+// The copy is known by deck.SourceURL alone: a link fetched before updates its
+// stored copy, and any other link gets a deck ID minted on this device, so
+// nothing the source serves can name, replace or hide another deck. At most
+// maxCopies fetched decks are kept; past that the ones fetched longest ago
+// are removed and reported, so their tags can be cleared.
+func (db *UserDB) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (database.FetchedDeckResult, error) {
+	var result database.FetchedDeckResult
+	if db.sql.Load() == nil {
+		return result, ErrNullSQL
+	}
+	if deck.SourceURL == "" {
+		return result, errors.New("fetched deck has no source URL")
+	}
+	var deckID string
+	err := db.sql.Load().QueryRowContext(db.ctx,
+		`select DeckID from Decks where Owned = 0 and SourceURL = ?;`, deck.SourceURL,
+	).Scan(&deckID)
+	isNew := errors.Is(err, sql.ErrNoRows)
+	switch {
+	case isNew:
+		if deckID, err = database.NewDeckID(); err != nil {
+			return result, fmt.Errorf("mint fetched deck ID: %w", err)
+		}
+	case err != nil:
+		return result, fmt.Errorf("failed to look up fetched deck: %w", err)
+	}
+	deck.DeckID, deck.Owned = deckID, false
+	changed, err := db.UpsertRemoteDeck(deck)
+	if err != nil {
+		return result, err
+	}
+	result.DeckID, result.Changed = deckID, changed
+	if isNew {
+		if result.Evicted, err = db.evictFetchedDecks(maxCopies); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// evictFetchedDecks removes the fetched decks beyond the keep most recently
+// fetched and returns their IDs.
+func (db *UserDB) evictFetchedDecks(keep int) ([]string, error) {
+	var evicted []string
+	err := db.deckTx(func(ctx context.Context, tx *sql.Tx, _ int64) (bool, error) {
+		dbids, deckIDs, err := sqlFetchedDecksBeyond(ctx, tx, keep)
+		if err != nil {
+			return false, err
+		}
+		for _, dbid := range dbids {
+			if _, err = tx.ExecContext(ctx, `delete from DeckItems where DeckDBID = ?;`, dbid); err != nil {
+				return false, fmt.Errorf("failed to delete fetched deck items: %w", err)
+			}
+			if _, err = tx.ExecContext(ctx, `delete from Decks where DBID = ?;`, dbid); err != nil {
+				return false, fmt.Errorf("failed to delete fetched deck: %w", err)
+			}
+		}
+		evicted = deckIDs
+		return len(dbids) > 0, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return evicted, nil
+}
+
+func sqlFetchedDecksBeyond(
+	ctx context.Context, q deckQueryable, keep int,
+) (dbids []int64, deckIDs []string, err error) {
+	rows, err := q.QueryContext(ctx, `
+		select DBID, DeckID from Decks where Owned = 0 and SourceURL != ''
+		order by FetchedAt desc, DBID desc limit -1 offset ?;`, keep)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query fetched decks: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+	for rows.Next() {
+		var dbid int64
+		var deckID string
+		if scanErr := rows.Scan(&dbid, &deckID); scanErr != nil {
+			return nil, nil, fmt.Errorf("failed to scan fetched deck: %w", scanErr)
+		}
+		dbids = append(dbids, dbid)
+		deckIDs = append(deckIDs, deckID)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("failed to iterate fetched decks: %w", err)
+	}
+	return dbids, deckIDs, nil
 }
 
 // touchUnchangedRemoteDeck records that a deck was fetched when the arriving
@@ -291,6 +388,7 @@ func (db *UserDB) touchUnchangedRemoteDeck(deck *database.Deck) (bool, error) {
 func sameRemoteDeck(stored, arriving *database.Deck) bool {
 	if stored.Name != arriving.Name || stored.Description != arriving.Description ||
 		stored.SourceURL != arriving.SourceURL || stored.Owned != arriving.Owned ||
+		stored.PlaylistID != arriving.PlaylistID ||
 		!bytes.Equal(stored.Metadata, arriving.Metadata) ||
 		len(stored.Items) != len(arriving.Items) {
 		return false
@@ -435,11 +533,12 @@ func sqlCountOwnedDecks(ctx context.Context, q deckQueryable) (int, error) {
 
 func sqlInsertDeck(ctx context.Context, q deckQueryable, deck *database.Deck) error {
 	err := q.QueryRowContext(ctx, `
-		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		insert into Decks(DeckID, Name, Description, Owned, Metadata, SourceURL, FetchedAt, CreatedAt, UpdatedAt,
+			PlaylistID)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		returning DBID;`,
 		deck.DeckID, deck.Name, deck.Description, deck.Owned, string(deck.Metadata), deck.SourceURL,
-		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt,
+		deck.FetchedAt, deck.CreatedAt, deck.UpdatedAt, deck.PlaylistID,
 	).Scan(&deck.DBID)
 	if err != nil {
 		return fmt.Errorf("failed to insert deck: %w", err)
@@ -552,7 +651,7 @@ func scanDeck(scan func(dest ...any) error) (*database.Deck, error) {
 	var metadata string
 	if err := scan(
 		&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
-		&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt,
+		&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID,
 	); err != nil {
 		return nil, err
 	}
@@ -604,7 +703,7 @@ func sqlListDecks(ctx context.Context, q deckQueryable) ([]database.Deck, error)
 		var metadata string
 		if scanErr := rows.Scan(
 			&deck.DBID, &deck.DeckID, &deck.Name, &deck.Description, &deck.Owned, &metadata,
-			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.ItemCount,
+			&deck.SourceURL, &deck.FetchedAt, &deck.CreatedAt, &deck.UpdatedAt, &deck.PlaylistID, &deck.ItemCount,
 		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan deck: %w", scanErr)
 		}

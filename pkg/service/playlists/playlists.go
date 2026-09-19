@@ -34,11 +34,16 @@ type Playlist struct {
 	// It is not part of playlist persistence or API responses.
 	HoldToken *tokens.Token
 	ID        string
-	Name      string
-	Slot      string
-	Items     []PlaylistItem
-	Index     int
-	Playing   bool
+	// DeckID names the deck on this device the playlist was opened from. It
+	// is set only by the deck loader, never from a served playlist, so it is
+	// what ties an open playlist to its deck; the ID is whatever its source
+	// chose to call it.
+	DeckID  string
+	Name    string
+	Slot    string
+	Items   []PlaylistItem
+	Index   int
+	Playing bool
 	// Clear signals the queue handler to remove the active playlist for this slot.
 	Clear bool
 	// Loop and LoopOne control end-of-playlist behavior set at load time.
