@@ -709,6 +709,8 @@ driver = "pn532"
 path = "/dev/ttyUSB0"
 scan_mode = "hold"
 `))
+	// A zero delay fires the timer as it is armed, racing the removal below.
+	cfg.SetScanExitDelay(1)
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("mock-platform")
