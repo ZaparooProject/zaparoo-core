@@ -2462,7 +2462,7 @@ func (db *MediaDB) ReconcileStagedSystem(
 		return database.ScanReconcileStats{}, fmt.Errorf(
 			"failed to flush batch inserters before reconciling %s: %w", systemID, err)
 	}
-	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), systemID, opts)
+	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), db.clock, systemID, opts)
 	if err != nil {
 		return stats, err
 	}

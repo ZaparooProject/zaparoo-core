@@ -30,14 +30,24 @@ package mediadb
 // entries reconstruct wall time, and pacing is never billed as SQL work.
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,7 +122,7 @@ func TestChunkedStepTiming_PacingIsNotBilledAsSQL(t *testing.T) {
 		return nil
 	}
 
-	affected, timing, err := sqlUpsertStagedMedia(ctx, boundsDB, "C64", 1, yield)
+	affected, timing, err := sqlUpsertStagedMedia(ctx, boundsDB, clockwork.NewRealClock(), "C64", 1, yield)
 	require.NoError(t, err)
 	require.EqualValues(t, rows, affected)
 	require.GreaterOrEqual(t, yields, 2, "test needs at least two chunks to be meaningful")
@@ -148,7 +158,7 @@ func TestChunkedStepTiming_PacingRecordedBeforeErrorReturn(t *testing.T) {
 		return sentinel
 	}
 
-	_, timing, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", 1, yield)
+	_, timing, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, yield)
 	require.ErrorIs(t, err, sentinel)
 	assert.GreaterOrEqual(t, timing.pacing, 20*time.Millisecond,
 		"pacing before a failed yield must still be reported")
@@ -163,7 +173,7 @@ func TestFlagMissingMediaTiming_ExcludesPacing(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := newUpsertStagedMediaTestDB(t)
 	stageSyntheticMedia(t, sqlDB, 1, 5)
-	_, _, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", 1, nil)
+	_, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil)
 	require.NoError(t, err)
 
 	// Empty ScanStage so every Media row now counts as missing.
@@ -174,7 +184,7 @@ func TestFlagMissingMediaTiming_ExcludesPacing(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 		return nil
 	}
-	affected, timing, err := sqlFlagMissingMedia(ctx, sqlDB, "C64", 1, yield)
+	affected, timing, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, yield)
 	require.NoError(t, err)
 	require.EqualValues(t, 5, affected)
 
@@ -197,4 +207,217 @@ func TestParseStepTimings_HandlesMultiWordStepNames(t *testing.T) {
 		"pacing":              0,
 		"unattributed":        -1,
 	}, parsed)
+}
+
+// tickingDB charges a fixed cost to a fake clock for every statement issued
+// through it. With that clock as reconcile's only time source, each step's
+// figure is an exact count of its statements, and a statement that no step
+// covers lands in unattributed as a whole tick rather than hiding in scheduler
+// noise.
+type tickingDB struct {
+	sqlQueryable
+	clock      *clockwork.FakeClock
+	statements int
+}
+
+const (
+	tickedStatementCost = time.Millisecond
+	tickedPacingCost    = 3 * time.Millisecond
+)
+
+func (db *tickingDB) tick() {
+	db.statements++
+	db.clock.Advance(tickedStatementCost)
+}
+
+func (db *tickingDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	db.tick()
+	res, err := db.sqlQueryable.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ticked exec: %w", err)
+	}
+	return res, nil
+}
+
+func (db *tickingDB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	db.tick()
+	stmt, err := db.sqlQueryable.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("ticked prepare: %w", err)
+	}
+	return stmt, nil
+}
+
+func (db *tickingDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	db.tick()
+	rows, err := db.sqlQueryable.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ticked query: %w", err)
+	}
+	return rows, nil
+}
+
+func (db *tickingDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	db.tick()
+	return db.sqlQueryable.QueryRowContext(ctx, query, args...)
+}
+
+// tickedReconcile stages files for SNES and reconciles them through a
+// tickingDB, returning the statements it charged and the times it paced.
+func tickedReconcile(
+	t *testing.T, mediaDB *MediaDB, clock *clockwork.FakeClock, files []database.ScanStagedMedia,
+) (statements, yields int) {
+	t.Helper()
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	for i := range files {
+		require.NoError(t, mediaDB.StageScannedMedia(&files[i]))
+	}
+	require.NoError(t, mediaDB.FlushBatchInserters())
+
+	db := &tickingDB{sqlQueryable: mediaDB.conn(), clock: clock}
+	yield := func() error {
+		yields++
+		clock.Advance(tickedPacingCost)
+		return nil
+	}
+	_, err := sqlReconcileStagedSystem(context.Background(), db, clock, "SNES",
+		database.ScanReconcileOpts{Yield: yield})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	return db.statements, yields
+}
+
+// readStepTimings returns the elapsed ms and steps field of the single
+// step-timings record in captured zerolog JSONL output.
+func readStepTimings(t *testing.T, out string) (elapsedMS float64, steps string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		var rec struct {
+			Message string  `json:"message"`
+			Steps   string  `json:"steps"`
+			Elapsed float64 `json:"elapsed"`
+		}
+		if line == "" || json.Unmarshal([]byte(line), &rec) != nil ||
+			rec.Message != "scan reconcile step timings" {
+			continue
+		}
+		require.False(t, found, "expected exactly one step-timings line, got more")
+		found, elapsedMS, steps = true, rec.Elapsed, rec.Steps
+	}
+	require.True(t, found, "reconcile must emit a step-timings line; captured output:\n%s", out)
+	return elapsedMS, steps
+}
+
+func snesStagedFiles(names ...string) []database.ScanStagedMedia {
+	files := make([]database.ScanStagedMedia, 0, len(names))
+	for _, name := range names {
+		files = append(files, database.ScanStagedMedia{
+			Path:          "/roms/SNES/" + name + " (USA).sfc",
+			ParentDir:     "/roms/SNES",
+			Slug:          name,
+			TitleName:     name,
+			SortName:      name,
+			SlugLength:    len(name),
+			SlugWordCount: 1,
+			Tags: []database.ScanStagedTag{
+				{Type: string(tags.TagTypeRegion), Value: "us"},
+				{Type: string(tags.TagTypeRev), Value: "1"},
+			},
+		})
+	}
+	return files
+}
+
+// TestReconcileStepTimings_EveryStatementIsAttributed is the regression guard
+// for the gap that made round 9 of #1279 misread: entries that covered as
+// little as 55% of reconcile wall time while reading like a complete
+// breakdown. The guard is on unattributed rather than on any one step, since
+// that is the term a step someone adds later and forgets to record ends up in.
+//
+// It runs on a fake clock that only statements and pacing advance, so the
+// check is exact. Measured on a real clock, a reconcile this small is a few
+// milliseconds, and a scheduler stall between two steps read as an untimed
+// step.
+func TestReconcileStepTimings_EveryStatementIsAttributed(t *testing.T) {
+	// Not parallel: swaps the global logger.
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "media.db")
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+"?_foreign_keys=ON")
+	require.NoError(t, err)
+	mediaDB := &MediaDB{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	require.NoError(t, mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform))
+	mediaDB.SetDBPathForTesting(dbPath)
+	t.Cleanup(func() { require.NoError(t, mediaDB.Close()) })
+
+	// TestMain disables logging for the whole binary; this test reads the log,
+	// so it re-enables it for its own duration and restores the suppression.
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	originalLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = originalLogger
+		zerolog.SetGlobalLevel(originalLevel)
+	})
+
+	names := make([]string, 0, 40)
+	for i := range 40 {
+		names = append(names, fmt.Sprintf("game%02d", i))
+	}
+	clock := clockwork.NewFakeClock()
+
+	// The first index creates the system and skips the steps that only
+	// reconcile against existing rows. The rescan drops one file and renames
+	// another so those steps run too.
+	rescan := snesStagedFiles(names[1:]...)
+	rescan[0].TitleName = "Renamed"
+	runs := []struct {
+		name     string
+		wantStep []string
+		files    []database.ScanStagedMedia
+	}{
+		{
+			name:     "fresh system",
+			files:    snesStagedFiles(names...),
+			wantStep: []string{"resolve system", "insert titles", "upsert media", "count touched titles"},
+		},
+		{
+			name:  "rescan",
+			files: rescan,
+			wantStep: []string{
+				"resolve system", "rename titles", "upsert media", "flag missing media",
+				"delete stale tag links", "count touched titles", "disambiguation",
+			},
+		},
+	}
+	for _, run := range runs {
+		buf.Reset()
+		statements, yields := tickedReconcile(t, mediaDB, clock, run.files)
+		elapsedMS, steps := readStepTimings(t, buf.String())
+		parsed := parseStepTimings(t, steps)
+
+		for _, want := range append(run.wantStep, "clear scan stage", "pacing", "unattributed") {
+			assert.Contains(t, parsed, want, "%s: steps must name %q; steps were: %s", run.name, want, steps)
+		}
+
+		wantElapsed := time.Duration(statements)*tickedStatementCost + time.Duration(yields)*tickedPacingCost
+		assert.InDelta(t, float64(wantElapsed.Milliseconds()), elapsedMS, 0,
+			"%s: the fake clock must be the only time source reconcile measures", run.name)
+		assert.Equal(t, int64(yields)*tickedPacingCost.Milliseconds(), parsed["pacing"],
+			"%s: every yield must be reported as pacing; steps: %s", run.name, steps)
+		assert.Zero(t, parsed["unattributed"],
+			"%s: a statement ran outside every named step, the #1279 gap reappearing. steps: %s",
+			run.name, steps)
+
+		var sum int64
+		for _, ms := range parsed {
+			sum += ms
+		}
+		assert.Equal(t, wantElapsed.Milliseconds(), sum,
+			"%s: entries must reconstruct elapsed exactly; steps: %s", run.name, steps)
+	}
 }

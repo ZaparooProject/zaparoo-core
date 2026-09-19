@@ -68,15 +68,12 @@ func stepTimingsLine(t *testing.T, out string) (elapsedMS float64, steps string)
 	return elapsedMS, steps
 }
 
-// TestReconcileStepTimingsLine_AccountsForWallTime is the regression guard for
-// the gap that made round 9 of #1279 misread. Before pacing was split out and
-// the four untimed steps were named, the entries on this line covered as
-// little as 55% of reconcile wall time while reading like a complete
-// breakdown.
-//
-// The assertion is deliberately on the *unattributed* term rather than on any
-// individual step: it is the term that catches a step someone adds later and
-// forgets to record, which is exactly how the original gap appeared.
+// TestReconcileStepTimingsLine_AccountsForWallTime checks the line a real
+// scanner-driven reconcile emits: it names every step and its entries add back
+// up to elapsed. Whether any time goes unattributed is checked exactly, on a
+// fake clock, by TestReconcileStepTimings_EveryStatementIsAttributed; on a
+// real clock a reconcile this small is a few milliseconds and a scheduler
+// stall between steps reads the same as an untimed step.
 func TestReconcileStepTimingsLine_AccountsForWallTime(t *testing.T) {
 	// Not parallel: swaps the global logger.
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
@@ -137,8 +134,4 @@ func TestReconcileStepTimingsLine_AccountsForWallTime(t *testing.T) {
 	assert.InDelta(t, elapsedMS, float64(sum), float64(len(parsed)+2),
 		"entries must reconstruct elapsed (%.1f ms); got %d ms from: %s",
 		elapsedMS, sum, steps)
-
-	assert.LessOrEqual(t, parsed["unattributed"], int64(float64(elapsedMS)*0.25)+5,
-		"unattributed must stay a small share of reconcile; a large value means a "+
-			"step is running untimed, which is the #1279 gap reappearing. steps: %s", steps)
 }

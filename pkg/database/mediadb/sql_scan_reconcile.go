@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -221,13 +222,15 @@ func sqlScanStageCount(ctx context.Context, db sqlQueryable) (int64, error) {
 
 // scanReconcileExec runs one reconcile statement with a cancellation check first,
 // returning the affected row count.
-func scanReconcileExec(ctx context.Context, db sqlQueryable, systemID, step, query string, args ...any) (int64, error) {
+func scanReconcileExec(
+	ctx context.Context, db sqlQueryable, clock clockwork.Clock, systemID, step, query string, args ...any,
+) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("scan reconcile cancelled before %s: %w", step, err)
 	}
-	started := time.Now()
+	started := clock.Now()
 	res, err := db.ExecContext(ctx, query, args...)
-	elapsed := time.Since(started)
+	elapsed := clock.Since(started)
 	if err != nil {
 		log.Warn().Str("system", systemID).Str("step", step).Dur("elapsed", elapsed).Msg("scan reconcile step failed")
 		return 0, fmt.Errorf("scan reconcile %s failed: %w", step, err)
@@ -275,19 +278,20 @@ type chunkedStepTiming struct {
 func sqlFlagMissingMedia(
 	ctx context.Context,
 	db sqlQueryable,
+	clock clockwork.Clock,
 	systemID string,
 	systemDBID int64,
 	yield func() error,
 ) (int64, chunkedStepTiming, error) {
 	const step = "flag missing media"
-	totalStart := time.Now()
+	totalStart := clock.Now()
 	totalAffected := int64(0)
 	var timing chunkedStepTiming
 	for {
 		if err := ctx.Err(); err != nil {
 			return totalAffected, timing, fmt.Errorf("scan reconcile cancelled before %s: %w", step, err)
 		}
-		chunkStart := time.Now()
+		chunkStart := clock.Now()
 		res, err := db.ExecContext(ctx, `
 			WITH missing AS (
 				SELECT m.DBID
@@ -298,7 +302,7 @@ func sqlFlagMissingMedia(
 			)
 			UPDATE Media SET IsMissing = 1
 			WHERE DBID IN (SELECT DBID FROM missing)`, systemDBID, scanFlagMissingBatchSize)
-		chunkElapsed := time.Since(chunkStart)
+		chunkElapsed := clock.Since(chunkStart)
 		if err != nil {
 			log.Warn().
 				Str("system", systemID).
@@ -325,9 +329,9 @@ func sqlFlagMissingMedia(
 				Msg("scan reconcile chunk completed")
 		}
 		if yield != nil {
-			pacingStart := time.Now()
+			pacingStart := clock.Now()
 			yieldErr := yield()
-			timing.pacing += time.Since(pacingStart)
+			timing.pacing += clock.Since(pacingStart)
 			if yieldErr != nil {
 				return totalAffected, timing, fmt.Errorf("scan reconcile pacing after %s failed: %w", step, yieldErr)
 			}
@@ -336,7 +340,7 @@ func sqlFlagMissingMedia(
 			break
 		}
 	}
-	logScanReconcileStep(systemID, step, totalAffected, time.Since(totalStart)-timing.pacing)
+	logScanReconcileStep(systemID, step, totalAffected, clock.Since(totalStart)-timing.pacing)
 	return totalAffected, timing, nil
 }
 
@@ -359,12 +363,13 @@ func sqlFlagMissingMedia(
 func sqlUpsertStagedMedia(
 	ctx context.Context,
 	db sqlQueryable,
+	clock clockwork.Clock,
 	systemID string,
 	systemDBID int64,
 	yield func() error,
 ) (int64, chunkedStepTiming, error) {
 	const step = "upsert media"
-	totalStart := time.Now()
+	totalStart := clock.Now()
 	totalAffected := int64(0)
 	var timing chunkedStepTiming
 	cursor := ""
@@ -375,12 +380,12 @@ func sqlUpsertStagedMedia(
 
 		var staged int64
 		var upperBound sql.NullString
-		boundsStart := time.Now()
+		boundsStart := clock.Now()
 		boundsErr := db.QueryRowContext(ctx, `
 			SELECT COUNT(*), MAX(Path) FROM (
 				SELECT Path FROM ScanStage WHERE Path > ? ORDER BY Path LIMIT ?
 			)`, cursor, scanUpsertMediaBatchSize).Scan(&staged, &upperBound)
-		timing.bounds += time.Since(boundsStart)
+		timing.bounds += clock.Since(boundsStart)
 		if boundsErr != nil {
 			return totalAffected, timing,
 				fmt.Errorf("scan reconcile %s: failed to read chunk bounds: %w", step, boundsErr)
@@ -389,7 +394,7 @@ func sqlUpsertStagedMedia(
 			break
 		}
 
-		chunkStart := time.Now()
+		chunkStart := clock.Now()
 		// CROSS JOIN (not JOIN): SQLite's planner otherwise drives this from
 		// MediaTitles regardless of the Path range — verified by EXPLAIN QUERY
 		// PLAN at 50k scale (see reconcile_query_plan_test.go in mediascanner)
@@ -413,7 +418,7 @@ func sqlUpsertStagedMedia(
 			   OR ParentDir <> excluded.ParentDir
 			   OR SortName <> excluded.SortName
 			   OR IsMissing <> 0`, systemDBID, systemDBID, cursor, upperBound.String)
-		chunkElapsed := time.Since(chunkStart)
+		chunkElapsed := clock.Since(chunkStart)
 		if err != nil {
 			log.Warn().
 				Str("system", systemID).
@@ -444,9 +449,9 @@ func sqlUpsertStagedMedia(
 			Msg("scan reconcile chunk completed")
 
 		if yield != nil {
-			pacingStart := time.Now()
+			pacingStart := clock.Now()
 			yieldErr := yield()
-			timing.pacing += time.Since(pacingStart)
+			timing.pacing += clock.Since(pacingStart)
 			if yieldErr != nil {
 				return totalAffected, timing, fmt.Errorf("scan reconcile pacing after %s failed: %w", step, yieldErr)
 			}
@@ -454,7 +459,7 @@ func sqlUpsertStagedMedia(
 
 		cursor = upperBound.String
 	}
-	logScanReconcileStep(systemID, step, totalAffected, time.Since(totalStart)-timing.pacing)
+	logScanReconcileStep(systemID, step, totalAffected, clock.Since(totalStart)-timing.pacing)
 	return totalAffected, timing, nil
 }
 
@@ -527,10 +532,10 @@ func sqlResolveScanSystem(ctx context.Context, db sqlQueryable, systemID string)
 // the newly-missing capture): the staged set is known to be a subset of the
 // library, so absence from it is not evidence a file is gone.
 func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequence
-	ctx context.Context, db sqlQueryable, systemID string, opts database.ScanReconcileOpts,
+	ctx context.Context, db sqlQueryable, clock clockwork.Clock, systemID string, opts database.ScanReconcileOpts,
 ) (database.ScanReconcileStats, error) {
 	stats := database.ScanReconcileStats{}
-	started := time.Now()
+	started := clock.Now()
 	// One line carrying every step's elapsed ms, emitted at info so it survives
 	// where the individual debug lines may not. Round 6 lost a whole system's
 	// profile to a log rotation and most per-chunk lines to truncated captures;
@@ -565,7 +570,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		pacingTotal += timing.pacing
 	}
 	defer func() {
-		elapsed := time.Since(started)
+		elapsed := clock.Since(started)
 		log.Debug().Str("system", systemID).Dur("elapsed", elapsed).Msg("scan reconcile completed")
 		if len(stepTimings) > 0 {
 			entries := make([]string, 0, len(stepTimings)+2)
@@ -583,24 +588,24 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
 
 	execStep := func(step, query string, args ...any) (int64, error) {
-		stepStart := time.Now()
-		affected, execErr := scanReconcileExec(ctx, db, systemID, step, query, args...)
-		recordStep(step, time.Since(stepStart))
+		stepStart := clock.Now()
+		affected, execErr := scanReconcileExec(ctx, db, clock, systemID, step, query, args...)
+		recordStep(step, clock.Since(stepStart))
 		if execErr != nil || opts.Yield == nil {
 			return affected, execErr
 		}
-		pacingStart := time.Now()
+		pacingStart := clock.Now()
 		yieldErr := opts.Yield()
-		pacingTotal += time.Since(pacingStart)
+		pacingTotal += clock.Since(pacingStart)
 		if yieldErr != nil {
 			return affected, fmt.Errorf("scan reconcile pacing after %s failed: %w", step, yieldErr)
 		}
 		return affected, nil
 	}
 
-	resolveStart := time.Now()
+	resolveStart := clock.Now()
 	systemRef, err := sqlResolveScanSystem(ctx, db, systemID)
-	recordStep("resolve system", time.Since(resolveStart))
+	recordStep("resolve system", clock.Since(resolveStart))
 	if err != nil {
 		return stats, err
 	}
@@ -770,12 +775,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// tracked field actually differs (title reassignment, parent dir move,
 	// sort name change, or a missing row re-found on disk). Chunked by
 	// ScanStage.Path — see sqlUpsertStagedMedia for why.
-	upsertStart := time.Now()
+	upsertStart := clock.Now()
 	var upsertTiming chunkedStepTiming
 	stats.MediaUpserted, upsertTiming, err = sqlUpsertStagedMedia(
-		ctx, db, systemID, systemDBID, opts.Yield,
+		ctx, db, clock, systemID, systemDBID, opts.Yield,
 	)
-	recordChunkedStep("upsert media", time.Since(upsertStart), upsertTiming)
+	recordChunkedStep("upsert media", clock.Since(upsertStart), upsertTiming)
 	if err != nil {
 		return stats, err
 	}
@@ -835,10 +840,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// written from ScanStage moments ago with IsMissing = 0, so the
 	// "not present in ScanStage" predicate is false for all of them.
 	if !opts.IncompleteScan && !freshSystem {
-		flagMissingStart := time.Now()
+		flagMissingStart := clock.Now()
 		var flagMissingTiming chunkedStepTiming
-		stats.MediaMissing, flagMissingTiming, err = sqlFlagMissingMedia(ctx, db, systemID, systemDBID, opts.Yield)
-		recordChunkedStep("flag missing media", time.Since(flagMissingStart), flagMissingTiming)
+		stats.MediaMissing, flagMissingTiming, err = sqlFlagMissingMedia(
+			ctx, db, clock, systemID, systemDBID, opts.Yield,
+		)
+		recordChunkedStep("flag missing media", clock.Since(flagMissingStart), flagMissingTiming)
 		if err != nil {
 			return stats, err
 		}
@@ -973,9 +980,9 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 	}
 
-	countTouchedStart := time.Now()
+	countTouchedStart := clock.Now()
 	touchedCount, err := sqlCountScanTouchedTitles(ctx, db)
-	countTouchedElapsed := time.Since(countTouchedStart)
+	countTouchedElapsed := clock.Since(countTouchedStart)
 	recordStep("count touched titles", countTouchedElapsed)
 	if err != nil {
 		return stats, err
@@ -987,9 +994,9 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		Dur("elapsed", countTouchedElapsed).
 		Msg("scan reconcile touched titles counted")
 	if opts.Yield != nil {
-		pacingStart := time.Now()
+		pacingStart := clock.Now()
 		yieldErr := opts.Yield()
-		pacingTotal += time.Since(pacingStart)
+		pacingTotal += clock.Since(pacingStart)
 		if yieldErr != nil {
 			return stats, fmt.Errorf("scan reconcile pacing after touched-title count failed: %w", yieldErr)
 		}
@@ -998,7 +1005,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		if err = ctx.Err(); err != nil {
 			return stats, fmt.Errorf("scan reconcile cancelled before disambiguation recompute: %w", err)
 		}
-		disambiguationStart := time.Now()
+		disambiguationStart := clock.Now()
 		recomputeScope := "titles"
 		if touchedCount > scanSystemDisambiguationThreshold {
 			recomputeScope = "system"
@@ -1019,7 +1026,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		if err != nil {
 			return stats, fmt.Errorf("scan reconcile disambiguation recompute failed: %w", err)
 		}
-		disambiguationElapsed := time.Since(disambiguationStart)
+		disambiguationElapsed := clock.Since(disambiguationStart)
 		recordStep("disambiguation", disambiguationElapsed)
 		logEvent := log.Debug()
 		if disambiguationElapsed > 5*time.Second {
@@ -1031,18 +1038,18 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			Dur("elapsed", disambiguationElapsed).
 			Msg("scan reconcile disambiguation recompute completed")
 		if opts.Yield != nil {
-			pacingStart := time.Now()
+			pacingStart := clock.Now()
 			yieldErr := opts.Yield()
-			pacingTotal += time.Since(pacingStart)
+			pacingTotal += clock.Since(pacingStart)
 			if yieldErr != nil {
 				return stats, fmt.Errorf("scan reconcile pacing after disambiguation failed: %w", yieldErr)
 			}
 		}
 	}
 
-	clearStart := time.Now()
+	clearStart := clock.Now()
 	clearErr := sqlClearScanStage(ctx, db)
-	recordStep("clear scan stage", time.Since(clearStart))
+	recordStep("clear scan stage", clock.Since(clearStart))
 	if clearErr != nil {
 		return stats, clearErr
 	}
