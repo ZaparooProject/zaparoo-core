@@ -62,10 +62,12 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 		Value: string(tags.TagUserFavorite),
 	}}
 	require.NoError(t, mediaDB.SetCachedSlugResolution(
-		ctx, "NES", "favorite-game", favoriteFilter, mediaDBID, "test",
+		ctx, "NES", "favorite-game", favoriteFilter,
+		database.SlugResolution{MediaDBID: mediaDBID, Strategy: "test", Confidence: 1.0},
 	))
 	require.NoError(t, mediaDB.SetCachedSlugResolution(
-		ctx, "SNES", "other-game", favoriteFilter, mediaDBID, "test",
+		ctx, "SNES", "other-game", favoriteFilter,
+		database.SlugResolution{MediaDBID: mediaDBID, Strategy: "test", Confidence: 1.0},
 	))
 
 	require.NoError(t, mediaDB.RebuildTagCache())
@@ -96,9 +98,9 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 	var countCacheRows int
 	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaCountCache").Scan(&countCacheRows))
 	assert.Zero(t, countCacheRows)
-	_, _, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "favorite-game", favoriteFilter)
+	_, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "favorite-game", favoriteFilter)
 	assert.False(t, found)
-	_, _, found = mediaDB.GetCachedSlugResolution(ctx, "SNES", "other-game", favoriteFilter)
+	_, found = mediaDB.GetCachedSlugResolution(ctx, "SNES", "other-game", favoriteFilter)
 	assert.True(t, found)
 
 	// Removals run before additions, so overlapping updates remain present and

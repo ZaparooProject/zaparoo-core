@@ -58,7 +58,7 @@ systems = ["NES"]
 	// Cache miss
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 
 	// Strategy 1: exact match with tags returns a result
 	mockMediaDB.On("SearchMediaBySlug",
@@ -76,7 +76,7 @@ systems = ["NES"]
 
 	// Cache the resolution
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, testhelpers.SlugResolutionMatcher(1),
 	).Return(nil)
 
 	launcherCache := &helpers.LauncherCache{}
@@ -119,7 +119,7 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
@@ -135,7 +135,7 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 	}, nil)
 
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, testhelpers.SlugResolutionMatcher(1),
 	).Return(nil)
 
 	env := requests.RequestEnv{
@@ -172,7 +172,7 @@ func TestHandleMediaLookup_NoMatch(t *testing.T) {
 	// Cache miss
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 
 	// All slug-based strategies return empty
 	mockMediaDB.On("SearchMediaBySlug",
@@ -263,7 +263,7 @@ func TestHandleMediaLookup_TagsReturned(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
@@ -282,7 +282,7 @@ func TestHandleMediaLookup_TagsReturned(t *testing.T) {
 	}, nil)
 
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, testhelpers.SlugResolutionMatcher(1),
 	).Return(nil)
 
 	launcherCache := &helpers.LauncherCache{}
@@ -324,7 +324,7 @@ func TestHandleMediaLookup_RelativePath(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 
 	// Return a path under the mock rootDir "/mock/roms" + launcher folder "NES"
 	mockMediaDB.On("SearchMediaBySlug",
@@ -341,7 +341,7 @@ func TestHandleMediaLookup_RelativePath(t *testing.T) {
 	}, nil)
 
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, testhelpers.SlugResolutionMatcher(1),
 	).Return(nil)
 
 	// LauncherCache with NES launcher folder matching the mock rootDir

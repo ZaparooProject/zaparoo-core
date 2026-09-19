@@ -798,6 +798,15 @@ type BrowseSystemRootCandidates struct {
 	HasMedia map[string]bool
 }
 
+// SlugResolution is a title resolution as the slug resolution cache keeps it:
+// the media it landed on, the strategy that found it, and the confidence it
+// scored, so a cache hit reports the same confidence as the first resolution.
+type SlugResolution struct {
+	Strategy   string
+	MediaDBID  int64
+	Confidence float64
+}
+
 type SearchResultWithCursor struct {
 	SystemID string
 	Name     string
@@ -1305,9 +1314,9 @@ type MediaDBI interface {
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
 		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
-	) (int64, string, bool)
+	) (SlugResolution, bool)
 	SetCachedSlugResolution(
-		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
+		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, resolution SlugResolution,
 	) error
 	InvalidateSlugCache(ctx context.Context) error
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error

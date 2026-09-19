@@ -186,8 +186,8 @@ type titleMatch struct {
 // resolveByTitle resolves a title launch the way a card tap would and
 // returns the matched media with an anchor snapshot, and whether anything
 // matched. Matches below the acceptable confidence are ignored, so a weak
-// match never tags or re-links a file. The slug cache is skipped because its
-// answers carry no confidence. A lookup that fails, rather than finding
+// match never tags or re-links a file. The slug cache is skipped so the match
+// is selected afresh from the library. A lookup that fails, rather than finding
 // nothing, is returned as an error: the item's file is unknown, not absent.
 func resolveByTitle(ctx context.Context, deps *ResolveDeps, script string) (titleMatch, bool, error) {
 	system, gameName, parsed := ParseTitleLaunch(script)

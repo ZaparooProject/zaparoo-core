@@ -41,7 +41,7 @@ import (
 func setupCacheMiss(m *helpers.MockMediaDBI) {
 	m.On("GetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 }
 
 // setupAllStrategiesEmpty configures all strategy DB calls to return empty results.
@@ -66,7 +66,7 @@ func setupAllStrategiesEmpty(m *helpers.MockMediaDBI) {
 // setupCacheWrite configures the mock to accept cache write calls.
 func setupCacheWrite(m *helpers.MockMediaDBI) {
 	m.On("SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return(nil)
 }
 
@@ -77,7 +77,7 @@ func setupCacheWrite(m *helpers.MockMediaDBI) {
 func setupCacheWriteSync(m *helpers.MockMediaDBI) <-chan struct{} {
 	done := make(chan struct{})
 	m.On("SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(mock.Arguments) {
 		close(done)
 	}).Return(nil)
@@ -93,7 +93,7 @@ func TestResolveTitle_StopsWhenContextCancelled(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return(int64(0), "", false)
+	).Return(database.SlugResolution{}, false)
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
@@ -139,7 +139,7 @@ func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
 	}}, nil)
 	done := make(chan struct{})
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
 		defer close(done)
 		ctx, ok := args.Get(0).(context.Context)
@@ -220,7 +220,7 @@ func TestResolveTitle_CacheHit(t *testing.T) {
 
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.Anything, mock.Anything,
-	).Return(int64(42), "exact_match", true)
+	).Return(database.SlugResolution{MediaDBID: 42, Strategy: "exact_match", Confidence: 0.65}, true)
 
 	mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(42)).Return(
 		database.SearchResultWithCursor{
@@ -241,7 +241,8 @@ func TestResolveTitle_CacheHit(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.InDelta(t, 1.0, result.Confidence, 0.001)
+	// A cache hit reports the score the match was cached with, not certainty.
+	assert.InDelta(t, 0.65, result.Confidence, 0.001)
 	assert.Equal(t, "exact_match", result.Strategy)
 	assert.Equal(t, "Super Mario Bros", result.Result.Name)
 }
@@ -256,7 +257,7 @@ func TestResolveTitle_CacheHitGetMediaByDBIDFails(t *testing.T) {
 	// Cache hit but GetMediaByDBID fails → falls back to full resolution
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.Anything, mock.Anything,
-	).Return(int64(42), "exact_match", true)
+	).Return(database.SlugResolution{MediaDBID: 42, Strategy: "exact_match", Confidence: 0.65}, true)
 
 	mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(42)).Return(
 		database.SearchResultWithCursor{}, errors.New("db error"))
@@ -621,7 +622,7 @@ func TestResolveTitle_Strategy3_SecondaryTitleMatch(t *testing.T) {
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return([]database.MediaTitle{}, nil)
 
-	setupCacheWrite(mockMediaDB)
+	done := setupCacheWriteSync(mockMediaDB)
 
 	result, err := ResolveTitle(context.Background(), &ResolveParams{
 		SystemID:  "NES",
@@ -635,6 +636,17 @@ func TestResolveTitle_Strategy3_SecondaryTitleMatch(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, StrategySecondaryTitleExact, result.Strategy)
 	assert.Equal(t, "Ocarina of Time", result.Result.Name)
+	assert.Less(t, result.Confidence, ConfidenceHigh)
+
+	// A match that is not certain is cached with the score it is returned with.
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cache write goroutine did not complete in time")
+	}
+	mockMediaDB.AssertCalled(t, "SetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		database.SlugResolution{MediaDBID: 1, Strategy: StrategySecondaryTitleExact, Confidence: result.Confidence})
 }
 
 func TestResolveTitle_Strategy4_FuzzyMatching(t *testing.T) {
@@ -889,7 +901,7 @@ func TestResolveTitle_SetCacheFailureDoesNotBlock(t *testing.T) {
 
 	// Cache write fails — should not affect result
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return(errors.New("cache write error"))
 
 	result, err := ResolveTitle(context.Background(), &ResolveParams{
@@ -958,7 +970,8 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 		t.Fatal("cache write goroutine did not complete in time")
 	}
 	mockMediaDB.AssertCalled(t, "SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, int64(1), StrategyExactMatch)
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		database.SlugResolution{MediaDBID: 1, Strategy: StrategyExactMatch, Confidence: result.Confidence})
 }
 
 func TestResolveTitle_MissingTagTypeIsNeutral(t *testing.T) {
