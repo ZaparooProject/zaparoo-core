@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,7 +73,7 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 	_, err = sqlDB.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES (?)", keepPath)
 	require.NoError(t, err)
 
-	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, "C64", 1, nil)
+	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, scanFlagMissingBatchSize+1, affected)
 
@@ -281,7 +282,7 @@ func TestUpsertStagedMedia_ChunksAcrossBatchBoundary(t *testing.T) {
 	const n = scanUpsertMediaBatchSize*2 + 1
 	stageSyntheticMedia(t, sqlDB, systemDBID, n)
 
-	affected, _, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", systemDBID, nil)
+	affected, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, n, affected)
 
@@ -318,11 +319,11 @@ func TestUpsertStagedMedia_NoOpChunkTerminates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	first, _, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", systemDBID, nil)
+	first, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, n, first)
 
-	second, _, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", systemDBID, nil)
+	second, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
 	require.Zero(t, second)
 }
@@ -339,7 +340,7 @@ func TestUpsertStagedMedia_MatchesUnchunkedResult(t *testing.T) {
 
 	chunkedDB := newUpsertStagedMediaTestDB(t)
 	stageSyntheticMedia(t, chunkedDB, systemDBID, n)
-	_, _, err := sqlUpsertStagedMedia(ctx, chunkedDB, "C64", systemDBID, nil)
+	_, _, err := sqlUpsertStagedMedia(ctx, chunkedDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
 
 	unchunkedDB := newUpsertStagedMediaTestDB(t)
@@ -406,7 +407,7 @@ func TestUpsertStagedMedia_UpdatesChangedRowsAcrossChunks(t *testing.T) {
 		}
 	}
 
-	affected, _, err := sqlUpsertStagedMedia(ctx, sqlDB, "C64", systemDBID, nil)
+	affected, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, changedTo-changedFrom, affected)
 
