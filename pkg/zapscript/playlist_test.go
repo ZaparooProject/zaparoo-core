@@ -558,6 +558,26 @@ Title1=Portable Game`), 0o600))
 }
 
 // TestCmdPlaylistOpen_PreservesPosition tests that position is preserved when reopening active playlist
+// TestLoadPlaylist_InheritsScriptTrust pins that a playlist written into a
+// script is trusted exactly as far as that script: one fetched from a
+// ZapLink, or nested inside an untrusted playlist's item, is untrusted.
+func TestLoadPlaylist_InheritsScriptTrust(t *testing.T) {
+	t.Parallel()
+
+	arg := `{"id":"ZON-abc","name":"Shared","items":[{"name":"A","zapscript":"**input.keyboard:a"}]}`
+	for _, unsafe := range []bool{false, true} {
+		env := platforms.CmdEnv{
+			ServiceCtx: t.Context(),
+			Cfg:        &config.Instance{},
+			Unsafe:     unsafe,
+			Cmd:        zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistOpen, Args: []string{arg}},
+		}
+		pls, err := loadPlaylist(newPlaylistTestPlatform(), env)
+		require.NoError(t, err)
+		assert.Equal(t, unsafe, pls.Unsafe)
+	}
+}
+
 func TestCmdPlaylistOpen_PreservesPosition(t *testing.T) {
 	t.Parallel()
 

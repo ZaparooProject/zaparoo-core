@@ -69,6 +69,72 @@ func TestTransitions_PreserveSlot(t *testing.T) {
 	})
 }
 
+func TestTransitions_PreserveUnsafe(t *testing.T) {
+	t.Parallel()
+
+	items := []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}}
+	p := playlists.NewPlaylist("id", "name", items)
+	assert.False(t, p.Unsafe, "a playlist is trusted unless its source is not")
+	p.Unsafe = true
+
+	assert.True(t, playlists.Next(*p).Unsafe)
+	assert.True(t, playlists.Previous(*p).Unsafe)
+	assert.True(t, playlists.Goto(*p, 1).Unsafe)
+	assert.True(t, playlists.Play(*p).Unsafe)
+	assert.True(t, playlists.Pause(*p).Unsafe)
+}
+
+// TestTransitions_DropQueueSignals pins that the flags describing one update
+// to the queue handler do not survive a transition. An active playlist is
+// stored with them set, so carrying them would relaunch a track or clear the
+// slot on the next move.
+func TestTransitions_DropQueueSignals(t *testing.T) {
+	t.Parallel()
+
+	p := playlists.NewPlaylist("id", "name", []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}})
+	p.Clear = true
+	p.ForceRelaunch = true
+	p.Refresh = true
+
+	for name, got := range map[string]*playlists.Playlist{
+		"Next":     playlists.Next(*p),
+		"Previous": playlists.Previous(*p),
+		"Goto":     playlists.Goto(*p, 1),
+		"Play":     playlists.Play(*p),
+		"Pause":    playlists.Pause(*p),
+	} {
+		assert.False(t, got.Clear, "%s carried Clear", name)
+		assert.False(t, got.ForceRelaunch, "%s carried ForceRelaunch", name)
+		assert.False(t, got.Refresh, "%s carried Refresh", name)
+	}
+}
+
+// TestTransitions_CarryEveryOtherField pins that a transition copies whole
+// playlists rather than a hand-written field list, so a field added later —
+// Unsafe, which decides whether items run with input and program rights —
+// cannot be dropped by a copy that forgot it.
+func TestTransitions_CarryEveryOtherField(t *testing.T) {
+	t.Parallel()
+
+	p := &playlists.Playlist{
+		HoldToken: &tokens.Token{UID: "owner"},
+		ID:        "id",
+		Name:      "name",
+		Slot:      mediaslot.Background,
+		Items:     []playlists.PlaylistItem{{ZapScript: "a", Name: "A"}, {ZapScript: "b", Name: "B"}},
+		Index:     1,
+		Playing:   true,
+		Loop:      true,
+		LoopOne:   true,
+		Unsafe:    true,
+	}
+
+	// Goto to the index it already holds, so nothing but the queue signals
+	// may differ from the original.
+	got := playlists.Goto(*p, 1)
+	assert.Equal(t, p, got, "Goto to the same index changed a field")
+}
+
 func TestTransitions_PreserveHoldToken(t *testing.T) {
 	t.Parallel()
 

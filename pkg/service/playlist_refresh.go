@@ -79,6 +79,10 @@ func refreshOpenDeckPlaylist(ctx context.Context, svc *ServiceContext, notificat
 		for _, item := range decks.PlaylistItems(ctx, svc.DB.MediaDB, deck) {
 			items = append(items, playlists.PlaylistItem{Name: item.Name, ZapScript: item.ZapScript})
 		}
+		// Unsafe is deliberately absent: a refresh carries only what it
+		// replaces, and handlePlaylist keeps the open playlist's own trust.
+		// Setting it here would let an omission grant trust instead of
+		// withholding it.
 		refreshed := &playlists.Playlist{
 			ID: playlistID, Name: deck.Name, Slot: active.Slot, Items: items,
 			Loop: active.Loop, LoopOne: active.LoopOne, Refresh: true,

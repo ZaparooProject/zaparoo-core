@@ -22,8 +22,10 @@ package zapscript
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +86,23 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 	assert.Equal(t, "Weekend", pls.Name)
 	require.Len(t, pls.Items, 2)
 	assert.Equal(t, "**launch.system:NES", pls.Items[0].ZapScript)
-	assert.Equal(t, int32(1), refreshed.Load(), "an owned deck is refreshed through the sync hook before it opens")
+	assert.Equal(t, int32(1), refreshed.Load(), "an owned deck asks the sync hook for a background refresh")
+	assert.False(t, pls.Unsafe, "the user's own deck is trusted")
+}
+
+func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
+	t.Parallel()
+	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
+	_, err := db.UserDB.UpsertRemoteDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Theirs", Owned: false,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**input.keyboard:a"}},
+	})
+	require.NoError(t, err)
+
+	_, err = cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	pls := <-queue
+	assert.True(t, pls.Unsafe, "a cached copy of somebody else's deck runs its items untrusted")
 }
 
 func TestCmdPlaylistLoad_DeckNotFound(t *testing.T) {
@@ -202,4 +221,76 @@ func TestRefreshDeck_SourceMustBeAZapLink(t *testing.T) {
 	unchanged, err := db.UserDB.GetDeck("0123456789ab")
 	require.NoError(t, err)
 	assert.Equal(t, "Old", unchanged.Name)
+}
+
+// deckZapLinkTransport answers a deck ZapLink: the well-known probe that
+// marks the host as serving ZapScript, then the deck body itself.
+type deckZapLinkTransport struct{ body string }
+
+func (t deckZapLinkTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	header := http.Header{}
+	if strings.HasSuffix(req.URL.Path, WellKnownPath) {
+		header.Set("Content-Type", "application/json")
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: header,
+			Body: io.NopCloser(strings.NewReader(`{"zapscript":1}`)),
+		}, nil
+	}
+	header.Set("Content-Type", MIMEZaparooZapScript)
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: header,
+		Body: io.NopCloser(strings.NewReader(t.body)),
+	}, nil
+}
+
+// TestRunCommand_OwnDeckZapLinkStaysTrusted pins that the owner tapping a
+// card for a deck this device owns runs its items trusted, so an input or
+// execute item in the user's own deck keeps working. The card carries a
+// ZapLink, so the token is flagged unsafe by the fetch; ownership of the deck
+// it resolves to, not the trust of the link, decides how its items run.
+//
+// Deriving the playlist's trust from the link as well would break this while
+// gaining nothing: an untrusted script naming an owned deck can only play the
+// user's own items, and a fetched deck can never overwrite an owned one.
+func TestRunCommand_OwnDeckZapLinkStaysTrusted(t *testing.T) {
+	const deckID = "0123456789ab"
+	link := "https://zpr.au/d" + deckID
+	body := servedDeckBody(t, deckID, "Mine",
+		decks.PlaylistArgItem{Name: "A", ZapScript: "**input.keyboard:a"})
+
+	oldWellKnown, oldZap := currentWellKnownFetchClient(), currentZapFetchClient()
+	t.Cleanup(func() {
+		zapFetchClientMu.Lock()
+		wellKnownFetchClient, zapFetchClient = oldWellKnown, oldZap
+		zapFetchClientMu.Unlock()
+	})
+	transport := deckZapLinkTransport{body: body}
+	zapFetchClientMu.Lock()
+	wellKnownFetchClient = newWellKnownFetchClient(transport)
+	zapFetchClient = newZapFetchClient(transport)
+	zapFetchClientMu.Unlock()
+
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
+		DeckID: deckID, Name: "Mine", Owned: true,
+		Items: []database.DeckItem{
+			{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**input.keyboard:a"},
+		},
+	}))
+
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := RunCommand(
+		t.Context(), newPlaylistTestPlatform(), &config.Instance{},
+		playlists.PlaylistController{Queue: queue},
+		tokens.Token{Text: link},
+		zapscript.Command{Name: zapscript.ZapScriptCmdLaunch, Args: []string{link}},
+		1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.Unsafe, "a fetched ZapLink flags the token unsafe")
+
+	pls := <-queue
+	assert.Equal(t, decks.PlaylistID(deckID), pls.ID, "the link resolves to the local owned deck")
+	assert.False(t, pls.Unsafe, "the user's own deck runs trusted however its card reached the device")
 }

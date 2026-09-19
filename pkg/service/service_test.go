@@ -701,6 +701,37 @@ func TestAdvanceBackgroundPlaylist_RepeatOneSameTrack(t *testing.T) {
 	}
 }
 
+// TestAdvanceBackgroundPlaylist_KeepsUnsafe pins that a background track from
+// an untrusted playlist is still untrusted when it repeats or advances on its
+// own, with nothing the user did to re-establish trust.
+func TestAdvanceBackgroundPlaylist_KeepsUnsafe(t *testing.T) {
+	t.Parallel()
+
+	for name, pls := range map[string]*playlists.Playlist{
+		"repeat one": makeMultiTrackPlaylist(1, false, true),
+		"advance":    makeMultiTrackPlaylist(0, false, false),
+		"wrap":       makeMultiTrackPlaylist(2, true, false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, cleanup := newAdvanceTestSvc(t)
+			defer cleanup()
+			pls.Unsafe = true
+			svc.State.SetBackgroundPlaylist(pls)
+
+			advanceBackgroundPlaylist(svc)
+
+			select {
+			case got := <-svc.PlaylistQueue:
+				assert.True(t, got.Unsafe, "an untrusted background playlist stays untrusted")
+			case <-time.After(time.Second):
+				t.Fatal("timeout: expected playlist on queue")
+			}
+		})
+	}
+}
+
 func TestAdvanceBackgroundPlaylist_RepeatAllSingleItemUsesForceRelaunch(t *testing.T) {
 	t.Parallel()
 
