@@ -43,6 +43,9 @@ type Database struct {
 	// DeckTags brings deck membership tags up to date in the background. It
 	// is nil where nothing runs that work, such as in tools and most tests.
 	DeckTags DeckTagQueue
+	// MediaUserData rebuilds the MediaDB projection of media user data in the
+	// background. It is nil wherever DeckTags is.
+	MediaUserData MediaUserDataReconciler
 }
 
 // DeckTagQueue brings the deck membership tags in MediaDB in line with the
@@ -67,6 +70,20 @@ func (db *Database) QueueDeckTags(deckIDs ...string) {
 func (db *Database) QueueAllDeckTags() {
 	if db != nil && db.DeckTags != nil {
 		db.DeckTags.QueueAllDeckTags()
+	}
+}
+
+// MediaUserDataReconciler brings the user flag tags and launcher overrides in
+// MediaDB in line with UserDB after UserDB was replaced as a whole. Queueing
+// returns at once; the work happens later.
+type MediaUserDataReconciler interface {
+	QueueMediaUserDataReconcile()
+}
+
+// QueueMediaUserDataReconcile schedules the reconcile when one is attached.
+func (db *Database) QueueMediaUserDataReconcile() {
+	if db != nil && db.MediaUserData != nil {
+		db.MediaUserData.QueueMediaUserDataReconcile()
 	}
 }
 
@@ -275,6 +292,11 @@ const DeviceStateKeyPlaytimeExtensions = "playtime_extensions"
 // membership tags still have to be brought up to date, as JSON, so the work
 // survives a restart.
 const DeviceStateKeyDeckTagsQueue = "deck_tags_queue"
+
+// DeviceStateKeyMediaUserDataReconcile is the DeviceState key marking that the
+// MediaDB projection of media user data still has to be rebuilt from UserDB.
+// It is kept in UserDB so a restore's restart carries it.
+const DeviceStateKeyMediaUserDataReconcile = "media_user_data_reconcile"
 
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
@@ -90,6 +91,31 @@ func GetMediaDBWriteCoordinator(mediaDB MediaDBI) (MediaDBWriteCoordinator, erro
 		return nil, ErrMediaWriteCoordinatorUnavailable
 	}
 	return coordinator, nil
+}
+
+// WaitForLongMediaWrites blocks while an index, optimization, recovery or
+// maintenance job owns the media database, checking again every poll, and
+// reports false if ctx ended first. Those jobs hold long write transactions
+// that a small write would time out behind. Scraping is not waited for: it can
+// run for hours and commits in short transactions.
+func WaitForLongMediaWrites(ctx context.Context, mediaDB MediaDBI, poll time.Duration) bool {
+	coordinator, err := GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return ctx.Err() == nil
+	}
+	for {
+		switch coordinator.ActiveMediaWriteOperation() {
+		case MediaWriteOperationIndexing, MediaWriteOperationOptimization,
+			MediaWriteOperationRecovery, MediaWriteOperationMaintenance:
+		default:
+			return ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(poll):
+		}
+	}
 }
 
 // MediaWriteConflictError reports which process-local owner blocked a request.
