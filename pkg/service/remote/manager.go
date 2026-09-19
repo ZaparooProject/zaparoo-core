@@ -231,6 +231,9 @@ func (m *manager) run(ctx context.Context) {
 		if !advertised || advertisedEnabled != enabled {
 			m.reportStatus(enabled, state.RemoteStateConnecting, "")
 			if err := m.sendCapabilityHeartbeat(ctx); err != nil {
+				// The document is sent between waits, so while it keeps
+				// failing no wait is open and no hint can arrive.
+				setPipe(false)
 				if isUnauthorized(err) {
 					if m.supersededRejection(err) {
 						log.Debug().Msg("ignoring unauthorized heartbeat for a superseded remote credential")

@@ -667,6 +667,196 @@ func TestRunGivesUpAStalledWaitAndOpensAnother(t *testing.T) {
 	}
 }
 
+// TestRunReportsThePipeGoneWhenTheCapabilityHeartbeatFails pins the case
+// where remote control is switched while the wait is held: the capability
+// document is sent again before the next wait, and while that send keeps
+// failing no wait is open, so the pipe must not stay reported as held.
+func TestRunReportsThePipeGoneWhenTheCapabilityHeartbeatFails(t *testing.T) {
+	var heartbeats, waits int32
+	flipped := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/device/heartbeat":
+			if atomic.AddInt32(&heartbeats, 1) == 1 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/v1/device/remote-sessions/wait":
+			if atomic.AddInt32(&waits, 1) == 1 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			select {
+			case <-flipped:
+				w.WriteHeader(http.StatusNoContent)
+			case <-r.Context().Done():
+			}
+		}
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetRemoteControl(false)
+	m.deps.Config.SetLibrarySync(true)
+	var pipeUps, pipeDowns int32
+	m.deps.PipeState = func(connected bool) {
+		if connected {
+			atomic.AddInt32(&pipeUps, 1)
+		} else {
+			atomic.AddInt32(&pipeDowns, 1)
+		}
+	}
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&waits) >= 2 },
+		3*time.Second, 10*time.Millisecond, "the second wait never opened")
+	require.Equal(t, int32(1), atomic.LoadInt32(&pipeUps), "the first answer reported the pipe held")
+	m.deps.Config.SetRemoteControl(true)
+	close(flipped)
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&pipeDowns) >= 1 },
+		3*time.Second, 10*time.Millisecond, "the failed heartbeat never reported the pipe as gone")
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&heartbeats), int32(2), "the capability document was sent again")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
+}
+
+// TestRunIgnoresEnvelopesItCannotUse pins that an answer of a type this build
+// does not know, and an operation answer with no operation in it, are both
+// passed over and the wait is opened again: the hint behind them still arrives.
+func TestRunIgnoresEnvelopesItCannotUse(t *testing.T) {
+	var waits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/device/remote-sessions/wait" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch atomic.AddInt32(&waits, 1) {
+		case 1:
+			_, _ = w.Write([]byte(`{"type":"session_offer","session":{"session_id":"rs_1"}}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"type":"operation_target"}`))
+		case 3:
+			_, _ = w.Write([]byte(`{"type":"library_changed","kinds":[],"revision":9}`))
+		case 4:
+			_, _ = w.Write([]byte(`{"type":"library_changed","kinds":["state"],"revision":10}`))
+		default:
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetLibrarySync(true)
+	m.execute = func(context.Context, *operationEnvelope) operationResult {
+		t.Error("nothing here is an operation to run")
+		return operationResult{}
+	}
+	var hints int32
+	var revision atomic.Int64
+	m.deps.LibraryHint = func(_ []string, rev int64) {
+		revision.Store(rev)
+		atomic.AddInt32(&hints, 1)
+	}
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	userDB.On("ListUnreportedRemoteCommands", mock.Anything).Return(nil, nil)
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&waits) >= 5 },
+		3*time.Second, 10*time.Millisecond, "the loop stopped at an envelope it could not use")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hints), "a hint naming no kinds is not passed on")
+	assert.Equal(t, int64(10), revision.Load())
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
+}
+
+// TestRunReportsThePipeGoneWhenTheCredentialIsRejected pins a wait answered
+// 401 while it is held for Library sync alone: the pipe is reported gone, the
+// account is marked unlinked, and the owner still sees remote control as off
+// rather than a rejection of a feature they never turned on.
+func TestRunReportsThePipeGoneWhenTheCredentialIsRejected(t *testing.T) {
+	var waits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/device/remote-sessions/wait" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if atomic.AddInt32(&waits, 1) == 1 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"device_revoked","message":"revoked"}}`))
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetRemoteControl(false)
+	m.deps.Config.SetLibrarySync(true)
+	var unlinked, pipeDowns int32
+	m.markUnlinked = func() { atomic.AddInt32(&unlinked, 1) }
+	m.deps.PipeState = func(connected bool) {
+		if !connected {
+			atomic.AddInt32(&pipeDowns, 1)
+		}
+	}
+	st, notifications := state.NewState(m.deps.Platform, "")
+	t.Cleanup(func() {
+		for len(notifications) > 0 {
+			<-notifications
+		}
+	})
+	m.deps.State = st
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&unlinked) >= 1 },
+		3*time.Second, 10*time.Millisecond, "the rejected credential was never recorded")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&pipeDowns), "the rejection reported the pipe as gone")
+	assert.Equal(t, state.RemoteStateDisabled, st.RemoteStatus().State)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
+}
+
 // TestJitter pins the backoff jitter contract: the result always falls in
 // [duration/2, duration], and it isn't degenerate (always returning the same
 // endpoint) across repeated calls, since jitter's whole purpose is to spread
