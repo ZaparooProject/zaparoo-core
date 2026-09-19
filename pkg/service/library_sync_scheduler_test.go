@@ -296,9 +296,11 @@ func (r *fakeLibraryStateRunner) setErr(err error) {
 }
 
 func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateResult, error) {
-	r.passes.Add(1)
+	// The pass is counted and its error taken in one step, so a test that
+	// sees a pass counted knows which error that pass ran with.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.passes.Add(1)
 	return librarysync.StateResult{}, r.err
 }
 
