@@ -61,9 +61,13 @@ const (
 	// has work or when its own limit is shorter, so raising the server's
 	// hold later needs no change here.
 	waitTimeoutSeconds = 300
-	// waitRequestTimeout bounds one wait request end to end, past the hold
-	// the device asked for.
-	waitRequestTimeout   = 330 * time.Second
+	// waitRequestTimeout bounds one wait request end to end. It follows the
+	// hold the server really keeps (under a minute), not the hold asked for:
+	// a connection that dies silently is only noticed when this runs out,
+	// and until then no command or hint arrives. A server that later holds
+	// longer than this costs an early reconnect, nothing else, since the
+	// wait carries no state.
+	waitRequestTimeout   = 90 * time.Second
 	requestTimeout       = 30 * time.Second
 	longRetry            = 5 * time.Minute
 	minBackoff           = time.Second
@@ -135,7 +139,10 @@ type manager struct {
 	// the backup manager. Tests inject a fake to observe the decision.
 	markUnlinked  func()
 	executionSlot chan struct{}
-	resultMu      syncutil.Mutex
+	// waitDeadline overrides waitRequestTimeout; zero uses it. Tests shorten
+	// it to watch a stalled wait being given up.
+	waitDeadline time.Duration
+	resultMu     syncutil.Mutex
 }
 
 // Start launches the remote operations polling loop in a background goroutine
@@ -287,6 +294,9 @@ func (m *manager) run(ctx context.Context) {
 				m.sleepWhileEligible(ctx, longRetry, true)
 			case errors.As(err, &httpErr) && (httpErr.status == http.StatusTooManyRequests ||
 				httpErr.status == http.StatusServiceUnavailable):
+				// No wait is open for the length of the back-off, so no hint
+				// can arrive during it.
+				setPipe(false)
 				m.reportStatus(enabled, state.RemoteStateError, errorCodeOf(err))
 				delay := httpErr.retryAfter
 				if delay <= 0 {
@@ -448,7 +458,11 @@ func (m *manager) waitOnce(
 	ctx context.Context, bearer string,
 ) (waitEnvelope, bool, error) {
 	var envelope waitEnvelope
-	requestCtx, cancel := context.WithTimeout(ctx, waitRequestTimeout)
+	deadline := m.waitDeadline
+	if deadline <= 0 {
+		deadline = waitRequestTimeout
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, deadline)
 	eligibilityDone := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)

@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -510,11 +511,14 @@ func TestRunHoldsThePipeForLibrarySyncWithRemoteControlOff(t *testing.T) {
 		}
 	})
 	m.deps.State = st
+	var hintMu syncutil.Mutex
 	var hintKinds []string
 	var hintRevision int64
 	var hints, pipeUps, pipeDowns int32
 	m.deps.LibraryHint = func(kinds []string, revision int64) {
+		hintMu.Lock()
 		hintKinds, hintRevision = kinds, revision
+		hintMu.Unlock()
 		atomic.AddInt32(&hints, 1)
 	}
 	m.deps.PipeState = func(connected bool) {
@@ -538,8 +542,10 @@ func TestRunHoldsThePipeForLibrarySyncWithRemoteControlOff(t *testing.T) {
 	require.Eventually(t, func() bool { return atomic.LoadInt32(&pipeDowns) >= 1 },
 		3*time.Second, 10*time.Millisecond, "the 404 never reported the pipe as gone")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hints), "the hint was passed on once")
+	hintMu.Lock()
 	assert.Equal(t, []string{"decks", "state"}, hintKinds)
 	assert.Equal(t, int64(42), hintRevision)
+	hintMu.Unlock()
 	assert.Equal(t, int32(1), atomic.LoadInt32(&pipeUps), "the first answer reported the pipe held")
 	assert.Equal(t, state.RemoteStateDisabled, st.RemoteStatus().State,
 		"the owner sees remote control as off while the pipe is held for Library sync")
@@ -551,6 +557,114 @@ func TestRunHoldsThePipeForLibrarySyncWithRemoteControlOff(t *testing.T) {
 		t.Fatal("run did not stop after context cancellation")
 	}
 	userDB.AssertExpectations(t)
+}
+
+// TestRunReportsThePipeGoneWhileToldToSlowDown pins that a 429 or 503 from
+// the wait reports the pipe as gone for the length of the back-off: no wait
+// is open then, so no hint can arrive, and Library sync must not stay on the
+// timer it keeps for a held pipe.
+func TestRunReportsThePipeGoneWhileToldToSlowDown(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var waits int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/device/remote-sessions/wait" {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				if atomic.AddInt32(&waits, 1) == 1 {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				w.Header().Set("Retry-After", "30")
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			m := newHTTPTestManager(t, server.URL)
+			m.deps.Config.SetRemoteControl(false)
+			m.deps.Config.SetLibrarySync(true)
+			var pipeUps, pipeDowns int32
+			m.deps.PipeState = func(connected bool) {
+				if connected {
+					atomic.AddInt32(&pipeUps, 1)
+				} else {
+					atomic.AddInt32(&pipeDowns, 1)
+				}
+			}
+			userDB := testinghelpers.NewMockUserDBI()
+			userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+			m.deps.DB = &database.Database{UserDB: userDB}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				m.run(ctx)
+				close(done)
+			}()
+
+			require.Eventually(t, func() bool { return atomic.LoadInt32(&pipeDowns) >= 1 },
+				3*time.Second, 10*time.Millisecond, "the back-off never reported the pipe as gone")
+			assert.Equal(t, int32(1), atomic.LoadInt32(&pipeUps), "the first answer reported the pipe held")
+			assert.Equal(t, int32(2), atomic.LoadInt32(&waits), "no wait is opened during the back-off")
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("run did not stop after context cancellation")
+			}
+		})
+	}
+}
+
+// TestRunGivesUpAStalledWaitAndOpensAnother pins what happens when the
+// connection dies without a word: the wait is given up at the request
+// deadline, the pipe is reported gone, and a new wait is opened.
+func TestRunGivesUpAStalledWaitAndOpensAnother(t *testing.T) {
+	var waits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/device/remote-sessions/wait" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if atomic.AddInt32(&waits, 1) == 1 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.waitDeadline = 100 * time.Millisecond
+	m.deps.Config.SetRemoteControl(false)
+	m.deps.Config.SetLibrarySync(true)
+	var pipeDowns int32
+	m.deps.PipeState = func(connected bool) {
+		if !connected {
+			atomic.AddInt32(&pipeDowns, 1)
+		}
+	}
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&waits) >= 3 },
+		5*time.Second, 10*time.Millisecond, "the stalled wait was never replaced")
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&pipeDowns), int32(1), "the stall reported the pipe as gone")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
 }
 
 // TestJitter pins the backoff jitter contract: the result always falls in
