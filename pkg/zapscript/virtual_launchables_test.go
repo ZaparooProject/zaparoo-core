@@ -29,8 +29,9 @@ import (
 
 func TestCheckZapLink_IgnoresVirtualPathSchemes(t *testing.T) {
 	cmd := gozapscript.Command{Args: []string{"zaparoo://mfsg22lomvzxiyi/Chess"}}
-	target, err := checkZapLink(nil, nil, nil, cmd)
+	target, owned, err := checkZapLink(nil, nil, nil, cmd)
 
 	require.NoError(t, err)
 	assert.Empty(t, target)
+	assert.False(t, owned)
 }

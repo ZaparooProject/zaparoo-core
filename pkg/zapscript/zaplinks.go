@@ -270,13 +270,19 @@ func isKnownZapLinkHost(link string, db *database.Database) bool {
 	if err != nil || validateZapLinkURL(u) != nil {
 		return false
 	}
-	_, supported, err := db.UserDB.GetZapLinkHost(u.Scheme + "://" + u.Host)
+	supported, found, err := db.UserDB.GetZapLinkHost(u.Scheme + "://" + u.Host)
 	if err != nil {
 		log.Debug().Err(err).Msg("error checking db for zap link host")
 		return false
 	}
-	return supported
+	return found && supported
 }
+
+// HeaderZaparooOwned is set by a link service on a response to a request
+// that carried the device's credential, when the account behind that
+// credential owns the card or deck the link names. It never appears in the
+// shared body every requester gets.
+const HeaderZaparooOwned = "X-Zaparoo-Owned"
 
 func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	return getRemoteZapScriptContext(context.Background(), urlStr, platform)
@@ -285,25 +291,36 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 // getRemoteZapScriptContext fetches a ZapLink body within ctx, bounded by the
 // same ten-second ceiling a plain fetch uses.
 func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) ([]byte, error) {
+	body, _, err := getRemoteZapScriptOwned(parent, urlStr, platform)
+	return body, err
+}
+
+// getRemoteZapScriptOwned fetches a ZapLink body and reports whether the
+// link service said the linked account owns what the link names. The answer
+// is trusted only from a host this device sent its own credential to, and
+// only when that host is the one the link names: a host that got no
+// credential cannot know who asked, and an answer reached through a redirect
+// is not for this link. Absent means not owned.
+func getRemoteZapScriptOwned(parent context.Context, urlStr, platform string) (body []byte, owned bool, err error) {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request for '%s': %w", urlStr, err)
+		return nil, false, fmt.Errorf("failed to create request for '%s': %w", urlStr, err)
 	}
 	if validationErr := validateZapLinkURL(req.URL); validationErr != nil {
-		return nil, validationErr
+		return nil, false, validationErr
 	}
 	setZapLinkHeaders(req, platform)
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := currentZapFetchClient().Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
+		return nil, false, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}
 	if resp == nil {
-		return nil, errors.New("received nil response")
+		return nil, false, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -313,12 +330,12 @@ func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) 
 
 	if resp.StatusCode != http.StatusOK {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
-		return nil, errors.New("invalid status code")
+		return nil, false, errors.New("invalid status code")
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		return nil, errors.New("content type is empty")
+		return nil, false, errors.New("content type is empty")
 	}
 
 	content := ""
@@ -330,21 +347,36 @@ func getRemoteZapScriptContext(parent context.Context, urlStr, platform string) 
 	}
 
 	if content == "" {
-		return nil, errors.New("no valid content type")
+		return nil, false, errors.New("no valid content type")
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
 	if err != nil {
-		return nil, fmt.Errorf("error reading body: %w", err)
+		return nil, false, fmt.Errorf("error reading body: %w", err)
 	}
 
 	if content != MIMEZaparooZapScript {
-		return nil, errors.New("invalid content type")
+		return nil, false, errors.New("invalid content type")
 	}
 
-	log.Debug().Int("size", len(body)).Msg("received zap link body")
+	// The answer only counts for the link that was tapped. Once a redirect
+	// is followed, whoever wrote the link chose where it led: a host that
+	// never saw the credential cannot vouch, and a linked host reached that
+	// way vouches for a card the link did not name. The body is still
+	// served; it just runs untrusted. Request.Response is set only on a
+	// request the client made to follow a redirect.
+	redirected := resp.Request != nil && resp.Request.Response != nil
+	owned = resp.Header.Get(HeaderZaparooOwned) == "1" && !redirected && credentialSentTo(urlStr)
+	log.Debug().Int("size", len(body)).Bool("owned", owned).Msg("received zap link body")
 
-	return body, nil
+	return body, owned, nil
+}
+
+// credentialSentTo reports whether the device attaches its own credential to
+// requests for urlStr, the same lookup the request transport makes.
+func credentialSentTo(urlStr string) bool {
+	entry := config.LookupAuth(config.GetAuthCfg(), urlStr)
+	return entry != nil && entry.Bearer != ""
 }
 
 // validateZapLinkURL enforces HTTPS except for localhost and literal
@@ -439,34 +471,38 @@ func isOfflineError(err error) bool {
 	return false
 }
 
+// checkZapLink resolves a command whose first argument is a ZapLink into the
+// script the link serves, and reports whether the link service said the
+// linked account owns what the link names. A body served from the offline
+// cache is never owned: nobody vouched for it this time.
 func checkZapLink(
 	_ *config.Instance,
 	pl platforms.Platform,
 	db *database.Database,
 	cmd zapscript.Command,
-) (string, error) {
+) (script string, owned bool, err error) {
 	if len(cmd.Args) == 0 {
-		return "", nil
+		return "", false, nil
 	}
 	value := cmd.Args[0]
 	if !isZapLink(value, db) {
-		return "", nil
+		return "", false, nil
 	}
 
 	platform := pl.ID()
 	log.Info().Msgf("checking zap link: %s", value)
-	body, err := getRemoteZapScript(value, platform)
+	body, owned, err := getRemoteZapScriptOwned(context.Background(), value, platform)
 	if isOfflineError(err) {
 		cachedScript, cacheErr := db.UserDB.GetZapLinkCache(value)
 		if cacheErr != nil {
-			return "", fmt.Errorf("failed to get zaplink cache for '%s': %w", value, cacheErr)
+			return "", false, fmt.Errorf("failed to get zaplink cache for '%s': %w", value, cacheErr)
 		}
 		if cachedScript != "" {
-			return cachedScript, nil
+			return cachedScript, false, nil
 		}
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	err = db.UserDB.UpdateZapLinkCache(value, string(body))
@@ -475,9 +511,9 @@ func checkZapLink(
 	}
 
 	if !helpers.MaybeJSON(body) {
-		return string(body), nil
+		return string(body), owned, nil
 	}
-	return "", errors.New("zapscript JSON not supported")
+	return "", false, errors.New("zapscript JSON not supported")
 }
 
 // PreWarmZapLinkHosts pre-warms the DNS and TLS cache for known zaplink hosts.

@@ -65,9 +65,11 @@ func refreshOpenDeckPlaylist(ctx context.Context, svc *ServiceContext, notificat
 	if err != nil {
 		return
 	}
-	playlistID := decks.PlaylistID(deckID)
 	for _, active := range []*playlists.Playlist{svc.State.GetActivePlaylist(), svc.State.GetBackgroundPlaylist()} {
-		if active == nil || active.ID != playlistID {
+		// The deck the playlist was opened from decides the match, never the
+		// playlist's ID: any served playlist may call itself anything,
+		// including the ID a deck on this device opens as.
+		if active == nil || active.DeckID != deckID {
 			continue
 		}
 		deck, getErr := svc.DB.UserDB.GetDeck(deckID)
@@ -84,7 +86,7 @@ func refreshOpenDeckPlaylist(ctx context.Context, svc *ServiceContext, notificat
 		// Setting it here would let an omission grant trust instead of
 		// withholding it.
 		refreshed := &playlists.Playlist{
-			ID: playlistID, Name: deck.Name, Slot: active.Slot, Items: items,
+			ID: active.ID, DeckID: deckID, Name: deck.Name, Slot: active.Slot, Items: items,
 			Loop: active.Loop, LoopOne: active.LoopOne, Refresh: true,
 		}
 		select {

@@ -478,7 +478,7 @@ func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscrip
 	return nil
 }
 
-func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (found, zapScript bool, err error) {
+func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported, found bool, err error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?;
 	`, host)

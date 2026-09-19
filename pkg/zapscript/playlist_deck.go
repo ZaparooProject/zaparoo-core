@@ -47,27 +47,27 @@ const (
 // ErrDeckNotFound reports a deck:// argument naming no deck on this device.
 var ErrDeckNotFound = errors.New("deck not found")
 
-// adoptZapLinkDeck recognizes a ZapLink body that serves a deck and caches
-// the deck locally, returning a script that opens the local copy instead. A
-// deck opened this way plays offline next time, and a deck this device owns
-// opens its own editable copy. Any other body is returned unchanged.
+// adoptZapLinkDeck recognizes a ZapLink body that serves a playlist and keeps
+// it as a deck on this device, returning the served command with its playlist
+// swapped for the local copy. A deck kept this way plays offline next time,
+// shows in the deck list and has its games tagged. Only the body decides: any
+// host and any link that serves a playlist is kept the same way. Any other
+// body, and one that cannot be stored, is returned unchanged.
 func adoptZapLinkDeck(db *database.Database, link, body string) string {
 	if db == nil || db.UserDB == nil {
 		return body
 	}
-	deckID, ok := decks.DeckIDFromZapLinkURL(link)
+	cmd, arg, ok := decks.ParseServedPlaylist(body)
 	if !ok {
 		return body
 	}
-	arg, ok := decks.ParseDeckPlaylist(body, deckID)
-	if !ok {
+	deckID, err := decks.StoreFetchedDeck(db, link, &arg)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to keep deck from zap link; playing it as served")
 		return body
 	}
-	if err := decks.StoreFetchedDeck(db, link, deckID, &arg); err != nil {
-		log.Warn().Err(err).Str("deck", deckID).Msg("failed to cache deck from zap link; playing it as served")
-		return body
-	}
-	return "**" + zapscript.ZapScriptCmdPlaylistOpen + ":" + decks.DeckURI(deckID)
+	cmd.Args = []string{decks.DeckURI(deckID)}
+	return cmd.String()
 }
 
 // loadDeckPlaylist builds a playlist from a deck on this device, refreshing
@@ -104,7 +104,8 @@ func loadDeckPlaylist(
 		rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
 	}
 
-	pls := playlists.NewPlaylist(decks.PlaylistID(deck.DeckID), deck.Name, items)
+	pls := playlists.NewPlaylist(decks.PlaylistID(deck), deck.Name, items)
+	pls.DeckID = deck.DeckID
 	// Only the user's own decks are trusted. A cached copy of somebody
 	// else's deck runs its items the way its ZapLink would, whatever script
 	// opened it.
@@ -165,12 +166,12 @@ func refreshDeck(pl platforms.Platform, env *platforms.CmdEnv, deck *database.De
 			log.Debug().Err(err).Str("deck", deck.DeckID).Msg("deck refresh skipped; opening cached copy")
 			return nil
 		}
-		arg, ok := decks.ParseDeckPlaylist(string(body), deck.DeckID)
+		_, arg, ok := decks.ParseServedPlaylist(string(body))
 		if !ok {
 			log.Debug().Str("deck", deck.DeckID).Msg("deck source no longer serves the deck; opening cached copy")
 			return nil
 		}
-		if storeErr := decks.StoreFetchedDeck(env.Database, deck.SourceURL, deck.DeckID, &arg); storeErr != nil {
+		if _, storeErr := decks.StoreFetchedDeck(env.Database, deck.SourceURL, &arg); storeErr != nil {
 			log.Debug().Err(storeErr).Str("deck", deck.DeckID).Msg("failed to store refreshed deck")
 			return nil
 		}

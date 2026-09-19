@@ -55,9 +55,17 @@ func deckTestEnv(t *testing.T, arg string) (platforms.CmdEnv, *database.Database
 	}, db, queue
 }
 
+// The links a deck is reached through in these tests. One is a real link on
+// the hosted service and the other belongs to nobody in particular: nothing
+// about a host or a link's shape may decide how its playlist is treated.
+const (
+	hostedDeckLink     = "https://zpr.au/d$lhm6n9t8"
+	thirdPartyDeckLink = "https://decks.example/shelf/anything/at/all?ref=1"
+)
+
 func servedDeckBody(t *testing.T, id, name string, items ...decks.PlaylistArgItem) string {
 	t.Helper()
-	encoded, err := json.Marshal(decks.PlaylistArg{ID: "ZON-" + id, Name: name, Items: items})
+	encoded, err := json.Marshal(decks.PlaylistArg{ID: id, Name: name, Items: items})
 	require.NoError(t, err)
 	return "**playlist.open:" + string(encoded)
 }
@@ -82,7 +90,8 @@ func TestCmdPlaylistLoad_Deck(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.PlaylistChanged)
 	pls := <-queue
-	assert.Equal(t, "ZON-0123456789ab", pls.ID, "a deck opens under the playlist ID its link uses")
+	assert.Equal(t, "deck://0123456789ab", pls.ID, "a deck made here opens as its own URI")
+	assert.Equal(t, "0123456789ab", pls.DeckID)
 	assert.Equal(t, "Weekend", pls.Name)
 	require.Len(t, pls.Items, 2)
 	assert.Equal(t, "**launch.system:NES", pls.Items[0].ZapScript)
@@ -112,37 +121,99 @@ func TestCmdPlaylistLoad_DeckNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrDeckNotFound)
 }
 
+// Any link that serves a playlist is kept as a deck, whoever hosts it and
+// whatever the link or the playlist's ID look like.
 func TestAdoptZapLinkDeck(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ link, playlistID string }{
+		"hosted":      {link: hostedDeckLink, playlistID: "ZON-LHM6N9T8"},
+		"third party": {link: thirdPartyDeckLink, playlistID: "party-list"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			t.Cleanup(cleanup)
+			body := servedDeckBody(t, tc.playlistID, "Theirs",
+				decks.PlaylistArgItem{Name: "Game", ZapScript: "**launch.title:SNES/Game"})
+
+			rewritten := adoptZapLinkDeck(db, tc.link, body)
+			all, err := db.UserDB.ListDecks()
+			require.NoError(t, err)
+			require.Len(t, all, 1)
+			parsed, err := zapscript.NewParser(rewritten).ParseScript()
+			require.NoError(t, err)
+			require.Len(t, parsed.Cmds, 1)
+			assert.Equal(t, zapscript.ZapScriptCmdPlaylistOpen, parsed.Cmds[0].Name)
+			assert.Equal(t, []string{decks.DeckURI(all[0].DeckID)}, parsed.Cmds[0].Args)
+			stored, err := db.UserDB.GetDeck(all[0].DeckID)
+			require.NoError(t, err)
+			assert.False(t, stored.Owned)
+			assert.Equal(t, tc.link, stored.SourceURL)
+			assert.Equal(t, tc.playlistID, decks.PlaylistID(stored), "the copy opens as the playlist it was served as")
+			require.Len(t, stored.Items, 1)
+
+			assert.Equal(t, rewritten, adoptZapLinkDeck(db, tc.link, body), "the same link is the same deck")
+			all, err = db.UserDB.ListDecks()
+			require.NoError(t, err)
+			assert.Len(t, all, 1)
+		})
+	}
+}
+
+func TestAdoptZapLinkDeck_KeepsTheServedCommand(t *testing.T) {
 	t.Parallel()
 	db, cleanup := testhelpers.NewTestDatabase(t)
 	t.Cleanup(cleanup)
-	body := servedDeckBody(t, "0123456789AB", "Theirs",
-		decks.PlaylistArgItem{Name: "Game", ZapScript: "**launch.title:SNES/Game"})
-
-	rewritten := adoptZapLinkDeck(db, "https://zpr.au/d0123456789ab", body)
-	assert.Equal(t, "**playlist.open:deck://0123456789ab", rewritten)
-	stored, err := db.UserDB.GetDeck("0123456789ab")
+	encoded, err := json.Marshal(decks.PlaylistArg{ID: "p", Name: "Mix", Items: []decks.PlaylistArgItem{
+		{Name: "A", ZapScript: "**launch.system:SNES"},
+	}})
 	require.NoError(t, err)
-	assert.False(t, stored.Owned)
-	assert.Equal(t, "https://zpr.au/d0123456789ab", stored.SourceURL)
-	require.Len(t, stored.Items, 1)
 
-	// Anything else passes through untouched.
-	assert.Equal(t, body, adoptZapLinkDeck(db, "https://zpr.au/c0123456789ab", body), "a card link is not a deck")
-	assert.Equal(t, "**launch.system:SNES",
-		adoptZapLinkDeck(db, "https://zpr.au/d0123456789ab", "**launch.system:SNES"))
-	other := servedDeckBody(t, "zzzzzzzzzzzz", "Other")
-	assert.Equal(t, other, adoptZapLinkDeck(db, "https://zpr.au/d0123456789ab", other),
-		"a served playlist for another ID is not this deck")
+	rewritten := adoptZapLinkDeck(db, thirdPartyDeckLink, "**playlist.play:"+string(encoded)+"?mode=shuffle")
+	parsed, err := zapscript.NewParser(rewritten).ParseScript()
+	require.NoError(t, err)
+	require.Len(t, parsed.Cmds, 1)
+	assert.Equal(t, zapscript.ZapScriptCmdPlaylistPlay, parsed.Cmds[0].Name, "a playlist served to play still plays")
+	assert.Equal(t, "shuffle", parsed.Cmds[0].AdvArgs.Get(zapscript.KeyMode))
+	require.Len(t, parsed.Cmds[0].Args, 1)
+	_, isDeck := decks.ParseDeckURI(parsed.Cmds[0].Args[0])
+	assert.True(t, isDeck)
+}
 
-	// A deck this device owns keeps its own copy and still opens locally.
+func TestAdoptZapLinkDeck_OtherBodiesPassThrough(t *testing.T) {
+	t.Parallel()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	for _, body := range []string{
+		"**launch.system:SNES",
+		"**playlist.open:/roms/list.pls",
+		servedDeckBody(t, "p", "Two") + "||**stop",
+		servedDeckBody(t, "p", "Nothing to run"),
+	} {
+		assert.Equal(t, body, adoptZapLinkDeck(db, hostedDeckLink, body))
+	}
+	all, err := db.UserDB.ListDecks()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// A served playlist never reaches a deck the user owns, whatever the link or
+// the playlist calls itself: it is kept as its own read-only copy.
+func TestAdoptZapLinkDeck_NeverResolvesToAnOwnedDeck(t *testing.T) {
+	t.Parallel()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
 	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{DeckID: "aaaaaaaaaaaa", Name: "Mine", Owned: true}))
-	mineBody := servedDeckBody(t, "AAAAAAAAAAAA", "Server copy")
-	assert.Equal(t, "**playlist.open:deck://aaaaaaaaaaaa",
-		adoptZapLinkDeck(db, "https://zpr.au/daaaaaaaaaaaa", mineBody))
+
+	body := servedDeckBody(t, "deck://aaaaaaaaaaaa", "Imposter",
+		decks.PlaylistArgItem{Name: "A", ZapScript: "**input.keyboard:a"})
+	rewritten := adoptZapLinkDeck(db, "https://decks.example/daaaaaaaaaaaa", body)
+	assert.NotContains(t, rewritten, "aaaaaaaaaaaa")
+
 	mine, err := db.UserDB.GetDeck("aaaaaaaaaaaa")
 	require.NoError(t, err)
 	assert.Equal(t, "Mine", mine.Name)
+	assert.Empty(t, mine.Items)
 }
 
 // A cached copy of somebody else's deck is fetched again before it opens,
@@ -181,7 +252,7 @@ func TestRefreshDeck_CachedCopy(t *testing.T) {
 	stale.FetchedAt = 0
 	assert.Nil(t, refreshDeck(newPlaylistTestPlatform(), &env, stale), "a failed fetch opens the cached copy")
 
-	serve.Store(servedDeckBody(t, "0123456789AB", "New",
+	serve.Store(servedDeckBody(t, "party-list", "New",
 		decks.PlaylistArgItem{Name: "B", ZapScript: "**b"}, decks.PlaylistArgItem{Name: "C", ZapScript: "**c"}))
 	refreshed := refreshDeck(newPlaylistTestPlatform(), &env, stale)
 	require.NotNil(t, refreshed)
@@ -189,7 +260,7 @@ func TestRefreshDeck_CachedCopy(t *testing.T) {
 	require.Len(t, refreshed.Items, 2)
 	cached, err := db.UserDB.GetZapLinkCache(server.URL)
 	require.NoError(t, err)
-	assert.Contains(t, cached, `"ZON-0123456789AB"`, "the link cache follows the refresh for offline taps")
+	assert.Contains(t, cached, `"party-list"`, "the link cache follows the refresh for offline taps")
 }
 
 // A stored source that is not a ZapLink host is never fetched, so a user
@@ -201,7 +272,7 @@ func TestRefreshDeck_SourceMustBeAZapLink(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.Header().Set("Content-Type", MIMEZaparooZapScript)
-		_, _ = w.Write([]byte(servedDeckBody(t, "0123456789AB", "Theirs",
+		_, _ = w.Write([]byte(servedDeckBody(t, "party-list", "Theirs",
 			decks.PlaylistArgItem{Name: "B", ZapScript: "**b"})))
 	}))
 	t.Cleanup(server.Close)
@@ -243,32 +314,68 @@ func (t deckZapLinkTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	}, nil
 }
 
-// TestRunCommand_OwnDeckZapLinkStaysTrusted pins that the owner tapping a
-// card for a deck this device owns runs its items trusted, so an input or
-// execute item in the user's own deck keeps working. The card carries a
-// ZapLink, so the token is flagged unsafe by the fetch; ownership of the deck
-// it resolves to, not the trust of the link, decides how its items run.
-//
-// Deriving the playlist's trust from the link as well would break this while
-// gaining nothing: an untrusted script naming an owned deck can only play the
-// user's own items, and a fetched deck can never overwrite an owned one.
-func TestRunCommand_OwnDeckZapLinkStaysTrusted(t *testing.T) {
-	const deckID = "0123456789ab"
-	link := "https://zpr.au/d" + deckID
-	body := servedDeckBody(t, deckID, "Mine",
-		decks.PlaylistArgItem{Name: "A", ZapScript: "**input.keyboard:a"})
-
+func useDeckZapLinkTransport(t *testing.T, transport http.RoundTripper) {
+	t.Helper()
 	oldWellKnown, oldZap := currentWellKnownFetchClient(), currentZapFetchClient()
 	t.Cleanup(func() {
 		zapFetchClientMu.Lock()
 		wellKnownFetchClient, zapFetchClient = oldWellKnown, oldZap
 		zapFetchClientMu.Unlock()
 	})
-	transport := deckZapLinkTransport{body: body}
 	zapFetchClientMu.Lock()
 	wellKnownFetchClient = newWellKnownFetchClient(transport)
 	zapFetchClient = newZapFetchClient(transport)
 	zapFetchClientMu.Unlock()
+}
+
+// TestRunCommand_DeckZapLinkIsKeptFromAnyHost pins the whole tap: a link on
+// the hosted service, in the shape it really has, and a link on somebody
+// else's host both end up as a read-only deck that opens untrusted.
+func TestRunCommand_DeckZapLinkIsKeptFromAnyHost(t *testing.T) {
+	for name, tc := range map[string]struct{ link, playlistID string }{
+		"hosted":      {link: hostedDeckLink, playlistID: "ZON-LHM6N9T8"},
+		"third party": {link: thirdPartyDeckLink, playlistID: "party-list"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useDeckZapLinkTransport(t, deckZapLinkTransport{body: servedDeckBody(t, tc.playlistID, "Theirs",
+				decks.PlaylistArgItem{Name: "A", ZapScript: "**input.keyboard:a"})})
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			t.Cleanup(cleanup)
+
+			queue := make(chan *playlists.Playlist, 1)
+			result, err := RunCommand(
+				t.Context(), newPlaylistTestPlatform(), &config.Instance{},
+				playlists.PlaylistController{Queue: queue},
+				tokens.Token{Text: tc.link},
+				zapscript.Command{Name: zapscript.ZapScriptCmdLaunch, Args: []string{tc.link}},
+				1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
+			)
+			require.NoError(t, err)
+			assert.True(t, result.Unsafe, "a fetched ZapLink flags the token unsafe")
+
+			all, err := db.UserDB.ListDecks()
+			require.NoError(t, err)
+			require.Len(t, all, 1, "the served playlist is kept as a deck")
+			assert.False(t, all[0].Owned)
+			assert.Equal(t, tc.link, all[0].SourceURL)
+
+			pls := <-queue
+			assert.Equal(t, tc.playlistID, pls.ID, "the copy opens as the playlist it was served as")
+			assert.Equal(t, all[0].DeckID, pls.DeckID)
+			assert.True(t, pls.Unsafe, "somebody else's deck runs its items untrusted")
+		})
+	}
+}
+
+// TestRunCommand_DeckZapLinkNeverOpensAnOwnedDeck pins that nothing a link
+// serves can steer a tap into a trusted open of a deck the user owns. Only
+// the account vouching for the link makes it trusted, and that is decided by
+// who answered, never by what the link or the playlist is called.
+func TestRunCommand_DeckZapLinkNeverOpensAnOwnedDeck(t *testing.T) {
+	const deckID = "0123456789ab"
+	link := "https://decks.example/d" + deckID
+	useDeckZapLinkTransport(t, deckZapLinkTransport{body: servedDeckBody(t, "deck://"+deckID, "Imposter",
+		decks.PlaylistArgItem{Name: "A", ZapScript: "**input.keyboard:a"})})
 
 	db, cleanup := testhelpers.NewTestDatabase(t)
 	t.Cleanup(cleanup)
@@ -280,7 +387,7 @@ func TestRunCommand_OwnDeckZapLinkStaysTrusted(t *testing.T) {
 	}))
 
 	queue := make(chan *playlists.Playlist, 1)
-	result, err := RunCommand(
+	_, err := RunCommand(
 		t.Context(), newPlaylistTestPlatform(), &config.Instance{},
 		playlists.PlaylistController{Queue: queue},
 		tokens.Token{Text: link},
@@ -288,9 +395,9 @@ func TestRunCommand_OwnDeckZapLinkStaysTrusted(t *testing.T) {
 		1, 0, db, &RunCommandOptions{}, &zapscript.ArgExprEnv{},
 	)
 	require.NoError(t, err)
-	assert.True(t, result.Unsafe, "a fetched ZapLink flags the token unsafe")
 
 	pls := <-queue
-	assert.Equal(t, decks.PlaylistID(deckID), pls.ID, "the link resolves to the local owned deck")
-	assert.False(t, pls.Unsafe, "the user's own deck runs trusted however its card reached the device")
+	assert.NotEqual(t, deckID, pls.DeckID, "the link does not resolve to the owned deck")
+	assert.Equal(t, "Imposter", pls.Name)
+	assert.True(t, pls.Unsafe)
 }

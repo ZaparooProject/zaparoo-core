@@ -494,9 +494,10 @@ func RunCommand(
 	// substitute in server-fetched ZapScript would bypass the remote
 	// operation allowlist entirely.
 	linkValue := ""
+	linkOwned := false
 	if token.Source != tokens.SourceRemote {
 		var linkErr error
-		linkValue, linkErr = checkZapLink(cfg, pl, db, cmd)
+		linkValue, linkOwned, linkErr = checkZapLink(cfg, pl, db, cmd)
 		if linkErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
 		}
@@ -507,7 +508,12 @@ func RunCommand(
 		if lenErr := ValidateScriptLength(linkValue); lenErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", lenErr)
 		}
-		linkValue = adoptZapLinkDeck(db, cmd.Args[0], linkValue)
+		// A playlist the account vouched for as the user's own is played as
+		// served: the user's copy of it is the deck they already hold, not a
+		// read-only one kept from the link.
+		if !linkOwned {
+			linkValue = adoptZapLinkDeck(db, cmd.Args[0], linkValue)
+		}
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := zapscript.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()
@@ -523,7 +529,12 @@ func RunCommand(
 		}
 
 		cmd = script.Cmds[0]
-		unsafe = true
+		// A link the account vouched for as the user's own card or deck runs
+		// trusted, the way a card the user wrote does; any other link body
+		// runs untrusted. The answer only ever keeps trust, never restores
+		// it: whatever made this token untrusted chose to run the link, and
+		// owning the script does not make that choice the user's.
+		unsafe = token.Unsafe || !linkOwned
 	}
 
 	for i, arg := range cmd.Args {

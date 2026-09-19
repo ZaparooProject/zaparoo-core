@@ -752,7 +752,7 @@ func handlePlaylist(
 		// The content of the active playlist changed underneath it, such as a
 		// deck edited elsewhere: swap the items in and keep the position and
 		// playback as they are.
-		if activePlaylist == nil || activePlaylist.ID != pls.ID {
+		if activePlaylist == nil || activePlaylist.ID != pls.ID || activePlaylist.DeckID != pls.DeckID {
 			log.Debug().Str("id", pls.ID).Msg("playlist refresh ignored; it is not the active playlist")
 			return
 		}

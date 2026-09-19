@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -840,12 +841,47 @@ func TestCheckZapLinkFetchesSupportedRemoteScript(t *testing.T) {
 	platform := mocks.NewMockPlatform()
 	platform.On("ID").Return("mister")
 
-	target, err := checkZapLink(nil, platform, db, gozapscript.Command{Args: []string{server.URL + "/token"}})
+	target, owned, err := checkZapLink(nil, platform, db, gozapscript.Command{Args: []string{server.URL + "/token"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, expected, target)
+	assert.False(t, owned, "a host that got no credential cannot vouch for ownership")
 	mockUserDB.AssertExpectations(t)
 	platform.AssertExpectations(t)
+}
+
+// TestGetRemoteZapScriptOwnedNeedsACredential pins the trust rule for the
+// owned header: it is honoured only from a host this device sent its own
+// credential to, and absent means not owned.
+func TestGetRemoteZapScriptOwnedNeedsACredential(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sendHeader atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		if sendHeader.Load() {
+			w.Header().Set(HeaderZaparooOwned, "1")
+		}
+		_, _ = w.Write([]byte("**launch.system:snes"))
+	}))
+	defer server.Close()
+
+	sendHeader.Store(true)
+	_, owned, err := getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.False(t, owned, "no credential was sent, so the claim is ignored")
+
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	_, owned, err = getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.True(t, owned, "the credentialed host vouched for the link")
+
+	sendHeader.Store(false)
+	_, owned, err = getRemoteZapScriptOwned(context.Background(), server.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.False(t, owned, "absent means not owned")
 }
 
 // FetchWellKnown Tests
@@ -1075,4 +1111,87 @@ func zapLinkCertPEM(t *testing.T, cert *x509.Certificate) []byte {
 		Type:  "CERTIFICATE",
 		Bytes: cert.Raw,
 	})
+}
+
+// TestGetRemoteZapScriptOwnedIgnoresARedirectedClaim pins that only the host
+// that was sent the credential can vouch. A credentialed host that redirects
+// elsewhere hands the answer to a host that never saw the credential, and
+// that host cannot know who asked.
+func TestGetRemoteZapScriptOwnedIgnoresARedirectedClaim(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sawCredential atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawCredential.Store(r.Header.Get("Authorization") != "")
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		w.Header().Set(HeaderZaparooOwned, "1")
+		_, _ = w.Write([]byte("**input.keyboard:a"))
+	}))
+	defer elsewhere.Close()
+	linked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/c1", http.StatusFound)
+	}))
+	defer linked.Close()
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(linked.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	body, owned, err := getRemoteZapScriptOwned(context.Background(), linked.URL+"/c1", "test")
+	require.NoError(t, err)
+	assert.Equal(t, "**input.keyboard:a", string(body))
+	assert.False(t, sawCredential.Load(), "the credential stays with the host it belongs to")
+	assert.False(t, owned, "a host that was sent no credential cannot vouch for ownership")
+}
+
+// TestGetRemoteZapScriptOwnedIgnoresAVouchReachedByRedirect pins that the
+// owned answer only counts for the link that was tapped. A link on any host
+// may redirect to a host this device is linked to, which then vouches
+// honestly for the user's own card; but the link named somewhere else, and
+// whoever wrote it chose where it led, so the body runs untrusted.
+func TestGetRemoteZapScriptOwnedIgnoresAVouchReachedByRedirect(t *testing.T) {
+	// No t.Parallel(): the auth config is global.
+	var sawCredential atomic.Bool
+	linked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawCredential.Store(r.Header.Get("Authorization") != "")
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		w.Header().Set(HeaderZaparooOwned, "1")
+		_, _ = w.Write([]byte("**input.keyboard:a"))
+	}))
+	defer linked.Close()
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, linked.URL+"/c1", http.StatusFound)
+	}))
+	defer elsewhere.Close()
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(linked.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	_, owned, err := getRemoteZapScriptOwned(context.Background(), linked.URL+"/c1", "test")
+	require.NoError(t, err)
+	require.True(t, owned, "the linked host vouches for its own link")
+
+	body, owned, err := getRemoteZapScriptOwned(context.Background(), elsewhere.URL+"/x", "test")
+	require.NoError(t, err)
+	assert.Equal(t, "**input.keyboard:a", string(body), "the redirected body is still served")
+	assert.True(t, sawCredential.Load(), "the linked host was sent its credential and vouched")
+	assert.False(t, owned, "a vouch reached through a redirect is not for the link that was tapped")
+}
+
+// TestIsKnownZapLinkHost pins the gate a stored address passes before it is
+// fetched: only a host this device learned serves ZapScript, never one it
+// learned does not, and never one it has not met.
+func TestIsKnownZapLinkHost(t *testing.T) {
+	t.Parallel()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.UserDB.UpdateZapLinkHost("https://serves.example", 1))
+	require.NoError(t, db.UserDB.UpdateZapLinkHost("https://refuses.example", 0))
+
+	assert.True(t, isKnownZapLinkHost("https://serves.example/any/path", db))
+	assert.False(t, isKnownZapLinkHost("https://refuses.example/any/path", db),
+		"a host recorded as not serving ZapScript is never fetched")
+	assert.False(t, isKnownZapLinkHost("https://stranger.example/any/path", db))
+	assert.False(t, isKnownZapLinkHost("http://serves.example/any/path", db), "a public link must be HTTPS")
+	assert.False(t, isKnownZapLinkHost("https://serves.example/any/path", nil))
 }

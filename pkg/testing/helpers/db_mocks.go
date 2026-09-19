@@ -359,6 +359,17 @@ func (m *MockUserDBI) UpsertRemoteDeck(deck *database.Deck) (bool, error) {
 	return args.Bool(0), nil
 }
 
+func (m *MockUserDBI) UpsertFetchedDeck(deck *database.Deck, maxCopies int) (database.FetchedDeckResult, error) {
+	args := m.Called(deck, maxCopies)
+	if err := args.Error(1); err != nil {
+		return database.FetchedDeckResult{}, fmt.Errorf("mock UserDBI upsert fetched deck failed: %w", err)
+	}
+	if result, ok := args.Get(0).(database.FetchedDeckResult); ok {
+		return result, nil
+	}
+	return database.FetchedDeckResult{}, nil
+}
+
 func (m *MockUserDBI) SetDeckItemAnchor(itemDBID int64, anchor *database.DeckItemAnchor) error {
 	if err := m.Called(itemDBID, anchor).Error(0); err != nil {
 		return fmt.Errorf("mock UserDBI set deck item anchor failed: %w", err)
