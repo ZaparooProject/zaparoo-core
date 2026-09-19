@@ -139,6 +139,14 @@ func TestToPlaylistState_Playing(t *testing.T) {
 	assert.True(t, toPlaylistState(p).Playing)
 }
 
+func TestToPlaylistState_Unsafe(t *testing.T) {
+	t.Parallel()
+	untrusted := &playlists.Playlist{Slot: mediaslot.Primary, Unsafe: true}
+	assert.True(t, toPlaylistState(untrusted).Unsafe)
+	trusted := &playlists.Playlist{Slot: mediaslot.Primary}
+	assert.False(t, toPlaylistState(trusted).Unsafe)
+}
+
 func TestToPlaylistState_EmptyItems(t *testing.T) {
 	t.Parallel()
 	p := &playlists.Playlist{Slot: mediaslot.Primary}
