@@ -33,23 +33,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
 
+// readerLookup reports the reader registered under an ID, like
+// state.State.GetReader.
+type readerLookup func(readerID string) (readers.Reader, bool)
+
 // ForToken returns the scan mode in force for t, always "tap" or "hold".
 func ForToken(cfg *config.Instance, st *state.State, t *tokens.Token) string {
-	if t == nil {
-		return cfg.GlobalScanMode()
-	}
-
-	if mode := t.Traits.ScanMode(); mode != "" {
-		return mode
-	}
-
-	if t.ReaderID != "" {
-		if r, ok := st.GetReader(t.ReaderID); ok && r != nil {
-			return cfg.ScanModeForReader(readers.DriverIDs(r), r.Path())
-		}
-	}
-
-	return cfg.GlobalScanMode()
+	return resolve(cfg, st.GetReader, t, false)
 }
 
 // ForTokenAfterRemoval resolves like ForToken, except that a reader which has
@@ -65,12 +55,32 @@ func ForToken(cfg *config.Instance, st *state.State, t *tokens.Token) string {
 // The API reports this same answer, so `readers` never claims tap for an owner
 // whose removal will exit.
 func ForTokenAfterRemoval(cfg *config.Instance, st *state.State, t *tokens.Token) string {
-	if t != nil && t.Traits.ScanMode() == "" && t.ReaderID != "" {
-		if _, ok := st.GetReader(t.ReaderID); !ok {
+	return resolve(cfg, st.GetReader, t, true)
+}
+
+// resolve looks the token's reader up once. The exit timer can fire while the
+// reader is disconnecting, and a second lookup could then see it gone after
+// the first saw it present, dropping its override for the global mode.
+func resolve(cfg *config.Instance, lookup readerLookup, t *tokens.Token, keepRemoved bool) string {
+	if t == nil {
+		return cfg.GlobalScanMode()
+	}
+
+	if mode := t.Traits.ScanMode(); mode != "" {
+		return mode
+	}
+
+	if t.ReaderID != "" {
+		r, ok := lookup(t.ReaderID)
+		if !ok && keepRemoved {
 			return config.ScanModeHold
 		}
+		if ok && r != nil {
+			return cfg.ScanModeForReader(readers.DriverIDs(r), r.Path())
+		}
 	}
-	return ForToken(cfg, st, t)
+
+	return cfg.GlobalScanMode()
 }
 
 // HoldForToken reports whether removing t should exit media.
