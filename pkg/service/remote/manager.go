@@ -55,8 +55,19 @@ import (
 )
 
 const (
-	protocolVersion      = 1
-	waitTimeoutSeconds   = 25
+	protocolVersion = 1
+	// waitTimeoutSeconds is the longest hold the device asks for. The
+	// contract makes it an upper bound: the server answers sooner when it
+	// has work or when its own limit is shorter, so raising the server's
+	// hold later needs no change here.
+	waitTimeoutSeconds = 300
+	// waitRequestTimeout bounds one wait request end to end. It follows the
+	// hold the server really keeps (under a minute), not the hold asked for:
+	// a connection that dies silently is only noticed when this runs out,
+	// and until then no command or hint arrives. A server that later holds
+	// longer than this costs an early reconnect, nothing else, since the
+	// wait carries no state.
+	waitRequestTimeout   = 90 * time.Second
 	requestTimeout       = 30 * time.Second
 	longRetry            = 5 * time.Minute
 	minBackoff           = time.Second
@@ -112,6 +123,12 @@ type Deps struct {
 		ctx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 		exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
 	) error
+	// LibraryHint receives a change hint from the account: which kinds of
+	// library data moved and the revision of the write. Optional.
+	LibraryHint func(kinds []string, revision int64)
+	// PipeState reports whether the wait is currently held with the
+	// account, so hint consumers can pace their own timers. Optional.
+	PipeState func(connected bool)
 }
 
 type manager struct {
@@ -122,7 +139,10 @@ type manager struct {
 	// the backup manager. Tests inject a fake to observe the decision.
 	markUnlinked  func()
 	executionSlot chan struct{}
-	resultMu      syncutil.Mutex
+	// waitDeadline overrides waitRequestTimeout; zero uses it. Tests shorten
+	// it to watch a stalled wait being given up.
+	waitDeadline time.Duration
+	resultMu     syncutil.Mutex
 }
 
 // Start launches the remote operations polling loop in a background goroutine
@@ -140,6 +160,26 @@ func Start(ctx context.Context, deps *Deps, wg *sync.WaitGroup) {
 	}()
 }
 
+// pipeWanted reports whether any feature wants the wait held: remote
+// control for its commands, Library sync for change hints.
+func (m *manager) pipeWanted() bool {
+	return m.deps.Config.RemoteControlEnabled() || m.deps.Config.LibrarySyncEnabled()
+}
+
+// reportStatus records the wait's state for the owner. While remote control
+// is off the wait may still be held for Library sync, but the owner is
+// shown remote control as off rather than the pipe's own weather.
+func (m *manager) reportStatus(remoteEnabled bool, remoteState, errorCode string) {
+	if !remoteEnabled {
+		m.setStatus(state.RemoteStateDisabled, "")
+		return
+	}
+	m.setStatus(remoteState, errorCode)
+}
+
+// run holds the device's one wait with the account for as long as something
+// wants it: remote operations are dispatched while remote control is on,
+// and library change hints are passed on while Library sync is on.
 func (m *manager) run(ctx context.Context) {
 	var workers sync.WaitGroup
 	defer workers.Wait()
@@ -148,14 +188,27 @@ func (m *manager) run(ctx context.Context) {
 		log.Warn().Err(err).Msg("failed to prune remote command ledger")
 	}
 	advertised := false
+	advertisedEnabled := false
 	replayed := false
 	lastReplay := time.Time{}
 	lastPrune := time.Now()
 	backoff := minBackoff
+	pipeUp := false
+	setPipe := func(connected bool) {
+		if pipeUp == connected {
+			return
+		}
+		pipeUp = connected
+		if m.deps.PipeState != nil {
+			m.deps.PipeState(connected)
+		}
+	}
+	defer setPipe(false)
 	for ctx.Err() == nil {
 		bearer := m.deviceBearer()
 		enabled := m.deps.Config.RemoteControlEnabled()
-		if !enabled || bearer == "" {
+		if !m.pipeWanted() || bearer == "" {
+			setPipe(false)
 			if advertised && bearer != "" {
 				if err := m.sendCapabilityHeartbeat(ctx); err != nil {
 					log.Warn().Err(err).Msg("remote operations capability withdrawal failed")
@@ -173,31 +226,37 @@ func (m *manager) run(ctx context.Context) {
 			continue
 		}
 
-		if !advertised {
-			m.setStatus(state.RemoteStateConnecting, "")
+		// The capability document names whether remote control is on, so it
+		// is sent again when that flips while the wait stays held.
+		if !advertised || advertisedEnabled != enabled {
+			m.reportStatus(enabled, state.RemoteStateConnecting, "")
 			if err := m.sendCapabilityHeartbeat(ctx); err != nil {
+				// The document is sent between waits, so while it keeps
+				// failing no wait is open and no hint can arrive.
+				setPipe(false)
 				if isUnauthorized(err) {
 					if m.supersededRejection(err) {
 						log.Debug().Msg("ignoring unauthorized heartbeat for a superseded remote credential")
 						continue
 					}
-					m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
+					m.reportStatus(enabled, state.RemoteStateCredentialRejected, errorCodeOf(err))
 					m.markUnlinkedIfCurrent(rejectedBearer(err))
 					m.sleepWhileEligible(ctx, time.Minute, true)
 					continue
 				}
 				log.Warn().Err(err).Msg("remote operations capability heartbeat failed")
-				m.setStatus(state.RemoteStateError, errorCodeOf(err))
+				m.reportStatus(enabled, state.RemoteStateError, errorCodeOf(err))
 				m.sleepWhileEligible(ctx, m.jitter(backoff), true)
 				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 			advertised = true
+			advertisedEnabled = enabled
 			backoff = minBackoff
-			m.setStatus(state.RemoteStateWaiting, "")
+			m.reportStatus(enabled, state.RemoteStateWaiting, "")
 		}
 		now := time.Now()
-		if resultsReplayDue(replayed, lastReplay, now) {
+		if enabled && resultsReplayDue(replayed, lastReplay, now) {
 			m.replayStoredResults(ctx)
 			replayed = true
 			lastReplay = now
@@ -219,23 +278,29 @@ func (m *manager) run(ctx context.Context) {
 					log.Debug().Msg("ignoring unauthorized poll for a superseded remote credential")
 					break
 				}
-				m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
+				setPipe(false)
+				m.reportStatus(enabled, state.RemoteStateCredentialRejected, errorCodeOf(err))
 				m.markUnlinkedIfCurrent(rejectedBearer(err))
 				m.sleepWhileEligible(ctx, time.Minute, true)
 			case errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound:
-				// The server answers 404 both when the feature is dark and
-				// when this device isn't the account's remote slot; the
-				// retry is the same long back-off either way, but the owner
-				// needs to be told which one it is.
+				// A server without the wait has no pipe: hint consumers fall
+				// back to their timers. An older server may also answer 404
+				// when this device isn't the account's remote slot; the retry
+				// is the same long back-off either way, but the owner needs
+				// to be told which one it is.
+				setPipe(false)
 				if httpErr.code == errorCodeRemoteSlotRequired {
-					m.setStatus(state.RemoteStateNotRemoteDevice, httpErr.code)
+					m.reportStatus(enabled, state.RemoteStateNotRemoteDevice, httpErr.code)
 				} else {
-					m.setStatus(state.RemoteStateUnavailable, httpErr.code)
+					m.reportStatus(enabled, state.RemoteStateUnavailable, httpErr.code)
 				}
 				m.sleepWhileEligible(ctx, longRetry, true)
 			case errors.As(err, &httpErr) && (httpErr.status == http.StatusTooManyRequests ||
 				httpErr.status == http.StatusServiceUnavailable):
-				m.setStatus(state.RemoteStateError, errorCodeOf(err))
+				// No wait is open for the length of the back-off, so no hint
+				// can arrive during it.
+				setPipe(false)
+				m.reportStatus(enabled, state.RemoteStateError, errorCodeOf(err))
 				delay := httpErr.retryAfter
 				if delay <= 0 {
 					delay = maxBackoff
@@ -243,27 +308,39 @@ func (m *manager) run(ctx context.Context) {
 				m.sleepWhileEligible(ctx, delay, true)
 			default:
 				log.Warn().Err(err).Dur("retry_in", backoff).Msg("remote operations wait failed")
-				m.setStatus(state.RemoteStateError, errorCodeOf(err))
+				setPipe(false)
+				m.reportStatus(enabled, state.RemoteStateError, errorCodeOf(err))
 				m.sleepWhileEligible(ctx, m.jitter(backoff), true)
 				backoff = min(backoff*2, maxBackoff)
 			}
 			continue
 		}
 		backoff = minBackoff
-		m.setStatus(state.RemoteStateWaiting, "")
+		m.reportStatus(enabled, state.RemoteStateWaiting, "")
+		setPipe(true)
 		if !hasWork {
 			continue
 		}
-		if envelope.Type != "operation_target" {
+		switch envelope.Type {
+		case envelopeTypeOperationTarget:
+			if !enabled {
+				// The account may still believe this device takes commands;
+				// nothing runs here while the owner has remote control off.
+				log.Debug().Msg("ignoring remote operation while remote control is off")
+				continue
+			}
+			if envelope.Operation == nil {
+				log.Warn().Msg("ignoring remote operation envelope without operation")
+				continue
+			}
+			m.dispatchOperation(ctx, &workers, envelope.Operation)
+		case envelopeTypeLibraryChanged:
+			if m.deps.LibraryHint != nil && len(envelope.Kinds) > 0 {
+				m.deps.LibraryHint(envelope.Kinds, envelope.Revision)
+			}
+		default:
 			log.Debug().Str("type", envelope.Type).Msg("ignoring unsupported remote work envelope")
-			continue
 		}
-		if envelope.Operation == nil {
-			log.Warn().Msg("ignoring remote operation envelope without operation")
-			continue
-		}
-
-		m.dispatchOperation(ctx, &workers, envelope.Operation)
 	}
 }
 
@@ -384,7 +461,11 @@ func (m *manager) waitOnce(
 	ctx context.Context, bearer string,
 ) (waitEnvelope, bool, error) {
 	var envelope waitEnvelope
-	requestCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	deadline := m.waitDeadline
+	if deadline <= 0 {
+		deadline = waitRequestTimeout
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, deadline)
 	eligibilityDone := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
@@ -396,7 +477,7 @@ func (m *manager) waitOnce(
 			case <-requestCtx.Done():
 				return
 			case <-ticker.C:
-				if !m.deps.Config.RemoteControlEnabled() || m.deviceBearer() != bearer {
+				if !m.pipeWanted() || m.deviceBearer() != bearer {
 					cancel()
 					return
 				}
@@ -454,7 +535,7 @@ func (m *manager) sleepWhileEligible(ctx context.Context, duration time.Duration
 			return
 		case <-timer.C:
 		}
-		if requireEnabled && (!m.deps.Config.RemoteControlEnabled() || m.deviceBearer() == "") {
+		if requireEnabled && (!m.pipeWanted() || m.deviceBearer() == "") {
 			return
 		}
 	}

@@ -21,6 +21,7 @@ package librarysync_test
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -470,4 +471,42 @@ func TestSyncState_PreferredVersionPrefersAnExactMatch(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, starred, "exactly one copy of the version the account named is starred")
+}
+
+// TestHintNeedsPull pins which change hints from the account run a pull. The
+// revision is on the same scale as the pull cursor, so a hint at or below the
+// cursor names a write this device already holds.
+func TestHintNeedsPull(t *testing.T) {
+	f := newSyncFixture(t, metroidUSA)
+
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindState, 1),
+		"with no cursor stored yet every hint is worth a pull")
+
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "metroid", Title: "Metroid", Favorite: true,
+	})
+	f.online.putStateRow(&fakeStateRow{
+		MediaType: "Game", SystemID: "NES", CoreSlug: "kid-icarus", Title: "Kid Icarus", Favorite: true,
+	})
+	f.syncState(t)
+	raw, found, err := f.db.UserDB.GetDeviceState(librarysync.DeviceStateKeyStateSince)
+	require.NoError(t, err)
+	require.True(t, found)
+	cursor, err := strconv.ParseInt(raw, 10, 64)
+	require.NoError(t, err)
+	require.Greater(t, cursor, int64(1))
+
+	assert.False(t, f.svc.HintNeedsPull(librarysync.HintKindState, cursor), "the write just pulled is an echo")
+	assert.False(t, f.svc.HintNeedsPull(librarysync.HintKindState, cursor-1))
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindState, cursor+1), "a newer write needs a pull")
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindState, 0), "a hint with no revision cannot be ruled out")
+	assert.True(t, f.svc.HintNeedsPull("collections", 1), "a kind this build does not know is worth a pass")
+
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindDecks, 1), "decks keep their own cursor")
+	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyDecksSince, "40"))
+	assert.False(t, f.svc.HintNeedsPull(librarysync.HintKindDecks, 40))
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindDecks, 41))
+
+	require.NoError(t, f.db.UserDB.SetDeviceState(librarysync.DeviceStateKeyDecksSince, "not a number"))
+	assert.True(t, f.svc.HintNeedsPull(librarysync.HintKindDecks, 1), "an unreadable cursor never hides a write")
 }

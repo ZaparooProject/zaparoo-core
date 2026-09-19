@@ -26,6 +26,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -280,25 +281,32 @@ func (*failingSettingRunner) ApplySetting(context.Context) (bool, error) {
 	return false, errors.New("user database is gone")
 }
 
+// fakeLibraryStateRunner is driven from inside a synctest bubble, so it keeps
+// to atomics: the deadlock build's mutex draws timers from a pool shared with
+// goroutines outside the bubble, which a bubble's clock cannot survive. Tests
+// only change the error once synctest.Wait has shown no pass is running.
 type fakeLibraryStateRunner struct {
-	err        error
+	err        atomic.Pointer[error]
 	passes     atomic.Int32
 	deckPasses atomic.Int32
 	deckPulls  atomic.Int32
-	mu         syncutil.Mutex
+	cursor     atomic.Int64
 }
 
 func (r *fakeLibraryStateRunner) setErr(err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.err = err
+	if err == nil {
+		r.err.Store(nil)
+		return
+	}
+	r.err.Store(&err)
 }
 
 func (r *fakeLibraryStateRunner) SyncState(context.Context) (librarysync.StateResult, error) {
 	r.passes.Add(1)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return librarysync.StateResult{}, r.err
+	if err := r.err.Load(); err != nil {
+		return librarysync.StateResult{}, *err
+	}
+	return librarysync.StateResult{}, nil
 }
 
 func (r *fakeLibraryStateRunner) SyncDecks(context.Context) (librarysync.DecksResult, error) {
@@ -311,72 +319,166 @@ func (r *fakeLibraryStateRunner) PullDecksIfStale(context.Context) error {
 	return nil
 }
 
-func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
-	t.Parallel()
-	runner := &fakeLibraryStateRunner{}
+// HintNeedsPull treats revisions above the fake cursor as unseen.
+func (r *fakeLibraryStateRunner) HintNeedsPull(_ string, revision int64) bool {
+	return revision > r.cursor.Load()
+}
+
+// testLibraryStateLoop is a running state loop and the channels that drive it.
+type testLibraryStateLoop struct {
+	requests chan struct{}
+	accesses chan struct{}
+	hints    chan libraryHint
+	// stop ends the loop; a bubble cannot finish while the loop still runs.
+	stop func()
+}
+
+// startTestLibraryStateLoop runs the state loop inside a synctest bubble, so
+// its timers run on the bubble's clock: a test moves time with time.Sleep and
+// lets the loop catch up with synctest.Wait, and nothing depends on how the
+// scheduler treats a real sleep.
+func startTestLibraryStateLoop(
+	t *testing.T, runner *fakeLibraryStateRunner, pipe *atomic.Bool, timings *libraryStateTimings,
+) *testLibraryStateLoop {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	requests := make(chan struct{}, 1)
-	accesses := make(chan struct{}, 1)
+	loop := &testLibraryStateLoop{
+		requests: make(chan struct{}, 1),
+		accesses: make(chan struct{}, 1),
+		hints:    make(chan libraryHint, 4),
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		libraryStateLoop(ctx, runner, requests, accesses, func() bool { return false }, &libraryStateTimings{
+		libraryStateLoop(ctx, runner, loop.requests, loop.accesses, loop.hints, pipe.Load, timings)
+	}()
+	loop.stop = func() {
+		cancel()
+		<-done
+	}
+	return loop
+}
+
+func TestLibraryStateLoop_HintRunsAPassWhenItNamesAnUnseenWrite(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		runner := &fakeLibraryStateRunner{}
+		runner.cursor.Store(5)
+		var pipe atomic.Bool
+		loop := startTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
 			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
 			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
+		defer loop.stop()
+
+		loop.hints <- libraryHint{kinds: []string{"state"}, revision: 3}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		assert.Zero(t, runner.passes.Load(), "a hint at or below the cursor is an echo")
+
+		loop.hints <- libraryHint{kinds: []string{"decks", "state"}, revision: 9}
+		time.Sleep(19 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, runner.passes.Load(), "the hint waits out the debounce like an edit")
+		time.Sleep(2 * time.Millisecond)
+		synctest.Wait()
+		assert.Equal(t, int32(1), runner.passes.Load())
 	})
-
-	for range 3 {
-		requests <- struct{}{}
-		time.Sleep(5 * time.Millisecond)
-	}
-	require.Eventually(t, func() bool { return runner.passes.Load() == 1 }, time.Second, 5*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, int32(1), runner.passes.Load(), "a burst of edits is pushed in one pass")
-	assert.Equal(t, int32(1), runner.deckPasses.Load(), "decks sync in the same pass")
-
-	accesses <- struct{}{}
-	require.Eventually(t, func() bool { return runner.deckPulls.Load() == 1 }, time.Second, 5*time.Millisecond)
-	assert.Equal(t, int32(1), runner.passes.Load(), "looking at decks does not push")
 }
 
-// TestLibraryStateLoop_DeferredPassKeepsAsking pins that an edit made while the
-// media database is being indexed still goes out soon after the index finishes.
-// A deferred pass is not a failure, so it must not start the hourly interval
-// over and leave the edit sitting for an hour.
-func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
+func TestLibraryStateLoop_PipeStateSelectsTheTimer(t *testing.T) {
 	t.Parallel()
-	runner := &fakeLibraryStateRunner{}
-	runner.setErr(librarysync.ErrNotSettled)
-	ctx, cancel := context.WithCancel(context.Background())
-	requests := make(chan struct{}, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		libraryStateLoop(ctx, runner, requests, make(chan struct{}), func() bool { return false }, &libraryStateTimings{
-			check: 10 * time.Millisecond, startup: time.Hour, debounce: 10 * time.Millisecond,
+	synctest.Test(t, func(t *testing.T) {
+		runner := &fakeLibraryStateRunner{}
+		var pipe atomic.Bool
+		pipe.Store(true)
+		// The timer only runs passes once the startup pass has happened.
+		loop := startTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+			check: time.Minute, startup: time.Minute, debounce: time.Second,
+			interval: 15 * time.Minute, intervalNoPipe: 5 * time.Minute,
+			initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+		defer loop.stop()
+
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		require.Equal(t, int32(1), runner.passes.Load(), "the startup pass")
+
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, int32(1), runner.passes.Load(), "with the pipe held the long timer applies")
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, int32(2), runner.passes.Load(), "the long timer runs a pass when it is due")
+
+		pipe.Store(false)
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, int32(3), runner.passes.Load(), "without the pipe the short timer applies")
+	})
+}
+
+func TestLibraryStateLoop_DebouncesEdits(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		runner := &fakeLibraryStateRunner{}
+		var pipe atomic.Bool
+		loop := startTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+			check: time.Hour, startup: time.Hour, debounce: 20 * time.Millisecond,
 			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
 		})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
+		defer loop.stop()
+
+		for range 3 {
+			loop.requests <- struct{}{}
+			time.Sleep(5 * time.Millisecond)
+		}
+		synctest.Wait()
+		assert.Zero(t, runner.passes.Load(), "each edit restarts the debounce")
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		assert.Equal(t, int32(1), runner.passes.Load(), "a burst of edits is pushed in one pass")
+		assert.Equal(t, int32(1), runner.deckPasses.Load(), "decks sync in the same pass")
+
+		loop.accesses <- struct{}{}
+		synctest.Wait()
+		assert.Equal(t, int32(1), runner.deckPulls.Load())
+		assert.Equal(t, int32(1), runner.passes.Load(), "looking at decks does not push")
 	})
+}
 
-	requests <- struct{}{}
-	require.Eventually(t, func() bool { return runner.passes.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
-		"an edit deferred by indexing keeps asking rather than waiting out the hour")
+// TestLibraryStateLoop_DeferredPassKeepsAsking pins an edit made while the
+// media database is indexing: the pass defers, and the loop asks again at the
+// check interval instead of counting the deferral as a success and waiting out
+// the hour.
+func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		runner := &fakeLibraryStateRunner{}
+		runner.setErr(librarysync.ErrNotSettled)
+		var pipe atomic.Bool
+		loop := startTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+			check: time.Minute, startup: 24 * time.Hour, debounce: time.Second,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+		defer loop.stop()
 
-	// The index finishes and the edit goes out, after which the loop settles.
-	runner.setErr(nil)
-	require.Eventually(t, func() bool { return runner.passes.Load() >= 4 }, 2*time.Second, 5*time.Millisecond)
-	settled := runner.passes.Load()
-	time.Sleep(100 * time.Millisecond)
-	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a pushed edit stops the retries")
+		loop.requests <- struct{}{}
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		deferred := runner.passes.Load()
+		assert.GreaterOrEqual(t, deferred, int32(3),
+			"an edit deferred by indexing keeps asking rather than waiting out the hour")
+
+		// The index finishes and the edit goes out, after which the loop settles.
+		runner.setErr(nil)
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, deferred+1, runner.passes.Load(), "the edit goes out once the index finishes")
+		time.Sleep(30 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, deferred+1, runner.passes.Load(), "a pushed edit stops the retries")
+	})
 }
 
 // TestLibraryStateLoop_DeferredStartupPassKeepsAsking pins the first pass after
@@ -385,29 +487,43 @@ func TestLibraryStateLoop_DeferredPassKeepsAsking(t *testing.T) {
 // success would leave the device unsynced for the whole hourly interval.
 func TestLibraryStateLoop_DeferredStartupPassKeepsAsking(t *testing.T) {
 	t.Parallel()
-	runner := &fakeLibraryStateRunner{}
-	runner.setErr(librarysync.ErrNotSettled)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		libraryStateLoop(ctx, runner, make(chan struct{}), make(chan struct{}), func() bool { return false },
-			&libraryStateTimings{
-				check: 10 * time.Millisecond, startup: 10 * time.Millisecond, debounce: time.Hour,
-				interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
-			})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
+	synctest.Test(t, func(t *testing.T) {
+		runner := &fakeLibraryStateRunner{}
+		runner.setErr(librarysync.ErrNotSettled)
+		var pipe atomic.Bool
+		loop := startTestLibraryStateLoop(t, runner, &pipe, &libraryStateTimings{
+			check: time.Minute, startup: time.Minute, debounce: time.Second,
+			interval: time.Hour, intervalNoPipe: time.Hour, initialBackoff: time.Hour, maxBackoff: time.Hour,
+		})
+		defer loop.stop()
+
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		deferred := runner.passes.Load()
+		assert.GreaterOrEqual(t, deferred, int32(3),
+			"a startup pass deferred by indexing keeps asking without an edit to prompt it")
+
+		runner.setErr(nil)
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, deferred+1, runner.passes.Load(), "the pass runs once the index finishes")
+		time.Sleep(30 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, deferred+1, runner.passes.Load(), "a synced pass stops the retries")
 	})
+}
 
-	require.Eventually(t, func() bool { return runner.passes.Load() >= 3 }, 2*time.Second, 5*time.Millisecond,
-		"a startup pass deferred by indexing keeps asking without an edit to prompt it")
+// TestOfferLibraryHint pins that the wait loop is never held up by Library
+// sync: a hint that finds the channel full is dropped, not waited on.
+func TestOfferLibraryHint(t *testing.T) {
+	t.Parallel()
+	hints := make(chan libraryHint, 1)
 
-	runner.setErr(nil)
-	require.Eventually(t, func() bool { return runner.passes.Load() >= 4 }, 2*time.Second, 5*time.Millisecond)
-	settled := runner.passes.Load()
-	time.Sleep(100 * time.Millisecond)
-	assert.LessOrEqual(t, runner.passes.Load(), settled+1, "a synced pass stops the retries")
+	offerLibraryHint(hints, []string{"state"}, 3)
+	offerLibraryHint(hints, []string{"decks"}, 4)
+
+	require.Len(t, hints, 1)
+	got := <-hints
+	assert.Equal(t, []string{"state"}, got.kinds)
+	assert.Equal(t, int64(3), got.revision)
 }

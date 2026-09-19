@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -117,6 +118,8 @@ func startLibrarySyncScheduler(
 	requests := make(chan struct{}, 1)
 	stateRequests := make(chan struct{}, 1)
 	accessRequests := make(chan struct{}, 1)
+	hints := make(chan libraryHint, 16)
+	var pipe atomic.Bool
 	st.SetLibrarySyncSignals(state.LibrarySyncSignals{
 		SettingChanged: func() {
 			signalLibrarySync(requests)
@@ -129,6 +132,8 @@ func startLibrarySyncScheduler(
 		// background when the last pull is stale and refreshes the open
 		// playlist in place if the deck changed.
 		RefreshDeck: func(context.Context, string) { signalLibrarySync(accessRequests) },
+		Hint:        func(kinds []string, revision int64) { offerLibraryHint(hints, kinds, revision) },
+		PipeState:   pipe.Store,
 	})
 	indexing, subID := notifBroker.Subscribe(32, models.NotificationMediaIndexing)
 	wg.Add(2)
@@ -139,11 +144,25 @@ func startLibrarySyncScheduler(
 	}()
 	go func() {
 		defer wg.Done()
-		// The wait pipe that delivers change hints is not built yet, so the
-		// loop always runs on the shorter timer.
-		libraryStateLoop(ctx, svc, stateRequests, accessRequests, func() bool { return false },
-			&defaultLibraryStateTimings)
+		libraryStateLoop(ctx, svc, stateRequests, accessRequests, hints, pipe.Load, &defaultLibraryStateTimings)
 	}()
+}
+
+// libraryHint is a change hint from the account: which kinds of library
+// data moved and the revision of the write.
+type libraryHint struct {
+	kinds    []string
+	revision int64
+}
+
+// offerLibraryHint hands a change hint to the state loop without waiting
+// for it. Hints are best effort: one that finds the channel full is covered
+// by the timer.
+func offerLibraryHint(hints chan<- libraryHint, kinds []string, revision int64) {
+	select {
+	case hints <- libraryHint{kinds: kinds, revision: revision}:
+	default:
+	}
 }
 
 func signalLibrarySync(requests chan<- struct{}) {
@@ -181,6 +200,7 @@ type libraryStateRunner interface {
 	SyncState(ctx context.Context) (librarysync.StateResult, error)
 	SyncDecks(ctx context.Context) (librarysync.DecksResult, error)
 	PullDecksIfStale(ctx context.Context) error
+	HintNeedsPull(kind string, revision int64) bool
 }
 
 // passError reports the outcome of one pass over both halves. A real failure
@@ -206,12 +226,14 @@ func passError(stateErr, decksErr error) error {
 // debounce; otherwise a pass runs after startup and on a timer whose length
 // depends on whether change hints arrive over the wait pipe. A client
 // looking at decks, or a deck opening, pulls them when the last pull is
-// stale.
+// stale. A change hint from the account that names a write not pulled yet
+// runs a pass the same way an edit does.
 func libraryStateLoop(
 	ctx context.Context,
 	runner libraryStateRunner,
 	requests <-chan struct{},
 	accesses <-chan struct{},
+	hints <-chan libraryHint,
 	pipeConnected func() bool,
 	timings *libraryStateTimings,
 ) {
@@ -259,6 +281,14 @@ func libraryStateLoop(
 		case <-requests:
 			pending = true
 			debounce.Reset(timings.debounce)
+		case hint := <-hints:
+			for _, kind := range hint.kinds {
+				if runner.HintNeedsPull(kind, hint.revision) {
+					pending = true
+					debounce.Reset(timings.debounce)
+					break
+				}
+			}
 		case <-accesses:
 			if err := runner.PullDecksIfStale(ctx); err != nil && !librarysync.IsIdleError(err) {
 				log.Debug().Err(err).Msg("decks not pulled for a client")

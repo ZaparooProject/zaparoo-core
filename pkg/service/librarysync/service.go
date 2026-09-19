@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -141,6 +142,36 @@ func New(opts *Options) *Service {
 // can skip work that only exists to serve it.
 func (s *Service) Enabled() bool {
 	return s.cfg.LibrarySyncEnabled()
+}
+
+// Kinds of library data a change hint from the account can name.
+const (
+	HintKindState = "state"
+	HintKindDecks = "decks"
+)
+
+// HintNeedsPull reports whether a change hint names a write this device has
+// not pulled yet. A hint at or below the pull cursor for its kind is an echo
+// of something already seen; an unknown kind is always worth a pass.
+func (s *Service) HintNeedsPull(kind string, revision int64) bool {
+	var key string
+	switch kind {
+	case HintKindState:
+		key = DeviceStateKeyStateSince
+	case HintKindDecks:
+		key = DeviceStateKeyDecksSince
+	default:
+		return true
+	}
+	raw, found, err := s.db.UserDB.GetDeviceState(key)
+	if err != nil || !found {
+		return true
+	}
+	since, parseErr := strconv.ParseInt(raw, 10, 64)
+	if parseErr != nil {
+		return true
+	}
+	return revision <= 0 || revision > since
 }
 
 func (s *Service) client() (*backup.OnlineClient, error) {
