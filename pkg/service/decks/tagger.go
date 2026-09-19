@@ -200,7 +200,7 @@ func (t *Tagger) Run(ctx context.Context) {
 func (t *Tagger) Drain(ctx context.Context) (failed bool) {
 	skip := make(map[string]struct{})
 	for ctx.Err() == nil {
-		if !t.waitForMediaWrites(ctx) {
+		if !database.WaitForLongMediaWrites(ctx, t.deps.MediaDB, t.busyPoll) {
 			return len(skip) > 0
 		}
 		if err := t.expandAll(ctx); err != nil {
@@ -284,29 +284,6 @@ func (t *Tagger) expandAll(ctx context.Context) error {
 	}
 	t.saveLocked()
 	return nil
-}
-
-// waitForMediaWrites blocks while a long-running job owns the media database,
-// and reports false if ctx ended first. Scraping is not waited for: it can
-// run for hours and commits in short transactions.
-func (t *Tagger) waitForMediaWrites(ctx context.Context) bool {
-	coordinator, err := database.GetMediaDBWriteCoordinator(t.deps.MediaDB)
-	if err != nil {
-		return ctx.Err() == nil
-	}
-	for {
-		switch coordinator.ActiveMediaWriteOperation() {
-		case database.MediaWriteOperationIndexing, database.MediaWriteOperationOptimization,
-			database.MediaWriteOperationRecovery, database.MediaWriteOperationMaintenance:
-		default:
-			return ctx.Err() == nil
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(t.busyPoll):
-		}
-	}
 }
 
 // deckIDsToTag lists every stored deck, then every deck that still has tags

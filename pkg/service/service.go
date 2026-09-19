@@ -480,6 +480,8 @@ func startService(
 		})
 	})
 	db.DeckTags = deckTagger
+	mediaUserReconcile := newMediaUserReconciler(db)
+	db.MediaUserData = mediaUserReconcile
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
@@ -789,6 +791,11 @@ func startService(
 	go func() {
 		defer backgroundWG.Done()
 		deckTagger.Run(st.GetContext())
+	}()
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		mediaUserReconcile.Run(st.GetContext())
 	}()
 	backgroundWG.Add(1)
 	go func() {
