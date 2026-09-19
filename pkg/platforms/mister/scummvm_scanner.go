@@ -181,12 +181,13 @@ func scanScummVMGames(
 	}
 
 	// Build virtual paths for each game
-	for _, game := range games {
+	sources := scummVMMetadataSources(games)
+	for i, game := range games {
 		virtualPath := virtualpath.CreateVirtualPath(shared.SchemeScummVM, game.TargetID, game.Description)
 		results = append(results, platforms.ScanResult{
 			Path:   virtualPath,
 			Name:   game.Description,
-			Source: scummVMMetadataSource(game),
+			Source: sources[i],
 			NoExt:  true, // Virtual paths have no extension
 		})
 	}
