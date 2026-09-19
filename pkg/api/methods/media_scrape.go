@@ -21,8 +21,10 @@ package methods
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,6 +36,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -429,6 +433,74 @@ func scrapingStatusFromUpdate(
 	return status
 }
 
+// maxReportedScrapeSourceErrors bounds how many unreadable files one inbox
+// message names; the rest are summarised as a count.
+const maxReportedScrapeSourceErrors = 5
+
+// scrapeSourceErrors gathers the metadata files a scrape job found but could
+// not load. They do not fail the job, so without this the run reports
+// "completed" with nothing imported and no reason the user can see.
+type scrapeSourceErrors struct {
+	seen  map[string]struct{}
+	lines []string
+	extra int
+}
+
+func (c *scrapeSourceErrors) add(err error) {
+	var sourceErr *scraper.SourceError
+	if !errors.As(err, &sourceErr) {
+		return
+	}
+	if _, dup := c.seen[sourceErr.Path]; dup {
+		return
+	}
+	if c.seen == nil {
+		c.seen = make(map[string]struct{})
+	}
+	c.seen[sourceErr.Path] = struct{}{}
+	if len(c.lines) >= maxReportedScrapeSourceErrors {
+		c.extra++
+		return
+	}
+	c.lines = append(c.lines, sourceErr.Path+": "+scrapeSourceErrorReason(sourceErr.Err))
+}
+
+func (c *scrapeSourceErrors) report(inbox *inboxservice.Service) {
+	if len(c.lines) == 0 || inbox == nil {
+		return
+	}
+	body := "These metadata files were found but could not be read, so nothing was imported from them:\n" +
+		strings.Join(c.lines, "\n")
+	if c.extra > 0 {
+		body += fmt.Sprintf("\n…and %d more.", c.extra)
+	}
+	if err := inbox.Add("Some metadata files could not be read",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityWarning),
+		inboxservice.WithCategory(inboxservice.CategoryScrapeSourceUnreadable),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about unreadable metadata files")
+	}
+}
+
+// scrapeSourceErrorReason gives the limits a user can act on a plain wording
+// and leaves anything else as the parser reported it.
+func scrapeSourceErrorReason(err error) string {
+	var syntaxErr *xml.SyntaxError
+	var tooLargeErr *esapi.GameListTooLargeError
+	switch {
+	case errors.As(err, &syntaxErr):
+		return fmt.Sprintf("invalid XML on line %d (%s)", syntaxErr.Line, syntaxErr.Msg)
+	case errors.As(err, &tooLargeErr):
+		// The limit differs by platform, so the error names the one that applied.
+		return tooLargeErr.Error()
+	case errors.Is(err, esapi.ErrGameListTooManyItems):
+		return fmt.Sprintf("file has more than %d entries", esapi.MaxGameListEntries)
+	default:
+		return err.Error()
+	}
+}
+
 func PublishScrapePauseStatus(ns chan<- models.Notification, paused, throttled bool) {
 	status := scrapingStatusInstance.getLatest()
 	status.Scraping = true
@@ -651,10 +723,12 @@ func startMediaScrapeOperation(
 		for {
 			finalStatus := mediadb.IndexingStatusCompleted
 			var receivedDone bool
+			var sourceErrs scrapeSourceErrors
 			for update := range ch {
 				if update.Done {
 					receivedDone = true
 				}
+				sourceErrs.add(update.Err)
 				paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 				throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
 				status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused, throttled)
@@ -678,6 +752,7 @@ func startMediaScrapeOperation(
 					finalStatus = mediadb.IndexingStatusPending
 				}
 			}
+			sourceErrs.report(env.State.Inbox())
 			// Scrape writes commit incrementally, so changed artwork must be
 			// invalidated on every terminal outcome, including failure/cancellation.
 			mediaImageNoImages.clear()

@@ -97,7 +97,28 @@ type GamelistXMLScraper struct {
 	cfg                *config.Instance
 	scope              *database.ScrapeScope
 	externalAssetRoots []string
+	maxGamelistBytes   int64
 	matchArcadeSets    bool
+}
+
+// maxGamelistFileBytes is the size limit for one gamelist.xml on this
+// platform. A zero field means the limit was not resolved from a platform, so
+// the default applies.
+func (g *GamelistXMLScraper) maxGamelistFileBytes() int64 {
+	if g.maxGamelistBytes <= 0 {
+		return esapi.MaxGameListXMLSize
+	}
+	return g.maxGamelistBytes
+}
+
+// maxGamelistBytesForPlatform keeps memory-constrained platforms on the
+// smaller limit. Their scrape holds every decoded entry for the run, so a list
+// sized for a desktop would cost more memory than the device has.
+func maxGamelistBytesForPlatform(pl platforms.Platform) int64 {
+	if pl != nil && pl.Settings().ResourceConstrained {
+		return esapi.MaxGameListXMLSizeConstrained
+	}
+	return esapi.MaxGameListXMLSize
 }
 
 type companionStats struct {
@@ -236,6 +257,7 @@ func NewPlatformScraper() platforms.Scraper {
 				cfg:                cfg,
 				scope:              opts.Scope,
 				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
+				maxGamelistBytes:   maxGamelistBytesForPlatform(pl),
 				matchArcadeSets:    arcadeSetMatchingEnabled(pl),
 			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
@@ -431,6 +453,8 @@ type parsedGamelistFile struct {
 
 type parsedGamelistSystem struct {
 	Files []parsedGamelistFile
+	// SourceErrors holds gamelist files that exist but could not be loaded.
+	SourceErrors []*scraper.SourceError
 }
 
 func (g *GamelistXMLScraper) loadParsedGamelistSystem(
@@ -447,13 +471,19 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 
 		gamelistPath := filepath.Join(rootPath, "gamelist.xml")
 		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
-		if statErr != nil || !exists {
+		if statErr != nil {
+			log.Warn().Err(statErr).Str("path", gamelistPath).Msg("gamelistxml: failed to stat gamelist.xml, skipping")
+			parsed.SourceErrors = append(parsed.SourceErrors, &scraper.SourceError{Path: gamelistPath, Err: statErr})
+			continue
+		}
+		if !exists {
 			continue
 		}
 
-		gl, err := esapi.ReadGameListXMLFS(g.filesystem(), gamelistPath)
+		gl, err := esapi.ReadGameListXMLLimitFS(g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
 		if err != nil {
 			log.Warn().Err(err).Str("path", gamelistPath).Msg("gamelistxml: failed to read gamelist.xml, skipping")
+			parsed.SourceErrors = append(parsed.SourceErrors, &scraper.SourceError{Path: gamelistPath, Err: err})
 			continue
 		}
 
@@ -461,6 +491,7 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			Str("path", gamelistPath).
 			Int("entries", len(gl.Games)).
 			Int("folder_entries", len(gl.Folders)).
+			Int("skipped_entries", gl.Skipped).
 			Msg("gamelistxml: loaded gamelist.xml")
 		parsed.Files = append(parsed.Files, parsedGamelistFile{
 			RootPath:     rootPath,
@@ -475,7 +506,11 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 		return parsed, ctx.Err()
 	default:
 	}
-	if customFile, ok := g.loadCustomGamelistFile(system); ok {
+	customFile, ok, customErr := g.loadCustomGamelistFile(system)
+	if customErr != nil {
+		parsed.SourceErrors = append(parsed.SourceErrors, customErr)
+	}
+	if ok {
 		parsed.Files = append(parsed.Files, customFile)
 	}
 	return parsed, nil
@@ -485,24 +520,31 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 // paths remain relative to the system's first ROM root, while asset paths are
 // relative to the bundle's system directory. Bundle image references are
 // treated as optional and only mapped when their files currently exist.
-func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem) (parsedGamelistFile, bool) {
+func (g *GamelistXMLScraper) loadCustomGamelistFile(
+	system scraper.ScrapeSystem,
+) (parsedGamelistFile, bool, *scraper.SourceError) {
 	customBase := g.cfg.ScraperGamelistXMLCustomPath()
 	if customBase == "" {
-		return parsedGamelistFile{}, false
+		return parsedGamelistFile{}, false, nil
 	}
 
 	customSystemDir := filepath.Join(customBase, system.ID)
 	gamelistPath := filepath.Join(customSystemDir, "gamelist.xml")
 	exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
-	if statErr != nil || !exists {
-		return parsedGamelistFile{}, false
+	if statErr != nil {
+		log.Warn().Err(statErr).Str("path", gamelistPath).
+			Msg("gamelistxml: failed to stat custom gamelist.xml, skipping")
+		return parsedGamelistFile{}, false, &scraper.SourceError{Path: gamelistPath, Err: statErr}
+	}
+	if !exists {
+		return parsedGamelistFile{}, false, nil
 	}
 
-	gl, err := esapi.ReadGameListXMLFS(g.filesystem(), gamelistPath)
+	gl, err := esapi.ReadGameListXMLLimitFS(g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
 	if err != nil {
 		log.Warn().Err(err).Str("path", gamelistPath).
 			Msg("gamelistxml: failed to read custom gamelist.xml, skipping")
-		return parsedGamelistFile{}, false
+		return parsedGamelistFile{}, false, &scraper.SourceError{Path: gamelistPath, Err: err}
 	}
 
 	rootPath := customSystemDir
@@ -513,6 +555,7 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem)
 		Str("path", gamelistPath).
 		Int("entries", len(gl.Games)).
 		Int("folder_entries", len(gl.Folders)).
+		Int("skipped_entries", gl.Skipped).
 		Msg("gamelistxml: loaded custom gamelist.xml")
 	return parsedGamelistFile{
 		RootPath:             rootPath,
@@ -521,7 +564,7 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem)
 		Games:                gl.Games,
 		Folders:              gl.Folders,
 		RequireExistingImage: true,
-	}, true
+	}, true, nil
 }
 
 // LoadRecords iterates gamelist.xml files found under each ROM root path for
@@ -1104,6 +1147,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: parseErr, Done: true})
 			return
+		}
+		for _, sourceErr := range parsed.SourceErrors {
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Err: sourceErr})
 		}
 
 		var arcadeErr error

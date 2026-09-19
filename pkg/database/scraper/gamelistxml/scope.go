@@ -62,6 +62,9 @@ func (g *GamelistXMLScraper) scrapeScoped(
 			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 			return
 		}
+		for _, sourceErr := range parsed.SourceErrors {
+			ch <- scraper.ScrapeUpdate{SystemID: system.ID, Err: sourceErr}
+		}
 		targets = append(targets, g.scopedCompanionTargets(ctx, opts, system, indexes, parsed)...)
 		records, err := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
 		if err != nil {

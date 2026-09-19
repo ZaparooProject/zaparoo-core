@@ -22,8 +22,11 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +38,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -1668,6 +1673,159 @@ func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)
 	mockDB.AssertExpectations(t)
+}
+
+// TestHandleMediaScrape_ReportsUnreadableSources covers issue #1502: a source
+// file the scraper found but could not load must not end as a bare "completed".
+// The run still completes, and the user gets one inbox warning naming the file.
+func TestHandleMediaScrape_ReportsUnreadableSources(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	for _, tc := range []struct {
+		name     string
+		updates  []scraper.ScrapeUpdate
+		wantBody []string
+		wantAdds int
+	}{
+		{
+			name: "source errors",
+			updates: []scraper.ScrapeUpdate{
+				{SystemID: "C64", Err: &scraper.SourceError{
+					Path: "/games/C64/gamelist.xml",
+					Err: fmt.Errorf("read: %w",
+						&esapi.GameListTooLargeError{Limit: esapi.MaxGameListXMLSizeConstrained}),
+				}},
+				{SystemID: "C64", Err: &scraper.SourceError{
+					Path: "/games/C64/gamelist.xml", Err: esapi.ErrGameListTooLarge,
+				}},
+				{SystemID: "NES", Err: &scraper.SourceError{
+					Path: "/games/NES/gamelist.xml", Err: errors.New("denied"),
+				}},
+				{SystemID: "NES", Err: errors.New("one write failed")},
+			},
+			wantAdds: 1,
+			wantBody: []string{
+				"/games/C64/gamelist.xml: file is larger than the 16 MB limit",
+				"/games/NES/gamelist.xml: denied",
+			},
+		},
+		{
+			name:    "ordinary errors only",
+			updates: []scraper.ScrapeUpdate{{SystemID: "NES", Err: errors.New("one write failed")}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ClearScrapingStatus()
+			statusInstance.clear()
+
+			// The worker reports after the terminal notification, so the inbox is
+			// only settled once it has released its background operation.
+			workerDone := make(chan struct{})
+			mockDB := testhelpers.NewMockMediaDBI()
+			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(workerDone) }).Return()
+			mockDB.On("WALCheckpoint").Return(nil).Once()
+			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "source-scraper").Return(0, nil)
+
+			sourceScraper := platforms.Scraper{
+				ID:   "source-scraper",
+				Name: "Source Scraper",
+				Scrape: func(
+					_ context.Context, _ *config.Instance, _ platforms.Platform,
+					_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+					_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+				) error {
+					go func() {
+						defer close(ch)
+						for _, update := range tc.updates {
+							ch <- update
+						}
+						ch <- scraper.ScrapeUpdate{Done: true}
+					}()
+					return nil
+				},
+			}
+
+			pl := mocks.NewMockPlatform()
+			pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{"source-scraper": sourceScraper})
+			pl.SetupBasicMock()
+			st, ns := state.NewState(pl, "test")
+			t.Cleanup(st.StopService)
+
+			userDB := testhelpers.NewMockUserDBI()
+			var added []*database.InboxMessage
+			userDB.On("AddInboxMessage", assertmock.Anything).
+				Run(func(args assertmock.Arguments) {
+					msg, ok := args.Get(0).(*database.InboxMessage)
+					require.True(t, ok)
+					added = append(added, msg)
+				}).
+				Return(&database.InboxMessage{DBID: 1}, nil)
+			st.SetInbox(inboxservice.NewService(userDB, make(chan models.Notification, 8)))
+
+			_, err := HandleMediaScrape(requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: pl,
+				State:    st,
+				Database: &database.Database{MediaDB: mockDB},
+				Params:   json.RawMessage(`{"scraperId":"source-scraper"}`),
+			})
+			require.NoError(t, err)
+
+			var gotDone bool
+			timeout := time.After(2 * time.Second)
+			for !gotDone {
+				select {
+				case n := <-ns:
+					if n.Method != models.NotificationMediaScraping {
+						continue
+					}
+					var p models.ScrapingStatusResponse
+					require.NoError(t, json.Unmarshal(n.Params, &p))
+					if p.Done {
+						assert.Equal(t, "completed", p.State)
+						assert.Empty(t, p.Error)
+						gotDone = true
+					}
+				case <-timeout:
+					t.Fatal("timed out waiting for terminal media.scraping notification")
+				}
+			}
+			select {
+			case <-workerDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for the scrape worker to finish")
+			}
+
+			require.Len(t, added, tc.wantAdds)
+			if tc.wantAdds > 0 {
+				assert.Equal(t, inboxservice.CategoryScrapeSourceUnreadable, added[0].Category)
+				assert.Equal(t, inboxservice.SeverityWarning, added[0].Severity)
+				for _, want := range tc.wantBody {
+					assert.Contains(t, added[0].Body, want)
+				}
+				assert.NotContains(t, added[0].Body, "one write failed")
+				assert.Equal(t, 1, strings.Count(added[0].Body, "/games/C64/gamelist.xml"))
+			}
+		})
+	}
+}
+
+func TestScrapeSourceErrors_CapsListedFiles(t *testing.T) {
+	t.Parallel()
+
+	var sourceErrs scrapeSourceErrors
+	for i := range maxReportedScrapeSourceErrors + 3 {
+		sourceErrs.add(&scraper.SourceError{
+			Path: fmt.Sprintf("/games/S%d/gamelist.xml", i),
+			Err:  &xml.SyntaxError{Line: 7, Msg: "unexpected EOF"},
+		})
+	}
+	require.Len(t, sourceErrs.lines, maxReportedScrapeSourceErrors)
+	assert.Equal(t, 3, sourceErrs.extra)
+	assert.Equal(t, "/games/S0/gamelist.xml: invalid XML on line 7 (unexpected EOF)", sourceErrs.lines[0])
+	assert.Equal(t,
+		fmt.Sprintf("file has more than %d entries", esapi.MaxGameListEntries),
+		scrapeSourceErrorReason(esapi.ErrGameListTooManyItems))
 }
 
 func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
