@@ -366,6 +366,13 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	// Game with multiple variants but no release
 	addGame(insertedNES.DBID, "Ancient Ruins (Demo)", "/roms/nes/Ancient Ruins (Demo).nes", demoTag.DBID)
 	addGame(insertedNES.DBID, "Ancient Ruins (Beta)", "/roms/nes/Ancient Ruins (Beta).nes", betaTag.DBID)
+	// One prototype filed under two folders, beside a released game whose title
+	// is the start of the prototype's
+	addGame(insertedNES.DBID, "Mecha Cop (USA)", "/roms/nes/Mecha Cop (USA).nes", usaTag.DBID)
+	addGame(insertedNES.DBID, "Mecha Cop versus The Exterminator (USA) (Proto)",
+		"/roms/nes/Mecha Cop versus The Exterminator (USA) (Proto).nes", usaTag.DBID, protoTag.DBID)
+	addGame(insertedNES.DBID, "Mecha Cop versus The Exterminator (USA) (Proto)",
+		"/roms/nes/protos/m/Mecha Cop versus The Exterminator (USA) (Proto).nes", usaTag.DBID, protoTag.DBID)
 
 	// For progressive trim tests
 	// Trim-induced ambiguity: "Legend" matches multiple games after trimming
@@ -517,6 +524,10 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 		description           string
 		expectedMinConfidence float64
 		expectedError         bool
+		// assertLaunchedPath checks the path handed to the launcher. The cases
+		// share one database and its resolution cache, so only a case whose
+		// title no other case resolves can set it.
+		assertLaunchedPath bool
 	}{
 		// ============================================================
 		// EXACT MATCH STRATEGY
@@ -1462,11 +1473,20 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 				"(Fix #2: single results bypass variant exclusion)",
 		},
 		{
-			name:          "error_only_demo_and_beta_variants_exist",
-			input:         "NES/Ancient Ruins",
-			expectedError: true,
-			description: "Game with only demo and beta variants (no release) should fail when " +
-				"variants are excluded",
+			name:             "only_demo_and_beta_variants_exist",
+			input:            "NES/Ancient Ruins",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Game with only demo and beta variants (no release) resolves to one " +
+				"of them",
+		},
+		{
+			name:               "duplicate_proto_not_shorter_title",
+			input:              "NES/Mecha Cop versus The Exterminator",
+			expectedPath:       "/roms/nes/Mecha Cop versus The Exterminator (USA) (Proto).nes",
+			expectedStrategy:   titles.StrategyExactMatch,
+			assertLaunchedPath: true,
+			description: "A prototype with duplicate files resolves to itself, not to the " +
+				"released game its title starts with",
 		},
 
 		// ============================================================
@@ -1647,6 +1667,10 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 
 			// Verify LaunchMedia was called
 			mockPlatform.AssertExpectations(t)
+			if tt.assertLaunchedPath {
+				mockPlatform.AssertCalled(t, "LaunchMedia",
+					mock.Anything, tt.expectedPath, mock.Anything, mock.Anything, mock.Anything)
+			}
 
 			t.Logf("✓ %s: Strategy '%s' matched '%s'", tt.name, tt.expectedStrategy, tt.input)
 		})
