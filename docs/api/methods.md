@@ -520,6 +520,7 @@ None.
 | index   | number | Yes      | Zero-based current item index. |
 | total   | number | Yes      | Total item count. |
 | playing | boolean | Yes    | Whether playlist slot is playing. |
+| unsafe  | boolean | Yes    | Read-only. True when the playlist's items came from a source this device does not trust, such as a fetched ZapLink or a deck shared by someone else. Commands in those items that drive input or run programs will not run. Core versions that do not report this field do not restrict playlist items, so treat a missing value as `false`. |
 
 #### Example
 

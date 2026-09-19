@@ -777,6 +777,88 @@ func TestHandleMedia_PlaylistsIncludedInResponse(t *testing.T) {
 	assert.True(t, background.Playing)
 }
 
+// TestHandleMedia_PlaylistsReportUnsafe verifies that each slot reports its
+// own playlist's trust, that a trusted playlist still carries the field, and
+// that moving through an untrusted playlist does not change what is reported.
+func TestHandleMedia_PlaylistsReportUnsafe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		primaryUnsafe    bool
+		backgroundUnsafe bool
+	}{
+		{name: "untrusted primary, trusted background", primaryUnsafe: true},
+		{name: "trusted primary, untrusted background", backgroundUnsafe: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pl := mocks.NewMockPlatform()
+			pl.SetupBasicMock()
+			st, ns := state.NewState(pl, "test")
+			defer st.StopService()
+			drainNotifications(t, ns)
+
+			items := []playlists.PlaylistItem{
+				{Name: "Item A", ZapScript: "**launch:a.nes"},
+				{Name: "Item B", ZapScript: "**launch:b.nes"},
+			}
+			st.SetActivePlaylist(&playlists.Playlist{
+				ID: "primary-pl", Slot: mediaslot.Primary, Items: items, Unsafe: tt.primaryUnsafe,
+			})
+			st.SetBackgroundPlaylist(&playlists.Playlist{
+				ID: "bg-pl", Slot: mediaslot.Background, Items: items, Unsafe: tt.backgroundUnsafe,
+			})
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+			ClearIndexingStatus()
+
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				State:    st,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			unsafeBySlot := func() map[string]bool {
+				result, err := HandleMedia(env)
+				require.NoError(t, err)
+				raw, err := json.Marshal(result)
+				require.NoError(t, err)
+				var decoded struct {
+					Playlists []map[string]any `json:"playlists"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &decoded))
+				require.Len(t, decoded.Playlists, 2)
+				got := make(map[string]bool, len(decoded.Playlists))
+				for _, p := range decoded.Playlists {
+					slot, ok := p["slot"].(string)
+					require.True(t, ok)
+					unsafe, ok := p["unsafe"].(bool)
+					require.True(t, ok, "unsafe must be present for the %s playlist", slot)
+					got[slot] = unsafe
+				}
+				return got
+			}
+
+			want := map[string]bool{
+				mediaslot.Primary:    tt.primaryUnsafe,
+				mediaslot.Background: tt.backgroundUnsafe,
+			}
+			assert.Equal(t, want, unsafeBySlot())
+
+			st.SetActivePlaylist(playlists.Next(*st.GetActivePlaylist()))
+			st.SetBackgroundPlaylist(playlists.Play(*st.GetBackgroundPlaylist()))
+			assert.Equal(t, want, unsafeBySlot())
+		})
+	}
+}
+
 // TestHandleMedia_EmptyPlaylistsOmittedFromResponse verifies that the playlists
 // field is absent when no playlists are active.
 func TestHandleMedia_EmptyPlaylistsOmittedFromResponse(t *testing.T) {
