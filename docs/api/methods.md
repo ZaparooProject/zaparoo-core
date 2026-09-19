@@ -5626,7 +5626,9 @@ Direct platform input control for remote control use cases. These methods bypass
 
 The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character. Macros also support `{delay:duration}`, `{hold:key:duration}`, `{press:key}`, and `{release:key}`. Press and release have short forms `{_key}` and `{^key}`. Delay and explicit hold durations are limited to 30 seconds.
 
-Persistent `{press:key}` and `{release:key}` input is available only over supported WebSocket input sessions. A press remains held across requests from that WebSocket until its matching release. Each WebSocket owns its held keys and buttons; one connection cannot release another connection's input. Core releases all owned input when the WebSocket disconnects, input execution fails, or Core shuts down. HTTP JSON-RPC requests reject persistent press and release tokens because HTTP has no durable session lifecycle.
+Persistent `{press:key}` and `{release:key}` input is available only over supported WebSocket input sessions. A press remains held across requests from that WebSocket until its matching release.
+
+Press, release and hold accept a shifted character (`{press:M}`, `{press:!}`), which holds Shift together with the key, and a modifier combo (`{press:ctrl+c}`, `{press:shift+a}`). A release matches the press that names the same keys, so `{release:shift+m}` releases `{press:M}`. Keys are reference counted per WebSocket: a modifier stays down until the last held key that needs it is released. Each WebSocket owns its held keys and buttons; one connection cannot release another connection's input. Core releases all owned input when the WebSocket disconnects, input execution fails, or Core shuts down. HTTP JSON-RPC requests reject persistent press and release tokens because HTTP has no durable session lifecycle.
 
 Keys sent by a client that is neither localhost nor an admin are checked against the `allow` and `block` lists in the `[zapscript.input]` config section, the same lists the ZapScript input commands use. On desktop platforms a default block list rejects keys such as `{alt+f4}`, `{ctrl+alt+delete}` and the Linux TTY switches. Wrapping a key in a `{press:...}`, `{release:...}` or `{hold:...}` macro does not evade the lists. Setting `block = []` clears the defaults. Unlike the ZapScript path, the API does not apply the `mode` setting, so plain characters can always be typed by a client that holds `input`.
 
@@ -5648,7 +5650,7 @@ An object:
 
 | Key  | Type   | Required | Description                                                                                                                                          |
 | :--- | :----- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
-| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). WebSocket requests may use `{press:key}` and `{release:key}` to hold a key across requests. |
+| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). WebSocket requests may use `{press:key}` and `{release:key}` to hold a key, shifted character or modifier combo across requests. |
 
 #### Result
 

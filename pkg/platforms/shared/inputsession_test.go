@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,6 +119,230 @@ func TestInputSession_KeyboardIsolationUsesReferenceCounts(t *testing.T) {
 	assert.Equal(t, []keyEvent{
 		{kind: "down", code: 103},
 		{kind: "up", code: 103},
+	}, keyboard.events)
+}
+
+func pressKeys(t *testing.T, session platforms.InputSession, keys ...string) {
+	t.Helper()
+	require.NoError(t, session.KeyboardPressSequence(t.Context(), keys, 0))
+}
+
+func TestInputSession_ShiftedKeyHoldsShift(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:M}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 50},
+	}, keyboard.events)
+
+	pressKeys(t, session, "{release:M}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 50},
+		{kind: "up", code: 42},
+	}, keyboard.events[2:])
+}
+
+func TestInputSession_ShiftStaysDownWhileAnyHoldNeedsIt(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:M}", "{press:!}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 50},
+		{kind: "down", code: 2},
+	}, keyboard.events)
+
+	pressKeys(t, session, "{release:M}")
+	assert.Equal(t, []keyEvent{{kind: "up", code: 50}}, keyboard.events[3:],
+		"shift is still needed by the other held key")
+
+	pressKeys(t, session, "{release:!}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 2},
+		{kind: "up", code: 42},
+	}, keyboard.events[4:])
+}
+
+func TestInputSession_ExplicitShiftSurvivesShiftedKeyRelease(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:shift}", "{press:M}", "{release:M}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 50},
+		{kind: "up", code: 50},
+	}, keyboard.events)
+
+	pressKeys(t, session, "{release:shift}")
+	assert.Equal(t, keyEvent{kind: "up", code: 42}, keyboard.events[3])
+}
+
+func TestInputSession_ComboPressAndRelease(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:ctrl+c}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 46},
+	}, keyboard.events)
+
+	pressKeys(t, session, "{release:ctrl+c}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 46},
+		{kind: "up", code: 29},
+	}, keyboard.events[2:])
+}
+
+func TestInputSession_ShiftComboMatchesShiftedCharacter(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:A}", "{press:shift+a}")
+	assert.Len(t, keyboard.events, 2, "both tokens name the same hold")
+
+	pressKeys(t, session, "{release:shift+a}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 30},
+		{kind: "up", code: 30},
+		{kind: "up", code: 42},
+	}, keyboard.events)
+}
+
+func TestInputSession_RepeatedShiftedPressIsReleasedOnce(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:M}", "{press:M}", "{release:M}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 50},
+		{kind: "up", code: 50},
+		{kind: "up", code: 42},
+	}, keyboard.events)
+}
+
+func TestInputSession_UnshiftedReleaseLeavesShiftedHold(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:M}", "{release:m}")
+	assert.Len(t, keyboard.events, 2, "m was never held on its own")
+}
+
+func TestInputSession_ShiftedHoldSharedBetweenSessions(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	first := input.NewInputSession()
+	second := input.NewInputSession()
+
+	pressKeys(t, first, "{press:M}")
+	pressKeys(t, second, "{press:M}")
+	pressKeys(t, first, "{release:M}")
+	assert.Len(t, keyboard.events, 2, "second session still holds both keys")
+
+	pressKeys(t, second, "{release:M}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 50},
+		{kind: "up", code: 42},
+	}, keyboard.events[2:])
+}
+
+func TestInputSession_FailedHoldRollsBackItsModifier(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	keyboard.failOnCode = 50
+	session, ok := input.NewInputSession().(*inputSession)
+	require.True(t, ok)
+
+	input.inputMu.Lock()
+	err := input.sessionKeyboardDownLocked(session, []int{42, 50})
+	sessions := len(input.inputSessions)
+	input.inputMu.Unlock()
+
+	require.Error(t, err)
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "up", code: 42},
+	}, keyboard.events)
+	assert.Zero(t, sessions)
+}
+
+func TestInputSession_FailedRollbackKeepsSharedModifierForOtherHold(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:!}")
+	keyboard.failOnCode = 50
+	keyboard.failOnce = true
+	require.Error(t, session.KeyboardPressSequence(t.Context(), []string{"{press:M}"}, 0))
+
+	assert.ElementsMatch(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 2},
+		{kind: "up", code: 2},
+		{kind: "up", code: 42},
+	}, keyboard.events, "a failed request releases everything the session holds, once")
+}
+
+func TestInputSession_ReleaseAllReleasesShiftedHolds(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:M}", "{press:!}", "{press:ctrl+c}")
+	require.NoError(t, session.ReleaseAll())
+
+	assert.Len(t, keyboard.events, 10)
+	assert.ElementsMatch(t, []keyEvent{
+		{kind: "up", code: 42},
+		{kind: "up", code: 50},
+		{kind: "up", code: 2},
+		{kind: "up", code: 29},
+		{kind: "up", code: 46},
+	}, keyboard.events[5:])
+}
+
+func TestInputSession_FailedShiftReleaseIsRetried(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+	pressKeys(t, session, "{press:M}")
+	keyboard.failUpOnCode = 42
+	keyboard.failUpOnce = true
+
+	require.Error(t, session.ReleaseAll())
+	require.NoError(t, session.ReleaseAll())
+	assert.ElementsMatch(t, []keyEvent{
+		{kind: "down", code: 42},
+		{kind: "down", code: 50},
+		{kind: "up", code: 50},
+		{kind: "up", code: 42},
 	}, keyboard.events)
 }
 
