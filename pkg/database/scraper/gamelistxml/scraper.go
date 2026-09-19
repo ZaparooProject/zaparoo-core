@@ -590,6 +590,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
 	var containerPathResolutions, folderEntries, folderMatches, folderUnmatched int
 	var arcadeSetsUnresolved, arcadeSetsSuperseded int
+	var parentEntries []parentEntry
 
 outer:
 	for _, file := range parsed.Files {
@@ -620,8 +621,15 @@ outer:
 			}
 
 			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
+			holdsSources := sourceRecords.hasChildren(resolved)
+			if holdsSources {
+				parentEntries = append(parentEntries, parentEntry{file: &file, directory: resolved, game: *game})
+			}
 			if record := g.matchSourceRecord(indexes, sourceRecords, &file, game, resolved); record != nil {
 				records = append(records, record)
+				continue
+			}
+			if holdsSources {
 				continue
 			}
 			var pathMedia database.Media
@@ -794,8 +802,15 @@ outer:
 				continue
 			}
 			game := folderAsGame(folder)
+			holdsSources := sourceRecords.hasChildren(resolved)
+			if holdsSources {
+				parentEntries = append(parentEntries, parentEntry{file: &file, directory: resolved, game: game})
+			}
 			if record := g.matchSourceRecord(indexes, sourceRecords, &file, &game, resolved); record != nil {
 				records = append(records, record)
+				continue
+			}
+			if holdsSources {
 				continue
 			}
 			folderMedia, matchedPathKey, ok := containerMediaForDir(indexes, resolved)
@@ -819,6 +834,10 @@ outer:
 			})
 			delete(indexes.MediaByPathFold, matchedPathKey)
 		}
+	}
+
+	if len(parentEntries) > 0 {
+		records = append(records, sourceRecords.inherit(indexes, parentEntries)...)
 	}
 
 	// Identity fallbacks are resolved last so an entry that named the row by

@@ -94,6 +94,16 @@ func (g *GamelistXMLScraper) matchSourceRecord(
 	if !ok {
 		return nil
 	}
+	return sourceRecords.claim(indexes, file, game, &source, source.SourcePath)
+}
+
+// claim builds the record for a source-matched entry and takes its media row
+// out of the path index. directory names the folder the entry describes, which
+// is what any artwork stored beside the gamelist is named after.
+func (r *sourceRecordIndex) claim(
+	indexes loadRecordIndexes, file *parsedGamelistFile, game *esapi.Game,
+	source *database.MediaSource, directory string,
+) *GamelistRecord {
 	key := pathFoldKey(source.MediaPath)
 	media, exists := indexes.MediaByPathFold[key]
 	if !exists || media.DBID != source.MediaDBID {
@@ -101,14 +111,43 @@ func (g *GamelistXMLScraper) matchSourceRecord(
 	}
 	delete(indexes.MediaByPathFold, key)
 
-	dirs := []map[string]string{sourceRecords.dirs[source.SourceRoot]}
+	dirs := []map[string]string{r.dirs[source.SourceRoot]}
 	if file.AssetRootPath != "" {
-		dirs = append([]map[string]string{sourceRecords.dirs[file.AssetRootPath]}, dirs...)
+		dirs = append([]map[string]string{r.dirs[file.AssetRootPath]}, dirs...)
 	}
 	return &GamelistRecord{
 		Game: *game, SystemRootPath: file.RootPath, ROMRootPath: source.SourceRoot,
-		AssetRootPath: file.AssetRootPath, SourceDirectory: source.SourcePath, MediaDirsByRoot: dirs,
+		AssetRootPath: file.AssetRootPath, SourceDirectory: directory, MediaDirsByRoot: dirs,
 		MatchKind: gamelistMatchSource, MatchedTitleDBID: media.MediaTitleDBID, MatchedMediaDBID: media.DBID,
 		MediaLevelWriteSafe: true, RequireExistingImage: file.RequireExistingImage,
 	}
+}
+
+// parentEntry is a gamelist entry describing a folder that holds source
+// directories rather than being one, such as a game folder with one configured
+// target per language or platform subfolder.
+type parentEntry struct {
+	file      *parsedGamelistFile
+	directory string
+	game      esapi.Game
+}
+
+func (r *sourceRecordIndex) hasChildren(resolved string) bool {
+	return r != nil && resolved != "" && len(r.sources.UnderParent(resolved)) > 0
+}
+
+// inherit gives each folder entry to the sources inside it that no entry named
+// directly. It runs after every file is matched so a variant's own entry wins
+// whatever the XML order.
+func (r *sourceRecordIndex) inherit(indexes loadRecordIndexes, entries []parentEntry) []*GamelistRecord {
+	var records []*GamelistRecord
+	for i := range entries {
+		entry := &entries[i]
+		for _, source := range r.sources.UnderParent(entry.directory) {
+			if record := r.claim(indexes, entry.file, &entry.game, &source, entry.directory); record != nil {
+				records = append(records, record)
+			}
+		}
+	}
+	return records
 }
