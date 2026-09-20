@@ -63,7 +63,12 @@ func (g *GamelistXMLScraper) scrapeScoped(
 			return
 		}
 		for _, sourceErr := range parsed.SourceErrors {
-			ch <- scraper.ScrapeUpdate{SystemID: system.ID, Err: sourceErr}
+			// Carry the run's totals: a status published with them zeroed
+			// resets the progress the caller is already showing.
+			ch <- scraper.ScrapeUpdate{
+				SystemID: system.ID, Err: sourceErr,
+				Total: len(selection.Media), TotalSteps: 1, CurrentStep: 1,
+			}
 		}
 		targets = append(targets, g.scopedCompanionTargets(ctx, opts, system, indexes, parsed)...)
 		records, err := g.loadRecordsFromParsed(ctx, system, indexes, parsed)

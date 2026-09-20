@@ -21,6 +21,7 @@ package gamelistxml
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -110,4 +112,63 @@ func TestScrapeScopedGamelist(t *testing.T) {
 			mdb.AssertExpectations(t)
 		})
 	}
+}
+
+// TestScrapeScopedGamelist_UnreadableRootKeepsProgress covers a scoped scrape
+// where one of the system's roots holds a gamelist that cannot be read. The
+// failure has to reach the caller, the readable root still has to import, and
+// the update carrying the failure must not publish the run's totals as zero:
+// a scoped scrape is a single system, so a zeroed status resets the progress
+// the caller is already showing.
+func TestScrapeScopedGamelist_UnreadableRootKeepsProgress(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	brokenRoot := t.TempDir()
+	goodRoot := t.TempDir()
+	require.NoError(t, afero.WriteFile(fs,
+		filepath.Join(brokenRoot, "gamelist.xml"), []byte("<html><body>404</body></html>"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(goodRoot, "gamelist.xml"), []byte(
+		`<gameList><game><path>./Game.nes</path><name>Game</name><desc>selected</desc></game></gameList>`,
+	), 0o600))
+
+	path := filepath.ToSlash(filepath.Join(goodRoot, "Game.nes"))
+	scope := &database.ScrapeScope{SystemID: "NES", Path: path, MediaID: 1}
+	mdb := helpers.NewMockMediaDBI()
+	mdb.On("GetScrapeMedia", mock.Anything, *scope).Return([]database.MediaFullRow{{
+		Media:  database.Media{DBID: 1, MediaTitleDBID: 10, Path: path},
+		Title:  database.MediaTitle{DBID: 10, SystemDBID: 100, Name: "Game", Slug: "game"},
+		System: database.System{DBID: 100, SystemID: "NES"},
+	}}, nil).Once()
+	mdb.On("GetScopedScrapeMediaIDs", mock.Anything, *scope, "gamelist.xml", "").
+		Return(map[int64]struct{}{}, nil).Once()
+	mdb.On("FindSingleContainerLaunchMediaBySystemID", mock.Anything, "NES", mock.Anything).
+		Return(nil, nil).Once()
+	mdb.On("ApplyScrapeResult", mock.Anything, int64(1), int64(10), mock.Anything).Return(nil).Once()
+
+	g := &GamelistXMLScraper{db: mdb, fs: fs}
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	systems := []scraper.ScrapeSystem{{ID: "NES", DBID: 100, ROMPaths: []string{brokenRoot, goodRoot}}}
+	g.scrapeLoop(context.Background(),
+		scraper.ScrapeOptions{Scope: scope}, systems, mdb, ch)
+
+	var sourceUpdates []scraper.ScrapeUpdate
+	var final scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+		var sourceErr *scraper.SourceError
+		if errors.As(update.Err, &sourceErr) {
+			assert.Equal(t, filepath.Join(brokenRoot, "gamelist.xml"), sourceErr.Path)
+			sourceUpdates = append(sourceUpdates, update)
+		}
+		final = update
+	}
+
+	require.Len(t, sourceUpdates, 1)
+	assert.Equal(t, 1, sourceUpdates[0].Total, "the failure update must carry the run's total")
+	assert.Equal(t, 1, sourceUpdates[0].TotalSteps)
+	assert.Equal(t, 1, sourceUpdates[0].CurrentStep)
+	require.True(t, final.Done)
+	assert.Equal(t, 1, final.Matched)
+	mdb.AssertExpectations(t)
 }
