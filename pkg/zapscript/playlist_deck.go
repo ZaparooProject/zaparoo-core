@@ -106,10 +106,13 @@ func loadDeckPlaylist(
 
 	pls := playlists.NewPlaylist(decks.PlaylistID(deck), deck.Name, items)
 	pls.DeckID = deck.DeckID
-	// Only the user's own decks are trusted. A cached copy of somebody
-	// else's deck runs its items the way its ZapLink would, whatever script
-	// opened it.
-	pls.Unsafe = !deck.Owned
+	// Only the user's own decks are trusted, and only when whatever asked for
+	// this one was trusted too. A cached copy of somebody else's deck runs its
+	// items the way its ZapLink would, whatever script opened it; owning the
+	// deck never restores trust an untrusted script had already lost, or an
+	// item of somebody else's playlist could name a deck ID and have the
+	// user's own input and program commands run for it.
+	pls.Unsafe = !deck.Owned || env.Unsafe
 	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 	if slotErr != nil {
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)

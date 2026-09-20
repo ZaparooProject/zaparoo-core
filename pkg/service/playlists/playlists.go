@@ -57,10 +57,13 @@ type Playlist struct {
 	// same ID in place, keeping its position and playback state and never
 	// launching anything. It is ignored when no such playlist is active.
 	Refresh bool
-	// Unsafe marks a playlist whose items came from a source this device
-	// does not trust: a fetched ZapLink, or a cached copy of somebody else's
-	// deck. Every item token carries it, so commands that drive input or run
-	// programs refuse, the same as the script that opened the playlist.
+	// Unsafe is the playlist's effective trust. It is set either because the
+	// items came from a source this device does not trust — a fetched
+	// ZapLink, or a cached copy of somebody else's deck — or because the
+	// script that opened it was already untrusted, which even the user's own
+	// deck inherits. Every item token carries it, so commands that drive
+	// input or run programs refuse, the same as the script that opened the
+	// playlist.
 	Unsafe bool
 }
 

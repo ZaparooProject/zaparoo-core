@@ -114,6 +114,26 @@ func TestCmdPlaylistLoad_NotOwnedDeckIsUntrusted(t *testing.T) {
 	assert.True(t, pls.Unsafe, "a cached copy of somebody else's deck runs its items untrusted")
 }
 
+// TestCmdPlaylistLoad_OwnedDeckKeepsAnUntrustedCallerUntrusted pins that
+// owning a deck does not hand trust back to a script that had already lost
+// it. An item of somebody else's playlist runs untrusted, so a deck URI in
+// one must not open the user's own deck with input and program rights.
+func TestCmdPlaylistLoad_OwnedDeckKeepsAnUntrustedCallerUntrusted(t *testing.T) {
+	t.Parallel()
+	env, db, queue := deckTestEnv(t, "deck://0123456789ab")
+	env.Unsafe = true
+	require.NoError(t, db.UserDB.CreateDeck(&database.Deck{
+		DeckID: "0123456789ab", Name: "Mine", Owned: true,
+		Items: []database.DeckItem{{Kind: database.DeckItemKindScript, Name: "A", ZapScript: "**input.keyboard:a"}},
+	}))
+
+	_, err := cmdPlaylistLoad(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	pls := <-queue
+	assert.Equal(t, "0123456789ab", pls.DeckID, "the owned deck is still the one that opens")
+	assert.True(t, pls.Unsafe, "an untrusted script opening an owned deck does not make it trusted")
+}
+
 func TestCmdPlaylistLoad_DeckNotFound(t *testing.T) {
 	t.Parallel()
 	env, _, _ := deckTestEnv(t, "deck://0123456789ab")
