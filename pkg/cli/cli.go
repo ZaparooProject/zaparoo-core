@@ -168,6 +168,10 @@ func isFlagPassed(name string) bool {
 // Pre runs flag parsing and actions any immediate flags that don't
 // require environment setup. Add any custom flags before running this.
 func (f *Flags) Pre(pl platforms.Platform) {
+	// Before flag.Parse, so that its own usage errors land somewhere a user can
+	// read them too. No-op everywhere but Windows.
+	attachConsole()
+
 	flag.Parse()
 
 	if *f.Version {
