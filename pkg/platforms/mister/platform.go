@@ -1902,11 +1902,14 @@ func (*Platform) ManagedByPackageManager() bool {
 	return hasTapto || hasAll
 }
 
-func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	docs := misterdocs.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, docs.ID: docs}
+	arcade := NewArcadeScraper(p, ArcadeSystemIDs())
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade,
+	}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

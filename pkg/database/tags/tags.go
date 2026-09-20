@@ -264,8 +264,8 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Buttons - number of in-game action buttons
 		// Note: pneumatic = air-pressure activated button (arcade boxing games)
 		TagInputButtons1, TagInputButtons2, TagInputButtons3, TagInputButtons4, TagInputButtons5, TagInputButtons6,
-		TagInputButtons7, TagInputButtons8, TagInputButtons11, TagInputButtons12, TagInputButtons19, TagInputButtons23,
-		TagInputButtons27, TagInputButtonsPneumatic,
+		TagInputButtons7, TagInputButtons8, TagInputButtons11, TagInputButtons12, TagInputButtons19, TagInputButtons20,
+		TagInputButtons23, TagInputButtons27, TagInputButtonsPneumatic,
 
 		// Pedals - foot controls
 		TagInputPedals1, TagInputPedals2,
@@ -286,10 +286,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPlayers7, TagPlayers8, TagPlayers9, TagPlayers10, TagPlayers12,
 
 		// Player modes
-		TagPlayersMMO,  // Massively multiplayer online
-		TagPlayersVS,   // Versus/competitive
-		TagPlayersCoop, // Cooperative
-		TagPlayersAlt,  // Alternating turns
+		TagPlayersMMO,          // Massively multiplayer online
+		TagPlayersVS,           // Versus/competitive
+		TagPlayersCoop,         // Cooperative
+		TagPlayersAlt,          // Alternating turns
+		TagPlayersSimultaneous, // Simultaneous play
 	},
 
 	TagTypeGameGenre: {
@@ -700,6 +701,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSearchKeywordEndorsed, // Endorsed by public figure
 		TagSearchKeywordBrand,    // Branded by company/product
 		TagSearchKeywordUbikey,   // Ubikey protection
+		TagSearchKeywordFlip,     // Cabinet screen-flip support
 	},
 	TagTypeMultigame: {
 		TagMultigameCompilation, // Compilation of multiple games in one title
@@ -908,6 +910,9 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 		// PC graphics standards
 		TagVideoCGA, TagVideoEGA, TagVideoHGC, TagVideoMCGA, TagVideoMDA, TagVideoSVGA, TagVideoVGA, TagVideoXGA,
+
+		// Arcade monitor scan rates
+		TagVideo15KHz, TagVideo31KHz,
 	},
 
 	TagTypeCopyright: {
@@ -1043,6 +1048,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyXMLGameID,
 		TagPropertyGameID,
 		TagPropertyLauncherOverride,
+		TagPropertyMAMESetName,
 	},
 
 	// Rating, genre, and game-family are scraped from external sources; seeded here

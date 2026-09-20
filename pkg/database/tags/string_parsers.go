@@ -144,12 +144,12 @@ func validMonthDay(m, d int) bool {
 	return m >= 1 && m <= 12 && d >= 1 && d <= 31
 }
 
-// parseBuildDate normalizes a romset/build date to YYYY-MM-DD. It accepts MiSTer
+// ParseBuildDate normalizes a romset/build date to YYYY-MM-DD. It accepts MiSTer
 // arcade YYMMDD (6 digits; century pivot at 70, so 70–99→19xx and 00–69→20xx),
 // YYYYMMDD (8 digits), and No-Intro YYYY-MM-DD. Returns false for any other shape
 // or an out-of-range month/day. The 6-digit form is the arcade convention; callers
 // gate it on a preceding region word to avoid matching bare numbers.
-func parseBuildDate(s string) (string, bool) {
+func ParseBuildDate(s string) (string, bool) {
 	switch {
 	case len(s) == 10 && s[4] == '-' && s[7] == '-':
 		if !allDigits(s[0:4]) || !allDigits(s[5:7]) || !allDigits(s[8:10]) {

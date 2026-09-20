@@ -36,6 +36,23 @@ func mapFilenameTagToCanonical(tag string) []CanonicalTag {
 	return result
 }
 
+// LookupRegionWord resolves a spelled-out or coded region word to its canonical
+// region value, reusing the filename mapping table so external metadata sources
+// and filenames agree on how "Japan" or "Hong Kong" is stored. Only the region
+// tag is returned: the table also carries an implied language for most regions,
+// which is an inference a metadata source stating a release region has not made.
+// ok is false for a word the table does not know.
+func LookupRegionWord(raw string) (value TagValue, ok bool) {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	key = strings.ReplaceAll(key, " ", "-")
+	for _, tag := range allTagMappings[key] {
+		if tag.Type == TagTypeRegion {
+			return tag.Value, true
+		}
+	}
+	return "", false
+}
+
 // allTagMappings is a unified map of all filename tags to canonical tags.
 // Keys are normalized (lowercase, spaces→dashes, no periods).
 // Using a single map provides O(1) lookup instead of sequential checks across multiple maps.

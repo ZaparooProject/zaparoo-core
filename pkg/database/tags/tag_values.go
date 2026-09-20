@@ -58,6 +58,7 @@ const (
 	TagInputButtons11             TagValue = "buttons:11"
 	TagInputButtons12             TagValue = "buttons:12"
 	TagInputButtons19             TagValue = "buttons:19"
+	TagInputButtons20             TagValue = "buttons:20"
 	TagInputButtons23             TagValue = "buttons:23"
 	TagInputButtons27             TagValue = "buttons:27"
 	TagInputButtonsPneumatic      TagValue = "buttons:pneumatic"
@@ -89,6 +90,8 @@ const (
 	TagPlayersVS   TagValue = "vs"
 	TagPlayersCoop TagValue = "coop"
 	TagPlayersAlt  TagValue = "alt"
+	// Simultaneous play, as distinct from alternating turns
+	TagPlayersSimultaneous TagValue = "simultaneous"
 )
 
 // Game genre tag values
@@ -381,6 +384,9 @@ const (
 	TagVideoSVGA    TagValue = "svga"
 	TagVideoVGA     TagValue = "vga"
 	TagVideoXGA     TagValue = "xga"
+	// Arcade monitor scan rates, from the MiSTer arcade catalog
+	TagVideo15KHz TagValue = "15khz"
+	TagVideo31KHz TagValue = "31khz"
 )
 
 // Media tag values
@@ -1063,6 +1069,7 @@ const (
 	TagSearchKeywordEndorsed TagValue = "keyword:endorsed"
 	TagSearchKeywordBrand    TagValue = "keyword:brand"
 	TagSearchKeywordUbikey   TagValue = "keyword:ubikey"
+	TagSearchKeywordFlip     TagValue = "keyword:flip" // Cabinet screen-flip support
 )
 
 // Multigame tag values
@@ -1564,4 +1571,5 @@ const (
 	TagPropertyXMLGameID        TagValue = "xml-game-id"       // game node ID (ScreenScraper Game ID for instance)
 	TagPropertyGameID           TagValue = "hash-gameid"       // go-gameid disc identity
 	TagPropertyLauncherOverride TagValue = "launcher-override" // Per-media launcher override (launcher ID)
+	TagPropertyMAMESetName      TagValue = "mame-setname"      // MAME/MRA romset identity
 )

@@ -1427,7 +1427,7 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	consumed := make([]bool, len(unmatched))
 	if hasTagType(results, TagTypeRegion) {
 		for i, u := range unmatched {
-			if v, ok := parseBuildDate(u); ok {
+			if v, ok := ParseBuildDate(u); ok {
 				results = append(results, CanonicalTag{
 					Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed,
 				})
@@ -1496,7 +1496,7 @@ func parseRegionDateToken(normalized string) ([]CanonicalTag, bool) {
 	// Standalone date: YYYY-MM-DD (dashed) or YYYYMMDD (8 digits). Bare 6-digit is
 	// excluded here — it only counts as a date with a region prefix (below).
 	if strings.Contains(normalized, "-") || len(normalized) == 8 {
-		if v, ok := parseBuildDate(normalized); ok {
+		if v, ok := ParseBuildDate(normalized); ok {
 			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}, true
 		}
 	}
@@ -1508,7 +1508,7 @@ func parseRegionDateToken(normalized string) ([]CanonicalTag, bool) {
 		return nil, false
 	}
 	prefix, last := normalized[:i], normalized[i+1:]
-	v, ok := parseBuildDate(last)
+	v, ok := ParseBuildDate(last)
 	if !ok {
 		return nil, false
 	}
@@ -1750,7 +1750,7 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 	// the dash-delimited forms are accepted here: bare 6-/8-digit tokens (e.g. "[010203]")
 	// are far more likely to be catalog numbers or ids than dates, so they stay dump info.
 	if strings.Contains(normalized, "-") {
-		if v, ok := parseBuildDate(normalized); ok {
+		if v, ok := ParseBuildDate(normalized); ok {
 			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}
 		}
 	}

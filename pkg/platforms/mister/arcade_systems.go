@@ -162,7 +162,7 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 				Msg("arcade MRA classification progress")
 		}
 
-		setName, ok := c.cachedSetName(cached, files[i].Path)
+		setName, ok := cachedSetName(cached, files[i].Path)
 		if ok {
 			cacheHits++
 			fresh[files[i].Path] = cached[files[i].Path]
@@ -202,8 +202,10 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 }
 
 // cachedSetName returns the setname recorded for path when its current size
-// and mtime match the cache entry.
-func (*arcadeSystemCache) cachedSetName(
+// and mtime match the cache entry. The arcade catalog scraper answers its own
+// set-name lookups from the same persisted cache, so both agree on when an
+// entry has gone stale.
+func cachedSetName(
 	cached map[string]arcadeClassCacheEntry, path string,
 ) (setName string, ok bool) {
 	entry, found := cached[path]

@@ -7,6 +7,7 @@ Current scraper implementations:
 - `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs. It also reads `<folder>` entries and `<game>` entries whose path is a directory.
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. Indexed directories also match artwork named after themselves, whether or not they collapse to a launch target. Directory image properties use stable `(system, path)` identities and each successfully completed system atomically replaces its prior directory snapshot, removing stale folder artwork. A force run (re-scrape) also deletes stale media image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 - `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
+- `mister-arcade` imports the MiSTer arcade catalog's metadata onto indexed `.mra` rows, keyed by the MAME set name declared inside each descriptor. It is registered on MiSTer and MiSTeX, reads the catalog those platforms already cache and embed, and runs automatically after arcade indexing.
 - `pinup-popper` imports PinUP Popper's own table metadata (year, manufacturer, player count, type, category, theme, notes) and wheel, playfield, backglass and flyer images for `Pinball` media indexed by the PinUP Popper launcher. It is registered only on Windows when a PinUP Popper installation is available, and reads `PUPDatabase.db` and the emulator media folders in place.
 
 ## Code Layout
@@ -18,6 +19,9 @@ Current scraper implementations:
 | `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
 | `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
 | `pkg/database/scraper/pinuppopper/` | PinUP Popper library metadata and media-folder image importer for Popper-launched tables |
+| `pkg/database/scraper/misterarcade/` | MiSTer arcade catalog reader, field mapping, and control-vocabulary normalisation |
+| `pkg/database/scraper/mra/` | Shared MiSTer arcade descriptor set-name reader |
+| `pkg/platforms/mister/arcade_scraper.go` | MiSTer/MiSTeX catalog and set-name-cache adapters for `mister-arcade` |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
@@ -41,7 +45,7 @@ Scrapers(*config.Instance) map[string]platforms.Scraper
 
 ### Ordinary Jobs After Indexing
 
-A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. Only PinUP Popper currently opts in; MiSTer scrapers remain manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
+A scraper can declare `SupportsFillMissing` and bind `AutoScrapeLaunchers` to selected launcher IDs. PinUP Popper and `mister-arcade` opt in; the remaining scrapers are manual. Both filesystem launchers and custom scanners can supply eligible contributions. Empty, failed, unavailable or unrelated sources do not request a job, and failed/cancelled indexes do not submit their summary.
 
 The sequence is **index → existing optimization → ordinary scraping**. Successful indexing persists eligible jobs before its final notification. The existing service recovery watcher starts them after optimization releases its write lease; there is no separate automatic-job worker. All jobs use the same scrape pauser, gameplay throttling, progress notifications and executor.
 
@@ -408,7 +412,72 @@ Only one scraper can run at a time, and scraping is mutually exclusive with medi
 go test ./pkg/database/scraper/...
 go test ./pkg/database/mediadb/ -run 'Scrape|Property|Blob|Sentinel|MediaImage'
 go test ./pkg/api/methods/ -run 'Scrape|MediaImage|MediaMeta'
+go test ./pkg/platforms/mister/ -run 'Arcade'
 ```
+
+## MiSTer Arcade Catalog Behavior
+
+MiSTer and MiSTeX download, verify and cache the upstream
+[`MiSTer-devel/ArcadeDatabase_MiSTer`](https://github.com/MiSTer-devel/ArcadeDatabase_MiSTer) catalog under Core's
+`assets` directory, and ARM builds embed a copy as a fallback. `mister-arcade` reads that catalog and joins it to
+indexed `.mra` rows.
+
+An MRA filename is a display title, so the join key is the `<setname>` inside the descriptor. MiSTer already reads
+every set name while classifying granular arcade systems and keeps the result in a size/mtime-validated cache, so
+the platform hands the scraper a lookup into that cache and only descriptors it cannot answer are read. MiSTeX has
+no granular classification, so every descriptor it indexes is an `Arcade` row and is read on demand. Reads are
+bounded to the descriptor header and stop at the ROM payload, so a multi-megabyte MRA costs nothing.
+
+The scraper is registered for `Arcade` and, on MiSTer, for each granular arcade system. It binds those launchers
+with `AutoScrapeLaunchers`, so an index that walked `_Arcade` queues a fill-missing job without any user action. A
+missing or unreadable catalog fails the run rather than writing an empty result; because fill-missing runs
+reconsider rows carrying the permanent sentinel, a later index fills them once the catalog is cached.
+
+A descriptor whose set name the catalog does not list is counted as skipped. The catalog omits hundreds of sets,
+nearly all of them under `_Arcade/_alternatives`.
+
+### Field Mapping
+
+Shared facts about the game go to the title, so every regional variant carries them. Facts about the individual
+romset go to the media row.
+
+| Catalog column | Destination | Notes |
+|---|---|---|
+| `year` | `MediaTitleTags: year` | Exclusive; four digits only |
+| `manufacturer` | `MediaTitleTags: developer` | Exclusive, company-name normalized. `credit` is the union query type, so a value written to `developer` answers both `developer:` and `credit:` filters |
+| `category` | `MediaTitleTags: genre` | Additive; the full genre plus its `" - "` family, so broad and narrow filters both resolve |
+| `series`, `parent_title` | `MediaTitleTags: gamefamily` | Exclusive, so `series` wins and `parent_title` only fills in for a game filed under no series |
+| `platform` | `MediaTitleTags: arcadeboard` | Exclusive |
+| `players` | `MediaTitleTags: players` | Additive; a range writes every count in it, plus `simultaneous` or `alt` |
+| `move_inputs`, `special_controls` | `MediaTitleTags: input` | Additive; normalized through a fixed phrase table |
+| `num_buttons` | `MediaTitleTags: input` as `buttons:N` | Zero buttons writes nothing |
+| `resolution` | `MediaTitleTags: video` as `15khz`/`31khz` | |
+| `rotation` | `MediaTitleTags: search` as `tate:cw`/`tate:ccw` | A horizontal monitor is the default and writes nothing |
+| `flip` | `MediaTitleTags: search` as `keyword:flip` | |
+| `homebrew` | `MediaTitleTags: release` as `homebrew` | |
+| `setname` | `MediaProperties: property:mame-setname` | The romset identity, so callers need not re-read descriptors |
+| `region` | `MediaTags: region` | Additive; multi-region cells split. A cell reading `bootleg` states a provenance and becomes `unlicensed:bootleg` |
+| `version` | `MediaTags`, routed | `YYMMDD` → `builddate`; `Rev A` → `rev:a`; `Set 1` → `set:1`; `Prototype` → `unfinished:proto`; `bootleg`/`hack` → `unlicensed`; a protection chip family → `protection` |
+| `alternative` | `MediaTags: alt` | |
+| `bootleg` | `MediaTags: unlicensed` as `bootleg` | |
+
+The catalog's `name` is not imported: arcade titles come from the descriptor filename, which the indexer owns.
+`linebreak1` and `linebreak2` are upstream layout spacers and are always empty.
+
+Catalog text is treated as untrusted: values are HTML-unescaped, whitespace-collapsed, and checked against the
+several spellings upstream uses for "not applicable". The control columns are free text with inconsistent case and
+two separators; each phrase the catalog uses is listed explicitly. A phrase that names a control family without the
+detail its canonical value needs — a `2-way` joystick with no axis, a bare `stick`, `positional` with no position
+count — is logged at debug and dropped rather than resolved to the nearest guess.
+
+The catalog names 141 hardware families while Core's canonical `arcadeboard` list covers a minority of them. A
+board the canonical list names is written with the canonical spelling; the rest keep the catalog's own spelling,
+normalized. Dropping them would leave most arcade games with no board at all.
+
+Writing media-level tags of scanner-owned types changes the `MediaIdentity` fingerprint for rows that lacked them,
+as `gamelist.xml`'s media-level `region`/`lang` writes already do. In practice the MRA filename parser already
+supplies region, build date, revision and bootleg for most arcade rows, and fill-missing only writes a type that is
+entirely absent. `property:mame-setname` is not scanner-owned and never affects it.
 
 ## PinUP Popper Behavior
 

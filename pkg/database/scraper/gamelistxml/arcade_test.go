@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/mra"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -49,11 +50,11 @@ func TestScrapeLoop_ArcadeSetNameBundle(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "_Arcade")
 	custom := t.TempDir()
 	bundle := filepath.Join(custom, systemdefs.SystemArcade)
-	mra := filepath.Join(root, "Pac-Man (Midway).mra")
+	mraPath := filepath.Join(root, "Pac-Man (Midway).mra")
 	image := filepath.Join(bundle, "images", "pacman.png")
 	for path, content := range map[string]string{
-		mra:   "<misterromdescription><setname>pacman</setname></misterromdescription>",
-		image: "image",
+		mraPath: "<misterromdescription><setname>pacman</setname></misterromdescription>",
+		image:   "image",
 		filepath.Join(bundle, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>
 <name>Different catalog title</name><desc>Arcade metadata</desc><image>./images/pacman.png</image>
 </game></gameList>`,
@@ -66,7 +67,7 @@ func TestScrapeLoop_ArcadeSetNameBundle(t *testing.T) {
 		DBID: 1, Slug: "pacman", Name: "Pac-Man", SystemDBID: 100,
 	}}, nil)
 	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{{
-		DBID: 10, MediaTitleDBID: 1, Path: mra,
+		DBID: 10, MediaTitleDBID: 1, Path: mraPath,
 	}}, nil)
 	mdb.On("ApplyScrapeResult", mock.Anything, int64(10), int64(1),
 		mock.MatchedBy(func(w *database.ScrapeWrite) bool {
@@ -267,7 +268,7 @@ func TestReadArcadeSetNameRejectsUnreadableDescriptors(t *testing.T) {
 		},
 		{
 			name: "header longer than the read bound",
-			content: `<misterromdescription><about>` + strings.Repeat("x", maxArcadeMRAHeaderBytes) +
+			content: `<misterromdescription><about>` + strings.Repeat("x", mra.MaxHeaderBytes) +
 				`</about><setname>pacman</setname></misterromdescription>`,
 		},
 		{name: "trailing text", content: valid + "garbage"},
@@ -661,9 +662,9 @@ func TestReadArcadeSetName(t *testing.T) {
 		{"nested set", `<misterromdescription><rom><setname>pacman</setname></rom></misterromdescription>`, ""},
 		{"unsafe set", `<misterromdescription><setname>../pacman.zip</setname></misterromdescription>`, ""},
 		{"extra document", `<misterromdescription><setname>pacman</setname></misterromdescription><extra/>`, ""},
-		{"unterminated header past the read bound", strings.Repeat(" ", maxArcadeMRAHeaderBytes+1), ""},
+		{"unterminated header past the read bound", strings.Repeat(" ", mra.MaxHeaderBytes+1), ""},
 		{"payload stops the header scan", `<misterromdescription><setname>pacman</setname>` +
-			`<rom index="0"><part>` + strings.Repeat("A", maxArcadeMRAHeaderBytes*2) +
+			`<rom index="0"><part>` + strings.Repeat("A", mra.MaxHeaderBytes*2) +
 			`</part></rom></misterromdescription>`, "pacman"},
 		{"set name after the payload is not a duplicate", `<misterromdescription><setname>pacman</setname>` +
 			`<rom index="0"/><setname>puckman</setname></misterromdescription>`, "pacman"},
@@ -700,11 +701,11 @@ func TestArcadeBundleSQLiteRepeatAndForce(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "_Arcade")
 			custom := t.TempDir()
 			bundle := filepath.Join(custom, systemID)
-			mra := filepath.Join(root, "Pac-Man.mra")
+			mraPath := filepath.Join(root, "Pac-Man.mra")
 			image := filepath.Join(bundle, "images", "pacman.png")
 			for filename, content := range map[string]string{
-				mra:   `<misterromdescription><setname>pacman</setname></misterromdescription>`,
-				image: "art",
+				mraPath: `<misterromdescription><setname>pacman</setname></misterromdescription>`,
+				image:   "art",
 				filepath.Join(bundle, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>` +
 					`<name>Catalog name</name><desc>Arcade description</desc>` +
 					`<image>./images/pacman.png</image></game></gameList>`,
@@ -713,7 +714,7 @@ func TestArcadeBundleSQLiteRepeatAndForce(t *testing.T) {
 				require.NoError(t, afero.WriteFile(fs, filename, []byte(content), 0o600))
 			}
 			media, err := mdb.InsertMedia(database.Media{
-				MediaTitleDBID: title.DBID, SystemDBID: system.DBID, Path: mra,
+				MediaTitleDBID: title.DBID, SystemDBID: system.DBID, Path: mraPath,
 			})
 			require.NoError(t, err)
 			s := &GamelistXMLScraper{db: mdb, fs: fs, matchArcadeSets: true, cfg: newCustomGamelistConfig(t, custom)}
@@ -773,7 +774,7 @@ func FuzzArcadeSetIdentity(f *testing.F) {
 		`<setname>two</setname></misterromdescription>`), "../two.7z")
 	f.Add([]byte(`<misterromdescription>`), `C:\roms\pacman.zip`)
 	f.Fuzz(func(t *testing.T, data []byte, source string) {
-		if len(data) > maxArcadeMRAHeaderBytes+1 || len(source) > 4096 {
+		if len(data) > mra.MaxHeaderBytes+1 || len(source) > 4096 {
 			t.Skip()
 		}
 		fs := afero.NewMemMapFs()

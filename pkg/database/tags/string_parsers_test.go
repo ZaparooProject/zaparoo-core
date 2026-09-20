@@ -106,7 +106,7 @@ func TestParseBuildDate(t *testing.T) {
 		{in: "", want: "", ok: false},
 	}
 	for _, tt := range tests {
-		got, ok := parseBuildDate(tt.in)
+		got, ok := ParseBuildDate(tt.in)
 		assert.Equal(t, tt.ok, ok, "ok mismatch for %q", tt.in)
 		assert.Equal(t, tt.want, got, "value mismatch for %q", tt.in)
 	}
