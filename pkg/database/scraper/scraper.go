@@ -28,6 +28,8 @@
 package scraper
 
 import (
+	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
@@ -74,6 +76,22 @@ type ScrapeUpdate struct {
 	TotalSteps  int
 	CurrentStep int
 	Done        bool
+}
+
+// SourceError reports a metadata source file that exists but could not be read
+// or parsed. It travels in ScrapeUpdate.Err: the run carries on with whatever
+// other sources it has, and the caller decides how to tell the user.
+type SourceError struct {
+	Err  error
+	Path string
+}
+
+func (e *SourceError) Error() string {
+	return fmt.Sprintf("%s: %v", e.Path, e.Err)
+}
+
+func (e *SourceError) Unwrap() error {
+	return e.Err
 }
 
 // MatchResult is the output of a successful Match call. Both IDs must be

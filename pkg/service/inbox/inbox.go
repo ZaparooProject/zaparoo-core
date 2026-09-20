@@ -60,6 +60,7 @@ const (
 	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"
 	CategoryBackupRemoteStale                = "backup_remote_stale"
 	CategoryLibraryInventoryTooLarge         = "library_inventory_too_large"
+	CategoryScrapeSourceUnreadable           = "scrape_source_unreadable"
 )
 
 // MessageOptions configures optional fields for inbox messages.
