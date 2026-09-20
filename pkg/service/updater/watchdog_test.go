@@ -1555,3 +1555,84 @@ func TestRunStartupWatchdog_RollsBackThroughAVacatingSwap(t *testing.T) {
 	sweepSupersededBinaryWith(f.targetPath, realVacatingOps())
 	assert.NoFileExists(t, stale, "the next install clears what the rollback had to leave")
 }
+
+// HasUnresolvedUpdate exists so startWith can tell "the previous version has
+// just been restored, so this process must exit for it to run" from "nothing
+// on disk is going to change, so stay up and report". It answers by repeating
+// rollBackFailedStartWithOps's conditions, and if the two ever disagree Core
+// keeps serving in front of a binary that was swapped out from under it.
+//
+// This pins them together: for every marker shape, the answer has to match
+// whether a rollback actually happened.
+func TestHasUnresolvedUpdate_AgreesWithWhatRollBackFailedStartDoes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		setMarker      func(f *installFixture) *pendingMarker
+		name           string
+		currentVersion string
+	}{
+		{
+			name:           "no marker at all",
+			setMarker:      func(*installFixture) *pendingMarker { return nil },
+			currentVersion: testTargetVersion,
+		},
+		{
+			name:           "an update still proving itself",
+			setMarker:      func(f *installFixture) *pendingMarker { return f.marker(markerConfirming) },
+			currentVersion: testTargetVersion,
+		},
+		{
+			name:           "an installed update on its first boot",
+			setMarker:      func(f *installFixture) *pendingMarker { return f.marker(markerInstalled) },
+			currentVersion: testTargetVersion,
+		},
+		{
+			name: "a rollback the startup watchdog already charged",
+			setMarker: func(f *installFixture) *pendingMarker {
+				return f.marker(markerRollingBack)
+			},
+			currentVersion: testTargetVersion,
+		},
+		{
+			name: "an update that already reached an outcome",
+			setMarker: func(f *installFixture) *pendingMarker {
+				m := f.marker(markerConfirming)
+				m.Outcome = outcomeSucceeded
+				return m
+			},
+			currentVersion: testTargetVersion,
+		},
+		{
+			name:           "a marker belonging to some other version",
+			setMarker:      func(f *installFixture) *pendingMarker { return f.marker(markerConfirming) },
+			currentVersion: "2.4.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newInstallFixture(t)
+			if m := tt.setMarker(f); m != nil {
+				require.NoError(t, saveMarker(stateDirFor(f.dataDir), m))
+			}
+
+			answered := HasUnresolvedUpdate(f.dataDir, tt.currentVersion)
+
+			restored := false
+			ops := defaultWatchdogFileOps()
+			inner := ops.binary.replaceRunning
+			ops.binary.replaceRunning = func(from, to string) error {
+				restored = true
+				return inner(from, to)
+			}
+			_ = rollBackFailedStartWithOps(t.Context(), f.dataDir, tt.currentVersion, ops)
+
+			assert.Equal(t, restored, answered,
+				"HasUnresolvedUpdate said %v but the rollback %s restore the binary",
+				answered, map[bool]string{true: "did", false: "did not"}[restored])
+		})
+	}
+}
