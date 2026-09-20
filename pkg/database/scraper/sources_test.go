@@ -93,6 +93,7 @@ func TestSourceIndexUnderParent(t *testing.T) {
 	assert.Empty(t, index.UnderParent(root), "the root is the collection, not a game folder")
 	assert.Empty(t, index.UnderParent(english.SourcePath))
 	assert.Empty(t, index.UnderParent(filepath.Dir(root)), "inheritance never reaches past the immediate parent")
+	assert.Empty(t, index.UnderParent(filepath.Join(root, "kyra")), "a shared name prefix is not a parent")
 
 	conflict := variant(7, "other", "dos-english", true)
 	index = NewSourceIndex([]database.MediaSource{english, conflict, french})

@@ -79,6 +79,9 @@ func (s *SourceIndex) addParent(source *database.MediaSource) {
 	s.byParent[parent] = append(s.byParent[parent], *source)
 }
 
+// sourcePathKey must fold a path exactly as helpers.NormalizePathForComparison
+// does, because that is what the scanner wrote into SourceKey. Calling it
+// directly would import a cycle through pkg/launchables.
 func sourcePathKey(path string) string {
 	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }

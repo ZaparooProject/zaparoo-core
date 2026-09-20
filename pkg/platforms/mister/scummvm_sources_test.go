@@ -83,4 +83,17 @@ func TestScummVMMetadataSourcesFoldVariantRoots(t *testing.T) {
 		filepath.Join(kyra, "dos-french"),
 		filepath.Join(other, "monkey"),
 	), "a root with no enclosing root stays where it is")
+
+	sd := filepath.Dir(games)
+	require.Equal(t, []string{sd, games, games}, roots(
+		games,
+		filepath.Join(games, "monkey"),
+		filepath.Join(kyra, "dos-english"),
+	), "a game's own data folder is not the collection its neighbours share")
+
+	mixed := filepath.Join(sd, "GAMES")
+	require.Equal(t, []string{games, mixed}, roots(
+		filepath.Join(games, "monkey"),
+		filepath.Join(mixed, "kyra3", "dos-french"),
+	), "a collection named in another case is still the same collection")
 }

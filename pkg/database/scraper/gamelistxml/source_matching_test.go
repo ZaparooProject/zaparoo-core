@@ -91,3 +91,56 @@ func TestMatchSourceRecordFailsClosedWithoutUsableOwnership(t *testing.T) {
 	require.Nil(t, impl.matchSourceRecord(indexes, records, file, game, ""),
 		"source MediaDBID must own the matching virtual media row")
 }
+
+func TestInheritGivesFolderEntriesToUnnamedChildren(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(string(filepath.Separator), "games")
+	gameFolder := filepath.Join(root, "kyra3")
+	src := func(dbid int64, target, dir string, unique bool) database.MediaSource {
+		path := filepath.Join(gameFolder, dir)
+		return database.MediaSource{
+			MediaDBID: dbid, MediaPath: "scummvm://" + target + "/Title", SourcePath: path,
+			SourceKey: helpers.NormalizePathForComparison(path), SourceRoot: root,
+			SourceKind: "directory", Unique: unique,
+		}
+	}
+	english, french := src(1, "en", "dos-english", true), src(2, "fr", "dos-french", true)
+	macOne, macTwo := src(3, "mac-en", "macintosh", false), src(4, "mac-de", "macintosh", false)
+	all := []database.MediaSource{english, french, macOne, macTwo}
+	records := &sourceRecordIndex{
+		sources: scraper.NewSourceIndex(all),
+		dirs:    map[string]map[string]string{root: {"boxart": filepath.Join(root, "media", "boxart")}},
+	}
+	indexes := loadRecordIndexes{MediaByPathFold: make(map[string]database.Media, len(all))}
+	for _, source := range all {
+		indexes.MediaByPathFold[pathFoldKey(source.MediaPath)] = database.Media{
+			DBID: source.MediaDBID, MediaTitleDBID: source.MediaDBID + 10,
+		}
+	}
+	file := &parsedGamelistFile{RootPath: root}
+	folder := esapi.Game{Path: "./kyra3", Image: "./kyra3.png"}
+
+	got := records.inherit(indexes, []parentEntry{
+		{file: file, directory: gameFolder, game: folder},
+		{file: file, directory: gameFolder, game: esapi.Game{Path: "./kyra3", Image: "./later.png"}},
+	})
+
+	require.Len(t, got, 2, "a second entry for the same folder finds every child already claimed")
+	for i, want := range []database.MediaSource{english, french} {
+		require.Equal(t, folder, got[i].Game, "the first entry for a folder wins its children")
+		require.Equal(t, gameFolder, got[i].SourceDirectory,
+			"artwork falls back to the name of the folder the entry describes")
+		require.Equal(t, root, got[i].ROMRootPath)
+		require.Equal(t, want.MediaDBID, got[i].MatchedMediaDBID)
+		require.Equal(t, gamelistMatchSource, got[i].MatchKind)
+		require.True(t, got[i].MediaLevelWriteSafe)
+	}
+	require.NotContains(t, indexes.MediaByPathFold, pathFoldKey(english.MediaPath),
+		"a claimed row leaves the path index so no later fallback guesses at it")
+	require.Contains(t, indexes.MediaByPathFold, pathFoldKey(macOne.MediaPath),
+		"targets sharing a directory are never claimed by the folder holding them")
+	require.Contains(t, indexes.MediaByPathFold, pathFoldKey(macTwo.MediaPath))
+
+	require.Empty(t, records.inherit(indexes, []parentEntry{{file: file, directory: root, game: folder}}),
+		"the collection root is not a game folder")
+}

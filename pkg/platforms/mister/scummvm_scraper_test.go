@@ -309,6 +309,86 @@ func TestScummVMVariantFolders(t *testing.T) {
 	}
 }
 
+// Metadata for a game folder reaches the variants inside it and stops there: it
+// never crosses to targets that share a directory, never reaches a variant
+// nested deeper, and the collection root is not a game folder.
+func TestScummVMVariantFoldersStopAtTheirScope(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		scraper string
+	}{
+		{name: "gamelist entry", scraper: "gamelist.xml"},
+		{name: "media folder artwork", scraper: "media-folder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			// A named collection folder, so artwork named after it is a case
+			// the fixture can state.
+			root := filepath.Join(t.TempDir(), "GAMES")
+			kyra := filepath.Join(root, "kyra3")
+			writeScummVMScrapeFile(t, fs, filepath.Join(root, "inherited.png"), "image")
+			// GAMES.png is named after the collection folder and must never be
+			// claimed. kyra3.png would also answer the gamelist entry, so it is
+			// only laid down for the scraper under test.
+			artwork := []string{"GAMES.png"}
+			if tc.scraper == "media-folder" {
+				artwork = append(artwork, "kyra3.png")
+			}
+			for _, name := range artwork {
+				writeScummVMScrapeFile(t, fs, filepath.Join(root, "media", "boxart", name), "image")
+			}
+			if tc.scraper == "gamelist.xml" {
+				writeScummVMScrapeFile(t, fs, filepath.Join(root, "gamelist.xml"),
+					"<gameList><game><path>./kyra3</path><image>./inherited.png</image></game></gameList>")
+			}
+
+			db, cleanup := helpers.NewInMemoryMediaDB(t)
+			t.Cleanup(cleanup)
+			shared := filepath.Join(kyra, "macintosh")
+			indexScummVMResults(t, db,
+				ScummVMGame{TargetID: "monkey", Description: "Monkey", Path: filepath.Join(root, "monkey")},
+				ScummVMGame{TargetID: "en", Description: "English", Path: filepath.Join(kyra, "dos-english")},
+				ScummVMGame{TargetID: "mac-en", Description: "Mac English", Path: shared},
+				ScummVMGame{TargetID: "mac-de", Description: "Mac German", Path: shared},
+				ScummVMGame{TargetID: "deep", Description: "Deep", Path: filepath.Join(kyra, "dos", "english")},
+			)
+			runScummVMScraper(t, fs, db, tc.scraper, scraper.ScrapeOptions{Force: true})
+
+			inherited := filepath.Join(root, "inherited.png")
+			if tc.scraper == "media-folder" {
+				inherited = filepath.Join(root, "media", "boxart", "kyra3.png")
+			}
+			want := map[string]string{
+				virtualpath.CreateVirtualPath("scummvm", "en", "English"):         inherited,
+				virtualpath.CreateVirtualPath("scummvm", "monkey", "Monkey"):      "",
+				virtualpath.CreateVirtualPath("scummvm", "mac-en", "Mac English"): "",
+				virtualpath.CreateVirtualPath("scummvm", "mac-de", "Mac German"):  "",
+				virtualpath.CreateVirtualPath("scummvm", "deep", "Deep"):          "",
+			}
+			rows, err := db.GetMediaBySystemID(systemdefs.SystemScummVM)
+			require.NoError(t, err)
+			require.Len(t, rows, len(want))
+			for _, row := range rows {
+				props, err := db.GetMediaPropertyMetadata(context.Background(), row.DBID)
+				require.NoError(t, err)
+				var got []string
+				for _, prop := range props {
+					if strings.HasPrefix(prop.TypeTag, "property:image-") {
+						got = append(got, prop.Text)
+					}
+				}
+				if want[row.Path] == "" {
+					assert.Empty(t, got, "path %s", row.Path)
+					continue
+				}
+				assert.Equal(t, []string{filepath.ToSlash(want[row.Path])}, got, "path %s", row.Path)
+			}
+		})
+	}
+}
+
 func TestScummVMLocalArtworkForceCleanup(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()

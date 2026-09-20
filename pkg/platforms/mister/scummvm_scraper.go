@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
@@ -52,15 +53,22 @@ func scummVMGameDirectory(game ScummVMGame) string {
 // A game's metadata root is normally its parent directory. Variants kept in
 // subfolders of one game folder would each get that game folder as a root and
 // lose the gamelist and artwork stored beside their sibling games, so a root
-// whose own parent is another game's root is folded into it.
+// whose own parent is another game's root is folded into it. Folding stops at a
+// folder a game is configured on: that folder holds one game's data, so it is
+// not a collection its neighbours share.
 func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
 	directories := make([]string, len(games))
+	configured := make(map[string]struct{}, len(games))
 	roots := make(map[string]struct{}, len(games))
 	for i, game := range games {
 		directories[i] = scummVMGameDirectory(game)
-		if directories[i] != "" {
-			roots[filepath.Dir(directories[i])] = struct{}{}
+		if directories[i] == "" {
+			continue
 		}
+		// Keyed the way the rest of the pipeline compares paths, so a folder
+		// named in another case on a case-insensitive card is one folder.
+		configured[helpers.NormalizePathForComparison(directories[i])] = struct{}{}
+		roots[helpers.NormalizePathForComparison(filepath.Dir(directories[i]))] = struct{}{}
 	}
 	sources := make([]*platforms.MediaSource, len(games))
 	for i, directory := range directories {
@@ -69,8 +77,12 @@ func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
 		}
 		root := filepath.Dir(directory)
 		for {
+			if _, own := configured[helpers.NormalizePathForComparison(root)]; own {
+				break
+			}
 			parent := filepath.Dir(root)
-			if _, shared := roots[parent]; !shared || filepath.Dir(parent) == parent {
+			_, shared := roots[helpers.NormalizePathForComparison(parent)]
+			if !shared || filepath.Dir(parent) == parent {
 				break
 			}
 			root = parent
