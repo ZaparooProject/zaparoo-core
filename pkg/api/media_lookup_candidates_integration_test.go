@@ -69,7 +69,7 @@ func TestMediaLookupCandidatesTransports(t *testing.T) {
 	ready, stopped := make(chan error, 1), make(chan error, 1)
 	go func() {
 		stopped <- StartWithReady(platform, cfg, st, queue, nil, db,
-			nil, nil, newTestBroker(st.GetContext(), notifications), nil, nil, nil, nil, nil, nil, ready)
+			nil, nil, newTestBroker(st.GetContext(), notifications), nil, nil, nil, nil, nil, nil, ready, nil)
 	}()
 	defer func() {
 		st.StopService()

@@ -170,10 +170,16 @@ database alongside the binary, so the schema goes back with it. What causes it
 is replacing the binary some other way — reinstalling an older release by hand,
 or a package manager moving the install backwards.
 
-On a platform with a service supervisor this presents as a service that keeps
-restarting rather than an error, because each attempt fails the same way. On
-MiSTer there is no journal at all. Either way the explanation is in
-`core.log`, and it names both versions.
+Core does not exit on this. It keeps the API port it already bound and serves a
+page explaining what happened, so opening `http://<device>:7497/app/` names the
+version that wrote the schema and what to reinstall, and `/health` reports
+`{"status":"error","state":"failed"}`. The Scripts-menu TUI reads the same
+state and shows the last error from the log instead of a generic message.
+
+The explanation is also in `core.log`, which names both versions. On MiSTer and
+Mistex the live log is on a tmpfs, so a copy is written to the data directory
+(`/media/fat/zaparoo/core.log`) when the failed state is entered and on clean
+shutdown.
 
 Recover in this order:
 

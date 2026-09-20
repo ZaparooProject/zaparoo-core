@@ -611,14 +611,23 @@ upgrade_relation() {
     semver_compare "${installed}" "${selected}"
 }
 
+# Whether anything is answering on Core's port. This deliberately does not
+# inspect the body: the question at every call site is whether the port is in
+# use, and Core answers /health from the moment it binds, before the databases
+# are open and while it is reporting a startup failure. Matching a body would
+# read those as "free" and let the installer replace a binary underneath a
+# running process.
 core_api_available() {
-    curl --fail --silent --show-error "http://127.0.0.1:7497/health" 2>/dev/null | \
-        grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'
+    curl --fail --silent --show-error "http://127.0.0.1:7497/health" >/dev/null 2>&1
 }
+
+# Core binds the port before it opens its databases and holds it until shutdown
+# finishes, so this has to outlast a real stop rather than a socket close.
+CORE_API_DOWN_ATTEMPTS=60
 
 wait_for_core_api_down() {
     local attempt
-    for ((attempt = 0; attempt < 20; attempt++)); do
+    for ((attempt = 0; attempt < CORE_API_DOWN_ATTEMPTS; attempt++)); do
         if ! core_api_available; then
             return 0
         fi
@@ -640,11 +649,39 @@ core_health_ok() {
         '^[[:space:]]*OK[[:space:]]*$|"status"[[:space:]]*:[[:space:]]*"ok"'
 }
 
+# Two budgets, because "not answering yet" and "answering that it is still
+# starting" are different questions. Core holds the port from before its
+# databases open, and a first start after an upgrade applies migrations that
+# take minutes on a large library. Spending one 15-second budget on both is how
+# a slow but healthy start gets read as a failure, and every caller of this
+# treats a failure as grounds to roll the installation back.
+CORE_API_VERIFY_ATTEMPTS=30
+CORE_API_STARTING_ATTEMPTS=600
+
 verify_core_api() {
     local expected_version="$1"
-    local attempt health version_response actual_version actual_platform
-    for ((attempt = 0; attempt < 30; attempt++)); do
+    local attempt=0 starting=0 announced=false
+    local health state version_response actual_version actual_platform
+    while [ "${attempt}" -lt "${CORE_API_VERIFY_ATTEMPTS}" ]; do
         health="$(curl --fail --silent --show-error "http://127.0.0.1:7497/health" 2>/dev/null || true)"
+        state="$(json_string_field "state" "${health}")"
+        if [ "${state}" = "failed" ]; then
+            # Core is alive only to report a problem a person has to resolve.
+            # No amount of further waiting changes that.
+            return 1
+        fi
+        if [ "${state}" = "starting" ]; then
+            if [ "${announced}" = false ]; then
+                announced=true
+                info "Zaparoo Core is still starting; waiting for it to finish"
+            fi
+            starting=$((starting + 1))
+            if [ "${starting}" -ge "${CORE_API_STARTING_ATTEMPTS}" ]; then
+                return 1
+            fi
+            sleep 0.5
+            continue
+        fi
         if core_health_ok "${health}"; then
             version_response="$(curl --fail --silent --show-error \
                 -H 'Content-Type: application/json' \
@@ -656,6 +693,7 @@ verify_core_api() {
                 return 0
             fi
         fi
+        attempt=$((attempt + 1))
         sleep 0.5
     done
     return 1

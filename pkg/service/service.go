@@ -360,19 +360,40 @@ func startWith(
 		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
 	}
 
-	defer func() {
-		if err == nil {
-			return
-		}
-		// Only does anything when this boot is the first one after an update.
-		if rollbackErr := updater.RollBackFailedStart(
-			context.Background(), dataDir, config.AppVersion,
-		); rollbackErr != nil {
-			err = fmt.Errorf("%w: %w", rollbackErr, err)
-		}
-	}()
+	res, err = initialize(pl, cfg)
+	if err == nil {
+		return res, nil
+	}
 
-	return initialize(pl, cfg)
+	// The updater gets first refusal on a failed start. Check before rolling
+	// back, because a rollback restores the previous binary and this process
+	// then has to exit so that binary runs — staying up would leave Core
+	// serving in front of a binary that is no longer installed.
+	updatePending := updater.HasUnresolvedUpdate(dataDir, config.AppVersion)
+
+	// Only does anything when this boot is the first one after an update.
+	if rollbackErr := updater.RollBackFailedStart(
+		context.Background(), dataDir, config.AppVersion,
+	); rollbackErr != nil {
+		return nil, fmt.Errorf("%w: %w", rollbackErr, err)
+	}
+	if updatePending {
+		return nil, err
+	}
+
+	// The listener is already bound, so Core can stay alive and explain
+	// itself — but only where that is better than exiting. Where a restart is
+	// the recovery, exiting is what lets the supervisor perform it.
+	var failure *startupFailureError
+	if errors.As(err, &failure) {
+		if failure.startingAgainCanHelp() {
+			failure.release()
+			return nil, err
+		}
+		return failure.enter()
+	}
+
+	return nil, err
 }
 
 func startService(
@@ -428,6 +449,20 @@ func startService(
 	})
 	st.SetUIEvents(uiEvents)
 
+	// Bind the API listener before anything that can fail slowly or fatally.
+	// Every channel Core normally uses to reach a user sits behind the
+	// databases being open or the API listening, and database work happens
+	// before both, so without this a slow migration or a refused database has
+	// nowhere to be reported.
+	startupServer, startupErr := api.NewStartupServer(st.GetContext(), cfg)
+	if startupErr != nil {
+		// No listener means no page to explain anything on, so there is
+		// nothing to stay alive for.
+		log.Error().Err(startupErr).Msg("failed to bind to port")
+		st.StopService()
+		return nil, fmt.Errorf("api startup failed: %w", startupErr)
+	}
+
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan softwareTokenUpdate) // launch software queue
@@ -437,34 +472,57 @@ func startService(
 	backgroundWG := &sync.WaitGroup{}
 
 	setupStarted := time.Now()
+	startupServer.SetStartingDetail("Preparing folders and configuration.")
 	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
-		return nil, err
+		return nil, newStartupFailure(
+			pl, st, startupServer, false,
+			"Zaparoo could not start",
+			"Zaparoo could not set up its folders. Check that its storage is present and writable.",
+			err,
+		)
 	}
 	log.Debug().Dur("duration", time.Since(setupStarted)).Msg("setup environment completed")
 
 	log.Info().Msg("running platform pre start")
 	preStartStarted := time.Now()
+	startupServer.SetStartingDetail("Starting platform support.")
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, fmt.Errorf("platform start pre failed: %w", err)
+		// Not stopping the platform: StartPre failed partway, so its
+		// counterpart has nothing well-defined to undo.
+		return nil, newStartupFailure(
+			pl, st, startupServer, false,
+			"Zaparoo could not start",
+			"Zaparoo could not start platform support for this device.",
+			fmt.Errorf("platform start pre failed: %w", err),
+		)
 	}
 	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
 	log.Info().Msg("opening databases")
 	databaseStarted := time.Now()
+	startupServer.SetStartingDetail(
+		"Opening databases. On a large library this can take several minutes.",
+	)
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
-		return nil, err
+		headline, detail := describeDatabaseStartupFailure(pl, err)
+		return nil, newStartupFailure(pl, st, startupServer, true, headline, detail, err)
 	}
 	log.Debug().Dur("duration", time.Since(databaseStarted)).Msg("databases opened")
 	backupManager := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 	if recoveryErr := backupManager.RecoverRestore(st.GetContext()); recoveryErr != nil {
 		closeDatabase(db)
-		return nil, fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr)
+		return nil, newStartupFailure(
+			pl, st, startupServer, true,
+			"Zaparoo could not start",
+			"Zaparoo could not finish restoring a backup that was interrupted.",
+			fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr),
+		)
 	}
 	closeHangingMediaHistoryOnStartup(db)
 	deckTagger := decks.NewTagger(&decks.ResolveDeps{
@@ -633,7 +691,7 @@ func startService(
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, player, playbackManager, indexPauser, scrapePauser,
-			backupPauser, idleSched, apiReady,
+			backupPauser, idleSched, apiReady, startupServer,
 		)
 	}()
 
@@ -926,6 +984,11 @@ func startService(
 		close(itq)
 		close(cfq)
 		closeDatabase(db)
+
+		// On platforms that log to a tmpfs so routine logging does not hit
+		// storage during gameplay, this is the last chance to put the log
+		// somewhere it survives a reboot.
+		helpers.PersistLog(pl)
 
 		log.Info().Msg("service cleanup completed")
 		close(doneCh)

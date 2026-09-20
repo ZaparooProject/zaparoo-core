@@ -280,7 +280,10 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 	mockPlatform.AssertNotCalled(
 		t, "StartPost", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	)
-	mockPlatform.AssertCalled(t, "Stop")
+	// The listener is bound before the platform starts, so an occupied port
+	// now fails before StartPre runs. Nothing was started, so there is nothing
+	// to stop.
+	mockPlatform.AssertNotCalled(t, "StartPre", mock.Anything)
 }
 
 func TestSetupEnvironmentFS_CreatesPlatformDirectories(t *testing.T) {

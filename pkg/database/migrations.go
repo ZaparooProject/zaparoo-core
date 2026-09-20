@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -139,9 +140,17 @@ func MigrateUp(
 		Msg("schema version checked")
 
 	log.Debug().Str("migration_dir", migrationDir).Msg("running goose up migrations")
+	pending := logPendingMigrations(db, migrationDir, dbPath)
 	upStart := time.Now()
 	if err := goose.Up(db, migrationDir); err != nil {
 		return fmt.Errorf("error running migrations up: %w", err)
+	}
+	if len(pending) > 0 {
+		log.Info().
+			Str("db", databaseLabel(dbPath)).
+			Int("count", len(pending)).
+			Dur("duration", time.Since(upStart)).
+			Msg("database migrations applied")
 	}
 	log.Debug().Int64("duration_ms", time.Since(upStart).Milliseconds()).
 		Msg("goose up migrations finished")
@@ -302,6 +311,58 @@ func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string
 	}
 
 	return nil
+}
+
+// databaseLabel names a database in logs by its file name, so a line says
+// which of the two is being worked on without the caller passing a label down.
+func databaseLabel(dbPath string) string {
+	if dbPath == "" {
+		return "unknown"
+	}
+	return filepath.Base(dbPath)
+}
+
+// logPendingMigrations names the work at Info before it starts, and returns
+// what it named.
+//
+// Everything else in this file logs at Debug, which is off by default, and
+// goose's own line only arrives once the work is finished. That left a
+// migration on a large library looking exactly like a hang: on a MiSTer with
+// 229k items the service was unavailable for over two minutes with nothing
+// between "opening databases" and the completion line. The point of naming
+// them first is that the log says what is being waited on while the wait is
+// happening.
+func logPendingMigrations(db *sql.DB, migrationDir, dbPath string) []string {
+	dbVersion, err := goose.GetDBVersion(db)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not read schema version to list pending migrations")
+		return nil
+	}
+
+	pending, err := goose.CollectMigrations(migrationDir, dbVersion, math.MaxInt64)
+	if err != nil {
+		// A fresh database has no migrations applied and goose reports that as
+		// an error rather than an empty set, so this is not worth a warning.
+		log.Debug().Err(err).Msg("could not collect pending migrations")
+		return nil
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(pending))
+	for _, migration := range pending {
+		names = append(names, filepath.Base(migration.Source))
+	}
+
+	log.Info().
+		Str("db", databaseLabel(dbPath)).
+		Int64("from_version", dbVersion).
+		Int("count", len(names)).
+		Strs("migrations", names).
+		Msg("applying database migrations")
+
+	return names
 }
 
 // latestEmbeddedVersion returns the highest goose version number from the

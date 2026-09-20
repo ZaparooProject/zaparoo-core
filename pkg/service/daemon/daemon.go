@@ -1559,6 +1559,18 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 		return func() {}, nil // no-op cleanup when using existing service
 	}
 
+	// An instance that stopped on a startup problem stays alive holding the
+	// port so it can report why. It does not answer the JSON-RPC route, so the
+	// check above cannot see it, and spawning a second daemon on top of it
+	// only produces a bind failure that says nothing about the real problem.
+	if state, ok := client.ServiceState(cfg); ok && state != client.ServiceStateReady {
+		log.Info().
+			Int("port", cfg.APIPort()).
+			Str("state", state).
+			Msg("an existing service instance holds the port and is not ready")
+		return func() {}, nil
+	}
+
 	log.Info().Msg("spawning daemon subprocess")
 
 	exe, err := os.Executable()

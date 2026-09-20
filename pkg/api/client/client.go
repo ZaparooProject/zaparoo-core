@@ -396,6 +396,57 @@ func IsServiceRunning(cfg *config.Instance) bool {
 	return true
 }
 
+// Service lifecycle states reported by /health. They mirror api.ServiceState;
+// this package cannot import pkg/api, which imports this one.
+const (
+	ServiceStateStarting = "starting"
+	ServiceStateReady    = "ready"
+	ServiceStateFailed   = "failed"
+)
+
+// ServiceState asks the local /health route what the service is doing.
+//
+// This is the only way to tell the three cases apart: a process that is alive
+// and working through startup, one that is alive but stopped on something a
+// person has to resolve, and nothing listening at all. IsServiceRunning cannot,
+// because it asks over the JSON-RPC route, which only answers once startup has
+// finished — that is deliberate, so callers waiting for a usable service keep
+// waiting.
+//
+// ok is false when nothing answered.
+func ServiceState(cfg *config.Instance) (state string, ok bool) {
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.APIPort())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, http.NoBody)
+	if err != nil {
+		return "", false
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Debug().Err(err).Int("port", cfg.APIPort()).Msg("nothing answered on the health route")
+		return "", false
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	var body struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		// A build older than the JSON payload answers with a bare "OK", which
+		// only ever meant a fully started service.
+		return ServiceStateReady, true
+	}
+	if body.State == "" {
+		return ServiceStateReady, true
+	}
+	return body.State, true
+}
+
 // WaitForAPI waits for the service API to become available.
 // Returns true if API became available, false if timeout reached.
 func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {

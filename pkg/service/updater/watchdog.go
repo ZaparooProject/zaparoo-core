@@ -339,6 +339,29 @@ func runStartupWatchdogWithOps(
 	}
 }
 
+// HasUnresolvedUpdate reports whether this boot is the first after an update
+// whose outcome is still undecided, which is exactly when a failed start rolls
+// back. Callers use it to tell "startup failed and the previous version has
+// just been restored, so this process must exit for it to run" from "startup
+// failed and nothing on disk is going to change".
+//
+// The conditions mirror rollBackFailedStartWithOps; the two must agree or a
+// caller will keep a process alive in front of a binary that was just swapped
+// out from under it.
+func HasUnresolvedUpdate(dataDir, currentVersion string) bool {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	m, err := loadMarker(stateDirFor(dataDir))
+	if err != nil || m == nil {
+		return false
+	}
+	if m.Outcome != "" || m.TargetVersion != currentVersion {
+		return false
+	}
+	return m.State != markerRollingBack
+}
+
 // RollBackFailedStart is the same recovery driven by a startup that got past the
 // watchdog and then failed anyway. The watchdog only sees a process that never
 // started; this sees one that started and could not finish, which on a device

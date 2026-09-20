@@ -251,3 +251,46 @@ func CloseLogging() error {
 	}
 	return nil
 }
+
+// LogPath is where the live log file is written for this platform.
+func LogPath(pl platforms.Platform) string {
+	return filepath.Join(pl.Settings().LogDir, config.LogFile)
+}
+
+// PersistLog copies the log bundle into the platform's persistent data
+// directory and returns the path a user should be pointed at.
+//
+// MiSTer and Mistex write their log to a tmpfs so that routine logging does
+// not hit the SD card during gameplay, which means the one file support asks
+// for does not survive a reboot. Callers use this at the moments the log is
+// about to matter — entering the failed state, and clean shutdown — so the
+// evidence outlives the boot that produced it.
+//
+// Platforms whose log directory is already persistent do nothing and get the
+// live path back. Pointing LogDir at TempDir is what makes a log volatile, and
+// MiSTer and Mistex are the only platforms that do it; everywhere else LogDir
+// is a persistent directory of its own, so copying the bundle would leave a
+// second, immediately stale core.log beside the live one on every stop.
+func PersistLog(pl platforms.Platform) string {
+	settings := pl.Settings()
+	livePath := LogPath(pl)
+
+	dataDir := DataDir(pl)
+	if dataDir == "" || settings.LogDir == "" || settings.LogDir != settings.TempDir {
+		return livePath
+	}
+
+	destPath := filepath.Join(dataDir, config.LogFile)
+	data, err := ReadLogBundle(pl, 0)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not read log bundle to persist it")
+		return livePath
+	}
+	if err := os.WriteFile(destPath, data, 0o600); err != nil {
+		log.Warn().Err(err).Str("path", destPath).Msg("could not persist log file")
+		return livePath
+	}
+
+	log.Info().Str("path", destPath).Msg("copied log to persistent storage")
+	return destPath
+}

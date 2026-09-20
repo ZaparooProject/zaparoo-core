@@ -6,7 +6,7 @@ Methods are used to execute actions and request data back from the API.
 
 Each method below identifies which clients may call it:
 
-- **Unauthenticated bootstrap:** JSON-RPC methods `settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status` are available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited. Separate client-pairing endpoints `/api/pair/start` and `/api/pair/finish` are remotely reachable and strictly rate limited. `/health` is unrestricted and returns only `OK`.
+- **Unauthenticated bootstrap:** JSON-RPC methods `settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status` are available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited. Separate client-pairing endpoints `/api/pair/start` and `/api/pair/finish` are remotely reachable and strictly rate limited. `/health` is unrestricted and returns a small JSON body carrying the service's coarse lifecycle state (`starting`, `ready` or `failed`) and nothing else.
 - **All accepted clients:** localhost, authenticated admin, authenticated member, and legacy clients admitted by platform compatibility policy.
 - **Localhost or any authenticated client:** localhost, paired clients, and API-key admin. Legacy clients are rejected.
 - **`profiles.manage`:** localhost and clients with the capability. Admin has it; member does not. Legacy retains it only on approved appliance platforms.
@@ -5144,6 +5144,7 @@ None.
 | Key    | Type   | Required | Description                                      |
 | :----- | :----- | :------- | :----------------------------------------------- |
 | status | string | Yes      | Health status. Returns `"ok"` when server is healthy. |
+| state  | string | Yes      | Lifecycle state. Always `"ready"` here, because this method only answers once the service is fully started. The HTTP `/health` route reports `"starting"` and `"failed"` as well. |
 
 #### Example
 
@@ -5164,7 +5165,8 @@ None.
   "jsonrpc": "2.0",
   "id": "db58f757-7e47-11ef-982b-020304050607",
   "result": {
-    "status": "ok"
+    "status": "ok",
+    "state": "ready"
   }
 }
 ```

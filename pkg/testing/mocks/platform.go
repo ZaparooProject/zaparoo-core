@@ -90,12 +90,23 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 }
 
 // StartPost runs any necessary platform setup AFTER the main service has started running
-func (m *MockPlatform) StartPost(ctx context.Context, cfg *config.Instance,
+func (m *MockPlatform) StartPost(_ context.Context, _ *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
 	db *database.Database, scheduler *idle.Scheduler,
 ) error {
-	args := m.Called(ctx, cfg, launcherManager, getActiveMedia, setActiveMedia, db, scheduler)
+	// Only presence is recorded, not the values. testify formats every
+	// argument with %v to build its diff output, and by the time StartPost is
+	// called the service is already running: formatting the scheduler, the
+	// database or the config reads state that other goroutines are writing,
+	// which the race detector rightly reports.
+	args := m.Called(
+		launcherManager != nil,
+		getActiveMedia != nil,
+		setActiveMedia != nil,
+		db != nil,
+		scheduler != nil,
+	)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}

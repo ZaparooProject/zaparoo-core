@@ -273,16 +273,19 @@ func TestMakeDatabase_SchemaAheadReportsUnreadableMediaUserData(t *testing.T) {
 
 // Start posts the notice rather than makeDatabase, because the media database is
 // discarded before the inbox service exists. Covering that wiring takes Start
-// itself, run as far as the API bind — occupied here — which is past the inbox
+// itself, run as far as StartPost — refused here — which is past the inbox
 // message and short of the reindex the rebuilt database is now due.
 func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	ctx := context.Background()
 
+	// Borrow a free port and hand it back: the API listener binds before the
+	// databases open, so leaving this one occupied would stop the run before
+	// the rebuild this test is about.
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer func() { require.NoError(t, listener.Close()) }()
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	require.True(t, ok)
+	require.NoError(t, listener.Close())
 
 	testRoot := t.TempDir()
 	settings := platforms.Settings{
@@ -305,6 +308,12 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	mockPlatform.On("ManagedByPackageManager").Return(false)
 	mockPlatform.On("StartPre", cfg).Return(nil)
 	mockPlatform.On("Stop").Return(nil).Maybe()
+	// The rebuild and its inbox message both happen before the API starts, so
+	// the run has to be stopped after that. StartPost is the first thing past
+	// them that can refuse.
+	mockPlatform.On(
+		"StartPost", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(errors.New("stop the test run here"))
 
 	seedMigratedMediaDB(ctx, t, mockPlatform)
 	markSchemaAhead(ctx, t, testRoot, config.MediaDbFile)
@@ -314,7 +323,7 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	t.Cleanup(crashdump.Stop)
 	svcResult, startErr := Start(mockPlatform, cfg)
 	require.Nil(t, svcResult)
-	require.Error(t, startErr, "the occupied API port is what stops this run, not the rebuild")
+	require.Error(t, startErr, "the refused StartPost is what stops this run, not the rebuild")
 
 	db, mediaDBReset, err := makeDatabase(ctx, mockPlatform)
 	t.Cleanup(func() { closeDatabase(db) })
