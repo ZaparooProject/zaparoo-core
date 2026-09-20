@@ -1102,10 +1102,12 @@ func TestSelectBest_AllVariantsChooseAmongThem(t *testing.T) {
 			wantID: 1,
 		},
 		{
+			// The Japanese file wins every tie-breaker below region, so only
+			// the region priority can pick the USA one.
 			name: "preferred region decides between variants",
 			results: []database.SearchResultWithCursor{
 				{MediaID: 1, Path: "/roms/nes/Game (Japan) (Proto).nes", Tags: []database.TagInfo{japan, proto}},
-				{MediaID: 2, Path: "/roms/nes/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+				{MediaID: 2, Path: "/roms/nes/prerelease/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
 			},
 			wantID: 2,
 		},
@@ -1119,6 +1121,8 @@ func TestSelectBest_AllVariantsChooseAmongThem(t *testing.T) {
 			wantID: 3,
 		},
 		{
+			// The prototype wins every tie-breaker, so only the requested tag
+			// can keep it out; the shallower of the two betas then wins.
 			name: "requested variant with duplicate copies",
 			tagFilters: []zapscript.TagFilter{{
 				Type:     string(tags.TagTypeUnfinished),
@@ -1127,8 +1131,8 @@ func TestSelectBest_AllVariantsChooseAmongThem(t *testing.T) {
 			}},
 			results: []database.SearchResultWithCursor{
 				{MediaID: 1, Path: "/roms/nes/Game (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
-				{MediaID: 2, Path: "/roms/nes/all/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
-				{MediaID: 3, Path: "/roms/nes/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+				{MediaID: 2, Path: "/roms/nes/beta/all/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+				{MediaID: 3, Path: "/roms/nes/beta/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
 			},
 			wantID: 3,
 		},

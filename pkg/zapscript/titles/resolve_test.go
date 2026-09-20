@@ -395,6 +395,63 @@ func TestResolveTitle_Strategy1_AllVariantsResolveWithinTitle(t *testing.T) {
 	assert.InDelta(t, 1.0, result.Confidence, 0.001)
 }
 
+func TestResolveTitle_Strategy1_AllVariantsExcludedByRequest(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+
+	// Keeping every candidate when they are all variants must not hand back one
+	// the request excluded. Both files carry the refused tag, so the exact match
+	// scores zero and the weaker strategies, which find nothing, settle it.
+	protoTags := []database.TagInfo{
+		{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+		{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)},
+	}
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, "NES", mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{
+			MediaID: 1, SystemID: "NES", Name: "RoboCop versus The Terminator",
+			Path: filepath.Join("games", "NES", "Protos", "RoboCop versus The Terminator (USA) (Proto).nes"),
+			Tags: protoTags,
+		},
+		{
+			MediaID: 2, SystemID: "NES", Name: "RoboCop versus The Terminator",
+			Path: filepath.Join("games", "NES", "RoboCop versus The Terminator (USA) (Proto).nes"),
+			Tags: protoTags,
+		},
+	}, nil)
+	mockMediaDB.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{}, nil)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "RoboCop versus The Terminator (-unfinished:proto)",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.ErrorIs(t, err, ErrNoMatch)
+	assert.Nil(t, result)
+	mockMediaDB.AssertNotCalled(t, "SetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestResolveTitle_Strategy1_TagMatchingSelectsUSA(t *testing.T) {
 	t.Parallel()
 
