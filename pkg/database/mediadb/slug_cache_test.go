@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -240,6 +241,36 @@ func TestSlugCache_SetAndGet_Integration(t *testing.T) {
 	got, found := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
 	assert.True(t, found, "cache entry should be found")
 	assert.Equal(t, want, got)
+}
+
+// TestSlugCache_RefusesUnscoredResolution_Integration covers a caller that fills in the
+// media and strategy but leaves the score behind. The row must not be written:
+// a stored zero is indistinguishable from a real score on the way back out, and
+// would be reported as a 0.00 confidence match on every later resolution.
+func TestSlugCache_RefusesUnscoredResolution_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	mediaDBID := createTestMedia(t, mediaDB, "NES", "metroid", "Metroid", "/roms/NES/Metroid.nes")
+
+	for _, confidence := range []float64{0, -0.5, 1.5, math.NaN()} {
+		err := mediaDB.SetCachedSlugResolution(ctx, "NES", "metroid", nil, database.SlugResolution{
+			MediaDBID: mediaDBID, Strategy: "exact_match", Confidence: confidence,
+		})
+		require.ErrorIs(t, err, ErrUnscoredSlugResolution, "confidence %v must be refused", confidence)
+
+		_, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "metroid", nil)
+		assert.False(t, found, "nothing is cached for confidence %v", confidence)
+	}
+
+	require.NoError(t, mediaDB.SetCachedSlugResolution(ctx, "NES", "metroid", nil, database.SlugResolution{
+		MediaDBID: mediaDBID, Strategy: "exact_match", Confidence: 0.633,
+	}))
+	got, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "metroid", nil)
+	require.True(t, found)
+	assert.InDelta(t, 0.633, got.Confidence, 1e-9)
 }
 
 // TestSlugCache_CacheMiss verifies cache miss behavior

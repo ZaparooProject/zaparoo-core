@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -115,10 +116,22 @@ func (db *MediaDB) GetCachedSlugResolution(
 	return resolution, true
 }
 
+// ErrUnscoredSlugResolution is returned when a resolution is offered to the
+// cache without a usable confidence score.
+var ErrUnscoredSlugResolution = errors.New("slug resolution has no usable confidence score")
+
 // SetCachedSlugResolution stores a successful slug resolution in the cache.
+// A resolution whose confidence is not a score between 0 and 1 is refused:
+// the point of caching the score is that a hit reports what the match
+// actually made, and a zero left behind by a caller that filled in every
+// other field would be served as a confident-looking 0.00.
 func (db *MediaDB) SetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, resolution database.SlugResolution,
 ) error {
+	if math.IsNaN(resolution.Confidence) || resolution.Confidence <= 0 || resolution.Confidence > 1 {
+		return fmt.Errorf("%w: %v", ErrUnscoredSlugResolution, resolution.Confidence)
+	}
+
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
