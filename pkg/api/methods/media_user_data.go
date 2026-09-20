@@ -21,24 +21,12 @@ package methods
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
-
-// setMediaUserLauncherOverride records the launcher-override intent for a media
-// path in UserDB. An empty launcherID clears the override. See
-// UserDB.SetMediaUserFlag for the concurrency guarantee.
-func setMediaUserLauncherOverride(env *requests.RequestEnv, systemID, path, launcherID string) error {
-	if err := env.Database.UserDB.SetMediaUserLauncherOverride(systemID, path, launcherID); err != nil {
-		return fmt.Errorf("failed to set media user launcher override: %w", err)
-	}
-	snapshotMediaUserIdentity(env, systemID, path)
-	return nil
-}
 
 // snapshotMediaUserIdentity best-effort captures the scanner's display name
 // and complete canonical file-tag snapshot onto the user-data row just written.

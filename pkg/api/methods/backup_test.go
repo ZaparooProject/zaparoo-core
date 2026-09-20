@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -194,6 +195,8 @@ func TestHandleBackupRestore_Success(t *testing.T) {
 	env.Params = params
 	deckTags := &recordingDeckTags{}
 	env.Database.DeckTags = deckTags
+	mediaUserData := &recordingMediaUserDataReconciler{}
+	env.Database.MediaUserData = mediaUserData
 
 	result, err := HandleBackupRestore(env)
 	require.NoError(t, err)
@@ -203,6 +206,25 @@ func TestHandleBackupRestore_Success(t *testing.T) {
 	require.NotNil(t, info.PreRestoreBackup)
 	assert.Equal(t, backupsvc.IntegrityValid, info.PreRestoreBackup.Integrity)
 	assert.Equal(t, int32(1), deckTags.all.Load(), "the restored decks are re-tagged")
+	assert.Equal(t, int32(1), mediaUserData.queued.Load(), "the restored flags and overrides are re-projected")
+}
+
+// recordingMediaUserDataReconciler counts the reconciles queued through it.
+type recordingMediaUserDataReconciler struct {
+	queued atomic.Int32
+}
+
+func (r *recordingMediaUserDataReconciler) QueueMediaUserDataReconcile() { r.queued.Add(1) }
+
+func TestHandleBackupRestore_FailureQueuesNothing(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.Params = json.RawMessage(`{"name":"missing.zip"}`)
+	mediaUserData := &recordingMediaUserDataReconciler{}
+	env.Database.MediaUserData = mediaUserData
+
+	_, err := HandleBackupRestore(env)
+	require.Error(t, err)
+	assert.Zero(t, mediaUserData.queued.Load(), "the user database was not replaced")
 }
 
 func TestHandleBackupRestore_RejectsActiveMedia(t *testing.T) {
