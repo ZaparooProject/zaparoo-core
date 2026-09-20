@@ -25,6 +25,36 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestExpandShift(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		codes []int
+		want  []int
+	}{
+		{name: "unshifted key", codes: []int{30}, want: []int{30}},
+		{name: "shifted key", codes: []int{-50}, want: []int{42, 50}},
+		{name: "combo without shift", codes: []int{29, 46}, want: []int{29, 46}},
+		{name: "explicit shift combo", codes: []int{42, 30}, want: []int{42, 30}},
+		{name: "explicit shift with shifted key", codes: []int{42, -30}, want: []int{42, 30}},
+		{name: "right shift with shifted key", codes: []int{54, -30}, want: []int{54, 30}},
+		{name: "modifier then shifted key", codes: []int{29, -30}, want: []int{29, 42, 30}},
+		{name: "shifted key before explicit shift", codes: []int{-30, 42}, want: []int{42, 30}},
+		{name: "two shifted keys", codes: []int{-30, -2}, want: []int{42, 30, 2}},
+		{name: "duplicate keys", codes: []int{29, 29, 46}, want: []int{29, 46}},
+		{name: "shifted and base of same key", codes: []int{30, -30}, want: []int{30, 42}},
+		{name: "empty", codes: []int{}, want: []int{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ExpandShift(tt.codes))
+		})
+	}
+}
+
 func TestIsShiftedKey(t *testing.T) {
 	t.Parallel()
 

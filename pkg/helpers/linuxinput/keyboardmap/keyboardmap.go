@@ -196,6 +196,43 @@ func IsShiftedKey(name string) (baseCode int, ok bool) {
 	return -code, true
 }
 
+// LeftShiftCode is the key held to type a shift-modified character.
+const LeftShiftCode = 42
+
+const rightShiftCode = 54
+
+// ExpandShift turns a list of map codes into the physical keys to press.
+// Shift-modified (negative) codes become their base code, with LeftShift
+// inserted before the first of them unless a Shift already precedes it.
+// A code that appears more than once is kept only at its first position.
+func ExpandShift(codes []int) []int {
+	out := make([]int, 0, len(codes)+1)
+	seen := make(map[int]struct{}, len(codes)+1)
+	add := func(code int) {
+		if _, ok := seen[code]; ok {
+			return
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+
+	hasShift := false
+	for _, code := range codes {
+		switch {
+		case code == LeftShiftCode || code == rightShiftCode:
+			hasShift = true
+		case code < 0:
+			if !hasShift {
+				add(LeftShiftCode)
+				hasShift = true
+			}
+			code = -code
+		}
+		add(code)
+	}
+	return out
+}
+
 var LegacyKeyboardMap map[int]string
 
 func SetupLegacyKeyboardMap() {
