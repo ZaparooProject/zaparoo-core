@@ -611,14 +611,23 @@ upgrade_relation() {
     semver_compare "${installed}" "${selected}"
 }
 
+# Whether anything is answering on Core's port. This deliberately does not
+# inspect the body: the question at every call site is whether the port is in
+# use, and Core answers /health from the moment it binds, before the databases
+# are open and while it is reporting a startup failure. Matching a body would
+# read those as "free" and let the installer replace a binary underneath a
+# running process.
 core_api_available() {
-    curl --fail --silent --show-error "http://127.0.0.1:7497/health" 2>/dev/null | \
-        grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'
+    curl --fail --silent --show-error "http://127.0.0.1:7497/health" >/dev/null 2>&1
 }
+
+# Core binds the port before it opens its databases and holds it until shutdown
+# finishes, so this has to outlast a real stop rather than a socket close.
+CORE_API_DOWN_ATTEMPTS=60
 
 wait_for_core_api_down() {
     local attempt
-    for ((attempt = 0; attempt < 20; attempt++)); do
+    for ((attempt = 0; attempt < CORE_API_DOWN_ATTEMPTS; attempt++)); do
         if ! core_api_available; then
             return 0
         fi

@@ -1956,13 +1956,17 @@ func Start(
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
-		notifBroker, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
+		notifBroker, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil, nil,
 	)
 }
 
 // StartWithReady starts the API web server and reports bind success or failure
 // before blocking for shutdown. This lets service startup fail synchronously
 // when the configured API port is unavailable.
+//
+// When startup is non-nil the listener is already bound and serving the
+// startup page, so this reuses it and swaps the full router in rather than
+// binding a second time.
 func StartWithReady(
 	platform platforms.Platform,
 	cfg *config.Instance,
@@ -1980,6 +1984,7 @@ func StartWithReady(
 	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 	ready chan<- error,
+	startup *StartupServer,
 ) error {
 	notifyReady := func(err error) {
 		if ready != nil {
@@ -1998,28 +2003,39 @@ func StartWithReady(
 		}
 	}
 
-	log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
-	log.Debug().Msg("HTTP server attempting to bind")
+	var listener net.Listener
+	if startup != nil {
+		// The listener was bound before the databases opened so startup had
+		// somewhere to report. Reuse it; binding again would fail.
+		listener = startup.Listener()
+		port = startup.Port()
+		log.Debug().Int("port", port).Msg("reusing startup listener for API server")
+	} else {
+		log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
+		log.Debug().Msg("HTTP server attempting to bind")
 
-	// Bind before reporting startup success so callers can fail fast when the
-	// configured API port is already in use, and before the origin lists are
-	// built so a port-zero bind resolves to the port they advertise.
-	lc := &net.ListenConfig{}
-	listener, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
-	if err != nil {
-		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
-		log.Error().Err(bindErr).Msg("failed to bind to port")
-		notifyReady(bindErr)
-		st.StopService()
-		return bindErr
-	}
+		// Bind before reporting startup success so callers can fail fast when
+		// the configured API port is already in use, and before the origin
+		// lists are built so a port-zero bind resolves to the port they
+		// advertise.
+		lc := &net.ListenConfig{}
+		bound, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+		if err != nil {
+			bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+			log.Error().Err(bindErr).Msg("failed to bind to port")
+			notifyReady(bindErr)
+			st.StopService()
+			return bindErr
+		}
+		listener = bound
 
-	// If port 0 was requested, adopt the port actually bound so callers can
-	// discover it and every allowed origin carries the real port.
-	if port == 0 {
-		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-			port = addr.Port
-			_ = cfg.SetAPIPort(port)
+		// If port 0 was requested, adopt the port actually bound so callers
+		// can discover it and every allowed origin carries the real port.
+		if port == 0 {
+			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+				port = addr.Port
+				_ = cfg.SetAPIPort(port)
+			}
 		}
 	}
 
@@ -2335,8 +2351,7 @@ func StartWithReady(
 	// app's discovery flow can reach it without credentials. The plain
 	// "OK" response intentionally leaks no information beyond liveness.
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		startup.WriteHealth(w)
 	})
 
 	// Redirect root to app for users who forget /app/
@@ -2344,30 +2359,43 @@ func StartWithReady(
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
-	server := &http.Server{
-		Addr:              cfg.APIListen(),
-		Handler:           r,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       config.APIRequestTimeout,
-	}
+	var (
+		server     *http.Server
+		serverDone <-chan error
+	)
 
-	serverDone := make(chan error, 1)
+	if startup != nil {
+		// The startup server is already serving this listener. Swapping the
+		// handler hands every subsequent request to the full router and marks
+		// the service ready in one step.
+		startup.SwapHandler(r)
+		serverDone = startup.Done()
+	} else {
+		server = &http.Server{
+			Addr:              cfg.APIListen(),
+			Handler:           r,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       config.APIRequestTimeout,
+		}
+		done := make(chan error, 1)
+		serverDone = done
+
+		go func() {
+			// Start serving
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error().Err(err).Msg("HTTP server error")
+				done <- err
+			} else {
+				log.Debug().Msg("HTTP server stopped normally")
+				done <- nil
+			}
+		}()
+
+		log.Debug().Msg("HTTP server goroutine launched")
+	}
 
 	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
 	notifyReady(nil)
-
-	go func() {
-		// Start serving
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error().Err(err).Msg("HTTP server error")
-			serverDone <- err
-		} else {
-			log.Debug().Msg("HTTP server stopped normally")
-			serverDone <- nil
-		}
-	}()
-
-	log.Debug().Msg("HTTP server goroutine launched")
 
 	select {
 	case <-st.GetContext().Done():
@@ -2384,9 +2412,18 @@ func StartWithReady(
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("HTTP server shutdown error")
-		return fmt.Errorf("HTTP server shutdown error: %w", err)
+	shutdownErr := func() error {
+		if startup != nil {
+			return startup.Shutdown(shutdownCtx)
+		}
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("HTTP server shutdown error: %w", err)
+		}
+		return nil
+	}()
+	if shutdownErr != nil {
+		log.Error().Err(shutdownErr).Msg("HTTP server shutdown error")
+		return shutdownErr
 	}
 
 	log.Info().Msg("HTTP server shutdown complete")

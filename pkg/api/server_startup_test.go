@@ -95,7 +95,7 @@ func TestWebSocketRouteRejectsNonUpgradeRequest(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, make(chan tokens.Token, 1), nil, db,
-			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready, nil,
 		)
 	}()
 	defer func() {
@@ -145,7 +145,7 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, tokenQueue, nil, db,
-			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready, nil,
 		)
 	}()
 
@@ -210,7 +210,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 				defer close(serverDone)
 				serverErr <- StartWithReady(
 					platform, cfg, st, tokenQueue, nil, db,
-					nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+					nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready, nil,
 				)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -1360,7 +1360,7 @@ func TestWebSocketSilentListenerReceivesNotifications(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, tokenQueue, nil, db,
-			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready, nil,
 		)
 	}()
 	defer func() {

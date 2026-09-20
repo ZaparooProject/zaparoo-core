@@ -261,7 +261,7 @@ Core's intentionally unauthenticated surface remains available on every platform
 
 - Client pairing (`/api/pair/start`, `/api/pair/finish`) is remotely reachable and strictly rate limited.
 - Online authentication bootstrap (`settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status`) is available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited.
-- `/health` is unrestricted and returns only `OK` for liveness checks.
+- `/health` is unrestricted and returns a small JSON body for liveness checks: `{"status":"ok","state":"ready"}` once the service is up, with `state` also reporting `starting` while it works through startup and `failed` when it stopped on something a person has to resolve. It always answers `200`, carries nothing beyond that state, and `status` is kept so callers matching the previous `"status":"ok"` keep working. Builds before v2.18 returned a bare `OK`.
 
 REST `/run/*` (plus `/r/*` and deprecated `/l/*`) is a separate restricted anonymous surface. Remote use requires explicit `allow_run`, and requested ZapScript must match configured patterns. Static API-key middleware still applies when keys are configured.
 

@@ -626,7 +626,11 @@ type VersionResponse struct {
 }
 
 type HealthCheckResponse struct {
+	// Status is kept for callers matching the historical `"status":"ok"`.
 	Status string `json:"status"`
+	// State is the coarse lifecycle state: starting, ready or failed. New
+	// callers should read this rather than Status.
+	State string `json:"state"`
 }
 
 // PlaylistItemInfo is one entry in a PlaylistState.

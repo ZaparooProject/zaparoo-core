@@ -45,6 +45,9 @@ func sqlMigrateUp(db *sql.DB, dbPath string) error {
 	if err := database.MigrateUp(db, migrationFiles, "migrations", dbPath, sidecarPath); err != nil {
 		return fmt.Errorf("failed to run user database migrations: %w", err)
 	}
+	// Note which build owns this schema now, so an older one that later
+	// refuses it can say which version to reinstall.
+	recordSchemaProvenance(context.Background(), db)
 	return nil
 }
 

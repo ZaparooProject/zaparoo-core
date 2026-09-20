@@ -36,7 +36,10 @@ func HandleVersion(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 
 func HandleHealthCheck(_ requests.RequestEnv) (any, error) { //nolint:gocritic // hugeParam yes is huge
 	log.Info().Msg("received health check request")
+	// This method only answers once the full router is serving, so the state
+	// is always ready by the time a caller gets here.
 	return models.HealthCheckResponse{
 		Status: "ok",
+		State:  "ready",
 	}, nil
 }

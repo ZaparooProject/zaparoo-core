@@ -509,8 +509,9 @@ func BuildMainPage(
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
 	mainPageNotifyState.SetCancel(notifyCancel)
 
-	svcRunning := isRunning()
-	log.Debug().Bool("svcRunning", svcRunning).Msg("TUI: service status check")
+	condition := resolveServiceCondition(cfg, isRunning)
+	svcRunning := condition == serviceRunning
+	log.Debug().Int("condition", int(condition)).Msg("TUI: service status check")
 
 	apiClient := client.NewLocalAPIClient(cfg)
 	svc := NewSettingsService(apiClient)
@@ -520,21 +521,13 @@ func BuildMainPage(
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 
-	t := CurrentTheme()
-
 	introText := tview.NewTextView().
 		SetText("Visit [::bu:https://zaparoo.org]zaparoo.org[::BU:-] for guides and support.\n").
 		SetDynamicColors(true).
 		SetWordWrap(true)
 
 	statusText := tview.NewTextView().SetDynamicColors(true)
-	var svcStatus string
-	if svcRunning {
-		svcStatus = fmt.Sprintf("[%s]* RUNNING[-]", t.SuccessColorName)
-	} else {
-		svcStatus = fmt.Sprintf("[%s]x NOT RUNNING[-]", t.ErrorColorName) +
-			"\nService may not have started.\nCheck Logs for details."
-	}
+	svcStatus := serviceStatusText(cfg, pl, condition)
 
 	ip := helpers.GetLocalIP()
 	var ipDisplay string
@@ -544,7 +537,7 @@ func BuildMainPage(
 		ipDisplay = ip
 	}
 
-	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.APIPort())
+	webUI := webUIAddress(cfg)
 
 	statusText.SetText(fmt.Sprintf(
 		"%s %s\n%s %s\n%s %s\n%s\n[:::%s]%s[:::-]",
