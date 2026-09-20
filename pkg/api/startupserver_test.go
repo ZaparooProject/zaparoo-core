@@ -181,3 +181,41 @@ func TestStartupServer_RefusesAnOccupiedPort(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to bind API listener")
 }
+
+// A refusal is often the only line a client has room to show. Telling a caller
+// Zaparoo is "still starting" when it has stopped on something a person has to
+// resolve sends them off to wait for something that is never coming.
+func TestStartupServer_RefusalSaysWhichStateItIsIn(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestStartupServer(t)
+
+	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/nothing-here", srv.Port()))
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Contains(t, body, "still starting")
+
+	srv.SetFailed("Zaparoo cannot open your saved data", "Reinstall the newer version.", "")
+
+	code, body = getBody(t, fmt.Sprintf("http://127.0.0.1:%d/nothing-here", srv.Port()))
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.NotContains(t, body, "still starting",
+		"a failed start is not something a caller should sit and wait out")
+	assert.Contains(t, body, "could not start")
+}
+
+// The detail line is what the page shows while startup is still working, and
+// it is the only progress a user gets during a long migration.
+func TestStartupServer_ShowsTheStepItIsOn(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestStartupServer(t)
+	srv.SetStartingDetail("Opening databases. On a large library this can take several minutes.")
+
+	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/app/", srv.Port()))
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "Zaparoo is starting")
+	assert.Contains(t, body, "can take several minutes")
+
+	_, state := healthState(t, srv)
+	assert.Equal(t, "starting", state, "a progress update must not change the state")
+}

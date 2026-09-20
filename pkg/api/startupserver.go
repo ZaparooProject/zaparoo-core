@@ -267,12 +267,23 @@ func (s *StartupServer) WriteHealth(w http.ResponseWriter) {
 	}
 }
 
+// refusal is what an unserved route says. The state matters: a caller told
+// "still starting" reasonably retries, and in the failed state that is a wait
+// that never ends. The page and /health carry the detail; this is the one
+// line a client has room to show.
+func (s *StartupServer) refusal() string {
+	if s.State() == ServiceStateFailed {
+		return "Zaparoo could not start; open it in a browser for details"
+	}
+	return "Zaparoo is still starting"
+}
+
 // serveStartup is the handler installed until the full router is ready. It
-// answers the four routes that need nothing but the listener and refuses
+// answers the routes that need nothing but the listener and refuses
 // everything else, so callers waiting on the real API keep waiting.
 func (s *StartupServer) serveStartup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Zaparoo is still starting", http.StatusServiceUnavailable)
+		http.Error(w, s.refusal(), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -282,7 +293,7 @@ func (s *StartupServer) serveStartup(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/" || r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/"):
 		s.servePage(w)
 	default:
-		http.Error(w, "Zaparoo is still starting", http.StatusServiceUnavailable)
+		http.Error(w, s.refusal(), http.StatusServiceUnavailable)
 	}
 }
 
