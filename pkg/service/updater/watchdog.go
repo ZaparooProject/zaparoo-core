@@ -339,10 +339,6 @@ func runStartupWatchdogWithOps(
 	}
 }
 
-// RollBackFailedStart is the same recovery driven by a startup that got past the
-// watchdog and then failed anyway. The watchdog only sees a process that never
-// started; this sees one that started and could not finish, which on a device
-// with no supervisor is just as fatal.
 // HasUnresolvedUpdate reports whether this boot is the first after an update
 // whose outcome is still undecided, which is exactly when a failed start rolls
 // back. Callers use it to tell "startup failed and the previous version has
@@ -366,6 +362,10 @@ func HasUnresolvedUpdate(dataDir, currentVersion string) bool {
 	return m.State != markerRollingBack
 }
 
+// RollBackFailedStart is the same recovery driven by a startup that got past the
+// watchdog and then failed anyway. The watchdog only sees a process that never
+// started; this sees one that started and could not finish, which on a device
+// with no supervisor is just as fatal.
 func RollBackFailedStart(ctx context.Context, dataDir, currentVersion string) error {
 	return rollBackFailedStartWithOps(ctx, dataDir, currentVersion, defaultWatchdogFileOps())
 }
