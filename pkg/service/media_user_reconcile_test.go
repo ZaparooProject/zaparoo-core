@@ -167,6 +167,64 @@ func TestMediaUserReconcilerRequeueDuringReconcile(t *testing.T) {
 	assert.False(t, f.markerSaved(t))
 }
 
+// unreadableStateUserDB fails every DeviceState read.
+type unreadableStateUserDB struct {
+	database.UserDBI
+}
+
+func (*unreadableStateUserDB) GetDeviceState(string) (value string, found bool, err error) {
+	return "", false, errors.New("state boom")
+}
+
+// A marker that cannot be read has to count as a request: skipping the
+// reconcile would leave the replaced database's flags in place for good,
+// while an unneeded reconcile writes nothing.
+func TestMediaUserReconcilerUnreadableMarkerReconciles(t *testing.T) {
+	t.Parallel()
+	f := newReconcilerFixture(t)
+	db := &database.Database{MediaDB: f.db.MediaDB, UserDB: &unreadableStateUserDB{UserDBI: f.db.UserDB}}
+
+	r := newMediaUserReconciler(db)
+
+	assert.True(t, r.pending, "an unreadable marker is treated as a request")
+	assert.True(t, r.reconcilePending(context.Background()))
+	assert.False(t, f.favoriteProjected(t), "the stale favorite is removed anyway")
+}
+
+// undeletableStateUserDB fails the marker removal while fail is set.
+type undeletableStateUserDB struct {
+	database.UserDBI
+	fail bool
+}
+
+func (u *undeletableStateUserDB) DeleteDeviceState(key string) error {
+	if u.fail {
+		return errors.New("delete boom")
+	}
+	return u.UserDBI.DeleteDeviceState(key) //nolint:wrapcheck // test passthrough
+}
+
+// The marker is what carries the request across a restart, so a reconcile
+// whose marker survives is still owed: clearing it in memory would let a
+// later start repeat work the marker says is unfinished.
+func TestMediaUserReconcilerKeepsRequestWhenMarkerSurvives(t *testing.T) {
+	t.Parallel()
+	f := newReconcilerFixture(t)
+	userDB := &undeletableStateUserDB{UserDBI: f.db.UserDB, fail: true}
+	r := newMediaUserReconciler(&database.Database{MediaDB: f.db.MediaDB, UserDB: userDB})
+	r.QueueMediaUserDataReconcile()
+
+	assert.False(t, r.reconcilePending(context.Background()), "a request whose marker is still saved is still owed")
+	assert.True(t, r.pending)
+	assert.True(t, f.markerSaved(t))
+	assert.False(t, f.favoriteProjected(t), "the reconcile itself did run")
+
+	userDB.fail = false
+	assert.True(t, r.reconcilePending(context.Background()))
+	assert.False(t, r.pending)
+	assert.False(t, f.markerSaved(t))
+}
+
 func TestMediaUserReconcilerWaitsForMediaWrites(t *testing.T) {
 	t.Parallel()
 	f := newReconcilerFixture(t)
