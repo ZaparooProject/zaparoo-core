@@ -312,8 +312,7 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	// the run has to be stopped after that. StartPost is the first thing past
 	// them that can refuse.
 	mockPlatform.On(
-		"StartPost", mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		"StartPost", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return(errors.New("stop the test run here"))
 
 	seedMigratedMediaDB(ctx, t, mockPlatform)
