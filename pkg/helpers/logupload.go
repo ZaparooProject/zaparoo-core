@@ -42,6 +42,7 @@ import (
 // still do when Core has stopped, so it lives here rather than inside any one
 // interface.
 var (
+	ErrUploadReadLog  = errors.New("log unavailable for upload")
 	ErrUploadPrepare  = errors.New("failed to prepare upload")
 	ErrUploadConnect  = errors.New("failed to connect to upload service")
 	ErrUploadResponse = errors.New("failed to read upload response")
@@ -51,6 +52,12 @@ var (
 // uploadTimeout bounds a single upload attempt. A log bundle is under a
 // megabyte, so this is generous even on a slow connection.
 const uploadTimeout = 30 * time.Second
+
+// maxResponseBytes bounds the reply. The service answers with a single URL, so
+// anything approaching this is a service that is not the one we think it is —
+// and the reply is read on a device with 128MB of RAM and then shown to the
+// user, so it is not read unbounded.
+const maxResponseBytes = 8 << 10
 
 // UploadLog sends the log bundle to the configured paste service and returns
 // the URL it was published at.
@@ -65,7 +72,7 @@ func uploadLogTo(pl platforms.Platform, uploadURL string, client *http.Client) (
 	// stderr, and that is usually the part worth reading.
 	content, err := ReadLogBundle(pl, config.LogBundleMaxBytes)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrUploadReadLog, err)
 	}
 
 	return UploadLogContent(content, uploadURL, client)
@@ -106,7 +113,7 @@ func UploadLogContent(content []byte, uploadURL string, client *http.Client) (st
 		}
 	}()
 
-	response, err := io.ReadAll(resp.Body)
+	response, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrUploadResponse, err)
 	}
@@ -119,10 +126,13 @@ func UploadLogContent(content []byte, uploadURL string, client *http.Client) (st
 }
 
 // DescribeUploadFailure turns an upload error into a sentence for a user. The
-// connection case is separated because it is the one with an obvious cause and
-// an obvious remedy.
+// read and connection cases are separated because they are the two with an
+// obvious cause and an obvious remedy, and because the first one means nothing
+// was sent at all.
 func DescribeUploadFailure(err error) string {
 	switch {
+	case errors.Is(err, ErrUploadReadLog):
+		return "Unable to read log file."
 	case errors.Is(err, ErrUploadConnect):
 		return "Unable to connect to upload service."
 	default:

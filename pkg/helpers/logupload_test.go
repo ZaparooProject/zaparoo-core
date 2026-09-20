@@ -414,6 +414,9 @@ func TestUploadLog_ReportsAMissingLog(t *testing.T) {
 
 	_, err := uploadLogTo(pl, "http://localhost:1", &http.Client{})
 	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrUploadConnect,
+	require.NotErrorIs(t, err, ErrUploadConnect,
 		"a log that could not be read never reached the network")
+	require.ErrorIs(t, err, ErrUploadReadLog)
+	assert.Equal(t, "Unable to read log file.", DescribeUploadFailure(err),
+		"telling this user the upload failed sends them looking at the network")
 }
