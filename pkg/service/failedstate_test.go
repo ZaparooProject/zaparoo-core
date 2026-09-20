@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -361,4 +362,68 @@ func TestStart_AFailureARestartCouldFixStillEndsTheProcess(t *testing.T) {
 	)
 	require.NoError(t, err, "exiting has to release the port for the next attempt")
 	require.NoError(t, listener.Close())
+}
+
+// The wording on the failed page is the whole point of the schema-ahead work:
+// a goose timestamp tells a user nothing about what to reinstall. Which of the
+// two sentences they get depends on whether their database was written by a
+// build that recorded its version, and every database in the field predates
+// that, so the version-less one has to read as well as the other.
+func TestDescribeDatabaseStartupFailure_WordsBothSchemaAheadCases(t *testing.T) {
+	t.Parallel()
+
+	newPlatform := func(t *testing.T, root string) *testmocks.MockPlatform {
+		t.Helper()
+		pl := testmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{
+			DataDir: root, ConfigDir: root, TempDir: root, LogDir: root,
+		})
+		return pl
+	}
+
+	t.Run("a database that records the build that wrote it", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+		seedMigratedUserDB(context.Background(), t, pl)
+
+		headline, detail := describeDatabaseStartupFailure(
+			pl, fmt.Errorf("opening user database: %w", database.ErrSchemaAhead),
+		)
+		assert.Equal(t, "Zaparoo cannot open your saved data", headline)
+		assert.Contains(t, detail, "upgraded by Zaparoo v"+config.AppVersion,
+			"naming the version is the reason the provenance is recorded")
+		assert.Contains(t, detail, "Reinstall v"+config.AppVersion, "and it has to say what to do")
+		assert.Contains(t, detail, "Nothing has been changed or deleted.")
+	})
+
+	t.Run("a database from before the build was recorded", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+
+		headline, detail := describeDatabaseStartupFailure(
+			pl, fmt.Errorf("opening user database: %w", database.ErrSchemaAhead),
+		)
+		assert.Equal(t, "Zaparoo cannot open your saved data", headline)
+		assert.NotContains(t, detail, "upgraded by Zaparoo v",
+			"with nothing recorded it must not name a version it does not know")
+		assert.Contains(t, detail, "a newer version of Zaparoo")
+		assert.Contains(t, detail, "(v"+config.AppVersion+")", "the installed version is still known")
+		assert.Contains(t, detail, "Nothing has been changed or deleted.")
+	})
+
+	t.Run("any other database failure", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+
+		headline, detail := describeDatabaseStartupFailure(pl, errors.New("disk went away"))
+		assert.Equal(t, "Zaparoo could not start", headline)
+		assert.NotContains(t, detail, "newer version",
+			"only the schema-ahead refusal is about a version")
+	})
 }
