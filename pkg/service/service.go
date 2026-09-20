@@ -381,10 +381,15 @@ func startWith(
 		return nil, err
 	}
 
-	// Startup failed on something a person has to resolve. The listener is
-	// already bound, so stay alive and explain rather than exiting.
+	// The listener is already bound, so Core can stay alive and explain
+	// itself — but only where that is better than exiting. Where a restart is
+	// the recovery, exiting is what lets the supervisor perform it.
 	var failure *startupFailureError
 	if errors.As(err, &failure) {
+		if failure.startingAgainCanHelp() {
+			failure.release()
+			return nil, err
+		}
 		return failure.enter()
 	}
 
