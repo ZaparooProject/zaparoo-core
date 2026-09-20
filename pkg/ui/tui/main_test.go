@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -740,4 +742,49 @@ func TestBuildMainPage_OffersSettingsWhenTheServiceIsRunning(t *testing.T) {
 	runner.Start(pages)
 
 	require.True(t, runner.WaitForText("Settings", uiSettleTimeout))
+}
+
+// Naming the button is not the same as being able to use it. The whole point of
+// the slot change is that a user with a dead service can get their log out, so
+// this drives it the way they would: press Logs, land on the log page, press
+// escape, land back on the main page.
+func TestBuildMainPage_LogsButtonOpensTheLogPageAndComesBack(t *testing.T) {
+	mainPageNotifyState.Cancel()
+	t.Cleanup(mainPageNotifyState.Cancel)
+
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	logDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(logDir, config.LogFile), []byte(`{"level":"error","message":"boom"}`+"\n"), 0o600,
+	))
+
+	platform := testingmocks.NewMockPlatform()
+	platform.On("ID").Return("test")
+	platform.On("Settings").Return(platforms.Settings{LogDir: logDir, DataDir: t.TempDir()})
+
+	pages := tview.NewPages()
+	BuildMainPage(
+		serveHealthState(t, ""), pages, runner.App(), platform,
+		func() bool { return false }, "", "", nil,
+	)
+	runner.Start(pages)
+
+	// The help line under the grid names whichever button holds focus, so it is
+	// how this checks the Logs slot is enabled — and it is checked before any
+	// key is sent, because with the slot disabled focus falls through to Exit
+	// and a blind Enter would stop the application.
+	require.True(t, runner.WaitForText("View and upload log files", uiSettleTimeout),
+		"the Logs slot has to be enabled and focusable, not just drawn")
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Export Logs", uiSettleTimeout),
+		"pressing Logs has to open the log page")
+
+	runner.SimulateEscape()
+	require.True(t, runner.WaitForText("NOT RUNNING", uiSettleTimeout),
+		"escape has to land back on the main page, not strand the user on the log page")
+	name, _ := pages.GetFrontPage()
+	assert.Equal(t, PageMain, name)
 }
