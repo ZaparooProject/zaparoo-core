@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -63,6 +64,7 @@ func systrayOnReady(
 		mReloadConfig := systray.AddMenuItem("Reload", "Reload Core settings and files")
 		mOpenLog := systray.AddMenuItem("View Log", "View Core log file")
 		mUploadLog := systray.AddMenuItem("Upload Log", "Upload the log file and copy a link to share")
+		var uploadInFlight atomic.Bool
 
 		systray.AddSeparator()
 		mPair := systray.AddMenuItem("Pair Device...", "Show a PIN to pair a phone or tablet")
@@ -116,7 +118,12 @@ func systrayOnReady(
 					// Its own goroutine: every other handler here runs inline
 					// on this select loop, and an upload can take the better
 					// part of a minute, which would freeze the whole menu.
-					go uploadLogFromMenu(pl, helpers.UploadLog, copyURLToClipboard, nativeDialog)
+					//
+					// The menu stays live during that minute, which is what
+					// startLogUpload is for.
+					startLogUpload(&uploadInFlight, mUploadLog, func() {
+						uploadLogFromMenu(pl, helpers.UploadLog, copyURLToClipboard, nativeDialog)
+					})
 				case <-mEditConfig.ClickedCh:
 					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
 					if err := openPath(configPath); err != nil {
@@ -229,6 +236,27 @@ func Run(
 // from another goroutine and does nothing if the tray has already quit.
 func Quit() {
 	systray.Quit()
+}
+
+// startLogUpload runs an upload in its own goroutine and holds the menu entry
+// shut until it finishes, reporting whether this click started one.
+//
+// The tray's select loop keeps serving clicks while an upload runs, so without
+// this a user who clicks again because nothing has visibly happened gets a
+// second upload and a second blocking message box behind the first.
+func startLogUpload(inFlight *atomic.Bool, item menuEntry, run func()) bool {
+	if !inFlight.CompareAndSwap(false, true) {
+		return false
+	}
+	item.Disable()
+	go func() {
+		defer func() {
+			item.Enable()
+			inFlight.Store(false)
+		}()
+		run()
+	}()
+	return true
 }
 
 // copyURLToClipboard is the real clipboard write, separated so the menu action

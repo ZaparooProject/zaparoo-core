@@ -23,11 +23,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -288,4 +292,69 @@ func TestUploadLogFromMenu(t *testing.T) {
 		assert.Contains(t, gotMessage, config.LogFile,
 			"a failed upload has to leave the user somewhere to go")
 	})
+}
+
+// recordingMenuEntry records the enable/disable calls a menu item receives.
+type recordingMenuEntry struct {
+	calls []string
+	mu    syncutil.Mutex
+}
+
+func (*recordingMenuEntry) SetTitle(string) {}
+
+func (r *recordingMenuEntry) Enable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "enable")
+}
+
+func (r *recordingMenuEntry) Disable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "disable")
+}
+
+func (r *recordingMenuEntry) Calls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// An upload takes the better part of a minute and the tray keeps serving clicks
+// the whole time, so a user who clicks again because nothing has visibly
+// happened must not get a second upload and a second blocking message box.
+func TestStartLogUpload(t *testing.T) {
+	t.Parallel()
+
+	var inFlight atomic.Bool
+	item := &recordingMenuEntry{}
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	var runs atomic.Int32
+
+	require.True(t, startLogUpload(&inFlight, item, func() {
+		runs.Add(1)
+		close(running)
+		<-release
+	}), "the first click starts an upload")
+
+	<-running
+	assert.Equal(t, []string{"disable"}, item.Calls(),
+		"the entry is held shut while the upload runs")
+
+	for range 5 {
+		assert.False(t, startLogUpload(&inFlight, item, func() { runs.Add(1) }),
+			"a click during an upload starts nothing")
+	}
+	assert.Equal(t, int32(1), runs.Load())
+
+	close(release)
+	require.Eventually(t, func() bool {
+		return slices.Equal(item.Calls(), []string{"disable", "enable"})
+	}, time.Second, 5*time.Millisecond, "the entry comes back when the upload finishes")
+
+	require.True(t, startLogUpload(&inFlight, item, func() { runs.Add(1) }),
+		"the entry works again once the upload is done")
+	require.Eventually(t, func() bool { return runs.Load() == 2 }, time.Second, 5*time.Millisecond)
 }
