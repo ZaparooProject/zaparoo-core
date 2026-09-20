@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -218,4 +219,33 @@ func TestStartupServer_ShowsTheStepItIsOn(t *testing.T) {
 
 	_, state := healthState(t, srv)
 	assert.Equal(t, "starting", state, "a progress update must not change the state")
+}
+
+// Shutdown has to mean the port is free, because that is what every caller
+// does next: the failed state releases it when stopped, and a start that ends
+// after the listener was bound leaves it for the next attempt. http.Server's
+// own Shutdown does not promise this, and the window it misses is the one
+// these callers sit in — a shutdown very shortly after the bind.
+func TestStartupServer_ShutdownReleasesThePortBeforeItReturns(t *testing.T) {
+	t.Parallel()
+
+	// One pass would pass by luck most of the time; the miss is a race.
+	for i := range 50 {
+		cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, t.TempDir(), "127.0.0.1", 0)
+		require.NoError(t, err)
+
+		srv, err := NewStartupServer(t.Context(), cfg)
+		require.NoError(t, err)
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = srv.Shutdown(shutdownCtx)
+		cancel()
+		require.NoError(t, err)
+
+		again, err := (&net.ListenConfig{}).Listen(
+			context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", srv.Port()),
+		)
+		require.NoErrorf(t, err, "port still held after shutdown returned, on pass %d", i)
+		require.NoError(t, again.Close())
+	}
 }
