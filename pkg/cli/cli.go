@@ -66,6 +66,7 @@ type Flags struct {
 	Profiles             *bool
 	ProfileResetPIN      *string
 	ProfileResetSwitchID *string
+	UploadLog            *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -130,6 +131,11 @@ func SetupFlags() *Flags {
 			"restore",
 			"",
 			"restore a full-device backup ZIP and restart Core",
+		),
+		UploadLog: flag.Bool(
+			"upload-log",
+			false,
+			"upload the log file and print the URL",
 		),
 		Profiles: flag.Bool(
 			"profiles",
@@ -214,7 +220,7 @@ func runFlag(cfg *config.Instance, value string) {
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
-func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
+func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	switch {
 	case isFlagPassed("write"):
 		if *f.Write == "" {
@@ -402,6 +408,18 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		os.Exit(0)
 	case *f.Update:
 		os.Exit(runUpdate(context.Background(), cfg, client.LocalClient))
+	case *f.UploadLog:
+		// Deliberately the one action here that never touches the API: this is
+		// what a user runs when Core is not answering, which is exactly when
+		// somebody needs to read their log.
+		url, err := helpers.UploadLog(pl)
+		if err != nil {
+			log.Warn().Err(err).Msg("log upload failed")
+			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", helpers.DescribeUploadFailure(err))
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(url))
+		os.Exit(0)
 	case *f.Backup:
 		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackup, "")
 		if err != nil {

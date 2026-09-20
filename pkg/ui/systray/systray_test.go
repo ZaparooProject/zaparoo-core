@@ -22,11 +22,15 @@ package systray
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.design/x/clipboard"
@@ -221,5 +225,67 @@ func TestCopyToClipboard(t *testing.T) {
 				return nil, errors.New("clipboard unavailable")
 			})
 		require.Error(t, err)
+	})
+}
+
+// The tray's job here is to hand over a link. The dialog cannot be selected,
+// so the clipboard is how that actually happens — and when the clipboard is
+// unavailable the message has to say so, or the user finds out by pasting
+// nothing.
+func TestUploadLogFromMenu(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	t.Run("shows the link and says it was copied", func(t *testing.T) {
+		t.Parallel()
+
+		var copied, gotTitle, gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "https://logs.zaparoo.org/abc123.log", nil
+			},
+			func(text string) error { copied = text; return nil },
+			func(title, message string) { gotTitle, gotMessage = title, message },
+		)
+
+		assert.Equal(t, "https://logs.zaparoo.org/abc123.log", copied)
+		assert.Equal(t, "Upload Log", gotTitle)
+		assert.Contains(t, gotMessage, "https://logs.zaparoo.org/abc123.log")
+		assert.Contains(t, gotMessage, "copied to your clipboard")
+	})
+
+	t.Run("still shows the link when the clipboard is unavailable", func(t *testing.T) {
+		t.Parallel()
+
+		var gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "https://logs.zaparoo.org/abc123.log", nil
+			},
+			func(string) error { return errors.New("no display server") },
+			func(_, message string) { gotMessage = message },
+		)
+
+		assert.Contains(t, gotMessage, "https://logs.zaparoo.org/abc123.log")
+		assert.Contains(t, gotMessage, "by hand")
+	})
+
+	t.Run("names the log file when the upload fails", func(t *testing.T) {
+		t.Parallel()
+
+		var gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "", fmt.Errorf("%w: offline", helpers.ErrUploadConnect)
+			},
+			func(string) error { return nil },
+			func(_, message string) { gotMessage = message },
+		)
+
+		assert.Contains(t, gotMessage, "Unable to connect to upload service.")
+		assert.Contains(t, gotMessage, config.LogFile,
+			"a failed upload has to leave the user somewhere to go")
 	})
 }

@@ -396,6 +396,10 @@ func IsServiceRunning(cfg *config.Instance) bool {
 	return true
 }
 
+// serviceStateTimeout bounds the health check. It is deliberately short: the
+// TUI blocks on this while building its main page.
+const serviceStateTimeout = 750 * time.Millisecond
+
 // Service lifecycle states reported by /health. They mirror api.ServiceState;
 // this package cannot import pkg/api, which imports this one.
 const (
@@ -416,7 +420,9 @@ const (
 // ok is false when nothing answered.
 func ServiceState(cfg *config.Instance) (state string, ok bool) {
 	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.APIPort())
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Short: this is a loopback request that either connects immediately or
+	// is refused immediately, and the TUI builds its main page on the result.
+	ctx, cancel := context.WithTimeout(context.Background(), serviceStateTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, http.NoBody)

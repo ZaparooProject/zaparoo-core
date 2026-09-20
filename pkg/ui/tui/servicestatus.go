@@ -145,11 +145,18 @@ func serviceStatusText(cfg *config.Instance, pl platforms.Platform, condition se
 		if reason := lastLoggedError(pl); reason != "" {
 			text += "\n\n" + reason
 		}
-		text += "\n\nOpen " + webUIAddress(cfg) + " for details."
+		text += "\n\nOpen " + webUIAddress(cfg) + "\nor press Logs to send a report."
 		return text
 	case serviceStopped:
-		return "[" + t.ErrorColorName + "]x NOT RUNNING[-]" +
-			"\nService may not have started.\nCheck Logs for details."
+		text := "[" + t.ErrorColorName + "]x NOT RUNNING[-]" +
+			"\nService may not have started."
+		if reason := lastLoggedError(pl); reason != "" {
+			text += "\n\n" + reason
+		}
+		// Logs is the one button that still works here, and it is where the
+		// answer is, so name it rather than leaving the user to go looking.
+		text += "\n\nPress Logs to send a report."
+		return text
 	}
 
 	return "[" + t.ErrorColorName + "]x NOT RUNNING[-]"

@@ -145,7 +145,9 @@ func BuildSettingsMainMenuWithService(
 			buildAdvancedSettingsMenu(svc, pages, app)
 		}).
 		AddNavAction("Logs", "View and export log files", func() {
-			BuildExportLogModal(pages, app, pl, logDestPath, logDestName)
+			BuildExportLogModal(pages, app, pl, logDestPath, logDestName, func() {
+				pages.SwitchToPage(PageSettingsMain)
+			})
 		}).
 		AddNavAction("About", "Version, license, and credits", func() {
 			buildAboutPage(pages, app)

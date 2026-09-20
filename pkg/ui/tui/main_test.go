@@ -20,13 +20,20 @@
 package tui
 
 import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
@@ -42,9 +49,14 @@ func TestBuildMainPage_ShowsAppFooter(t *testing.T) {
 
 	platform := testingmocks.NewMockPlatform()
 	platform.On("ID").Return("test")
+	// The stopped status block reads the tail of the log for the last error.
+	platform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
 	pages := tview.NewPages()
+	// Not a bare config: the main page asks the health route what the service
+	// is doing, and a default config points at the port a real Core would be
+	// on, which would make this test depend on the machine running it.
 	BuildMainPage(
-		&config.Instance{}, pages, runner.App(), platform,
+		serveHealthState(t, ""), pages, runner.App(), platform,
 		func() bool { return false }, "", "", nil,
 	)
 
@@ -643,4 +655,89 @@ func TestButtonGrid_WrapAround_Integration(t *testing.T) {
 	row, col := grid.GetFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 0, col, "Should wrap to first column")
+}
+
+// serveHealthState runs a stand-in for Core's health route on a free port and
+// returns a config pointing at it. resolveServiceCondition asks that route
+// what the service is doing, so this is what decides which buttons the main
+// page offers.
+func serveHealthState(t *testing.T, state string) *config.Instance {
+	t.Helper()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	if state == "" {
+		// Nothing listening: the caller wants the no-answer path.
+		require.NoError(t, listener.Close())
+	} else {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprintf(w, `{"status":"ok","state":%q}`, state)
+		})
+		server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+		go func() { _ = server.Serve(listener) }()
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = server.Shutdown(ctx)
+		})
+	}
+
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, t.TempDir(), "127.0.0.1", addr.Port)
+	require.NoError(t, err)
+	return cfg
+}
+
+// The log page used to live behind Settings, which is disabled whenever the
+// service is not running — so the one thing a user needs in order to report a
+// problem was locked behind the thing that had broken. In that state the slot
+// becomes the log page itself.
+func TestBuildMainPage_OffersLogsWhenTheServiceIsNotRunning(t *testing.T) {
+	mainPageNotifyState.Cancel()
+	t.Cleanup(mainPageNotifyState.Cancel)
+
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	platform := testingmocks.NewMockPlatform()
+	platform.On("ID").Return("test")
+	platform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	pages := tview.NewPages()
+	BuildMainPage(
+		serveHealthState(t, ""), pages, runner.App(), platform,
+		func() bool { return false }, "", "", nil,
+	)
+	runner.Start(pages)
+
+	require.True(t, runner.WaitForText("Logs", uiSettleTimeout),
+		"the log page has to be reachable when the service is down")
+	assert.NotContains(t, runner.GetScreenText(), "Settings",
+		"Settings is disabled in this state, so its slot is the log page instead")
+}
+
+// When the service is up, the slot is Settings as before and the log page is
+// reached through it.
+func TestBuildMainPage_OffersSettingsWhenTheServiceIsRunning(t *testing.T) {
+	mainPageNotifyState.Cancel()
+	t.Cleanup(mainPageNotifyState.Cancel)
+
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	platform := testingmocks.NewMockPlatform()
+	platform.On("ID").Return("test")
+	platform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()}).Maybe()
+
+	pages := tview.NewPages()
+	BuildMainPage(
+		serveHealthState(t, "ready"), pages, runner.App(), platform,
+		func() bool { return true }, "", "", nil,
+	)
+	runner.Start(pages)
+
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout))
 }
