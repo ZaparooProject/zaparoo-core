@@ -73,6 +73,36 @@ func TestSourceIndexAmbiguity(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestSourceIndexUnderParent(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	game := filepath.Join(root, "kyra3")
+	variant := func(id int64, target, dir string, unique bool) database.MediaSource {
+		source := testSource(id, "scummvm://"+target+"/Title", filepath.Join(game, dir), unique)
+		source.SourceRoot = root
+		return source
+	}
+	english, french := variant(1, "en", "dos-english", true), variant(2, "fr", "dos-french", true)
+	sharedOne, sharedTwo := variant(3, "mac-en", "macintosh", false), variant(4, "mac-fr", "macintosh", false)
+	sibling := testSource(5, "scummvm://monkey/Title", filepath.Join(root, "monkey"), true)
+	file := variant(6, "file", "launch.scummvm", true)
+	file.SourceKind = "file"
+	index := NewSourceIndex([]database.MediaSource{english, french, sharedOne, sharedTwo, sibling, file})
+
+	assert.Equal(t, []database.MediaSource{english, french}, index.UnderParent(game+string(filepath.Separator)))
+	assert.Empty(t, index.UnderParent(root), "the root is the collection, not a game folder")
+	assert.Empty(t, index.UnderParent(english.SourcePath))
+	assert.Empty(t, index.UnderParent(filepath.Dir(root)), "inheritance never reaches past the immediate parent")
+	assert.Empty(t, index.UnderParent(filepath.Join(root, "kyra")), "a shared name prefix is not a parent")
+
+	conflict := variant(7, "other", "dos-english", true)
+	index = NewSourceIndex([]database.MediaSource{english, conflict, french})
+	assert.Equal(t, []database.MediaSource{french}, index.UnderParent(game))
+
+	var nilIndex *SourceIndex
+	assert.Empty(t, nilIndex.UnderParent(game))
+}
+
 func TestSourceIndexIgnoresIncompleteRows(t *testing.T) {
 	t.Parallel()
 	index := NewSourceIndex([]database.MediaSource{
