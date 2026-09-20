@@ -23,10 +23,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,4 +288,35 @@ func TestCopyLogToSd_Error(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "Destination file should not exist after failed copy")
 
 	mockPlatform.AssertExpectations(t)
+}
+
+// The log page is now reachable from two places, and its return target used to
+// be a hardcoded switch to the settings page. Opened from the main menu, which
+// is the case that matters when the service is down, that page has never been
+// registered — and switching to an unknown page is a no-op, so the user would
+// have been left on the log page with no way out.
+func TestBuildExportLogModal_ReturnsToItsCaller(t *testing.T) {
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	wentBack := make(chan struct{}, 1)
+	pages := tview.NewPages()
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		BuildExportLogModal(pages, runner.App(), pl, "", "", func() {
+			wentBack <- struct{}{}
+		})
+	})
+
+	require.True(t, runner.WaitForText("Export Logs", uiSettleTimeout))
+
+	runner.SimulateEscape()
+	select {
+	case <-wentBack:
+	case <-time.After(uiSettleTimeout):
+		t.Fatal("escape did not return to the caller")
+	}
 }
