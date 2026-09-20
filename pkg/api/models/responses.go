@@ -637,8 +637,10 @@ type PlaylistItemInfo struct {
 
 // PlaylistState describes the current state of a playlist slot as exposed by
 // the media response. Repeat is one of "none", "all", or "one". Unsafe reports
-// that the items came from a source this device does not trust, so commands
-// in them that drive input or run programs will not run. It is read-only.
+// the playlist's effective trust: either its items came from a source this
+// device does not trust, or the script that opened it was already untrusted
+// and it inherited that. Either way, commands in its items that drive input
+// or run programs will not run. It is read-only.
 type PlaylistState struct {
 	ID      string             `json:"id"`
 	Name    string             `json:"name"`
