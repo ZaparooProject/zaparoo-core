@@ -483,8 +483,9 @@ func (c *scrapeSourceErrors) report(inbox *inboxservice.Service) {
 	}
 }
 
-// scrapeSourceErrorReason gives the limits a user can act on a plain wording
-// and leaves anything else as the parser reported it.
+// scrapeSourceErrorReason gives the limits a user can act on a plain wording.
+// Anything else falls back to the innermost cause, because the wrappers a
+// loader adds on the way out already name the file this message is about.
 func scrapeSourceErrorReason(err error) string {
 	var syntaxErr *xml.SyntaxError
 	var tooLargeErr *esapi.GameListTooLargeError
@@ -496,8 +497,24 @@ func scrapeSourceErrorReason(err error) string {
 		return tooLargeErr.Error()
 	case errors.Is(err, esapi.ErrGameListTooManyItems):
 		return fmt.Sprintf("file has more than %d entries", esapi.MaxGameListEntries)
+	case errors.Is(err, esapi.ErrGameListTooDeep):
+		return esapi.ErrGameListTooDeep.Error()
+	case errors.Is(err, esapi.ErrGameListInvalidRoot):
+		return esapi.ErrGameListInvalidRoot.Error()
 	default:
-		return err.Error()
+		return innermostError(err).Error()
+	}
+}
+
+// innermostError unwraps to the cause an operating system or library reported,
+// dropping the path-carrying context each layer added.
+func innermostError(err error) error {
+	for {
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			return err
+		}
+		err = unwrapped
 	}
 }
 

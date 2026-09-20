@@ -91,6 +91,11 @@ var (
 	ErrGameListTooLarge     = errors.New("gamelist.xml exceeds size limit")
 	ErrGameListTooManyItems = errors.New("gamelist.xml exceeds entry limit")
 	ErrGameListTooDeep      = errors.New("gamelist.xml exceeds XML depth limit")
+	// ErrGameListInvalidRoot covers every way a file fails to be a gameList
+	// document at all: no root element, a different root, or content outside
+	// it. Each wraps this sentinel with the detail, so a caller reporting the
+	// failure to a user has one condition to name.
+	ErrGameListInvalidRoot = errors.New("file is not an EmulationStation game list")
 )
 
 // GameListTooLargeError reports the limit that a gamelist.xml exceeded, which
@@ -100,6 +105,9 @@ type GameListTooLargeError struct {
 }
 
 func (e *GameListTooLargeError) Error() string {
+	if e.Limit < 1<<20 {
+		return fmt.Sprintf("file is larger than the %d byte limit", e.Limit)
+	}
 	return fmt.Sprintf("file is larger than the %d MB limit", e.Limit>>20)
 }
 
@@ -278,8 +286,18 @@ func ReadGameReferencesXMLFS(fs afero.Fs, path string) ([]GameReference, error) 
 		return nil, err
 	}
 	defer file.Close() //nolint:errcheck // Read-only file; close errors do not affect parsed data.
+	references, err := decodeGameReferences(file, MaxGameListXMLSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal gamelist XML file %s: %w", cleanPath, err)
+	}
+	return references, nil
+}
+
+// decodeGameReferences walks the same document as decodeGameList but keeps only
+// the name and path of each <game>, which is all media discovery needs.
+func decodeGameReferences(r io.Reader, maxBytes int64) ([]GameReference, error) {
 	var references []GameReference
-	_, err = streamGameList(file, MaxGameListXMLSize, gameListVisitor{
+	_, err := streamGameList(r, maxBytes, gameListVisitor{
 		game: func(d *xml.Decoder, start *xml.StartElement) error {
 			var reference GameReference
 			if decodeErr := d.DecodeElement(&reference, start); decodeErr != nil {
@@ -290,7 +308,7 @@ func ReadGameReferencesXMLFS(fs afero.Fs, path string) ([]GameReference, error) 
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal gamelist XML file %s: %w", cleanPath, err)
+		return nil, err
 	}
 	return references, nil
 }
@@ -372,7 +390,7 @@ func streamGameList(r io.Reader, maxBytes int64, visitor gameListVisitor) (gameL
 		token, err := guard.Token()
 		if errors.Is(err, io.EOF) {
 			if !guard.sawRoot {
-				return root, errors.New("missing gameList root element")
+				return root, fmt.Errorf("%w: missing gameList root element", ErrGameListInvalidRoot)
 			}
 			return root, nil
 		}
@@ -484,7 +502,7 @@ func (g *gameListTokenGuard) Token() (xml.Token, error) {
 		}
 		if g.depth == 1 {
 			if g.sawRoot || value.Name.Local != "gameList" {
-				return nil, errors.New("invalid gameList root element")
+				return nil, fmt.Errorf("%w: invalid gameList root element", ErrGameListInvalidRoot)
 			}
 			g.sawRoot = true
 		}
@@ -498,7 +516,7 @@ func (g *gameListTokenGuard) Token() (xml.Token, error) {
 		g.depth--
 	case xml.CharData:
 		if g.depth == 0 && len(bytes.TrimSpace(value)) > 0 {
-			return nil, errors.New("character data outside gameList root element")
+			return nil, fmt.Errorf("%w: character data outside gameList root element", ErrGameListInvalidRoot)
 		}
 	}
 	return token, nil

@@ -1828,6 +1828,97 @@ func TestScrapeSourceErrors_CapsListedFiles(t *testing.T) {
 		scrapeSourceErrorReason(esapi.ErrGameListTooManyItems))
 }
 
+// TestScrapeSourceErrorReason_RealLoaderErrors feeds the reason formatter the
+// error chains the loader actually produces, rather than the hand-built ones
+// the rest of these tests use. Every wrapper on the way out names the file, so
+// a reason taken verbatim repeats the path the inbox line already starts with
+// and hands the user the parser's internal wording.
+func TestScrapeSourceErrorReason_RealLoaderErrors(t *testing.T) {
+	t.Parallel()
+
+	oversize := strings.Repeat(" ", 200)
+	var tooMany strings.Builder
+	_, _ = tooMany.WriteString("<gameList>")
+	for range esapi.MaxGameListEntries + 1 {
+		_, _ = tooMany.WriteString("<game><path>./x</path></game>")
+	}
+	_, _ = tooMany.WriteString("</gameList>")
+
+	for _, tc := range []struct {
+		name  string
+		body  string
+		want  string
+		limit int64
+	}{
+		{
+			name: "empty file", body: "",
+			want: "file is not an EmulationStation game list",
+		},
+		{
+			name: "not xml at all", body: "<html><body>404</body></html>",
+			want: "file is not an EmulationStation game list",
+		},
+		{
+			name: "wrong document", body: `<systemList><system/></systemList>`,
+			want: "file is not an EmulationStation game list",
+		},
+		{
+			name: "truncated", body: `<gameList><game><path>./A</path>`,
+			want: "invalid XML on line 1 (unexpected EOF)",
+		},
+		{
+			name: "bare ampersand", body: `<gameList><game><desc>Tom & Jerry</desc></game></gameList>`,
+			want: "invalid XML on line 1 (invalid character entity & (no semicolon))",
+		},
+		{
+			name: "too large", body: oversize, limit: 100,
+			want: "file is larger than the 100 byte limit",
+		},
+		{
+			name: "too many entries", body: tooMany.String(),
+			want: fmt.Sprintf("file has more than %d entries", esapi.MaxGameListEntries),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			path := filepath.Join("games", "C64", "gamelist.xml")
+			require.NoError(t, afero.WriteFile(fs, path, []byte(tc.body), 0o600))
+			limit := tc.limit
+			if limit == 0 {
+				limit = esapi.MaxGameListXMLSizeConstrained
+			}
+
+			_, loadErr := esapi.ReadGameListXMLLimitFS(fs, path, limit)
+			require.Error(t, loadErr)
+
+			var collected scrapeSourceErrors
+			collected.add(&scraper.SourceError{Path: path, Err: loadErr})
+			require.Len(t, collected.lines, 1)
+			assert.Equal(t, path+": "+tc.want, collected.lines[0])
+			assert.Equal(t, 1, strings.Count(collected.lines[0], path),
+				"the line already starts with the file, so the reason must not repeat it")
+		})
+	}
+}
+
+// TestScrapeSourceErrorReason_UnwrapsIOErrors covers a file that exists but
+// cannot be opened: the reason must be what the OS said, not the loader's
+// path-carrying wrapper around it.
+func TestScrapeSourceErrorReason_UnwrapsIOErrors(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("games", "NES", "gamelist.xml")
+	_, loadErr := esapi.ReadGameListXMLLimitFS(fs, path, esapi.MaxGameListXMLSizeConstrained)
+	require.Error(t, loadErr)
+
+	reason := scrapeSourceErrorReason(loadErr)
+	assert.NotContains(t, reason, path)
+	assert.NotContains(t, reason, "gamelist XML file")
+	assert.Contains(t, reason, "does not exist")
+}
+
 func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()

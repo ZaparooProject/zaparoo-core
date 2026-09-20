@@ -345,6 +345,91 @@ func TestGameListTooLargeErrorNamesItsLimit(t *testing.T) {
 	assert.Equal(t, int64(len(body))-1, tooLarge.Limit)
 }
 
+// TestGameListInvalidRootIsReportable covers every way a file fails to be a
+// gameList document. Each carries one sentinel so a caller reporting the
+// failure to a user has a condition to name, rather than echoing a parser
+// string that repeats the file path back at them.
+func TestGameListInvalidRootIsReportable(t *testing.T) {
+	t.Parallel()
+
+	for name, doc := range map[string]string{
+		"empty file":       "",
+		"whitespace only":  "   \n",
+		"prolog only":      `<?xml version="1.0"?>`,
+		"wrong root":       `<systemList><system/></systemList>`,
+		"second root":      `<gameList/><gameList/>`,
+		"text before root": `junk<gameList/>`,
+		"text after root":  `<gameList/>junk`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseGameListXML([]byte(doc))
+			require.ErrorIs(t, err, ErrGameListInvalidRoot)
+			require.ErrorIs(t, ValidateGameListXML([]byte(doc)), ErrGameListInvalidRoot)
+
+			fs := afero.NewMemMapFs()
+			require.NoError(t, afero.WriteFile(fs, "gamelist.xml", []byte(doc), 0o600))
+			_, err = ReadGameListXMLFS(fs, "gamelist.xml")
+			require.ErrorIs(t, err, ErrGameListInvalidRoot)
+			_, err = ReadGameReferencesXMLFS(fs, "gamelist.xml")
+			require.ErrorIs(t, err, ErrGameListInvalidRoot)
+		})
+	}
+}
+
+// TestGameListTooLargeErrorBelowOneMegabyte keeps the reported limit truthful
+// for a caller that passes ReadGameListXMLLimitFS a limit under a megabyte,
+// which integer megabytes render as "0 MB".
+func TestGameListTooLargeErrorBelowOneMegabyte(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "file is larger than the 900 byte limit",
+		(&GameListTooLargeError{Limit: 900}).Error())
+	assert.Equal(t, "file is larger than the 1 MB limit",
+		(&GameListTooLargeError{Limit: 1 << 20}).Error())
+}
+
+// TestGameListEntryErrorPaths covers the failures that reach the decoder in
+// the middle of an entry rather than between entries: a document truncated
+// inside a <folder>, inside a <game> on the reference walk, and immediately
+// after a value that was going to drop its entry anyway.
+func TestGameListEntryErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("truncated inside a folder", func(t *testing.T) {
+		t.Parallel()
+		_, err := ParseGameListXML([]byte(`<gameList><folder><path>./F</path>`))
+		require.Error(t, err)
+		var syntaxErr *xml.SyntaxError
+		require.ErrorAs(t, err, &syntaxErr)
+		assert.Contains(t, err.Error(), "decode gamelist folder")
+	})
+
+	t.Run("truncated inside a game on the reference walk", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		require.NoError(t, afero.WriteFile(fs, "gamelist.xml",
+			[]byte(`<gameList><game><path>./A</path>`), 0o600))
+		_, err := ReadGameReferencesXMLFS(fs, "gamelist.xml")
+		require.Error(t, err)
+		var syntaxErr *xml.SyntaxError
+		require.ErrorAs(t, err, &syntaxErr)
+		assert.Contains(t, err.Error(), "decode gamelist game reference")
+	})
+
+	t.Run("truncated after a value that drops its entry", func(t *testing.T) {
+		t.Parallel()
+		// The bad <playcount> would normally be skipped and the rest of the
+		// entry drained; here the drain runs straight into the truncation, so
+		// the document has to fail rather than report a clean partial decode.
+		_, err := ParseGameListXML([]byte(
+			`<gameList><game><playcount>many</playcount><desc>unterminated`))
+		require.Error(t, err)
+		var syntaxErr *xml.SyntaxError
+		assert.ErrorAs(t, err, &syntaxErr)
+	})
+}
+
 // TestGameListStreamsPastOldBufferLimit decodes a document larger than the
 // 16 MiB whole-file buffer the parser used to require, which a large scraped
 // library such as C64 exceeds.
