@@ -34,7 +34,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// BuildExportLogModal creates the log export page with PageFrame.
 // BuildExportLogModal builds the log page. goBack is supplied by the caller
 // because this page is reachable from two places: the settings menu during
 // normal operation, and the main menu directly when the service is not
@@ -52,11 +51,6 @@ func BuildExportLogModal(
 		SetTitle("Export Logs").
 		SetHelpText("View, upload, or copy log files")
 
-	if goBack == nil {
-		goBack = func() {
-			pages.SwitchToPage(PageSettingsMain)
-		}
-	}
 	frame.SetOnEscape(goBack)
 
 	exportPages := tview.NewPages()
