@@ -242,3 +242,87 @@ func TestApplyMediaUserLauncherOverrideSetsAndClears(t *testing.T) {
 	require.NoError(t, database.ApplyMediaUserLauncherOverride(ctx, f.db, "NES", path, 0, "RetroArch"))
 	assert.Empty(t, f.projectedOverrides(t), "a media ID of 0 skips the projection")
 }
+
+// newRestoreFixture is newReconcileFixture with a UserDB that lives at its own
+// path, so Core's real backup and restore calls can replace the whole file.
+func newRestoreFixture(t *testing.T, names ...string) *reconcileFixture {
+	t.Helper()
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewUserDBInDataDir(t)
+	t.Cleanup(userCleanup)
+
+	paths := make([]string, 0, len(names))
+	for _, name := range names {
+		paths = append(paths, nesPath(name))
+	}
+	scantest.IndexMediaPaths(t, mediaDB, "NES", paths...)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, len(names))
+	f := &reconcileFixture{
+		db:  &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		ids: make(map[string]int64, len(names)),
+	}
+	for i := range rows {
+		f.ids[filepath.Base(rows[i].Path)] = rows[i].DBID
+	}
+	return f
+}
+
+// Replacing UserDB as a whole is what leaves the MediaDB projection describing
+// a database that is gone, and no other test drives that replacement for real:
+// this one takes a UserDB backup, edits the flags and overrides through the
+// live handlers, then restores the file over the top, exactly as
+// backup.restore does. It asserts the projection is stale first, so a reconcile
+// that did nothing could not pass.
+func TestReconcileMediaUserDataAfterUserDBFileRestore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newRestoreFixture(t, "Kept (USA).nes", "Dropped (USA).nes", "Added (USA).nes", "Override (USA).nes")
+	kept, dropped := nesPath("Kept (USA).nes"), nesPath("Dropped (USA).nes")
+	added, override := nesPath("Added (USA).nes"), nesPath("Override (USA).nes")
+
+	// The state the backup captures.
+	setFlag := func(path string, id int64, flag database.MediaUserFlag) {
+		t.Helper()
+		_, err := database.ApplyMediaUserFlags(ctx, f.db, "NES", path, id,
+			map[database.MediaUserFlag]bool{flag: true})
+		require.NoError(t, err)
+	}
+	setFlag(kept, f.ids["Kept (USA).nes"], database.MediaUserFlagFavorite)
+	setFlag(dropped, f.ids["Dropped (USA).nes"], database.MediaUserFlagHidden)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		ctx, f.db, "NES", override, f.ids["Override (USA).nes"], "RetroArch"))
+
+	snapshot, err := f.db.UserDB.Backup("test", true)
+	require.NoError(t, err)
+	require.True(t, snapshot.Valid)
+
+	// Edits made after the backup, which the restore has to undo.
+	_, err = database.ApplyMediaUserFlags(ctx, f.db, "NES", dropped, f.ids["Dropped (USA).nes"],
+		map[database.MediaUserFlag]bool{database.MediaUserFlagHidden: false})
+	require.NoError(t, err)
+	setFlag(added, f.ids["Added (USA).nes"], database.MediaUserFlagFavorite)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		ctx, f.db, "NES", override, f.ids["Override (USA).nes"], "Mednafen"))
+
+	_, err = f.db.UserDB.RestoreBackup(snapshot.Name)
+	require.NoError(t, err)
+
+	// The restore replaces UserDB only; nothing has touched media.db yet.
+	require.Empty(t, f.flags(t, "Dropped (USA).nes"), "sanity: the flag was removed before the backup was restored")
+	require.Equal(t, map[database.MediaUserFlag]bool{database.MediaUserFlagFavorite: true},
+		f.flags(t, "Added (USA).nes"), "the projection still describes the replaced database")
+	require.Equal(t, map[string]string{"Override (USA).nes": "Mednafen"}, f.projectedOverrides(t))
+
+	require.NoError(t, database.ReconcileMediaUserData(ctx, f.db))
+
+	assert.Equal(t, map[database.MediaUserFlag]bool{database.MediaUserFlagFavorite: true},
+		f.flags(t, "Kept (USA).nes"))
+	assert.Equal(t, map[database.MediaUserFlag]bool{database.MediaUserFlagHidden: true},
+		f.flags(t, "Dropped (USA).nes"), "a flag the restored database holds is put back")
+	assert.Empty(t, f.flags(t, "Added (USA).nes"), "a flag the restored database does not hold is removed")
+	assert.Equal(t, map[string]string{"Override (USA).nes": "RetroArch"}, f.projectedOverrides(t),
+		"the override goes back to the restored value")
+}

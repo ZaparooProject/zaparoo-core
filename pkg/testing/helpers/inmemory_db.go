@@ -33,6 +33,36 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// NewUserDBInDataDir opens a UserDB the way the service does, at
+// DataDir/user.db under a temporary directory. Unlike NewInMemoryUserDB it
+// knows its own path, so the backup and restore calls that replace the file
+// work against it. Use it only when a test needs that; the other helper is
+// cheaper.
+func NewUserDBInDataDir(t *testing.T) (db *userdb.UserDB, cleanup func()) {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: dataDir,
+		TempDir: filepath.Join(dataDir, "tmp"),
+	})
+
+	db, err := userdb.OpenUserDB(context.Background(), mockPlatform)
+	if err != nil {
+		t.Fatalf("Failed to open test user database: %v", err)
+	}
+
+	cleanup = func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Failed to close UserDB: %v", err)
+		}
+	}
+
+	return db, cleanup
+}
+
 func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	t.Helper()
 
