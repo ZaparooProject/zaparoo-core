@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,14 @@ type parsedInputMacro struct {
 	action   inputMacroAction
 }
 
+// maxSessionKeyboardHolds bounds the distinct key combinations one session can
+// hold at once. A hold is remembered until its release or the session's, and a
+// combo can name any set of keys, so without a cap a client could spend one
+// request turning a few KB of macro into tens of MB of state that lives as
+// long as its WebSocket. The physical keyboard has around a hundred keys, so
+// this is far more than anything driving a real device needs.
+const maxSessionKeyboardHolds = 128
+
 // heldInputState is the input one session holds across requests. A keyboard
 // hold is a list of keys pressed together, such as Shift and a letter, and is
 // identified by that list. keyboard counts how many of the session's holds
@@ -61,9 +70,15 @@ type heldInputState struct {
 	gamepad       map[int]struct{}
 }
 
+// keyboardHoldID names a hold by the keys it needs, whatever order the token
+// listed them in, so {release:shift+ctrl+a} ends the hold {press:ctrl+shift+a}
+// started. The caller keeps its own slice in press order for the release.
 func keyboardHoldID(codes []int) string {
+	canonical := slices.Clone(codes)
+	slices.Sort(canonical)
+
 	var b strings.Builder
-	for i, code := range codes {
+	for i, code := range canonical {
 		if i > 0 {
 			_ = b.WriteByte('+')
 		}
@@ -286,6 +301,9 @@ func (l *InputManager) sessionKeyboardDownLocked(session *inputSession, codes []
 	id := keyboardHoldID(codes)
 	if _, ok := state.keyboardHolds[id]; ok {
 		return nil
+	}
+	if len(state.keyboardHolds) >= maxSessionKeyboardHolds {
+		return fmt.Errorf("session already holds %d key combinations", maxSessionKeyboardHolds)
 	}
 	for i, code := range codes {
 		if state.keyboard[code] == 0 {

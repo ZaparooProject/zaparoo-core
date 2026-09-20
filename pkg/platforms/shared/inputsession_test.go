@@ -21,6 +21,9 @@ package shared
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 
@@ -206,6 +209,63 @@ func TestInputSession_ComboPressAndRelease(t *testing.T) {
 	}, keyboard.events[2:])
 }
 
+func TestInputSession_ComboReleaseIgnoresKeyOrder(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:ctrl+shift+a}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 42},
+		{kind: "down", code: 30},
+	}, keyboard.events)
+
+	pressKeys(t, session, "{release:shift+ctrl+a}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 30},
+		{kind: "up", code: 42},
+		{kind: "up", code: 29},
+	}, keyboard.events[3:], "a release naming the same keys in another order matches the hold")
+}
+
+func TestInputSession_ShiftedComboReleaseIgnoresKeyOrder(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:ctrl+A}", "{release:a+shift+ctrl}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 42},
+		{kind: "down", code: 30},
+		{kind: "up", code: 30},
+		{kind: "up", code: 42},
+		{kind: "up", code: 29},
+	}, keyboard.events)
+}
+
+func TestInputSession_ReorderedPressMatchesExistingHold(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, _ := newRecordingInputDevices()
+	session := input.NewInputSession()
+
+	pressKeys(t, session, "{press:ctrl+c}", "{press:c+ctrl}")
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 46},
+	}, keyboard.events, "the reordered press names a hold the session already owns")
+
+	pressKeys(t, session, "{release:ctrl+c}")
+	assert.Equal(t, []keyEvent{
+		{kind: "up", code: 46},
+		{kind: "up", code: 29},
+	}, keyboard.events[2:], "one release ends the hold")
+}
+
 func TestInputSession_ShiftComboMatchesShiftedCharacter(t *testing.T) {
 	t.Parallel()
 
@@ -222,6 +282,152 @@ func TestInputSession_ShiftComboMatchesShiftedCharacter(t *testing.T) {
 		{kind: "up", code: 30},
 		{kind: "up", code: 42},
 	}, keyboard.events)
+}
+
+// TestInputSession_HoldSetModelMatchesDevice replays random press and release
+// tokens against a model that treats a hold as the set of keys it names, and
+// checks the virtual keyboard ends up holding exactly the keys the model says.
+// It is the general form of the ordering cases above: a press or release that
+// names keys in another order must land on the same hold.
+// comboTokens builds count distinct hold tokens, each naming a different pair
+// of keys, so a session asked to hold them all keeps count separate holds.
+func comboTokens(t *testing.T, action string, count int) []string {
+	t.Helper()
+
+	letters := "abcdefghijklmnopqrstuvwxyz"
+	tokens := make([]string, 0, count)
+	for i := range len(letters) {
+		for j := i + 1; j < len(letters); j++ {
+			if len(tokens) == count {
+				return tokens
+			}
+			tokens = append(tokens, fmt.Sprintf("{%s:%c+%c}", action, letters[i], letters[j]))
+		}
+	}
+	require.Len(t, tokens, count, "not enough distinct pairs")
+	return tokens
+}
+
+// TestInputSession_HoldsAreBounded verifies one session cannot accumulate
+// unbounded hold state. A combo names a set of keys, so without a cap a single
+// request could turn a few KB of macro into tens of MB retained for the life
+// of the WebSocket.
+func TestInputSession_HoldsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	input, _, _ := newRecordingInputDevices()
+	session, ok := input.NewInputSession().(*inputSession)
+	require.True(t, ok)
+
+	tokens := comboTokens(t, "press", maxSessionKeyboardHolds+1)
+	err := input.keyboardPressSequenceLocked(t.Context(), tokens, time.Nanosecond, session)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "key combinations")
+
+	input.inputMu.Lock()
+	holds := len(input.inputSessions[session].keyboardHolds)
+	input.inputMu.Unlock()
+	assert.Equal(t, maxSessionKeyboardHolds, holds, "the hold that hit the cap was not stored")
+
+	require.NoError(t, session.ReleaseAll())
+}
+
+// TestInputSession_ReleasedHoldFreesItsSlot verifies the cap tracks what is
+// held now, not how many holds a session has ever taken.
+func TestInputSession_ReleasedHoldFreesItsSlot(t *testing.T) {
+	t.Parallel()
+
+	input, _, _ := newRecordingInputDevices()
+	session, ok := input.NewInputSession().(*inputSession)
+	require.True(t, ok)
+
+	presses := comboTokens(t, "press", maxSessionKeyboardHolds)
+	require.NoError(t, input.keyboardPressSequenceLocked(t.Context(), presses, time.Nanosecond, session))
+	require.NoError(t, input.keyboardPressSequenceLocked(
+		t.Context(), comboTokens(t, "release", 1), time.Nanosecond, session))
+
+	require.NoError(t, session.KeyboardPressSequence(t.Context(), []string{"{press:ctrl+shift+f9}"}, 0))
+	require.NoError(t, session.ReleaseAll())
+}
+
+func TestInputSession_HoldSetModelMatchesDevice(t *testing.T) {
+	t.Parallel()
+
+	tokens := []string{
+		"M", "!", "m", "shift", "ctrl+c", "c", "ctrl", "shift+a", "A", "a",
+		"ctrl+shift+a", "shift+ctrl+a", "a+ctrl", "rshift+a", "ctrl+A",
+		"ctrl+plus", "f4", "alt", "up", "1", "shift+1",
+	}
+	canonical := func(codes []int) string {
+		sorted := slices.Clone(codes)
+		slices.Sort(sorted)
+		return fmt.Sprint(sorted)
+	}
+
+	rng := rand.New(rand.NewPCG(7, 11)) //nolint:gosec // deterministic test input
+	for iter := range 2000 {
+		input, keyboard, _ := newRecordingInputDevices()
+		sessions := []platforms.InputSession{input.NewInputSession(), input.NewInputSession()}
+		holds := []map[string][]int{{}, {}}
+
+		var seq []string
+		for range 1 + rng.IntN(10) {
+			token := tokens[rng.IntN(len(tokens))]
+			action := "press"
+			if rng.IntN(3) == 0 {
+				action = "release"
+			}
+			owner := rng.IntN(len(sessions))
+			macro := fmt.Sprintf("{%s:%s}", action, token)
+			seq = append(seq, fmt.Sprintf("session %d %s", owner, macro))
+
+			codes, err := resolveHoldKeyCodes(token)
+			require.NoError(t, err)
+			require.NoError(t, sessions[owner].KeyboardPressSequence(t.Context(), []string{macro}, 0),
+				"iteration %d: %v", iter, seq)
+
+			id := canonical(codes)
+			if action == "press" {
+				if _, held := holds[owner][id]; !held {
+					holds[owner][id] = codes
+				}
+				continue
+			}
+			delete(holds[owner], id)
+		}
+
+		want := map[int]bool{}
+		for _, sessionHolds := range holds {
+			for _, codes := range sessionHolds {
+				for _, code := range codes {
+					want[code] = true
+				}
+			}
+		}
+		got := map[int]bool{}
+		for code, balance := range keyEventBalance(keyboard.events) {
+			require.GreaterOrEqual(t, balance, 0, "iteration %d: %v gives %v", iter, seq, keyboard.events)
+			require.LessOrEqual(t, balance, 1, "iteration %d: %v gives %v", iter, seq, keyboard.events)
+			if balance == 1 {
+				got[code] = true
+			}
+		}
+		require.Equal(t, want, got, "iteration %d: %v gives %v", iter, seq, keyboard.events)
+	}
+}
+
+// keyEventBalance reduces a recorded event list to how many times each key is
+// still down.
+func keyEventBalance(events []keyEvent) map[int]int {
+	balance := make(map[int]int)
+	for _, event := range events {
+		if event.kind == "down" {
+			balance[event.code]++
+			continue
+		}
+		balance[event.code]--
+	}
+	return balance
 }
 
 func TestInputSession_RepeatedShiftedPressIsReleasedOnce(t *testing.T) {

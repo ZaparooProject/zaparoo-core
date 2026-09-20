@@ -758,24 +758,38 @@ func TestKeyboardPressSequence_HoldTokenCombos(t *testing.T) {
 func TestKeyboardPress_ComboWithShiftedMember(t *testing.T) {
 	t.Parallel()
 
-	want := []keyEvent{
-		{kind: "down", code: 29},
-		{kind: "down", code: 42},
-		{kind: "down", code: 30},
-		{kind: "up", code: 30},
-		{kind: "up", code: 42},
-		{kind: "up", code: 29},
+	tests := []struct {
+		name  string
+		macro string
+		codes []int
+	}{
+		{name: "shifted letter", macro: "{ctrl+A}", codes: []int{29, 42, 30}},
+		{name: "shifted symbol", macro: "{ctrl+plus}", codes: []int{29, 42, 13}},
 	}
 
-	rec := &recordingKeyboard{}
-	input := newRecordingInputManager(rec)
-	require.NoError(t, input.KeyboardPress("{ctrl+A}"))
-	assert.Equal(t, want, rec.events)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	rec = &recordingKeyboard{}
-	input = newRecordingInputManager(rec)
-	require.NoError(t, input.KeyboardPressSequence([]string{"{ctrl+A}"}, 0))
-	assert.Equal(t, want, rec.events)
+			want := make([]keyEvent, 0, len(tt.codes)*2)
+			for _, code := range tt.codes {
+				want = append(want, keyEvent{kind: "down", code: code})
+			}
+			for i := len(tt.codes) - 1; i >= 0; i-- {
+				want = append(want, keyEvent{kind: "up", code: tt.codes[i]})
+			}
+
+			rec := &recordingKeyboard{}
+			input := newRecordingInputManager(rec)
+			require.NoError(t, input.KeyboardPress(tt.macro))
+			assert.Equal(t, want, rec.events)
+
+			rec = &recordingKeyboard{}
+			input = newRecordingInputManager(rec)
+			require.NoError(t, input.KeyboardPressSequence([]string{tt.macro}, 0))
+			assert.Equal(t, want, rec.events)
+		})
+	}
 }
 
 // TestKeyboardPressSequence_InvalidDelayToken verifies malformed inline delays
