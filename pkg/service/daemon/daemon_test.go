@@ -1042,6 +1042,26 @@ func TestWaitForAPIPortRelease(t *testing.T) {
 	require.NoError(t, waitForAPIPortRelease(cfg, time.Second, 5*time.Millisecond))
 }
 
+// A probe that gets no answer in time used to be read as "the port was
+// released", so on a loaded machine a replacement would go on to bind a port the
+// old process still held. An expired budget reproduces that without needing a
+// blackholed address: the dial cannot complete, and the port is still held.
+func TestAPIPortHeldTreatsAProbeTimeoutAsHeld(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	addr := listener.Addr().String()
+
+	assert.True(t, apiPortHeld(addr, time.Second), "a listening port is held")
+	assert.True(t, apiPortHeld(addr, -1), "a probe that cannot complete must not report the port free")
+
+	require.NoError(t, listener.Close())
+	assert.False(t, apiPortHeld(addr, time.Second), "a refused port has been released")
+}
+
 func TestStopProcessTerminatesCommand(t *testing.T) {
 	process := exec.CommandContext(context.Background(), "sleep", "1000")
 	require.NoError(t, process.Start())
