@@ -43,8 +43,14 @@ const (
 	// LaunchRepairLauncherPluginMissing means the launcher is installed but its
 	// plugin or core for this system is absent.
 	LaunchRepairLauncherPluginMissing LaunchRepairReason = "launcher_plugin_missing"
+	// LaunchRepairLauncherVersionUnsupported means the installed build of the
+	// launcher cannot be used for this media, for example because its storage
+	// model is unsupported. The user needs a different build of that launcher.
+	LaunchRepairLauncherVersionUnsupported LaunchRepairReason = "launcher_version_unsupported"
 	// LaunchRepairLauncherAmbiguous means several launchers are usable and no
-	// reviewed default applies, so the user must choose one.
+	// reviewed default applies, so the user must choose one. It is reserved: no
+	// producer emits it yet, because launcher selection resolves by catalog
+	// precedence without asking.
 	LaunchRepairLauncherAmbiguous LaunchRepairReason = "launcher_ambiguous"
 	// LaunchRepairLauncherUnsupportedMedia means this launcher cannot play the
 	// selected media entry.
@@ -67,12 +73,19 @@ const (
 	// LaunchRepairHostForegroundRequired means the launch needs the user to return
 	// to the app first.
 	LaunchRepairHostForegroundRequired LaunchRepairReason = "host_foreground_required"
+	// LaunchRepairCancelled means the launch was cancelled before it started.
+	LaunchRepairCancelled LaunchRepairReason = "cancelled"
 	// LaunchRepairOutcomeUnknown means the launch was dispatched but its result
 	// could not be confirmed.
 	LaunchRepairOutcomeUnknown LaunchRepairReason = "outcome_unknown"
-	// LaunchRepairRefused is the catch-all: the request was refused for another
-	// reason, and every producer without a narrower code reports it.
+	// LaunchRepairRefused means the operating system refused the request. It is
+	// not a catch-all: a producer that cannot say that much reports
+	// LaunchRepairUnspecified instead.
 	LaunchRepairRefused LaunchRepairReason = "refused"
+	// LaunchRepairUnspecified means the producer sent no structured reason, so a
+	// client shows the error's message verbatim. It is the default for a producer
+	// with no code yet and for any reason this build does not recognise.
+	LaunchRepairUnspecified LaunchRepairReason = "unspecified"
 )
 
 // Parameter names a repair error may carry. The key set is closed: these are
@@ -99,6 +112,7 @@ var launchRepairReasons = []LaunchRepairReason{
 	LaunchRepairLauncherNotInstalled,
 	LaunchRepairLauncherComponentMissing,
 	LaunchRepairLauncherPluginMissing,
+	LaunchRepairLauncherVersionUnsupported,
 	LaunchRepairLauncherAmbiguous,
 	LaunchRepairLauncherUnsupportedMedia,
 	LaunchRepairLauncherOptionsUnsupported,
@@ -108,8 +122,10 @@ var launchRepairReasons = []LaunchRepairReason{
 	LaunchRepairMediaUnavailable,
 	LaunchRepairHostUnavailable,
 	LaunchRepairHostForegroundRequired,
+	LaunchRepairCancelled,
 	LaunchRepairOutcomeUnknown,
 	LaunchRepairRefused,
+	LaunchRepairUnspecified,
 }
 
 // launchRepairParams is the closed parameter key set, in documentation order.
@@ -141,10 +157,11 @@ func (e *LaunchRepairError) Error() string {
 	return e.message
 }
 
-// Reason is never empty: an error built without one reports the catch-all.
+// Reason is never empty: an error built without a usable one reports
+// LaunchRepairUnspecified, which tells a client to show the message as it is.
 func (e *LaunchRepairError) Reason() LaunchRepairReason {
 	if e == nil || !e.reason.Valid() {
-		return LaunchRepairRefused
+		return LaunchRepairUnspecified
 	}
 	return e.reason
 }
@@ -160,22 +177,22 @@ func (e *LaunchRepairError) Params() map[string]string {
 
 // NewLaunchRepairError must never receive paths, scripts, credentials, provider
 // errors or other runtime input. Use fixed messages selected by a bounded code.
-// It reports the catch-all reason, for producers that have no code yet.
+// It reports LaunchRepairUnspecified, for producers that have no code yet.
 func NewLaunchRepairError(message string) error {
-	return NewLaunchRepairErrorWithReason(LaunchRepairRefused, nil, message)
+	return NewLaunchRepairErrorWithReason(LaunchRepairUnspecified, nil, message)
 }
 
 // NewLaunchRepairErrorWithReason builds the client-facing repair error. A reason
-// outside the closed set becomes LaunchRepairRefused, an unusable message becomes
-// the generic fallback, and a parameter outside the closed key set or not shaped
-// like a display name is dropped rather than sent.
+// outside the closed set becomes LaunchRepairUnspecified, an unusable message
+// becomes the generic fallback, and a parameter outside the closed key set or
+// not shaped like a display name is dropped rather than sent.
 func NewLaunchRepairErrorWithReason(
 	reason LaunchRepairReason,
 	params map[string]string,
 	message string,
 ) error {
 	if !reason.Valid() {
-		reason = LaunchRepairRefused
+		reason = LaunchRepairUnspecified
 	}
 	return &LaunchRepairError{
 		params:  safeRepairParams(params),
