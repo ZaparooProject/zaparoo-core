@@ -320,3 +320,31 @@ func TestBuildExportLogModal_ReturnsToItsCaller(t *testing.T) {
 		t.Fatal("escape did not return to the caller")
 	}
 }
+
+// The TUI's upload used to read the bundle itself and say so when it could not.
+// Routing the read through helpers.UploadLog lost that until the read failure
+// got its own sentinel, and this is the surface where a user reads the result:
+// telling somebody with no log file that the upload failed sends them looking
+// at their network.
+//
+// The loading dialog matters as much as the wording. It is put up before the
+// upload and taken down after, so a failure that left it up would trap the user
+// behind "Uploading log file..." for good.
+func TestUploadLog_SaysTheLogCouldNotBeRead(t *testing.T) {
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	pages := tview.NewPages()
+	runner.Start(pages)
+
+	// Called from the test goroutine, not inside QueueUpdateDraw: uploadLog
+	// forces a draw of its own and would deadlock against a queued update.
+	outcome := uploadLog(pl, pages, runner.App())
+
+	assert.Equal(t, "Unable to read log file.", outcome)
+	assert.False(t, pages.HasPage("temp_upload"),
+		"the loading dialog has to come down whatever the upload did")
+}
