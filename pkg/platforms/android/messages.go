@@ -67,16 +67,22 @@ func repairReason(reason FailureReason) platforms.LaunchRepairReason {
 		return platforms.LaunchRepairStorageProviderUnsupported
 	case FailureStorageUnmounted:
 		return platforms.LaunchRepairStorageUnavailable
+	case FailureStorageVersion:
+		return platforms.LaunchRepairLauncherVersionUnsupported
 	case FailureSourceUnavailable:
 		return platforms.LaunchRepairMediaUnavailable
-	case FailureForegroundRequired, FailureCancelled:
+	case FailureForegroundRequired:
 		return platforms.LaunchRepairHostForegroundRequired
+	case FailureCancelled:
+		return platforms.LaunchRepairCancelled
 	case FailureOutcomeUnknown:
 		return platforms.LaunchRepairOutcomeUnknown
-	default:
-		// FailureRefused, and FailureStorageVersion because a build whose
-		// storage access cannot be verified has no narrower reason.
+	case FailureRefused:
 		return platforms.LaunchRepairRefused
+	default:
+		// A host answering with a code this build does not know says nothing
+		// about the operating system, so it cannot claim a refusal.
+		return platforms.LaunchRepairUnspecified
 	}
 }
 
@@ -97,19 +103,23 @@ func repairMessage(reason FailureReason, installHint string) string {
 	case FailureStorageDenied:
 		return "this launcher does not have the storage permission it needs"
 	case FailureStorageVersion:
-		return "storage access cannot be verified for this build of the launcher"
+		return "this build of the launcher cannot be used for this media; a different build is needed"
 	case FailureProviderUnsupported:
 		return "this launcher cannot read media from the provider holding it"
 	case FailureStorageUnmounted:
 		return "the storage holding this media is not available"
 	case FailureSourceUnavailable:
 		return "this media entry could not be resolved or opened"
-	case FailureForegroundRequired, FailureCancelled:
+	case FailureForegroundRequired:
 		return "return to Zaparoo before launching a game"
+	case FailureCancelled:
+		return "the launch was cancelled before it started"
 	case FailureOutcomeUnknown:
 		return "the launch was sent but its outcome could not be confirmed"
+	case FailureRefused:
+		return "Android refused the launcher request"
 	default:
-		return "the launcher request was refused"
+		return "the launch could not be completed"
 	}
 }
 

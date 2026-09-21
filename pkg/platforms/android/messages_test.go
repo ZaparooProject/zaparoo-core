@@ -24,7 +24,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"slices"
 	"strconv"
 	"testing"
 
@@ -96,12 +95,12 @@ func TestRepairReasonMapsEveryHostFailure(t *testing.T) {
 		FailureNotInstalled:        platforms.LaunchRepairLauncherNotInstalled,
 		FailureActivityUnavailable: platforms.LaunchRepairLauncherComponentMissing,
 		FailureStorageDenied:       platforms.LaunchRepairStoragePermissionRequired,
-		FailureStorageVersion:      platforms.LaunchRepairRefused,
+		FailureStorageVersion:      platforms.LaunchRepairLauncherVersionUnsupported,
 		FailureProviderUnsupported: platforms.LaunchRepairStorageProviderUnsupported,
 		FailureStorageUnmounted:    platforms.LaunchRepairStorageUnavailable,
 		FailureSourceUnavailable:   platforms.LaunchRepairMediaUnavailable,
 		FailureForegroundRequired:  platforms.LaunchRepairHostForegroundRequired,
-		FailureCancelled:           platforms.LaunchRepairHostForegroundRequired,
+		FailureCancelled:           platforms.LaunchRepairCancelled,
 		FailureOutcomeUnknown:      platforms.LaunchRepairOutcomeUnknown,
 		FailureRefused:             platforms.LaunchRepairRefused,
 	}
@@ -116,9 +115,9 @@ func TestRepairReasonMapsEveryHostFailure(t *testing.T) {
 	}
 
 	// A host that answers with something this build does not know still gets a
-	// usable reason.
-	assert.Equal(t, platforms.LaunchRepairRefused, repairReason(""))
-	assert.Equal(t, platforms.LaunchRepairRefused, repairReason("invented-by-a-host"))
+	// usable reason, and it must not claim the operating system refused.
+	assert.Equal(t, platforms.LaunchRepairUnspecified, repairReason(""))
+	assert.Equal(t, platforms.LaunchRepairUnspecified, repairReason("invented-by-a-host"))
 }
 
 func TestRepairParamsAreDisplayNames(t *testing.T) {
@@ -184,6 +183,7 @@ func TestEveryRepairErrorCarriesAClosedReason(t *testing.T) {
 		}
 		hosts = append(hosts,
 			&fakeHost{dispatchErr: errors.New("binder died")},
+			&fakeHost{dispatchErr: &HostError{Reason: "invented-by-a-host"}},
 			&fakeHost{receipt: &DispatchReceipt{Package: "org.example.other"}},
 			&fakeHost{openErr: hostmedia.ErrUnavailable},
 		)
@@ -199,27 +199,20 @@ func TestEveryRepairErrorCarriesAClosedReason(t *testing.T) {
 			&platforms.Launcher{ID: "RetroArch.Mesen"}, nil, nil))
 	})
 
-	// The sweep is only meaningful if it actually reached most of the set.
-	for _, reason := range []platforms.LaunchRepairReason{
-		platforms.LaunchRepairLauncherNotInstalled,
-		platforms.LaunchRepairLauncherComponentMissing,
-		platforms.LaunchRepairLauncherPluginMissing,
-		platforms.LaunchRepairLauncherUnsupportedMedia,
-		platforms.LaunchRepairLauncherOptionsUnsupported,
-		platforms.LaunchRepairStoragePermissionRequired,
-		platforms.LaunchRepairStorageProviderUnsupported,
-		platforms.LaunchRepairStorageUnavailable,
-		platforms.LaunchRepairMediaUnavailable,
-		platforms.LaunchRepairHostUnavailable,
-		platforms.LaunchRepairHostForegroundRequired,
-		platforms.LaunchRepairOutcomeUnknown,
-		platforms.LaunchRepairRefused,
-	} {
+	// Every reason but the reserved one has a producer here, so a value added to
+	// the closed set has to be placed on one side of this line.
+	unreachable := map[platforms.LaunchRepairReason]string{
+		platforms.LaunchRepairLauncherAmbiguous: "reserved: launcher selection resolves by catalog " +
+			"precedence, so nothing asks the user to choose",
+	}
+	for _, reason := range platforms.LaunchRepairReasons() {
+		if why, reserved := unreachable[reason]; reserved {
+			assert.NotContains(t, produced, reason, why)
+			continue
+		}
 		assert.Contains(t, produced, reason, "no producer exercised %s", reason)
 	}
-	// Only a client chooses between launchers, so this platform never asks.
-	assert.NotContains(t, produced, platforms.LaunchRepairLauncherAmbiguous)
 	for reason := range produced {
-		assert.True(t, slices.Contains(platforms.LaunchRepairReasons(), reason), reason)
+		assert.True(t, reason.Valid(), reason)
 	}
 }

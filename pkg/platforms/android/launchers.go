@@ -259,8 +259,19 @@ func (p *Platform) dispatch(entry *catalogEntry, identity string) (err error) {
 	}
 	if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
 		receipt.Strategy != definition.Strategy {
-		// Something started, but not what the definition asked for, so the
-		// outcome is unconfirmed rather than a refusal.
+		// The host started something the definition did not name. A user can do
+		// nothing about it, so the client only learns the outcome is
+		// unconfirmed. An operator has to be able to find this, so it is logged
+		// at error level with both components named.
+		log.Error().
+			Str("launcherID", definition.ID).
+			Str("expectedPackage", definition.Package).
+			Str("actualPackage", receipt.Package).
+			Str("expectedActivity", definition.Activity).
+			Str("actualActivity", receipt.Activity).
+			Str("expectedStrategy", definition.Strategy).
+			Str("actualStrategy", receipt.Strategy).
+			Msg("host dispatch receipt names a different component than the launch definition")
 		return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
 	}
 	return nil

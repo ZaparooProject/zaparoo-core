@@ -46,7 +46,13 @@ func TestLaunchRepairReasonSetIsClosed(t *testing.T) {
 	t.Parallel()
 
 	reasons := platforms.LaunchRepairReasons()
-	require.NotEmpty(t, reasons)
+	// Clients are written against the published set, so its size is part of the
+	// contract: changing it means telling them.
+	assert.Len(t, reasons, 17)
+	assert.Contains(t, reasons, platforms.LaunchRepairRefused)
+	assert.Contains(t, reasons, platforms.LaunchRepairUnspecified)
+	assert.NotEqual(t, platforms.LaunchRepairRefused, platforms.LaunchRepairUnspecified,
+		"an operating-system refusal is not the same as no reason at all")
 	seen := make(map[platforms.LaunchRepairReason]struct{}, len(reasons))
 	for _, reason := range reasons {
 		assert.NotEmpty(t, string(reason))
@@ -99,14 +105,16 @@ func TestLaunchRepairReasonsAreDocumented(t *testing.T) {
 	}
 }
 
-func TestNewLaunchRepairErrorDefaultsToRefused(t *testing.T) {
+// A producer with no code must not claim the operating system refused, so the
+// codeless constructor reports unspecified.
+func TestNewLaunchRepairErrorDefaultsToUnspecified(t *testing.T) {
 	t.Parallel()
 
 	err := platforms.NewLaunchRepairError("the launcher service is not responding")
 	repair := repairErrorOf(t, err)
 
 	assert.Equal(t, "the launcher service is not responding", repair.Error())
-	assert.Equal(t, platforms.LaunchRepairRefused, repair.Reason())
+	assert.Equal(t, platforms.LaunchRepairUnspecified, repair.Reason())
 	assert.Nil(t, repair.Params())
 }
 
@@ -126,12 +134,12 @@ func TestLaunchRepairErrorAlwaysCarriesAReasonAndAMessage(t *testing.T) {
 			want:    platforms.LaunchRepairMediaUnavailable, wantMsg: "this media entry could not be opened",
 		},
 		{
-			name: "an empty reason becomes the catch-all", reason: "",
-			message: "unreachable", want: platforms.LaunchRepairRefused, wantMsg: "unreachable",
+			name: "an empty reason becomes unspecified", reason: "",
+			message: "unreachable", want: platforms.LaunchRepairUnspecified, wantMsg: "unreachable",
 		},
 		{
-			name: "an unknown reason becomes the catch-all", reason: "invented_by_a_caller",
-			message: "unreachable", want: platforms.LaunchRepairRefused, wantMsg: "unreachable",
+			name: "an unknown reason becomes unspecified", reason: "invented_by_a_caller",
+			message: "unreachable", want: platforms.LaunchRepairUnspecified, wantMsg: "unreachable",
 		},
 		{
 			name:   "an empty message becomes the generic fallback",
@@ -161,17 +169,17 @@ func TestLaunchRepairErrorAlwaysCarriesAReasonAndAMessage(t *testing.T) {
 }
 
 // A zero value can only come from a caller building the struct by hand, and it
-// must still answer with the catch-all rather than nothing.
-func TestLaunchRepairErrorZeroValueReportsTheCatchAll(t *testing.T) {
+// must still answer with a reason rather than nothing.
+func TestLaunchRepairErrorZeroValueReportsUnspecified(t *testing.T) {
 	t.Parallel()
 
 	zero := &platforms.LaunchRepairError{}
-	assert.Equal(t, platforms.LaunchRepairRefused, zero.Reason())
+	assert.Equal(t, platforms.LaunchRepairUnspecified, zero.Reason())
 	assert.Equal(t, genericRepairMessage, zero.Error())
 	assert.Nil(t, zero.Params())
 
 	var missing *platforms.LaunchRepairError
-	assert.Equal(t, platforms.LaunchRepairRefused, missing.Reason())
+	assert.Equal(t, platforms.LaunchRepairUnspecified, missing.Reason())
 	assert.Equal(t, genericRepairMessage, missing.Error())
 	assert.Nil(t, missing.Params())
 }

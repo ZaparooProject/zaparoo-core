@@ -77,26 +77,33 @@ A `launch_repair` error means the launch stopped for something the user can act 
 
 The reasons and the parameters each one can carry:
 
-| Reason                         | Meaning                                                                       | Parameters           |
-| :----------------------------- | :---------------------------------------------------------------------------- | :------------------- |
-| `launcher_not_installed`       | The launcher application is not installed.                                     | `launcher`, `plugin` |
-| `launcher_component_missing`   | The launcher is installed, but the entry point it declares is gone or disabled. | `launcher`, `plugin` |
-| `launcher_plugin_missing`      | The launcher is installed but its plugin or core for this system is absent.    | `launcher`, `plugin` |
-| `launcher_ambiguous`           | Several usable launchers and no reviewed default; the user must choose one.    | `launcher`, `plugin` |
-| `launcher_unsupported_media`   | This launcher cannot play the selected media entry.                            | `launcher`, `plugin` |
-| `launcher_options_unsupported` | The launch options requested are not supported by this launcher.               | `launcher`, `plugin` |
-| `storage_permission_required`  | The launcher lacks the storage permission it needs.                            | `launcher`, `plugin` |
-| `storage_provider_unsupported` | The media lives on a provider this launcher cannot read.                       | `launcher`, `plugin` |
-| `storage_unavailable`          | The storage holding the media is not present.                                  | `launcher`, `plugin` |
-| `media_unavailable`            | The media file cannot be resolved or opened.                                   | `launcher`, `plugin` |
-| `host_unavailable`             | The host's launch service is not answering.                                    | `launcher`, `plugin` |
-| `host_foreground_required`     | The launch needs the user to return to the app first.                          | `launcher`, `plugin` |
-| `outcome_unknown`              | The launch was dispatched, but the result could not be confirmed.              | `launcher`, `plugin` |
-| `refused`                      | The request was refused for another reason.                                    | `launcher`, `plugin` |
+| Reason                          | Meaning                                                                          | Parameters           |
+| :------------------------------ | :-------------------------------------------------------------------------------- | :------------------- |
+| `launcher_not_installed`        | The launcher application is not installed.                                        | `launcher`, `plugin` |
+| `launcher_component_missing`    | The launcher is installed, but the entry point it declares is gone or disabled.    | `launcher`, `plugin` |
+| `launcher_plugin_missing`       | The launcher is installed but its plugin or core for this system is absent.       | `launcher`, `plugin` |
+| `launcher_version_unsupported`  | The installed build of the launcher cannot be used for this media, for example because its storage model is unsupported. The user needs a different build of that launcher. | `launcher`, `plugin` |
+| `launcher_ambiguous`            | Several usable launchers and no reviewed default; the user must choose one. Reserved: see below. | `launcher`, `plugin` |
+| `launcher_unsupported_media`    | This launcher cannot play the selected media entry.                               | `launcher`, `plugin` |
+| `launcher_options_unsupported`  | The launch options requested are not supported by this launcher.                  | `launcher`, `plugin` |
+| `storage_permission_required`   | The launcher lacks the storage permission it needs.                               | `launcher`, `plugin` |
+| `storage_provider_unsupported`  | The media lives on a provider this launcher cannot read.                          | `launcher`, `plugin` |
+| `storage_unavailable`           | The storage holding the media is not present.                                     | `launcher`, `plugin` |
+| `media_unavailable`             | The media file cannot be resolved or opened.                                      | `launcher`, `plugin` |
+| `host_unavailable`              | The host's launch service is not answering.                                       | `launcher`, `plugin` |
+| `host_foreground_required`      | The launch needs the user to return to the app first.                             | `launcher`, `plugin` |
+| `cancelled`                     | The launch was cancelled before it started.                                       | `launcher`, `plugin` |
+| `outcome_unknown`               | The launch was dispatched, but the result could not be confirmed.                 | `launcher`, `plugin` |
+| `refused`                       | The operating system refused the request. This is not a catch-all.                | `launcher`, `plugin` |
+| `unspecified`                   | Core sent no structured reason. Show `message` verbatim.                          | `launcher`, `plugin` |
+
+`refused` means specifically that the operating system refused the launch. A failure Core cannot classify that far reports `unspecified` instead, so do not treat `refused` as "something else went wrong".
+
+`launcher_ambiguous` is reserved. No Core version emits it yet, because launcher selection resolves by catalog precedence rather than asking the user. It is published so that clients can handle it when a version does; do not wait for it.
 
 `params` has a closed key set: `launcher` is the launcher application's display name, such as `RetroArch` or `DuckStation`, and `plugin` is the name of its plugin or core for this system, such as `Mesen`. Both are short display names only, never identifiers, paths, URIs or text from the host. A key is absent when Core has no name for it, so treat both as optional for every reason.
 
-Clients must tolerate an unknown `reason`, and an absent one from an older Core, by falling back to the error's `message`. The message is a fixed English string that reads sensibly on its own, so it is always a usable last resort, but it is not a stable contract: branch on `reason` wherever the wording matters.
+Clients must tolerate an unknown `reason`, and an absent one from an older Core, by falling back to the error's `message`, exactly as they do for `unspecified`. The message is a fixed English string that reads sensibly on its own, so it is always a usable last resort, but it is not a stable contract: branch on `reason` wherever the wording matters.
 
 Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 

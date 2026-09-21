@@ -325,19 +325,19 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			params:   map[string]string{"launcher": "RetroArch", "plugin": "Mesen"},
 		},
 		{
-			name: "a repair error with no code is refused",
+			name: "a repair error with no code is unspecified",
 			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
 				platforms.NewLaunchRepairError("allow player storage access in Android Settings")),
 			category: models.ErrorCategoryLaunchRepair,
 			message:  "allow player storage access in Android Settings",
-			reason:   "refused",
+			reason:   "unspecified",
 		},
 		{
 			name:     "invalid repair message stays generic",
 			cause:    platforms.NewLaunchRepairError("invalid\nmessage"),
 			category: models.ErrorCategoryLaunchRepair,
 			message:  "player request could not be completed",
-			reason:   "refused",
+			reason:   "unspecified",
 		},
 		{
 			name:     "unclassified failure",
