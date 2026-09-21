@@ -19,24 +19,211 @@
 
 package platforms
 
-import "strings"
+import (
+	"maps"
+	"slices"
+	"strings"
+)
 
-// LaunchRepairError explicitly marks fixed, application-authored repair text
-// safe for API clients. Wrapping error details remain private to Core logs.
-type LaunchRepairError struct{ message string }
+// LaunchRepairReason is the closed set of reasons a launch needs the user to
+// fix something before it can succeed. A client branches on the reason and
+// writes its own wording and localization; the error's message is only the
+// fallback for a client that has none.
+//
+// The set is closed. Adding a value means mapping every producer onto it and
+// documenting it in docs/api/methods.md in the same change.
+type LaunchRepairReason string
+
+const (
+	// LaunchRepairLauncherNotInstalled means the launcher application is not installed.
+	LaunchRepairLauncherNotInstalled LaunchRepairReason = "launcher_not_installed"
+	// LaunchRepairLauncherComponentMissing means the launcher is installed but the
+	// entry point it declares is gone or disabled.
+	LaunchRepairLauncherComponentMissing LaunchRepairReason = "launcher_component_missing"
+	// LaunchRepairLauncherPluginMissing means the launcher is installed but its
+	// plugin or core for this system is absent.
+	LaunchRepairLauncherPluginMissing LaunchRepairReason = "launcher_plugin_missing"
+	// LaunchRepairLauncherAmbiguous means several launchers are usable and no
+	// reviewed default applies, so the user must choose one.
+	LaunchRepairLauncherAmbiguous LaunchRepairReason = "launcher_ambiguous"
+	// LaunchRepairLauncherUnsupportedMedia means this launcher cannot play the
+	// selected media entry.
+	LaunchRepairLauncherUnsupportedMedia LaunchRepairReason = "launcher_unsupported_media"
+	// LaunchRepairLauncherOptionsUnsupported means the launch options requested are
+	// not supported by this launcher.
+	LaunchRepairLauncherOptionsUnsupported LaunchRepairReason = "launcher_options_unsupported"
+	// LaunchRepairStoragePermissionRequired means the launcher lacks the storage
+	// permission it needs.
+	LaunchRepairStoragePermissionRequired LaunchRepairReason = "storage_permission_required"
+	// LaunchRepairStorageProviderUnsupported means the media lives on a provider
+	// this launcher cannot read.
+	LaunchRepairStorageProviderUnsupported LaunchRepairReason = "storage_provider_unsupported"
+	// LaunchRepairStorageUnavailable means the storage holding the media is not present.
+	LaunchRepairStorageUnavailable LaunchRepairReason = "storage_unavailable"
+	// LaunchRepairMediaUnavailable means the media file cannot be resolved or opened.
+	LaunchRepairMediaUnavailable LaunchRepairReason = "media_unavailable"
+	// LaunchRepairHostUnavailable means the host's launch service is not answering.
+	LaunchRepairHostUnavailable LaunchRepairReason = "host_unavailable"
+	// LaunchRepairHostForegroundRequired means the launch needs the user to return
+	// to the app first.
+	LaunchRepairHostForegroundRequired LaunchRepairReason = "host_foreground_required"
+	// LaunchRepairOutcomeUnknown means the launch was dispatched but its result
+	// could not be confirmed.
+	LaunchRepairOutcomeUnknown LaunchRepairReason = "outcome_unknown"
+	// LaunchRepairRefused is the catch-all: the request was refused for another
+	// reason, and every producer without a narrower code reports it.
+	LaunchRepairRefused LaunchRepairReason = "refused"
+)
+
+// Parameter names a repair error may carry. The key set is closed: these are
+// display names a client substitutes into its own wording, never identifiers,
+// paths or host text.
+const (
+	// LaunchRepairParamLauncher names the launcher application, such as "RetroArch".
+	LaunchRepairParamLauncher = "launcher"
+	// LaunchRepairParamPlugin names the launcher's plugin or core, such as "Mesen".
+	LaunchRepairParamPlugin = "plugin"
+)
+
+const (
+	maxRepairMessageBytes = 1024
+	maxRepairParamBytes   = 64
+	// repairParamPunctuation is every non-alphanumeric character a display name
+	// may contain. It admits no path, URI, script, query or assignment syntax.
+	repairParamPunctuation = " !()+-._"
+	defaultRepairMessage   = "player request could not be completed"
+)
+
+// launchRepairReasons is the closed set, in documentation order.
+var launchRepairReasons = []LaunchRepairReason{
+	LaunchRepairLauncherNotInstalled,
+	LaunchRepairLauncherComponentMissing,
+	LaunchRepairLauncherPluginMissing,
+	LaunchRepairLauncherAmbiguous,
+	LaunchRepairLauncherUnsupportedMedia,
+	LaunchRepairLauncherOptionsUnsupported,
+	LaunchRepairStoragePermissionRequired,
+	LaunchRepairStorageProviderUnsupported,
+	LaunchRepairStorageUnavailable,
+	LaunchRepairMediaUnavailable,
+	LaunchRepairHostUnavailable,
+	LaunchRepairHostForegroundRequired,
+	LaunchRepairOutcomeUnknown,
+	LaunchRepairRefused,
+}
+
+// launchRepairParams is the closed parameter key set, in documentation order.
+var launchRepairParams = []string{LaunchRepairParamLauncher, LaunchRepairParamPlugin}
+
+// LaunchRepairReasons returns every reason in the closed set.
+func LaunchRepairReasons() []LaunchRepairReason { return slices.Clone(launchRepairReasons) }
+
+// LaunchRepairParams returns every parameter name in the closed key set.
+func LaunchRepairParams() []string { return slices.Clone(launchRepairParams) }
+
+// Valid reports whether r belongs to the closed set.
+func (r LaunchRepairReason) Valid() bool { return slices.Contains(launchRepairReasons, r) }
+
+// LaunchRepairError explicitly marks a launch failure as one a client may show.
+// The reason and parameters are the contract; the message is a fixed English
+// fallback kept for clients that only read error.message. Wrapping error details
+// remain private to Core logs.
+type LaunchRepairError struct {
+	params  map[string]string
+	message string
+	reason  LaunchRepairReason
+}
 
 func (e *LaunchRepairError) Error() string {
 	if e == nil || e.message == "" {
-		return "player request could not be completed"
+		return defaultRepairMessage
 	}
 	return e.message
 }
 
+// Reason is never empty: an error built without one reports the catch-all.
+func (e *LaunchRepairError) Reason() LaunchRepairReason {
+	if e == nil || !e.reason.Valid() {
+		return LaunchRepairRefused
+	}
+	return e.reason
+}
+
+// Params returns a copy of the bounded display names, or nil when there are
+// none, so a client-facing payload cannot be edited through the error.
+func (e *LaunchRepairError) Params() map[string]string {
+	if e == nil || len(e.params) == 0 {
+		return nil
+	}
+	return maps.Clone(e.params)
+}
+
 // NewLaunchRepairError must never receive paths, scripts, credentials, provider
 // errors or other runtime input. Use fixed messages selected by a bounded code.
+// It reports the catch-all reason, for producers that have no code yet.
 func NewLaunchRepairError(message string) error {
-	if message == "" || len(message) > 1024 || strings.ContainsAny(message, "\x00\r\n") {
-		message = "player request could not be completed"
+	return NewLaunchRepairErrorWithReason(LaunchRepairRefused, nil, message)
+}
+
+// NewLaunchRepairErrorWithReason builds the client-facing repair error. A reason
+// outside the closed set becomes LaunchRepairRefused, an unusable message becomes
+// the generic fallback, and a parameter outside the closed key set or not shaped
+// like a display name is dropped rather than sent.
+func NewLaunchRepairErrorWithReason(
+	reason LaunchRepairReason,
+	params map[string]string,
+	message string,
+) error {
+	if !reason.Valid() {
+		reason = LaunchRepairRefused
 	}
-	return &LaunchRepairError{message: message}
+	return &LaunchRepairError{
+		params:  safeRepairParams(params),
+		message: safeRepairMessage(message),
+		reason:  reason,
+	}
+}
+
+func safeRepairMessage(message string) string {
+	if message == "" || len(message) > maxRepairMessageBytes ||
+		strings.ContainsAny(message, "\x00\r\n") {
+		return defaultRepairMessage
+	}
+	return message
+}
+
+// safeRepairParams keeps only the closed key set, and only values that still
+// read as a display name. Anything longer, differently punctuated or otherwise
+// unrecognised is dropped, so a filesystem path, URI, script fragment,
+// credential or provider error message cannot reach a client through here.
+func safeRepairParams(params map[string]string) map[string]string {
+	if len(params) == 0 {
+		return nil
+	}
+	safe := make(map[string]string, len(launchRepairParams))
+	for _, key := range launchRepairParams {
+		if value, present := params[key]; present && validRepairParam(value) {
+			safe[key] = value
+		}
+	}
+	if len(safe) == 0 {
+		return nil
+	}
+	return safe
+}
+
+func validRepairParam(value string) bool {
+	if value == "" || len(value) > maxRepairParamBytes ||
+		strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
+		return false
+	}
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		case strings.ContainsRune(repairParamPunctuation, char):
+		default:
+			return false
+		}
+	}
+	return true
 }

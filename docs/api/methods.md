@@ -61,9 +61,42 @@ If execution fails, the response carries an [error](index.md#response-errors) wh
 | `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
 | `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
 | `unavailable`      | The service is shutting down.                                                                 |
+| `launch_repair`    | The launch needs the user to fix something first. See [launch repair errors](#launch-repair-errors). |
 | `execution_failed` | Any other execution failure.                                                                  |
 
 Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back. During shutdown the connection often closes before the `unavailable` response can be written, so treat a dropped connection with a request in flight the same way.
+
+##### Launch repair errors
+
+A `launch_repair` error means the launch stopped for something the user can act on, such as an uninstalled launcher or a missing permission. Its `data` carries two extra keys that let a client write and localize its own wording:
+
+| Key      | Type   | Required | Description                                                                          |
+| :------- | :----- | :------- | :----------------------------------------------------------------------------------- |
+| `reason` | string | Yes      | A machine readable reason from the closed set below.                                  |
+| `params` | object | No       | Display names for the reason's wording. Present only when the reason carries one.     |
+
+The reasons and the parameters each one can carry:
+
+| Reason                         | Meaning                                                                       | Parameters           |
+| :----------------------------- | :---------------------------------------------------------------------------- | :------------------- |
+| `launcher_not_installed`       | The launcher application is not installed.                                     | `launcher`, `plugin` |
+| `launcher_component_missing`   | The launcher is installed, but the entry point it declares is gone or disabled. | `launcher`, `plugin` |
+| `launcher_plugin_missing`      | The launcher is installed but its plugin or core for this system is absent.    | `launcher`, `plugin` |
+| `launcher_ambiguous`           | Several usable launchers and no reviewed default; the user must choose one.    | `launcher`, `plugin` |
+| `launcher_unsupported_media`   | This launcher cannot play the selected media entry.                            | `launcher`, `plugin` |
+| `launcher_options_unsupported` | The launch options requested are not supported by this launcher.               | `launcher`, `plugin` |
+| `storage_permission_required`  | The launcher lacks the storage permission it needs.                            | `launcher`, `plugin` |
+| `storage_provider_unsupported` | The media lives on a provider this launcher cannot read.                       | `launcher`, `plugin` |
+| `storage_unavailable`          | The storage holding the media is not present.                                  | `launcher`, `plugin` |
+| `media_unavailable`            | The media file cannot be resolved or opened.                                   | `launcher`, `plugin` |
+| `host_unavailable`             | The host's launch service is not answering.                                    | `launcher`, `plugin` |
+| `host_foreground_required`     | The launch needs the user to return to the app first.                          | `launcher`, `plugin` |
+| `outcome_unknown`              | The launch was dispatched, but the result could not be confirmed.              | `launcher`, `plugin` |
+| `refused`                      | The request was refused for another reason.                                    | `launcher`, `plugin` |
+
+`params` has a closed key set: `launcher` is the launcher application's display name, such as `RetroArch` or `DuckStation`, and `plugin` is the name of its plugin or core for this system, such as `Mesen`. Both are short display names only, never identifiers, paths, URIs or text from the host. A key is absent when Core has no name for it, so treat both as optional for every reason.
+
+Clients must tolerate an unknown `reason`, and an absent one from an older Core, by falling back to the error's `message`. The message is a fixed English string that reads sensibly on its own, so it is always a usable last resort, but it is not a stable contract: branch on `reason` wherever the wording matters.
 
 Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 
@@ -113,6 +146,27 @@ Earlier Core versions returned `null` as soon as the token was accepted, before 
     "message": "media not found",
     "data": {
       "category": "media_not_found"
+    }
+  }
+}
+```
+
+##### Launch repair error response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "52f6242e-7a5a-11ef-bf93-020304050607",
+  "error": {
+    "code": 1,
+    "message": "this launcher's plugin for this system is not installed",
+    "data": {
+      "category": "launch_repair",
+      "reason": "launcher_plugin_missing",
+      "params": {
+        "launcher": "RetroArch",
+        "plugin": "Mesen"
+      }
     }
   }
 }

@@ -249,6 +249,13 @@ func scriptTooLongErr(err error) error {
 // kept for logging and errors.Is.
 func runError(err error) error {
 	category, message := runfailure.Classify(err)
+	var repair *platforms.LaunchRepairError
+	if category == models.ErrorCategoryLaunchRepair && errors.As(err, &repair) {
+		// The reason and its bounded display names are the contract; the
+		// message is the fallback for a client that only reads it.
+		return models.CategorizedDetailErr(category, message,
+			string(repair.Reason()), repair.Params(), err)
+	}
 	return models.CategorizedErr(category, message, err)
 }
 

@@ -36,9 +36,13 @@ const (
 )
 
 // ErrorData is the structured payload placed in ErrorObject.Data for
-// categorized errors.
+// categorized errors. Reason and Params are documented per category and stay
+// absent from the JSON for every category that does not define them, so adding
+// them changes no existing response shape.
 type ErrorData struct {
-	Category string `json:"category"`
+	Params   map[string]string `json:"params,omitempty"`
+	Category string            `json:"category"`
+	Reason   string            `json:"reason,omitempty"`
 }
 
 // CategorizedError is a client-facing failure with a stable category and a
@@ -48,8 +52,10 @@ type ErrorData struct {
 // paths or token contents.
 type CategorizedError struct {
 	Err      error
+	Params   map[string]string
 	Category string
 	Message  string
+	Reason   string
 }
 
 func (e *CategorizedError) Error() string {
@@ -63,4 +69,18 @@ func (e *CategorizedError) Unwrap() error {
 // CategorizedErr wraps err with a stable category and a safe message.
 func CategorizedErr(category, message string, err error) error {
 	return &CategorizedError{Err: err, Category: category, Message: message}
+}
+
+// CategorizedDetailErr wraps err with a stable category, a safe message and the
+// structured detail a client needs to write its own wording. Only categories
+// that document a reason and parameters populate them; everything else keeps
+// using CategorizedErr and sends the category alone.
+func CategorizedDetailErr(category, message, reason string, params map[string]string, err error) error {
+	return &CategorizedError{
+		Err:      err,
+		Params:   params,
+		Category: category,
+		Message:  message,
+		Reason:   reason,
+	}
 }
