@@ -54,35 +54,11 @@ func TestSelectDetectedLauncher(t *testing.T) {
 	assert.Empty(t, launcher.ID)
 }
 
-func TestSelectPreferredDetectedLauncher(t *testing.T) {
+func TestLauncherKnownMissing(t *testing.T) {
 	t.Parallel()
 
 	yes, no := true, false
-	candidates := []platforms.Launcher{
-		{ID: "registered-first", Detected: &yes},
-		{ID: "reviewed-default", Detected: &yes},
-		{ID: "missing", Detected: &no},
-	}
-	launcher, result := SelectPreferredDetectedLauncher(candidates, []string{
-		"missing", "reviewed-default", "registered-first",
-	})
-	require.Equal(t, LauncherDetectionUnique, result)
-	assert.Equal(t, "reviewed-default", launcher.ID)
-
-	launcher, result = SelectPreferredDetectedLauncher(candidates, []string{"unknown"})
-	require.Equal(t, LauncherDetectionAmbiguous, result)
-	assert.Empty(t, launcher.ID)
-}
-
-func TestSelectPreferredLauncherRequiresExplicitMatch(t *testing.T) {
-	t.Parallel()
-
-	candidates := []platforms.Launcher{{ID: "registered-first"}, {ID: "reviewed-default"}}
-	launcher, ok := SelectPreferredLauncher(candidates, []string{"reviewed-default", "registered-first"})
-	require.True(t, ok)
-	assert.Equal(t, "reviewed-default", launcher.ID)
-
-	launcher, ok = SelectPreferredLauncher(candidates, []string{"unknown"})
-	require.False(t, ok)
-	assert.Empty(t, launcher.ID)
+	assert.False(t, LauncherKnownMissing(&platforms.Launcher{}), "unscanned is not evidence of absence")
+	assert.False(t, LauncherKnownMissing(&platforms.Launcher{Detected: &yes}))
+	assert.True(t, LauncherKnownMissing(&platforms.Launcher{Detected: &no}))
 }

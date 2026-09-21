@@ -30,18 +30,15 @@ const (
 	LauncherDetectionAmbiguous
 )
 
-// SelectDetectedLauncher resolves optional host discovery metadata without
-// treating catalog order as installation evidence.
-func SelectDetectedLauncher(candidates []platforms.Launcher) (platforms.Launcher, LauncherDetectionResult) {
-	return SelectPreferredDetectedLauncher(candidates, nil)
+// LauncherKnownMissing reports a launcher whose platform looked for its player
+// and did not find it. An unscanned launcher is not known to be missing.
+func LauncherKnownMissing(launcher *platforms.Launcher) bool {
+	return launcher.Detected != nil && !*launcher.Detected
 }
 
-// SelectPreferredDetectedLauncher resolves discovery metadata using an
-// explicit, reviewed preference list when more than one launcher is detected.
-// Candidate or registration order is never a preference signal.
-func SelectPreferredDetectedLauncher(
-	candidates []platforms.Launcher, preferredIDs []string,
-) (platforms.Launcher, LauncherDetectionResult) {
+// SelectDetectedLauncher resolves optional host discovery metadata without
+// treating an unscanned launcher as installed or as absent.
+func SelectDetectedLauncher(candidates []platforms.Launcher) (platforms.Launcher, LauncherDetectionResult) {
 	scanned := false
 	matches := make([]platforms.Launcher, 0, len(candidates))
 	for i := range candidates {
@@ -53,32 +50,14 @@ func SelectPreferredDetectedLauncher(
 			matches = append(matches, candidates[i])
 		}
 	}
-	if len(matches) == 1 {
+	switch {
+	case len(matches) == 1:
 		return matches[0], LauncherDetectionUnique
-	}
-	if len(matches) > 1 {
-		if preferred, ok := SelectPreferredLauncher(matches, preferredIDs); ok {
-			return preferred, LauncherDetectionUnique
-		}
+	case len(matches) > 1:
 		return platforms.Launcher{}, LauncherDetectionAmbiguous
-	}
-	if scanned {
+	case scanned:
 		return platforms.Launcher{}, LauncherDetectionNone
+	default:
+		return platforms.Launcher{}, LauncherDetectionUnscanned
 	}
-	return platforms.Launcher{}, LauncherDetectionUnscanned
-}
-
-// SelectPreferredLauncher returns the first candidate named by an explicit
-// preference list. It deliberately has no candidate-order fallback.
-func SelectPreferredLauncher(
-	candidates []platforms.Launcher, preferredIDs []string,
-) (platforms.Launcher, bool) {
-	for _, preferredID := range preferredIDs {
-		for i := range candidates {
-			if candidates[i].ID == preferredID {
-				return candidates[i], true
-			}
-		}
-	}
-	return platforms.Launcher{}, false
 }

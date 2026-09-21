@@ -742,16 +742,7 @@ func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) 
 		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 	}
 
-	best := 0
-	bestScore := launcherSpecificity(&launchers[0])
-	for i := 1; i < len(launchers); i++ {
-		score := launcherSpecificity(&launchers[i])
-		if score > bestScore {
-			best = i
-			bestScore = score
-		}
-	}
-
+	best, bestScore := mostSpecificLauncher(launchers)
 	launcher := launchers[best]
 
 	log.Debug().
@@ -949,6 +940,23 @@ func launcherSpecificity(l *platforms.Launcher) int {
 	return score
 }
 
+// mostSpecificLauncher picks the launcher to infer for a path from a non-empty
+// list of matches. The highest specificity wins and registration order breaks
+// ties, but a launcher whose player is known to be missing is only chosen when
+// every match is: it still explains what to install.
+func mostSpecificLauncher(launchers []platforms.Launcher) (best, bestScore int) {
+	best, bestScore = -1, -1
+	bestMissing := true
+	for i := range launchers {
+		missing := LauncherKnownMissing(&launchers[i])
+		score := launcherSpecificity(&launchers[i])
+		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
+			best, bestScore, bestMissing = i, score, missing
+		}
+	}
+	return best, bestScore
+}
+
 func folderTrailSystem(path string) (string, bool) {
 	segments := strings.Split(filepath.ToSlash(filepath.Clean(filepath.Dir(path))), "/")
 	for i := len(segments) - 1; i >= 0; i-- {
@@ -1099,16 +1107,7 @@ func FindLauncher(
 			return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 		}
 	} else {
-		best := 0
-		bestScore := launcherSpecificity(&launchers[0])
-		for i := 1; i < len(launchers); i++ {
-			score := launcherSpecificity(&launchers[i])
-			if score > bestScore {
-				best = i
-				bestScore = score
-			}
-		}
-
+		best, bestScore := mostSpecificLauncher(launchers)
 		launcher = launchers[best]
 		log.Debug().
 			Str("path", path).

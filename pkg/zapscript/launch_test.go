@@ -1469,6 +1469,43 @@ func TestInferLauncherForSystemPath_PrefersUniqueDetectedLauncher(t *testing.T) 
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestInferLauncherForPath_SkipsKnownMissingPlayer(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	detected, missing := true, false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "NESMissing", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
+		{ID: "SNESInstalled", SystemID: systemdefs.SystemSNES, Schemes: []string{"source"}, Detected: &detected},
+		{ID: "SNESSecond", SystemID: systemdefs.SystemSNES, Schemes: []string{"source"}, Detected: &detected},
+	})
+
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "source://abc/game.bin")
+
+	require.True(t, found)
+	assert.Equal(t, "SNESInstalled", launcher.ID, "first registered launcher that is not known missing")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForPath_AllMissingKeepsFirst(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	missing := false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "First", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
+		{ID: "Second", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
+	})
+
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "source://abc/game.nes")
+
+	require.True(t, found)
+	assert.Equal(t, "First", launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestInferLauncherForSystemPath_SkipsScanOnly covers a custom launcher that
 // only widens a system's media directories. It shares the stock launcher's
 // extension, so counting it as a candidate would make every launch for that
