@@ -13,6 +13,7 @@ When `readers.scan.mode='tap'` (default setting) and a game is launched using a 
 - [ ] Tapping another card to launch a game will start the new game without returning to the core menu.
 - [ ] Tapping a card whose launch resolves to the game already running leaves that game uninterrupted. This applies to different cards, mappings, and scripts that resolve to the same target, not just repeated scans of one card.
 - [ ] A repeated random or dynamic script still resolves normally; a different target launches, while the current target is a successful no-op.
+- [ ] Tapping the card of a playlist that is already playing moves it on to the next item, wrapping after the last one, instead of starting the playlist again. A card naming a different playlist still starts that playlist at its first item, and a playlist that is paused picks up where it left off. `**playlist.goto:1` goes back to the first item.
 - [ ] A skipped launch does not run launch/exit hooks, reset playtime, clear the active playlist, or transfer hold ownership. Other commands on the card still execute.
 - [ ] Scanning a utility card does not reset this protection. After the game stops, tapping its card launches it again.
 - [ ] Tapping a command like `input.coin` will execute the command without interrupting the game.
@@ -37,6 +38,10 @@ and audio/video repeat behavior are unchanged. System-only and platform-specific
 commands without a resolved media target also retain their existing behavior.
 Explicit changes of launcher or
 MiSTer `setname`, and non-run actions such as `details`, are not suppressed.
+
+This key does not change what a playlist card does. `**playlist.play` naming the
+playlist already playing moves to the next item either way, because it acts on
+the playlist rather than relaunching media.
 
 Matching uses resolved launch paths and systems, not display names. Different ROM
 files remain different targets, even when they share a title. MiSTer ZIP launches
@@ -201,3 +206,6 @@ token rather than a step in running it:
       not change the mode of the token that triggered it.
 - [ ] Every track of a playlist runs under the mode the card that started the
       playlist declared.
+- [ ] Under hold mode, removing the card that started a playlist clears it, so
+      scanning that card again starts the playlist from its first item. Moving
+      through a playlist by scanning its card again is tap-mode behavior.

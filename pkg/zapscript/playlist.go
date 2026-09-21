@@ -490,6 +490,43 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	return pls, nil
 }
 
+// resumeOrAdvanceActivePlaylist runs playlist.play against the playlist it
+// already names. One that is not playing picks up where it left off; one that
+// is already playing moves on to the next item and wraps at the end, so a
+// token scanned repeatedly walks through its playlist.
+//
+// The copy just loaded is discarded rather than installed. Its items may be in
+// another order, since a shuffled playlist reshuffles every time it loads, and
+// "next" only means something against the order the playlist is playing in.
+func resumeOrAdvanceActivePlaylist(
+	env *platforms.CmdEnv, active *playlists.Playlist,
+) (platforms.CmdResult, error) {
+	var pls *playlists.Playlist
+	if active.Playing {
+		pls = playlists.Next(*active)
+		// A playlist of one wraps onto the item it is already on, which the
+		// queue would otherwise drop as no change.
+		if len(pls.Items) == 1 {
+			pls.ForceRelaunch = true
+		}
+		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
+			Msg("advancing active playlist")
+	} else {
+		pls = playlists.Play(*active)
+		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
+			Msg("resuming active playlist")
+	}
+
+	if err := queuePlaylistUpdate(env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	hasPlaylistArg := len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != ""
@@ -516,6 +553,13 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err
+	}
+
+	// Naming the playlist that is already open acts on it instead of starting
+	// it over. Scanning a token again is how you move through its playlist,
+	// and it must not throw away the position the playlist is at.
+	if active != nil && active.ID == pls.ID {
+		return resumeOrAdvanceActivePlaylist(&env, active)
 	}
 
 	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("play playlist: %v", env.Cmd.Args)
