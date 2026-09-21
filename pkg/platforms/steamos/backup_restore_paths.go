@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !android
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
