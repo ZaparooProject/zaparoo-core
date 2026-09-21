@@ -26,6 +26,7 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
 // These helpers run inside the ordinary scrape transaction. Missing means no
@@ -70,12 +71,16 @@ func fillMissingScrapeTags(
 				continue
 			}
 		}
+		// Stored tag values are zero-padded on their numeric tail, the same as
+		// every other scrape write path. Writing the natural spelling here would
+		// add a second Tags row for one value that no padded query can reach.
+		tagValue := tags.PadTagValue(tag.Tag)
 		// Reusing a global tag must not replace its display label for other media.
 		var tagID int64
 		err = c.tx.QueryRowContext(ctx,
-			"SELECT DBID FROM Tags WHERE TypeDBID=? AND Tag=?", typeID, tag.Tag).Scan(&tagID)
+			"SELECT DBID FROM Tags WHERE TypeDBID=? AND Tag=?", typeID, tagValue).Scan(&tagID)
 		if errors.Is(err, sql.ErrNoRows) {
-			tagID, err = c.resolveTag(ctx, typeID, tag.Type, tag.Tag, tag.Label)
+			tagID, err = c.resolveTag(ctx, typeID, tag.Type, tagValue, tag.Label)
 		}
 		if err != nil {
 			return fmt.Errorf("resolve missing scrape tag: %w", err)

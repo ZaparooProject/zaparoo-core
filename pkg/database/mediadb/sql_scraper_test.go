@@ -3197,3 +3197,62 @@ func TestResolveSingletonContainerAliases_CandidateWithoutTrailingSlash(t *testi
 	require.Len(t, aliases, 1)
 	assert.Equal(t, mediaPath, aliases[0].Row.Path)
 }
+
+// TestApplyScrapeFillMissingPadsNumericTagValues pins the storage spelling of a
+// fill-missing write. Tag values are stored with their numeric tail zero-padded
+// so they sort and compare as numbers, and every query pads the value it looks
+// for. A fill-missing write that stored the natural spelling instead would add a
+// second Tags row for one value, and no filter would ever find it.
+func TestApplyScrapeFillMissingPadsNumericTagValues(t *testing.T) {
+	t.Parallel()
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupScraperTestDB(t)
+			defer cleanup()
+			write := &database.ScrapeWrite{
+				FillMissing: true,
+				Sentinel:    database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{
+					{Type: "players", Tag: "2"},
+					{Type: "input", Tag: "joystick:8"},
+				},
+				MediaTags: []database.TagInfo{{Type: "set", Tag: "1"}},
+			}
+			if batch {
+				require.NoError(t, db.ApplyScrapeResults(t.Context(), []database.ScrapeWriteTarget{
+					{MediaDBID: 1, MediaTitleDBID: 1, Write: write},
+				}))
+			} else {
+				require.NoError(t, db.ApplyScrapeResult(t.Context(), 1, 1, write))
+			}
+
+			titleTags := storedTagValues(t, db, "MediaTitleTags", "MediaTitleDBID", 1)
+			assert.Contains(t, titleTags, "0002", "players is stored padded")
+			assert.Contains(t, titleTags, "joystick:0008", "an input's numeric tail is stored padded")
+			assert.NotContains(t, titleTags, "2")
+			assert.NotContains(t, titleTags, "joystick:8")
+
+			mediaTags := storedTagValues(t, db, "MediaTags", "MediaDBID", 1)
+			assert.Contains(t, mediaTags, "0001", "a media tag's numeric tail is stored padded")
+			assert.NotContains(t, mediaTags, "1")
+		})
+	}
+}
+
+// storedTagValues reads the raw stored Tag strings linked to one entity.
+func storedTagValues(t *testing.T, db *MediaDB, table, column string, id int64) []string {
+	t.Helper()
+	rows, err := db.sql.Load().QueryContext(t.Context(),
+		"SELECT t.Tag FROM "+table+" l JOIN Tags t ON t.DBID = l.TagDBID WHERE l."+column+" = ?", id)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	var values []string
+	for rows.Next() {
+		var tag string
+		require.NoError(t, rows.Scan(&tag))
+		values = append(values, tag)
+	}
+	require.NoError(t, rows.Err())
+	return values
+}
