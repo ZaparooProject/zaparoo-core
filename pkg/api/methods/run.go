@@ -272,6 +272,10 @@ func runError(err error) error {
 		return models.CategorizedErr(models.ErrorCategoryPlaytimeLimit,
 			"playtime limit reached", err)
 	default:
+		var repair *platforms.LaunchRepairError
+		if errors.As(err, &repair) {
+			return models.CategorizedErr(models.ErrorCategoryLaunchRepair, repair.Error(), err)
+		}
 		return models.CategorizedErr(models.ErrorCategoryExecutionFailed,
 			"ZapScript execution failed", err)
 	}

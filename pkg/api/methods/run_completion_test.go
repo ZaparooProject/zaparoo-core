@@ -312,6 +312,19 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			message:  "playtime limit reached",
 		},
 		{
+			name: "explicit safe player repair",
+			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
+				platforms.NewLaunchRepairError("allow player storage access in Android Settings")),
+			category: models.ErrorCategoryLaunchRepair,
+			message:  "allow player storage access in Android Settings",
+		},
+		{
+			name:     "invalid repair message stays generic",
+			cause:    platforms.NewLaunchRepairError("invalid\nmessage"),
+			category: models.ErrorCategoryLaunchRepair,
+			message:  "player request could not be completed",
+		},
+		{
 			name:     "unclassified failure",
 			cause:    errors.New("launcher exploded while opening " + leakedPath),
 			category: models.ErrorCategoryExecutionFailed,
