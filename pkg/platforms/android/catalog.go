@@ -83,7 +83,10 @@ type standaloneCatalog struct {
 // the platform needs to present and detect it.
 type catalogEntry struct {
 	// coreFile is the launcher core the definition loads, when it needs one.
-	coreFile   string
+	coreFile string
+	// coreName is that core's display name, which a client may show.
+	coreName string
+	// group is the launcher application's display name.
 	group      string
 	definition LaunchDefinition
 }
@@ -156,7 +159,9 @@ func loadRetroArchCatalog(data []byte) ([]catalogEntry, error) {
 		if err := definition.Validate(); err != nil {
 			return nil, fmt.Errorf("RetroArch catalog row %d: %w", i, err)
 		}
-		entries = append(entries, catalogEntry{definition: definition, coreFile: profile.File, group: retroArchGroup})
+		entries = append(entries, catalogEntry{
+			definition: definition, coreFile: profile.File, coreName: profile.Name, group: retroArchGroup,
+		})
 	}
 	return entries, nil
 }

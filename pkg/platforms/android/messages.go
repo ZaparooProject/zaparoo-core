@@ -25,59 +25,113 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// Every user-facing repair message this platform produces lives in this file.
-// The standalone catalog's per-app install hints are the only other source.
+// Everything this platform sends a client about a failed launch lives in this
+// file: the reason it branches on, the display names it may place in its own
+// wording, and the English fallback for a client that has no wording of its
+// own. The fallbacks stay deliberately generic, because the advice that names
+// an app, a menu or a settings screen belongs to the client. The catalog's
+// per-profile install hint is the only other source, and it is only a fallback
+// for a launcher that is not installed.
 
 const (
-	msgCoreMissing = "this RetroArch core was not found in the selected cores folder; " +
-		"install it or detect cores again"
-	msgWrongMedia           = "this launcher does not support the selected canonical media entry"
-	msgOverridesUnsupported = "launcher core and rendering overrides are not supported by this profile"
-	msgReceiptMismatch      = "host player result does not match selected definition"
+	msgNotInstalled         = "this launcher is not installed, or its entry point is missing"
+	msgCoreMissing          = "this launcher's plugin for this system is not installed"
+	msgWrongMedia           = "this launcher cannot play the selected media entry"
+	msgOverridesUnsupported = "this launcher does not support the requested launch options"
+	msgReceiptMismatch      = "the launch could not be confirmed: another component answered"
 )
 
 // retroArchRepairMessage is the install hint carried by a RetroArch definition.
+// It is fallback prose only; a client uses the reason and the launcher and
+// plugin names instead.
 func retroArchRepairMessage(coreName string) string {
 	return fmt.Sprintf("Install %s using RetroArch's Core Downloader, allow RetroArch storage access, "+
 		"and quit RetroArch before launching a different game. "+
 		"Custom core/config locations are not supported by this profile.", coreName)
 }
 
-// repairMessage turns a host failure into what the user can do about it.
-// installHint is the definition's own repair text.
-func repairMessage(reason FailureReason, installHint string) string {
-	//nolint:exhaustive // every reason without its own advice shares the default
+// repairReason maps a host failure onto the client-facing reason vocabulary.
+// Every failure maps onto a reason, so no repair error can leave here without
+// one.
+func repairReason(reason FailureReason) platforms.LaunchRepairReason {
 	switch reason {
-	case FailureHostUnavailable:
-		return "Android launcher service unavailable; return to Zaparoo and retry"
-	case FailureInvalidResponse:
-		return "invalid Android launcher response"
-	case FailureNotInstalled, FailureActivityUnavailable:
-		return installHint
+	case FailureHostUnavailable, FailureInvalidResponse:
+		return platforms.LaunchRepairHostUnavailable
+	case FailureNotInstalled:
+		return platforms.LaunchRepairLauncherNotInstalled
+	case FailureActivityUnavailable:
+		return platforms.LaunchRepairLauncherComponentMissing
 	case FailureStorageDenied:
-		return "allow RetroArch storage access in Android Settings > Apps > RetroArch > Permissions"
-	case FailureStorageVersion:
-		return "this profile cannot verify storage access for this RetroArch build; " +
-			"only legacy target SDK 28 or earlier is supported"
+		return platforms.LaunchRepairStoragePermissionRequired
 	case FailureProviderUnsupported:
-		return "RetroArch needs a local file; choose a game folder from internal storage or an SD card, " +
-			"not a cloud or other document provider"
+		return platforms.LaunchRepairStorageProviderUnsupported
 	case FailureStorageUnmounted:
-		return "game storage is unavailable; reconnect the SD card or storage and retry"
+		return platforms.LaunchRepairStorageUnavailable
 	case FailureSourceUnavailable:
-		return "game file is unavailable or outside supported shared storage; " +
-			"choose its folder again and update the media database"
+		return platforms.LaunchRepairMediaUnavailable
 	case FailureForegroundRequired, FailureCancelled:
-		return "return to Zaparoo before launching a game"
+		return platforms.LaunchRepairHostForegroundRequired
 	case FailureOutcomeUnknown:
-		return "launch outcome is unknown; check RetroArch before retrying"
+		return platforms.LaunchRepairOutcomeUnknown
 	default:
-		return "Android refused the launcher request; check RetroArch and return to Zaparoo"
+		// FailureRefused, and FailureStorageVersion because a build whose
+		// storage access cannot be verified has no narrower reason.
+		return platforms.LaunchRepairRefused
 	}
 }
 
-// repairError marks one of this file's fixed messages as safe to show a client.
-func repairError(message string) error {
+// repairMessage is the English fallback for a host failure. installHint is the
+// definition's own install advice, used only when the launcher itself is absent.
+func repairMessage(reason FailureReason, installHint string) string {
+	//nolint:exhaustive // every reason without its own wording shares the default
+	switch reason {
+	case FailureHostUnavailable:
+		return "the launcher service is not responding"
+	case FailureInvalidResponse:
+		return "the launcher service answered with something unusable"
+	case FailureNotInstalled, FailureActivityUnavailable:
+		if installHint == "" {
+			return msgNotInstalled
+		}
+		return installHint
+	case FailureStorageDenied:
+		return "this launcher does not have the storage permission it needs"
+	case FailureStorageVersion:
+		return "storage access cannot be verified for this build of the launcher"
+	case FailureProviderUnsupported:
+		return "this launcher cannot read media from the provider holding it"
+	case FailureStorageUnmounted:
+		return "the storage holding this media is not available"
+	case FailureSourceUnavailable:
+		return "this media entry could not be resolved or opened"
+	case FailureForegroundRequired, FailureCancelled:
+		return "return to Zaparoo before launching a game"
+	case FailureOutcomeUnknown:
+		return "the launch was sent but its outcome could not be confirmed"
+	default:
+		return "the launcher request was refused"
+	}
+}
+
+// repairParams are the display names a client may place in its own wording.
+// They are names only: never a package, path, URI, option or host message.
+func (e *catalogEntry) repairParams() map[string]string {
+	params := map[string]string{platforms.LaunchRepairParamLauncher: e.group}
+	if e.coreName != "" {
+		params[platforms.LaunchRepairParamPlugin] = e.coreName
+	}
+	return params
+}
+
+// repairError marks one of this file's fixed messages as safe to show a client
+// and carries the reason and names the client uses in place of the wording.
+func repairError(reason platforms.LaunchRepairReason, params map[string]string, message string) error {
 	//nolint:wrapcheck // the repair error is the whole message; a wrapper would only prefix it
-	return platforms.NewLaunchRepairError(message)
+	return platforms.NewLaunchRepairErrorWithReason(reason, params, message)
+}
+
+// hostRepairError turns a host failure into entry's client-facing repair error.
+func hostRepairError(failure FailureReason, entry *catalogEntry) error {
+	return repairError(repairReason(failure), entry.repairParams(),
+		repairMessage(failure, entry.definition.Repair))
 }

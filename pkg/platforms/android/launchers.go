@@ -118,7 +118,7 @@ func (p *Platform) launcher(entry *catalogEntry, snapshot *hostSnapshot) platfor
 	target := snapshot.targetFailure(definition)
 	var availability error
 	if target != "" {
-		availability = repairError(repairMessage(target, definition.Repair))
+		availability = hostRepairError(target, entry)
 	}
 	coreMissing := false
 	if entry.coreFile != "" && snapshot.coresSeen {
@@ -138,10 +138,10 @@ func (p *Platform) launcher(entry *catalogEntry, snapshot *hostSnapshot) platfor
 		Detected:           detected(entry, snapshot, target),
 		Test:               func(_ *config.Instance, identity string) bool { return definition.Matches(identity) },
 		Preflight: func(_ *config.Instance, identity string, options *platforms.LaunchOptions) error {
-			return preflight(definition, identity, options, coreMissing)
+			return preflight(entry, identity, options, coreMissing)
 		},
 		Launch: func(_ *config.Instance, identity string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			return nil, p.dispatch(definition, identity)
+			return nil, p.dispatch(entry, identity)
 		},
 	}
 	if availability != nil {
@@ -151,20 +151,21 @@ func (p *Platform) launcher(entry *catalogEntry, snapshot *hostSnapshot) platfor
 }
 
 func preflight(
-	definition *LaunchDefinition,
+	entry *catalogEntry,
 	identity string,
 	options *platforms.LaunchOptions,
 	coreMissing bool,
 ) error {
 	if coreMissing {
-		return repairError(msgCoreMissing)
+		return repairError(platforms.LaunchRepairLauncherPluginMissing, entry.repairParams(), msgCoreMissing)
 	}
-	if !definition.Matches(identity) {
-		return repairError(msgWrongMedia)
+	if !entry.definition.Matches(identity) {
+		return repairError(platforms.LaunchRepairLauncherUnsupportedMedia, entry.repairParams(), msgWrongMedia)
 	}
 	if options != nil && (options.SetName != "" || options.SetNameSameDir != "" ||
 		options.RenderScale != nil || options.RenderResolution != "") {
-		return repairError(msgOverridesUnsupported)
+		return repairError(platforms.LaunchRepairLauncherOptionsUnsupported,
+			entry.repairParams(), msgOverridesUnsupported)
 	}
 	return nil
 }
@@ -223,14 +224,15 @@ func displayName(identity string) string {
 // dispatch resolves identity to a live document and asks the host to start it.
 // A dispatch is not evidence of gameplay: the launcher is LifecycleExternal, so
 // no active media or playtime is published from here.
-func (p *Platform) dispatch(definition *LaunchDefinition, identity string) (err error) {
+func (p *Platform) dispatch(entry *catalogEntry, identity string) (err error) {
+	definition := &entry.definition
 	ctx := p.launcherContext()
 	if p.host == nil || ctx == nil {
 		return unsupported("launch media before the host is ready")
 	}
 	session, err := p.host.OpenDocuments(ctx)
 	if err != nil {
-		return sourceFailure(ctx, err)
+		return sourceFailure(ctx, entry, err)
 	}
 	defer func() {
 		if closeErr := session.Close(); closeErr != nil {
@@ -242,30 +244,31 @@ func (p *Platform) dispatch(definition *LaunchDefinition, identity string) (err 
 
 	sources, err := session.Sources(ctx)
 	if err != nil {
-		return sourceFailure(ctx, err)
+		return sourceFailure(ctx, entry, err)
 	}
 	document, err := hostmedia.Resolve(ctx, session, sources, identity)
 	if err != nil {
-		return sourceFailure(ctx, err)
+		return sourceFailure(ctx, entry, err)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
 	receipt, err := session.Dispatch(definition, document)
 	if err != nil {
-		return fmt.Errorf("%w: %w", repairError(
-			repairMessage(failureReason(err), definition.Repair)), err)
+		return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
 	}
 	if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
 		receipt.Strategy != definition.Strategy {
-		return repairError(msgReceiptMismatch)
+		// Something started, but not what the definition asked for, so the
+		// outcome is unconfirmed rather than a refusal.
+		return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
 	}
 	return nil
 }
 
-func sourceFailure(ctx context.Context, err error) error {
+func sourceFailure(ctx context.Context, entry *catalogEntry, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
-	return fmt.Errorf("%w: %w", repairError(repairMessage(FailureSourceUnavailable, "")), err)
+	return fmt.Errorf("%w: %w", hostRepairError(FailureSourceUnavailable, entry), err)
 }

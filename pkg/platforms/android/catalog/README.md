@@ -66,6 +66,20 @@ Arcade is an inherent exception to universal compatibility: ZIP contents must
 match the selected core's ROM set. FinalBurn Neo leads, followed by MAME
 2003-Plus and current MAME; users with another ROM set can override it.
 
+## Repair text is a fallback, not the contract
+
+Each profile carries a `repair` string. It stays in the schema and remains the
+English fallback message for a launcher that is not installed or whose declared
+entry point is missing, so a client that only reads `error.message` keeps
+working.
+
+It is not what a client should display. A launch failure reports a machine
+readable `reason` from the closed set in `pkg/platforms/launch_error.go`, plus
+the bounded `launcher` and `plugin` display names, and a client is expected to
+write and localize its own wording from those. See the `launch_repair` error in
+[`docs/api/methods.md`](../../../../docs/api/methods.md). Keep `repair` short,
+generic and free of anything a client must not show verbatim.
+
 ## Boundaries
 
 RetroArch profiles use transient filesystem paths only for media selected

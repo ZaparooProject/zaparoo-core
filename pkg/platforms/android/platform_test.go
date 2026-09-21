@@ -491,17 +491,16 @@ func TestOpenMediaScanListsGrantedSystems(t *testing.T) {
 func TestRepairMessagesCoverEveryReason(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []FailureReason{
-		FailureHostUnavailable, FailureInvalidResponse, FailureStorageDenied, FailureStorageVersion,
-		FailureProviderUnsupported, FailureStorageUnmounted, FailureSourceUnavailable,
-		FailureForegroundRequired, FailureCancelled, FailureOutcomeUnknown, FailureRefused, "unheard-of",
-	} {
+	for _, reason := range append(declaredFailureReasons(t), "unheard-of") {
 		message := repairMessage(reason, "install it")
 		assert.NotEmpty(t, message, reason)
 		assert.Equal(t, message, platforms.NewLaunchRepairError(message).Error(), "message must pass the repair filter")
 	}
 	assert.Equal(t, "install it", repairMessage(FailureNotInstalled, "install it"))
 	assert.Equal(t, "install it", repairMessage(FailureActivityUnavailable, "install it"))
+	// Without a definition's own install hint the fallback must still read.
+	assert.Equal(t, msgNotInstalled, repairMessage(FailureNotInstalled, ""))
+	assert.Equal(t, msgNotInstalled, repairMessage(FailureActivityUnavailable, ""))
 	assert.Equal(t, FailureHostUnavailable, failureReason(errors.New("plain")))
 	assert.Equal(t, FailureRefused, failureReason(&HostError{Reason: FailureRefused}))
 	assert.Equal(t, "android host: refused", (&HostError{Reason: FailureRefused}).Error())
