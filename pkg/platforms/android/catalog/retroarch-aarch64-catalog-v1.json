@@ -1,0 +1,3604 @@
+{
+  "version": 1,
+  "package": "com.retroarch.aarch64",
+  "activity": "com.retroarch.browser.retroactivity.RetroActivityFuture",
+  "profiles": [
+    {
+      "id": "RetroArch.Opera",
+      "name": "Opera",
+      "system": "3DO",
+      "core": "opera",
+      "extensions": [
+        ".iso",
+        ".chd",
+        ".cue"
+      ],
+      "file": "opera_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PUAE.Amiga1200",
+      "name": "PUAE",
+      "system": "Amiga1200",
+      "core": "puae",
+      "extensions": [
+        ".adf",
+        ".uae",
+        ".ipf",
+        ".dms",
+        ".dmz",
+        ".adz",
+        ".lha",
+        ".hdf",
+        ".exe",
+        ".m3u",
+        ".zip"
+      ],
+      "file": "puae_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PUAE.Amiga500",
+      "name": "PUAE",
+      "system": "Amiga500",
+      "core": "puae",
+      "extensions": [
+        ".adf",
+        ".uae",
+        ".ipf",
+        ".dms",
+        ".dmz",
+        ".adz",
+        ".lha",
+        ".hdf",
+        ".exe",
+        ".m3u",
+        ".zip"
+      ],
+      "file": "puae_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PUAE.AmigaCD32",
+      "name": "PUAE",
+      "system": "AmigaCD32",
+      "core": "puae",
+      "extensions": [
+        ".bin",
+        ".cue",
+        ".iso",
+        ".chd"
+      ],
+      "file": "puae_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PUAE.CommodoreCDTV",
+      "name": "PUAE",
+      "system": "CommodoreCDTV",
+      "core": "puae",
+      "extensions": [
+        ".bin",
+        ".cue",
+        ".iso",
+        ".chd",
+        ".m3u"
+      ],
+      "file": "puae_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Cap32.Amstrad",
+      "name": "Cap32",
+      "system": "Amstrad",
+      "core": "cap32",
+      "extensions": [
+        ".dsk",
+        ".sna",
+        ".tap",
+        ".cdt",
+        ".voc",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "cap32_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Cap32.AmstradGX4000",
+      "name": "Cap32",
+      "system": "AmstradGX4000",
+      "core": "cap32",
+      "extensions": [
+        ".dsk",
+        ".m3u",
+        ".cpr",
+        ".zip",
+        ".7z"
+      ],
+      "file": "cap32_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.AppleWin",
+      "name": "AppleWin",
+      "system": "AppleII",
+      "core": "applewin",
+      "extensions": [
+        ".nib",
+        ".do",
+        ".po",
+        ".dsk",
+        ".mfi",
+        ".dfi",
+        ".rti",
+        ".edd",
+        ".woz",
+        ".wav",
+        ".zip",
+        ".7z"
+      ],
+      "file": "applewin_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FBNeo.Arcade",
+      "name": "FBNeo",
+      "system": "Arcade",
+      "core": "fbneo",
+      "extensions": [
+        ".zip",
+        ".7z"
+      ],
+      "file": "fbneo_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Stella",
+      "name": "Stella",
+      "system": "Atari2600",
+      "core": "stella",
+      "extensions": [
+        ".a26",
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "stella_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Atari800.Atari5200",
+      "name": "Atari800",
+      "system": "Atari5200",
+      "core": "atari800",
+      "extensions": [
+        ".rom",
+        ".xfd",
+        ".atr",
+        ".atx",
+        ".cdm",
+        ".cas",
+        ".car",
+        ".bin",
+        ".a52",
+        ".xex",
+        ".zip",
+        ".7z"
+      ],
+      "file": "atari800_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.ProSystem",
+      "name": "ProSystem",
+      "system": "Atari7800",
+      "core": "prosystem",
+      "extensions": [
+        ".a78",
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "prosystem_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Atari800.Atari800",
+      "name": "Atari800",
+      "system": "Atari800",
+      "core": "atari800",
+      "extensions": [
+        ".rom",
+        ".xfd",
+        ".atr",
+        ".atx",
+        ".cdm",
+        ".cas",
+        ".car",
+        ".bin",
+        ".a52",
+        ".xex",
+        ".zip",
+        ".7z"
+      ],
+      "file": "atari800_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Hatari",
+      "name": "Hatari",
+      "system": "AtariST",
+      "core": "hatari",
+      "extensions": [
+        ".st",
+        ".msa",
+        ".stx",
+        ".dim",
+        ".ipf",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "hatari_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.B2",
+      "name": "B2",
+      "system": "BBCMicro",
+      "core": "b2",
+      "extensions": [
+        ".mfi",
+        ".dfi",
+        ".hfe",
+        ".mfm",
+        ".td0",
+        ".imd",
+        ".d77",
+        ".d88",
+        ".1dd",
+        ".cqm",
+        ".cqi",
+        ".dsk",
+        ".ima",
+        ".img",
+        ".ufi",
+        ".360",
+        ".ipf",
+        ".ssd",
+        ".bbc",
+        ".dsd",
+        ".adf",
+        ".ads",
+        ".adm",
+        ".adl",
+        ".fsd",
+        ".wav",
+        ".tap",
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "b2_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.VICEXVIC",
+      "name": "VICEXVIC",
+      "system": "VIC20",
+      "core": "vice_xvic",
+      "extensions": [
+        ".a0",
+        ".b0",
+        ".crt",
+        ".d64",
+        ".d81",
+        ".prg",
+        ".tap",
+        ".t64",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "vice_xvic_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.VICEX64",
+      "name": "VICEX64",
+      "system": "C64",
+      "core": "vice_x64",
+      "extensions": [
+        ".d64",
+        ".d81",
+        ".crt",
+        ".prg",
+        ".tap",
+        ".t64",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "vice_x64_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FreeChaF",
+      "name": "FreeChaF",
+      "system": "ChannelF",
+      "core": "freechaf",
+      "extensions": [
+        ".zip",
+        ".rom",
+        ".bin",
+        ".chf"
+      ],
+      "file": "freechaf_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Gearcoleco.ColecoVision",
+      "name": "Gearcoleco",
+      "system": "ColecoVision",
+      "core": "gearcoleco",
+      "file": "gearcoleco_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".col",
+        ".rom",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.VICEXPlus4",
+      "name": "VICEXPlus4",
+      "system": "CommodorePlus4",
+      "core": "vice_xplus4",
+      "extensions": [
+        ".d64",
+        ".prg",
+        ".tap",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "vice_xplus4_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FBNeo.CPS1",
+      "name": "FBNeo",
+      "system": "CPS1",
+      "core": "fbneo",
+      "extensions": [
+        ".zip",
+        ".7z"
+      ],
+      "file": "fbneo_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FBNeo.CPS2",
+      "name": "FBNeo",
+      "system": "CPS2",
+      "core": "fbneo",
+      "extensions": [
+        ".zip",
+        ".7z"
+      ],
+      "file": "fbneo_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FBNeo.CPS3",
+      "name": "FBNeo",
+      "system": "CPS3",
+      "core": "fbneo",
+      "extensions": [
+        ".zip",
+        ".7z"
+      ],
+      "file": "fbneo_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.DOSBoxPure",
+      "name": "DOSBoxPure",
+      "system": "DOS",
+      "core": "dosbox_pure",
+      "extensions": [
+        ".pc",
+        ".dos",
+        ".zip",
+        ".squashfs",
+        ".dosz",
+        ".m3u",
+        ".iso",
+        ".cue"
+      ],
+      "file": "dosbox_pure_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Flycast",
+      "name": "Flycast",
+      "system": "Dreamcast",
+      "core": "flycast",
+      "extensions": [
+        ".cdi",
+        ".cue",
+        ".gdi",
+        ".chd",
+        ".m3u"
+      ],
+      "file": "flycast_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Mesen.FDS",
+      "name": "Mesen",
+      "system": "FDS",
+      "core": "mesen",
+      "extensions": [
+        ".fds",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mesen_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GW",
+      "name": "GW",
+      "system": "GameNWatch",
+      "core": "gw",
+      "extensions": [
+        ".mgw",
+        ".zip",
+        ".7z"
+      ],
+      "file": "gw_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.GameGear",
+      "name": "GenesisPlusGX",
+      "system": "GameGear",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".bin",
+        ".gg",
+        ".zip",
+        ".7z"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Gambatte.Gameboy",
+      "name": "Gambatte",
+      "system": "Gameboy",
+      "core": "gambatte",
+      "extensions": [
+        ".gb",
+        ".zip",
+        ".7z"
+      ],
+      "file": "gambatte_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.mGBA",
+      "name": "mGBA",
+      "system": "GBA",
+      "core": "mgba",
+      "extensions": [
+        ".gba",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mgba_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Gambatte.GameboyColor",
+      "name": "Gambatte",
+      "system": "GameboyColor",
+      "core": "gambatte",
+      "extensions": [
+        ".gbc",
+        ".zip",
+        ".7z"
+      ],
+      "file": "gambatte_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FreeIntv",
+      "name": "FreeIntv",
+      "system": "Intellivision",
+      "core": "freeintv",
+      "extensions": [
+        ".int",
+        ".bin",
+        ".rom",
+        ".zip",
+        ".7z"
+      ],
+      "file": "freeintv_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.VirtualJaguar",
+      "name": "VirtualJaguar",
+      "system": "Jaguar",
+      "core": "virtualjaguar",
+      "extensions": [
+        ".cue",
+        ".j64",
+        ".jag",
+        ".cof",
+        ".abs",
+        ".cdi",
+        ".rom",
+        ".zip",
+        ".7z"
+      ],
+      "file": "virtualjaguar_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.MednafenLynx.AtariLynx",
+      "name": "Beetle Lynx",
+      "system": "AtariLynx",
+      "core": "mednafen_lynx",
+      "file": "mednafen_lynx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".lnx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.MasterSystem",
+      "name": "GenesisPlusGX",
+      "system": "MasterSystem",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".bin",
+        ".sms",
+        ".zip",
+        ".7z"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.MegaCD",
+      "name": "GenesisPlusGX",
+      "system": "MegaCD",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".cue",
+        ".iso",
+        ".chd",
+        ".m3u"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.Genesis",
+      "name": "GenesisPlusGX",
+      "system": "Genesis",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".bin",
+        ".gen",
+        ".md",
+        ".sg",
+        ".smd",
+        ".zip",
+        ".7z"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.SegaPico",
+      "name": "GenesisPlusGX",
+      "system": "SegaPico",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".bin",
+        ".md",
+        ".zip",
+        ".7z"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BlueMSX.MSX",
+      "name": "BlueMSX",
+      "system": "MSX",
+      "core": "bluemsx",
+      "extensions": [
+        ".dsk",
+        ".mx1",
+        ".rom",
+        ".zip",
+        ".7z",
+        ".cas",
+        ".m3u",
+        ".mx2"
+      ],
+      "file": "bluemsx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BlueMSX.MSX2Plus",
+      "name": "BlueMSX",
+      "system": "MSX2Plus",
+      "core": "bluemsx",
+      "extensions": [
+        ".dsk",
+        ".mx2",
+        ".rom",
+        ".zip",
+        ".7z",
+        ".cas",
+        ".m3u"
+      ],
+      "file": "bluemsx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Mupen64PlusNext",
+      "name": "Mupen64PlusNext",
+      "system": "Nintendo64",
+      "core": "mupen64plus_next_gles3",
+      "extensions": [
+        ".z64",
+        ".n64",
+        ".v64",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mupen64plus_next_gles3_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.melonDSDS",
+      "name": "melonDSDS",
+      "system": "NDS",
+      "core": "melondsds",
+      "extensions": [
+        ".nds",
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "melondsds_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FBNeo.NeoGeo",
+      "name": "FBNeo",
+      "system": "NeoGeo",
+      "core": "fbneo",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ],
+      "file": "fbneo_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.NeoCD",
+      "name": "NeoCD",
+      "system": "NeoGeoCD",
+      "core": "neocd",
+      "extensions": [
+        ".cue",
+        ".iso",
+        ".chd"
+      ],
+      "file": "neocd_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Mesen",
+      "name": "Mesen",
+      "system": "NES",
+      "core": "mesen",
+      "extensions": [
+        ".nes",
+        ".unif",
+        ".unf",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mesen_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleNGP.NeoGeoPocket",
+      "name": "BeetleNGP",
+      "system": "NeoGeoPocket",
+      "core": "mednafen_ngp",
+      "extensions": [
+        ".ngp",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_ngp_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleNGP.NeoGeoPocketColor",
+      "name": "BeetleNGP",
+      "system": "NeoGeoPocketColor",
+      "core": "mednafen_ngp",
+      "extensions": [
+        ".ngc",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_ngp_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.O2EM",
+      "name": "O2EM",
+      "system": "Odyssey2",
+      "core": "o2em",
+      "extensions": [
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "o2em_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.QUASI88",
+      "name": "QUASI88",
+      "system": "PC88",
+      "core": "quasi88",
+      "extensions": [
+        ".d88",
+        ".u88",
+        ".m3u"
+      ],
+      "file": "quasi88_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.NekoProjectIIKai",
+      "name": "NekoProjectIIKai",
+      "system": "PC98",
+      "core": "np2kai",
+      "extensions": [
+        ".d98",
+        ".zip",
+        ".98d",
+        ".fdi",
+        ".fdd",
+        ".2hd",
+        ".tfd",
+        ".d88",
+        ".88d",
+        ".hdm",
+        ".xdf",
+        ".dup",
+        ".cmd",
+        ".hdi",
+        ".thd",
+        ".nhd",
+        ".hdd",
+        ".hdn",
+        ".m3u"
+      ],
+      "file": "np2kai_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.MednafenPce.TurboGrafx16",
+      "name": "Beetle PCE",
+      "system": "TurboGrafx16",
+      "core": "mednafen_pce",
+      "file": "mednafen_pce_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".pce",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenPce.TurboGrafx16CD",
+      "name": "Beetle PCE",
+      "system": "TurboGrafx16CD",
+      "core": "mednafen_pce",
+      "file": "mednafen_pce_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".pce"
+      ]
+    },
+    {
+      "id": "RetroArch.BeetlePCFX",
+      "name": "BeetlePCFX",
+      "system": "PCFX",
+      "core": "mednafen_pcfx",
+      "extensions": [
+        ".cue",
+        ".ccd",
+        ".toc",
+        ".chd",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_pcfx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.VICEXPET",
+      "name": "VICEXPET",
+      "system": "PET2001",
+      "core": "vice_xpet",
+      "extensions": [
+        ".a0",
+        ".b0",
+        ".crt",
+        ".d64",
+        ".d81",
+        ".prg",
+        ".tap",
+        ".t64",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "vice_xpet_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PokeMini",
+      "name": "PokeMini",
+      "system": "PokemonMini",
+      "core": "pokemini",
+      "extensions": [
+        ".min",
+        ".zip",
+        ".7z"
+      ],
+      "file": "pokemini_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PrBoom",
+      "name": "PrBoom",
+      "system": "DOS",
+      "core": "prboom",
+      "extensions": [
+        ".wad",
+        ".iwad",
+        ".pwad"
+      ],
+      "file": "prboom_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PPSSPP",
+      "name": "PPSSPP",
+      "system": "PSP",
+      "core": "ppsspp",
+      "extensions": [
+        ".iso",
+        ".cso",
+        ".pbp",
+        ".chd"
+      ],
+      "file": "ppsspp_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Swanstation.PSX",
+      "name": "SwanStation",
+      "system": "PSX",
+      "core": "swanstation",
+      "file": "swanstation_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".img",
+        ".iso",
+        ".m3u",
+        ".pbp"
+      ]
+    },
+    {
+      "id": "RetroArch.BeetleSaturn",
+      "name": "BeetleSaturn",
+      "system": "Saturn",
+      "core": "mednafen_saturn",
+      "extensions": [
+        ".cue",
+        ".ccd",
+        ".m3u",
+        ".chd",
+        ".iso",
+        ".zip"
+      ],
+      "file": "mednafen_saturn_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.ScummVM",
+      "name": "ScummVM",
+      "system": "ScummVM",
+      "core": "scummvm",
+      "extensions": [
+        ".scummvm",
+        ".squashfs"
+      ],
+      "file": "scummvm_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PicoDrive",
+      "name": "PicoDrive",
+      "system": "Sega32X",
+      "core": "picodrive",
+      "extensions": [
+        ".32x",
+        ".chd",
+        ".smd",
+        ".bin",
+        ".md",
+        ".zip",
+        ".7z"
+      ],
+      "file": "picodrive_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.GenesisPlusGX.SG1000",
+      "name": "GenesisPlusGX",
+      "system": "SG1000",
+      "core": "genesis_plus_gx",
+      "extensions": [
+        ".bin",
+        ".sg",
+        ".zip",
+        ".7z"
+      ],
+      "file": "genesis_plus_gx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.SNES9x",
+      "name": "SNES9x",
+      "system": "SNES",
+      "core": "snes9x",
+      "extensions": [
+        ".smc",
+        ".fig",
+        ".sfc",
+        ".gd3",
+        ".gd7",
+        ".dx2",
+        ".bsx",
+        ".swc",
+        ".zip",
+        ".7z"
+      ],
+      "file": "snes9x_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleSuperGrafx",
+      "name": "BeetleSuperGrafx",
+      "system": "SuperGrafx",
+      "core": "mednafen_supergrafx",
+      "extensions": [
+        ".pce",
+        ".sgx",
+        ".cue",
+        ".ccd",
+        ".chd",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_supergrafx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.TIC80",
+      "name": "TIC80",
+      "system": "TIC80",
+      "core": "tic80",
+      "extensions": [
+        ".tic"
+      ],
+      "file": "tic80_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.VecX",
+      "name": "VecX",
+      "system": "Vectrex",
+      "core": "vecx",
+      "extensions": [
+        ".bin",
+        ".gam",
+        ".vec",
+        ".zip",
+        ".7z"
+      ],
+      "file": "vecx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleVB",
+      "name": "BeetleVB",
+      "system": "VirtualBoy",
+      "core": "mednafen_vb",
+      "extensions": [
+        ".vb",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_vb_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleWonderSwan.WonderSwan",
+      "name": "BeetleWonderSwan",
+      "system": "WonderSwan",
+      "core": "mednafen_wswan",
+      "extensions": [
+        ".ws",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_wswan_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetleWonderSwan.WonderSwanColor",
+      "name": "BeetleWonderSwan",
+      "system": "WonderSwanColor",
+      "core": "mednafen_wswan",
+      "extensions": [
+        ".wsc",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_wswan_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.PX68k",
+      "name": "PX68k",
+      "system": "X68000",
+      "core": "px68k",
+      "extensions": [
+        ".dim",
+        ".img",
+        ".d88",
+        ".88d",
+        ".hdm",
+        ".dup",
+        ".2hd",
+        ".xdf",
+        ".hdf",
+        ".cmd",
+        ".m3u",
+        ".zip",
+        ".7z"
+      ],
+      "file": "px68k_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.EightyOne",
+      "name": "EightyOne",
+      "system": "ZX81",
+      "core": "81",
+      "extensions": [
+        ".tzx",
+        ".p",
+        ".zip",
+        ".7z"
+      ],
+      "file": "81_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Fuse",
+      "name": "Fuse",
+      "system": "ZXSpectrum",
+      "core": "fuse",
+      "extensions": [
+        ".tzx",
+        ".tap",
+        ".z80",
+        ".rzx",
+        ".scl",
+        ".trd",
+        ".dsk",
+        ".zip",
+        ".7z"
+      ],
+      "file": "fuse_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BSNES",
+      "name": "BSNES",
+      "system": "SNES",
+      "core": "bsnes",
+      "extensions": [
+        ".smc",
+        ".fig",
+        ".sfc",
+        ".gd3",
+        ".gd7",
+        ".dx2",
+        ".bsx",
+        ".swc",
+        ".zip",
+        ".7z"
+      ],
+      "file": "bsnes_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.FCEUmm",
+      "name": "FCEUmm",
+      "system": "NES",
+      "core": "fceumm",
+      "extensions": [
+        ".nes",
+        ".unif",
+        ".unf",
+        ".zip",
+        ".7z"
+      ],
+      "file": "fceumm_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.A5200.Atari5200",
+      "name": "a5200",
+      "system": "Atari5200",
+      "core": "a5200",
+      "file": "a5200_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".a52",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Amiarcadia.Arcadia",
+      "name": "AmiArcadia",
+      "system": "Arcadia",
+      "core": "amiarcadia",
+      "file": "amiarcadia_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Amiberry.Amiga500",
+      "name": "Amiberry",
+      "system": "Amiga500",
+      "core": "amiberry",
+      "file": "amiberry_libretro_android.so",
+      "extensions": [
+        ".adf",
+        ".adz",
+        ".dms",
+        ".hdf",
+        ".ipf",
+        ".lha",
+        ".uae",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Amiberry.Amiga1200",
+      "name": "Amiberry",
+      "system": "Amiga1200",
+      "core": "amiberry",
+      "file": "amiberry_libretro_android.so",
+      "extensions": [
+        ".adf",
+        ".adz",
+        ".dms",
+        ".hdf",
+        ".ipf",
+        ".lha",
+        ".uae",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Amiberry.AmigaCD32",
+      "name": "Amiberry",
+      "system": "AmigaCD32",
+      "core": "amiberry",
+      "file": "amiberry_libretro_android.so",
+      "extensions": [
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Amiberry.CommodoreCDTV",
+      "name": "Amiberry",
+      "system": "CommodoreCDTV",
+      "core": "amiberry",
+      "file": "amiberry_libretro_android.so",
+      "extensions": [
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Ardens.Arduboy",
+      "name": "Ardens",
+      "system": "Arduboy",
+      "core": "ardens",
+      "file": "ardens_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".hex",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Arduous.Arduboy",
+      "name": "Arduous",
+      "system": "Arduboy",
+      "core": "arduous",
+      "file": "arduous_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".hex",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Pcsx2.PS2",
+      "name": "LRPS2",
+      "system": "PS2",
+      "core": "pcsx2",
+      "file": "pcsx2_libretro_android.so",
+      "extensions": [
+        ".bin",
+        ".chd",
+        ".cso",
+        ".dump",
+        ".gz",
+        ".img",
+        ".iso",
+        ".m3u",
+        ".mdf",
+        ".nrg"
+      ]
+    },
+    {
+      "id": "RetroArch.Azahar.System3DS",
+      "name": "Azahar",
+      "system": "3DS",
+      "core": "azahar",
+      "file": "azahar_libretro.so",
+      "extensions": [
+        ".3ds",
+        ".cci",
+        ".cxi",
+        ".zcci"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.Sega32X",
+      "name": "BlastEm",
+      "system": "Sega32X",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".32x",
+        ".7z",
+        ".bin",
+        ".chd",
+        ".md",
+        ".smd",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.GameGear",
+      "name": "BlastEm",
+      "system": "GameGear",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.MasterSystem",
+      "name": "BlastEm",
+      "system": "MasterSystem",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sms",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.Genesis",
+      "name": "BlastEm",
+      "system": "Genesis",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gen",
+        ".md",
+        ".sg",
+        ".smd",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.MegaCD",
+      "name": "BlastEm",
+      "system": "MegaCD",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.SegaPico",
+      "name": "BlastEm",
+      "system": "SegaPico",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".md",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Blastem.SG1000",
+      "name": "BlastEm",
+      "system": "SG1000",
+      "core": "blastem",
+      "file": "blastem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Bluemsx.SG1000",
+      "name": "blueMSX",
+      "system": "SG1000",
+      "core": "bluemsx",
+      "file": "bluemsx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".sg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesJg.SNES",
+      "name": "bsnes-jg",
+      "system": "SNES",
+      "core": "bsnes-jg",
+      "file": "bsnes-jg_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Bsnes2014Accuracy.SNES",
+      "name": "bsnes 2014 Accuracy",
+      "system": "SNES",
+      "core": "bsnes2014_accuracy",
+      "file": "bsnes2014_accuracy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Bsnes2014Balanced.SNES",
+      "name": "bsnes 2014 Balanced",
+      "system": "SNES",
+      "core": "bsnes2014_balanced",
+      "file": "bsnes2014_balanced_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Bsnes2014Performance.SNES",
+      "name": "bsnes 2014 Performance",
+      "system": "SNES",
+      "core": "bsnes2014_performance",
+      "file": "bsnes2014_performance_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesCplusplus98.SNES",
+      "name": "bsnes C++98 (v085)",
+      "system": "SNES",
+      "core": "bsnes_cplusplus98",
+      "file": "bsnes_cplusplus98_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesHdBeta.SNES",
+      "name": "bsnes-hd beta",
+      "system": "SNES",
+      "core": "bsnes_hd_beta",
+      "file": "bsnes_hd_beta_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".fig",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesMercuryAccuracy.SNES",
+      "name": "bsnes-mercury Accuracy",
+      "system": "SNES",
+      "core": "bsnes_mercury_accuracy",
+      "file": "bsnes_mercury_accuracy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesMercuryBalanced.SNES",
+      "name": "bsnes-mercury Balanced",
+      "system": "SNES",
+      "core": "bsnes_mercury_balanced",
+      "file": "bsnes_mercury_balanced_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BsnesMercuryPerformance.SNES",
+      "name": "bsnes-mercury Performance",
+      "system": "SNES",
+      "core": "bsnes_mercury_performance",
+      "file": "bsnes_mercury_performance_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Cemu.WiiU",
+      "name": "Cemu",
+      "system": "WiiU",
+      "core": "cemu",
+      "file": "cemu_libretro_android.so",
+      "extensions": [
+        ".rpx",
+        ".wua",
+        ".wud",
+        ".wux"
+      ]
+    },
+    {
+      "id": "RetroArch.Citra2018.System3DS",
+      "name": "Citra 2018",
+      "system": "3DS",
+      "core": "citra2018",
+      "file": "citra2018_libretro_android.so",
+      "extensions": [
+        ".3ds",
+        ".cci",
+        ".cxi"
+      ]
+    },
+    {
+      "id": "RetroArch.Citra.System3DS",
+      "name": "Citra",
+      "system": "3DS",
+      "core": "citra",
+      "file": "citra_libretro_android.so",
+      "extensions": [
+        ".3ds",
+        ".cci",
+        ".cxi"
+      ]
+    },
+    {
+      "id": "RetroArch.Clownmdemu.MegaCD",
+      "name": "ClownMDEmu",
+      "system": "MegaCD",
+      "core": "clownmdemu",
+      "file": "clownmdemu_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Clownmdemu.Genesis",
+      "name": "ClownMDEmu",
+      "system": "Genesis",
+      "core": "clownmdemu",
+      "file": "clownmdemu_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gen",
+        ".md",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Crocods.Amstrad",
+      "name": "CrocoDS",
+      "system": "Amstrad",
+      "core": "crocods",
+      "file": "crocods_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".dsk",
+        ".sna",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Melonds.NDS",
+      "name": "melonDS",
+      "system": "NDS",
+      "core": "melonds",
+      "file": "melonds_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Desmume2015.NDS",
+      "name": "DeSmuME 2015",
+      "system": "NDS",
+      "core": "desmume2015",
+      "file": "desmume2015_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".nds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Dolphin.GameCube",
+      "name": "Dolphin",
+      "system": "GameCube",
+      "core": "dolphin",
+      "file": "dolphin_libretro_android.so",
+      "extensions": [
+        ".ciso",
+        ".dol",
+        ".elf",
+        ".gcm",
+        ".gcz",
+        ".iso",
+        ".m3u",
+        ".rvz",
+        ".wbfs"
+      ]
+    },
+    {
+      "id": "RetroArch.Dolphin.Wii",
+      "name": "Dolphin",
+      "system": "Wii",
+      "core": "dolphin",
+      "file": "dolphin_libretro_android.so",
+      "extensions": [
+        ".ciso",
+        ".dol",
+        ".elf",
+        ".gcm",
+        ".gcz",
+        ".iso",
+        ".m3u",
+        ".rvz",
+        ".wad",
+        ".wbfs"
+      ]
+    },
+    {
+      "id": "RetroArch.DosboxCore.DOS",
+      "name": "DOSBox-core",
+      "system": "DOS",
+      "core": "dosbox_core",
+      "file": "dosbox_core_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cue",
+        ".iso",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Dosbox.DOS",
+      "name": "DOSBox",
+      "system": "DOS",
+      "core": "dosbox",
+      "file": "dosbox_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.DosboxSvn.DOS",
+      "name": "DOSBox-SVN",
+      "system": "DOS",
+      "core": "dosbox_svn",
+      "file": "dosbox_svn_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cue",
+        ".iso",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Sameboy.Gameboy",
+      "name": "SameBoy",
+      "system": "Gameboy",
+      "core": "sameboy",
+      "file": "sameboy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Sameboy.GameboyColor",
+      "name": "SameBoy",
+      "system": "GameboyColor",
+      "core": "sameboy",
+      "file": "sameboy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Emuscv.SuperCassetteVision",
+      "name": "EmuSCV",
+      "system": "SuperCassetteVision",
+      "core": "emuscv",
+      "file": "emuscv_libretro_android.so",
+      "extensions": [
+        ".0",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Ep128emuCore.Amstrad",
+      "name": "ep128emu-core",
+      "system": "Amstrad",
+      "core": "ep128emu_core",
+      "file": "ep128emu_core_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cdt",
+        ".dsk",
+        ".tap",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Ep128emuCore.ZXSpectrum",
+      "name": "ep128emu-core",
+      "system": "ZXSpectrum",
+      "core": "ep128emu_core",
+      "file": "ep128emu_core_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".dsk",
+        ".tap",
+        ".tzx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fbalpha2012Cps1.CPS1",
+      "name": "FB Alpha 2012 CPS-1",
+      "system": "CPS1",
+      "core": "fbalpha2012_cps1",
+      "file": "fbalpha2012_cps1_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fbalpha2012Cps2.CPS2",
+      "name": "FB Alpha 2012 CPS-2",
+      "system": "CPS2",
+      "core": "fbalpha2012_cps2",
+      "file": "fbalpha2012_cps2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fbalpha2012Cps3.CPS3",
+      "name": "FB Alpha 2012 CPS-3",
+      "system": "CPS3",
+      "core": "fbalpha2012_cps3",
+      "file": "fbalpha2012_cps3_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2003Plus.Arcade",
+      "name": "MAME 2003-Plus",
+      "system": "Arcade",
+      "core": "mame2003_plus",
+      "file": "mame2003_plus_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fbalpha2012Neogeo.NeoGeo",
+      "name": "FB Alpha 2012 Neo Geo",
+      "system": "NeoGeo",
+      "core": "fbalpha2012_neogeo",
+      "file": "fbalpha2012_neogeo_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fceumm.FDS",
+      "name": "FCEUmm",
+      "system": "FDS",
+      "core": "fceumm",
+      "file": "fceumm_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".fds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Doublecherrygb.Gameboy",
+      "name": "DoubleCherryGB",
+      "system": "Gameboy",
+      "core": "DoubleCherryGB",
+      "file": "DoubleCherryGB_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Doublecherrygb.GameboyColor",
+      "name": "DoubleCherryGB",
+      "system": "GameboyColor",
+      "core": "DoubleCherryGB",
+      "file": "DoubleCherryGB_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fixnes.NES",
+      "name": "fixNES",
+      "system": "NES",
+      "core": "fixnes",
+      "file": "fixnes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nes",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fixnes.FDS",
+      "name": "fixNES",
+      "system": "FDS",
+      "core": "fixnes",
+      "file": "fixnes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".fds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Flycast.NAOMI",
+      "name": "Flycast",
+      "system": "NAOMI",
+      "core": "flycast",
+      "file": "flycast_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".dat",
+        ".lst",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Flycast.NAOMI2",
+      "name": "Flycast",
+      "system": "NAOMI2",
+      "core": "flycast",
+      "file": "flycast_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Flycast.Atomiswave",
+      "name": "Flycast",
+      "system": "Atomiswave",
+      "core": "flycast",
+      "file": "flycast_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".dat",
+        ".lst",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fmsx.MSX",
+      "name": "fMSX",
+      "system": "MSX",
+      "core": "fmsx",
+      "file": "fmsx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cas",
+        ".dsk",
+        ".m3u",
+        ".mx1",
+        ".mx2",
+        ".rom",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fmsx.MSX2Plus",
+      "name": "fMSX",
+      "system": "MSX2Plus",
+      "core": "fmsx",
+      "file": "fmsx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cas",
+        ".dsk",
+        ".m3u",
+        ".mx2",
+        ".rom",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Frodo.C64",
+      "name": "Frodo",
+      "system": "C64",
+      "core": "frodo",
+      "file": "frodo_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".d64",
+        ".lnx",
+        ".t64",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fixgb.Gameboy",
+      "name": "fixGB",
+      "system": "Gameboy",
+      "core": "fixgb",
+      "file": "fixgb_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fixgb.GameboyColor",
+      "name": "fixGB",
+      "system": "GameboyColor",
+      "core": "fixgb",
+      "file": "fixgb_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BlueMSX.ColecoVision",
+      "name": "BlueMSX",
+      "system": "ColecoVision",
+      "core": "bluemsx",
+      "extensions": [
+        ".bin",
+        ".col",
+        ".rom",
+        ".zip",
+        ".7z"
+      ],
+      "file": "bluemsx_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Geargrafx.SuperGrafx",
+      "name": "Geargrafx",
+      "system": "SuperGrafx",
+      "core": "geargrafx",
+      "file": "geargrafx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".chd",
+        ".cue",
+        ".pce",
+        ".sgx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.BeetlePCEFast.TurboGrafx16",
+      "name": "BeetlePCEFast",
+      "system": "TurboGrafx16",
+      "core": "mednafen_pce_fast",
+      "extensions": [
+        ".pce",
+        ".bin",
+        ".zip",
+        ".7z"
+      ],
+      "file": "mednafen_pce_fast_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.BeetlePCEFast.TurboGrafx16CD",
+      "name": "BeetlePCEFast",
+      "system": "TurboGrafx16CD",
+      "core": "mednafen_pce_fast",
+      "extensions": [
+        ".pce",
+        ".cue",
+        ".ccd",
+        ".iso",
+        ".img",
+        ".chd"
+      ],
+      "file": "mednafen_pce_fast_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Handy",
+      "name": "Handy",
+      "system": "AtariLynx",
+      "core": "handy",
+      "extensions": [
+        ".lnx",
+        ".zip",
+        ".7z"
+      ],
+      "file": "handy_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.Gearsystem.GameGear",
+      "name": "Gearsystem",
+      "system": "GameGear",
+      "core": "gearsystem",
+      "file": "gearsystem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gearsystem.MasterSystem",
+      "name": "Gearsystem",
+      "system": "MasterSystem",
+      "core": "gearsystem",
+      "file": "gearsystem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sms",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gearsystem.SG1000",
+      "name": "Gearsystem",
+      "system": "SG1000",
+      "core": "gearsystem",
+      "file": "gearsystem_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.GameGear",
+      "name": "Genesis Plus GX Wide",
+      "system": "GameGear",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.MasterSystem",
+      "name": "Genesis Plus GX Wide",
+      "system": "MasterSystem",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sms",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.MegaCD",
+      "name": "Genesis Plus GX Wide",
+      "system": "MegaCD",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso",
+        ".m3u"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.Genesis",
+      "name": "Genesis Plus GX Wide",
+      "system": "Genesis",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gen",
+        ".md",
+        ".sg",
+        ".smd",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.SegaPico",
+      "name": "Genesis Plus GX Wide",
+      "system": "SegaPico",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".md",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.GenesisPlusGxWide.SG1000",
+      "name": "Genesis Plus GX Wide",
+      "system": "SG1000",
+      "core": "genesis_plus_gx_wide",
+      "file": "genesis_plus_gx_wide_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Geolith.NeoGeo",
+      "name": "Geolith",
+      "system": "NeoGeo",
+      "core": "geolith",
+      "file": "geolith_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gpsp.GBA",
+      "name": "gpSP",
+      "system": "GBA",
+      "core": "gpsp",
+      "file": "gpsp_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Hatari2014.AtariST",
+      "name": "Hatari2014",
+      "system": "AtariST",
+      "core": "hatari2014",
+      "file": "hatari2014_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".dim",
+        ".ipf",
+        ".m3u",
+        ".msa",
+        ".st",
+        ".stx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Hatarib.AtariST",
+      "name": "hatarib",
+      "system": "AtariST",
+      "core": "hatarib",
+      "file": "hatarib_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".dim",
+        ".ipf",
+        ".m3u",
+        ".msa",
+        ".st",
+        ".stx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mamearcade.Arcade",
+      "name": "MAME (Git)",
+      "system": "Arcade",
+      "core": "mamearcade",
+      "file": "mamearcade_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gearlynx.AtariLynx",
+      "name": "Gearlynx",
+      "system": "AtariLynx",
+      "core": "gearlynx",
+      "file": "gearlynx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".lnx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gearboy.Gameboy",
+      "name": "Gearboy",
+      "system": "Gameboy",
+      "core": "gearboy",
+      "file": "gearboy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Gearboy.GameboyColor",
+      "name": "Gearboy",
+      "system": "GameboyColor",
+      "core": "gearboy",
+      "file": "gearboy_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Jollycv.ColecoVision",
+      "name": "JollyCV",
+      "system": "ColecoVision",
+      "core": "jollycv",
+      "file": "jollycv_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".col",
+        ".rom",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Fbalpha2012.Arcade",
+      "name": "FB Alpha 2012",
+      "system": "Arcade",
+      "core": "fbalpha2012",
+      "file": "fbalpha2012_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Hbmame.Arcade",
+      "name": "HBMAME (Git)",
+      "system": "Arcade",
+      "core": "hbmame",
+      "file": "hbmame_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2000.Arcade",
+      "name": "MAME 2000 (0.37b5)",
+      "system": "Arcade",
+      "core": "mame2000",
+      "file": "mame2000_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2003.Arcade",
+      "name": "MAME 2003 (0.78)",
+      "system": "Arcade",
+      "core": "mame2003",
+      "file": "mame2003_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2003Midway.Arcade",
+      "name": "MAME 2003 Midway (0.78)",
+      "system": "Arcade",
+      "core": "mame2003_midway",
+      "file": "mame2003_midway_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2010.Arcade",
+      "name": "MAME 2010 (0.139)",
+      "system": "Arcade",
+      "core": "mame2010",
+      "file": "mame2010_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2015.Arcade",
+      "name": "MAME 2015 (0.160)",
+      "system": "Arcade",
+      "core": "mame2015",
+      "file": "mame2015_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mame2016.Arcade",
+      "name": "MAME 2016 (0.174)",
+      "system": "Arcade",
+      "core": "mame2016",
+      "file": "mame2016_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mamemess.Arcade",
+      "name": "MESS (Git)",
+      "system": "Arcade",
+      "core": "mamemess",
+      "file": "mamemess_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenGba.GBA",
+      "name": "Beetle GBA",
+      "system": "GBA",
+      "core": "mednafen_gba",
+      "file": "mednafen_gba_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Holani.AtariLynx",
+      "name": "Holani",
+      "system": "AtariLynx",
+      "core": "holani",
+      "file": "holani_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".lnx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenPce.SuperGrafx",
+      "name": "Beetle PCE",
+      "system": "SuperGrafx",
+      "core": "mednafen_pce",
+      "file": "mednafen_pce_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".pce",
+        ".sgx",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Geargrafx.TurboGrafx16",
+      "name": "Geargrafx",
+      "system": "TurboGrafx16",
+      "core": "geargrafx",
+      "file": "geargrafx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".pce",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Geargrafx.TurboGrafx16CD",
+      "name": "Geargrafx",
+      "system": "TurboGrafx16CD",
+      "core": "geargrafx",
+      "file": "geargrafx_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".pce"
+      ]
+    },
+    {
+      "id": "RetroArch.BeetlePSXHW",
+      "name": "BeetlePSXHW",
+      "system": "PSX",
+      "core": "mednafen_psx_hw",
+      "extensions": [
+        ".cue",
+        ".img",
+        ".mdf",
+        ".pbp",
+        ".toc",
+        ".cbn",
+        ".m3u",
+        ".ccd",
+        ".chd",
+        ".iso"
+      ],
+      "file": "mednafen_psx_hw_libretro_android.so"
+    },
+    {
+      "id": "RetroArch.MednafenSnes.SNES",
+      "name": "Beetle bsnes",
+      "system": "SNES",
+      "core": "mednafen_snes",
+      "file": "mednafen_snes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".fig",
+        ".sfc",
+        ".smc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenSupafaust.SNES",
+      "name": "Beetle Supafaust",
+      "system": "SNES",
+      "core": "mednafen_supafaust",
+      "file": "mednafen_supafaust_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bsx",
+        ".dx2",
+        ".fig",
+        ".gd3",
+        ".gd7",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenSupergrafx.TurboGrafx16",
+      "name": "Beetle SuperGrafx",
+      "system": "TurboGrafx16",
+      "core": "mednafen_supergrafx",
+      "file": "mednafen_supergrafx_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".pce",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenSupergrafx.TurboGrafx16CD",
+      "name": "Beetle SuperGrafx",
+      "system": "TurboGrafx16CD",
+      "core": "mednafen_supergrafx",
+      "file": "mednafen_supergrafx_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".pce"
+      ]
+    },
+    {
+      "id": "RetroArch.Desmume.NDS",
+      "name": "DeSmuME",
+      "system": "NDS",
+      "core": "desmume",
+      "file": "desmume_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".nds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MesenS.SNES",
+      "name": "Mesen-S",
+      "system": "SNES",
+      "core": "mesen-s",
+      "file": "mesen-s_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".fig",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Irogb.Gameboy",
+      "name": "IroGB",
+      "system": "Gameboy",
+      "core": "irogb",
+      "file": "irogb_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Irogb.GameboyColor",
+      "name": "IroGB",
+      "system": "GameboyColor",
+      "core": "irogb",
+      "file": "irogb_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.SNES",
+      "name": "MesenCE",
+      "system": "SNES",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bs",
+        ".fig",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MesenS.Gameboy",
+      "name": "Mesen-S",
+      "system": "Gameboy",
+      "core": "mesen-s",
+      "file": "mesen-s_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.MesenS.GameboyColor",
+      "name": "Mesen-S",
+      "system": "GameboyColor",
+      "core": "mesen-s",
+      "file": "mesen-s_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.GBA",
+      "name": "MesenCE",
+      "system": "GBA",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.WonderSwan",
+      "name": "MesenCE",
+      "system": "WonderSwan",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".ws",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.WonderSwanColor",
+      "name": "MesenCE",
+      "system": "WonderSwanColor",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".wsc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.SuperGrafx",
+      "name": "MesenCE",
+      "system": "SuperGrafx",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".cue",
+        ".pce",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.TurboGrafx16",
+      "name": "MesenCE",
+      "system": "TurboGrafx16",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".pce",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.TurboGrafx16CD",
+      "name": "MesenCE",
+      "system": "TurboGrafx16CD",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".cue",
+        ".pce"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.NES",
+      "name": "MesenCE",
+      "system": "NES",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nes",
+        ".unf",
+        ".unif",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.FDS",
+      "name": "MesenCE",
+      "system": "FDS",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".fds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Meteor.GBA",
+      "name": "Meteor",
+      "system": "GBA",
+      "core": "meteor",
+      "file": "meteor_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.Gameboy",
+      "name": "MesenCE",
+      "system": "Gameboy",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mesen2.GameboyColor",
+      "name": "MesenCE",
+      "system": "GameboyColor",
+      "core": "mesen2",
+      "file": "mesen2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Minivmac.MacOS",
+      "name": "MinivmacII",
+      "system": "MacOS",
+      "core": "minivmac",
+      "file": "minivmac_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".dsk",
+        ".img",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mupen64plusNextGles2.Nintendo64",
+      "name": "mupen64plus_next_gles2",
+      "system": "Nintendo64",
+      "core": "mupen64plus_next_gles2",
+      "file": "mupen64plus_next_gles2_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".n64",
+        ".v64",
+        ".z64",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Nekop2.PC98",
+      "name": "Neko Project II",
+      "system": "PC98",
+      "core": "nekop2",
+      "file": "nekop2_libretro_android.so",
+      "extensions": [
+        ".2hd",
+        ".88d",
+        ".98d",
+        ".cmd",
+        ".d88",
+        ".d98",
+        ".dup",
+        ".fdd",
+        ".fdi",
+        ".hdd",
+        ".hdi",
+        ".hdm",
+        ".nhd",
+        ".tfd",
+        ".thd",
+        ".xdf",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Nestopia.NES",
+      "name": "Nestopia",
+      "system": "NES",
+      "core": "nestopia",
+      "file": "nestopia_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nes",
+        ".unf",
+        ".unif",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Nestopia.FDS",
+      "name": "Nestopia",
+      "system": "FDS",
+      "core": "nestopia",
+      "file": "nestopia_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".fds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Noods.NDS",
+      "name": "NooDS",
+      "system": "NDS",
+      "core": "noods",
+      "file": "noods_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Panda3ds.System3DS",
+      "name": "Panda3DS",
+      "system": "3DS",
+      "core": "panda3ds",
+      "file": "panda3ds_libretro_android.so",
+      "extensions": [
+        ".3ds",
+        ".cci",
+        ".cxi"
+      ]
+    },
+    {
+      "id": "RetroArch.ParallelN64.Nintendo64",
+      "name": "ParaLLEl N64",
+      "system": "Nintendo64",
+      "core": "parallel_n64",
+      "file": "parallel_n64_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".n64",
+        ".v64",
+        ".z64",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Armsx2.PS2",
+      "name": "ARMSX2",
+      "system": "PS2",
+      "core": "armsx2",
+      "file": "armsx2_libretro_android.so",
+      "extensions": [
+        ".bin",
+        ".chd",
+        ".cso",
+        ".dump",
+        ".gz",
+        ".img",
+        ".iso",
+        ".m3u",
+        ".mdf",
+        ".nrg"
+      ]
+    },
+    {
+      "id": "RetroArch.Pcee2.PS2",
+      "name": "PCEE2",
+      "system": "PS2",
+      "core": "pcee2",
+      "file": "pcee2_libretro_android.so",
+      "extensions": [
+        ".bin",
+        ".chd",
+        ".cso",
+        ".gz",
+        ".iso",
+        ".mdf",
+        ".nrg"
+      ]
+    },
+    {
+      "id": "RetroArch.MednafenPsx.PSX",
+      "name": "Beetle PSX",
+      "system": "PSX",
+      "core": "mednafen_psx",
+      "file": "mednafen_psx_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".m3u",
+        ".pbp",
+        ".toc"
+      ]
+    },
+    {
+      "id": "RetroArch.Picodrive.MasterSystem",
+      "name": "PicoDrive",
+      "system": "MasterSystem",
+      "core": "picodrive",
+      "file": "picodrive_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sms",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Picodrive.GameGear",
+      "name": "PicoDrive",
+      "system": "GameGear",
+      "core": "picodrive",
+      "file": "picodrive_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Picodrive.MegaCD",
+      "name": "PicoDrive",
+      "system": "MegaCD",
+      "core": "picodrive",
+      "file": "picodrive_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso",
+        ".m3u"
+      ]
+    },
+    {
+      "id": "RetroArch.Picodrive.Genesis",
+      "name": "PicoDrive",
+      "system": "Genesis",
+      "core": "picodrive",
+      "file": "picodrive_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gen",
+        ".md",
+        ".sg",
+        ".smd",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Picodrive.SegaPico",
+      "name": "PicoDrive",
+      "system": "SegaPico",
+      "core": "picodrive",
+      "file": "picodrive_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".md",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Play.PS2",
+      "name": "Play!",
+      "system": "PS2",
+      "core": "play",
+      "file": "play_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cso",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Potator.SuperVision",
+      "name": "Potator",
+      "system": "SuperVision",
+      "core": "potator",
+      "file": "potator_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".sv",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Puae2021.Amiga500",
+      "name": "PUAE 2021",
+      "system": "Amiga500",
+      "core": "puae2021",
+      "file": "puae2021_libretro_android.so",
+      "extensions": [
+        ".adf",
+        ".adz",
+        ".dms",
+        ".hdf",
+        ".ipf",
+        ".lha",
+        ".m3u",
+        ".uae",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Puae2021.Amiga1200",
+      "name": "PUAE 2021",
+      "system": "Amiga1200",
+      "core": "puae2021",
+      "file": "puae2021_libretro_android.so",
+      "extensions": [
+        ".adf",
+        ".adz",
+        ".dms",
+        ".hdf",
+        ".ipf",
+        ".lha",
+        ".m3u",
+        ".uae",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Puae2021.AmigaCD32",
+      "name": "PUAE 2021",
+      "system": "AmigaCD32",
+      "core": "puae2021",
+      "file": "puae2021_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Puae2021.CommodoreCDTV",
+      "name": "PUAE 2021",
+      "system": "CommodoreCDTV",
+      "core": "puae2021",
+      "file": "puae2021_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso",
+        ".m3u"
+      ]
+    },
+    {
+      "id": "RetroArch.Quicknes.NES",
+      "name": "QuickNES",
+      "system": "NES",
+      "core": "quicknes",
+      "file": "quicknes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nes",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Race.NeoGeoPocket",
+      "name": "RACE",
+      "system": "NeoGeoPocket",
+      "core": "race",
+      "file": "race_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".ngp",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Race.NeoGeoPocketColor",
+      "name": "RACE",
+      "system": "NeoGeoPocketColor",
+      "core": "race",
+      "file": "race_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".ngc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Retro8.Pico8",
+      "name": "Retro8",
+      "system": "Pico8",
+      "core": "retro8",
+      "file": "retro8_libretro_android.so",
+      "extensions": [
+        ".p8",
+        ".png"
+      ]
+    },
+    {
+      "id": "RetroArch.Rustynes.NES",
+      "name": "RustyNES",
+      "system": "NES",
+      "core": "rustynes",
+      "file": "rustynes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nes",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Rustynes.FDS",
+      "name": "RustyNES",
+      "system": "FDS",
+      "core": "rustynes",
+      "file": "rustynes_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".fds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mgba.Gameboy",
+      "name": "mGBA",
+      "system": "Gameboy",
+      "core": "mgba",
+      "file": "mgba_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Mgba.GameboyColor",
+      "name": "mGBA",
+      "system": "GameboyColor",
+      "core": "mgba",
+      "file": "mgba_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Sameduck.MegaDuck",
+      "name": "SameDuck",
+      "system": "MegaDuck",
+      "core": "sameduck",
+      "file": "sameduck_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.SameCdi.Arcade",
+      "name": "SAME CDi (Git)",
+      "system": "Arcade",
+      "core": "same_cdi",
+      "file": "same_cdi_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.SameCdi.CDI",
+      "name": "SAME CDi (Git)",
+      "system": "CDI",
+      "core": "same_cdi",
+      "file": "same_cdi_libretro_android.so",
+      "extensions": [
+        ".chd",
+        ".cue",
+        ".iso"
+      ]
+    },
+    {
+      "id": "RetroArch.Skyemu.NDS",
+      "name": "SkyEmu",
+      "system": "NDS",
+      "core": "skyemu",
+      "file": "skyemu_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".nds",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Skyemu.Gameboy",
+      "name": "SkyEmu",
+      "system": "Gameboy",
+      "core": "skyemu",
+      "file": "skyemu_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Skyemu.GameboyColor",
+      "name": "SkyEmu",
+      "system": "GameboyColor",
+      "core": "skyemu",
+      "file": "skyemu_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Skyemu.GBA",
+      "name": "SkyEmu",
+      "system": "GBA",
+      "core": "skyemu",
+      "file": "skyemu_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Smsplus.GameGear",
+      "name": "SMS Plus GX",
+      "system": "GameGear",
+      "core": "smsplus",
+      "file": "smsplus_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".gg",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Smsplus.MasterSystem",
+      "name": "SMS Plus GX",
+      "system": "MasterSystem",
+      "core": "smsplus",
+      "file": "smsplus_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bin",
+        ".sms",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Snes9x2002.SNES",
+      "name": "Snes9x 2002",
+      "system": "SNES",
+      "core": "snes9x2002",
+      "file": "snes9x2002_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bsx",
+        ".dx2",
+        ".fig",
+        ".gd3",
+        ".gd7",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Snes9x2005.SNES",
+      "name": "Snes9x 2005",
+      "system": "SNES",
+      "core": "snes9x2005",
+      "file": "snes9x2005_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bsx",
+        ".dx2",
+        ".fig",
+        ".gd3",
+        ".gd7",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Snes9x2005Plus.SNES",
+      "name": "Snes9x 2005 Plus",
+      "system": "SNES",
+      "core": "snes9x2005_plus",
+      "file": "snes9x2005_plus_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bsx",
+        ".dx2",
+        ".fig",
+        ".gd3",
+        ".gd7",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Snes9x2010.SNES",
+      "name": "Snes9x 2010",
+      "system": "SNES",
+      "core": "snes9x2010",
+      "file": "snes9x2010_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".bsx",
+        ".dx2",
+        ".fig",
+        ".gd3",
+        ".gd7",
+        ".sfc",
+        ".smc",
+        ".swc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Squirreljme.J2ME",
+      "name": "SquirrelJME",
+      "system": "J2ME",
+      "core": "squirreljme",
+      "file": "squirreljme_libretro_android.so",
+      "extensions": [
+        ".jar"
+      ]
+    },
+    {
+      "id": "RetroArch.Stella2014.Atari2600",
+      "name": "Stella 2014",
+      "system": "Atari2600",
+      "core": "stella2014",
+      "file": "stella2014_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".a26",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Stella2023.Atari2600",
+      "name": "Stella 2023",
+      "system": "Atari2600",
+      "core": "stella2023",
+      "file": "stella2023_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".a26",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Supermodel.Model3",
+      "name": "Supermodel",
+      "system": "Model3",
+      "core": "supermodel",
+      "file": "supermodel_libretro_android.so",
+      "extensions": [
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.PcsxRearmed.PSX",
+      "name": "PCSX-ReARMed",
+      "system": "PSX",
+      "core": "pcsx_rearmed",
+      "file": "pcsx_rearmed_libretro_android.so",
+      "extensions": [
+        ".cbn",
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".img",
+        ".iso",
+        ".m3u",
+        ".mdf",
+        ".pbp",
+        ".toc"
+      ]
+    },
+    {
+      "id": "RetroArch.Tgbdual.Gameboy",
+      "name": "TGB Dual",
+      "system": "Gameboy",
+      "core": "tgbdual",
+      "file": "tgbdual_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Tgbdual.GameboyColor",
+      "name": "TGB Dual",
+      "system": "GameboyColor",
+      "core": "tgbdual",
+      "file": "tgbdual_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Theodore.Thomson",
+      "name": "theodore",
+      "system": "Thomson",
+      "core": "theodore",
+      "file": "theodore_libretro_android.so",
+      "extensions": [
+        ".fd",
+        ".k7",
+        ".m5",
+        ".m7",
+        ".rom",
+        ".sap",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Tia.Atari2600",
+      "name": "Tia",
+      "system": "Atari2600",
+      "core": "tia",
+      "file": "tia_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".a26",
+        ".bin",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Uzem.Uzebox",
+      "name": "uzem",
+      "system": "Uzebox",
+      "core": "uzem",
+      "file": "uzem_libretro_android.so",
+      "extensions": [
+        ".uze"
+      ]
+    },
+    {
+      "id": "RetroArch.Vbam.Gameboy",
+      "name": "VBA-M",
+      "system": "Gameboy",
+      "core": "vbam",
+      "file": "vbam_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gb",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Vbam.GameboyColor",
+      "name": "VBA-M",
+      "system": "GameboyColor",
+      "core": "vbam",
+      "file": "vbam_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gbc",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Vbam.GBA",
+      "name": "VBA-M",
+      "system": "GBA",
+      "core": "vbam",
+      "file": "vbam_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.VbaNext.GBA",
+      "name": "VBA Next",
+      "system": "GBA",
+      "core": "vba_next",
+      "file": "vba_next_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".gba",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.ViceX64sc.C64",
+      "name": "VICE x64sc",
+      "system": "C64",
+      "core": "vice_x64sc",
+      "file": "vice_x64sc_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".crt",
+        ".d64",
+        ".d81",
+        ".m3u",
+        ".prg",
+        ".t64",
+        ".tap",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.ViceXscpu64.C64",
+      "name": "VICE xscpu64",
+      "system": "C64",
+      "core": "vice_xscpu64",
+      "file": "vice_xscpu64_libretro_android.so",
+      "extensions": [
+        ".7z",
+        ".crt",
+        ".d64",
+        ".d81",
+        ".m3u",
+        ".prg",
+        ".t64",
+        ".tap",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.X1.X1",
+      "name": "x1",
+      "system": "X1",
+      "core": "x1",
+      "file": "x1_libretro_android.so",
+      "extensions": [
+        ".2d",
+        ".2hd",
+        ".7z",
+        ".88d",
+        ".cmd",
+        ".d88",
+        ".dup",
+        ".dx1",
+        ".hdm",
+        ".tfd",
+        ".xdf",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Yabasanshiro.Saturn",
+      "name": "YabaSanshiro",
+      "system": "Saturn",
+      "core": "yabasanshiro",
+      "file": "yabasanshiro_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".iso",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Yabause.Saturn",
+      "name": "Yabause",
+      "system": "Saturn",
+      "core": "yabause",
+      "file": "yabause_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".iso",
+        ".m3u",
+        ".zip"
+      ]
+    },
+    {
+      "id": "RetroArch.Ymir.Saturn",
+      "name": "Emir",
+      "system": "Saturn",
+      "core": "ymir",
+      "file": "ymir_libretro_android.so",
+      "extensions": [
+        ".ccd",
+        ".chd",
+        ".cue",
+        ".iso",
+        ".m3u",
+        ".zip"
+      ]
+    }
+  ],
+  "source": {
+    "buildbot": "https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/",
+    "coreInfoRepository": "libretro/libretro-core-info",
+    "coreInfoRevision": "5a74858ab2f7a50cebb5a6330895bc38899531c0",
+    "reviewed": "2026-09-19"
+  }
+}
