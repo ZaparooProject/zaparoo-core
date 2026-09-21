@@ -2914,7 +2914,7 @@ None.
 | :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
 | launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
-| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. |
+| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, `**mister.mgl`, the `stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. A `before_exit` can also be written per launcher or launcher group as `[[launchers.default]] before_exit`, or globally as `[launchers] before_exit`; neither is exposed through this API, and this per-system script beats a group entry and the global but loses to an entry naming the launcher that started the media. |
 
 #### Example
 

@@ -54,7 +54,7 @@ whole-token confirmation before execution.
 When `readers.scan.mode='hold'` with `readers.scan.exit_delay=0.0` and a game is launched using a card:
 
 - [ ] Removing the card from the reader will close the game immediately after `on_remove` completes, including when removal happens before launch initialization finishes. If `on_remove` contains a delay, that hook delay completes before the zero-delay hold exit starts.
-- [ ] The system's `before_exit` script, if configured, runs after `on_remove` and immediately before the game closes.
+- [ ] The `before_exit` script, if configured, runs after `on_remove` and immediately before the game closes.
 - [ ] Scanning and removing a command card will execute the command without closing the game; only the launch card owns Hold mode exit.
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
@@ -66,7 +66,7 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=0.0` and a game is
 When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is launched using a card:
 
 - [ ] Removing the card from the reader runs `on_remove` first, then starts the **N-second** hold-exit countdown after the hook completes. Any hook delay therefore precedes `exit_delay` rather than overlapping it.
-- [ ] The full order on a hold-mode exit is `on_remove`, then `exit_delay`, then the system's `before_exit` script, then the game closes.
+- [ ] The full order on a hold-mode exit is `on_remove`, then `exit_delay`, then the `before_exit` script, then the game closes.
 - [ ] Removing the card and reinserting it before the N-second countdown ends will not interrupt the ongoing game.
 - [ ] When `on_remove` contains a `delay` command, reinserting the removed card during that delay cancels the remaining hook commands without relaunching the game.
 - [ ] Removing the card and tapping a different game card will immediately launch the other game.
@@ -77,19 +77,39 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is l
 
 ---
 
-## Behavior: the system `before_exit` hook
+## Behavior: the `before_exit` hook
 
-A `[[systems.default]]` entry can carry a `before_exit` script that runs just
-before media for that system stops or is replaced:
+A `before_exit` script runs just before media stops or is replaced. It can be
+written at three scopes: a `[[systems.default]]` entry, a `[[launchers.default]]`
+entry naming a launcher or one of its groups, and the global `[launchers]` key.
 
 ```toml
+[launchers]
+# Everything not claimed by a more specific scope.
+before_exit = "**input.keyboard:{f12}"
+
+# Every launcher in a group, in one entry: all the MiSTer RetroAchievements
+# cores, every Kodi launcher, every LLAPI core, and so on.
+[[launchers.default]]
+launcher = "RetroAchievements"
+before_exit = "**input.keyboard:{f2}"
+
 [[systems.default]]
 system = "SNES"
-before_exit = "**input.keyboard:{f2}"
+before_exit = "**input.keyboard:{f4}"
 ```
 
-The script is looked up against the outgoing media's system, so it applies
-regardless of which launcher started it.
+Scopes resolve narrowest first, and an unset script falls through to the next:
+
+1. a `[[launchers.default]]` entry naming the outgoing launcher exactly
+2. a `[[systems.default]]` entry for the outgoing media's system
+3. a `[[launchers.default]]` entry naming one of that launcher's groups
+4. the global `[launchers] before_exit`
+
+A named launcher is narrower than a system; a group spans many launchers across
+many systems, so it sits below one. A system entry is found by the outgoing
+media's own system, then by the system of the launcher that started it, and
+aliases resolve on either side.
 
 - [ ] Tapping a second card runs `before_exit` before the new game starts.
 - [ ] `**stop`, `**playlist.stop` and the `stop` API method each run it
@@ -105,6 +125,13 @@ regardless of which launcher started it.
 - [ ] A script that stalls stops the exit for at most 30 seconds.
 - [ ] Only one `before_exit` script runs at a time, so a script that itself
       stops or launches media does not trigger another.
+- [ ] One `[[launchers.default]]` entry for a group runs for every system its
+      launchers cover, with no `[[systems.default]]` entries configured.
+- [ ] An entry naming a launcher exactly beats a `[[systems.default]]` entry for
+      that media's system, which in turn beats a group entry.
+- [ ] The global `[launchers] before_exit` runs for media no other scope claims,
+      including media a platform reports without a launcher, such as a game
+      started from the MiSTer menu.
 
 ---
 

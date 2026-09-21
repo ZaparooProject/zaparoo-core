@@ -42,11 +42,16 @@ type Launchers struct {
 	Preference       []string `toml:"preference,omitempty,multiline"`
 	AllowFile        []string `toml:"allow_file,omitempty,multiline"`
 	allowFileRe      []*regexp.Regexp
-	MediaDir         string             `toml:"media_dir,omitempty"`
-	BeforeMediaStart string             `toml:"before_media_start,omitempty"`
-	OnMediaStart     string             `toml:"on_media_start,omitempty"`
-	Default          []LaunchersDefault `toml:"default,omitempty"`
-	Custom           []LaunchersCustom  `toml:"custom,omitempty"`
+	MediaDir         string `toml:"media_dir,omitempty"`
+	BeforeMediaStart string `toml:"before_media_start,omitempty"`
+	OnMediaStart     string `toml:"on_media_start,omitempty"`
+	// BeforeExit is the fallback before_exit script for outgoing media that no
+	// [[systems.default]] or [[launchers.default]] entry claims. Declared before
+	// Default because go-toml marshals in field order and a scalar written after
+	// an array of tables reads back as a key of the last table.
+	BeforeExit string             `toml:"before_exit,omitempty"`
+	Default    []LaunchersDefault `toml:"default,omitempty"`
+	Custom     []LaunchersCustom  `toml:"custom,omitempty"`
 }
 
 type LaunchersDefault struct {
@@ -64,6 +69,9 @@ type LaunchersDefault struct {
 	// like "_Unstable/SNES" (no extension, relative to /media/fat). Launchers
 	// that do not load an implementation file ignore this field.
 	LoadPath string `toml:"load_path,omitempty"`
+	// BeforeExit is a ZapScript run just before media started by a matching
+	// launcher stops or is replaced.
+	BeforeExit string `toml:"before_exit,omitempty"`
 }
 
 const (
@@ -119,23 +127,33 @@ func (c *Instance) LaunchersOnMediaStart() string {
 	return c.vals.Launchers.OnMediaStart
 }
 
+func (c *Instance) LaunchersBeforeExit() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Launchers.BeforeExit
+}
+
 func (c *Instance) IsLauncherFileAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return checkAllow(c.vals.Launchers.AllowFile, c.vals.Launchers.allowFileRe, s)
 }
 
-// LookupLauncherDefaults merges configuration defaults for a launcher by iterating
-// through config entries in order. Entries match if their launcher field equals
-// either the launcher ID or any of the launcher's groups (case-insensitive).
-// Later matching entries override earlier ones, allowing hierarchical configuration
-// like: set defaults for all "Kodi" launchers, then override for specific "KodiTV" group.
+// LookupLauncherDefaults merges configuration defaults for a launcher. An entry
+// matches when its launcher field equals the launcher's own ID or one of the
+// groups it belongs to, compared case-insensitively.
+//
+// Group entries merge first, then exact-ID entries, so a launcher's own entry
+// always beats an entry for a family it belongs to no matter where the two sit
+// in the file. Within each pass later entries override earlier ones, which is
+// the only tie-break available between two groups: Groups is a flat list whose
+// order means different things per platform, so nothing declares that "Kodi" is
+// broader than "KodiTV".
 func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) LaunchersDefault {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	var result LaunchersDefault
-	result.Launcher = launcherID
+	result := LaunchersDefault{Launcher: launcherID}
 
 	log.Debug().
 		Str("launcherID", launcherID).
@@ -143,54 +161,25 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Int("defaultsCount", len(c.vals.Launchers.Default)).
 		Msg("LookupLauncherDefaults: resolving launcher defaults")
 
-	for _, entry := range c.vals.Launchers.Default {
-		matches := false
-
-		// Check if entry matches the exact launcher ID
-		if strings.EqualFold(entry.Launcher, launcherID) {
-			matches = true
-		}
-
-		// Check if entry matches any of the launcher's groups
-		if !matches {
-			for _, group := range groups {
-				if strings.EqualFold(entry.Launcher, group) {
-					matches = true
-					break
-				}
+	mergeMatching := func(matchedOn string, matches func(entryLauncher string) bool) {
+		for _, entry := range c.vals.Launchers.Default {
+			if !matches(entry.Launcher) {
+				continue
 			}
-		}
-
-		if matches {
 			log.Debug().
 				Str("configLauncher", entry.Launcher).
 				Str("launcherID", launcherID).
+				Str("matchedOn", matchedOn).
 				Msg("LookupLauncherDefaults: merging matching entry")
-
-			// Merge non-empty fields (later entries override earlier ones)
-			if entry.InstallDir != "" {
-				result.InstallDir = entry.InstallDir
-			}
-			if entry.ServerURL != "" {
-				result.ServerURL = entry.ServerURL
-			}
-			if entry.Action != "" {
-				result.Action = entry.Action
-			}
-			if entry.LoadPath != "" {
-				result.LoadPath = entry.LoadPath
-			}
-			if entry.RenderScale != nil {
-				renderScale := *entry.RenderScale
-				result.RenderScale = &renderScale
-				result.RenderResolution = ""
-			}
-			if entry.RenderResolution != "" {
-				result.RenderScale = nil
-				result.RenderResolution = entry.RenderResolution
-			}
+			mergeLauncherDefault(&result, &entry)
 		}
 	}
+	mergeMatching("group", func(entryLauncher string) bool {
+		return matchesAnyLauncherGroup(entryLauncher, groups)
+	})
+	mergeMatching("launcher", func(entryLauncher string) bool {
+		return strings.EqualFold(entryLauncher, launcherID)
+	})
 
 	log.Debug().
 		Str("launcherID", launcherID).
@@ -198,9 +187,55 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Str("resolvedAction", result.Action).
 		Str("resolvedInstallDir", result.InstallDir).
 		Str("resolvedLoadPath", result.LoadPath).
+		Bool("resolvedBeforeExit", result.BeforeExit != "").
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result
+}
+
+// matchesAnyLauncherGroup reports whether a config entry's launcher field names
+// one of the groups a launcher belongs to.
+func matchesAnyLauncherGroup(entryLauncher string, groups []string) bool {
+	for _, group := range groups {
+		if strings.EqualFold(entryLauncher, group) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeLauncherDefault copies entry's set fields over dst. An empty string never
+// clears an already-resolved value, so a narrower entry that omits a field
+// inherits it rather than blanking it. render_scale and render_resolution are
+// mutually exclusive and each clears the other.
+//
+// An entry whose launcher field happens to name both the launcher ID and one of
+// its groups merges twice; that is harmless because every field is set-if-set.
+func mergeLauncherDefault(dst, entry *LaunchersDefault) {
+	if entry.InstallDir != "" {
+		dst.InstallDir = entry.InstallDir
+	}
+	if entry.ServerURL != "" {
+		dst.ServerURL = entry.ServerURL
+	}
+	if entry.Action != "" {
+		dst.Action = entry.Action
+	}
+	if entry.LoadPath != "" {
+		dst.LoadPath = entry.LoadPath
+	}
+	if entry.BeforeExit != "" {
+		dst.BeforeExit = entry.BeforeExit
+	}
+	if entry.RenderScale != nil {
+		renderScale := *entry.RenderScale
+		dst.RenderScale = &renderScale
+		dst.RenderResolution = ""
+	}
+	if entry.RenderResolution != "" {
+		dst.RenderScale = nil
+		dst.RenderResolution = entry.RenderResolution
+	}
 }
 
 // ValidateRenderResolution validates and parses a positive WIDTHxHEIGHT render target.

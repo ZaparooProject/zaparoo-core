@@ -48,6 +48,10 @@ func TestLookupSystemDefaultsFuzzyMatching(t *testing.T) {
 						Launcher:   "duckstation",
 						BeforeExit: "cleanup.sh",
 					},
+					{
+						System:   "Gameboy", // Canonical, looked up by its GB alias
+						Launcher: "sameboy",
+					},
 				},
 			},
 		},
@@ -81,6 +85,14 @@ func TestLookupSystemDefaultsFuzzyMatching(t *testing.T) {
 			name:        "system not in defaults returns false",
 			systemID:    "NES",
 			expectFound: false,
+		},
+		{
+			// The mirror of the cases above: the alias is on the lookup side and
+			// the canonical ID in config. Only the config side used to resolve.
+			name:             "alias lookup matches canonical ID in config (GB via Gameboy)",
+			systemID:         "GB",
+			expectFound:      true,
+			expectedLauncher: "sameboy",
 		},
 		{
 			name:        "unknown system ID returns false",

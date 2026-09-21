@@ -187,6 +187,101 @@ render_resolution = "640x480"`,
 	}
 }
 
+func TestLaunchersBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		script   string
+		expected string
+	}{
+		{
+			name:     "empty script",
+			script:   "",
+			expected: "",
+		},
+		{
+			name:     "simple script",
+			script:   "**input.keyboard:{f12}",
+			expected: "**input.keyboard:{f12}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{
+				vals: Values{
+					Launchers: Launchers{
+						BeforeExit: tt.script,
+					},
+				},
+			}
+
+			assert.Equal(t, tt.expected, cfg.LaunchersBeforeExit())
+		})
+	}
+}
+
+// A launcher's own entry is narrower than an entry for a family it belongs to, so
+// it must win wherever the two sit in the file. Resolution used to be purely
+// document-ordered, which let a group entry placed later override it.
+func TestLookupLauncherDefaults_ExactIDBeatsGroupRegardlessOfOrder(t *testing.T) {
+	t.Parallel()
+
+	renderScale := 50
+	tests := []struct {
+		name     string
+		defaults []LaunchersDefault
+	}{
+		{
+			name: "group entry first",
+			defaults: []LaunchersDefault{
+				{
+					Launcher: "RetroAchievements", LoadPath: "_Other/SNES", InstallDir: "/group",
+					Action: "run", BeforeExit: "**echo:group", RenderResolution: "640x360",
+				},
+				{
+					Launcher: "RASNES", LoadPath: "_RA_Cores/Cores/SNES", InstallDir: "/exact",
+					Action: "details", BeforeExit: "**echo:exact", RenderScale: &renderScale,
+				},
+			},
+		},
+		{
+			name: "group entry last",
+			defaults: []LaunchersDefault{
+				{
+					Launcher: "RASNES", LoadPath: "_RA_Cores/Cores/SNES", InstallDir: "/exact",
+					Action: "details", BeforeExit: "**echo:exact", RenderScale: &renderScale,
+				},
+				{
+					Launcher: "RetroAchievements", LoadPath: "_Other/SNES", InstallDir: "/group",
+					Action: "run", BeforeExit: "**echo:group", RenderResolution: "640x360",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{vals: Values{Launchers: Launchers{Default: tt.defaults}}}
+
+			result := cfg.LookupLauncherDefaults("RASNES", []string{"RetroAchievements"})
+
+			assert.Equal(t, "_RA_Cores/Cores/SNES", result.LoadPath)
+			assert.Equal(t, "/exact", result.InstallDir)
+			assert.Equal(t, "details", result.Action)
+			assert.Equal(t, "**echo:exact", result.BeforeExit)
+			require.NotNil(t, result.RenderScale)
+			assert.Equal(t, renderScale, *result.RenderScale)
+			assert.Empty(t, result.RenderResolution, "the exact entry's render_scale must clear it")
+		})
+	}
+}
+
 func TestLookupLauncherDefaults_RenderSettingsOverrideEachOther(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +306,7 @@ func TestLookupLauncherDefaults(t *testing.T) {
 		expectedAction    string
 		expectedInstall   string
 		expectedLoadPath  string
+		expectedBefore    string
 		groups            []string
 		defaults          []LaunchersDefault
 	}{
@@ -390,6 +486,34 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			},
 			expectedLoadPath: "_Console/SNES",
 		},
+		{
+			name:       "group match propagates before_exit",
+			launcherID: "RANES",
+			groups:     []string{"RetroAchievements"},
+			defaults: []LaunchersDefault{
+				{Launcher: "RetroAchievements", BeforeExit: "**input.keyboard:{f12}"},
+			},
+			expectedBefore: "**input.keyboard:{f12}",
+		},
+		{
+			name:       "later empty before_exit does not clear an earlier one",
+			launcherID: "RANES",
+			groups:     []string{"RetroAchievements"},
+			defaults: []LaunchersDefault{
+				{Launcher: "RetroAchievements", BeforeExit: "**input.keyboard:{f12}"},
+				{Launcher: "RANES", Action: "run"},
+			},
+			expectedBefore: "**input.keyboard:{f12}",
+			expectedAction: "run",
+		},
+		{
+			name:       "non-matching entry contributes no before_exit",
+			launcherID: "RASNES",
+			groups:     nil,
+			defaults: []LaunchersDefault{
+				{Launcher: "RetroAchievements", BeforeExit: "**input.keyboard:{f12}"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -411,6 +535,7 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			assert.Equal(t, tt.expectedAction, result.Action, "Action mismatch")
 			assert.Equal(t, tt.expectedInstall, result.InstallDir, "InstallDir mismatch")
 			assert.Equal(t, tt.expectedLoadPath, result.LoadPath, "LoadPath mismatch")
+			assert.Equal(t, tt.expectedBefore, result.BeforeExit, "BeforeExit mismatch")
 		})
 	}
 }
@@ -553,8 +678,13 @@ func TestLauncherDefaults_SaveLoadRoundTrip(t *testing.T) {
 	cfg, err := NewConfig(tempDir, BaseDefaults)
 	require.NoError(t, err)
 
-	// Set launcher defaults using LoadTOML
+	// Set launcher defaults using LoadTOML. The [launchers] scalars have to
+	// precede the [[launchers.default]] blocks, which is also the order Save must
+	// marshal them in for the reload below to see them.
 	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+before_exit = "**input.keyboard:{f12}"
+
 [[launchers.default]]
 launcher = "Steam"
 action = "details"
@@ -563,6 +693,7 @@ action = "details"
 launcher = "GOG"
 action = "run"
 install_dir = "/games/gog"
+before_exit = "**echo:gog"
 `))
 
 	// Save and reload
@@ -579,6 +710,10 @@ install_dir = "/games/gog"
 	gogDefault := cfg.LookupLauncherDefaults("GOG", nil)
 	assert.Equal(t, "run", gogDefault.Action)
 	assert.Equal(t, "/games/gog", gogDefault.InstallDir)
+	assert.Equal(t, "**echo:gog", gogDefault.BeforeExit)
+
+	assert.Equal(t, "**input.keyboard:{f12}", cfg.LaunchersBeforeExit())
+	assert.Empty(t, steamDefault.BeforeExit, "an unset before_exit must not inherit the global")
 }
 
 func TestCustomLaunchers_NewFieldsParsing(t *testing.T) {

@@ -27,7 +27,6 @@ import (
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -77,69 +76,112 @@ func runHookWithContext(
 // delay cannot stall an exit indefinitely. A var so tests can shorten it.
 var beforeExitHookTimeout = 30 * time.Second
 
-// appendSystemAndAliases adds systemID and its aliases to ids, skipping any
-// already present. Comparison is case-insensitive because system IDs come from
-// user config as well as launcher definitions.
-func appendSystemAndAliases(ids []string, systemID string) []string {
+// appendSystemID adds systemID to ids unless an equal-folding entry is already
+// present. Comparison is case-insensitive because system IDs come from user
+// config as well as launcher definitions.
+//
+// Aliases are not expanded here: LookupSystemDefaults resolves both the entry it
+// reads and the ID it is given to a canonical system, so every alias of a system
+// already resolves to the same entry this canonical ID does.
+func appendSystemID(ids []string, systemID string) []string {
 	if systemID == "" {
 		return ids
 	}
-	add := func(id string) []string {
-		for _, existing := range ids {
-			if strings.EqualFold(existing, id) {
-				return ids
-			}
-		}
-		return append(ids, id)
-	}
-	ids = add(systemID)
-	if system, err := systemdefs.LookupSystem(systemID); err == nil {
-		for _, alias := range system.Aliases {
-			ids = add(alias)
+	for _, existing := range ids {
+		if strings.EqualFold(existing, systemID) {
+			return ids
 		}
 	}
-	return ids
+	return append(ids, systemID)
 }
 
-// beforeExitSystemIDs returns the candidate system IDs to look up before_exit
-// defaults for, widest match first: the media's own system, then the system of
-// the launcher that started it, then a launcher whose ID matches the media's
-// system ID.
+// beforeExitTarget is everything a before_exit lookup can key on for one piece
+// of outgoing media: the systems it may be configured under, and the launcher
+// that started it.
+type beforeExitTarget struct {
+	systemIDs  []string
+	launcherID string
+	groups     []string
+}
+
+// beforeExitTargetFor resolves the outgoing media's before_exit keys.
 //
-// The last case is the only shape that ever matched before, and it only holds
-// on platforms where launcher IDs happen to equal system IDs. It is kept so
-// existing configs that relied on it keep working.
-func beforeExitSystemIDs(svc *ServiceContext, media *models.ActiveMedia) []string {
-	var ids []string
-	ids = appendSystemAndAliases(ids, media.SystemID)
+// System candidates are ordered outward from the media itself, because the lookup
+// takes the first that carries a script: the media's own system, then the system
+// of the launcher that started it, then the system of a launcher whose ID matches
+// the media's system ID. That last shape is the only one that matched before the
+// lookup was fixed, and only on platforms where launcher IDs happen to equal
+// system IDs, so it is kept for configs that relied on it.
+//
+// Launchers resolve through the cache rather than Platform.Launchers: the cache
+// is the only complete source, it folds case the way every other launcher-ID
+// comparison in the codebase does, and it avoids rebuilding the whole launcher
+// list, which MiSTer does on every Launchers call.
+func beforeExitTargetFor(svc *ServiceContext, media *models.ActiveMedia) beforeExitTarget {
+	target := beforeExitTarget{launcherID: media.LauncherID}
+	target.systemIDs = appendSystemID(target.systemIDs, media.SystemID)
 
-	launchers := svc.Platform.Launchers(svc.Config)
-	for i := range launchers {
-		if launchers[i].ID == media.LauncherID {
-			ids = appendSystemAndAliases(ids, launchers[i].SystemID)
-			break
+	if svc.LauncherCache == nil {
+		return target
+	}
+	if media.LauncherID != "" {
+		if launcher := svc.LauncherCache.GetLauncherByID(media.LauncherID); launcher != nil {
+			target.systemIDs = appendSystemID(target.systemIDs, launcher.SystemID)
+			target.groups = launcher.Groups
 		}
 	}
-	for i := range launchers {
-		if launchers[i].ID == media.SystemID {
-			ids = appendSystemAndAliases(ids, launchers[i].SystemID)
-			break
+	if media.SystemID != "" {
+		if launcher := svc.LauncherCache.GetLauncherByID(media.SystemID); launcher != nil {
+			target.systemIDs = appendSystemID(target.systemIDs, launcher.SystemID)
 		}
 	}
 
-	return ids
+	return target
 }
 
-// beforeExitScript returns the before_exit script configured for the outgoing
-// media's system, or an empty string when none applies.
+// beforeExitScript returns the before_exit script that applies to the outgoing
+// media, or an empty string when none does.
+//
+// Scopes resolve narrowest first, first non-empty winning and an empty value
+// falling through, the same shape as the scan-mode chain:
+//
+//  1. a [[launchers.default]] entry naming the outgoing launcher exactly
+//  2. a [[systems.default]] entry for the outgoing media's system
+//  3. a [[launchers.default]] entry naming one of that launcher's groups
+//  4. the global [launchers] before_exit
+//
+// An exact launcher is narrower than a system; a group spans many launchers
+// across many systems, so it is broader than one.
 func beforeExitScript(svc *ServiceContext, media *models.ActiveMedia) string {
-	for _, systemID := range beforeExitSystemIDs(svc, media) {
+	target := beforeExitTargetFor(svc, media)
+
+	// An empty launcher ID would match a [[launchers.default]] entry that leaves
+	// launcher unset, and media published by a platform tracker rather than by a
+	// launch carries no launcher at all.
+	hasLauncher := target.launcherID != ""
+
+	if hasLauncher {
+		if script := svc.Config.LookupLauncherDefaults(target.launcherID, nil).BeforeExit; script != "" {
+			return script
+		}
+	}
+
+	for _, systemID := range target.systemIDs {
 		defaults, ok := svc.Config.LookupSystemDefaults(systemID)
 		if ok && defaults.BeforeExit != "" {
 			return defaults.BeforeExit
 		}
 	}
-	return ""
+
+	// Any script left here came from a group entry: the exact-launcher tier above
+	// already returned if one named this launcher directly.
+	if hasLauncher && len(target.groups) > 0 {
+		if script := svc.Config.LookupLauncherDefaults(target.launcherID, target.groups).BeforeExit; script != "" {
+			return script
+		}
+	}
+
+	return svc.Config.LaunchersBeforeExit()
 }
 
 // runBeforeExitHook runs the outgoing primary media's before_exit script.

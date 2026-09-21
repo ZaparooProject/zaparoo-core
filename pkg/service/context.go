@@ -45,8 +45,13 @@ type softwareTokenUpdate struct {
 // ServiceContext holds the shared dependencies threaded through all
 // service-layer functions. Created once in Start() and passed by pointer.
 type ServiceContext struct {
-	Platform            platforms.Platform
-	Config              *config.Instance
+	Platform platforms.Platform
+	Config   *config.Instance
+	// LauncherCache resolves the launcher behind active media. It is the only
+	// complete source: it holds launchers the platform cannot build itself, such
+	// as native audio and the launchables media launchers behind virtual systems
+	// and decks, so never resolve a launcher ID from Platform.Launchers instead.
+	LauncherCache       platforms.LauncherResolver
 	State               *state.State
 	DB                  *database.Database
 	Profiles            *profiles.Service
