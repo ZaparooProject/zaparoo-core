@@ -1338,6 +1338,29 @@ func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestInferLauncherForSystemPath_PrefersUniqueDetectedLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	detected, missing := true, false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "GenesisMissing", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}, Detected: &missing},
+		{ID: "GenesisInstalled", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}, Detected: &detected},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "SomeGame.bin"),
+		systemdefs.SystemGenesis,
+	)
+
+	require.True(t, found)
+	assert.Equal(t, "GenesisInstalled", launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestInferLauncherForSystemPath_SkipsScanOnly covers a custom launcher that
 // only widens a system's media directories. It shares the stock launcher's
 // extension, so counting it as a candidate would make every launch for that

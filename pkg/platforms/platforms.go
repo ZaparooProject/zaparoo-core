@@ -383,6 +383,7 @@ type Launcher struct {
 	SystemID                 string
 	UsesRunningInstance      string
 	AvailabilityReason       string
+	Detected                 *bool
 	Folders                  []string
 	Groups                   []string
 	Extensions               []string
