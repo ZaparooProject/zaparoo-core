@@ -36,12 +36,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/sourcepath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -295,6 +297,112 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A per-media override naming a launcher that cannot run right now must still
+// reach the platform, so the failure is that launcher's own availability error
+// rather than whatever automatic selection reports. The override is stored the
+// way media.meta.update stores it.
+func TestCmdLaunch_URIAppliesUnavailableMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+
+	uri, err := sourcepath.Format(sourcepath.ID("test-source"), []string{"NES", "game.nes"})
+	require.NoError(t, err)
+	scantest.IndexMediaPaths(t, mediaDB, "NES", uri)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		context.Background(), db, "NES", uri, rows[0].DBID, "Player.Override"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	unavailable := errors.New("player is not installed")
+	matchesSource := func(_ *config.Instance, path string) bool {
+		return strings.HasPrefix(path, "source://") && strings.Contains(path, "/NES/")
+	}
+	launchers := []platforms.Launcher{
+		{
+			ID: "Player.Default", SystemID: "NES", Schemes: []string{"source"},
+			Extensions: []string{".nes"}, Test: matchesSource,
+			Availability: func(*config.Instance) error { return unavailable },
+		},
+		{
+			ID: "Player.Override", SystemID: "NES", Schemes: []string{"source"},
+			Extensions: []string{".nes"}, Test: matchesSource,
+			Availability: func(*config.Instance) error { return unavailable },
+		},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, uri,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Player.Override"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(unavailable)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err = cmdLaunch(mockPlatform, env)
+
+	require.ErrorIs(t, err, unavailable)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	uri := "source://abc123/NES/game.nes"
+	launchers := []platforms.Launcher{{
+		ID:           "Player.Unavailable",
+		SystemID:     "NES",
+		Schemes:      []string{"source"},
+		Availability: func(*config.Instance) error { return errors.New("player is not installed") },
+	}}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("FindSystemBySystemID", "NES").
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), uri).
+		Return(&database.Media{DBID: 123, Path: uri}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, uri, (*platforms.Launcher)(nil), db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
