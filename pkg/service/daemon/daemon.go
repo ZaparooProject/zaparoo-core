@@ -105,12 +105,16 @@ const (
 	serviceKillTimeout        = 3 * time.Second
 	serviceStopPollInterval   = 100 * time.Millisecond
 	servicePortReleaseTimeout = 3 * time.Second
-	// apiPortProbeTimeout bounds one dial while probing whether the API port is
-	// still held. Deliberately independent of the poll interval: how often to
-	// look and how long to wait for an answer are different questions, and an
-	// interval short enough to poll responsively is far too short to conclude
-	// anything from. The overall timeout still bounds how many rounds happen.
+	// apiPortProbeTimeout caps one dial while probing whether the API port is
+	// still held, and apiPortMinProbeTimeout floors it. Both are independent of
+	// the poll interval: how often to look and how long to wait for an answer are
+	// different questions, and an interval short enough to poll responsively is
+	// far too short to conclude anything from. Each probe is also clamped to the
+	// time left before the caller's deadline, so waiting for an answer cannot
+	// outlast the release timeout it belongs to; the floor keeps a probe long
+	// enough to come back with a real answer rather than only ever timing out.
 	apiPortProbeTimeout        = time.Second
+	apiPortMinProbeTimeout     = 25 * time.Millisecond
 	daemonReadyTimeout         = 3 * time.Second
 	serviceManifestName        = "service_manifest.json"
 	serviceHashLength          = 16
@@ -1459,9 +1463,11 @@ func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Dura
 	addrs := apiDialAddresses(cfg)
 	deadline := time.Now().Add(timeout)
 	for {
+		probeTimeout := min(apiPortProbeTimeout, max(time.Until(deadline), apiPortMinProbeTimeout))
+
 		held := false
 		for _, addr := range addrs {
-			if apiPortHeld(addr, apiPortProbeTimeout) {
+			if apiPortHeld(addr, probeTimeout) {
 				held = true
 				break
 			}
