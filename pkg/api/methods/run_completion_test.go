@@ -193,9 +193,11 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 
 	tests := []struct {
 		cause    error
+		params   map[string]string
 		name     string
 		category string
 		message  string
+		reason   string
 	}{
 		{
 			name:     "script already running",
@@ -312,17 +314,30 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			message:  "playtime limit reached",
 		},
 		{
-			name: "explicit safe player repair",
+			name: "coded player repair carries its reason and names",
+			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
+				platforms.NewLaunchRepairErrorWithReason(platforms.LaunchRepairLauncherPluginMissing,
+					map[string]string{"launcher": "RetroArch", "plugin": "Mesen"},
+					"this launcher's plugin for this system is not installed")),
+			category: models.ErrorCategoryLaunchRepair,
+			message:  "this launcher's plugin for this system is not installed",
+			reason:   "launcher_plugin_missing",
+			params:   map[string]string{"launcher": "RetroArch", "plugin": "Mesen"},
+		},
+		{
+			name: "a repair error with no code is refused",
 			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
 				platforms.NewLaunchRepairError("allow player storage access in Android Settings")),
 			category: models.ErrorCategoryLaunchRepair,
 			message:  "allow player storage access in Android Settings",
+			reason:   "refused",
 		},
 		{
 			name:     "invalid repair message stays generic",
 			cause:    platforms.NewLaunchRepairError("invalid\nmessage"),
 			category: models.ErrorCategoryLaunchRepair,
 			message:  "player request could not be completed",
+			reason:   "refused",
 		},
 		{
 			name:     "unclassified failure",
@@ -347,6 +362,11 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			assert.Equal(t, tt.message, o.err.Error())
 			assert.NotContains(t, o.err.Error(), leakedPath)
 			require.ErrorIs(t, o.err, tt.cause, "cause must stay reachable for logging")
+
+			var catErr *models.CategorizedError
+			require.ErrorAs(t, o.err, &catErr)
+			assert.Equal(t, tt.reason, catErr.Reason, "only launch repair carries a reason")
+			assert.Equal(t, tt.params, catErr.Params)
 		})
 	}
 }

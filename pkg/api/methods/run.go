@@ -274,7 +274,10 @@ func runError(err error) error {
 	default:
 		var repair *platforms.LaunchRepairError
 		if errors.As(err, &repair) {
-			return models.CategorizedErr(models.ErrorCategoryLaunchRepair, repair.Error(), err)
+			// The reason and its bounded display names are the contract; the
+			// message is the fallback for a client that only reads it.
+			return models.CategorizedDetailErr(models.ErrorCategoryLaunchRepair,
+				repair.Error(), string(repair.Reason()), repair.Params(), err)
 		}
 		return models.CategorizedErr(models.ErrorCategoryExecutionFailed,
 			"ZapScript execution failed", err)

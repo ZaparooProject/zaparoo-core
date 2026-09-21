@@ -656,7 +656,8 @@ func handleRequest(
 		var catErr *models.CategorizedError
 		if errors.As(err, &catErr) {
 			// The producer already logged the cause at the right level; the
-			// wire only gets the safe message and the category.
+			// wire only gets the safe message, the category and whatever
+			// bounded detail that category documents.
 			if contextFailure {
 				logAPIContextFailure(env.Context, err, req.Method)
 			} else {
@@ -666,7 +667,11 @@ func handleRequest(
 			return nil, &models.ErrorObject{
 				Code:    1,
 				Message: catErr.Message,
-				Data:    models.ErrorData{Category: catErr.Category},
+				Data: models.ErrorData{
+					Category: catErr.Category,
+					Reason:   catErr.Reason,
+					Params:   catErr.Params,
+				},
 			}
 		}
 		var quietErr *models.QuietClientError
