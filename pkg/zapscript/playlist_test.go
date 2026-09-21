@@ -578,6 +578,49 @@ func TestLoadPlaylist_InheritsScriptTrust(t *testing.T) {
 	}
 }
 
+// TestLoadPlaylist_InheritsCommandPolicy pins that a playlist carries the
+// bound of the script that opened it. A playlist is an indirection like a
+// ZapLink — its items are arbitrary ZapScript that re-enter as their own
+// tokens — so opening one must not let those items reach commands the script
+// that opened it could not run itself.
+func TestLoadPlaylist_InheritsCommandPolicy(t *testing.T) {
+	t.Parallel()
+
+	arg := `{"id":"deck-1","name":"Shared","items":[{"name":"A","zapscript":"**input.keyboard:a"}]}`
+	policy := tokens.NewCommandPolicy(
+		zapscript.ZapScriptCmdLaunch, zapscript.ZapScriptCmdPlaylistOpen)
+	env := platforms.CmdEnv{
+		ServiceCtx:      t.Context(),
+		Cfg:             &config.Instance{},
+		AllowedCommands: policy,
+		Cmd:             zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistOpen, Args: []string{arg}},
+	}
+
+	pls, err := loadPlaylist(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+
+	assert.False(t, pls.AllowedCommands.Unrestricted())
+	assert.True(t, pls.AllowedCommands.Allows(zapscript.ZapScriptCmdLaunch))
+	assert.False(t, pls.AllowedCommands.Allows("input.keyboard"))
+}
+
+// TestLoadPlaylist_UnboundedScriptLeavesPlaylistUnbounded pins that the bound
+// is opt-in: a reader scan or the run API opens a playlist with no policy.
+func TestLoadPlaylist_UnboundedScriptLeavesPlaylistUnbounded(t *testing.T) {
+	t.Parallel()
+
+	arg := `{"id":"deck-1","name":"Shared","items":[{"name":"A","zapscript":"**input.keyboard:a"}]}`
+	env := platforms.CmdEnv{
+		ServiceCtx: t.Context(),
+		Cfg:        &config.Instance{},
+		Cmd:        zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistOpen, Args: []string{arg}},
+	}
+
+	pls, err := loadPlaylist(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	assert.True(t, pls.AllowedCommands.Unrestricted())
+}
+
 func TestCmdPlaylistOpen_PreservesPosition(t *testing.T) {
 	t.Parallel()
 

@@ -641,6 +641,10 @@ func launchPlaylistMedia(
 		ScanTime: time.Now(),
 		Source:   tokens.SourcePlaylist,
 		Unsafe:   pls.Unsafe,
+		// The bound travels with the item the way trust does. The source is
+		// rewritten here, so anything keyed on it would be lost; the policy
+		// the token carries is what survives into the item.
+		AllowedCommands: pls.AllowedCommands,
 	}
 	plsc := playlists.PlaylistController{
 		Active:     svc.State.GetActivePlaylist(),
@@ -886,7 +890,6 @@ func rejectOversizedToken(t *tokens.Token, err error) {
 func processTokenQueue(
 	svc *ServiceContext,
 	itq <-chan tokens.Token,
-	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 ) {
 	for {
@@ -895,7 +898,7 @@ func processTokenQueue(
 			handlePlaylist(svc, pls, player)
 		case t := <-itq:
 			// TODO: change this channel to send a token pointer or something
-			handleQueuedToken(svc, t, limitsManager, player)
+			handleQueuedToken(svc, t, player)
 		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("exiting service worker via context cancellation")
 			return
@@ -910,7 +913,6 @@ func processTokenQueue(
 func handleQueuedToken(
 	svc *ServiceContext,
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
-	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 ) {
 	if t.ScanTime.IsZero() {
@@ -1021,40 +1023,30 @@ func handleQueuedToken(
 	// Check if any command in the script launches media
 	hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
 
-	// When require_for_launch is enabled, media launches are blocked
-	// until a profile is active (profile switch commands still run —
-	// scanning a profile card is how the device gets unparked). A
-	// combo card that switches profile before launching passes: the
-	// switch activates a profile before the launch command runs, or
-	// fails and aborts the whole script.
-	if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() &&
-		svc.State.ActiveProfile() == nil && !scriptActivatesProfileBeforeLaunch(&script) {
-		log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
-
-		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
-		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
-
-		he.Success = false
-		if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
-			log.Error().Err(histErr).Msgf("error adding history")
-		}
-
-		t.Completion.Complete(state.ErrLaunchRequiresProfile)
-		return
-	}
-
-	// Only check playtime limits if the script contains media-launching commands
+	// Media launches are gated on the device's own policies. Profile switch
+	// commands still run while a profile is required — scanning a profile
+	// card is how the device gets unparked — and a combo card that switches
+	// profile before launching passes, because the switch activates a profile
+	// before the launch command runs, or fails and aborts the whole script.
 	if hasMediaLaunchCmd {
-		if limitReason, limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
-			log.Warn().Err(limitErr).Msg("playtime: launch blocked by limit")
+		limitReason, admitErr := launchAdmission(svc, scriptActivatesProfileBeforeLaunch(&script))
+		if admitErr != nil {
+			if errors.Is(admitErr, state.ErrLaunchRequiresProfile) {
+				log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
 
-			if limitReason != "" {
-				notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
-					Reason: limitReason,
-				})
+				path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+			} else {
+				log.Warn().Err(admitErr).Msg("playtime: launch blocked by limit")
 
-				path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
-				helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+				if limitReason != "" {
+					notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
+						Reason: limitReason,
+					})
+
+					path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
+					helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+				}
 			}
 
 			he.Success = false
@@ -1062,7 +1054,7 @@ func handleQueuedToken(
 				log.Error().Err(histErr).Msgf("error adding history")
 			}
 
-			t.Completion.Complete(limitErr)
+			t.Completion.Complete(admitErr)
 			return
 		}
 	} else {

@@ -23,8 +23,10 @@ import (
 	"context"
 	"encoding/json"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
 
 // opSpec describes one allowlisted remote operation type. operationAllowlist
@@ -91,3 +93,28 @@ var operationAllowlist = map[string]opSpec{
 		local: (*manager).executeCommand, translate: translateCommandParams, limit: resultLimit,
 	},
 }
+
+// commandPolicy bounds the ZapScript a remote operation may run, including
+// anything it expands into: the body of a ZapLink it launches, and the items
+// of a playlist that body opens. A bounded token carries this with it, so the
+// indirection widens nothing — the worst a link's host can do is substitute
+// which media launches, which the operation could already ask for directly.
+//
+// It is deliberately separate from operationAllowlist. That maps operation
+// types, and some of them (media.search) are not ZapScript commands at all.
+// This is the ZapScript side of the same boundary and has to be read as its
+// own list, not derived from the other one.
+//
+// The three playlist verbs are the ones ParseServedPlaylist accepts, because
+// a served playlist is the shape a deck link arrives in.
+//
+//nolint:gochecknoglobals // immutable policy; the ZapScript half of the remote boundary
+var commandPolicy = tokens.NewCommandPolicy(
+	gozapscript.ZapScriptCmdLaunch,
+	gozapscript.ZapScriptCmdLaunchSystem,
+	gozapscript.ZapScriptCmdMisterScript,
+	gozapscript.ZapScriptCmdStop,
+	gozapscript.ZapScriptCmdPlaylistOpen,
+	gozapscript.ZapScriptCmdPlaylistPlay,
+	gozapscript.ZapScriptCmdPlaylistLoad,
+)

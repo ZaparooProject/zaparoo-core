@@ -123,6 +123,12 @@ type Deps struct {
 		ctx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 		exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
 	) error
+	// LaunchAdmission applies the device policies that gate starting media —
+	// require-a-profile and the playtime limit — and returns why a launch
+	// must not proceed. It is a callback for the same reason RunZapScript is.
+	// Optional: a nil one admits everything, which is what the tests that do
+	// not exercise the gates want.
+	LaunchAdmission func() error
 	// LibraryHint receives a change hint from the account: which kinds of
 	// library data moved and the revision of the write. Optional.
 	LibraryHint func(kinds []string, revision int64)

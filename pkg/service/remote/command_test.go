@@ -29,6 +29,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -198,7 +199,7 @@ func TestCommandExecuteRejectsMalformedParams(t *testing.T) {
 // a command with an empty launch target.
 func TestBuildStructuralCommandRejectsEmptyArgument(t *testing.T) {
 	t.Parallel()
-	_, err := buildStructuralCommand("launch", "?launcher=x")
+	_, err := buildStructuralCommand("launch", "?launcher=x", false)
 	require.Error(t, err)
 }
 
@@ -218,24 +219,22 @@ func TestBuildStructuralCommandRejectsMalformedAdvancedArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := buildStructuralCommand("launch", tt.value)
+			_, err := buildStructuralCommand("launch", tt.value, false)
 			require.Error(t, err)
 		})
 	}
 }
 
-// TestCommandRejectsURLValueForAllStructuralVerbs pins that none of the
-// three remote structural verbs accept a value carrying any URL scheme: a
-// system ID, media path, or script name is never legitimately one, and the
-// launch command would install-fetch http(s) and smb URLs onto the device.
-// The check mirrors the Online API's own (any scheme, anywhere in the
-// value) so a bypassed API still can't reach the fetch path, and gives a
-// clean bad_params error instead of a downstream failure.
-func TestCommandRejectsURLValueForAllStructuralVerbs(t *testing.T) {
+// TestCommandRejectsNonLinkURLValues pins that a remote structural verb
+// refuses every URL scheme that is not a ZapLink candidate. A system ID,
+// media path or script name is never a URL, and an smb:// or opaque value
+// reaches the installer's fetch path, which writes to the device with no
+// resolver in between. The check mirrors the Online API's own (any scheme,
+// anywhere in the value) so a bypassed API cannot reach that path either.
+func TestCommandRejectsNonLinkURLValues(t *testing.T) {
 	t.Parallel()
 	for _, operationType := range []string{"launch", "launch.system", "mister.script"} {
 		for _, value := range []string{
-			"https://example.com/game.zip",
 			"smb://nas/share/game.sfc?system=SNES",
 			"FTP://example.com/game.zip",
 			"file:/media/game.sfc",
@@ -259,8 +258,97 @@ func TestCommandRejectsURLValueForAllStructuralVerbs(t *testing.T) {
 	}
 }
 
+// TestCommandAcceptsHTTPURLOnlyForLaunch pins which verb may carry a
+// ZapLink. Only launch can: launch.system takes a system ID and
+// mister.script a script name, and neither is ever a URL, so an http(s)
+// value there is a mistake or an attempt, not a link.
+func TestCommandAcceptsHTTPURLOnlyForLaunch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		operationType string
+		value         string
+		wantCalled    bool
+	}{
+		{operationType: "launch", value: "https://example.com/abc123", wantCalled: true},
+		{operationType: "launch", value: "http://192.168.1.5/abc123", wantCalled: true},
+		{operationType: "launch.system", value: "https://example.com/abc123", wantCalled: false},
+		{operationType: "mister.script", value: "https://example.com/abc123", wantCalled: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.operationType+" "+tt.value, func(t *testing.T) {
+			t.Parallel()
+			called := false
+			linux := mocks.NewMockPlatform()
+			linux.On("ID").Return("linux")
+			m := &manager{deps: Deps{Platform: linux, RunZapScript: func(
+				context.Context, tokens.Token, playlists.PlaylistController,
+				*gozapscript.ArgExprEnv, bool,
+			) error {
+				called = true
+				return nil
+			}}}
+			result := m.executeCommand(
+				context.Background(), tt.operationType, json.RawMessage(`{"value":"`+tt.value+`"}`))
+			assert.Equal(t, tt.wantCalled, called)
+			if !tt.wantCalled {
+				assert.Equal(t, "bad_params", result.ErrorCode)
+			}
+		})
+	}
+}
+
+// TestCommandPassesZapLinkWhole pins that a launch value which is a ZapLink
+// keeps its own query string instead of having it eaten as advanced
+// arguments. Splitting there would both corrupt the link and let a remote
+// operation set `system` on a URL, which is what sends launch to the
+// installer's fetch path instead of the ZapLink resolver.
+func TestCommandPassesZapLinkWhole(t *testing.T) {
+	t.Parallel()
+	const link = "https://example.com/abc123?ref=card"
+	var got tokens.Token
+	m := &manager{deps: Deps{RunZapScript: func(
+		_ context.Context, token tokens.Token, _ playlists.PlaylistController,
+		_ *gozapscript.ArgExprEnv, _ bool,
+	) error {
+		got = token
+		return nil
+	}}}
+
+	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"`+link+`"}`))
+
+	assert.Equal(t, "succeeded", result.Status)
+	require.Len(t, got.Commands, 1)
+	assert.Equal(t, []string{link}, got.Commands[0].Args)
+	assert.Empty(t, got.Commands[0].AdvArgs.Get(gozapscript.KeySystem))
+}
+
+// TestCommandBoundsResolvedZapScript pins that a remote token carries the
+// command policy. It is what keeps a ZapLink from widening the operation
+// allowlist: whatever the link resolves to, and whatever a playlist it opens
+// contains, is checked against this same bound when it runs.
+func TestCommandBoundsResolvedZapScript(t *testing.T) {
+	t.Parallel()
+	var got tokens.Token
+	m := &manager{deps: Deps{RunZapScript: func(
+		_ context.Context, token tokens.Token, _ playlists.PlaylistController,
+		_ *gozapscript.ArgExprEnv, _ bool,
+	) error {
+		got = token
+		return nil
+	}}}
+
+	m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+
+	assert.False(t, got.AllowedCommands.Unrestricted())
+	assert.True(t, got.AllowedCommands.Allows(gozapscript.ZapScriptCmdLaunch))
+	assert.True(t, got.AllowedCommands.Allows(gozapscript.ZapScriptCmdPlaylistOpen))
+	assert.False(t, got.AllowedCommands.Allows("execute"))
+	assert.False(t, got.AllowedCommands.Allows("input.keyboard"))
+}
+
 func TestBuildStructuralCommandSeparatesAdvancedArgs(t *testing.T) {
-	command, err := buildStructuralCommand("launch", "Genesis/Sonic.md?launcher=genesis-alt")
+	command, err := buildStructuralCommand("launch", "Genesis/Sonic.md?launcher=genesis-alt", false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Genesis/Sonic.md"}, command.Args)
 	assert.Equal(t, "genesis-alt", command.AdvArgs.Get(gozapscript.KeyLauncher))
@@ -272,7 +360,7 @@ func TestBuildStructuralCommandSeparatesAdvancedArgs(t *testing.T) {
 // buildStructuralCommand is generic across operation names, and cmdSystem
 // reads the same launcher adv arg to pick among a system's launchers.
 func TestBuildStructuralCommandLaunchSystemAcceptsLauncherArg(t *testing.T) {
-	command, err := buildStructuralCommand("launch.system", "SNES?launcher=SuperNT")
+	command, err := buildStructuralCommand("launch.system", "SNES?launcher=SuperNT", false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"SNES"}, command.Args)
 	assert.Equal(t, "SuperNT", command.AdvArgs.Get(gozapscript.KeyLauncher))
@@ -301,7 +389,7 @@ func FuzzBuildStructuralCommand(f *testing.F) {
 		if !validCommandValue(value) {
 			return
 		}
-		command, err := buildStructuralCommand("launch", value)
+		command, err := buildStructuralCommand("launch", value, false)
 		if err != nil {
 			return
 		}
@@ -310,4 +398,96 @@ func FuzzBuildStructuralCommand(f *testing.F) {
 		assert.NotContains(t, command.Args[0], "**")
 		assert.NotContains(t, command.Args[0], "||")
 	})
+}
+
+// TestCommandAppliesLaunchAdmission pins that a remote launch is gated on the
+// device's own launch policies. A remote operation reaches the ZapScript
+// runner directly rather than through the token queue, so the require-a-
+// profile and playtime gates the queue applies have to be asked for on this
+// path or they do not happen at all — which is how remote launches came to
+// run past a reached playtime limit.
+func TestCommandAppliesLaunchAdmission(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		admitErr      error
+		name          string
+		operationType string
+		value         string
+		wantErrorCode string
+		wantRun       bool
+	}{
+		{
+			name: "profile required blocks launch", operationType: "launch", value: "Genesis/Sonic.md",
+			admitErr: state.ErrLaunchRequiresProfile, wantErrorCode: "profile_required",
+		},
+		{
+			name: "playtime limit blocks launch", operationType: "launch", value: "Genesis/Sonic.md",
+			admitErr: playtime.ErrLimitReached, wantErrorCode: "playtime_limit_reached",
+		},
+		{
+			name: "admitted launch runs", operationType: "launch", value: "Genesis/Sonic.md",
+			admitErr: nil, wantRun: true,
+		},
+		{
+			name: "launch.system is gated too", operationType: "launch.system", value: "SNES",
+			admitErr: playtime.ErrLimitReached, wantErrorCode: "playtime_limit_reached",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ran := false
+			m := &manager{deps: Deps{
+				LaunchAdmission: func() error { return tt.admitErr },
+				RunZapScript: func(
+					context.Context, tokens.Token, playlists.PlaylistController,
+					*gozapscript.ArgExprEnv, bool,
+				) error {
+					ran = true
+					return nil
+				},
+			}}
+
+			result := m.executeCommand(
+				context.Background(), tt.operationType, json.RawMessage(`{"value":"`+tt.value+`"}`))
+
+			assert.Equal(t, tt.wantRun, ran)
+			if tt.wantRun {
+				assert.Equal(t, "succeeded", result.Status)
+				return
+			}
+			assert.Equal(t, "failed", result.Status)
+			assert.Equal(t, tt.wantErrorCode, result.ErrorCode)
+		})
+	}
+}
+
+// TestCommandLaunchAdmissionSkipsNonLaunchVerbs pins that the launch gates
+// apply to launches only. Stopping media, or running a MiSTer script, is not
+// starting media and must not be refused because a playtime limit is spent.
+func TestCommandLaunchAdmissionSkipsNonLaunchVerbs(t *testing.T) {
+	t.Parallel()
+
+	mister := mocks.NewMockPlatform()
+	mister.On("ID").Return("mister")
+	ran := false
+	m := &manager{deps: Deps{
+		Platform:        mister,
+		LaunchAdmission: func() error { return playtime.ErrLimitReached },
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			ran = true
+			return nil
+		},
+	}}
+
+	result := m.executeCommand(
+		context.Background(), "mister.script", json.RawMessage(`{"value":"update_all.sh"}`))
+
+	assert.True(t, ran)
+	assert.Equal(t, "succeeded", result.Status)
 }

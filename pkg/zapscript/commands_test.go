@@ -931,17 +931,77 @@ func TestRunCommandSkippedWhenLogRedactsSensitiveCommand(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
-// TestRunCommandSkipsZapLinkForRemoteSource pins that a remote-sourced
-// command never reaches ZapLink resolution: the command's own value is
-// already trusted structural input built server-side, so there is nothing
-// for a link to legitimately resolve, and letting one substitute in
-// server-fetched ZapScript would bypass the remote operation allowlist. The
-// mock has no GetZapLinkHost expectation registered, so a call to it fails
-// the test rather than silently passing.
-func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
+// TestRunCommandBoundedTokenRefusesCommandOutsidePolicy pins the bound a
+// token carries. A remote operation may launch a ZapLink, so the link's body
+// decides which command actually runs — the bound is what keeps that body
+// inside the same capability the operation had. Without it a link would hand
+// a remote caller the whole ZapScript language.
+func TestRunCommandBoundedTokenRefusesCommandOutsidePolicy(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{
+			Source:          tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
+		zapscript.Command{
+			Name: zapscript.ZapScriptCmdStop,
+		},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrCommandNotPermitted)
+}
+
+// TestRunCommandUnboundedTokenRunsAnyCommand pins that the bound is opt-in:
+// a reader scan, the run API and a hook carry no policy and are unaffected.
+func TestRunCommandUnboundedTokenRunsAnyCommand(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{},
+		zapscript.Command{
+			Name: "zzz-test-nonexistent-command",
+		},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnknownCommand)
+	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
+}
+
+// TestRunCommandBoundedTokenRefusesUnresolvedURL pins that a bounded token
+// may carry a URL only as a ZapLink. One the resolver did not claim would go
+// on as a raw launch path, where a scheme launcher can match it and stop
+// whatever is playing before the path is even checked.
+func TestRunCommandBoundedTokenRefusesUnresolvedURL(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://not-a-zaplink.example.com").
+		Return(false, true, nil)
 	db := &database.Database{UserDB: mockUserDB}
 	mockPlatform := mocks.NewMockPlatform()
 
@@ -950,10 +1010,13 @@ func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
 		mockPlatform,
 		&config.Instance{},
 		playlists.PlaylistController{},
-		tokens.Token{Source: tokens.SourceRemote},
+		tokens.Token{
+			Source:          tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
 		zapscript.Command{
-			Name: "zzz-test-nonexistent-command",
-			Args: []string{"https://zaplink.example.com/resolves-through-cache"},
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{"https://not-a-zaplink.example.com/game.zip"},
 		},
 		1,
 		0,
@@ -963,8 +1026,7 @@ func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
-	mockUserDB.AssertNotCalled(t, "GetZapLinkHost", mock.Anything)
+	require.ErrorIs(t, err, ErrUnresolvedZapLink)
 }
 
 // TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
@@ -1149,4 +1211,73 @@ func TestRunCommandOwnedDeckZapLinkPlaysAsServed(t *testing.T) {
 	all, err := db.UserDB.ListDecks()
 	require.NoError(t, err)
 	assert.Empty(t, all, "no read-only copy of the user's own deck is kept")
+}
+
+// TestRunCommandZapLinkCannotWidenTokenPolicy is the point of the bound: a
+// remote operation may launch a ZapLink, so the link's host chooses the
+// command that actually runs. Without the bound travelling on the token, one
+// hop would turn a three-verb remote allowlist into the whole ZapScript
+// language, with the script coming from whatever host the caller named.
+func TestRunCommandZapLinkCannotWidenTokenPolicy(t *testing.T) {
+	t.Parallel()
+
+	const linkURL = "https://zaplink.example.com/resolves-to-execute"
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	mockUserDB.On("GetZapLinkCache", linkURL).Return("**execute:rm -rf /", nil)
+	mockUserDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	db := &database.Database{UserDB: mockUserDB}
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{
+			Source:          tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
+		zapscript.Command{Name: zapscript.ZapScriptCmdLaunch, Args: []string{linkURL}},
+		1,
+		0,
+		db,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.ErrorIs(t, err, ErrCommandNotPermitted)
+}
+
+// TestRunCommandZapLinkInsidePolicyIsNotRefused is the other half: a link
+// that resolves to a command the token already had is not blocked by the
+// bound. It still fails for its own reasons — there is no such media here —
+// but never with ErrCommandNotPermitted.
+func TestRunCommandZapLinkInsidePolicyIsNotRefused(t *testing.T) {
+	t.Parallel()
+
+	const linkURL = "https://zaplink.example.com/resolves-to-launch"
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	mockUserDB.On("GetZapLinkCache", linkURL).Return("**launch:/games/nothing-here.rom", nil)
+	mockUserDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	db := &database.Database{UserDB: mockUserDB}
+
+	_, err := RunCommand(
+		t.Context(),
+		mocks.NewMockPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{
+			Source:          tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
+		zapscript.Command{Name: zapscript.ZapScriptCmdLaunch, Args: []string{linkURL}},
+		1,
+		0,
+		db,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
 }

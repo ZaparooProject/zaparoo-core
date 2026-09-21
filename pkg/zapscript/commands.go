@@ -80,6 +80,13 @@ var (
 	// ErrExecuteNotAllowed is returned when a command line is denied by the
 	// allow_execute config.
 	ErrExecuteNotAllowed = errors.New("execute not allowed")
+	// ErrCommandNotPermitted is returned for a command outside the bound its
+	// token carries. Unlike ErrCommandBlocked it is not a configuration
+	// choice: it is the channel the token came from refusing to widen.
+	ErrCommandNotPermitted = errors.New("command not permitted for this token")
+	// ErrUnresolvedZapLink is returned when a bounded token carries a URL
+	// that did not resolve as a ZapLink.
+	ErrUnresolvedZapLink = errors.New("url did not resolve as a zap link")
 	errAmbiguousPath     = errors.New("ambiguous case-insensitive path")
 )
 
@@ -488,19 +495,9 @@ func RunCommand(
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
 
-	// Remote-sourced commands are already fully-formed, pre-validated
-	// structural commands built server-side (see pkg/service/remote). There
-	// is nothing for a ZapLink to legitimately resolve here, and letting one
-	// substitute in server-fetched ZapScript would bypass the remote
-	// operation allowlist entirely.
-	linkValue := ""
-	linkOwned := false
-	if token.Source != tokens.SourceRemote {
-		var linkErr error
-		linkValue, linkOwned, linkErr = checkZapLink(cfg, pl, db, cmd)
-		if linkErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
-		}
+	linkValue, linkOwned, linkErr := checkZapLink(cfg, pl, db, cmd)
+	if linkErr != nil {
+		return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
 	}
 	if linkValue != "" {
 		// The link body is fetched from a remote server, so it is bounded on
@@ -535,6 +532,13 @@ func RunCommand(
 		// it: whatever made this token untrusted chose to run the link, and
 		// owning the script does not make that choice the user's.
 		unsafe = token.Unsafe || !linkOwned
+	} else if !token.AllowedCommands.Unrestricted() && hasHTTPURLArg(cmd) {
+		// A bounded token may carry a URL only as a ZapLink. One that did not
+		// resolve would go on as a raw path, where a scheme launcher can match
+		// it and stop whatever is playing before the path is even checked. The
+		// bound names which commands may run, so an indirection that did not
+		// happen must not quietly become a launch of its own.
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrUnresolvedZapLink, cmd.Args[0])
 	}
 
 	for i, arg := range cmd.Args {
@@ -588,11 +592,12 @@ func RunCommand(
 		// A ZapLink resolves one card command into a whole script, so the
 		// count on the card understates what this token runs. Commands that
 		// insist on running alone have to see the expanded total.
-		TotalCommands: totalCmds + len(newCmds),
-		CurrentIndex:  currentIndex,
-		Unsafe:        unsafe,
-		Database:      db,
-		ExprEnv:       exprEnv,
+		TotalCommands:   totalCmds + len(newCmds),
+		CurrentIndex:    currentIndex,
+		Unsafe:          unsafe,
+		AllowedCommands: token.AllowedCommands,
+		Database:        db,
+		ExprEnv:         exprEnv,
 	}
 
 	if opts.LauncherManager != nil {
@@ -606,6 +611,14 @@ func RunCommand(
 
 	if cfg.IsCommandBlocked(cmd.Name) {
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandBlocked, cmd.Name)
+	}
+
+	// The token's own bound, checked after ZapLink resolution so it governs
+	// what a link actually returned rather than what was asked for. Playlist
+	// items and deck items inherit the bound with the token, so this one check
+	// covers every level an indirection can reach.
+	if !token.AllowedCommands.Allows(cmd.Name) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
 	}
 
 	// A ZapLink may replace a deferred launch with a different command kind.

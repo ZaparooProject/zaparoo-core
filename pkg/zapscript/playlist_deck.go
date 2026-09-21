@@ -113,6 +113,7 @@ func loadDeckPlaylist(
 	// item of somebody else's playlist could name a deck ID and have the
 	// user's own input and program commands run for it.
 	pls.Unsafe = !deck.Owned || env.Unsafe
+	pls.AllowedCommands = env.AllowedCommands
 	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 	if slotErr != nil {
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
