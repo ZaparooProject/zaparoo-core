@@ -340,11 +340,18 @@ func TestUploadLog_SaysTheLogCouldNotBeRead(t *testing.T) {
 	pages := tview.NewPages()
 	runner.Start(pages)
 
-	// Called from the test goroutine, not inside QueueUpdateDraw: uploadLog
-	// forces a draw of its own and would deadlock against a queued update.
-	outcome := uploadLog(pl, pages, runner.App())
+	// Run on the application's own loop, which is where the Upload button's
+	// handler runs it. uploadLog forces a draw, and tview forbids that from any
+	// other goroutine — doing it from the test goroutine is a data race the
+	// race detector catches.
+	var outcome string
+	var dialogLeftUp bool
+	runner.QueueUpdateDraw(func() {
+		outcome = uploadLog(pl, pages, runner.App())
+		dialogLeftUp = pages.HasPage("temp_upload")
+	})
 
 	assert.Equal(t, "Unable to read log file.", outcome)
-	assert.False(t, pages.HasPage("temp_upload"),
+	assert.False(t, dialogLeftUp,
 		"the loading dialog has to come down whatever the upload did")
 }
