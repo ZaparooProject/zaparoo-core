@@ -23,7 +23,9 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -34,7 +36,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1902,4 +1906,113 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 		}
 		assert.True(t, found, "EarthBound should be in pre-filter candidates")
 	})
+}
+
+// TestResolveTitle_CachedResolutionKeepsItsConfidence resolves each title cold,
+// from the slug resolution cache, and from the cache of a reopened database. A
+// cache hit must report the media, strategy and confidence the first resolution
+// scored, so a weak match is never reported as a certain one.
+func TestResolveTitle_CachedResolutionKeepsItsConfidence(t *testing.T) {
+	ctx := context.Background()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	mediaDB, err := mediadb.OpenMediaDB(ctx, mockPlatform)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mediaDB.Close() })
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	metroid := filepath.ToSlash(filepath.Join("roms", "NES", "Metroid.nes"))
+	contra := filepath.ToSlash(filepath.Join("roms", "NES", "Contra.nes"))
+	scantest.IndexMediaPaths(t, mediaDB, nes.ID, metroid, contra)
+	rows, err := mediaDB.GetMediaBySystemID(nes.ID)
+	require.NoError(t, err)
+	var metroidID int64
+	for i := range rows {
+		if rows[i].Path == metroid {
+			metroidID = rows[i].DBID
+		}
+	}
+	require.NotZero(t, metroidID)
+	// Five of the six requested tags match and region conflicts, which scores
+	// the only candidate 5/6 - 0.2: above the launch minimum, below acceptable.
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, metroidID, nil, []database.MediaTagRef{
+		{Type: "developer", Tag: "a"},
+		{Type: "publisher", Tag: "b"},
+		{Type: "year", Tag: "1986"},
+		{Type: "video", Tag: "ntsc"},
+		{Type: "edition", Tag: "x"},
+		{Type: "region", Tag: "us"},
+	}))
+
+	tests := []struct {
+		name     string
+		gameName string
+		slug     string
+		weak     bool
+	}{
+		{
+			name:     "weak match",
+			gameName: "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:x) (region:eu)",
+			slug:     "metroid",
+			weak:     true,
+		},
+		{name: "certain match", gameName: "Contra", slug: "contra"},
+	}
+
+	resolve := func(t *testing.T, db *mediadb.MediaDB, gameName string) *titles.ResolveResult {
+		t.Helper()
+		result, resolveErr := titles.ResolveTitle(ctx, &titles.ResolveParams{
+			MediaDB: db, Cfg: cfg, SystemID: nes.ID, GameName: gameName, MediaType: nes.GetMediaType(),
+		})
+		require.NoError(t, resolveErr)
+		require.NotNil(t, result)
+		return result
+	}
+	assertSame := func(t *testing.T, want, got *titles.ResolveResult) {
+		t.Helper()
+		assert.Equal(t, want.Result.MediaID, got.Result.MediaID)
+		assert.Equal(t, want.Strategy, got.Strategy)
+		assert.InDelta(t, want.Confidence, got.Confidence, 1e-9)
+	}
+
+	cold := make([]*titles.ResolveResult, len(tests))
+	for i, tt := range tests {
+		cold[i] = resolve(t, mediaDB, tt.gameName)
+		if tt.weak {
+			require.Less(t, cold[i].Confidence, titles.ConfidenceAcceptable)
+			require.GreaterOrEqual(t, cold[i].Confidence, titles.ConfidenceMinimum)
+		} else {
+			require.GreaterOrEqual(t, cold[i].Confidence, titles.ConfidenceAcceptable)
+		}
+		// The cache write runs in the background, so wait for it to land.
+		filters, _ := titles.ExtractCanonicalTagsFromParens(tt.gameName)
+		require.Eventually(t, func() bool {
+			_, hit := mediaDB.GetCachedSlugResolution(ctx, nes.ID, tt.slug, filters)
+			return hit
+		}, 5*time.Second, 10*time.Millisecond, "the resolution is cached")
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name+" from cache", func(t *testing.T) {
+			assertSame(t, cold[i], resolve(t, mediaDB, tt.gameName))
+		})
+	}
+
+	require.NoError(t, mediaDB.Close())
+	reopened, err := mediadb.OpenMediaDB(ctx, mockPlatform)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	for i, tt := range tests {
+		t.Run(tt.name+" after reopen", func(t *testing.T) {
+			filters, _ := titles.ExtractCanonicalTagsFromParens(tt.gameName)
+			_, hit := reopened.GetCachedSlugResolution(ctx, nes.ID, tt.slug, filters)
+			require.True(t, hit, "the cached resolution survives a reopen")
+			assertSame(t, cold[i], resolve(t, reopened, tt.gameName))
+		})
+	}
 }

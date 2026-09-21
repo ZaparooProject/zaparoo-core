@@ -226,7 +226,7 @@ Resolution tries strategies in order, each more lenient than the last, until som
 7. Progressive trim
 ```
 
-**Cache** — keyed by SystemID + Slug + Tags. Returns immediately on hit.
+**Cache** — keyed by SystemID + Slug + Tags. Returns immediately on hit, with the strategy and confidence the match was first resolved with.
 
 **Exact match with tags** — direct slug lookup with tags as filters. Early exit if confidence >= 0.95.
 

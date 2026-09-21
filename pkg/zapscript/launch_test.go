@@ -1119,14 +1119,14 @@ launcher = "snes-retroarch"
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "SNES", "supermarioworld", mock.Anything).
-		Return(int64(0), "", false)
+		Return(database.SlugResolution{}, false)
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, "SNES", "supermarioworld", mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{Path: "/games/snes/Super Mario World.sfc", SystemID: "SNES", Name: "Super Mario World"},
 		}, nil)
 	mockMediaDB.On("SetCachedSlugResolution",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 
 	env := platforms.CmdEnv{

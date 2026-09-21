@@ -78,11 +78,11 @@ func TestCmdTitlePassesSlotToLaunchOptions(t *testing.T) {
 		}),
 	}
 	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil)).
-		Return(int64(0), "", false)
+		Return(database.SlugResolution{}, false)
 	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil)).
 		Return([]database.SearchResultWithCursor{{SystemID: "Audio", Name: "F-Zero - Big Blue", Path: mediaPath}}, nil)
 	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil),
-		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).Return(nil).Maybe()
+		mock.AnythingOfType("database.SlugResolution")).Return(nil).Maybe()
 	mockPlatform.On("LaunchMedia", mock.Anything, mediaPath, mock.Anything, mock.Anything, mock.MatchedBy(
 		func(opts *platforms.LaunchOptions) bool {
 			return opts != nil && opts.Slot == mediaslot.Background
@@ -187,7 +187,7 @@ func TestCmdTitle(t *testing.T) {
 				// Mock cache miss
 				mockMediaDB.On("GetCachedSlugResolution",
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
-					Return(int64(0), "", false)
+					Return(database.SlugResolution{}, false)
 
 				expectedResults := []database.SearchResultWithCursor{
 					{
@@ -201,7 +201,7 @@ func TestCmdTitle(t *testing.T) {
 					Return(expectedResults, nil)
 				mockMediaDB.On("SetCachedSlugResolution",
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil),
-					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+					mock.AnythingOfType("database.SlugResolution")).
 					Return(nil).Maybe()
 				mockPlatform.On(
 					"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -210,7 +210,7 @@ func TestCmdTitle(t *testing.T) {
 				// shouldError but validation passes - set up mocks to return no results
 				mockMediaDB.On("GetCachedSlugResolution",
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
-					Return(int64(0), "", false)
+					Return(database.SlugResolution{}, false)
 				mockMediaDB.On("SearchMediaBySlug",
 					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
 					Return([]database.SearchResultWithCursor{}, nil).Maybe()
@@ -368,7 +368,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 	// Mock cache miss
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, expectedSystem, expectedSlug, expectedTags).
-		Return(int64(0), "", false)
+		Return(database.SlugResolution{}, false)
 
 	expectedResults := []database.SearchResultWithCursor{
 		{
@@ -381,7 +381,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 		Return(expectedResults, nil)
 	mockMediaDB.On("SetCachedSlugResolution",
 		mock.Anything, expectedSystem, expectedSlug, expectedTags,
-		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+		mock.AnythingOfType("database.SlugResolution")).
 		Return(nil).Maybe()
 	mockPlatform.On(
 		"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -525,7 +525,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			// Mock cache miss
 			mockMediaDB.On("GetCachedSlugResolution",
 				mock.Anything, tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
-				Return(int64(0), "", false)
+				Return(database.SlugResolution{}, false)
 
 			mockMediaDB.On("SearchMediaBySlug",
 				mock.Anything, tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
@@ -568,7 +568,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			if !tt.shouldError {
 				mockMediaDB.On("SetCachedSlugResolution",
 					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []zapscript.TagFilter(nil),
-					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+					mock.AnythingOfType("database.SlugResolution")).
 					Return(nil).Maybe()
 				mockPlatform.On(
 					"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -666,7 +666,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			// Mock cache miss
 			mockMediaDB.On("GetCachedSlugResolution",
 				mock.Anything, tt.systemID, tt.slug, []zapscript.TagFilter(nil)).
-				Return(int64(0), "", false)
+				Return(database.SlugResolution{}, false)
 
 			// Strategy 1 (exact match) fails
 			mockMediaDB.On("SearchMediaBySlug",
@@ -718,7 +718,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 
 			mockMediaDB.On("SetCachedSlugResolution",
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []zapscript.TagFilter(nil),
-				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+				mock.AnythingOfType("database.SlugResolution")).
 				Return(nil).Maybe()
 			mockPlatform.On(
 				"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1536,7 +1536,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		// Mock cache hit - should return cached values
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, systemID, slug, []zapscript.TagFilter(nil)).
-			Return(int64(123), "strategy_exact_match", true)
+			Return(database.SlugResolution{
+				MediaDBID: 123, Strategy: "strategy_exact_match", Confidence: 0.65,
+			}, true)
 
 		// When cache hits, GetMediaByDBID is called to fetch full media details
 		mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(123)).
@@ -1553,7 +1555,8 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result.MediaChanged)
 		assert.Equal(t, "strategy_exact_match", result.Strategy)
-		assert.InDelta(t, 1.0, result.Confidence, 0.001)
+		// The cached match scored below acceptable, and a cache hit must say so.
+		assert.InDelta(t, 0.65, result.Confidence, 0.001)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 
@@ -1590,7 +1593,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		// Mock cache miss
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, systemID, slug, []zapscript.TagFilter(nil)).
-			Return(int64(0), "", false)
+			Return(database.SlugResolution{}, false)
 
 		expectedResults := []database.SearchResultWithCursor{
 			{
@@ -1607,7 +1610,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		// Should update cache after successful search
 		waitCache := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, systemID, slug, []zapscript.TagFilter(nil),
-			int64(123), mock.AnythingOfType("string")). // strategy string
+			helpers.SlugResolutionMatcher(123)).
 			Return(nil).Once())
 
 		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
@@ -1660,7 +1663,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		// Cache miss for USA version
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, systemID, slug, tags1).
-			Return(int64(0), "", false).Once()
+			Return(database.SlugResolution{}, false).Once()
 
 		mockMediaDB.On("SearchMediaBySlug",
 			mock.Anything, systemID, slug, tags1).
@@ -1669,7 +1672,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			}, nil).Once()
 
 		waitCache1 := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
-			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
+			mock.Anything, systemID, slug, tags1, helpers.SlugResolutionMatcher(100)).
 			Return(nil).Once())
 
 		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(100)).
@@ -1699,7 +1702,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, systemID, slug, tags2).
-			Return(int64(0), "", false).Once()
+			Return(database.SlugResolution{}, false).Once()
 
 		mockMediaDB.On("SearchMediaBySlug",
 			mock.Anything, systemID, slug, tags2).
@@ -1708,7 +1711,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			}, nil).Once()
 
 		waitCache2 := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
-			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
+			mock.Anything, systemID, slug, tags2, helpers.SlugResolutionMatcher(200)).
 			Return(nil).Once())
 
 		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(200)).
@@ -1754,7 +1757,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
-			Return(int64(0), "", false)
+			Return(database.SlugResolution{}, false)
 
 		mockMediaDB.On("SearchMediaBySlug",
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
@@ -1791,7 +1794,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
-			Return(int64(0), "", false)
+			Return(database.SlugResolution{}, false)
 
 		expectedResults := []database.SearchResultWithCursor{
 			{MediaID: 123, SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
@@ -1803,7 +1806,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		// Cache will be set before platform launch attempt
 		mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil),
-			int64(123), mock.AnythingOfType("string")).
+			helpers.SlugResolutionMatcher(123)).
 			Return(nil).Maybe()
 
 		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
@@ -1870,7 +1873,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, "SNES", "nonexistentgame12345", []zapscript.TagFilter(nil)).
-			Return(int64(0), "", false)
+			Return(database.SlugResolution{}, false)
 
 		// All search strategies return empty
 		mockMediaDB.On("SearchMediaBySlug",
@@ -1943,7 +1946,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil)).
-			Return(int64(0), "", false)
+			Return(database.SlugResolution{}, false)
 
 		mockMediaDB.On("SearchMediaBySlug",
 			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil)).
@@ -1951,7 +1954,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 
 		mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil),
-			mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+			mock.AnythingOfType("database.SlugResolution")).
 			Return(nil).Maybe()
 
 		mockPlatform.On(
@@ -1985,7 +1988,7 @@ func TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder(t *testing.T) {
 	cuePath := discDir + "B_064.cue"
 
 	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil)).
-		Return(int64(0), "", false)
+		Return(database.SlugResolution{}, false)
 	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil)).
 		Return([]database.SearchResultWithCursor{{
 			SystemID: "PSX", Name: "B_064", Path: trackPath, MediaID: 7,
@@ -1997,7 +2000,7 @@ func TestCmdTitleLaunchesContainerCueForTruncatedDiscFolder(t *testing.T) {
 			SystemID: "PSX", Name: "B_064", Path: cuePath, MediaID: 99,
 		}, nil)
 	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "PSX", mock.Anything, []zapscript.TagFilter(nil),
-		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).Return(nil).Maybe()
+		mock.AnythingOfType("database.SlugResolution")).Return(nil).Maybe()
 	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, mock.AnythingOfType("int64")).
 		Return([]database.MediaProperty{}, nil).Maybe()
 	mockPlatform.On("LaunchMedia", mock.Anything, cuePath, mock.Anything, mock.Anything, mock.Anything).

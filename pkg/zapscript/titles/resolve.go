@@ -59,8 +59,8 @@ type ResolveParams struct {
 	AdditionalTags []zapscript.TagFilter
 	Launchers      []platforms.Launcher
 	// SkipCachedResult resolves through the database even when the slug
-	// resolution cache holds an answer. A cached answer reports confidence
-	// 1.0 whatever it scored, so a caller that gates on confidence sets this.
+	// resolution cache holds an answer, for a caller that wants the match
+	// selected afresh rather than the one an earlier resolution settled on.
 	SkipCachedResult bool
 }
 
@@ -76,13 +76,12 @@ func cacheSlugResolution(
 	systemID string,
 	slug string,
 	tagFilters []zapscript.TagFilter,
-	mediaID int64,
-	strategy string,
+	resolution database.SlugResolution,
 ) {
 	go func() {
 		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), slugResolutionCacheWriteTimeout)
 		defer cancel()
-		cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy)
+		cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, resolution)
 		if cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
 		}
@@ -244,15 +243,14 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 
 	// Check slug resolution cache first
 	if !params.SkipCachedResult {
-		cachedMediaID, cachedStrategy, cacheHit := mediadb.GetCachedSlugResolution(
-			ctx, systemID, slug, tagFilters)
+		cached, cacheHit := mediadb.GetCachedSlugResolution(ctx, systemID, slug, tagFilters)
 		if cacheHit {
-			result, cacheErr := mediadb.GetMediaByDBID(ctx, cachedMediaID)
+			result, cacheErr := mediadb.GetMediaByDBID(ctx, cached.MediaDBID)
 			if cacheErr == nil {
 				return &ResolveResult{
 					Result:     result,
-					Strategy:   cachedStrategy,
-					Confidence: 1.0,
+					Strategy:   cached.Strategy,
+					Confidence: cached.Confidence,
 				}, nil
 			}
 			log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
@@ -281,7 +279,11 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		if confidence >= ConfidenceHigh {
 			selectedResult = promoteToContainerLaunchMedia(
 				ctx, mediadb, systemID, &selectedResult, tagFilters)
-			cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, selectedResult.MediaID, StrategyExactMatch)
+			cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, database.SlugResolution{
+				MediaDBID:  selectedResult.MediaID,
+				Strategy:   StrategyExactMatch,
+				Confidence: confidence,
+			})
 			return &ResolveResult{
 				Result:     selectedResult,
 				Strategy:   StrategyExactMatch,
@@ -447,7 +449,11 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 	// Cache the successful resolution without letting cache bookkeeping block
 	// launch-critical title resolution. Promotion runs first so the cached ID is
 	// the container's launch target, not the sibling the search happened to pick.
-	cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, bestCandidate.result.MediaID, bestCandidate.strategy)
+	cacheSlugResolution(ctx, mediadb, systemID, slug, tagFilters, database.SlugResolution{
+		MediaDBID:  bestCandidate.result.MediaID,
+		Strategy:   bestCandidate.strategy,
+		Confidence: bestCandidate.confidence,
+	})
 
 	return &ResolveResult{
 		Result:     bestCandidate.result,

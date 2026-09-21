@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -78,45 +79,59 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []zapscript.TagFilte
 }
 
 // GetCachedSlugResolution retrieves a cached slug resolution result.
-// Returns the MediaDBID, strategy name, and true if found; otherwise returns 0, "", false.
+// Returns the resolution and true if found; otherwise the zero value and false.
 func (db *MediaDB) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
-) (mediaDBID int64, strategy string, found bool) {
+) (database.SlugResolution, bool) {
 	if db.sql.Load() == nil {
-		return 0, "", false
+		return database.SlugResolution{}, false
 	}
 
 	cacheKey, err := generateSlugCacheKey(systemID, slug, tagFilters)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to generate slug cache key for lookup")
-		return 0, "", false
+		return database.SlugResolution{}, false
 	}
 
+	var resolution database.SlugResolution
 	err = db.sql.Load().QueryRowContext(ctx,
-		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
-		cacheKey).Scan(&mediaDBID, &strategy)
+		"SELECT MediaDBID, Strategy, Confidence FROM SlugResolutionCache WHERE CacheKey = ?",
+		cacheKey).Scan(&resolution.MediaDBID, &resolution.Strategy, &resolution.Confidence)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", false
+		return database.SlugResolution{}, false
 	}
 	if err != nil {
 		log.Warn().Err(err).Str("cacheKey", cacheKey).Msg("failed to get cached slug resolution")
-		return 0, "", false
+		return database.SlugResolution{}, false
 	}
 
 	log.Debug().
 		Str("system_id", systemID).
 		Str("slug", slug).
-		Int64("media_dbid", mediaDBID).
-		Str("strategy", strategy).
+		Int64("media_dbid", resolution.MediaDBID).
+		Str("strategy", resolution.Strategy).
+		Float64("confidence", resolution.Confidence).
 		Msg("slug resolution cache hit")
 
-	return mediaDBID, strategy, true
+	return resolution, true
 }
 
+// ErrUnscoredSlugResolution is returned when a resolution is offered to the
+// cache without a usable confidence score.
+var ErrUnscoredSlugResolution = errors.New("slug resolution has no usable confidence score")
+
 // SetCachedSlugResolution stores a successful slug resolution in the cache.
+// A resolution whose confidence is not a score between 0 and 1 is refused:
+// the point of caching the score is that a hit reports what the match
+// actually made, and a zero left behind by a caller that filled in every
+// other field would be served as a confident-looking 0.00.
 func (db *MediaDB) SetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, resolution database.SlugResolution,
 ) error {
+	if math.IsNaN(resolution.Confidence) || resolution.Confidence <= 0 || resolution.Confidence > 1 {
+		return fmt.Errorf("%w: %v", ErrUnscoredSlugResolution, resolution.Confidence)
+	}
+
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
@@ -133,9 +148,10 @@ func (db *MediaDB) SetCachedSlugResolution(
 
 	_, err = db.sql.Load().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
-		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, cacheKey, systemID, slug, string(tagFiltersJSON), mediaDBID, strategy, time.Now().Unix())
+		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, Confidence, LastUpdated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, cacheKey, systemID, slug, string(tagFiltersJSON),
+		resolution.MediaDBID, resolution.Strategy, resolution.Confidence, time.Now().Unix())
 	if err != nil {
 		return fmt.Errorf("failed to cache slug resolution: %w", err)
 	}
@@ -143,8 +159,9 @@ func (db *MediaDB) SetCachedSlugResolution(
 	log.Debug().
 		Str("system_id", systemID).
 		Str("slug", slug).
-		Int64("media_dbid", mediaDBID).
-		Str("strategy", strategy).
+		Int64("media_dbid", resolution.MediaDBID).
+		Str("strategy", resolution.Strategy).
+		Float64("confidence", resolution.Confidence).
 		Msg("cached slug resolution")
 
 	return nil

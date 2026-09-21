@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -230,17 +231,46 @@ func TestSlugCache_SetAndGet_Integration(t *testing.T) {
 	// Test basic set and get
 	systemID := nesSystem.ID
 	slug := "supermariobros"
-	mediaDBID := insertedMedia.DBID
-	strategy := "exact_match"
+	// A score below 1.0 proves the stored confidence comes back, not a constant.
+	want := database.SlugResolution{MediaDBID: insertedMedia.DBID, Strategy: "exact_match", Confidence: 0.633}
 
-	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil, mediaDBID, strategy)
+	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil, want)
 	require.NoError(t, err)
 
 	// Verify we can retrieve it
-	gotMediaDBID, gotStrategy, found := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
+	got, found := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
 	assert.True(t, found, "cache entry should be found")
-	assert.Equal(t, mediaDBID, gotMediaDBID)
-	assert.Equal(t, strategy, gotStrategy)
+	assert.Equal(t, want, got)
+}
+
+// TestSlugCache_RefusesUnscoredResolution_Integration covers a caller that fills in the
+// media and strategy but leaves the score behind. The row must not be written:
+// a stored zero is indistinguishable from a real score on the way back out, and
+// would be reported as a 0.00 confidence match on every later resolution.
+func TestSlugCache_RefusesUnscoredResolution_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	mediaDBID := createTestMedia(t, mediaDB, "NES", "metroid", "Metroid", "/roms/NES/Metroid.nes")
+
+	for _, confidence := range []float64{0, -0.5, 1.5, math.NaN()} {
+		err := mediaDB.SetCachedSlugResolution(ctx, "NES", "metroid", nil, database.SlugResolution{
+			MediaDBID: mediaDBID, Strategy: "exact_match", Confidence: confidence,
+		})
+		require.ErrorIs(t, err, ErrUnscoredSlugResolution, "confidence %v must be refused", confidence)
+
+		_, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "metroid", nil)
+		assert.False(t, found, "nothing is cached for confidence %v", confidence)
+	}
+
+	require.NoError(t, mediaDB.SetCachedSlugResolution(ctx, "NES", "metroid", nil, database.SlugResolution{
+		MediaDBID: mediaDBID, Strategy: "exact_match", Confidence: 0.633,
+	}))
+	got, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "metroid", nil)
+	require.True(t, found)
+	assert.InDelta(t, 0.633, got.Confidence, 1e-9)
 }
 
 // TestSlugCache_CacheMiss verifies cache miss behavior
@@ -252,10 +282,9 @@ func TestSlugCache_CacheMiss(t *testing.T) {
 	ctx := context.Background()
 
 	// Try to get non-existent cache entry
-	mediaDBID, strategy, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "nonexistent", nil)
+	got, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "nonexistent", nil)
 	assert.False(t, found, "cache entry should not be found")
-	assert.Equal(t, int64(0), mediaDBID)
-	assert.Empty(t, strategy)
+	assert.Equal(t, database.SlugResolution{}, got)
 }
 
 // TestSlugCache_MultipleEntries verifies multiple cache entries can coexist
@@ -274,28 +303,32 @@ func TestSlugCache_MultipleEntries_Integration(t *testing.T) {
 
 	// Set multiple entries
 	entries := []struct {
-		systemID  string
-		slug      string
-		strategy  string
-		mediaDBID int64
+		systemID   string
+		slug       string
+		strategy   string
+		mediaDBID  int64
+		confidence float64
 	}{
-		{systemID: "NES", slug: "mario", mediaDBID: nesMarDBID, strategy: "exact"},
-		{systemID: "NES", slug: "zelda", mediaDBID: nesZeldaDBID, strategy: "exact"},
-		{systemID: "SNES", slug: "mario", mediaDBID: snesMarDBID, strategy: "exact"},
-		{systemID: "Genesis", slug: "sonic", mediaDBID: genesisSonicDBID, strategy: "fuzzy"},
+		{systemID: "NES", slug: "mario", mediaDBID: nesMarDBID, strategy: "exact", confidence: 1.0},
+		{systemID: "NES", slug: "zelda", mediaDBID: nesZeldaDBID, strategy: "exact", confidence: 0.95},
+		{systemID: "SNES", slug: "mario", mediaDBID: snesMarDBID, strategy: "exact", confidence: 0.8},
+		{systemID: "Genesis", slug: "sonic", mediaDBID: genesisSonicDBID, strategy: "fuzzy", confidence: 0.61},
 	}
 
 	for _, entry := range entries {
-		err := mediaDB.SetCachedSlugResolution(ctx, entry.systemID, entry.slug, nil, entry.mediaDBID, entry.strategy)
+		err := mediaDB.SetCachedSlugResolution(ctx, entry.systemID, entry.slug, nil, database.SlugResolution{
+			MediaDBID: entry.mediaDBID, Strategy: entry.strategy, Confidence: entry.confidence,
+		})
 		require.NoError(t, err)
 	}
 
 	// Verify all entries can be retrieved
 	for _, entry := range entries {
-		mediaDBID, strategy, found := mediaDB.GetCachedSlugResolution(ctx, entry.systemID, entry.slug, nil)
+		got, found := mediaDB.GetCachedSlugResolution(ctx, entry.systemID, entry.slug, nil)
 		assert.True(t, found, "cache entry should be found for %s/%s", entry.systemID, entry.slug)
-		assert.Equal(t, entry.mediaDBID, mediaDBID)
-		assert.Equal(t, entry.strategy, strategy)
+		assert.Equal(t, database.SlugResolution{
+			MediaDBID: entry.mediaDBID, Strategy: entry.strategy, Confidence: entry.confidence,
+		}, got)
 	}
 }
 
@@ -318,12 +351,14 @@ func TestSlugCache_WithTagFilters_Integration(t *testing.T) {
 		t, mediaDB, systemID, slug+"_multi", "Super Mario Bros (USA) (Platform)", "/roms/mario_multi.nes")
 
 	// Set entry with no tags
-	err := mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil, media1DBID, "no_tags")
+	err := mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil,
+		database.SlugResolution{MediaDBID: media1DBID, Strategy: "no_tags", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Set entry with USA region tag
 	usaTags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
-	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, usaTags, media2DBID, "usa_region")
+	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, usaTags,
+		database.SlugResolution{MediaDBID: media2DBID, Strategy: "usa_region", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Set entry with multiple tags
@@ -331,24 +366,25 @@ func TestSlugCache_WithTagFilters_Integration(t *testing.T) {
 		{Type: "region", Value: "usa"},
 		{Type: "genre", Value: "platform"},
 	}
-	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, multiTags, media3DBID, "multi_tag")
+	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, multiTags,
+		database.SlugResolution{MediaDBID: media3DBID, Strategy: "multi_tag", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Verify each entry is separate
-	mediaDBID1, strategy1, found1 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
+	got1, found1 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
 	assert.True(t, found1)
-	assert.Equal(t, media1DBID, mediaDBID1)
-	assert.Equal(t, "no_tags", strategy1)
+	assert.Equal(t, media1DBID, got1.MediaDBID)
+	assert.Equal(t, "no_tags", got1.Strategy)
 
-	mediaDBID2, strategy2, found2 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, usaTags)
+	got2, found2 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, usaTags)
 	assert.True(t, found2)
-	assert.Equal(t, media2DBID, mediaDBID2)
-	assert.Equal(t, "usa_region", strategy2)
+	assert.Equal(t, media2DBID, got2.MediaDBID)
+	assert.Equal(t, "usa_region", got2.Strategy)
 
-	mediaDBID3, strategy3, found3 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, multiTags)
+	got3, found3 := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, multiTags)
 	assert.True(t, found3)
-	assert.Equal(t, media3DBID, mediaDBID3)
-	assert.Equal(t, "multi_tag", strategy3)
+	assert.Equal(t, media3DBID, got3.MediaDBID)
+	assert.Equal(t, "multi_tag", got3.Strategy)
 }
 
 // TestSlugCache_OverwriteExisting verifies INSERT OR REPLACE behavior
@@ -369,18 +405,21 @@ func TestSlugCache_OverwriteExisting_Integration(t *testing.T) {
 		t, mediaDB, systemID, slug+"_second", "Super Mario Bros (Second)", "/roms/mario_second.nes")
 
 	// Set initial entry
-	err := mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil, media1DBID, "first")
+	err := mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil,
+		database.SlugResolution{MediaDBID: media1DBID, Strategy: "first", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Overwrite with new values
-	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil, media2DBID, "second")
+	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, nil,
+		database.SlugResolution{MediaDBID: media2DBID, Strategy: "second", Confidence: 0.7})
 	require.NoError(t, err)
 
 	// Verify the new value is returned
-	mediaDBID, strategy, found := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
+	got, found := mediaDB.GetCachedSlugResolution(ctx, systemID, slug, nil)
 	assert.True(t, found)
-	assert.Equal(t, media2DBID, mediaDBID, "should return updated value")
-	assert.Equal(t, "second", strategy, "should return updated strategy")
+	assert.Equal(t, media2DBID, got.MediaDBID, "should return updated value")
+	assert.Equal(t, "second", got.Strategy, "should return updated strategy")
+	assert.InDelta(t, 0.7, got.Confidence, 1e-9, "should return updated confidence")
 }
 
 // TestSlugCache_InvalidateFull clears the entire cache
@@ -397,11 +436,14 @@ func TestSlugCache_InvalidateFull_Integration(t *testing.T) {
 	genesisMedia := createTestMedia(t, mediaDB, "Genesis", "sonic", "Sonic the Hedgehog", "/roms/genesis/sonic.bin")
 
 	// Populate cache with multiple entries
-	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil, nesMedia, "exact")
+	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil,
+		database.SlugResolution{MediaDBID: nesMedia, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "zelda", nil, snesMedia, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "zelda", nil,
+		database.SlugResolution{MediaDBID: snesMedia, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil, genesisMedia, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil,
+		database.SlugResolution{MediaDBID: genesisMedia, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Invalidate entire cache
@@ -409,13 +451,13 @@ func TestSlugCache_InvalidateFull_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all entries are gone
-	_, _, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
+	_, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
 	assert.False(t, found1, "NES entry should be cleared")
 
-	_, _, found2 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "zelda", nil)
+	_, found2 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "zelda", nil)
 	assert.False(t, found2, "SNES entry should be cleared")
 
-	_, _, found3 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
+	_, found3 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
 	assert.False(t, found3, "Genesis entry should be cleared")
 }
 
@@ -434,13 +476,17 @@ func TestSlugCache_InvalidateBySystem_Integration(t *testing.T) {
 	genesisSonic := createTestMedia(t, mediaDB, "Genesis", "sonic", "Sonic the Hedgehog", "/roms/genesis/sonic.bin")
 
 	// Populate cache for multiple systems
-	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil, nesMario, "exact")
+	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil,
+		database.SlugResolution{MediaDBID: nesMario, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "NES", "zelda", nil, nesZelda, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "NES", "zelda", nil,
+		database.SlugResolution{MediaDBID: nesZelda, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "mariokart", nil, snesKart, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "mariokart", nil,
+		database.SlugResolution{MediaDBID: snesKart, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil, genesisSonic, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil,
+		database.SlugResolution{MediaDBID: genesisSonic, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Invalidate only NES system
@@ -448,17 +494,17 @@ func TestSlugCache_InvalidateBySystem_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify NES entries are gone
-	_, _, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
+	_, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
 	assert.False(t, found1, "NES mario should be cleared")
 
-	_, _, found2 := mediaDB.GetCachedSlugResolution(ctx, "NES", "zelda", nil)
+	_, found2 := mediaDB.GetCachedSlugResolution(ctx, "NES", "zelda", nil)
 	assert.False(t, found2, "NES zelda should be cleared")
 
 	// Verify other systems remain
-	_, _, found3 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "mariokart", nil)
+	_, found3 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "mariokart", nil)
 	assert.True(t, found3, "SNES entry should remain")
 
-	_, _, found4 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
+	_, found4 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
 	assert.True(t, found4, "Genesis entry should remain")
 }
 
@@ -476,11 +522,14 @@ func TestSlugCache_InvalidateMultipleSystems_Integration(t *testing.T) {
 	genesisSonic := createTestMedia(t, mediaDB, "Genesis", "sonic", "Sonic the Hedgehog", "/roms/genesis/sonic.bin")
 
 	// Populate cache for multiple systems
-	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil, nesMario, "exact")
+	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil,
+		database.SlugResolution{MediaDBID: nesMario, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "zelda", nil, snesZelda, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "SNES", "zelda", nil,
+		database.SlugResolution{MediaDBID: snesZelda, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
-	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil, genesisSonic, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, "Genesis", "sonic", nil,
+		database.SlugResolution{MediaDBID: genesisSonic, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Invalidate NES and SNES
@@ -488,14 +537,14 @@ func TestSlugCache_InvalidateMultipleSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify NES and SNES entries are gone
-	_, _, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
+	_, found1 := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
 	assert.False(t, found1, "NES entry should be cleared")
 
-	_, _, found2 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "zelda", nil)
+	_, found2 := mediaDB.GetCachedSlugResolution(ctx, "SNES", "zelda", nil)
 	assert.False(t, found2, "SNES entry should be cleared")
 
 	// Verify Genesis remains
-	_, _, found3 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
+	_, found3 := mediaDB.GetCachedSlugResolution(ctx, "Genesis", "sonic", nil)
 	assert.True(t, found3, "Genesis entry should remain")
 }
 
@@ -511,7 +560,8 @@ func TestSlugCache_InvalidateEmptyList_Integration(t *testing.T) {
 	nesMario := createTestMedia(t, mediaDB, "NES", "mario", "Super Mario Bros", "/roms/nes/mario.nes")
 
 	// Populate cache
-	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil, nesMario, "exact")
+	err := mediaDB.SetCachedSlugResolution(ctx, "NES", "mario", nil,
+		database.SlugResolution{MediaDBID: nesMario, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Invalidate with empty list - should be no-op
@@ -519,7 +569,7 @@ func TestSlugCache_InvalidateEmptyList_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify entry still exists
-	_, _, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
+	_, found := mediaDB.GetCachedSlugResolution(ctx, "NES", "mario", nil)
 	assert.True(t, found, "entry should still exist after empty invalidation")
 }
 
@@ -789,11 +839,12 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache the slug resolution
-	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil, insertedMedia.DBID, "exact")
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil,
+		database.SlugResolution{MediaDBID: insertedMedia.DBID, Strategy: "exact", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Verify cache entry exists
-	_, _, found := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil)
+	_, found := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil)
 	assert.True(t, found, "cache entry should exist before delete")
 
 	// Delete the media (using Truncate as a simple way to delete)
@@ -801,7 +852,7 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify cache entry is gone (due to FK CASCADE)
-	_, _, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil)
+	_, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil)
 	assert.False(t, foundAfter, "cache entry should be deleted via CASCADE when media is deleted")
 }
 

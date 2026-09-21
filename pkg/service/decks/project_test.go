@@ -315,7 +315,7 @@ func TestProjectDeckIgnoresCachedWeakMatch(t *testing.T) {
 	require.GreaterOrEqual(t, launched.Confidence, titles.ConfidenceMinimum)
 	filters, _ := titles.ExtractCanonicalTagsFromParens(game)
 	require.Eventually(t, func() bool {
-		_, _, hit := f.mediaDB.GetCachedSlugResolution(f.ctx, nes.ID, "metroid", filters)
+		_, hit := f.mediaDB.GetCachedSlugResolution(f.ctx, nes.ID, "metroid", filters)
 		return hit
 	}, 5*time.Second, 10*time.Millisecond, "the launch caches its match")
 
