@@ -27,6 +27,24 @@ import (
 
 type unixPeerKey struct{}
 
+type listenerKeyScopeKey struct{}
+
+// ListenerKeyScope marks the base context of one listener so that the listener
+// keys of NewListenerAuthConfig apply to its connections. Use it only from
+// http.Server.BaseContext, which the server calls with the accepting listener:
+// the mark then records which listener accepted a connection rather than what
+// kind of address the peer has.
+func ListenerKeyScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, listenerKeyScopeKey{}, true)
+}
+
+// HasListenerKeyScope reports whether the request arrived on the listener
+// marked with ListenerKeyScope.
+func HasListenerKeyScope(r *http.Request) bool {
+	scoped, ok := r.Context().Value(listenerKeyScopeKey{}).(bool)
+	return ok && scoped
+}
+
 // PeerContext is an http.Server.ConnContext hook. Only server-observed transport,
 // never RemoteAddr text or forwarded headers, can grant Unix-peer classification.
 func PeerContext(ctx context.Context, conn net.Conn) context.Context {

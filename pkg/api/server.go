@@ -2004,9 +2004,22 @@ func (l *servingListener) Accept() (net.Conn, error) {
 
 // ListenerOptions supplies transport resources and an optional per-listener key provider.
 // APIKeys must be safe for concurrent calls. Nil preserves standalone configuration.
+//
+// Network additionally binds the configured TCP address and serves the same API
+// on it, exactly as a standalone server would: clients of that listener are
+// checked against the configured keys, pairing, encryption, IP filter, rate
+// limits and origins, and APIKeys authenticates nobody there. It is only valid
+// with a supplied Listener, because a standalone server already binds TCP. A
+// failed bind is logged and the supplied listener is served alone.
+//
+// OnNetwork is called at most once, from the server goroutine, with the TCP port
+// actually bound. It is not called when Network is false or the bind failed, and
+// it must return promptly.
 type ListenerOptions struct {
-	Listener net.Listener
-	APIKeys  apimiddleware.APIKeyProvider
+	Listener  net.Listener
+	APIKeys   apimiddleware.APIKeyProvider
+	OnNetwork func(port int)
+	Network   bool
 }
 
 // StartWithListener serves the existing API on a host-supplied listener. Ownership
@@ -2051,6 +2064,12 @@ func StartWithListener(
 		st.StopService()
 		return err
 	}
+	if opts.Network && listener == nil {
+		err := errors.New("the network listener option requires a supplied listener")
+		notifyReady(err)
+		st.StopService()
+		return err
+	}
 
 	methods.InitMediaThumbCache(platform)
 
@@ -2091,13 +2110,34 @@ func StartWithListener(
 		}
 		listener = bound
 	}
+
+	// The network listener is an addition to a working private listener, so a
+	// port that cannot be bound costs remote access and nothing else.
+	var networkListener net.Listener
+	if opts.Network {
+		lc := &net.ListenConfig{}
+		bound, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+		if err != nil {
+			log.Warn().Err(err).Str("listen", listenAddr).
+				Msg("failed to bind network API listener, serving the supplied listener only")
+		} else {
+			networkListener = bound
+			defer func() { _ = networkListener.Close() }()
+			log.Info().Stringer("listen", bound.Addr()).Msg("starting HTTP server on network listener")
+		}
+	}
+
 	if startup == nil {
 		defer func() { _ = listener.Close() }()
 
 		// If port 0 was requested, adopt the port actually bound so callers
 		// can discover it and every allowed origin carries the real port.
+		portListener := listener
+		if networkListener != nil {
+			portListener = networkListener
+		}
 		if port == 0 {
-			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			if addr, ok := portListener.Addr().(*net.TCPAddr); ok {
 				port = addr.Port
 				_ = cfg.SetAPIPort(port)
 			}
@@ -2155,6 +2195,12 @@ func StartWithListener(
 		keyProvider = config.GetAPIKeys
 	}
 	authConfig := apimiddleware.NewAuthConfig(keyProvider)
+	if opts.Network && opts.APIKeys != nil {
+		// Two listeners, two sets of credentials: the supplied provider is
+		// confined to the supplied listener, and network clients get the
+		// configured keys as they would from a standalone server.
+		authConfig = apimiddleware.NewListenerAuthConfig(config.GetAPIKeys, opts.APIKeys)
+	}
 
 	// Global middleware applied to all routes. IP filtering is applied
 	// per-group: non-WS transports use NonWSIPFilterMiddleware
@@ -2450,12 +2496,43 @@ func StartWithListener(
 			ConnContext:       apimiddleware.PeerContext,
 			ReadTimeout:       config.APIRequestTimeout,
 		}
+		serving := &servingListener{Listener: listener, accepting: func() { notifyReady(nil) }}
+		if opts.Network {
+			// BaseContext runs once per Serve call with the listener being
+			// served, so the supplied key provider follows the listener that
+			// accepted a connection and cannot reach the network listener.
+			server.BaseContext = func(accepting net.Listener) context.Context {
+				if accepting == net.Listener(serving) {
+					return apimiddleware.ListenerKeyScope(context.Background())
+				}
+				return context.Background()
+			}
+		}
+		// Registered before the deferred Close so it runs after it: Close is what
+		// makes the network Serve call return.
+		networkDone := make(chan struct{})
+		defer func() { <-networkDone }()
 		defer func() { _ = server.Close() }()
 		done := make(chan error, 1)
 		serverDone = done
 
+		if networkListener == nil {
+			close(networkDone)
+		} else {
+			go func() {
+				defer close(networkDone)
+				// Losing the network listener later is handled like failing to
+				// bind it: the supplied listener keeps serving its host.
+				if err := server.Serve(networkListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Error().Err(err).Msg("network API listener stopped serving")
+				}
+			}()
+			if addr, ok := networkListener.Addr().(*net.TCPAddr); ok && opts.OnNetwork != nil {
+				opts.OnNetwork(addr.Port)
+			}
+		}
+
 		go func() {
-			serving := &servingListener{Listener: listener, accepting: func() { notifyReady(nil) }}
 			if err := server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				notifyReady(err)
 				log.Error().Err(err).Msg("HTTP server error")

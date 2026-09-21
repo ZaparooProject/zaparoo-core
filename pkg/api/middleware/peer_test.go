@@ -108,3 +108,118 @@ func TestUnixPassesLocalFiltersAndRatePolicy(t *testing.T) {
 		assert.Equal(t, http.StatusNoContent, response.Code)
 	}
 }
+
+// scopedUnixRequest is a Unix request accepted by the listener that carries the
+// listener key scope, the way http.Server layers BaseContext under ConnContext.
+func scopedUnixRequest(t *testing.T, path string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(ListenerKeyScope(t.Context()), http.MethodGet, path, http.NoBody)
+	r.RemoteAddr = "@"
+	return r.WithContext(PeerContext(r.Context(), peerTestConn{}))
+}
+
+func tcpRequest(t *testing.T, remoteAddr string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api", http.NoBody)
+	r.RemoteAddr = remoteAddr
+	return r
+}
+
+func TestListenerKeysStayOnTheirListener(t *testing.T) {
+	t.Parallel()
+	const listenerKey, networkKey = "listener-key", "network-key"
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tc := range []struct {
+		request     func(*testing.T) *http.Request
+		name        string
+		key         string
+		networkKeys []string
+		want        int
+	}{
+		{
+			name: "listener_key_on_its_listener", key: listenerKey, networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return scopedUnixRequest(t, "/api") },
+			want:    http.StatusNoContent,
+		},
+		{
+			name: "network_key_refused_on_private_listener", key: networkKey, networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return scopedUnixRequest(t, "/api") },
+			want:    http.StatusUnauthorized,
+		},
+		{
+			name: "listener_key_refused_from_network", key: listenerKey, networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return tcpRequest(t, "192.168.1.50:4000") },
+			want:    http.StatusUnauthorized,
+		},
+		{
+			name: "network_key_from_network", key: networkKey, networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return tcpRequest(t, "192.168.1.50:4000") },
+			want:    http.StatusNoContent,
+		},
+		{
+			name: "missing_key_from_network", key: "", networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return tcpRequest(t, "192.168.1.50:4000") },
+			want:    http.StatusUnauthorized,
+		},
+		{
+			// Standalone behavior: with no configured keys this layer is open and
+			// the listener key neither enables nor satisfies it.
+			name: "no_network_keys_is_standalone_open", key: "", networkKeys: nil,
+			request: func(t *testing.T) *http.Request { return tcpRequest(t, "192.168.1.50:4000") },
+			want:    http.StatusNoContent,
+		},
+		{
+			name: "unscoped_unix_peer_cannot_use_listener_key", key: listenerKey, networkKeys: []string{networkKey},
+			request: func(t *testing.T) *http.Request { return unixRequest(t, "/api") },
+			want:    http.StatusUnauthorized,
+		},
+		{
+			name: "unscoped_unix_peer_without_network_keys_fails_closed", key: listenerKey, networkKeys: nil,
+			request: func(t *testing.T) *http.Request { return unixRequest(t, "/api") },
+			want:    http.StatusUnauthorized,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			auth := NewListenerAuthConfig(
+				func() []string { return tc.networkKeys },
+				func() []string { return []string{listenerKey} },
+			)
+			r := tc.request(t)
+			if tc.key != "" {
+				r.Header.Set("Authorization", "Bearer "+tc.key)
+			}
+			response := httptest.NewRecorder()
+			HTTPAuthMiddleware(auth)(next).ServeHTTP(response, r)
+			assert.Equal(t, tc.want, response.Code)
+
+			r = tc.request(t)
+			if tc.key != "" {
+				r.Header.Set("Authorization", "Bearer "+tc.key)
+			}
+			assert.Equal(t, tc.want == http.StatusNoContent, WebSocketAuthHandler(auth, r))
+		})
+	}
+}
+
+func TestListenerKeyScopeIsNotClientControlled(t *testing.T) {
+	t.Parallel()
+	auth := NewListenerAuthConfig(
+		func() []string { return []string{"network-key"} },
+		func() []string { return []string{"listener-key"} },
+	)
+	r := tcpRequest(t, "192.168.1.50:4000")
+	r.Header.Set("Authorization", "Bearer listener-key")
+	r.Header.Set("X-Listener-Key-Scope", "true")
+	r.URL.RawQuery = "scope=listener&key=listener-key"
+	assert.False(t, HasListenerKeyScope(r))
+	assert.False(t, WebSocketAuthHandler(auth, r))
+}
+
+func TestAuthConfigWithoutListenerKeysIgnoresScope(t *testing.T) {
+	t.Parallel()
+	auth := NewAuthConfig(func() []string { return []string{"only-key"} })
+	r := scopedUnixRequest(t, "/api")
+	r.Header.Set("Authorization", "Bearer only-key")
+	assert.True(t, WebSocketAuthHandler(auth, r))
+}

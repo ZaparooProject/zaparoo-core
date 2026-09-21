@@ -37,14 +37,28 @@ import (
 // Only one runtime may run in a process; await Done before starting another.
 // Listener ownership transfers on entry, including validation and startup failures.
 // Private listeners are not advertised through mDNS.
+//
+// Network also serves the API on the configured TCP address, with the same
+// authentication, pairing, encryption, IP filter, rate limits and origins as a
+// standalone service. APIKeys authenticates clients of Listener only and is never
+// accepted from the network. A TCP address that cannot be bound is logged and
+// the runtime starts without it.
+//
+// OnNetwork is called at most once, with the TCP port actually bound and the
+// instance name Core's own discovery would use, so a host can advertise
+// discovery.ServiceType itself; an embedded runtime never starts a responder.
+// It is not called when Network is false or the bind failed, and it may run
+// before StartEmbedded returns.
 type EmbeddedOptions struct {
-	Context  context.Context
-	Listener net.Listener
-	Audio    audio.Player
-	APIKeys  func() []string
-	Renderer uievents.Renderer
-	OnPhase  func(string)
-	OnFatal  func(error)
+	Context   context.Context
+	Listener  net.Listener
+	Audio     audio.Player
+	APIKeys   func() []string
+	Renderer  uievents.Renderer
+	OnPhase   func(string)
+	OnFatal   func(error)
+	OnNetwork func(port int, instanceName string)
+	Network   bool
 }
 
 // StartEmbedded initializes the actual service and databases using host-owned
