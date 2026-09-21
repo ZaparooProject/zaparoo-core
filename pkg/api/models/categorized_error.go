@@ -32,6 +32,7 @@ const (
 	ErrorCategoryTimeout         = "timeout"
 	ErrorCategoryUnavailable     = "unavailable"
 	ErrorCategoryExecutionFailed = "execution_failed"
+	ErrorCategoryLaunchRepair    = "launch_repair"
 )
 
 // ErrorData is the structured payload placed in ErrorObject.Data for
