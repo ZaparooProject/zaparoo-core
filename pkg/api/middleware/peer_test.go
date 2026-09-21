@@ -223,3 +223,76 @@ func TestAuthConfigWithoutListenerKeysIgnoresScope(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer only-key")
 	assert.True(t, WebSocketAuthHandler(auth, r))
 }
+
+// untrustedLoopbackRequest is a TCP request to a server that shares loopback
+// with other apps, as http.Server builds it from an UntrustedLoopback base context.
+func untrustedLoopbackRequest(t *testing.T, remoteAddr string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(UntrustedLoopback(t.Context()), http.MethodGet, "/api", http.NoBody)
+	r.RemoteAddr = remoteAddr
+	return r
+}
+
+func TestUntrustedLoopbackIsNeverLocal(t *testing.T) {
+	t.Parallel()
+	auth := NewAuthConfig(func() []string { return []string{"network-key"} })
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	noAllowedIPs := func() []string { return nil }
+
+	for _, addr := range []string{"127.0.0.1:4000", "[::1]:4000", "127.8.9.10:4000"} {
+		// Standalone: loopback is local, needs no key and is never limited.
+		standalone := tcpRequest(t, addr)
+		assert.True(t, IsTrustedLoopback(standalone), addr)
+		assert.True(t, IsLocalRequest(standalone), addr)
+		assert.True(t, WebSocketAuthHandler(auth, standalone), addr)
+
+		r := untrustedLoopbackRequest(t, addr)
+		r.Header.Set("X-Forwarded-For", "127.0.0.1")
+		assert.False(t, IsTrustedLoopback(r), addr)
+		assert.False(t, IsLocalRequest(r), addr)
+		assert.False(t, WebSocketAuthHandler(auth, r), addr)
+
+		response := httptest.NewRecorder()
+		HTTPAuthMiddleware(auth)(next).ServeHTTP(response, untrustedLoopbackRequest(t, addr))
+		assert.Equal(t, http.StatusUnauthorized, response.Code, addr)
+
+		response = httptest.NewRecorder()
+		NonWSIPFilterMiddleware(noAllowedIPs)(next).ServeHTTP(response, untrustedLoopbackRequest(t, addr))
+		assert.Equal(t, http.StatusForbidden, response.Code, addr)
+		response = httptest.NewRecorder()
+		RunIPFilterMiddleware(noAllowedIPs, func() bool { return false })(next).
+			ServeHTTP(response, untrustedLoopbackRequest(t, addr))
+		assert.Equal(t, http.StatusForbidden, response.Code, addr)
+
+		keyed := untrustedLoopbackRequest(t, addr)
+		keyed.Header.Set("Authorization", "Bearer network-key")
+		response = httptest.NewRecorder()
+		HTTPAuthMiddleware(auth)(next).ServeHTTP(response, keyed)
+		assert.Equal(t, http.StatusNoContent, response.Code, addr)
+	}
+}
+
+func TestUntrustedLoopbackIsRateLimited(t *testing.T) {
+	t.Parallel()
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	serve := func(r *http.Request) int {
+		limiter := NewIPRateLimiterWithLimits(rate.Limit(0), 1)
+		handler := HTTPRateLimitMiddleware(limiter)(next)
+		handler.ServeHTTP(httptest.NewRecorder(), r)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, r)
+		return response.Code
+	}
+	assert.Equal(t, http.StatusNoContent, serve(tcpRequest(t, "127.0.0.1:4000")), "standalone loopback is exempt")
+	assert.Equal(t, http.StatusTooManyRequests, serve(untrustedLoopbackRequest(t, "127.0.0.1:4000")))
+	assert.Equal(t, http.StatusTooManyRequests, serve(untrustedLoopbackRequest(t, "[::1]:4000")))
+}
+
+func TestUnixPeerStaysLocalWhenLoopbackIsUntrusted(t *testing.T) {
+	t.Parallel()
+	r := httptest.NewRequestWithContext(UntrustedLoopback(t.Context()), http.MethodGet, "/api", http.NoBody)
+	r.RemoteAddr = "@"
+	r = r.WithContext(PeerContext(r.Context(), peerTestConn{}))
+	assert.True(t, IsLocalRequest(r))
+	assert.False(t, IsTrustedLoopback(r))
+}
