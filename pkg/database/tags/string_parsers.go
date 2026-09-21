@@ -139,15 +139,36 @@ func atoi2(s string) int {
 	return int(s[0]-'0')*10 + int(s[1]-'0')
 }
 
-// validMonthDay reports whether m is 1–12 and d is 1–31 (calendar-agnostic bound).
-func validMonthDay(m, d int) bool {
-	return m >= 1 && m <= 12 && d >= 1 && d <= 31
+// atoi4 converts a 4-digit ASCII string to its integer value (no validation).
+func atoi4(s string) int {
+	return atoi2(s[0:2])*100 + atoi2(s[2:4])
+}
+
+// monthLengths holds the number of days in each month, indexed from 1.
+// February is the common-year length; validMonthDay adds the leap day.
+var monthLengths = [13]int{0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31} //nolint:gochecknoglobals // Static table.
+
+// validMonthDay reports whether m names a month and d a day that month has in
+// the given year. A build date is a real calendar date, so "230231" is not one.
+func validMonthDay(year, m, d int) bool {
+	if m < 1 || m > 12 || d < 1 {
+		return false
+	}
+	length := monthLengths[m]
+	if m == 2 && isLeapYear(year) {
+		length = 29
+	}
+	return d <= length
+}
+
+func isLeapYear(year int) bool {
+	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
 }
 
 // ParseBuildDate normalizes a romset/build date to YYYY-MM-DD. It accepts MiSTer
 // arcade YYMMDD (6 digits; century pivot at 70, so 70–99→19xx and 00–69→20xx),
 // YYYYMMDD (8 digits), and No-Intro YYYY-MM-DD. Returns false for any other shape
-// or an out-of-range month/day. The 6-digit form is the arcade convention; callers
+// or a date the calendar does not have. The 6-digit form is the arcade convention; callers
 // gate it on a preceding region word to avoid matching bare numbers.
 func ParseBuildDate(s string) (string, bool) {
 	switch {
@@ -155,7 +176,7 @@ func ParseBuildDate(s string) (string, bool) {
 		if !allDigits(s[0:4]) || !allDigits(s[5:7]) || !allDigits(s[8:10]) {
 			return "", false
 		}
-		if !validMonthDay(atoi2(s[5:7]), atoi2(s[8:10])) {
+		if !validMonthDay(atoi4(s[0:4]), atoi2(s[5:7]), atoi2(s[8:10])) {
 			return "", false
 		}
 		return s, true
@@ -169,17 +190,18 @@ func ParseBuildDate(s string) (string, bool) {
 		}
 		return s, true
 	case len(s) == 8 && allDigits(s):
-		if !validMonthDay(atoi2(s[4:6]), atoi2(s[6:8])) {
+		if !validMonthDay(atoi4(s[0:4]), atoi2(s[4:6]), atoi2(s[6:8])) {
 			return "", false
 		}
 		return s[0:4] + "-" + s[4:6] + "-" + s[6:8], true
 	case len(s) == 6 && allDigits(s):
-		if !validMonthDay(atoi2(s[2:4]), atoi2(s[4:6])) {
-			return "", false
-		}
 		century := "20"
 		if s[0] >= '7' { // first digit 7–9 ⇒ YY 70–99 ⇒ 1900s
 			century = "19"
+		}
+		year := atoi2(century)*100 + atoi2(s[0:2])
+		if !validMonthDay(year, atoi2(s[2:4]), atoi2(s[4:6])) {
+			return "", false
 		}
 		return century + s[0:2] + "-" + s[2:4] + "-" + s[4:6], true
 	}
