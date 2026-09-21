@@ -45,7 +45,7 @@ func SelectBestResult(
 ) (result database.SearchResultWithCursor, confidence float64) {
 	if len(results) == 1 {
 		// If there's only ONE match, that's what the user searched for - return it
-		// Variant exclusion only makes sense when choosing between multiple results
+		// Variant exclusion only decides between a variant and a main release
 		tagConfidence := CalculateTagMatchConfidence(&results[0], tagFilters)
 		confidence = matchQuality * tagConfidence
 		log.Info().Msgf("single result, confidence: %.2f (match: %.2f, tags: %.2f)",
@@ -73,7 +73,9 @@ func SelectBestResult(
 	}
 
 	// Priority 2: Prefer main game over variants (exclude demos, betas, prototypes, hacks)
-	// But only if user didn't explicitly request a variant via tags
+	// But only if user didn't explicitly request a variant via tags. A title that
+	// exists only as variants keeps them all: every candidate is still the title
+	// that was asked for, so the remaining priorities choose among them.
 	if !hasVariantTagFilter(tagFilters) {
 		mainGames := FilterOutVariants(results)
 		if len(mainGames) == 1 {
@@ -85,10 +87,8 @@ func SelectBestResult(
 		}
 		if len(mainGames) > 0 {
 			results = mainGames
-		} else if len(results) > 0 {
-			// All results are variants - reject them
-			log.Info().Msgf("all %d results are variants (demo/beta/proto), excluding all", len(results))
-			return database.SearchResultWithCursor{}, 0.0
+		} else {
+			log.Info().Msgf("all %d results are variants, choosing among them", len(results))
 		}
 	}
 

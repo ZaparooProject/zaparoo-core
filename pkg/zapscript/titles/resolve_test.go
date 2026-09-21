@@ -354,7 +354,48 @@ func TestResolveTitle_Strategy1_SearchError(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestResolveTitle_Strategy1_AllVariantsRejected(t *testing.T) {
+func TestResolveTitle_Strategy1_AllVariantsResolveWithinTitle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+	setupCacheWrite(mockMediaDB)
+
+	// The same prototype filed under two folders. Every candidate carries the
+	// requested title, so the match stays inside it. No weaker strategy is
+	// mocked: reaching one fails the test.
+	protoTags := []database.TagInfo{
+		{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+		{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)},
+	}
+	shallow := filepath.Join("games", "NES", "RoboCop versus The Terminator (USA) (Proto).nes")
+	deep := filepath.Join("games", "NES", "Protos", "R-Z", "RoboCop versus The Terminator (USA) (Proto).nes")
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, "NES", mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{MediaID: 1, SystemID: "NES", Name: "RoboCop versus The Terminator", Path: deep, Tags: protoTags},
+		{MediaID: 2, SystemID: "NES", Name: "RoboCop versus The Terminator", Path: shallow, Tags: protoTags},
+	}, nil)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "RoboCop versus The Terminator",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, StrategyExactMatch, result.Strategy)
+	assert.Equal(t, shallow, result.Result.Path)
+	assert.InDelta(t, 1.0, result.Confidence, 0.001)
+}
+
+func TestResolveTitle_Strategy1_AllVariantsExcludedByRequest(t *testing.T) {
 	t.Parallel()
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -363,29 +404,25 @@ func TestResolveTitle_Strategy1_AllVariantsRejected(t *testing.T) {
 
 	setupCacheMiss(mockMediaDB)
 
-	// Strategy 1: Returns MULTIPLE results that are ALL variants.
-	// SelectBestResult returns confidence 0.0 for all-variant results when
-	// there are multiple (variant filtering kicks in with >1 results).
+	// Keeping every candidate when they are all variants must not hand back one
+	// the request excluded. Both files carry the refused tag, so the exact match
+	// scores zero and the weaker strategies, which find nothing, settle it.
+	protoTags := []database.TagInfo{
+		{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+		{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)},
+	}
 	mockMediaDB.On("SearchMediaBySlug",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, "NES", mock.Anything, mock.Anything,
 	).Return([]database.SearchResultWithCursor{
 		{
-			MediaID:  1,
-			SystemID: "NES",
-			Name:     "Super Mario Bros (Demo)",
-			Path:     "/games/nes/smb-demo.nes",
-			Tags: []database.TagInfo{
-				{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedDemo)},
-			},
+			MediaID: 1, SystemID: "NES", Name: "RoboCop versus The Terminator",
+			Path: filepath.Join("games", "NES", "Protos", "RoboCop versus The Terminator (USA) (Proto).nes"),
+			Tags: protoTags,
 		},
 		{
-			MediaID:  2,
-			SystemID: "NES",
-			Name:     "Super Mario Bros (Beta)",
-			Path:     "/games/nes/smb-beta.nes",
-			Tags: []database.TagInfo{
-				{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedBeta)},
-			},
+			MediaID: 2, SystemID: "NES", Name: "RoboCop versus The Terminator",
+			Path: filepath.Join("games", "NES", "RoboCop versus The Terminator (USA) (Proto).nes"),
+			Tags: protoTags,
 		},
 	}, nil)
 	mockMediaDB.On("SearchMediaBySecondarySlug",
@@ -403,14 +440,16 @@ func TestResolveTitle_Strategy1_AllVariantsRejected(t *testing.T) {
 
 	result, err := ResolveTitle(context.Background(), &ResolveParams{
 		SystemID:  "NES",
-		GameName:  "Super Mario Bros",
+		GameName:  "RoboCop versus The Terminator (-unfinished:proto)",
 		MediaDB:   mockMediaDB,
 		Cfg:       cfg,
 		MediaType: slugs.MediaTypeGame,
 	})
 
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoMatch)
 	assert.Nil(t, result)
+	mockMediaDB.AssertNotCalled(t, "SetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestResolveTitle_Strategy1_TagMatchingSelectsUSA(t *testing.T) {

@@ -26,7 +26,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetRegionMatch(t *testing.T) {
@@ -1062,6 +1064,91 @@ func TestSelectBest_SingleResultVariant(t *testing.T) {
 			} else {
 				assert.Zero(t, confidence, "expected result to be rejected but confidence was non-zero")
 			}
+		})
+	}
+}
+
+func TestSelectBest_AllVariantsChooseAmongThem(t *testing.T) {
+	t.Parallel()
+
+	proto := database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)}
+	beta := database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedBeta)}
+	translation := database.TagInfo{
+		Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation),
+	}
+	usa := database.TagInfo{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)}
+	japan := database.TagInfo{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionJP)}
+
+	tests := []struct {
+		name       string
+		tagFilters []zapscript.TagFilter
+		results    []database.SearchResultWithCursor
+		wantID     int64
+	}{
+		{
+			name: "duplicate copies of one prototype",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Path: "/roms/nes/all/Star Trek V (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
+				{MediaID: 2, Path: "/roms/nes/Star Trek V (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
+			},
+			wantID: 2,
+		},
+		{
+			name: "duplicate copies of one translation",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Path: "/roms/nes/Dai Meiro [T+Eng].nes", Tags: []database.TagInfo{japan, translation}},
+				{MediaID: 2, Path: "/roms/nes/jp/Dai Meiro [T+Eng].nes", Tags: []database.TagInfo{japan, translation}},
+			},
+			wantID: 1,
+		},
+		{
+			// The Japanese file wins every tie-breaker below region, so only
+			// the region priority can pick the USA one.
+			name: "preferred region decides between variants",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Path: "/roms/nes/Game (Japan) (Proto).nes", Tags: []database.TagInfo{japan, proto}},
+				{MediaID: 2, Path: "/roms/nes/prerelease/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+			},
+			wantID: 2,
+		},
+		{
+			name: "main release still beats duplicate variants",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Path: "/roms/nes/Game (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
+				{MediaID: 2, Path: "/roms/nes/all/Game (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
+				{MediaID: 3, Path: "/roms/nes/all/deep/Game (Japan).nes", Tags: []database.TagInfo{japan}},
+			},
+			wantID: 3,
+		},
+		{
+			// The prototype wins every tie-breaker, so only the requested tag
+			// can keep it out; the shallower of the two betas then wins.
+			name: "requested variant with duplicate copies",
+			tagFilters: []zapscript.TagFilter{{
+				Type:     string(tags.TagTypeUnfinished),
+				Value:    string(tags.TagUnfinishedBeta),
+				Operator: zapscript.TagOperatorAND,
+			}},
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Path: "/roms/nes/Game (USA) (Proto).nes", Tags: []database.TagInfo{usa, proto}},
+				{MediaID: 2, Path: "/roms/nes/beta/all/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+				{MediaID: 3, Path: "/roms/nes/beta/Game (USA) (Beta).nes", Tags: []database.TagInfo{usa, beta}},
+			},
+			wantID: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+			require.NoError(t, err)
+
+			result, confidence := SelectBestResult(tt.results, tt.tagFilters, cfg, 1.0, nil)
+
+			assert.InDelta(t, 1.0, confidence, 0.001)
+			assert.Equal(t, tt.wantID, result.MediaID)
 		})
 	}
 }
