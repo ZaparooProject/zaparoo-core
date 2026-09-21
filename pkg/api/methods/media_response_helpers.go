@@ -122,6 +122,7 @@ func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
 		Total:   len(p.Items),
 		Playing: p.Playing,
 		Repeat:  repeat,
+		Unsafe:  p.Unsafe,
 	}
 }
 

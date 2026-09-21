@@ -25,23 +25,69 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// scummVMMetadataSource converts ScummVM's configured game directory into
-// provenance carried by the normal media indexing pipeline.
-func scummVMMetadataSource(game ScummVMGame) *platforms.MediaSource {
+// scummVMGameDirectory resolves a configured game directory, or "" when it
+// cannot carry local metadata.
+func scummVMGameDirectory(game ScummVMGame) string {
 	if game.Path == "" || strings.Contains(game.Path, "://") || virtualpath.ContainsControlChar(game.Path) {
-		return nil
+		return ""
 	}
 	directory := filepath.Clean(game.Path)
 	if !filepath.IsAbs(directory) {
 		directory = filepath.Join(scummvmBaseDir, directory)
 	}
-	root := filepath.Dir(directory)
-	if root == directory {
-		return nil
+	if filepath.Dir(directory) == directory {
+		return ""
 	}
-	return &platforms.MediaSource{Path: directory, Root: root, Kind: platforms.MediaSourceDirectory}
+	return directory
+}
+
+// scummVMMetadataSources converts ScummVM's configured game directories into
+// provenance carried by the normal media indexing pipeline. The result is
+// parallel to games, with nil for a game that has no usable directory.
+//
+// A game's metadata root is normally its parent directory. Variants kept in
+// subfolders of one game folder would each get that game folder as a root and
+// lose the gamelist and artwork stored beside their sibling games, so a root
+// whose own parent is another game's root is folded into it. Folding stops at a
+// folder a game is configured on: that folder holds one game's data, so it is
+// not a collection its neighbours share.
+func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
+	directories := make([]string, len(games))
+	configured := make(map[string]struct{}, len(games))
+	roots := make(map[string]struct{}, len(games))
+	for i, game := range games {
+		directories[i] = scummVMGameDirectory(game)
+		if directories[i] == "" {
+			continue
+		}
+		// Keyed the way the rest of the pipeline compares paths, so a folder
+		// named in another case on a case-insensitive card is one folder.
+		configured[helpers.NormalizePathForComparison(directories[i])] = struct{}{}
+		roots[helpers.NormalizePathForComparison(filepath.Dir(directories[i]))] = struct{}{}
+	}
+	sources := make([]*platforms.MediaSource, len(games))
+	for i, directory := range directories {
+		if directory == "" {
+			continue
+		}
+		root := filepath.Dir(directory)
+		for {
+			if _, own := configured[helpers.NormalizePathForComparison(root)]; own {
+				break
+			}
+			parent := filepath.Dir(root)
+			_, shared := roots[helpers.NormalizePathForComparison(parent)]
+			if !shared || filepath.Dir(parent) == parent {
+				break
+			}
+			root = parent
+		}
+		sources[i] = &platforms.MediaSource{Path: directory, Root: root, Kind: platforms.MediaSourceDirectory}
+	}
+	return sources
 }

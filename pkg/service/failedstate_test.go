@@ -24,20 +24,30 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -215,4 +225,205 @@ func TestStart_FailedStateStopsCleanly(t *testing.T) {
 	)
 	require.NoError(t, err, "the failed state must release the port when stopped")
 	require.NoError(t, listener.Close())
+}
+
+// failedStateLogChildEnv marks the process that actually runs the assertions.
+// They need the package-global logger pointed at a file, and writing that
+// global while another test's broker goroutine is still logging through it is
+// a data race. Running alone in a child process is what makes it safe rather
+// than lucky.
+const failedStateLogChildEnv = "ZAPAROO_TEST_FAILED_STATE_LOG_CHILD"
+
+// initLoggingTo points the global logger at this platform's log file.
+//
+// Deliberately not helpers.InitLogging: lumberjack starts a mill goroutine on
+// first write that outlives Close, which this package's goleak check would
+// report. A plain file writer exercises the same property — the log line has
+// to be on disk before the copy is taken — without it.
+func initLoggingTo(t *testing.T, pl platforms.Platform) {
+	t.Helper()
+
+	require.NoError(t, helpers.EnsureDirectories(pl))
+	file, err := os.OpenFile(helpers.LogPath(pl), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	require.NoError(t, err)
+
+	// This package's TestMain disables logging, which would leave the file
+	// this test reads back empty.
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	log.Logger = zerolog.New(file)
+
+	t.Cleanup(func() { assert.NoError(t, file.Close()) })
+}
+
+// The persisted copy is the file support asks for, and on MiSTer it is the
+// only one that survives the reboot. Copying it before the failure is written
+// leaves a user holding a log that stops just short of the explanation, which
+// is worse than no copy at all because it looks complete.
+func TestFailedState_PersistedLogCarriesTheExplanation(t *testing.T) {
+	if os.Getenv(failedStateLogChildEnv) == "" {
+		//nolint:gosec // re-runs this same test binary, nothing external
+		child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+		child.Env = append(os.Environ(), failedStateLogChildEnv+"=1")
+		out, err := child.CombinedOutput()
+		require.NoError(t, err, "child run failed:\n%s", out)
+		return
+	}
+
+	root := t.TempDir()
+	tempDir := filepath.Join(root, "tmp")
+	dataDir := filepath.Join(root, "data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o750))
+
+	// MiSTer's shape: the live log is on a tmpfs, the data directory is not.
+	settings := platforms.Settings{
+		DataDir:   dataDir,
+		ConfigDir: dataDir,
+		TempDir:   tempDir,
+		LogDir:    tempDir,
+	}
+
+	pl := testmocks.NewMockPlatform()
+	pl.On("ID").Return("mock-platform")
+	pl.On("Settings").Return(settings)
+
+	initLoggingTo(t, pl)
+
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, dataDir, "127.0.0.1", freePort(t))
+	require.NoError(t, err)
+
+	startupServer, err := api.NewStartupServer(context.Background(), cfg)
+	require.NoError(t, err)
+
+	st, _ := state.NewState(pl, "boot-uuid")
+
+	failure := &startupFailureError{
+		platform: pl,
+		state:    st,
+		startup:  startupServer,
+		headline: "Zaparoo could not start",
+		detail:   "Zaparoo could not finish restoring a backup that was interrupted.",
+		err:      errors.New("recovering interrupted backup restore: disk went away"),
+	}
+
+	res, enterErr := failure.enter()
+	require.NoError(t, enterErr)
+	require.NotNil(t, res)
+	t.Cleanup(func() { assert.NoError(t, res.Stop()) })
+
+	persisted, err := os.ReadFile(filepath.Join(dataDir, config.LogFile)) //nolint:gosec // test path
+	require.NoError(t, err, "a volatile log has to be copied somewhere it survives a reboot")
+
+	assert.Contains(t, string(persisted), "staying up to report it",
+		"the copy has to contain the failure, not everything up to just before it")
+	assert.Contains(t, string(persisted), "disk went away",
+		"including the underlying error, which the backup-restore path never logs itself")
+}
+
+// Holding the port to explain a failure is only better than exiting when
+// exiting would not have fixed it. The service units retry every five seconds,
+// so a data directory whose mount is not up yet, or platform support that is
+// still starting, comes good on its own — and a Core that stays alive on a
+// page is a Core that never gets that restart. pkg/cli/exit.go says the same
+// thing about the exit status.
+func TestStart_AFailureARestartCouldFixStillEndsTheProcess(t *testing.T) {
+	port := freePort(t)
+	testRoot := t.TempDir()
+	settings := platforms.Settings{
+		ConfigDir: testRoot,
+		DataDir:   testRoot,
+		LogDir:    testRoot,
+		TempDir:   testRoot,
+	}
+
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, testRoot, "127.0.0.1", port)
+	require.NoError(t, err)
+	cfg.SetUpdateCheck(false)
+
+	mockPlatform := testmocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(settings)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{testRoot})
+	mockPlatform.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	mockPlatform.On("ManagedByPackageManager").Return(false)
+	mockPlatform.On("Stop").Return(nil).Maybe()
+	// Transient by nature: the bus this needs may simply not be up yet.
+	mockPlatform.On("StartPre", cfg).Return(errors.New("the reader bus is not up yet"))
+
+	t.Cleanup(crashdump.Stop)
+	svcResult, startErr := Start(mockPlatform, cfg)
+	require.Error(t, startErr, "a failure a restart could fix has to reach the caller")
+	assert.Nil(t, svcResult, "and must not leave a running service behind")
+	assert.Contains(t, startErr.Error(), "the reader bus is not up yet")
+
+	// The listener was bound before any of this, so nothing else gives it back.
+	listener, err := (&net.ListenConfig{}).Listen(
+		context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port),
+	)
+	require.NoError(t, err, "exiting has to release the port for the next attempt")
+	require.NoError(t, listener.Close())
+}
+
+// The wording on the failed page is the whole point of the schema-ahead work:
+// a goose timestamp tells a user nothing about what to reinstall. Which of the
+// two sentences they get depends on whether their database was written by a
+// build that recorded its version, and every database in the field predates
+// that, so the version-less one has to read as well as the other.
+func TestDescribeDatabaseStartupFailure_WordsBothSchemaAheadCases(t *testing.T) {
+	t.Parallel()
+
+	newPlatform := func(t *testing.T, root string) *testmocks.MockPlatform {
+		t.Helper()
+		pl := testmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{
+			DataDir: root, ConfigDir: root, TempDir: root, LogDir: root,
+		})
+		return pl
+	}
+
+	t.Run("a database that records the build that wrote it", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+		seedMigratedUserDB(context.Background(), t, pl)
+
+		headline, detail := describeDatabaseStartupFailure(
+			pl, fmt.Errorf("opening user database: %w", database.ErrSchemaAhead),
+		)
+		assert.Equal(t, "Zaparoo cannot open your saved data", headline)
+		assert.Contains(t, detail, "upgraded by Zaparoo v"+config.AppVersion,
+			"naming the version is the reason the provenance is recorded")
+		assert.Contains(t, detail, "Reinstall v"+config.AppVersion, "and it has to say what to do")
+		assert.Contains(t, detail, "Nothing has been changed or deleted.")
+	})
+
+	t.Run("a database from before the build was recorded", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+
+		headline, detail := describeDatabaseStartupFailure(
+			pl, fmt.Errorf("opening user database: %w", database.ErrSchemaAhead),
+		)
+		assert.Equal(t, "Zaparoo cannot open your saved data", headline)
+		assert.NotContains(t, detail, "upgraded by Zaparoo v",
+			"with nothing recorded it must not name a version it does not know")
+		assert.Contains(t, detail, "a newer version of Zaparoo")
+		assert.Contains(t, detail, "(v"+config.AppVersion+")", "the installed version is still known")
+		assert.Contains(t, detail, "Nothing has been changed or deleted.")
+	})
+
+	t.Run("any other database failure", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		pl := newPlatform(t, root)
+
+		headline, detail := describeDatabaseStartupFailure(pl, errors.New("disk went away"))
+		assert.Equal(t, "Zaparoo could not start", headline)
+		assert.NotContains(t, detail, "newer version",
+			"only the schema-ahead refusal is about a version")
+	})
 }

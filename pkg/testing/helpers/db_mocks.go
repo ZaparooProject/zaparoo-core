@@ -2988,6 +2988,8 @@ func NewMockUserDBI() *MockUserDBI {
 	// don't each need to stub it; tests can override with their own expectation.
 	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
 	m.On("GetDeviceState", database.DeviceStateKeyMediaPreferencesRevision).Return("", false, nil).Maybe()
+	// Startup checks for a reconcile left pending by a restore; default to none.
+	m.On("GetDeviceState", database.DeviceStateKeyMediaUserDataReconcile).Return("", false, nil).Maybe()
 	return m
 }
 

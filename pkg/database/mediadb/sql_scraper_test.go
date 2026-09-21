@@ -120,6 +120,29 @@ func TestFindMediaBySystemAndPaths_ReturnsMatchesByPath(t *testing.T) {
 	assert.NotContains(t, results, missingPath)
 }
 
+// A restore reconcile asks for every media user data row of one system at
+// once, so the list is as long as the user made it. SQLite refuses a query
+// with more than 32766 variables, which an unchunked IN list would reach.
+func TestFindMediaBySystemAndPaths_MoreThanSQLiteVariableLimit(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	paths := make([]string, 0, 40000)
+	for i := range 40000 {
+		paths = append(paths, fmt.Sprintf("roms/absent-%d.nes", i))
+	}
+	// Last, so a query that only looked at the first chunk would miss it.
+	paths = append(paths, marioPath)
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(ctx, 1, paths)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, int64(1), results[marioPath].DBID)
+}
+
 func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

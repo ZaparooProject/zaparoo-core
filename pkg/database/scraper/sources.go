@@ -30,14 +30,16 @@ import (
 // SourceIndex provides temporary lookup keys over source rows already selected
 // from MediaDB. It never discovers launcher configuration or broadens scope.
 type SourceIndex struct {
-	byMedia map[string]database.MediaSource
-	byPath  map[string]database.MediaSource
+	byMedia  map[string]database.MediaSource
+	byPath   map[string]database.MediaSource
+	byParent map[string][]database.MediaSource
 }
 
 func NewSourceIndex(sources []database.MediaSource) *SourceIndex {
 	index := &SourceIndex{
-		byMedia: make(map[string]database.MediaSource, len(sources)),
-		byPath:  make(map[string]database.MediaSource, len(sources)),
+		byMedia:  make(map[string]database.MediaSource, len(sources)),
+		byPath:   make(map[string]database.MediaSource, len(sources)),
+		byParent: make(map[string][]database.MediaSource),
 	}
 	for _, source := range sources {
 		mediaKey := VirtualMediaKey(source.MediaPath)
@@ -57,9 +59,31 @@ func NewSourceIndex(sources []database.MediaSource) *SourceIndex {
 			index.byPath[source.SourceKey] = database.MediaSource{}
 		} else if !exists {
 			index.byPath[source.SourceKey] = source
+			index.addParent(&source)
 		}
 	}
 	return index
+}
+
+// addParent records a directory source under the folder that holds it. A
+// source sitting directly in its root has no such folder: the root is the
+// collection, not a game.
+func (s *SourceIndex) addParent(source *database.MediaSource) {
+	if source.SourceKind != "directory" {
+		return
+	}
+	parent := sourcePathKey(filepath.Dir(source.SourcePath))
+	if parent == sourcePathKey(source.SourceRoot) {
+		return
+	}
+	s.byParent[parent] = append(s.byParent[parent], *source)
+}
+
+// sourcePathKey must fold a path exactly as helpers.NormalizePathForComparison
+// does, because that is what the scanner wrote into SourceKey. Calling it
+// directly would import a cycle through pkg/launchables.
+func sourcePathKey(path string) string {
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
 // VirtualMediaKey ignores mutable display text while preserving scheme and ID.
@@ -88,6 +112,24 @@ func (s *SourceIndex) ForPath(path string) (database.MediaSource, bool) {
 	if s == nil {
 		return database.MediaSource{}, false
 	}
-	source := s.byPath[strings.ToLower(filepath.ToSlash(filepath.Clean(path)))]
+	source := s.byPath[sourcePathKey(path)]
 	return source, source.MediaDBID != 0
+}
+
+// UnderParent returns the unambiguous directory sources held directly inside
+// path, so metadata describing a game folder can reach the variants in it.
+func (s *SourceIndex) UnderParent(path string) []database.MediaSource {
+	if s == nil {
+		return nil
+	}
+	children := s.byParent[sourcePathKey(path)]
+	result := make([]database.MediaSource, 0, len(children))
+	for _, child := range children {
+		// A directory that turned out to be shared after it was recorded is
+		// blanked in byPath and must not inherit either.
+		if current := s.byPath[child.SourceKey]; current.MediaDBID == child.MediaDBID {
+			result = append(result, child)
+		}
+	}
+	return result
 }

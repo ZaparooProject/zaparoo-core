@@ -398,7 +398,8 @@ func backfillMediaHistoryUUIDs(userDB database.UserDBI) (int64, error) {
 // versions stored only in media.db. It runs only while UserDB has no media user
 // data yet: once any row exists, UserDB is authoritative and media.db's copy is
 // never re-read (re-reading could resurrect a favorite the user removed if a prior
-// projection write had failed).
+// projection write had failed). It also stands down while a restore's reconcile
+// is pending.
 //
 // rescued carries rows read out of a media database that has since been discarded
 // for having a newer schema; when it is set, it stands in for the read that can no
@@ -420,6 +421,17 @@ func backfillMediaUserData(ctx context.Context, db *database.Database, rescued [
 		return fmt.Errorf("reading media user data from user database: %w", err)
 	}
 	if len(existing) > 0 {
+		return nil
+	}
+	// A restored user database with no media user data is the user's data, not
+	// an old version's gap. Until the reconcile it queued has run, media.db
+	// still holds the replaced database's favorites and overrides, and
+	// importing them would undo the restore.
+	_, reconcilePending, err := db.UserDB.GetDeviceState(database.DeviceStateKeyMediaUserDataReconcile)
+	if err != nil {
+		return fmt.Errorf("reading media user data reconcile marker: %w", err)
+	}
+	if reconcilePending {
 		return nil
 	}
 

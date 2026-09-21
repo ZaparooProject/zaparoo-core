@@ -77,6 +77,10 @@ func (db *MediaDB) FindMediaBySystemAndPath(
 	return &row, nil
 }
 
+// FindMediaBySystemAndPaths returns the indexed media of one system for the
+// given paths, keyed by path. The paths come from a user-sized list (every
+// media user data row of a system, say), so they are queried in chunks that
+// stay under SQLite's variable limit.
 func (db *MediaDB) FindMediaBySystemAndPaths(
 	ctx context.Context, systemDBID int64, paths []string,
 ) (map[string]database.Media, error) {
@@ -88,6 +92,20 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 		return nil, ErrNullSQL
 	}
 
+	// One placeholder is spent on the system, so the rest is what a chunk holds.
+	chunkSize := sqliteMaxParams - 1
+	for start := 0; start < len(paths); start += chunkSize {
+		chunk := paths[start:min(start+chunkSize, len(paths))]
+		if err := db.findMediaBySystemAndPathChunk(ctx, systemDBID, chunk, results); err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+func (db *MediaDB) findMediaBySystemAndPathChunk(
+	ctx context.Context, systemDBID int64, paths []string, results map[string]database.Media,
+) error {
 	args := make([]any, 0, len(paths)+1)
 	args = append(args, systemDBID)
 	for _, path := range paths {
@@ -101,7 +119,7 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 		WHERE SystemDBID = ? AND Path IN (`+prepareVariadic("?", ",", len(paths))+`)
 	`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query FindMediaBySystemAndPaths: %w", err)
+		return fmt.Errorf("failed to query FindMediaBySystemAndPaths: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -119,11 +137,14 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 			&row.ParentDir,
 			&row.IsMissing,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPaths: %w", err)
+			return fmt.Errorf("failed to scan FindMediaBySystemAndPaths: %w", err)
 		}
 		results[row.Path] = row
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read FindMediaBySystemAndPaths: %w", err)
+	}
+	return nil
 }
 
 func (db *MediaDB) FindMediaIDsByPaths(

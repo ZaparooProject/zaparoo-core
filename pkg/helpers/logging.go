@@ -267,12 +267,16 @@ func LogPath(pl platforms.Platform) string {
 // evidence outlives the boot that produced it.
 //
 // Platforms whose log directory is already persistent do nothing and get the
-// live path back.
+// live path back. Pointing LogDir at TempDir is what makes a log volatile, and
+// MiSTer and Mistex are the only platforms that do it; everywhere else LogDir
+// is a persistent directory of its own, so copying the bundle would leave a
+// second, immediately stale core.log beside the live one on every stop.
 func PersistLog(pl platforms.Platform) string {
+	settings := pl.Settings()
 	livePath := LogPath(pl)
 
 	dataDir := DataDir(pl)
-	if dataDir == "" || pl.Settings().LogDir == dataDir {
+	if dataDir == "" || settings.LogDir == "" || settings.LogDir != settings.TempDir {
 		return livePath
 	}
 

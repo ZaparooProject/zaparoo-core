@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -180,4 +181,71 @@ func TestStartupServer_RefusesAnOccupiedPort(t *testing.T) {
 	_, err = NewStartupServer(ctx, cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to bind API listener")
+}
+
+// A refusal is often the only line a client has room to show. Telling a caller
+// Zaparoo is "still starting" when it has stopped on something a person has to
+// resolve sends them off to wait for something that is never coming.
+func TestStartupServer_RefusalSaysWhichStateItIsIn(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestStartupServer(t)
+
+	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/nothing-here", srv.Port()))
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Contains(t, body, "still starting")
+
+	srv.SetFailed("Zaparoo cannot open your saved data", "Reinstall the newer version.", "")
+
+	code, body = getBody(t, fmt.Sprintf("http://127.0.0.1:%d/nothing-here", srv.Port()))
+	require.Equal(t, http.StatusServiceUnavailable, code)
+	assert.NotContains(t, body, "still starting",
+		"a failed start is not something a caller should sit and wait out")
+	assert.Contains(t, body, "could not start")
+}
+
+// The detail line is what the page shows while startup is still working, and
+// it is the only progress a user gets during a long migration.
+func TestStartupServer_ShowsTheStepItIsOn(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestStartupServer(t)
+	srv.SetStartingDetail("Opening databases. On a large library this can take several minutes.")
+
+	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/app/", srv.Port()))
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "Zaparoo is starting")
+	assert.Contains(t, body, "can take several minutes")
+
+	_, state := healthState(t, srv)
+	assert.Equal(t, "starting", state, "a progress update must not change the state")
+}
+
+// Shutdown has to mean the port is free, because that is what every caller
+// does next: the failed state releases it when stopped, and a start that ends
+// after the listener was bound leaves it for the next attempt. http.Server's
+// own Shutdown does not promise this, and the window it misses is the one
+// these callers sit in — a shutdown very shortly after the bind.
+func TestStartupServer_ShutdownReleasesThePortBeforeItReturns(t *testing.T) {
+	t.Parallel()
+
+	// One pass would pass by luck most of the time; the miss is a race.
+	for i := range 50 {
+		cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, t.TempDir(), "127.0.0.1", 0)
+		require.NoError(t, err)
+
+		srv, err := NewStartupServer(t.Context(), cfg)
+		require.NoError(t, err)
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = srv.Shutdown(shutdownCtx)
+		cancel()
+		require.NoError(t, err)
+
+		again, err := (&net.ListenConfig{}).Listen(
+			context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", srv.Port()),
+		)
+		require.NoErrorf(t, err, "port still held after shutdown returned, on pass %d", i)
+		require.NoError(t, again.Close())
+	}
 }

@@ -143,27 +143,22 @@ func (l *InputManager) KeyboardPress(arg string) error {
 	return l.pressKeyboardToken(arg)
 }
 
-// resolveHoldKeyCode converts a key name (as it appears inside a sigil or hold
-// token, without braces) to a keycode. Shifted single chars (e.g. "M", "*")
-// resolve to their base code. Multi-char names get braces added before looking
-// them up (e.g. "shift" → "{shift}").
-func resolveHoldKeyCode(name string) (int, error) {
-	if baseCode, ok := keyboardmap.IsShiftedKey(name); ok {
-		return baseCode, nil
-	}
+// resolveHoldKeyCodes converts a key name (as it appears inside a sigil or hold
+// token, without braces) to the keys to press, in press order. Shifted single
+// chars (e.g. "M", "*") include Shift, and combos (e.g. "ctrl+c") include every
+// member. Multi-char names get braces added before looking them up (e.g.
+// "shift" → "{shift}").
+func resolveHoldKeyCodes(name string) ([]int, error) {
 	// Choose the form ParseKeyCombo expects.
 	arg := name
 	if len([]rune(name)) > 1 {
 		arg = "{" + name + "}"
 	}
-	codes, isCombo, err := keyboardmap.ParseKeyCombo(arg)
+	codes, _, err := keyboardmap.ParseKeyCombo(arg)
 	if err != nil {
-		return 0, fmt.Errorf("unknown key %q: %w", name, err)
+		return nil, fmt.Errorf("unknown key %q: %w", name, err)
 	}
-	if isCombo {
-		return 0, fmt.Errorf("hold/press/release does not support combos: %q", name)
-	}
-	return codes[0], nil
+	return keyboardmap.ExpandShift(codes), nil
 }
 
 // resolveGamepadHoldCode converts a button name (as it appears inside a sigil

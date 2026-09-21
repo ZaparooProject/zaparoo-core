@@ -236,7 +236,16 @@ func (s *StartupServer) SwapHandler(h http.Handler) {
 	log.Debug().Msg("API router installed, service ready")
 }
 
-// Shutdown stops the HTTP server.
+// Shutdown stops the HTTP server and waits for it to stop serving.
+//
+// The wait is what makes the port free when this returns, and callers depend
+// on that: the failed state has to give the port back when it is stopped, and
+// a start that ends after the listener was bound has to leave it for the next
+// attempt. http.Server.Shutdown alone does not promise it. It closes the
+// listeners it has been told about, and Serve registers the listener after it
+// starts, so a shutdown landing in that window closes nothing and leaves
+// Serve's own deferred close to do it — after Shutdown has returned. Measured
+// at 1714 of 2000 immediate shutdowns.
 func (s *StartupServer) Shutdown(ctx context.Context) error {
 	if s == nil {
 		return nil
@@ -244,7 +253,12 @@ func (s *StartupServer) Shutdown(ctx context.Context) error {
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("HTTP server shutdown error: %w", err)
 	}
-	return nil
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for the HTTP server to stop: %w", ctx.Err())
+	}
 }
 
 // WriteHealth renders the /health body for the current state. It is used by
@@ -267,12 +281,23 @@ func (s *StartupServer) WriteHealth(w http.ResponseWriter) {
 	}
 }
 
+// refusal is what an unserved route says. The state matters: a caller told
+// "still starting" reasonably retries, and in the failed state that is a wait
+// that never ends. The page and /health carry the detail; this is the one
+// line a client has room to show.
+func (s *StartupServer) refusal() string {
+	if s.State() == ServiceStateFailed {
+		return "Zaparoo could not start; open it in a browser for details"
+	}
+	return "Zaparoo is still starting"
+}
+
 // serveStartup is the handler installed until the full router is ready. It
-// answers the four routes that need nothing but the listener and refuses
+// answers the routes that need nothing but the listener and refuses
 // everything else, so callers waiting on the real API keep waiting.
 func (s *StartupServer) serveStartup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Zaparoo is still starting", http.StatusServiceUnavailable)
+		http.Error(w, s.refusal(), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -282,7 +307,7 @@ func (s *StartupServer) serveStartup(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/" || r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/"):
 		s.servePage(w)
 	default:
-		http.Error(w, "Zaparoo is still starting", http.StatusServiceUnavailable)
+		http.Error(w, s.refusal(), http.StatusServiceUnavailable)
 	}
 }
 

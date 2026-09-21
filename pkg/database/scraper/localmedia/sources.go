@@ -20,6 +20,8 @@
 package localmedia
 
 import (
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
@@ -39,6 +41,11 @@ func mediaArtworkNames(
 		switch source.SourceKind {
 		case "directory":
 			names = esmedia.DirectoryArtworkFallbackNames(source.SourcePath, source.SourceRoot)
+			// A variant without artwork of its own takes the artwork of the
+			// game folder holding it. The root is the collection, not a game,
+			// and yields no names here.
+			names = append(names,
+				esmedia.DirectoryArtworkFallbackNames(filepath.Dir(source.SourcePath), source.SourceRoot)...)
 		case "file":
 			names = artworkFallbackNames(source.SourcePath, []string{source.SourceRoot}, false)
 		default:

@@ -21,7 +21,6 @@ package methods
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,27 +75,23 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 
 	row := resolved[0].Row
 	if patch.LauncherOverrideSet {
-		// Write the durable truth (UserDB) before the media.db projection. If the
-		// projection write fails the truth is still saved and the next reindex
-		// re-materializes it.
-		if patch.LauncherOverride == nil {
-			if udErr := setMediaUserLauncherOverride(&env, row.System.SystemID, row.Path, ""); udErr != nil {
-				return nil, udErr
-			}
-			if err := clearMediaLauncherOverride(&env, row.DBID); err != nil {
-				return nil, err
-			}
-		} else {
-			launcherID, err := resolveLauncherOverrideID(&env, row.System.SystemID, *patch.LauncherOverride)
+		// The durable truth (UserDB) is written before the media.db projection.
+		// If the projection write fails the truth is still saved and the next
+		// reindex re-materializes it.
+		launcherID := ""
+		if patch.LauncherOverride != nil {
+			launcherID, err = resolveLauncherOverrideID(&env, row.System.SystemID, *patch.LauncherOverride)
 			if err != nil {
 				return nil, err
 			}
-			if udErr := setMediaUserLauncherOverride(&env, row.System.SystemID, row.Path, launcherID); udErr != nil {
-				return nil, udErr
-			}
-			if err := setMediaLauncherOverride(&env, row.DBID, launcherID); err != nil {
-				return nil, err
-			}
+		}
+		applyErr := database.ApplyMediaUserLauncherOverride(
+			env.Context, env.Database, row.System.SystemID, row.Path, row.DBID, launcherID,
+		)
+		// The snapshot never inserts, so it is safe even when the write failed.
+		snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
+		if applyErr != nil {
+			return nil, fmt.Errorf("failed to apply media launcher override: %w", applyErr)
 		}
 	}
 
@@ -143,22 +138,6 @@ func parseMediaMetaUpdatePatch(raw json.RawMessage) (mediaMetaUpdatePatch, error
 	return patch, nil
 }
 
-func setMediaLauncherOverride(env *requests.RequestEnv, mediaDBID int64, launcherID string) error {
-	if err := ensureLauncherOverridePropertyTag(env.Database.MediaDB); err != nil {
-		return err
-	}
-	prop := database.MediaProperty{
-		TypeTag: launcherOverridePropertyTypeTag(),
-		Text:    launcherID,
-	}
-	if err := env.Database.MediaDB.UpsertMediaProperties(
-		env.Context, mediaDBID, []database.MediaProperty{prop},
-	); err != nil {
-		return fmt.Errorf("failed to set media launcher override: %w", err)
-	}
-	return nil
-}
-
 func resolveLauncherOverrideID(env *requests.RequestEnv, systemID, requested string) (string, error) {
 	candidates := launcherCandidates(env)
 	for i := range candidates {
@@ -182,48 +161,4 @@ func launcherCandidates(env *requests.RequestEnv) []platforms.Launcher {
 		return nil
 	}
 	return env.Platform.Launchers(env.Config)
-}
-
-func ensureLauncherOverridePropertyTag(mediaDB database.MediaDBI) error {
-	tagType, err := mediaDB.FindOrInsertTagType(database.TagType{
-		Type:        string(tags.TagTypeProperty),
-		IsExclusive: tags.IsExclusiveType(tags.TagTypeProperty),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to find or insert launcher override tag type: %w", err)
-	}
-	_, err = mediaDB.FindOrInsertTag(database.Tag{
-		TypeDBID: tagType.DBID,
-		Tag:      string(tags.TagPropertyLauncherOverride),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to find or insert launcher override tag: %w", err)
-	}
-	return nil
-}
-
-func clearMediaLauncherOverride(env *requests.RequestEnv, mediaDBID int64) error {
-	mediaDB := env.Database.MediaDB
-	tagType, err := mediaDB.FindTagType(database.TagType{Type: string(tags.TagTypeProperty)})
-	if err != nil {
-		return ignoreMissingPropertyTag(err)
-	}
-	tagRow, err := mediaDB.FindTag(database.Tag{
-		TypeDBID: tagType.DBID,
-		Tag:      string(tags.TagPropertyLauncherOverride),
-	})
-	if err != nil {
-		return ignoreMissingPropertyTag(err)
-	}
-	if err := mediaDB.DeleteMediaProperty(env.Context, mediaDBID, tagRow.DBID); err != nil {
-		return fmt.Errorf("failed to clear media launcher override: %w", err)
-	}
-	return nil
-}
-
-func ignoreMissingPropertyTag(err error) error {
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	return err
 }

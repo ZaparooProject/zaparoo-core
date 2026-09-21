@@ -191,6 +191,98 @@ test_core_health_response() {
     pass "accept current and legacy Core health responses"
 }
 
+# Core answers /health from before its databases open, and a first start after
+# an upgrade can spend minutes applying migrations. Every caller of
+# verify_core_api treats a failure as grounds to roll the installation back, so
+# a slow but healthy start must not count against the verification budget.
+#
+# The call counter lives in a file because verify_core_api reads curl through a
+# command substitution, and a variable incremented in that subshell never
+# reaches the caller.
+verify_core_api_health_calls() {
+    local counter="$1"
+    printf '%s\n' "$(($(cat "${counter}") + 1))" >"${counter}"
+    cat "${counter}"
+}
+
+test_verify_core_api_waits_out_a_reported_startup() {
+    local counter="${TEST_TMP}/verify-startup-calls"
+    local result
+    printf '0\n' >"${counter}"
+    result="$(
+        sleep() { :; }
+        curl() {
+            local url="${*: -1}" calls
+            if [[ "${url}" == *"/health" ]]; then
+                calls="$(verify_core_api_health_calls "${counter}")"
+                if [ "${calls}" -le 40 ]; then
+                    printf '{"status":"starting","state":"starting"}'
+                else
+                    printf '{"status":"ok","state":"ready"}'
+                fi
+                return 0
+            fi
+            printf '{"result":{"version":"9.9.9","platform":"steamos"}}'
+        }
+        if verify_core_api "9.9.9" >/dev/null; then
+            printf 'verified\n'
+        else
+            printf 'gave up\n'
+        fi
+    )"
+    assert_equal "verified" "${result}" "a reported startup must not fail verification"
+    assert_equal "41" "$(cat "${counter}")" \
+        "every starting answer is waited on, not charged to the verification budget"
+    pass "wait out a Core that reports it is still starting"
+}
+
+# A Core that stopped on something a person has to resolve holds the port and
+# keeps saying so. Waiting out the full window there only delays the rollback.
+test_verify_core_api_gives_up_on_a_reported_failure() {
+    local counter="${TEST_TMP}/verify-failed-calls"
+    local result
+    printf '0\n' >"${counter}"
+    result="$(
+        sleep() { :; }
+        curl() {
+            verify_core_api_health_calls "${counter}" >/dev/null
+            printf '{"status":"error","state":"failed"}'
+        }
+        if verify_core_api "9.9.9" >/dev/null; then
+            printf 'verified\n'
+        else
+            printf 'gave up\n'
+        fi
+    )"
+    assert_equal "gave up" "${result}" "a reported failure is final"
+    assert_equal "1" "$(cat "${counter}")" "no point asking a second time"
+    pass "stop verifying once Core reports a failed start"
+}
+
+# The bound still has to exist: a service that answers nothing useful cannot
+# hold the installer open forever.
+test_verify_core_api_still_gives_up_on_an_unusable_service() {
+    local counter="${TEST_TMP}/verify-unusable-calls"
+    local result
+    printf '0\n' >"${counter}"
+    result="$(
+        sleep() { :; }
+        curl() {
+            verify_core_api_health_calls "${counter}" >/dev/null
+            printf 'something else entirely'
+        }
+        if verify_core_api "9.9.9" >/dev/null; then
+            printf 'verified\n'
+        else
+            printf 'gave up\n'
+        fi
+    )"
+    assert_equal "gave up" "${result}" "an unusable service fails verification"
+    assert_equal "${CORE_API_VERIFY_ATTEMPTS}" "$(cat "${counter}")" \
+        "the verification budget still bounds an unusable service"
+    pass "keep a bound on verifying an unusable service"
+}
+
 test_api_identity_fields_are_literal() {
     local response='{"result":{"version":"2.17.0+build.1","platform":"steamos"}}'
     assert_equal "2.17.0+build.1" "$(json_string_field version "${response}")" \
@@ -565,6 +657,9 @@ test_dry_run_prompts_accept
 test_signed_release_selection
 test_invalid_release_metadata
 test_core_health_response
+test_verify_core_api_waits_out_a_reported_startup
+test_verify_core_api_gives_up_on_a_reported_failure
+test_verify_core_api_still_gives_up_on_an_unusable_service
 test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name

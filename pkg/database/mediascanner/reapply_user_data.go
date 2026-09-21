@@ -44,7 +44,8 @@ import (
 //
 // Writes use the same media.db primitives as the live edit handlers, so the
 // projection is identical. It is add-only: live edits keep media.db in sync when
-// a flag or override is removed, so re-apply never needs to delete. Rows whose
+// a flag or override is removed, so re-apply never needs to delete; a UserDB
+// replaced as a whole is database.ReconcileMediaUserData's job. Rows whose
 // system or path is not currently indexed are harmless orphans and are skipped.
 func reapplyMediaUserData(
 	ctx context.Context, db database.MediaDBI, userDB database.UserDBI,

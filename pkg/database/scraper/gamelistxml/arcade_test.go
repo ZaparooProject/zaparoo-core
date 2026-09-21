@@ -391,6 +391,7 @@ func TestPlatformScraperGatesArcadeSetsByPlatform(t *testing.T) {
 			pl.SetupBasicMock()
 			pl.ExpectedCalls = nil
 			pl.On("ID").Return(tc.platformID)
+			pl.On("Settings").Return(platforms.Settings{})
 			pl.On("RootDirs", mock.Anything).Return([]string{})
 			pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 			mdb := helpers.NewMockMediaDBI()

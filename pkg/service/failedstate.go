@@ -48,6 +48,12 @@ const failedStateShutdownTimeout = 30 * time.Second
 //
 // It is an error so it travels the existing return path, which matters because
 // the updater gets first refusal on a failed start and must keep doing so.
+//
+// Every failure that ends startup after the listener is bound becomes one of
+// these, whether or not Core will stay up for it, because the listener has to
+// be given back either way. startingAgainCanHelp is the only thing that
+// decides which happens, so headline and detail are supplied everywhere rather
+// than at whichever call sites currently qualify.
 type startupFailureError struct {
 	startup      *api.StartupServer
 	state        *state.State
@@ -85,6 +91,42 @@ func newStartupFailure(
 	}
 }
 
+// startingAgainCanHelp reports whether a supervisor restarting this process is
+// a plausible recovery for the failure.
+//
+// Only the schema-ahead refusal is certain that it is not: the file on disk is
+// the same on the next attempt. A data directory whose mount is not up yet, a
+// busy file, a platform dependency still starting — those do come good on
+// their own, and the service units retry every five seconds until they do.
+// Holding the port to show a page instead would trade a recovery that works
+// for one nobody is watching.
+//
+// pkg/cli's ExitCodeFor answers the same question for the exit status and is
+// keyed off the same sentinel. It cannot be called from here, because pkg/cli
+// imports this package.
+func (f *startupFailureError) startingAgainCanHelp() bool {
+	return !errors.Is(f.err, database.ErrSchemaAhead)
+}
+
+// release gives the bound listener back when Core is going to exit after all.
+// The listener was taken before the databases opened, so nothing else frees it
+// on a path that ends startup.
+func (f *startupFailureError) release() {
+	if f.stopPlatform {
+		if stopErr := f.platform.Stop(); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping platform after a failed start")
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), failedStateShutdownTimeout)
+	defer cancel()
+	if shutdownErr := f.startup.Shutdown(shutdownCtx); shutdownErr != nil {
+		log.Warn().Err(shutdownErr).Msg("error shutting down startup server")
+	}
+
+	f.state.StopService()
+}
+
 // enter keeps the process alive after a startup failure a person has to
 // resolve. The listener is already bound, so the startup page and /health can
 // say what happened. Nothing else runs: no readers, no token processing, no
@@ -95,10 +137,14 @@ func newStartupFailure(
 // explains it, or on MiSTer, where nothing supervises the service at all, a
 // process that is simply gone by the time anyone looks.
 func (f *startupFailureError) enter() (*StartResult, error) {
+	// Before the copy, not after it: the copy is the file support asks for, so
+	// it has to contain the explanation. The interrupted-backup path does not
+	// log on its own, so without this that one failure reaches storage with
+	// nothing in the log saying what happened.
+	log.Error().Err(f.err).Msg("startup failed; staying up to report it")
+
 	logPath := helpers.PersistLog(f.platform)
 	f.startup.SetFailed(f.headline, f.detail, logPath)
-
-	log.Error().Err(f.err).Str("log", logPath).Msg("startup failed; staying up to report it")
 
 	done := make(chan struct{})
 	go func() {

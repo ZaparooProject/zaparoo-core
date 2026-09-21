@@ -97,7 +97,13 @@ class Harness:
         self.record('api_ready', version)
         if self.expected_version is not None:
             assert version['version'] == self.expected_version, f'Expected {self.expected_version}, got {version["version"]}'
-        assert self.rpc('health') == {'status': 'ok'}
+        # Exact equality would pin this to one build's field set. The rig also
+        # runs pinned published releases, which answer with status alone, while
+        # current builds add the lifecycle state. Assert what the route
+        # promises: healthy, and fully started if it says so at all.
+        health = self.rpc('health')
+        assert health.get('status') == 'ok', health
+        assert health.get('state', 'ready') == 'ready', health
         readers = wait(lambda: self.rpc('readers'), lambda r: any(x.get('driver') == 'file' and x.get('connected') for x in r.get('readers', [])))
         self.record('reader_connected', readers)
         return next(x for x in readers['readers'] if x['driver'] == 'file')

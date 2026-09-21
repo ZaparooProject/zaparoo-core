@@ -118,6 +118,28 @@ func TestBackfillMediaUserData(t *testing.T) {
 	assert.Equal(t, "RetroArch", override.LauncherOverride)
 }
 
+// A restored backup with no media user data must stay empty: media.db still
+// holds the replaced database's favorites and overrides until the reconcile
+// the restore queued has run.
+func TestBackfillMediaUserDataSkipsWhileReconcilePending(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	seedMediaUserData(ctx, t, mediaDB)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+	newMediaUserReconciler(db).QueueMediaUserDataReconcile()
+
+	require.NoError(t, backfillMediaUserData(ctx, db, nil))
+
+	rows, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, rows, "the replaced database's data is not imported into the restored one")
+}
+
 func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	ctx := context.Background()
 

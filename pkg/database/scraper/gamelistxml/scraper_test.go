@@ -21,6 +21,7 @@ package gamelistxml
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,9 +36,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -459,6 +462,8 @@ func TestLoadParsedGamelistSystem_SkipsMalformedCustomFile(t *testing.T) {
 		loadParsedGamelistSystem(context.Background(), scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{t.TempDir()}})
 	require.NoError(t, err)
 	assert.Empty(t, parsed.Files)
+	require.Len(t, parsed.SourceErrors, 1)
+	assert.Equal(t, filepath.Join(customSystemDir, "gamelist.xml"), parsed.SourceErrors[0].Path)
 }
 
 func TestCompanionParent_CustomGamelistAssetPolicy(t *testing.T) {
@@ -3942,6 +3947,173 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	assert.Equal(t, 1, done.Processed)
 	assert.Equal(t, 1, done.Matched)
 	assert.Equal(t, 0, done.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
+// TestMaxGamelistBytesForPlatform covers the per-platform size limit. A
+// gamelist is held in memory for the whole scrape, so a device that reports
+// ResourceConstrained keeps the smaller limit rather than decoding a list it
+// does not have the memory for.
+func TestMaxGamelistBytesForPlatform(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		want        int64
+		constrained bool
+	}{
+		{name: "constrained", constrained: true, want: esapi.MaxGameListXMLSizeConstrained},
+		{name: "unconstrained", constrained: false, want: esapi.MaxGameListXMLSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pl := mocks.NewMockPlatform()
+			pl.On("Settings").Return(platforms.Settings{ResourceConstrained: tc.constrained})
+			assert.Equal(t, tc.want, maxGamelistBytesForPlatform(pl))
+		})
+	}
+
+	assert.Equal(t, int64(esapi.MaxGameListXMLSize), maxGamelistBytesForPlatform(nil),
+		"an unknown platform must not get the constrained limit by accident")
+	assert.Equal(t, int64(esapi.MaxGameListXMLSize), (&GamelistXMLScraper{}).maxGamelistFileBytes(),
+		"an unresolved limit must fall back to the default")
+}
+
+// TestLoadParsedGamelistSystem_ReportsOversizeFile checks the resolved limit is
+// applied to the file the scraper reads, and that exceeding it is reported with
+// the limit that actually applied instead of being skipped silently.
+func TestLoadParsedGamelistSystem_ReportsOversizeFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	body := `<gameList><game><path>./Game.d64</path><name>Game</name></game></gameList>`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(body), 0o600))
+
+	s := &GamelistXMLScraper{maxGamelistBytes: int64(len(body)) - 1}
+	parsed, err := s.loadParsedGamelistSystem(
+		context.Background(), scraper.ScrapeSystem{ID: "C64", ROMPaths: []string{root}},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, parsed.Files)
+	require.Len(t, parsed.SourceErrors, 1)
+	require.ErrorIs(t, parsed.SourceErrors[0], esapi.ErrGameListTooLarge)
+
+	// The same file loads once the limit allows it.
+	s.maxGamelistBytes = esapi.MaxGameListXMLSizeConstrained
+	parsed, err = s.loadParsedGamelistSystem(
+		context.Background(), scraper.ScrapeSystem{ID: "C64", ROMPaths: []string{root}},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, parsed.SourceErrors)
+	require.Len(t, parsed.Files, 1)
+	require.Len(t, parsed.Files[0].Games, 1)
+}
+
+// TestScrapeLoop_UnreadableGamelistIsReported covers issue #1502: a gamelist.xml
+// that cannot be loaded used to be skipped with nothing but a log line, so the
+// run finished "completed" with no matches and no reason. The failure must reach
+// the caller, and the system's other root must still import. The readable root
+// is a Skraper RecalBox-mode C64 list, the shape the report was about.
+func TestScrapeLoop_UnreadableGamelistIsReported(t *testing.T) {
+	t.Parallel()
+	brokenRoot := t.TempDir()
+	brokenPath := filepath.Join(brokenRoot, "gamelist.xml")
+	require.NoError(t, os.WriteFile(brokenPath, []byte(`<gameList><game><path>./Broken.d64</path>`), 0o600))
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte("\xef\xbb\xbf"+
+		`<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<gameList>
+  <provider>
+    <System>Commodore 64</System>
+    <software>Skraper</software>
+    <database>ScreenScraper.fr</database>
+    <web>http://www.screenscraper.fr</web>
+  </provider>
+  <game id="0" source="ScreenScraper.fr">
+    <path>./Unknown Demo (19xx)(-).prg</path>
+    <name>Unknown Demo (19xx)(-)</name>
+    <desc/>
+    <releasedate/>
+    <developer/>
+    <publisher/>
+    <genre/>
+    <players/>
+  </game>
+  <game id="13344" source="ScreenScraper.fr">
+    <path>./Bubble Bobble (1987)(Firebird)[cr Ikari].d64</path>
+    <name>Bubble Bobble</name>
+    <desc>Bub &amp; Bob blow bubbles.</desc>
+    <rating>0.8</rating>
+    <releasedate>19870101T000000</releasedate>
+    <developer>Software Creations</developer>
+    <publisher>Firebird</publisher>
+    <genre>Platform</genre>
+    <players>1-2</players>
+    <hash>7B2A9C01</hash>
+    <image>./media/images/Bubble Bobble (1987)(Firebird)[cr Ikari].png</image>
+    <genreid>257</genreid>
+  </game>
+</gameList>`), 0o600))
+
+	const (
+		mediaDBID  = int64(15020)
+		titleDBID  = int64(15021)
+		systemDBID = int64(15022)
+	)
+	romPath := filepath.Join(root, "Bubble Bobble (1987)(Firebird)[cr Ikari].d64")
+	imageProp := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	writeMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		if w == nil {
+			return false
+		}
+		for _, p := range w.MediaProps {
+			if p.TypeTag == imageProp {
+				return p.Text == filepath.ToSlash(filepath.Join(
+					root, "media", "images", "Bubble Bobble (1987)(Firebird)[cr Ikari].png",
+				))
+			}
+		}
+		return false
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{}, nil)
+	mockDB.On("GetMediaBySystemID", "C64").
+		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: romPath}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "C64", ROMPaths: []string{brokenRoot, root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	var done scraper.ScrapeUpdate
+	var sourceErrs []*scraper.SourceError
+	for _, u := range drainChannel(ch) {
+		if u.Done {
+			done = u
+		}
+		var sourceErr *scraper.SourceError
+		if errors.As(u.Err, &sourceErr) {
+			assert.Equal(t, "C64", u.SystemID)
+			assert.False(t, u.Done)
+			require.NoError(t, u.FatalErr)
+			sourceErrs = append(sourceErrs, sourceErr)
+		}
+	}
+	require.Len(t, sourceErrs, 1)
+	assert.Equal(t, brokenPath, sourceErrs[0].Path)
+	require.ErrorContains(t, sourceErrs[0], brokenPath)
+	require.True(t, done.Done)
+	require.NoError(t, done.FatalErr)
+	assert.Equal(t, 1, done.Matched)
 	mockDB.AssertExpectations(t)
 }
 
