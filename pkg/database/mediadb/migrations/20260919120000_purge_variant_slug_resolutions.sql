@@ -10,6 +10,12 @@
 -- only memoises resolutions the pipeline can redo, and the next launch of each
 -- title repopulates it.
 
+-- zaparoo:allow-unbounded a stale entry returns the wrong title, and only the
+-- cache knows which of its rows predate the corrected selection rule, so there
+-- is nothing narrower to delete and no later moment at which it is still safe
+-- to serve them. The row count is the cache's, not the library's: it holds one
+-- row per title actually launched, and the delete is a single unindexed scan of
+-- a table that is empty on a new install.
 DELETE FROM SlugResolutionCache;
 
 -- +goose Down
