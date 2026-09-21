@@ -338,3 +338,40 @@ func TestTargetSystems(t *testing.T) {
 	assert.Empty(t, targetSystems(supported, supported, []string{"snes"}),
 		"a request for an unrelated system selects nothing")
 }
+
+func TestSharedTitleWritesAreOrderedByPath(t *testing.T) {
+	t.Parallel()
+	// Regional variants of one game share a title, and a fill-missing run gives
+	// that title's exclusive tags to whichever variant is written first. The
+	// catalog disagrees with itself for a handful of set names, so which one
+	// that is must not depend on the order the database happened to return.
+	fs := afero.NewMemMapFs()
+	japan := descriptor(t, fs, "1941 - Counter Attack (Japan)", "1941j")
+	world := descriptor(t, fs, "1941 - Counter Attack (World)", "1941")
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
+		arcadeMedia(101, 1, world),
+		arcadeMedia(100, 1, japan),
+	}, nil)
+	mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
+		Return(map[int64]struct{}{}, nil)
+	writes := captureWrites(mediaDB)
+
+	world1941 := cps1Entry()
+	japan1941 := cps1Entry()
+	japan1941.SetName = "1941j"
+	japan1941.Year = "1991"
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(world1941, japan1941), nil)
+	run(t, &s, fs, mediaDB, scraper.ScrapeOptions{FillMissing: true, RunID: "run-1"})
+
+	require.Len(t, *writes, 2)
+	assert.Equal(t, []int64{100, 101},
+		[]int64{(*writes)[0].MediaDBID, (*writes)[1].MediaDBID},
+		"writes follow descriptor path order, not the order the database returned")
+	assert.Equal(t, []string{"1991"}, tagValues((*writes)[0].Write.TitleTags, tags.TagTypeYear),
+		"the lexicographically first descriptor is the one whose title tags land first")
+	assert.True(t, (*writes)[0].Write.FillMissing)
+}
