@@ -409,3 +409,22 @@ func TestFallbackInstanceName(t *testing.T) {
 	assert.Equal(t, "zaparoo", fallbackInstanceName("short"))
 	assert.Equal(t, "zaparoo", fallbackInstanceName(""))
 }
+
+func TestResolveInstanceNameMatchesAdvertisedName(t *testing.T) {
+	t.Parallel()
+
+	for _, configured := range []string{"", "Living Room"} {
+		cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+		require.NoError(t, err)
+		cfg.SetDiscoveryInstanceName(configured)
+
+		advertised, err := New(cfg).resolveInstanceName()
+		require.NoError(t, err)
+		name := ResolveInstanceName(cfg)
+		assert.Equal(t, advertised, name)
+		assert.NotEmpty(t, name)
+		if configured != "" {
+			assert.Equal(t, configured, name)
+		}
+	}
+}

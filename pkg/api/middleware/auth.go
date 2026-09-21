@@ -50,6 +50,9 @@ type APIKeyProvider func() []string
 // It uses a provider function to fetch keys dynamically, supporting hot-reload.
 type AuthConfig struct {
 	getKeys APIKeyProvider
+	// listenerKeys, when set, replaces getKeys for requests accepted by the
+	// listener marked with ListenerKeyScope, and for no other request.
+	listenerKeys APIKeyProvider
 }
 
 // NewAuthConfig creates a new AuthConfig with a key provider function.
@@ -61,9 +64,42 @@ func NewAuthConfig(keyProvider APIKeyProvider) *AuthConfig {
 	}
 }
 
+// NewListenerAuthConfig creates an AuthConfig for a server with two listeners
+// that must not share credentials. listenerKeys authenticates only requests
+// whose connection was accepted by the listener marked with ListenerKeyScope;
+// every other request is checked against networkKeys. The decision follows the
+// accepting listener, never anything the client sends, and an unmarked request
+// falls back to networkKeys so a lost mark cannot widen the listener keys.
+func NewListenerAuthConfig(networkKeys, listenerKeys APIKeyProvider) *AuthConfig {
+	return &AuthConfig{
+		getKeys:      networkKeys,
+		listenerKeys: listenerKeys,
+	}
+}
+
+// keysFor returns the provider that authenticates this request's listener.
+func (a *AuthConfig) keysFor(r *http.Request) APIKeyProvider {
+	if a.listenerKeys != nil && HasListenerKeyScope(r) {
+		return a.listenerKeys
+	}
+	return a.getKeys
+}
+
 // Enabled returns true if authentication is enabled (at least one key configured).
+// It reports the network keys; requests are checked against their own listener.
 func (a *AuthConfig) Enabled() bool {
-	keys := a.getKeys()
+	return keysEnabled(a.getKeys)
+}
+
+// IsValidKey checks if the provided key is valid using constant-time comparison
+// to prevent timing attacks. It checks the network keys; requests are checked
+// against their own listener.
+func (a *AuthConfig) IsValidKey(key string) bool {
+	return keyIsValid(a.getKeys, key)
+}
+
+func keysEnabled(getKeys APIKeyProvider) bool {
+	keys := getKeys()
 	for _, k := range keys {
 		if k != "" {
 			return true
@@ -72,14 +108,12 @@ func (a *AuthConfig) Enabled() bool {
 	return false
 }
 
-// IsValidKey checks if the provided key is valid using constant-time comparison
-// to prevent timing attacks.
-func (a *AuthConfig) IsValidKey(key string) bool {
+func keyIsValid(getKeys APIKeyProvider, key string) bool {
 	if key == "" {
 		return false
 	}
 
-	keys := a.getKeys()
+	keys := getKeys()
 	var found bool
 	for _, k := range keys {
 		if k != "" && subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
@@ -105,7 +139,8 @@ func extractKey(r *http.Request) string {
 func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !IsUnixPeer(r) && (!auth.Enabled() || IsLoopbackAddr(r.RemoteAddr)) {
+			getKeys := auth.keysFor(r)
+			if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsLoopbackAddr(r.RemoteAddr)) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -120,7 +155,7 @@ func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			if !auth.IsValidKey(key) {
+			if !keyIsValid(getKeys, key) {
 				log.Debug().
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
@@ -138,7 +173,8 @@ func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 // Returns true if the connection is allowed, false otherwise.
 // If no keys are configured or the request is from localhost, all connections are allowed.
 func WebSocketAuthHandler(auth *AuthConfig, r *http.Request) bool {
-	if !IsUnixPeer(r) && (!auth.Enabled() || IsLoopbackAddr(r.RemoteAddr)) {
+	getKeys := auth.keysFor(r)
+	if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsLoopbackAddr(r.RemoteAddr)) {
 		return true
 	}
 
@@ -150,7 +186,7 @@ func WebSocketAuthHandler(auth *AuthConfig, r *http.Request) bool {
 		return false
 	}
 
-	if !auth.IsValidKey(key) {
+	if !keyIsValid(getKeys, key) {
 		log.Debug().
 			Str("path", r.URL.Path).
 			Msg("websocket invalid API key")

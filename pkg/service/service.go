@@ -757,6 +757,12 @@ func startServiceWithOptions(
 		if opts != nil {
 			listenerOptions.Listener = opts.Listener
 			listenerOptions.APIKeys = opts.APIKeys
+			listenerOptions.Network = opts.Network
+			if opts.OnNetwork != nil {
+				listenerOptions.OnNetwork = func(port int) {
+					opts.OnNetwork(port, discovery.ResolveInstanceName(cfg))
+				}
+			}
 		}
 		apiDone <- api.StartWithListener(
 			listenerOptions, pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,

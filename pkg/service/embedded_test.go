@@ -26,6 +26,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -149,5 +151,49 @@ func TestEmbeddedStopDeadline(t *testing.T) {
 	case <-result.Done:
 		t.Fatal("deadline must not pretend that blocked cleanup completed")
 	default:
+	}
+}
+
+func TestEmbeddedNetwork(t *testing.T) {
+	previousCache := helpers.GlobalLauncherCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = previousCache })
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
+	type advert struct {
+		name string
+		port int
+	}
+	for _, network := range []bool{true, false} {
+		platform, cfg, opts := embeddedFixture(t, t.TempDir())
+		platform.On("StartPre", mock.Anything).Return(nil)
+		platform.On("Stop").Return(nil)
+		adverts := make(chan advert, 4)
+		opts.Network = network
+		opts.OnNetwork = func(port int, instanceName string) { adverts <- advert{instanceName, port} }
+		result, err := StartEmbedded(platform, cfg, opts)
+		require.NoError(t, err)
+		if network {
+			select {
+			case got := <-adverts:
+				assert.NotZero(t, got.port)
+				assert.Equal(t, cfg.APIPort(), got.port, "the advertised port is the one actually bound")
+				assert.Equal(t, discovery.ResolveInstanceName(cfg), got.name)
+				assert.NotEmpty(t, got.name)
+				conn, dialErr := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(
+					t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(got.port)))
+				require.NoError(t, dialErr, "the advertised port must accept connections")
+				require.NoError(t, conn.Close())
+			case <-time.After(10 * time.Second):
+				t.Fatal("OnNetwork was never called")
+			}
+		}
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		require.NoError(t, result.StopContext(stopCtx))
+		cancel()
+		require.NoError(t, result.Err())
+		select {
+		case got := <-adverts:
+			t.Fatalf("unexpected OnNetwork call (network=%t): %+v", network, got)
+		default:
+		}
 	}
 }
