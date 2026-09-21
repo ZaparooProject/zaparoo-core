@@ -347,17 +347,22 @@ func startWith(
 ) (res *StartResult, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
+	// A host that replaces the executable itself has no pending update to
+	// resolve or roll back. A failed start is still released or reported below.
+	selfUpdate := !pl.Settings().DisableSelfUpdate
 	dataDir := helpers.DataDir(pl)
 
 	// Deliberately before config, databases and network are touched: the
 	// failure this exists to catch is a binary that cannot reach any of them.
 	// It has its own context because st.GetContext does not exist yet.
-	if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
-		if errors.Is(watchdogErr, updater.ErrRolledBack) ||
-			errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
-			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+	if selfUpdate {
+		if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
+			if errors.Is(watchdogErr, updater.ErrRolledBack) ||
+				errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
+				return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+			}
+			log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
 		}
-		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
 	}
 
 	res, err = initialize(pl, cfg)
@@ -365,20 +370,22 @@ func startWith(
 		return res, nil
 	}
 
-	// The updater gets first refusal on a failed start. Check before rolling
-	// back, because a rollback restores the previous binary and this process
-	// then has to exit so that binary runs — staying up would leave Core
-	// serving in front of a binary that is no longer installed.
-	updatePending := updater.HasUnresolvedUpdate(dataDir, config.AppVersion)
+	if selfUpdate {
+		// The updater gets first refusal on a failed start. Check before rolling
+		// back, because a rollback restores the previous binary and this process
+		// then has to exit so that binary runs — staying up would leave Core
+		// serving in front of a binary that is no longer installed.
+		updatePending := updater.HasUnresolvedUpdate(dataDir, config.AppVersion)
 
-	// Only does anything when this boot is the first one after an update.
-	if rollbackErr := updater.RollBackFailedStart(
-		context.Background(), dataDir, config.AppVersion,
-	); rollbackErr != nil {
-		return nil, fmt.Errorf("%w: %w", rollbackErr, err)
-	}
-	if updatePending {
-		return nil, err
+		// Only does anything when this boot is the first one after an update.
+		if rollbackErr := updater.RollBackFailedStart(
+			context.Background(), dataDir, config.AppVersion,
+		); rollbackErr != nil {
+			return nil, fmt.Errorf("%w: %w", rollbackErr, err)
+		}
+		if updatePending {
+			return nil, err
+		}
 	}
 
 	// The listener is already bound, so Core can stay alive and explain
@@ -935,8 +942,10 @@ func startService(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
-		if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
-			log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+		if !platformSettings.DisableSelfUpdate {
+			if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
+				log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+			}
 		}
 		if backupErr := waitForBackupShutdown(
 			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
@@ -1032,13 +1041,15 @@ func startService(
 	// one. It is deliberately after StartPost: a boot that still fails after
 	// here rolls back and restores the database, which would take the message
 	// with it.
-	updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
+	if !platformSettings.DisableSelfUpdate {
+		updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
 
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		confirmPendingUpdate(st, helpers.DataDir(pl))
-	}()
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			confirmPendingUpdate(st, helpers.DataDir(pl))
+		}()
+	}
 
 	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
 		backgroundWG.Add(1)

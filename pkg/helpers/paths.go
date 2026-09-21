@@ -1180,17 +1180,23 @@ func HasUserDir() (string, bool) {
 }
 
 func ConfigDir(pl platforms.Platform) string {
-	if v, ok := HasUserDir(); ok {
-		return v
-	}
-	return pl.Settings().ConfigDir
+	settings := pl.Settings()
+	return resolvePlatformDir(settings.HostManagedPaths, settings.ConfigDir, HasUserDir)
 }
 
 func DataDir(pl platforms.Platform) string {
-	if v, ok := HasUserDir(); ok {
-		return v
+	settings := pl.Settings()
+	return resolvePlatformDir(settings.HostManagedPaths, settings.DataDir, HasUserDir)
+}
+
+func resolvePlatformDir(hostManaged bool, configured string, portable func() (string, bool)) string {
+	if hostManaged {
+		return configured
 	}
-	return pl.Settings().DataDir
+	if path, ok := portable(); ok {
+		return path
+	}
+	return configured
 }
 
 var ReURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)

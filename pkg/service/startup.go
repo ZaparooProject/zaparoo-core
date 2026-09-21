@@ -66,8 +66,10 @@ func setupEnvironment(pl platforms.Platform) error {
 }
 
 func setupEnvironmentFS(fs afero.Fs, pl platforms.Platform) error {
-	if _, ok := helpers.HasUserDir(); ok {
-		log.Info().Msg("using 'user' directory for storage")
+	if !pl.Settings().HostManagedPaths {
+		if _, ok := helpers.HasUserDir(); ok {
+			log.Info().Msg("using 'user' directory for storage")
+		}
 	}
 
 	log.Info().Msg("creating platform directories")

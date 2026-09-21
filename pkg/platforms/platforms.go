@@ -471,6 +471,12 @@ type Settings struct {
 	TempDir string
 	// LogDir returns the directory where persistent log files are stored.
 	LogDir string
+	// HostManagedPaths makes the supplied directories authoritative instead of probing
+	// for a portable user directory next to the current executable.
+	HostManagedPaths bool
+	// DisableSelfUpdate means the host updates this component as part of its own package.
+	// Neither automatic nor manually requested executable updates may run.
+	DisableSelfUpdate bool
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool
