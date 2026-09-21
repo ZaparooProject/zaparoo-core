@@ -79,6 +79,7 @@ type ArcadeDbEntry struct {
 	Category        string `csv:"category"`
 	Linebreak1      string `csv:"linebreak1"`
 	Resolution      string `csv:"resolution"`
+	Rotation        string `csv:"rotation"`
 	Flip            string `csv:"flip"`
 	Linebreak2      string `csv:"linebreak2"`
 	Players         string `csv:"players"`

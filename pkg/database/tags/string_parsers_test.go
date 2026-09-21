@@ -98,6 +98,16 @@ func TestParseBuildDate(t *testing.T) {
 		{in: "931305", want: "", ok: false}, // month 13
 		{in: "930032", want: "", ok: false}, // day 32
 		{in: "1992-13-01", want: "", ok: false},
+		// a day the month does not have
+		{in: "230231", want: "", ok: false}, // February 31st
+		{in: "230229", want: "", ok: false}, // 2023 is not a leap year
+		{in: "240229", want: "2024-02-29", ok: true},
+		{in: "000229", want: "2000-02-29", ok: true}, // divisible by 400
+		{in: "19000229", want: "", ok: false},        // divisible by 100 but not 400
+		{in: "930431", want: "", ok: false},          // April has 30 days
+		{in: "19930931", want: "", ok: false},        // September has 30 days
+		{in: "1993-11-31", want: "", ok: false},      // November has 30 days
+		{in: "1993-11-30", want: "1993-11-30", ok: true},
 		// wrong shapes
 		{in: "12345", want: "", ok: false},   // 5 digits
 		{in: "1234567", want: "", ok: false}, // 7 digits
@@ -106,7 +116,7 @@ func TestParseBuildDate(t *testing.T) {
 		{in: "", want: "", ok: false},
 	}
 	for _, tt := range tests {
-		got, ok := parseBuildDate(tt.in)
+		got, ok := ParseBuildDate(tt.in)
 		assert.Equal(t, tt.ok, ok, "ok mismatch for %q", tt.in)
 		assert.Equal(t, tt.want, got, "value mismatch for %q", tt.in)
 	}

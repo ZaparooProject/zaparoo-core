@@ -553,3 +553,32 @@ func TestClient_Update_EmptyContents(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, updated)
 }
+
+// TestClient_Read_ParsesRotation pins the upstream column order. The catalog
+// states the cabinet monitor rotation between resolution and flip; a struct
+// missing that field parses the file without error and silently drops it,
+// which is how it went unread for as long as it did.
+func TestClient_Read_ParsesRotation(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	client := NewClient(nil, fs, "", "")
+
+	csvHeader := "setname,name,region,version,alternative,parent_title,platform,series," +
+		"homebrew,bootleg,year,manufacturer,category,linebreak1,resolution,rotation,flip," +
+		"linebreak2,players,move_inputs,special_controls,num_buttons"
+	csvContent := csvHeader +
+		"\n1941,1941- Counter Attack (W),World,900227,yes,1941- Counter Attack,Capcom CPS-1,19XX," +
+		"no,no,1990,Capcom,Shooter - Flying Vertical,,15kHz,vertical (ccw),yes,,2 (simultaneous),8-way,,2\n"
+	require.NoError(t, afero.WriteFile(fs, "/data/arcade.csv", []byte(csvContent), 0o644))
+
+	entries, err := client.Read("/data/arcade.csv")
+
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "15kHz", entries[0].Resolution)
+	assert.Equal(t, "vertical (ccw)", entries[0].Rotation)
+	assert.Equal(t, "yes", entries[0].Flip)
+	assert.Equal(t, "2 (simultaneous)", entries[0].Players)
+	assert.Equal(t, "2", entries[0].NumButtons)
+}

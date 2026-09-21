@@ -321,13 +321,17 @@ func TestSpecificTagTypeRules(t *testing.T) {
 		tags := CanonicalTagDefinitions[TagTypePlayers]
 		playerNumPattern := regexp.MustCompile(`^\d{1,2}$`)
 
+		// "simultaneous" is the arcade counterpart of "alt": a catalog states
+		// that both players are on the cabinet at once without saying whether
+		// they cooperate or compete, so neither coop nor vs can stand in.
+		modes := map[string]bool{"mmo": true, "vs": true, "coop": true, "alt": true, "simultaneous": true}
+
 		for _, tag := range tags {
 			tagStr := string(tag)
-			// Should be a number or known mode (mmo, vs, coop, alt)
-			if tagStr != "mmo" && tagStr != "vs" && tagStr != "coop" && tagStr != "alt" {
+			if !modes[tagStr] {
 				// Should be a valid number
 				assert.True(t, playerNumPattern.MatchString(tagStr),
-					"Player tag should be a number or mode (mmo/vs/coop/alt): %s", tagStr)
+					"Player tag should be a number or a known mode: %s", tagStr)
 			}
 		}
 	})

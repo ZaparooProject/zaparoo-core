@@ -257,3 +257,44 @@ func TestGetTagsFromFileName(t *testing.T) {
 		})
 	}
 }
+
+func TestLookupRegionWord(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want TagValue
+	}{
+		{in: "World", want: TagRegionWorld},
+		{in: "Japan", want: TagRegionJP},
+		{in: "USA", want: TagRegionUS},
+		{in: "Europe", want: TagRegionEU},
+		// External sources spell multi-word regions with spaces where filenames
+		// use dashes.
+		{in: "Hong Kong", want: TagRegionHK},
+		{in: " korea ", want: TagRegionKR},
+		{in: "jp", want: TagRegionJP},
+		// Not a region the vocabulary knows, and a word that maps to something
+		// other than a region.
+		{in: "Hispanic"},
+		{in: "Etc."},
+		{in: ""},
+	} {
+		t.Run("region "+tc.in, func(t *testing.T) {
+			t.Parallel()
+			value, ok := LookupRegionWord(tc.in)
+			assert.Equal(t, tc.want != "", ok)
+			assert.Equal(t, tc.want, value)
+		})
+	}
+}
+
+func TestLookupRegionWordReturnsNoImpliedLanguage(t *testing.T) {
+	t.Parallel()
+	// The filename table pairs Japan with Japanese, which is an inference about
+	// a release rather than something a metadata source stated. Callers asking
+	// for a region get only the region.
+	value, ok := LookupRegionWord("Japan")
+	assert.True(t, ok)
+	assert.Equal(t, TagRegionJP, value)
+	assert.NotEqual(t, TagLangJA, value)
+}
