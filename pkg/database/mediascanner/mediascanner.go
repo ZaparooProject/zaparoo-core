@@ -1318,6 +1318,19 @@ func NewNamesIndexWithSources(
 		return 0, errors.New(mediaDatabaseCorruptMessage)
 	}
 
+	var hostScan platforms.HostMediaScan
+	if provider, ok := platform.(platforms.HostMediaProvider); ok {
+		update(IndexStatus{Phase: PhaseDiscovering})
+		hostScan, err = provider.OpenMediaScan(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("prepare host media sources: %w", err)
+		}
+		if hostScan == nil {
+			return 0, errors.New("host returned no media scan")
+		}
+		defer func() { err = errors.Join(err, hostScan.Close(err == nil)) }()
+	}
+
 	// Build launcher metadata once so runnable-system filtering and scanner
 	// execution both use the same launcher set even when the global cache is stale.
 	launcherCache, allLaunchers := newIndexLauncherCache(cfg, platform)
@@ -1332,6 +1345,14 @@ func NewNamesIndexWithSources(
 	update(IndexStatus{Phase: PhaseInitializing})
 
 	systemsWithScanners := make(map[string]bool, len(allLaunchers))
+	if hostScan != nil {
+		for _, id := range hostScan.Systems() {
+			if _, lookupErr := systemdefs.GetSystem(id); lookupErr != nil {
+				return 0, fmt.Errorf("host source system: %w", lookupErr)
+			}
+			systemsWithScanners[id] = true
+		}
+	}
 	// Build any-scanner list once so runnable-system filtering can preserve
 	// platforms that intentionally discover media via scanner-only sources.
 	var anyScanners []*platforms.Launcher
@@ -1814,7 +1835,22 @@ func NewNamesIndexWithSources(
 
 		collectDur += time.Since(collectStart)
 
-		for fileIdx, file := range files {
+		fileIdx := -1
+		checkpoint := func() error { return timedWait(func() error { return pauser.Wait(ctx) }) }
+		for file, sourceErr := range indexResults(ctx, files, hostScan, systemID, checkpoint) {
+			if sourceErr != nil {
+				if ctx.Err() != nil {
+					return handleCancellationWithRollback(ctx, db, "Host media indexing cancelled")
+				}
+				return 0, fmt.Errorf("host media enumeration failed: %w", sourceErr)
+			}
+			fileIdx++
+			if fileIdx >= len(files) {
+				status.Files++
+				if status.Files%128 == 0 {
+					update(status)
+				}
+			}
 			// Check for cancellation or pause between file processing
 			select {
 			case <-ctx.Done():

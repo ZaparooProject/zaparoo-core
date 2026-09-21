@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/sourcepath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -84,6 +85,11 @@ type StageMediaPathParams struct {
 // checks run set-based in ReconcileStagedSystem once the system's files are
 // staged, so scanner memory does not grow with library or database size.
 func StageMediaPath(params *StageMediaPathParams) error {
+	if strings.HasPrefix(params.Path, sourcepath.Scheme+"://") {
+		if _, _, err := sourcepath.Parse(params.Path); err != nil {
+			return fmt.Errorf("validate source identity: %w", err)
+		}
+	}
 	pf := GetPathFragments(&PathFragmentParams{
 		Config:       params.Config,
 		Path:         params.Path,
@@ -151,6 +157,10 @@ func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*data
 }
 
 func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []database.ScanStagedProperty {
+	// Host content is opened through its owned descriptor adapter, never os.Open on an identity URI.
+	if strings.HasPrefix(path, sourcepath.Scheme+"://") {
+		return nil
+	}
 	if !gameid.IsCandidate(path, systemID) {
 		return nil
 	}
@@ -263,7 +273,17 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually
-	if helpers.ReURI.MatchString(params.Path) {
+	var sourceParts []string
+	if strings.HasPrefix(params.Path, sourcepath.Scheme+"://") {
+		_, sourceParts, _ = sourcepath.Parse(params.Path)
+	}
+	switch {
+	case len(sourceParts) > 0:
+		leaf := sourceParts[len(sourceParts)-1]
+		ext := filepath.Ext(leaf)
+		f.Ext = strings.ToLower(ext)
+		f.FileName = strings.TrimSuffix(leaf, ext)
+	case helpers.ReURI.MatchString(params.Path):
 		// For URIs, FilenameFromPath returns the decoded last path segment, which may include an extension for http/s
 		f.FileName = helpers.FilenameFromPath(f.Path)
 
@@ -287,7 +307,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			// For custom schemes (steam, kodi, etc.), there is no extension
 			f.Ext = ""
 		}
-	} else {
+	default:
 		fileBase := filepath.Base(f.Path)
 		// Skip extension extraction if params.NoExt is true or extract normally
 		if params.NoExt {
