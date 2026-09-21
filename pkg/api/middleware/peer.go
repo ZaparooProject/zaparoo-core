@@ -59,10 +59,34 @@ func IsUnixPeer(r *http.Request) bool {
 	return ok && unix
 }
 
+type untrustedLoopbackKey struct{}
+
+// UntrustedLoopback marks the base context of a server whose loopback clients
+// are not local. A service embedded in an app shares its loopback interface
+// with every other app on the device, so an address of 127.0.0.1 says nothing
+// about who is connecting; those clients authenticate, pair and are filtered
+// and rate limited like any other network client. Use it only from
+// http.Server.BaseContext so that no client input can remove the mark.
+func UntrustedLoopback(ctx context.Context) context.Context {
+	return context.WithValue(ctx, untrustedLoopbackKey{}, true)
+}
+
+// IsTrustedLoopback reports whether the request comes from a loopback address
+// on a server that treats loopback as local. It is the only place a TCP peer
+// can gain locality; every exemption for loopback clients must go through it.
+func IsTrustedLoopback(r *http.Request) bool {
+	return !loopbackUntrusted(r) && IsLoopbackAddr(r.RemoteAddr)
+}
+
+func loopbackUntrusted(r *http.Request) bool {
+	untrusted, ok := r.Context().Value(untrustedLoopbackKey{}).(bool)
+	return ok && untrusted
+}
+
 // IsLocalRequest classifies locality, not authentication. Unix requests still
 // require an API key at the server boundary before receiving local authority.
 func IsLocalRequest(r *http.Request) bool {
-	return IsUnixPeer(r) || IsLoopbackAddr(r.RemoteAddr)
+	return IsUnixPeer(r) || IsTrustedLoopback(r)
 }
 
 // UnixAuthMiddleware protects the whole private listener, including routes that

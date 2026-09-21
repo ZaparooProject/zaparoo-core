@@ -140,7 +140,7 @@ func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			getKeys := auth.keysFor(r)
-			if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsLoopbackAddr(r.RemoteAddr)) {
+			if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsTrustedLoopback(r)) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -174,7 +174,7 @@ func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 // If no keys are configured or the request is from localhost, all connections are allowed.
 func WebSocketAuthHandler(auth *AuthConfig, r *http.Request) bool {
 	getKeys := auth.keysFor(r)
-	if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsLoopbackAddr(r.RemoteAddr)) {
+	if !IsUnixPeer(r) && (!keysEnabled(getKeys) || IsTrustedLoopback(r)) {
 		return true
 	}
 

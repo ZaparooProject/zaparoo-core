@@ -151,7 +151,7 @@ func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host, exempt := remoteRateLimitHost(r.RemoteAddr)
-			if exempt || IsUnixPeer(r) {
+			if (exempt && !loopbackUntrusted(r)) || IsUnixPeer(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

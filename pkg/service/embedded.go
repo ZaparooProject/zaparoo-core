@@ -41,8 +41,10 @@ import (
 // Network also serves the API on the configured TCP address, with the same
 // authentication, pairing, encryption, IP filter, rate limits and origins as a
 // standalone service. APIKeys authenticates clients of Listener only and is never
-// accepted from the network. A TCP address that cannot be bound is logged and
-// the runtime starts without it.
+// accepted from the network. No TCP client is local, loopback included, because
+// other apps on the device share that interface; only Unix peers of Listener
+// are. A TCP address that cannot be bound is logged and the runtime starts
+// without it.
 //
 // OnNetwork is called at most once, with the TCP port actually bound and the
 // instance name Core's own discovery would use, so a host can advertise

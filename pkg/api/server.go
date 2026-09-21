@@ -2012,6 +2012,11 @@ func (l *servingListener) Accept() (net.Conn, error) {
 // with a supplied Listener, because a standalone server already binds TCP. A
 // failed bind is logged and the supplied listener is served alone.
 //
+// One rule differs from standalone: no TCP client is local, loopback included.
+// An embedding app shares loopback with every other app on the device, so such
+// clients authenticate, pair and are filtered and rate limited like LAN clients.
+// Only Unix peers of the supplied listener are local.
+//
 // OnNetwork is called at most once, from the server goroutine, with the TCP port
 // actually bound. It is not called when Network is false or the bind failed, and
 // it must return promptly.
@@ -2501,11 +2506,17 @@ func StartWithListener(
 			// BaseContext runs once per Serve call with the listener being
 			// served, so the supplied key provider follows the listener that
 			// accepted a connection and cannot reach the network listener.
+			//
+			// An embedding host shares loopback with every other app on the
+			// device, so no TCP peer of this server is local: only Unix peers
+			// of the supplied listener are. The mark covers every listener so
+			// that locality never depends on telling them apart.
 			server.BaseContext = func(accepting net.Listener) context.Context {
+				ctx := apimiddleware.UntrustedLoopback(context.Background())
 				if accepting == net.Listener(serving) {
-					return apimiddleware.ListenerKeyScope(context.Background())
+					return apimiddleware.ListenerKeyScope(ctx)
 				}
-				return context.Background()
+				return ctx
 			}
 		}
 		// Registered before the deferred Close so it runs after it: Close is what
