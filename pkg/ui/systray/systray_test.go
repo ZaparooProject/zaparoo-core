@@ -22,11 +22,19 @@ package systray
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.design/x/clipboard"
@@ -222,4 +230,131 @@ func TestCopyToClipboard(t *testing.T) {
 			})
 		require.Error(t, err)
 	})
+}
+
+// The tray's job here is to hand over a link. The dialog cannot be selected,
+// so the clipboard is how that actually happens — and when the clipboard is
+// unavailable the message has to say so, or the user finds out by pasting
+// nothing.
+func TestUploadLogFromMenu(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	t.Run("shows the link and says it was copied", func(t *testing.T) {
+		t.Parallel()
+
+		var copied, gotTitle, gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "https://logs.zaparoo.org/abc123.log", nil
+			},
+			func(text string) error { copied = text; return nil },
+			func(title, message string) { gotTitle, gotMessage = title, message },
+		)
+
+		assert.Equal(t, "https://logs.zaparoo.org/abc123.log", copied)
+		assert.Equal(t, "Upload Log", gotTitle)
+		assert.Contains(t, gotMessage, "https://logs.zaparoo.org/abc123.log")
+		assert.Contains(t, gotMessage, "copied to your clipboard")
+	})
+
+	t.Run("still shows the link when the clipboard is unavailable", func(t *testing.T) {
+		t.Parallel()
+
+		var gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "https://logs.zaparoo.org/abc123.log", nil
+			},
+			func(string) error { return errors.New("no display server") },
+			func(_, message string) { gotMessage = message },
+		)
+
+		assert.Contains(t, gotMessage, "https://logs.zaparoo.org/abc123.log")
+		assert.Contains(t, gotMessage, "by hand")
+	})
+
+	t.Run("names the log file when the upload fails", func(t *testing.T) {
+		t.Parallel()
+
+		var gotMessage string
+		uploadLogFromMenu(pl,
+			func(platforms.Platform) (string, error) {
+				return "", fmt.Errorf("%w: offline", helpers.ErrUploadConnect)
+			},
+			func(string) error { return nil },
+			func(_, message string) { gotMessage = message },
+		)
+
+		assert.Contains(t, gotMessage, "Unable to connect to upload service.")
+		assert.Contains(t, gotMessage, config.LogFile,
+			"a failed upload has to leave the user somewhere to go")
+	})
+}
+
+// recordingMenuEntry records the enable/disable calls a menu item receives.
+type recordingMenuEntry struct {
+	calls []string
+	mu    syncutil.Mutex
+}
+
+func (*recordingMenuEntry) SetTitle(string) {}
+
+func (r *recordingMenuEntry) Enable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "enable")
+}
+
+func (r *recordingMenuEntry) Disable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "disable")
+}
+
+func (r *recordingMenuEntry) Calls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// An upload takes the better part of a minute and the tray keeps serving clicks
+// the whole time, so a user who clicks again because nothing has visibly
+// happened must not get a second upload and a second blocking message box.
+func TestStartLogUpload(t *testing.T) {
+	t.Parallel()
+
+	var inFlight atomic.Bool
+	item := &recordingMenuEntry{}
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	var runs atomic.Int32
+
+	require.True(t, startLogUpload(&inFlight, item, func() {
+		runs.Add(1)
+		close(running)
+		<-release
+	}), "the first click starts an upload")
+
+	<-running
+	assert.Equal(t, []string{"disable"}, item.Calls(),
+		"the entry is held shut while the upload runs")
+
+	for range 5 {
+		assert.False(t, startLogUpload(&inFlight, item, func() { runs.Add(1) }),
+			"a click during an upload starts nothing")
+	}
+	assert.Equal(t, int32(1), runs.Load())
+
+	close(release)
+	require.Eventually(t, func() bool {
+		return slices.Equal(item.Calls(), []string{"disable", "enable"})
+	}, time.Second, 5*time.Millisecond, "the entry comes back when the upload finishes")
+
+	require.True(t, startLogUpload(&inFlight, item, func() { runs.Add(1) }),
+		"the entry works again once the upload is done")
+	require.Eventually(t, func() bool { return runs.Load() == 2 }, time.Second, 5*time.Millisecond)
 }

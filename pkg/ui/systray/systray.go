@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -62,6 +63,8 @@ func systrayOnReady(
 		mOpenLaunchers := systray.AddMenuItem("Launchers", "Open Core custom launchers directory")
 		mReloadConfig := systray.AddMenuItem("Reload", "Reload Core settings and files")
 		mOpenLog := systray.AddMenuItem("View Log", "View Core log file")
+		mUploadLog := systray.AddMenuItem("Upload Log", "Upload the log file and copy a link to share")
+		var uploadInFlight atomic.Bool
 
 		systray.AddSeparator()
 		mPair := systray.AddMenuItem("Pair Device...", "Show a PIN to pair a phone or tablet")
@@ -111,6 +114,16 @@ func systrayOnReady(
 						log.Error().Err(err).Msg("failed to open log file")
 						notify("Error opening log file.")
 					}
+				case <-mUploadLog.ClickedCh:
+					// Its own goroutine: every other handler here runs inline
+					// on this select loop, and an upload can take the better
+					// part of a minute, which would freeze the whole menu.
+					//
+					// The menu stays live during that minute, which is what
+					// startLogUpload is for.
+					startLogUpload(&uploadInFlight, mUploadLog, func() {
+						uploadLogFromMenu(pl, helpers.UploadLog, copyURLToClipboard, nativeDialog)
+					})
 				case <-mEditConfig.ClickedCh:
 					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
 					if err := openPath(configPath); err != nil {
@@ -223,4 +236,65 @@ func Run(
 // from another goroutine and does nothing if the tray has already quit.
 func Quit() {
 	systray.Quit()
+}
+
+// startLogUpload runs an upload in its own goroutine and holds the menu entry
+// shut until it finishes, reporting whether this click started one.
+//
+// The tray's select loop keeps serving clicks while an upload runs, so without
+// this a user who clicks again because nothing has visibly happened gets a
+// second upload and a second blocking message box behind the first.
+func startLogUpload(inFlight *atomic.Bool, item menuEntry, run func()) bool {
+	if !inFlight.CompareAndSwap(false, true) {
+		return false
+	}
+	item.Disable()
+	go func() {
+		defer func() {
+			item.Enable()
+			inFlight.Store(false)
+		}()
+		run()
+	}()
+	return true
+}
+
+// copyURLToClipboard is the real clipboard write, separated so the menu action
+// can be tested without a display server.
+func copyURLToClipboard(text string) error {
+	return copyToClipboard(text, clipboard.Init, clipboard.Write)
+}
+
+// uploadLogFromMenu uploads the log bundle, puts the link on the clipboard and
+// shows it.
+//
+// Outcomes go through showDialog rather than notify: notify logs at Debug on
+// Windows and is a no-op on macOS, so a user would see nothing either way. The
+// dialog is a plain message box whose text cannot be selected, which is why
+// the clipboard write is the part that actually hands over the link — and why
+// a clipboard that will not open is worth saying out loud rather than leaving
+// the user to discover on paste.
+func uploadLogFromMenu(
+	pl platforms.Platform,
+	upload func(platforms.Platform) (string, error),
+	copyText func(string) error,
+	show showDialog,
+) {
+	url, err := upload(pl)
+	if err != nil {
+		log.Error().Err(err).Msg("log upload failed")
+		show("Upload Log", helpers.DescribeUploadFailure(err)+
+			"\n\nThe log file is at:\n"+helpers.LogPath(pl))
+		return
+	}
+
+	message := url
+	if copyErr := copyText(url); copyErr != nil {
+		log.Warn().Err(copyErr).Msg("failed to copy log URL to clipboard")
+		message += "\n\nCopy this link by hand: it could not be put on your clipboard."
+	} else {
+		message += "\n\nThis link has been copied to your clipboard."
+	}
+
+	show("Upload Log", message)
 }

@@ -20,19 +20,15 @@
 package tui
 
 import (
-	"errors"
-	"io"
-	"mime"
-	"mime/multipart"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -229,336 +225,6 @@ func TestReadLastLinesNonexistentFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read log file")
 }
 
-func TestUploadLogContent_RequestFormat(t *testing.T) {
-	t.Parallel()
-
-	logContent := []byte("test log content\nline 2\nline 3")
-	expectedURL := "https://logs.zaparoo.org/abc123.log"
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request is constructed correctly
-		assert.Equal(t, http.MethodPost, r.Method)
-
-		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Equal(t, "multipart/form-data", mediaType)
-
-		reader := multipart.NewReader(r.Body, params["boundary"])
-		part, err := reader.NextPart()
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Verify form field name and filename match rustypaste expectations
-		assert.Equal(t, "file", part.FormName())
-		assert.Equal(t, "core.log", part.FileName())
-
-		body, err := io.ReadAll(part)
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Equal(t, logContent, body)
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(expectedURL))
-	}))
-	defer server.Close()
-
-	url, err := uploadLogContent(logContent, server.URL, server.Client())
-
-	require.NoError(t, err)
-	assert.Equal(t, expectedURL, url)
-}
-
-func TestUploadLogContent_TrimsResponseWhitespace(t *testing.T) {
-	t.Parallel()
-
-	// rustypaste may return URLs with trailing newlines
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("  https://logs.zaparoo.org/xyz.log  \n"))
-	}))
-	defer server.Close()
-
-	url, err := uploadLogContent([]byte("test"), server.URL, server.Client())
-
-	require.NoError(t, err)
-	assert.Equal(t, "https://logs.zaparoo.org/xyz.log", url)
-}
-
-func TestUploadLogContent_NonOKStatus(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		responseBody string
-		wantInError  []string
-		statusCode   int
-	}{
-		{
-			name:         "500 internal server error",
-			statusCode:   http.StatusInternalServerError,
-			responseBody: "internal error occurred",
-			wantInError:  []string{"500", "internal error occurred"},
-		},
-		{
-			name:         "403 forbidden",
-			statusCode:   http.StatusForbidden,
-			responseBody: "access denied",
-			wantInError:  []string{"403", "access denied"},
-		},
-		{
-			name:         "413 payload too large",
-			statusCode:   http.StatusRequestEntityTooLarge,
-			responseBody: "file exceeds maximum size",
-			wantInError:  []string{"413", "file exceeds maximum size"},
-		},
-		{
-			name:         "429 rate limited",
-			statusCode:   http.StatusTooManyRequests,
-			responseBody: "rate limit exceeded",
-			wantInError:  []string{"429", "rate limit exceeded"},
-		},
-		{
-			name:         "empty response body",
-			statusCode:   http.StatusBadGateway,
-			responseBody: "",
-			wantInError:  []string{"502"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.statusCode)
-				_, _ = w.Write([]byte(tt.responseBody))
-			}))
-			defer server.Close()
-
-			_, err := uploadLogContent([]byte("test"), server.URL, server.Client())
-
-			require.ErrorIs(t, err, errUploadStatus)
-			for _, want := range tt.wantInError {
-				assert.ErrorContains(t, err, want)
-			}
-		})
-	}
-}
-
-func TestUploadLogContent_EmptyContent(t *testing.T) {
-	t.Parallel()
-
-	expectedURL := "https://logs.zaparoo.org/empty.log"
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify empty content is still sent correctly
-		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Equal(t, "multipart/form-data", mediaType)
-
-		reader := multipart.NewReader(r.Body, params["boundary"])
-		part, err := reader.NextPart()
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		body, err := io.ReadAll(part)
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Empty(t, body, "empty content should result in empty body")
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(expectedURL))
-	}))
-	defer server.Close()
-
-	url, err := uploadLogContent([]byte{}, server.URL, server.Client())
-
-	require.NoError(t, err)
-	assert.Equal(t, expectedURL, url)
-}
-
-func TestUploadLogContent_LargeContent(t *testing.T) {
-	t.Parallel()
-
-	// Create 1MB of log content
-	largeContent := make([]byte, 1024*1024)
-	for i := range largeContent {
-		largeContent[i] = byte('A' + (i % 26))
-	}
-
-	expectedURL := "https://logs.zaparoo.org/large.log"
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify large content is received correctly
-		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Equal(t, "multipart/form-data", mediaType)
-
-		reader := multipart.NewReader(r.Body, params["boundary"])
-		part, err := reader.NextPart()
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		body, err := io.ReadAll(part)
-		if !assert.NoError(t, err) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Len(t, body, len(largeContent), "large content should be fully transmitted")
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(expectedURL))
-	}))
-	defer server.Close()
-
-	url, err := uploadLogContent(largeContent, server.URL, server.Client())
-
-	require.NoError(t, err)
-	assert.Equal(t, expectedURL, url)
-}
-
-func TestUploadLogContent_InvalidURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		expectedErr error
-		name        string
-		url         string
-	}{
-		{
-			name:        "missing scheme",
-			url:         "://missing-scheme",
-			expectedErr: errUploadPrepare,
-		},
-		{
-			name:        "empty URL",
-			url:         "",
-			expectedErr: errUploadConnect, // Empty URL passes request creation but fails at Do()
-		},
-		{
-			name:        "invalid scheme",
-			url:         "notascheme://example.com",
-			expectedErr: errUploadConnect,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := uploadLogContent([]byte("test"), tt.url, &http.Client{})
-
-			require.ErrorIs(t, err, tt.expectedErr)
-		})
-	}
-}
-
-func TestUploadLogContent_ConnectionError(t *testing.T) {
-	t.Parallel()
-
-	_, err := uploadLogContent([]byte("test"), "http://localhost:1", &http.Client{})
-
-	require.ErrorIs(t, err, errUploadConnect)
-}
-
-// errorReader is a reader that always returns an error.
-type errorReader struct {
-	err error
-}
-
-func (e errorReader) Read(_ []byte) (int, error) {
-	return 0, e.err
-}
-
-func (errorReader) Close() error {
-	return nil
-}
-
-func TestUploadLogContent_ReadResponseError(t *testing.T) {
-	t.Parallel()
-
-	readErr := errors.New("simulated read failure")
-
-	// Custom transport that returns a response with a failing body
-	client := &http.Client{
-		Transport: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       errorReader{err: readErr},
-			}, nil
-		}),
-	}
-
-	_, err := uploadLogContent([]byte("test"), "http://example.com", client)
-
-	require.ErrorIs(t, err, errUploadResponse)
-	assert.ErrorContains(t, err, "simulated read failure")
-}
-
-// roundTripperFunc allows using a function as an http.RoundTripper.
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
-}
-
-func TestDoUploadLog_Success(t *testing.T) {
-	t.Parallel()
-
-	expectedURL := "https://logs.zaparoo.org/abc123.log"
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(expectedURL))
-	}))
-	defer server.Close()
-
-	result := doUploadLog([]byte("test log content"), server.URL, server.Client())
-
-	assert.Equal(t, "Log file URL:\n\n"+expectedURL, result)
-}
-
-func TestDoUploadLog_ConnectionError(t *testing.T) {
-	t.Parallel()
-
-	result := doUploadLog([]byte("test"), "http://localhost:1", &http.Client{})
-
-	assert.Equal(t, "Unable to connect to upload service.", result)
-}
-
-func TestDoUploadLog_UploadError(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("server error"))
-	}))
-	defer server.Close()
-
-	result := doUploadLog([]byte("test"), server.URL, server.Client())
-
-	assert.Equal(t, "Unable to upload log file.", result)
-}
-
 func TestCopyLogToSd_Success(t *testing.T) {
 	t.Parallel()
 
@@ -622,4 +288,70 @@ func TestCopyLogToSd_Error(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "Destination file should not exist after failed copy")
 
 	mockPlatform.AssertExpectations(t)
+}
+
+// The log page is now reachable from two places, and its return target used to
+// be a hardcoded switch to the settings page. Opened from the main menu, which
+// is the case that matters when the service is down, that page has never been
+// registered — and switching to an unknown page is a no-op, so the user would
+// have been left on the log page with no way out.
+func TestBuildExportLogModal_ReturnsToItsCaller(t *testing.T) {
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	wentBack := make(chan struct{}, 1)
+	pages := tview.NewPages()
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		BuildExportLogModal(pages, runner.App(), pl, "", "", func() {
+			wentBack <- struct{}{}
+		})
+	})
+
+	require.True(t, runner.WaitForText("Export Logs", uiSettleTimeout))
+
+	runner.SimulateEscape()
+	select {
+	case <-wentBack:
+	case <-time.After(uiSettleTimeout):
+		t.Fatal("escape did not return to the caller")
+	}
+}
+
+// The TUI's upload used to read the bundle itself and say so when it could not.
+// Routing the read through helpers.UploadLog lost that until the read failure
+// got its own sentinel, and this is the surface where a user reads the result:
+// telling somebody with no log file that the upload failed sends them looking
+// at their network.
+//
+// The loading dialog matters as much as the wording. It is put up before the
+// upload and taken down after, so a failure that left it up would trap the user
+// behind "Uploading log file..." for good.
+func TestUploadLog_SaysTheLogCouldNotBeRead(t *testing.T) {
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{LogDir: t.TempDir(), DataDir: t.TempDir()})
+
+	pages := tview.NewPages()
+	runner.Start(pages)
+
+	// Run on the application's own loop, which is where the Upload button's
+	// handler runs it. uploadLog forces a draw, and tview forbids that from any
+	// other goroutine — doing it from the test goroutine is a data race the
+	// race detector catches.
+	var outcome string
+	var dialogLeftUp bool
+	runner.QueueUpdateDraw(func() {
+		outcome = uploadLog(pl, pages, runner.App())
+		dialogLeftUp = pages.HasPage("temp_upload")
+	})
+
+	assert.Equal(t, "Unable to read log file.", outcome)
+	assert.False(t, dialogLeftUp,
+		"the loading dialog has to come down whatever the upload did")
 }

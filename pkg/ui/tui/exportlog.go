@@ -20,14 +20,8 @@
 package tui
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"mime/multipart"
-	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -40,21 +34,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// BuildExportLogModal creates the log export page with PageFrame.
+// BuildExportLogModal builds the log page. goBack is supplied by the caller
+// because this page is reachable from two places: the settings menu during
+// normal operation, and the main menu directly when the service is not
+// running — where the settings page has never been registered, so a hardcoded
+// switch to it would strand the user on a page with no way out.
 func BuildExportLogModal(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
 	logDestPath string,
 	logDestName string,
+	goBack func(),
 ) {
 	frame := NewPageFrame(app).
 		SetTitle("Export Logs").
 		SetHelpText("View, upload, or copy log files")
 
-	goBack := func() {
-		pages.SwitchToPage(PageSettingsMain)
-	}
 	frame.SetOnEscape(goBack)
 
 	exportPages := tview.NewPages()
@@ -146,13 +142,6 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 	return fmt.Sprintf("Copied %s to %s.", config.LogFile, logDestName)
 }
 
-var (
-	errUploadPrepare  = errors.New("failed to prepare upload")
-	errUploadConnect  = errors.New("failed to connect to upload service")
-	errUploadResponse = errors.New("failed to read upload response")
-	errUploadStatus   = errors.New("upload service returned error status")
-)
-
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	loadingDialog := NewDialog().
 		SetText("Uploading log file...").
@@ -161,80 +150,14 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	app.SetFocus(loadingDialog)
 	app.ForceDraw()
 
-	// Uploads the bundle: this is where a reported log usually comes from, and
-	// a crash exists only in the captured stderr.
-	logContent, err := helpers.ReadLogBundle(pl, config.LogBundleMaxBytes)
-	if err != nil {
-		pages.RemovePage("temp_upload")
-		log.Error().Err(err).Msg("failed to read log file")
-		return "Unable to read log file."
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	result := doUploadLog(logContent, config.LogUploadURL, client)
+	url, err := helpers.UploadLog(pl)
 	pages.RemovePage("temp_upload")
-	return result
-}
-
-// doUploadLog performs the upload and returns a user-friendly message.
-func doUploadLog(logContent []byte, uploadURL string, client *http.Client) string {
-	url, err := uploadLogContent(logContent, uploadURL, client)
 	if err != nil {
 		log.Error().Err(err).Msg("log upload failed")
-		switch {
-		case errors.Is(err, errUploadConnect):
-			return "Unable to connect to upload service."
-		default:
-			return "Unable to upload log file."
-		}
+		return helpers.DescribeUploadFailure(err)
 	}
+
 	return "Log file URL:\n\n" + url
-}
-
-// uploadLogContent uploads log content to the specified URL and returns the resulting URL.
-func uploadLogContent(content []byte, uploadURL string, client *http.Client) (string, error) {
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("file", "core.log")
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
-	}
-	if _, err = part.Write(content); err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
-	}
-	if err = writer.Close(); err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, body)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := client.Do(req) //nolint:gosec // G704: URL from hardcoded paste service endpoint
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadConnect, err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("failed to close response body")
-		}
-	}()
-
-	response, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errUploadResponse, err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: %d %s", errUploadStatus, resp.StatusCode, string(response))
-	}
-
-	return strings.TrimSpace(string(response)), nil
 }
 
 // readLastLines reads the last n lines from a file

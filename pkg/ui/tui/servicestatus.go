@@ -80,12 +80,20 @@ func resolveServiceCondition(cfg *config.Instance, isRunning func() bool) servic
 	return serviceStopped
 }
 
-// lastLoggedError returns the message of the most recent error in the log.
+// lastLoggedError returns the reason the service is not running, as the log
+// records it.
 //
 // The log file is what support asks for and what the bug report template asks
-// for, so the reason a start failed is already written there. Surfacing the
-// last line of it here saves the user fetching the file to answer the first
-// question they have.
+// for, so the reason a start failed is already written there. Surfacing it here
+// saves the user fetching the file to answer the first question they have.
+//
+// A failed start writes a record carrying the headline written for a person to
+// read, and that is preferred over the most recent error. Core keeps logging
+// after it enters the failed state — this TUI's own client dialling the
+// websocket that is not serving, for one — and those later lines are symptoms
+// that mask the cause. On a MiSTer held in the failed state by a schema-ahead
+// user database, the block said "error disabling runZapScript" and nothing at
+// all about the database.
 func lastLoggedError(pl platforms.Platform) string {
 	content, err := readLastLines(helpers.LogPath(pl), logErrorLinesShown)
 	if err != nil {
@@ -93,6 +101,7 @@ func lastLoggedError(pl platforms.Platform) string {
 	}
 
 	lines := strings.Split(content, "\n")
+	mostRecent := ""
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -100,9 +109,10 @@ func lastLoggedError(pl platforms.Platform) string {
 		}
 
 		var entry struct {
-			Level   string `json:"level"`
-			Message string `json:"message"`
-			Error   string `json:"error"`
+			Level    string `json:"level"`
+			Message  string `json:"message"`
+			Error    string `json:"error"`
+			Headline string `json:"headline"`
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
@@ -111,13 +121,20 @@ func lastLoggedError(pl platforms.Platform) string {
 			continue
 		}
 
-		if entry.Error != "" {
-			return entry.Message + ": " + entry.Error
+		// Only the failed-state record carries this field, so its presence is
+		// what identifies the record rather than matching on the message.
+		if entry.Headline != "" {
+			return entry.Headline
 		}
-		return entry.Message
+		if mostRecent == "" {
+			mostRecent = entry.Message
+			if entry.Error != "" {
+				mostRecent = entry.Message + ": " + entry.Error
+			}
+		}
 	}
 
-	return ""
+	return mostRecent
 }
 
 // webUIAddress is the address a user can open to reach this device.
@@ -145,11 +162,18 @@ func serviceStatusText(cfg *config.Instance, pl platforms.Platform, condition se
 		if reason := lastLoggedError(pl); reason != "" {
 			text += "\n\n" + reason
 		}
-		text += "\n\nOpen " + webUIAddress(cfg) + " for details."
+		text += "\n\nOpen " + webUIAddress(cfg) + "\nor press Logs to send a report."
 		return text
 	case serviceStopped:
-		return "[" + t.ErrorColorName + "]x NOT RUNNING[-]" +
-			"\nService may not have started.\nCheck Logs for details."
+		text := "[" + t.ErrorColorName + "]x NOT RUNNING[-]" +
+			"\nService may not have started."
+		if reason := lastLoggedError(pl); reason != "" {
+			text += "\n\n" + reason
+		}
+		// Logs is the one button that still works here, and it is where the
+		// answer is, so name it rather than leaving the user to go looking.
+		text += "\n\nPress Logs to send a report."
+		return text
 	}
 
 	return "[" + t.ErrorColorName + "]x NOT RUNNING[-]"

@@ -176,3 +176,56 @@ func TestServiceStatusText_SaysSomethingDifferentForEachCondition(t *testing.T) 
 	assert.Contains(t, failed, "could not open user.db", "the reason is the whole point of this state")
 	assert.Contains(t, failed, "/app/", "and somewhere to read the rest of it")
 }
+
+// These lines are the ones a MiSTer wrote when its user database was held
+// schema-ahead: the cause, then the record built for a person to read, then the
+// symptom that arrives half a minute later when the TUI's own client dials a
+// websocket the failed service is not serving.
+const (
+	logCause = `{"level":"error",` +
+		`"error":"error migrating userdb: database schema is newer than this binary supports",` +
+		`"message":"error opening databases"}`
+	logFailedRecord = `{"level":"error","headline":"Zaparoo cannot open your saved data",` +
+		`"detail":"Your history, mappings and profiles were upgraded by a newer version.",` +
+		`"message":"service entered failed state"}`
+	logSymptom = `{"level":"error",` +
+		`"error":"failed to dial websocket (HTTP status 503): websocket: bad handshake",` +
+		`"message":"error disabling runZapScript"}`
+)
+
+// Core keeps logging after it enters the failed state, so the most recent error
+// is a symptom and not the cause. Taking it is what put "error disabling
+// runZapScript" on a MiSTer whose user database could not be opened.
+func TestLastLoggedError_PrefersTheFailedStateHeadline(t *testing.T) {
+	t.Parallel()
+
+	pl := logPlatform(t, logCause+"\n"+logFailedRecord+"\n"+logSymptom+"\n")
+
+	reason := lastLoggedError(pl)
+
+	assert.Equal(t, "Zaparoo cannot open your saved data", reason)
+	assert.NotContains(t, reason, "runZapScript",
+		"the most recent error is a symptom of the failure, not its cause")
+}
+
+// The stopped block used to carry a fixed "may not have started" and nothing
+// else, which is the whole of what a user saw when an older binary refused a
+// schema-ahead database and exited. Both broken states now name the reason and
+// the one button that still works.
+func TestServiceStatusText_NamesTheReasonAndTheButton(t *testing.T) {
+	t.Parallel()
+
+	cfg := closedPortConfig(t)
+	pl := logPlatform(t, logCause+"\n"+logFailedRecord+"\n"+logSymptom+"\n")
+
+	failed := serviceStatusText(cfg, pl, serviceFailed)
+	assert.Contains(t, failed, "NOT WORKING")
+	assert.Contains(t, failed, "Zaparoo cannot open your saved data")
+	assert.Contains(t, failed, "press Logs", "the button that still works has to be named")
+
+	stopped := serviceStatusText(cfg, pl, serviceStopped)
+	assert.Contains(t, stopped, "NOT RUNNING")
+	assert.Contains(t, stopped, "Zaparoo cannot open your saved data",
+		"an older binary that refused the database and exited leaves this state, not failed")
+	assert.Contains(t, stopped, "Press Logs")
+}

@@ -698,10 +698,22 @@ func BuildMainPage(
 		saveFocus()
 		BuildGenerateDBPage(cfg, pages, app)
 	})
+	// While the service is not running, Settings is disabled and the log page
+	// is the one thing inside it anybody needs — so the slot becomes that page
+	// rather than a dead button. This is the state where a user has to get
+	// their log to somebody, and Settings was the only door to it.
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
 		saveFocus()
 		BuildSettingsMainMenu(cfg, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 	})
+	settingsHelp := "Manage settings for Core service"
+	if !svcRunning {
+		settingsButton = tview.NewButton("Logs").SetSelectedFunc(func() {
+			saveFocus()
+			BuildExportLogModal(pages, app, pl, logDestPath, logDestName, rebuildMainPage)
+		})
+		settingsHelp = "View and upload log files to report a problem"
+	}
 	profilesButton := tview.NewButton("Profiles").SetSelectedFunc(func() {
 		saveFocus()
 		BuildProfilesPage(svc, pages, app)
@@ -716,7 +728,6 @@ func BuildMainPage(
 		searchButton.SetDisabled(true)
 		writeButton.SetDisabled(true)
 		updateDBButton.SetDisabled(true)
-		settingsButton.SetDisabled(true)
 		profilesButton.SetDisabled(true)
 	}
 
@@ -731,7 +742,7 @@ func BuildMainPage(
 		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
 	)
 	buttonGrid.AddRow(
-		&ButtonGridItem{settingsButton, "Manage settings for Core service", disableRow1},
+		&ButtonGridItem{settingsButton, settingsHelp, false},
 		&ButtonGridItem{profilesButton, "Manage device profiles and write switch cards", disableRow1},
 		&ButtonGridItem{exitButton, exitHelpText, false},
 	)
