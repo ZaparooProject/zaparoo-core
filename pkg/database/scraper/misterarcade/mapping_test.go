@@ -317,11 +317,18 @@ func TestVersionTagRoutesOnlyModelledForms(t *testing.T) {
 	}
 }
 
-func TestArcadeBoardValueUsesCanonicalSpellingWhenOneExists(t *testing.T) {
+func TestArcadeBoardValueSplitsVendorFromBoard(t *testing.T) {
 	t.Parallel()
+	// Where the catalog's own spelling already agrees with the canonical one,
+	// the mechanical split lands on it.
 	assert.Equal(t, string(tags.TagArcadeBoardCapcomCPS2), string(arcadeBoardValue("Capcom CPS-2")))
 	assert.Equal(t, string(tags.TagArcadeBoardIremM72), string(arcadeBoardValue("Irem M72")))
 	assert.Equal(t, string(tags.TagArcadeBoardSegaSystem16), string(arcadeBoardValue("Sega System 16")))
+	// There is no alias table, so where the two disagree the catalog wins. The
+	// canonical value here is capcom:cps, and this is the disagreement the
+	// scraper documents rather than resolves.
+	assert.Equal(t, "capcom:cps1", string(arcadeBoardValue("Capcom CPS-1")))
+	assert.NotEqual(t, string(tags.TagArcadeBoardCapcomCPS), string(arcadeBoardValue("Capcom CPS-1")))
 	// The catalog names far more boards than the canonical list does; keeping
 	// its own spelling is better than leaving most arcade games with none.
 	assert.Equal(t, "namco:pacmanhardware", string(arcadeBoardValue("Namco Pac-Man hardware")))

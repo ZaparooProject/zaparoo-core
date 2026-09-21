@@ -73,7 +73,11 @@ type SetNameCache func(path string) (setName string, ok bool)
 
 // index maps a lower-cased set name to its catalog row. Later duplicates lose:
 // the catalog is a single upstream file, so a repeated set name is a defect in
-// it rather than an ambiguity Core can resolve.
+// it rather than an ambiguity Core can resolve. The repeats sit in blocks
+// appended after the sorted body and describe an alternative that was given the
+// parent's set name, so the earlier row is the one that belongs to the key --
+// checked against the catalog current when this was written, where 19 set names
+// repeated and the 13 that disagreed all disagreed that way.
 func index(entries []Entry) map[string]*Entry {
 	byName := make(map[string]*Entry, len(entries))
 	for i := range entries {
@@ -112,8 +116,8 @@ func field(value string) string {
 }
 
 // isYes reads the catalog's boolean columns. Upstream has at least one typo
-// ("ys"), so a prefix match on the affirmative is used rather than equality;
-// every negative spelling in the file starts with "n".
+// ("ys"), so every affirmative spelling the file uses is listed rather than
+// relying on "yes" alone.
 func isYes(value string) bool {
 	value = strings.ToLower(field(value))
 	return value == "yes" || value == "ys" || value == "y" || value == "true"

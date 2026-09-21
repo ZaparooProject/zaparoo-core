@@ -470,14 +470,29 @@ two separators; each phrase the catalog uses is listed explicitly. A phrase that
 detail its canonical value needs — a `2-way` joystick with no axis, a bare `stick`, `positional` with no position
 count — is logged at debug and dropped rather than resolved to the nearest guess.
 
-The catalog names 141 hardware families while Core's canonical `arcadeboard` list covers a minority of them. A
-board the canonical list names is written with the canonical spelling; the rest keep the catalog's own spelling,
-normalized. Dropping them would leave most arcade games with no board at all.
+The catalog names far more hardware families than Core's canonical `arcadeboard` list does, and there is no alias
+table between them. Every board goes through the same mechanical rule — the first word becomes the vendor and the
+rest the board — so a catalog spelling that happens to agree with the canonical one lands on it, and everything
+else keeps the catalog's own spelling, normalized. Against the catalog current when this was written, 18 of its
+193 boards agreed. Where the two disagree the catalog wins: it yields `capcom:cps1` where the canonical value is
+`capcom:cps`. Reconciling that wants a curated alias table and an arcade-hardware judgement this scraper does not
+make; dropping the unmatched boards would leave most arcade games with no board at all.
 
 Writing media-level tags of scanner-owned types changes the `MediaIdentity` fingerprint for rows that lacked them,
-as `gamelist.xml`'s media-level `region`/`lang` writes already do. In practice the MRA filename parser already
-supplies region, build date, revision and bootleg for most arcade rows, and fill-missing only writes a type that is
-entirely absent. `property:mame-setname` is not scanner-owned and never affects it.
+as `gamelist.xml`'s media-level `region`/`lang` writes already do. `property:mame-setname` is not scanner-owned and
+never affects it.
+
+How much a fill-missing run changes depends on the type. An **exclusive** type is written only when the row has no
+value of that type at all, so the MRA filename parser's build date, revision and bootleg normally stand. An
+**additive** type is always written, so a row can gain a second value of a type it already had. The two that move
+in practice:
+
+- `alt` is new to most rows. The catalog marks a majority of its romsets as alternates and an MRA filename almost
+  never says so, so a first run re-fingerprints the bulk of an arcade library — measured against a real `_Arcade`
+  corpus, 1748 of 3274 rows, of which 5 had a filename that already said `alt`.
+- `region` is additive, so a row whose filename states a territory can gain the catalog's broader value beside it.
+  On the same corpus 43 rows ended up carrying `world` next to a specific territory, because the catalog describes
+  the romset's release while the filename describes which dump this is.
 
 ## PinUP Popper Behavior
 

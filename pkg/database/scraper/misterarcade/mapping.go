@@ -173,11 +173,14 @@ func normalized(tagType tags.TagType, raw string) tags.TagValue {
 	return tags.TagValue(tags.NormalizeTagValue(string(tagType), raw))
 }
 
-// arcadeBoardValue spells a board the way the canonical vocabulary does when it
-// names that board, and otherwise keeps the catalog's own spelling normalized.
-// The catalog names 141 hardware families and Core's canonical list covers a
-// minority of them; dropping the rest would leave most arcade games with no
-// board at all.
+// arcadeBoardValue splits a board name into a vendor and the rest, which is the
+// spelling the canonical vocabulary uses. There is no alias table between the
+// catalog's 193 hardware families and the canonical list's 74, so a catalog
+// spelling only lands on a canonical value where the two already agree (18 of
+// the 193 when this was written) and every other board keeps the catalog's own
+// spelling. That leaves real disagreements — the catalog yields `capcom:cps1`
+// where the canonical value is `capcom:cps` — but dropping the boards the
+// canonical list does not name would leave most arcade games with none.
 func arcadeBoardValue(board string) tags.TagValue {
 	words := strings.Fields(strings.Map(func(r rune) rune {
 		switch {
