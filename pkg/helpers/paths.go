@@ -248,6 +248,7 @@ type LauncherMatcher struct {
 	cfg             *config.Instance
 	normFolderCache map[string]string
 	precomp         map[string]*launcherPrecomp
+	scanDuplicates  map[string]bool
 	normDataDir     string
 	normMediaPrefix string
 	normRootDirs    []string
@@ -262,7 +263,12 @@ func (m *LauncherMatcher) launcherPaths(l *platforms.Launcher) *launcherPrecomp 
 	if lc := m.precomp[l.ID]; lc != nil {
 		return lc
 	}
-	return newLauncherPrecomp(l, m.normRootDirs, m.normFolderCache, m.normMediaPrefix)
+	// This runs inside the walk callback, so the scan_duplicates answer comes
+	// from the map built at construction rather than a config lock per entry.
+	return newLauncherPrecomp(
+		l, m.normRootDirs, m.normFolderCache, m.normMediaPrefix,
+		m.scanDuplicates[strings.ToLower(l.ID)],
+	)
 }
 
 // newLauncherPrecomp normalizes everything path matching needs from a single
@@ -273,6 +279,7 @@ func newLauncherPrecomp(
 	normRoots []string,
 	folderCache map[string]string,
 	normMediaPrefix string,
+	scanDuplicates bool,
 ) *launcherPrecomp {
 	lp := &launcherPrecomp{}
 
@@ -307,16 +314,21 @@ func newLauncherPrecomp(
 	for _, e := range l.Extensions {
 		lp.extensions = append(lp.extensions, strings.ToLower(e))
 	}
+	// scan_duplicates only drops the two exclusions that suppress copies of
+	// media the launcher already indexes. ScanExcludes names files that are not
+	// media at all, so it holds either way.
 	for _, exclude := range l.ScanExcludes {
 		lp.scanExcludes = append(lp.scanExcludes, NormalizePathForComparison(exclude))
 	}
-	for _, exclude := range l.ScanDirectoryExcludes {
-		lp.scanDirectoryExcludes = append(
-			lp.scanDirectoryExcludes,
-			NormalizePathForComparison(exclude),
-		)
+	if !scanDuplicates {
+		for _, exclude := range l.ScanDirectoryExcludes {
+			lp.scanDirectoryExcludes = append(
+				lp.scanDirectoryExcludes,
+				NormalizePathForComparison(exclude),
+			)
+		}
 	}
-	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks
+	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks && !scanDuplicates
 
 	return lp
 }
@@ -366,6 +378,30 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		normMediaPrefix = NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
 	}
 
+	// Only launchers that suppress duplicates can be affected, so the config
+	// lookup is skipped for the rest. Only enabled entries are stored, leaving
+	// the map empty for every ordinary setup.
+	var scanDuplicates map[string]bool
+	for i := range allLaunchers {
+		l := &allLaunchers[i]
+		if len(l.ScanDirectoryExcludes) == 0 && !l.ScanSkipInternalSymlinks {
+			continue
+		}
+		if cfg == nil {
+			continue
+		}
+		defaults := cfg.LookupLauncherDefaults(l.ID, l.Groups)
+		if !defaults.ScanDuplicatesEnabled() {
+			continue
+		}
+		if scanDuplicates == nil {
+			scanDuplicates = make(map[string]bool)
+		}
+		scanDuplicates[strings.ToLower(l.ID)] = true
+		log.Info().Str("launcherID", l.ID).
+			Msg("launcher configured to scan duplicate media")
+	}
+
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
@@ -380,7 +416,10 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 			precomp[l.ID] = nil
 			continue
 		}
-		precomp[l.ID] = newLauncherPrecomp(l, normRoots, folderCache, normMediaPrefix)
+		precomp[l.ID] = newLauncherPrecomp(
+			l, normRoots, folderCache, normMediaPrefix,
+			scanDuplicates[strings.ToLower(l.ID)],
+		)
 	}
 
 	return &LauncherMatcher{
@@ -391,6 +430,7 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		normMediaPrefix: normMediaPrefix,
 		normFolderCache: folderCache,
 		precomp:         precomp,
+		scanDuplicates:  scanDuplicates,
 	}
 }
 

@@ -125,9 +125,35 @@ func installArcadeOrganizerLauncher(t *testing.T, cfg *config.Instance, rootDir 
 	return platform
 }
 
-func TestGetFiles_SkipsArcadeOrganizerInPlace(t *testing.T) {
-	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
-	rootDir := t.TempDir()
+// arcadeOrganizerFixture names the paths of a MiSTer Arcade tree carrying
+// Arcade Organizer output written straight into _Arcade (ORGDIR=_Arcade).
+type arcadeOrganizerFixture struct {
+	arcadeDir       string
+	canonicalPath   string
+	alternativePath string
+	offsetPath      string
+	externalAlias   string
+	categoryAlias   string
+	platformAlias   string
+	organizedAlias  string
+	topdirLink      string
+	yearAlias       string
+	relativeAlias   string
+	brokenAlias     string
+}
+
+// aliases lists every Organizer alias of the canonical MRA, including the one
+// reached through the TOPDIR directory symlink.
+func (f *arcadeOrganizerFixture) aliases() []string {
+	return []string{
+		f.categoryAlias, f.platformAlias, f.organizedAlias, f.yearAlias, f.relativeAlias,
+		filepath.Join(f.topdirLink, "Pooyan.mra"),
+	}
+}
+
+func newArcadeOrganizerFixture(t *testing.T, rootDir string) arcadeOrganizerFixture {
+	t.Helper()
+
 	arcadeDir := filepath.Join(rootDir, "_Arcade")
 	externalDir := filepath.Join(rootDir, "external")
 	require.NoError(t, os.MkdirAll(filepath.Join(arcadeDir, "_alternatives"), 0o750))
@@ -170,23 +196,76 @@ func TestGetFiles_SkipsArcadeOrganizerInPlace(t *testing.T) {
 	externalAlias := filepath.Join(arcadeDir, "External.mra")
 	require.NoError(t, os.Symlink(externalTarget, externalAlias))
 
+	return arcadeOrganizerFixture{
+		arcadeDir:       arcadeDir,
+		canonicalPath:   canonicalPath,
+		alternativePath: alternativePath,
+		offsetPath:      offsetPath,
+		externalAlias:   externalAlias,
+		categoryAlias:   categoryAlias,
+		platformAlias:   platformAlias,
+		organizedAlias:  organizedAlias,
+		topdirLink:      topdirLink,
+		yearAlias:       yearAlias,
+		relativeAlias:   relativeAlias,
+		brokenAlias:     brokenAlias,
+	}
+}
+
+func TestGetFiles_SkipsArcadeOrganizerInPlace(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	fixture := newArcadeOrganizerFixture(t, rootDir)
+
 	fs := testhelpers.NewMemoryFS()
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
 	platform := installArcadeOrganizerLauncher(t, cfg, rootDir)
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, fixture.arcadeDir, nil)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{canonicalPath, alternativePath, offsetPath, externalAlias}, files)
+	assert.ElementsMatch(t,
+		[]string{fixture.canonicalPath, fixture.alternativePath, fixture.offsetPath, fixture.externalAlias},
+		files)
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
-	for _, alias := range []string{
-		categoryAlias, platformAlias, organizedAlias, yearAlias, relativeAlias,
-		filepath.Join(topdirLink, "Pooyan.mra"),
-	} {
+	for _, alias := range fixture.aliases() {
 		assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, alias),
 			"organizer alias %s must remain directly launchable", alias)
 	}
+}
+
+// TestGetFiles_IndexesArcadeOrganizerWhenScanDuplicatesEnabled is the #1423
+// opt-in: the same tree, with the launcher configured to scan duplicates.
+func TestGetFiles_IndexesArcadeOrganizerWhenScanDuplicatesEnabled(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	fixture := newArcadeOrganizerFixture(t, rootDir)
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "arcade-launcher"
+scan_duplicates = true
+`))
+	platform := installArcadeOrganizerLauncher(t, cfg, rootDir)
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, fixture.arcadeDir, nil)
+	require.NoError(t, err)
+
+	// brokenAlias is in this set on purpose. Dropping a dangling symlink was
+	// only ever a side effect of the alias check, and every launcher that does
+	// not opt into that check already indexes one; opting in accepts the same
+	// unlaunchable row rather than inventing a rule for this launcher alone.
+	// The _loop link back to the parent yields nothing, so the walk stays
+	// inside the scan root.
+	expected := append([]string{
+		fixture.canonicalPath, fixture.alternativePath, fixture.offsetPath,
+		fixture.externalAlias, fixture.brokenAlias,
+	}, fixture.aliases()...)
+	assert.ElementsMatch(t, expected, files)
 }
 
 func TestGetFiles_IgnoresArcadeOrganizerSibling(t *testing.T) {
@@ -214,6 +293,44 @@ func TestGetFiles_IgnoresArcadeOrganizerSibling(t *testing.T) {
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
 	assert.False(t, matcher.MatchSystemFileForScan(systemdefs.SystemArcade, siblingAlias),
 		"a folder whose name merely starts with _Arcade is not part of the Arcade scan root")
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{canonicalPath}, files)
+}
+
+// TestGetFiles_IgnoresArcadeOrganizerSiblingWithScanDuplicates pins that the
+// opt-in widens what is scanned inside a launcher's roots, never the roots
+// themselves: _Arcade Organized is a sibling of the scan root, not part of it.
+func TestGetFiles_IgnoresArcadeOrganizerSiblingWithScanDuplicates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+	coresDir := filepath.Join(arcadeDir, "cores")
+	require.NoError(t, os.MkdirAll(coresDir, 0o750))
+	canonicalPath := filepath.Join(arcadeDir, "Pooyan.mra")
+	require.NoError(t, os.WriteFile(canonicalPath, []byte("<misterromdescription/>"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(coresDir, "Pooyan_20240101.rbf"), []byte("rbf"), 0o600))
+
+	siblingDir := filepath.Join(rootDir, "_Arcade Organized")
+	require.NoError(t, os.MkdirAll(filepath.Join(siblingDir, "_1 A-E"), 0o750))
+	siblingAlias := filepath.Join(siblingDir, "_1 A-E", "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, siblingAlias))
+	require.NoError(t, os.Symlink(coresDir, filepath.Join(siblingDir, "cores")))
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "arcade-launcher"
+scan_duplicates = true
+`))
+	platform := installArcadeOrganizerLauncher(t, cfg, rootDir)
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+	assert.False(t, matcher.MatchSystemFileForScan(systemdefs.SystemArcade, siblingAlias),
+		"a folder whose name merely starts with _Arcade is still not part of the Arcade scan root")
 
 	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
 	require.NoError(t, err)

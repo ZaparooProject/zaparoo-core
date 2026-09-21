@@ -886,3 +886,98 @@ execute = "echo nested"
 	customs := cfg.CustomLaunchers()
 	require.Len(t, customs, 2)
 }
+
+func TestLookupLauncherDefaults_MergesScanDuplicates(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "Arcade", ScanDuplicates: &enabled},
+				},
+			},
+		},
+	}
+
+	arcade := cfg.LookupLauncherDefaults("Arcade", nil)
+	snes := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.True(t, arcade.ScanDuplicatesEnabled())
+	assert.False(t, snes.ScanDuplicatesEnabled(), "a launcher with no matching entry must stay off")
+}
+
+func TestLookupLauncherDefaults_ScanDuplicatesFalseOverridesGroup(t *testing.T) {
+	t.Parallel()
+
+	enabled, disabled := true, false
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "MisterArcade", ScanDuplicates: &enabled},
+					{Launcher: "Arcade", ScanDuplicates: &disabled},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("Arcade", []string{"MisterArcade"})
+	require.NotNil(t, result.ScanDuplicates, "an explicit false must be distinguishable from unset")
+	assert.False(t, result.ScanDuplicatesEnabled(), "a later explicit false must beat a group-wide true")
+}
+
+func TestLookupLauncherDefaults_ScanDuplicatesEntryWithoutKeyKeepsEarlier(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "Arcade", ScanDuplicates: &enabled},
+					{Launcher: "Arcade", InstallDir: "/games"},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("Arcade", nil)
+	assert.True(t, result.ScanDuplicatesEnabled(), "an entry omitting the key must not clear it")
+	assert.Equal(t, "/games", result.InstallDir)
+}
+
+func TestLookupLauncherDefaults_ScanDuplicatesTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Arcade"
+scan_duplicates = true
+`))
+
+	result := cfg.LookupLauncherDefaults("Arcade", nil)
+	assert.True(t, result.ScanDuplicatesEnabled(), "scan_duplicates must survive a TOML round-trip")
+}
+
+func TestLookupLauncherDefaults_ScanDuplicatesDoesNotAliasConfig(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "Arcade", ScanDuplicates: &enabled},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("Arcade", nil)
+	*result.ScanDuplicates = false
+
+	reread := cfg.LookupLauncherDefaults("Arcade", nil)
+	assert.True(t, reread.ScanDuplicatesEnabled(), "the returned pointer must not alias config memory")
+}
