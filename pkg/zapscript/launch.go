@@ -120,6 +120,12 @@ func applyMediaLauncherOverrideForPath(
 		return current
 	}
 	launcher, found := inferLauncherForPath(pl, env, path)
+	if !found {
+		// The override may name a launcher that cannot run right now. Its
+		// own availability error is the useful one, so the media row is
+		// still resolved when nothing that matches the path is available.
+		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
+	}
 	if !found || launcher.SystemID == "" {
 		return current
 	}
@@ -263,6 +269,15 @@ func applySystemDefaultLauncherForPath(pl platforms.Platform, env *platforms.Cmd
 }
 
 func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) (platforms.Launcher, bool) {
+	return inferLauncherForPathWithAvailability(pl, env, path, true)
+}
+
+func inferLauncherForPathWithAvailability(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	requireAvailable bool,
+) (platforms.Launcher, bool) {
 	launchers := pl.Launchers(env.Cfg)
 	best := -1
 	bestScore := -1
@@ -270,7 +285,7 @@ func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path str
 		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
 			continue
 		}
-		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
+		if requireAvailable && launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
 		score := launcherInferenceScore(&launchers[i])
