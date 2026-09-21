@@ -281,6 +281,7 @@ func inferLauncherForPathWithAvailability(
 	launchers := pl.Launchers(env.Cfg)
 	best := -1
 	bestScore := -1
+	bestMissing := true
 	for i := range launchers {
 		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
 			continue
@@ -288,10 +289,14 @@ func inferLauncherForPathWithAvailability(
 		if requireAvailable && launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
+		// A launcher whose player is known to be missing only stands in when
+		// every other match is missing too.
+		missing := helpers.LauncherKnownMissing(&launchers[i])
 		score := launcherInferenceScore(&launchers[i])
-		if score > bestScore {
+		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
 			best = i
 			bestScore = score
+			bestMissing = missing
 		}
 	}
 	if best == -1 {

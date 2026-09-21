@@ -770,6 +770,88 @@ func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
 	assert.Equal(t, "First", launcher.ID, "on tie, first match should win")
 }
 
+// TestFindLauncher_SkipsKnownMissingPlayer covers several launchers serving one
+// path where the platform scanned for their players. Registration order breaks
+// the tie, but never in favour of a player known to be absent.
+func TestFindLauncher_SkipsKnownMissingPlayer(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	found, missing := true, false
+	tests := []struct {
+		name      string
+		want      string
+		launchers []platforms.Launcher
+	}{
+		{
+			name: "missing first yields to a detected launcher",
+			want: "Second",
+			launchers: []platforms.Launcher{
+				{ID: "First", SystemID: "NES", Schemes: []string{"source"}, Detected: &missing},
+				{ID: "Second", SystemID: "NES", Schemes: []string{"source"}, Detected: &found},
+			},
+		},
+		{
+			name: "missing first yields to an unscanned launcher",
+			want: "Second",
+			launchers: []platforms.Launcher{
+				{ID: "First", SystemID: "NES", Schemes: []string{"source"}, Detected: &missing},
+				{ID: "Second", SystemID: "NES", Schemes: []string{"source"}},
+			},
+		},
+		{
+			name: "missing yields even to a less specific launcher",
+			want: "Generic",
+			launchers: []platforms.Launcher{
+				{ID: "Specific", SystemID: "NES", Schemes: []string{"source"}, Detected: &missing},
+				{ID: "Generic", Schemes: []string{"source"}},
+			},
+		},
+		{
+			name: "registration order still decides between detected launchers",
+			want: "First",
+			launchers: []platforms.Launcher{
+				{ID: "First", SystemID: "NES", Schemes: []string{"source"}, Detected: &found},
+				{ID: "Second", SystemID: "NES", Schemes: []string{"source"}, Detected: &found},
+			},
+		},
+		{
+			name: "all missing keeps the first so its repair advice is reported",
+			want: "First",
+			launchers: []platforms.Launcher{
+				{ID: "First", SystemID: "NES", Schemes: []string{"source"}, Detected: &missing},
+				{ID: "Second", SystemID: "NES", Schemes: []string{"source"}, Detected: &missing},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{})
+			mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+			mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(tt.launchers)
+			cfg := &config.Instance{}
+
+			testLauncherCacheMutex.Lock()
+			originalCache := GlobalLauncherCache
+			testCache := &LauncherCache{}
+			testCache.Initialize(mockPlatform, cfg)
+			GlobalLauncherCache = testCache
+			defer func() {
+				GlobalLauncherCache = originalCache
+				testLauncherCacheMutex.Unlock()
+			}()
+
+			launcher, err := FindLauncher(cfg, mockPlatform, "source://abc/nes/mario.nes")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, launcher.ID)
+
+			matched, err := NewLauncherMatcher(cfg, mockPlatform).FindLauncher("source://abc/nes/mario.nes")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, matched.ID)
+		})
+	}
+}
+
 // TestMatchSystemFile_DuplicateLauncherIDs covers a custom launcher configured
 // with the same ID as a built-in one. The matcher precomputes folder data into
 // a map keyed by ID, so before the fix one entry answered for both and the
