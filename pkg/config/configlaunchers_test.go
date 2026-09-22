@@ -282,6 +282,41 @@ func TestLookupLauncherDefaults_ExactIDBeatsGroupRegardlessOfOrder(t *testing.T)
 	}
 }
 
+// An entry that leaves launcher unset names nothing, so it must not resolve for
+// a launcher either. Group matching is what makes this reachable: custom
+// launcher groups come straight from user TOML, which does not reject a blank
+// one, and a blank group would otherwise make the entry a wildcard.
+func TestLookupLauncherDefaults_EntryWithNoLauncherMatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	defaults := []LaunchersDefault{
+		{Launcher: "", InstallDir: "/wildcard", BeforeExit: "**echo:wildcard"},
+	}
+
+	tests := []struct {
+		name       string
+		launcherID string
+		groups     []string
+	}{
+		{name: "launcher carrying a blank group", launcherID: "Weird", groups: []string{""}},
+		{name: "blank group among real ones", launcherID: "Weird", groups: []string{"LLAPI", ""}},
+		{name: "launcher with no ID at all", launcherID: "", groups: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{vals: Values{Launchers: Launchers{Default: defaults}}}
+
+			result := cfg.LookupLauncherDefaults(tt.launcherID, tt.groups)
+
+			assert.Empty(t, result.InstallDir, "an entry naming no launcher must not resolve")
+			assert.Empty(t, result.BeforeExit, "an entry naming no launcher must not resolve")
+		})
+	}
+}
+
 func TestLookupLauncherDefaults_RenderSettingsOverrideEachOther(t *testing.T) {
 	t.Parallel()
 

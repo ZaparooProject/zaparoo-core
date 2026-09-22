@@ -409,6 +409,23 @@ before_exit = "**input.keyboard:a"`)
 
 		assertHookPressed(t, pressed, "d")
 	})
+
+	t.Run("a blank group does not reopen it either", func(t *testing.T) {
+		t.Parallel()
+
+		// Custom launcher groups come straight from user TOML, which does not
+		// reject a blank one. The group tier would otherwise match the same
+		// entry the launcher tier refuses.
+		svc, pressed := setupBeforeExitTest(t,
+			[]platforms.Launcher{{ID: "Weird", SystemID: "NES", Groups: []string{""}}},
+			nil,
+			wildcardTOML)
+		svc.State.SetActiveMedia(models.NewActiveMedia("NES", "NES", "g.nes", "G", "Weird"))
+
+		runBeforeExitHook(svc)
+
+		assertHookDidNotRun(t, pressed)
+	})
 }
 
 // Launcher IDs fold case everywhere else in the codebase; the old resolver

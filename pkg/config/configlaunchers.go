@@ -163,7 +163,11 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 
 	mergeMatching := func(matchedOn string, matches func(entryLauncher string) bool) {
 		for _, entry := range c.vals.Launchers.Default {
-			if !matches(entry.Launcher) {
+			// An entry with no launcher field names nothing. Custom launchers
+			// take their groups straight from user TOML, which does not reject a
+			// blank one, so without this such an entry becomes a wildcard for
+			// every launcher carrying it.
+			if entry.Launcher == "" || !matches(entry.Launcher) {
 				continue
 			}
 			log.Debug().
@@ -194,7 +198,8 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 }
 
 // matchesAnyLauncherGroup reports whether a config entry's launcher field names
-// one of the groups a launcher belongs to.
+// one of the groups a launcher belongs to. Callers pass only a named entry, so a
+// blank group in the list matches nothing.
 func matchesAnyLauncherGroup(entryLauncher string, groups []string) bool {
 	for _, group := range groups {
 		if strings.EqualFold(entryLauncher, group) {
