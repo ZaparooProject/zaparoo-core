@@ -619,17 +619,3 @@ func preWarmHost(ctx context.Context, baseURL string, db *database.Database, cli
 		log.Debug().Msgf("pre-warmed zaplink host: %s", baseURL)
 	}
 }
-
-// hasHTTPURLArg reports whether a command's first argument is an http(s) URL.
-// That is the shape a ZapLink arrives in, and it is how a link that failed to
-// resolve is told apart from an ordinary media path.
-func hasHTTPURLArg(cmd zapscript.Command) bool {
-	if len(cmd.Args) == 0 {
-		return false
-	}
-	parsed, err := url.Parse(cmd.Args[0])
-	if err != nil || parsed.Host == "" {
-		return false
-	}
-	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
-}

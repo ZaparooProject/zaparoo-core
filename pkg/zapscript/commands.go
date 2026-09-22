@@ -84,10 +84,7 @@ var (
 	// token carries. Unlike ErrCommandBlocked it is not a configuration
 	// choice: it is the channel the token came from refusing to widen.
 	ErrCommandNotPermitted = errors.New("command not permitted for this token")
-	// ErrUnresolvedZapLink is returned when a bounded token carries a URL
-	// that did not resolve as a ZapLink.
-	ErrUnresolvedZapLink = errors.New("url did not resolve as a zap link")
-	errAmbiguousPath     = errors.New("ambiguous case-insensitive path")
+	errAmbiguousPath       = errors.New("ambiguous case-insensitive path")
 )
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -532,13 +529,6 @@ func RunCommand(
 		// it: whatever made this token untrusted chose to run the link, and
 		// owning the script does not make that choice the user's.
 		unsafe = token.Unsafe || !linkOwned
-	} else if !token.AllowedCommands.Unrestricted() && hasHTTPURLArg(cmd) {
-		// A bounded token may carry a URL only as a ZapLink. One that did not
-		// resolve would go on as a raw path, where a scheme launcher can match
-		// it and stop whatever is playing before the path is even checked. The
-		// bound names which commands may run, so an indirection that did not
-		// happen must not quietly become a launch of its own.
-		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrUnresolvedZapLink, cmd.Args[0])
 	}
 
 	for i, arg := range cmd.Args {
@@ -617,7 +607,16 @@ func RunCommand(
 	// what a link actually returned rather than what was asked for. Playlist
 	// items and deck items inherit the bound with the token, so this one check
 	// covers every level an indirection can reach.
+	//
+	// The bound is over command names only. A launch value that is a URL is
+	// left alone: a card that delivers its own media is a URL and nothing
+	// else, whether it arrives as a link body or as one item of a deck, and
+	// the installer is what keeps that download inside the media directory.
 	if !token.AllowedCommands.Allows(cmd.Name) {
+		// A link that resolved to the wrong verb is the common way to see
+		// this, and the command alone does not say why it was refused.
+		log.Warn().Str("command", cmd.Name).Strs("permitted", token.AllowedCommands.Names()).
+			Msg("command is outside the bound this token carries")
 		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrCommandNotPermitted, cmd.Name)
 	}
 

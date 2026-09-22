@@ -94,7 +94,8 @@ func playlistForLog(pls *playlists.Playlist) any {
 // (keeping it out of Sentry). These are not bugs: a missing file, a playlist
 // control command with nothing playing, a double-tap during an active launch,
 // a user-supplied system or command that doesn't exist, a script that doesn't
-// parse, or a launch refused by configuration or a hook.
+// parse, or a launch refused by configuration, by a hook, or by the bound the
+// token carries.
 func isExpectedLaunchError(err error) bool {
 	return errors.Is(err, zapscript.ErrFileNotFound) ||
 		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
@@ -103,6 +104,7 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, zapscript.ErrUnknownCommand) ||
 		errors.Is(err, zapscript.ErrUnsupportedControlAction) ||
 		errors.Is(err, zapscript.ErrCommandBlocked) ||
+		errors.Is(err, zapscript.ErrCommandNotPermitted) ||
 		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
 		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
 		errors.Is(err, zapscript.ErrRemoteSource) ||

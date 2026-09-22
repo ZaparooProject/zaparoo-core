@@ -105,6 +105,17 @@ var operationAllowlist = map[string]opSpec{
 // This is the ZapScript side of the same boundary and has to be read as its
 // own list, not derived from the other one.
 //
+// The whole launch family is here, not just the two verbs an operation can
+// name directly. A link stands for a card, and a card that picks its media by
+// title, by search, at random or from history is asking for the same thing a
+// path does — media starts, and the launch gates have already been asked. The
+// deprecated aliases are included because a card written years ago still says
+// **system: or **random:.
+//
+// The MiSTer core verbs are here for the same reason: on a tap they are how a
+// MiSTer card loads a core or an MGL, so a link to that card has to reach
+// them too. mister.ini and mister.wallpaper are not launches and stay out.
+//
 // The three playlist verbs are the ones ParseServedPlaylist accepts, because
 // a served playlist is the shape a deck link arrives in.
 //
@@ -112,7 +123,15 @@ var operationAllowlist = map[string]opSpec{
 var commandPolicy = tokens.NewCommandPolicy(
 	gozapscript.ZapScriptCmdLaunch,
 	gozapscript.ZapScriptCmdLaunchSystem,
+	gozapscript.ZapScriptCmdLaunchRandom,
+	gozapscript.ZapScriptCmdLaunchSearch,
+	gozapscript.ZapScriptCmdLaunchTitle,
+	gozapscript.ZapScriptCmdLaunchLast,
+	gozapscript.ZapScriptCmdSystem,
+	gozapscript.ZapScriptCmdRandom,
 	gozapscript.ZapScriptCmdMisterScript,
+	gozapscript.ZapScriptCmdMisterCore,
+	gozapscript.ZapScriptCmdMisterMGL,
 	gozapscript.ZapScriptCmdStop,
 	gozapscript.ZapScriptCmdPlaylistOpen,
 	gozapscript.ZapScriptCmdPlaylistPlay,

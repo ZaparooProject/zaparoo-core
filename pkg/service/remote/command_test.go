@@ -491,3 +491,51 @@ func TestCommandLaunchAdmissionSkipsNonLaunchVerbs(t *testing.T) {
 	assert.True(t, ran)
 	assert.Equal(t, "succeeded", result.Status)
 }
+
+// TestCommandPolicyContents pins the bound itself. It is read as its own
+// list, not derived from operationAllowlist, so nothing else would notice a
+// verb quietly added or dropped: a card link that resolves to a launch verb
+// has to keep working, and one that resolves to anything that runs a program,
+// drives input or changes settings has to keep failing.
+func TestCommandPolicyContents(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		gozapscript.ZapScriptCmdLaunch,
+		gozapscript.ZapScriptCmdLaunchSystem,
+		gozapscript.ZapScriptCmdLaunchRandom,
+		gozapscript.ZapScriptCmdLaunchSearch,
+		gozapscript.ZapScriptCmdLaunchTitle,
+		gozapscript.ZapScriptCmdLaunchLast,
+		gozapscript.ZapScriptCmdSystem,
+		gozapscript.ZapScriptCmdRandom,
+		gozapscript.ZapScriptCmdMisterScript,
+		gozapscript.ZapScriptCmdMisterCore,
+		gozapscript.ZapScriptCmdMisterMGL,
+		gozapscript.ZapScriptCmdStop,
+		gozapscript.ZapScriptCmdPlaylistOpen,
+		gozapscript.ZapScriptCmdPlaylistPlay,
+		gozapscript.ZapScriptCmdPlaylistLoad,
+	} {
+		assert.True(t, commandPolicy.Allows(name), "a card link resolving to %s must run", name)
+	}
+
+	for _, name := range []string{
+		gozapscript.ZapScriptCmdExecute,
+		gozapscript.ZapScriptCmdShell,
+		gozapscript.ZapScriptCmdHTTPGet,
+		gozapscript.ZapScriptCmdHTTPPost,
+		gozapscript.ZapScriptCmdInputKeyboard,
+		gozapscript.ZapScriptCmdInputGamepad,
+		gozapscript.ZapScriptCmdInputText,
+		gozapscript.ZapScriptCmdMisterINI,
+		gozapscript.ZapScriptCmdMisterWallpaper,
+		gozapscript.ZapScriptCmdProfile,
+		gozapscript.ZapScriptCmdPlaytimeExtend,
+		gozapscript.ZapScriptCmdControl,
+		gozapscript.ZapScriptCmdScreenshot,
+		gozapscript.ZapScriptCmdDelay,
+	} {
+		assert.False(t, commandPolicy.Allows(name), "a card link must not reach %s", name)
+	}
+}

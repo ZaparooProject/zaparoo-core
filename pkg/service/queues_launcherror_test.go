@@ -62,6 +62,10 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		},
 		{name: "untyped action error", err: errors.New("not supported by launcher"), expected: false},
 		{name: "command blocked", err: zapscript.ErrCommandBlocked, expected: true},
+		{
+			name: "wrapped command outside token bound",
+			err:  fmt.Errorf("%w: execute", zapscript.ErrCommandNotPermitted), expected: true,
+		},
 		{name: "hook blocked launch", err: state.ErrLaunchBlockedByHook, expected: true},
 		{name: "launch panicked", err: errLaunchPanicked, expected: false},
 		{

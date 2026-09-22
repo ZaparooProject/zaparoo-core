@@ -992,43 +992,6 @@ func TestRunCommandUnboundedTokenRunsAnyCommand(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
 }
 
-// TestRunCommandBoundedTokenRefusesUnresolvedURL pins that a bounded token
-// may carry a URL only as a ZapLink. One the resolver did not claim would go
-// on as a raw launch path, where a scheme launcher can match it and stop
-// whatever is playing before the path is even checked.
-func TestRunCommandBoundedTokenRefusesUnresolvedURL(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := &testhelpers.MockUserDBI{}
-	mockUserDB.On("GetZapLinkHost", "https://not-a-zaplink.example.com").
-		Return(false, true, nil)
-	db := &database.Database{UserDB: mockUserDB}
-	mockPlatform := mocks.NewMockPlatform()
-
-	_, err := RunCommand(
-		t.Context(),
-		mockPlatform,
-		&config.Instance{},
-		playlists.PlaylistController{},
-		tokens.Token{
-			Source:          tokens.SourceRemote,
-			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
-		},
-		zapscript.Command{
-			Name: zapscript.ZapScriptCmdLaunch,
-			Args: []string{"https://not-a-zaplink.example.com/game.zip"},
-		},
-		1,
-		0,
-		db,
-		&RunCommandOptions{},
-		&zapscript.ArgExprEnv{},
-	)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrUnresolvedZapLink)
-}
-
 // TestRunCommandCountsZapLinkExpansionInTotalCommands pins that a command
 // which insists on being alone on the token sees the expanded script, not the
 // single command printed on the card. A ZapLink resolving to
@@ -1280,4 +1243,155 @@ func TestRunCommandZapLinkInsidePolicyIsNotRefused(t *testing.T) {
 	)
 
 	assert.NotErrorIs(t, err, ErrCommandNotPermitted)
+}
+
+// deliveryPlatform is a platform a download-and-install launch can run
+// against: the launch path asks it for launchers and root dirs, and the
+// installer puts the file under its data directory.
+func deliveryPlatform(t *testing.T) (pl *mocks.MockPlatform, dataDir string) {
+	t.Helper()
+
+	dataDir = t.TempDir()
+	pl = mocks.NewMockPlatform()
+	pl.On("ID").Return("test").Maybe()
+	pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	pl.On("RootDirs", mock.Anything).Return([]string{}).Maybe()
+	pl.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+	pl.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+	return pl, dataDir
+}
+
+// deliveryServer serves one ROM at /media/<name> and reports whether it was
+// asked for. It stands in for the media CDN a delivery card points at.
+func deliveryServer(t *testing.T, name string) (url string, hit *atomic.Bool) {
+	t.Helper()
+
+	var fetched atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetched.Store(true)
+		_, _ = w.Write([]byte("ROMDATA"))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL + "/media/" + name, &fetched
+}
+
+// runLinkBody resolves a ZapLink whose body is the caller's, through the
+// offline cache so no link server is needed, and runs what it resolved to.
+func runLinkBody(t *testing.T, pl platforms.Platform, token *tokens.Token, body string) error {
+	t.Helper()
+
+	const linkURL = "https://zaplink.example.com/resolves-to-body"
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(true, true, nil)
+	mockUserDB.On("GetZapLinkCache", linkURL).Return(body, nil)
+	mockUserDB.On("UpdateZapLinkCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := RunCommand(
+		t.Context(),
+		pl,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		*token,
+		zapscript.Command{Name: zapscript.ZapScriptCmdLaunch, Args: []string{linkURL}},
+		1,
+		0,
+		&database.Database{UserDB: mockUserDB},
+		&RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+		&zapscript.ArgExprEnv{},
+	)
+	return err
+}
+
+// TestRunCommandBoundedTokenInstallsFromResolvedCardLink is the delivery
+// feature on the remote path. A Zaparoo Online card link resolves to a bare
+// media URL with a system, exactly as zpr.au serves one, and the device has to
+// fetch it and keep it. The bound is over command names; it never had any
+// business deciding that a launch value may not be a URL.
+func TestRunCommandBoundedTokenInstallsFromResolvedCardLink(t *testing.T) {
+	t.Parallel()
+
+	pl, dataDir := deliveryPlatform(t)
+	mediaURL, fetched := deliveryServer(t, "Downfall.rom")
+
+	_ = runLinkBody(t, pl,
+		&tokens.Token{
+			Source:          tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
+		mediaURL+"?system=Genesis",
+	)
+
+	assert.True(t, fetched.Load(), "the card's media was never fetched")
+	assert.FileExists(t, filepath.Join(dataDir, "media", "Genesis", "Downfall.rom"))
+}
+
+// TestRunCommandBoundedPlaylistItemInstalls is the deck half, and the case
+// that was broken outright: a deck link resolves to a served playlist whose
+// every item is a bare media URL, and each item re-enters later as its own
+// bounded token. Refusing a URL there refused the whole deck.
+func TestRunCommandBoundedPlaylistItemInstalls(t *testing.T) {
+	t.Parallel()
+
+	pl, dataDir := deliveryPlatform(t)
+	mediaURL, fetched := deliveryServer(t, "Biopede.rom")
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", mock.Anything).Return(false, true, nil).Maybe()
+
+	// What launchPlaylistMedia builds for one item of a bounded playlist.
+	item, err := zapscript.NewParser(mediaURL + "?system=Genesis").ParseScript()
+	require.NoError(t, err)
+	require.Len(t, item.Cmds, 1)
+
+	_, _ = RunCommand(
+		t.Context(),
+		pl,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{
+			Source:          tokens.SourcePlaylist,
+			AllowedCommands: tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch),
+		},
+		item.Cmds[0],
+		1,
+		0,
+		&database.Database{UserDB: mockUserDB},
+		&RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+		&zapscript.ArgExprEnv{},
+	)
+
+	assert.True(t, fetched.Load(), "the deck item's media was never fetched")
+	assert.FileExists(t, filepath.Join(dataDir, "media", "Genesis", "Biopede.rom"))
+}
+
+// TestRunCommandBoundedTokenAllowsArgumentlessCommand pins that the bound
+// copes with a command that has no argument at all. stop is in every bound a
+// card link runs under and takes none.
+func TestRunCommandBoundedTokenAllowsArgumentlessCommand(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("ReturnToMenu").Return(nil).Maybe()
+	pl.On("StopActiveLauncher").Return(nil).Maybe()
+
+	_, err := RunCommand(
+		t.Context(),
+		pl,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{
+			Source: tokens.SourceRemote,
+			AllowedCommands: tokens.NewCommandPolicy(
+				zapscript.ZapScriptCmdLaunch, zapscript.ZapScriptCmdStop),
+		},
+		zapscript.Command{Name: zapscript.ZapScriptCmdStop},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
 }
