@@ -189,8 +189,12 @@ func newArcadeOrganizerFixture(t *testing.T, rootDir string) arcadeOrganizerFixt
 	// Hand-made aliases with relative and dangling internal targets.
 	relativeAlias := filepath.Join(arcadeDir, "_favorites", "Pooyan.mra")
 	require.NoError(t, os.Symlink(filepath.Join("..", "Pooyan.mra"), relativeAlias))
-	brokenAlias := filepath.Join(arcadeDir, "Missing.mra")
-	require.NoError(t, os.Symlink(filepath.Join(arcadeDir, "missing.mra"), brokenAlias))
+	// The target must differ from the link by more than case. On a
+	// case-insensitive filesystem — macOS, Windows, and MiSTer's own exFAT — a
+	// link to its own name resolves back to itself, and stat answers ELOOP
+	// rather than "not found", which is a different thing entirely.
+	brokenAlias := filepath.Join(arcadeDir, "Dangling.mra")
+	require.NoError(t, os.Symlink(filepath.Join(arcadeDir, "Vanished.mra"), brokenAlias))
 	// A loop back to the parent and a link to media outside the scan root.
 	require.NoError(t, os.Symlink("..", filepath.Join(arcadeDir, "_loop")))
 	externalAlias := filepath.Join(arcadeDir, "External.mra")
