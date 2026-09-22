@@ -67,6 +67,11 @@ type Token struct {
 	// resolving their own.
 	Traits Traits
 	Unsafe bool
+	// AllowedCommands bounds which ZapScript commands this token may run.
+	// The zero value is unrestricted. Tokens derived from this one, such as
+	// playlist tracks, inherit it, so an indirection cannot shed the bound
+	// set where the token entered the system.
+	AllowedCommands CommandPolicy
 	// LaunchGuardGeneration is assigned by the reader manager when confirmation
 	// should resume a resolved launch instead of re-running text. Zero keeps
 	// whole-token confirmation; the generation rejects stale resolutions.

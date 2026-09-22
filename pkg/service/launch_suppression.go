@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -96,6 +97,32 @@ func canDeferGuardCommand(cmd gozapscript.Command) bool {
 	return true
 }
 
+// launchAdmission applies the two device policies that gate starting media,
+// whoever asked for it: a profile must be active when the device requires
+// one, and the playtime limit must not have been reached. Every path that can
+// start media calls it, so the rule lives here instead of being restated at
+// each one — a path that forgets it is how remote operations came to run past
+// both.
+//
+// profileAlreadySatisfied is for a script that activates a profile before it
+// launches. Such a combo card passes the gate, because by the time the launch
+// runs a profile is active.
+//
+// The returned reason is the playtime limit's own reason, for callers that
+// raise a notification; it is empty unless a limit is what refused.
+func launchAdmission(svc *ServiceContext, profileAlreadySatisfied bool) (string, error) {
+	if svc.Config.ProfilesRequireForLaunch() && svc.State.ActiveProfile() == nil &&
+		!profileAlreadySatisfied {
+		return "", state.ErrLaunchRequiresProfile
+	}
+	if svc.LimitsManager != nil {
+		if reason, err := svc.LimitsManager.CheckBeforeLaunch(); err != nil {
+			return reason, err //nolint:wrapcheck // callers classify the limit error
+		}
+	}
+	return "", nil
+}
+
 // recheckConfirmedLaunch repeats admission checks that may have changed since
 // the worker accepted the scan. Confirmation must not retain an old permission
 // to launch after the device is locked or a playtime limit is reached.
@@ -106,13 +133,11 @@ func recheckConfirmedLaunch(svc *ServiceContext, command string) error {
 	if svc.Config.IsCommandBlocked(command) {
 		return fmt.Errorf("%w: %s", zapscript.ErrCommandBlocked, command)
 	}
-	if svc.Config.ProfilesRequireForLaunch() && svc.State.ActiveProfile() == nil {
-		return state.ErrLaunchRequiresProfile
-	}
-	if svc.LimitsManager != nil {
-		if _, err := svc.LimitsManager.CheckBeforeLaunch(); err != nil {
-			return fmt.Errorf("confirmed launch blocked: %w", err)
+	if _, err := launchAdmission(svc, false); err != nil {
+		if errors.Is(err, state.ErrLaunchRequiresProfile) {
+			return err
 		}
+		return fmt.Errorf("confirmed launch blocked: %w", err)
 	}
 	return nil
 }

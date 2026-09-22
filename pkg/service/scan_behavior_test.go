@@ -291,7 +291,7 @@ mode = "unrestricted"`))
 	}()
 	go func() {
 		defer wg.Done()
-		processTokenQueue(svc, itq, limitsManager, mockPlayer)
+		processTokenQueue(svc, itq, mockPlayer)
 	}()
 
 	t.Cleanup(func() {

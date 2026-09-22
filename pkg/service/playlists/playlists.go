@@ -33,7 +33,12 @@ type Playlist struct {
 	// HoldToken is internal runtime ownership for primary hold-mode playback.
 	// It is not part of playlist persistence or API responses.
 	HoldToken *tokens.Token
-	ID        string
+	// AllowedCommands is the bound carried by the script that opened this
+	// playlist, and it travels to every item token. A playlist is an
+	// indirection like a ZapLink: opening one must not let its items reach
+	// commands the script that opened it could not run itself.
+	AllowedCommands tokens.CommandPolicy
+	ID              string
 	// DeckID names the deck on this device the playlist was opened from. It
 	// is set only by the deck loader, never from a served playlist, so it is
 	// what ties an open playlist to its deck; the ID is whatever its source

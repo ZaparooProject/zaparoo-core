@@ -936,7 +936,7 @@ func startService(
 	processTokenQueueDone := make(chan struct{})
 	go func() {
 		defer close(processTokenQueueDone)
-		processTokenQueue(svc, itq, limitsManager, player)
+		processTokenQueue(svc, itq, player)
 	}()
 
 	doneCh := make(chan struct{})
@@ -1027,6 +1027,10 @@ func startService(
 		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
 		Methods:     api.NewMethodMap(),
 		LibraryHint: svc.State.NotifyLibraryHint, PipeState: svc.State.SetLibraryPipeState,
+		LaunchAdmission: func() error {
+			_, err := launchAdmission(svc, false)
+			return err
+		},
 		RunZapScript: func(
 			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
 			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,

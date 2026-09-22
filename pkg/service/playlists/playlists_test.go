@@ -84,6 +84,30 @@ func TestTransitions_PreserveUnsafe(t *testing.T) {
 	assert.True(t, playlists.Pause(*p).Unsafe)
 }
 
+// TestTransitions_PreserveCommandPolicy pins that the bound survives every
+// move through a playlist. Each track re-enters as its own token carrying it,
+// so a transition that dropped it would let an item of a bounded playlist run
+// commands the script that opened the playlist could not.
+func TestTransitions_PreserveCommandPolicy(t *testing.T) {
+	t.Parallel()
+
+	items := []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}}
+	p := playlists.NewPlaylist("id", "name", items)
+	assert.True(t, p.AllowedCommands.Unrestricted(), "a playlist is unbounded unless its source is")
+	p.AllowedCommands = tokens.NewCommandPolicy("launch")
+
+	for name, moved := range map[string]*playlists.Playlist{
+		"next":     playlists.Next(*p),
+		"previous": playlists.Previous(*p),
+		"goto":     playlists.Goto(*p, 1),
+		"play":     playlists.Play(*p),
+		"pause":    playlists.Pause(*p),
+	} {
+		assert.True(t, moved.AllowedCommands.Allows("launch"), name)
+		assert.False(t, moved.AllowedCommands.Allows("execute"), name)
+	}
+}
+
 // TestTransitions_DropQueueSignals pins that the flags describing one update
 // to the queue handler do not survive a transition. An active playlist is
 // stored with them set, so carrying them would relaunch a track or clear the

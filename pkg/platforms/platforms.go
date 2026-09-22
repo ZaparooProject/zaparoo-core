@@ -229,10 +229,14 @@ type CmdEnv struct {
 	LauncherCache LauncherResolver
 	UI            *uievents.Service
 	Playlist      playlists.PlaylistController
-	Cfg           *config.Instance
-	Database      *database.Database
-	ExprEnv       *zapscript.ArgExprEnv
-	Source        string
+	// AllowedCommands is the bound the running token carries. It is forwarded
+	// so a playlist opened by this command keeps the same bound, the way
+	// Unsafe does.
+	AllowedCommands tokens.CommandPolicy
+	Cfg             *config.Instance
+	Database        *database.Database
+	ExprEnv         *zapscript.ArgExprEnv
+	Source          string
 	// PathRoot is an optional per-token root for resolving relative filesystem paths.
 	PathRoot      string
 	Cmd           zapscript.Command

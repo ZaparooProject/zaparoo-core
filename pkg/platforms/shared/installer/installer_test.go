@@ -469,3 +469,127 @@ func TestNamesFromURL(t *testing.T) {
 		})
 	}
 }
+
+// TestNamesFromURLDoesNotDoubleDecode pins that the last path segment is
+// decoded exactly once. url.Parse already returns Path unescaped, so a second
+// pass turned %252e%252e%252f back into "../" and let whoever served the URL
+// choose which directory the download landed in.
+func TestNamesFromURLDoesNotDoubleDecode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rawURL   string
+		wantFile string
+	}{
+		{
+			// The escapes survive as literal characters in the name instead
+			// of becoming separators. This is the case that traversed.
+			name:     "double encoded traversal stays one segment",
+			rawURL:   "http://example.com/roms/%252e%252e%252f%252e%252e%252fScripts%252fpwn.sh",
+			wantFile: "%2e%2e%2f%2e%2e%2fScripts%2fpwn.sh",
+		},
+		{
+			// Singly encoded separators are decoded by url.Parse itself, so
+			// path.Base resolves them away before anything joins the name.
+			name:     "single encoded traversal collapses to the base name",
+			rawURL:   "http://example.com/roms/%2e%2e%2f%2e%2e%2fpwn.sh",
+			wantFile: "pwn.sh",
+		},
+		{
+			// path.Base does not treat a backslash as a separator, so this
+			// one reaches the caller intact and only findInstallDir stops it.
+			name:     "encoded backslash traversal stays one segment",
+			rawURL:   `http://example.com/roms/..%5C..%5Cpwn.exe`,
+			wantFile: `..\..\pwn.exe`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantFile, namesFromURL(tt.rawURL, "").filename)
+		})
+	}
+}
+
+// TestFindInstallDirNeverEscapesSystemDir is the containment this all exists
+// for. A remote server picks the last path segment of the download URL, and
+// from the install directory a few levels of "../" reach the MiSTer scripts
+// folder and its boot script, which run as root. Nothing downstream re-checks
+// the path, so whatever the name is, the result has to be refused or stay put.
+func TestFindInstallDirNeverEscapesSystemDir(t *testing.T) {
+	t.Parallel()
+
+	for _, rawURL := range []string{
+		"http://example.com/roms/%252e%252e%252f%252e%252e%252f%252e%252e%252fScripts%252fpwn.sh",
+		"http://example.com/roms/%252e%252e%252f%252e%252e%252f%252e%252e%252flinux%252fuser-startup.sh",
+		"http://example.com/roms/%2e%2e%2f%2e%2e%2fpwn.sh",
+		`http://example.com/roms/..%5C..%5Cpwn.exe`,
+		`http://example.com/roms/%252e%252e%255C%252e%252e%255Cpwn.exe`,
+		"http://example.com/roms/..",
+		"http://example.com/roms/.",
+		"http://example.com/roms/",
+		"http://example.com/",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			pl := setupMockPlatformWithTempDir(t, tempDir)
+			systemDir := filepath.Join(tempDir, "media", "NES")
+
+			got, err := findInstallDir(&config.Instance{}, pl, "nes", namesFromURL(rawURL, ""))
+			if err != nil {
+				return
+			}
+			assert.True(t, isWithinDir(systemDir, got),
+				"install path escaped the system directory: %s", got)
+		})
+	}
+}
+
+// TestFindInstallDirRefusesDirectoryNames pins the names that resolve to a
+// directory rather than a file. Joining one moves the download up a level or
+// onto the system folder itself, so they are refused outright rather than
+// cleaned into something that looks fine.
+func TestFindInstallDirRefusesDirectoryNames(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	pl := setupMockPlatformWithTempDir(t, tempDir)
+
+	for _, filename := range []string{"..", ".", "", "a/b", `a\b`} {
+		_, err := findInstallDir(&config.Instance{}, pl, "nes", mediaNames{filename: filename})
+		require.ErrorIs(t, err, ErrUnsafeMediaName, "filename %q", filename)
+	}
+}
+
+// TestFindInstallDirKeepsOrdinaryNames is the other half: the names real
+// delivery URLs carry, including spaces and brackets, still resolve inside the
+// system's own directory.
+func TestFindInstallDirKeepsOrdinaryNames(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	pl := setupMockPlatformWithTempDir(t, tempDir)
+
+	for _, tt := range []struct {
+		rawURL   string
+		wantBase string
+	}{
+		{
+			rawURL:   "https://cdn.example.com/media/games/jaguar/Downfall.rom",
+			wantBase: "Downfall.rom",
+		},
+		{
+			rawURL:   "https://cdn.example.com/media/games/jaguar/Full%20Circle%20-%20Rocketeer%20(Promo).rom",
+			wantBase: "Full Circle - Rocketeer (Promo).rom",
+		},
+	} {
+		got, err := findInstallDir(&config.Instance{}, pl, "nes", namesFromURL(tt.rawURL, ""))
+		require.NoError(t, err)
+		assert.Equal(t, tt.wantBase, filepath.Base(got))
+		assert.Equal(t, filepath.Join(tempDir, "media", "NES"), filepath.Dir(got))
+	}
+}

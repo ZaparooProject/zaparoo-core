@@ -40,6 +40,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ErrUnsafeMediaName is returned for a download URL whose last path segment is
+// not a plain filename. The name comes from a remote server, so it decides
+// where on this device the download lands.
+var ErrUnsafeMediaName = errors.New("remote media name is not a plain filename")
+
 type mediaNames struct {
 	display  string
 	filename string
@@ -62,21 +67,37 @@ func namesFromURL(rawURL, defaultName string) mediaNames {
 		}
 	}
 
+	// url.Parse already returns Path decoded, so the segment is unescaped
+	// here and must not be unescaped again: a second pass turns %252e%252e%252f
+	// into "../" and hands the server a say in which directory it writes to.
 	file := path.Base(u.Path)
-	decoded, err := url.PathUnescape(file)
-	if err != nil {
-		decoded = file
-	}
-	ext := path.Ext(decoded)
+	ext := path.Ext(file)
 	name := defaultName
 	if name == "" {
-		name = strings.TrimSuffix(decoded, ext)
+		name = strings.TrimSuffix(file, ext)
 	}
 	return mediaNames{
 		display:  name,
-		filename: decoded,
+		filename: file,
 		ext:      ext,
 	}
+}
+
+// safeMediaFilename reports whether name may be joined onto an install
+// directory. The name is chosen by whoever serves the URL, so it has to be one
+// path segment that stays put: anything carrying a separator, or naming a
+// directory rather than a file, would move the download somewhere the caller
+// did not pick.
+func safeMediaFilename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
+		return false
+	}
+	// filepath.Base is what the join would collapse the name to. A name that
+	// survives it unchanged cannot traverse on this OS.
+	return filepath.Base(name) == name
 }
 
 func showPreNotice(
@@ -125,6 +146,10 @@ func findInstallDir(
 		return "", fmt.Errorf("error getting system: %w", err)
 	}
 
+	if !safeMediaFilename(names.filename) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeMediaName, names.filename)
+	}
+
 	fallbackDir := cfg.DefaultMediaDir()
 	if fallbackDir == "" {
 		fallbackDir = filepath.Join(helpers.DataDir(pl), config.MediaDir)
@@ -137,7 +162,28 @@ func findInstallDir(
 
 	localPath := filepath.Clean(filepath.Join(fallbackDir, names.filename))
 
+	// The name check above should make this unreachable. It stays because the
+	// cost of being wrong is a write outside the media directory, and this is
+	// the last point where that is still cheap to stop.
+	if !isWithinDir(fallbackDir, localPath) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeMediaName, names.filename)
+	}
+
 	return localPath, nil
+}
+
+// isWithinDir reports whether target sits under dir. Both are expected clean
+// and absolute; a relative traversal out of dir, or a sibling with dir as a
+// string prefix, is not within it.
+func isWithinDir(dir, target string) bool {
+	rel, err := filepath.Rel(dir, target)
+	if err != nil {
+		return false
+	}
+	if rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 type DownloaderArgs struct {
