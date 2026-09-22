@@ -331,22 +331,25 @@ func TestStateNotificationSystem(t *testing.T) {
 			// Perform action
 			tc.action(st)
 
-			// Give notifications time to process
-			time.Sleep(15 * time.Millisecond)
-
-			// Verify we have some notifications
-			finalCount := func() int {
+			count := func() int {
 				notificationMutex.Lock()
 				defer notificationMutex.Unlock()
 				return len(notifications)
-			}()
+			}
 
 			// Playlist changes may not generate notifications in current implementation
 			if tc.name != "Playlist changed notification" {
-				assert.Greater(t, finalCount, initialCount, tc.description)
+				// Wait for the notification rather than sleeping a fixed span: the
+				// state notifies from its own goroutine, and under a loaded parallel
+				// run a fixed wait is a coin toss.
+				require.Eventually(t, func() bool {
+					return count() > initialCount
+				}, 5*time.Second, time.Millisecond, tc.description)
 			} else {
-				// For playlist, just verify the test completed without error
-				t.Logf("Playlist notification test completed (notifications: %d -> %d)", initialCount, finalCount)
+				// For playlist, allow the notification a chance to arrive, then
+				// verify only that the test completed without error.
+				time.Sleep(15 * time.Millisecond)
+				t.Logf("Playlist notification test completed (notifications: %d -> %d)", initialCount, count())
 			}
 		})
 	}

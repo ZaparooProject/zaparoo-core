@@ -75,15 +75,31 @@ func (c *Instance) SetSystemDefaults(defaults []SystemsDefault) {
 	c.vals.Systems.Default = cloneSystemDefaults(defaults)
 }
 
+// LookupSystemDefaults returns the first entry naming systemID, or false when
+// none does.
+//
+// Both sides are resolved to a canonical system ID first, so an alias resolves
+// whichever side it is written on: system = "megadrive" matches a lookup for
+// "Genesis", and system = "Genesis" matches a lookup for "MegaDrive". Comparing
+// a canonical config ID against the raw argument only ever worked in the first
+// direction, because a system's alias list never contains its own ID.
+//
+// An argument naming no known system matches nothing, the same as before: every
+// entry that survives resolution carries a canonical ID, which an unknown name
+// can never equal.
 func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	querySystem, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return SystemsDefault{}, false
+	}
 	for _, defaultSystem := range c.vals.Systems.Default {
 		configSystem, err := systemdefs.LookupSystem(defaultSystem.System)
 		if err != nil {
 			continue
 		}
-		if strings.EqualFold(configSystem.ID, systemID) {
+		if strings.EqualFold(configSystem.ID, querySystem.ID) {
 			return defaultSystem, true
 		}
 	}

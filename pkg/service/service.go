@@ -596,9 +596,13 @@ func startService(
 		watcher.WatchProfileData(st.GetContext(), dataSwap.Reconcile)
 	}
 
+	// LauncherCache is the pointer to the shared cache, assigned before the
+	// Initialize below fills it: nothing resolves a launcher through it until
+	// media exists.
 	svc := &ServiceContext{
 		Platform:            pl,
 		Config:              cfg,
+		LauncherCache:       helpers.GlobalLauncherCache,
 		State:               st,
 		DB:                  db,
 		Profiles:            profilesSvc,

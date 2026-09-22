@@ -1042,6 +1042,55 @@ func TestWaitForAPIPortRelease(t *testing.T) {
 	require.NoError(t, waitForAPIPortRelease(cfg, time.Second, 5*time.Millisecond))
 }
 
+// A probe that gets no answer in time used to be read as "the port was
+// released", so on a loaded machine a replacement would go on to bind a port the
+// old process still held. An expired budget reproduces that without needing a
+// blackholed address: the dial cannot complete, and the port is still held.
+func TestAPIPortHeldTreatsAProbeTimeoutAsHeld(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	addr := listener.Addr().String()
+
+	assert.True(t, apiPortHeld(addr, time.Second), "a listening port is held")
+	assert.True(t, apiPortHeld(addr, -1), "a probe that cannot complete must not report the port free")
+
+	require.NoError(t, listener.Close())
+	assert.False(t, apiPortHeld(addr, time.Second), "a refused port has been released")
+}
+
+// Waiting for an answer must not outlast the release timeout it belongs to: each
+// probe is clamped to the time left, so a held port that never answers still
+// returns near the caller's deadline rather than one probe timeout past it.
+func TestWaitForAPIPortReleaseHonoursItsTimeout(t *testing.T) {
+	t.Parallel()
+
+	// A port nothing listens on and nothing routes to: dials hang rather than
+	// being refused, which is the case that used to overrun the deadline.
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(
+		testhelpers.NewOSFS(),
+		t.TempDir(),
+		"192.0.2.1", // TEST-NET-1, reserved and unroutable
+		9,
+	)
+	require.NoError(t, err)
+
+	start := time.Now()
+	err = waitForAPIPortRelease(cfg, 100*time.Millisecond, 10*time.Millisecond)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "an address that never answers is not a released port")
+	assert.Contains(t, err.Error(), "timeout waiting for API port")
+	// Unclamped, the single probe alone runs the full apiPortProbeTimeout, so
+	// anything near that cap means the deadline was ignored. Half of it leaves
+	// generous slack over the ~100ms a clamped run takes.
+	assert.Less(t, elapsed, apiPortProbeTimeout/2,
+		"probes must be bounded by the release deadline, not by the probe cap")
+}
+
 func TestStopProcessTerminatesCommand(t *testing.T) {
 	process := exec.CommandContext(context.Background(), "sleep", "1000")
 	require.NoError(t, process.Start())
