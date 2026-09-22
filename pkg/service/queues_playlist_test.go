@@ -1164,3 +1164,36 @@ func TestHandlePlaylist_BackgroundRefreshToEmptyStopsPlayback(t *testing.T) {
 	assert.Nil(t, svc.State.GetBackgroundPlaylist())
 	assert.Contains(t, recorder.stopped, mediaslot.Background, "background playback is stopped")
 }
+
+// TestHandlePlaylist_DifferentPlaylistOpeningOnTheSameItemTakesOver pins that
+// opening one playlist while another plays is never mistaken for a repeat of
+// the one already open. The dedup asks only whether the current item and
+// playback state changed, so a playlist whose first item is the game already
+// running looked like no change at all and never took the slot, leaving every
+// later playlist command acting on the playlist the user swapped away from.
+func TestHandlePlaylist_DifferentPlaylistOpeningOnTheSameItemTakesOver(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	active := makeServicePlaylist()
+	active.ID = "first"
+	active.Index = 1
+	active.Playing = true
+	svc.State.SetActivePlaylist(active)
+
+	incoming := playlists.NewPlaylist("second", "second", []playlists.PlaylistItem{
+		{Name: "Item 2", ZapScript: "**test2"},
+		{Name: "Item 9", ZapScript: "**test9"},
+	})
+	incoming.Playing = true
+
+	handlePlaylist(svc, incoming, nil)
+
+	got := svc.State.GetActivePlaylist()
+	require.NotNil(t, got)
+	assert.Equal(t, "second", got.ID, "the playlist that was opened takes the slot")
+	assert.Equal(t, 0, got.Index)
+	assert.Empty(t, recorder.played, "the item already playing is not relaunched")
+}

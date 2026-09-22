@@ -490,6 +490,74 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	return pls, nil
 }
 
+// samePlaylistItem reports whether a move landed on the item already playing.
+// A playlist of one wraps back onto it whichever way it moves, and a playlist
+// is free to list the same item twice.
+func samePlaylistItem(moved, active *playlists.Playlist) bool {
+	// Current clamps the playlist it is called on, so the one that is open is
+	// read through a copy.
+	current := *active
+	return len(moved.Items) > 0 && moved.Current() == current.Current()
+}
+
+// advancePlaylist moves a playlist on to its next item. The queue drops an
+// update whose current item and playing state are unchanged, so a move that
+// lands where it started has to say outright that it relaunches, or the
+// playlist never moves at all.
+func advancePlaylist(active *playlists.Playlist) *playlists.Playlist {
+	pls := playlists.Next(*active)
+	pls.ForceRelaunch = samePlaylistItem(pls, active)
+	return pls
+}
+
+// rewindPlaylist moves a playlist back to the item before it, relaunching for
+// the same reason advancePlaylist does.
+func rewindPlaylist(active *playlists.Playlist) *playlists.Playlist {
+	pls := playlists.Previous(*active)
+	pls.ForceRelaunch = samePlaylistItem(pls, active)
+	return pls
+}
+
+// isActivePlaylist reports whether a freshly loaded playlist is the one
+// already open for its slot. A playlist written inline carries whatever ID it
+// was given and none at all when it was given none, so an empty ID matches
+// nothing: two unnamed playlists are two playlists, not one.
+func isActivePlaylist(active, pls *playlists.Playlist) bool {
+	return active != nil && pls != nil && pls.ID != "" && active.ID == pls.ID
+}
+
+// resumeOrAdvanceActivePlaylist runs playlist.play against the playlist it
+// already names. One that is not playing picks up where it left off; one that
+// is already playing moves on to the next item and wraps at the end, so a
+// token scanned repeatedly walks through its playlist.
+//
+// The copy just loaded is discarded rather than installed. Its items may be in
+// another order, since a shuffled playlist reshuffles every time it loads, and
+// "next" only means something against the order the playlist is playing in.
+func resumeOrAdvanceActivePlaylist(
+	env *platforms.CmdEnv, active *playlists.Playlist,
+) (platforms.CmdResult, error) {
+	var pls *playlists.Playlist
+	if active.Playing {
+		pls = advancePlaylist(active)
+		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
+			Msg("advancing active playlist")
+	} else {
+		pls = playlists.Play(*active)
+		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
+			Msg("resuming active playlist")
+	}
+
+	if err := queuePlaylistUpdate(env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	hasPlaylistArg := len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != ""
@@ -516,6 +584,13 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err
+	}
+
+	// Naming the playlist that is already open acts on it instead of starting
+	// it over. Scanning a token again is how you move through its playlist,
+	// and it must not throw away the position the playlist is at.
+	if isActivePlaylist(active, pls) {
+		return resumeOrAdvanceActivePlaylist(&env, active)
 	}
 
 	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("play playlist: %v", env.Cmd.Args)
@@ -577,7 +652,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		}
 
 		// If loaded playlist matches active, preserve current position
-		if active != nil && active.ID == pls.ID {
+		if isActivePlaylist(active, pls) {
 			log.Debug().Msg("opening active playlist")
 			pls.Index = active.Index
 			// Validate index bounds
@@ -682,7 +757,7 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
-	pls := playlists.Next(*active)
+	pls := advancePlaylist(active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -709,7 +784,7 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 		return platforms.CmdResult{}, nil
 	}
 
-	pls := playlists.Previous(*active)
+	pls := rewindPlaylist(active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
