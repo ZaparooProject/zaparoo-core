@@ -703,6 +703,9 @@ func TestArcadeSystemCacheScanFilesIncludesOrganizerWhenScanDuplicatesEnabled(t 
 	for _, alias := range []string{organizedAlias, inPlaceAlias, yearAlias} {
 		require.NoError(t, os.Symlink(canonicalPath, alias))
 	}
+	// An alias the Organizer left behind after its media was deleted.
+	brokenAlias := filepath.Join(organizedDir, "Gone.mra")
+	require.NoError(t, os.Symlink(filepath.Join(arcadeRoot, "Gone.mra"), brokenAlias))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(fmt.Sprintf(
@@ -724,4 +727,6 @@ func TestArcadeSystemCacheScanFilesIncludesOrganizerWhenScanDuplicatesEnabled(t 
 		{Path: inPlaceAlias},
 		{Path: yearAlias},
 	}, results)
+	assert.NotContains(t, results, platforms.ScanResult{Path: brokenAlias},
+		"a dangling alias must not reach classification")
 }

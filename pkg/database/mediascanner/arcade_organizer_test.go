@@ -255,17 +255,18 @@ scan_duplicates = true
 	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, fixture.arcadeDir, nil)
 	require.NoError(t, err)
 
-	// brokenAlias is in this set on purpose. Dropping a dangling symlink was
-	// only ever a side effect of the alias check, and every launcher that does
-	// not opt into that check already indexes one; opting in accepts the same
-	// unlaunchable row rather than inventing a rule for this launcher alone.
-	// The _loop link back to the parent yields nothing, so the walk stays
-	// inside the scan root.
+	// brokenAlias is deliberately absent. A launcher indexing its own alias
+	// trees picks up every alias whose media has since been deleted, and those
+	// rows can be browsed but never launched, so the opt-in drops them. The
+	// _loop link back to the parent yields nothing, so the walk stays inside
+	// the scan root.
 	expected := append([]string{
 		fixture.canonicalPath, fixture.alternativePath, fixture.offsetPath,
-		fixture.externalAlias, fixture.brokenAlias,
+		fixture.externalAlias,
 	}, fixture.aliases()...)
 	assert.ElementsMatch(t, expected, files)
+	assert.NotContains(t, files, fixture.brokenAlias,
+		"a dangling alias must not become an unlaunchable row")
 }
 
 func TestGetFiles_IgnoresArcadeOrganizerSibling(t *testing.T) {

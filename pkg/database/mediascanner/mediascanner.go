@@ -801,6 +801,35 @@ func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bo
 	return false, nil
 }
 
+// shouldSkipBrokenAlias asks the matcher whether a symlink is a dead alias,
+// keeping cancellation distinguishable from a filesystem answer the same way
+// shouldSkipSymlinkAlias does. Any other error keeps the entry: a scan must
+// never drop media because a stat was unlucky.
+func shouldSkipBrokenAlias(ctx context.Context, check func() (bool, error)) (bool, error) {
+	skip, err := check()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err == nil {
+		return skip, nil
+	}
+	return false, nil
+}
+
+// symlinkTargetExists reports whether a symlink still resolves to something.
+// Only a definite "not found" answers false: a timeout, a permission error or
+// any other stat failure keeps the entry, so a slow or flaky mount never drops
+// media that is really there.
+func symlinkTargetExists(ctx context.Context, path string) (bool, error) {
+	if _, err := statWithContext(ctx, path); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return !errors.Is(err, fs.ErrNotExist), nil
+	}
+	return true, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -821,6 +850,7 @@ func GetFiles(
 	var symlinksEncountered atomic.Int64
 	var directoriesExcluded atomic.Int64
 	var symlinkAliasesSkipped atomic.Int64
+	var brokenAliasesSkipped atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
@@ -902,6 +932,23 @@ func GetFiles(
 					Str("system", systemID).
 					Str("path", p).
 					Msg("skipping symlink alias of scanned media")
+				return skipEntry(d)
+			}
+
+			broken, brokenErr := shouldSkipBrokenAlias(ctx, func() (bool, error) {
+				return matcher.ShouldSkipBrokenScanSymlink(system.ID, p, func() (bool, error) {
+					return symlinkTargetExists(ctx, p)
+				})
+			})
+			if brokenErr != nil {
+				return brokenErr
+			}
+			if broken {
+				brokenAliasesSkipped.Add(1)
+				log.Debug().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping symlink whose target no longer exists")
 				return skipEntry(d)
 			}
 		}
@@ -1006,6 +1053,7 @@ func GetFiles(
 		Int64("symlinksEncountered", symlinksEncountered.Load()).
 		Int64("directoriesExcluded", directoriesExcluded.Load()).
 		Int64("symlinkAliasesSkipped", symlinkAliasesSkipped.Load()).
+		Int64("brokenAliasesSkipped", brokenAliasesSkipped.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
