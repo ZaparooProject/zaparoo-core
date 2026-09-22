@@ -316,3 +316,35 @@ func TestSetMigrationReporter_RestoresWhatItReplaced(t *testing.T) {
 	assert.Equal(t, 1, outer, "the replaced reporter comes back")
 	assert.Equal(t, 1, inner)
 }
+
+// The unit tests above drive reportMigrations directly, which would keep
+// passing if MigrateUp stopped calling it — and MigrateUp only reaches it when
+// migrations are genuinely pending, the one path the startup page exists for.
+// This runs the real thing.
+func TestMigrateUp_ReportsPendingWorkBeforeApplyingIt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "media.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	type report struct {
+		label   string
+		pending int
+	}
+	var reports []report
+	restore := SetMigrationReporter(func(dbLabel string, pending int) {
+		reports = append(reports, report{dbLabel, pending})
+	})
+	defer restore()
+
+	require.NoError(t, MigrateUp(db, testMigrationFiles, "testdata/migrations", dbPath, ""))
+	require.Len(t, reports, 1, "a fresh database has its whole chain to apply and must say so")
+	assert.Equal(t, "media.db", reports[0].label)
+	assert.Equal(t, 2, reports[0].pending, "both fixture migrations are pending on a fresh database")
+
+	// Migrating an already-current database must stay silent: this is what
+	// every ordinary start does, and it is what used to claim minutes.
+	reports = nil
+	require.NoError(t, MigrateUp(db, testMigrationFiles, "testdata/migrations", dbPath, ""))
+	assert.Empty(t, reports, "a database with nothing to apply must report nothing")
+}

@@ -509,12 +509,7 @@ func startService(
 	// migration on a 229k-item library took 2m14s (#1372), and saying so up
 	// front would tell every ordinary start, which finishes in about a second,
 	// to expect minutes. Say it only once a migration is actually running.
-	restoreReporter := database.SetMigrationReporter(func(dbLabel string, pending int) {
-		startupServer.SetStartingDetail(fmt.Sprintf(
-			"Upgrading %s (%d to apply). This can take several minutes on a large library.",
-			dbLabel, pending,
-		))
-	})
+	restoreReporter := database.SetMigrationReporter(migrationStartupReporter(startupServer))
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	restoreReporter()
 	if err != nil {

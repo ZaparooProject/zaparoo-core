@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -726,5 +727,18 @@ func runMediaDBStartupMaintenanceWork(
 	log.Info().Msg("temporary media repair jobs pending; starting background optimization")
 	if runErr := coordinator.RunBackgroundOptimizationWithLease(nil, pauser, lease); runErr != nil {
 		log.Error().Err(runErr).Msg("temporary media repair optimization failed")
+	}
+}
+
+// migrationStartupReporter is what the startup page shows while a database is
+// actually being upgraded. It is named rather than inline so the sentence a
+// user reads, and the fact that it reaches the page at all, can be tested
+// without racing a migration that finishes in milliseconds.
+func migrationStartupReporter(startupServer *api.StartupServer) database.MigrationReporter {
+	return func(dbLabel string, pending int) {
+		startupServer.SetStartingDetail(fmt.Sprintf(
+			"Upgrading %s (%d to apply). This can take several minutes on a large library.",
+			dbLabel, pending,
+		))
 	}
 }
