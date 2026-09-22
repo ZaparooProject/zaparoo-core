@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,6 +45,12 @@ func (db *MediaDB) FindMediaBySystemAndPath(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	path = pathutil.CanonicalMediaPath(path)
+
 	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
@@ -337,6 +344,12 @@ func (db *MediaDB) FindMediaBySystemAndPathFold(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	path = pathutil.CanonicalMediaPath(path)
+
 	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
@@ -1609,6 +1622,12 @@ func (db *MediaDB) HasMediaPropertyForPath(ctx context.Context, systemID, path, 
 	if db.sql.Load() == nil {
 		return false, ErrNullSQL
 	}
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	path = pathutil.CanonicalMediaPath(path)
+
 	typeTagDBID, err := resolvePropertyTypeTag(ctx, db.conn(), tags.PropertyTypeTag(tags.TagValue(property)))
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve property %q: %w", property, err)

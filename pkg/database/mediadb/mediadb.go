@@ -47,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
@@ -3441,7 +3442,11 @@ func (db *MediaDB) SearchMediaPathExact(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResult, 0), ErrNullSQL
 	}
-	return sqlSearchMediaPathExact(ctx, db.sql.Load(), systems, query)
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	return sqlSearchMediaPathExact(ctx, db.sql.Load(), systems, pathutil.CanonicalMediaPath(query))
 }
 
 func (db *MediaDB) SearchMediaWithFilters(
@@ -5201,7 +5206,11 @@ func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path 
 		return "", err
 	}
 
-	return sqlGetLaunchCommandForMedia(ctx, sqlDB, systemID, path)
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	return sqlGetLaunchCommandForMedia(ctx, sqlDB, systemID, pathutil.CanonicalMediaPath(path))
 }
 
 // CheckForDuplicateMediaTitles returns any MediaTitle records that have duplicate (SystemDBID, Slug) combinations.
