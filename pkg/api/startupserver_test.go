@@ -210,12 +210,12 @@ func TestStartupServer_ShowsTheStepItIsOn(t *testing.T) {
 	t.Parallel()
 
 	srv := newTestStartupServer(t)
-	srv.SetStartingDetail("Opening databases. On a large library this can take several minutes.")
+	srv.SetStartingDetail("Upgrading media.db (3 to apply).")
 
 	code, body := getBody(t, fmt.Sprintf("http://127.0.0.1:%d/app/", srv.Port()))
 	assert.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "Zaparoo is starting")
-	assert.Contains(t, body, "can take several minutes")
+	assert.Contains(t, body, "Upgrading media.db (3 to apply)")
 
 	_, state := healthState(t, srv)
 	assert.Equal(t, "starting", state, "a progress update must not change the state")

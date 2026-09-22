@@ -271,3 +271,48 @@ func TestMigrateUp_EmptyPathsDisableFastPath(t *testing.T) {
 	require.NoError(t, row.Scan(&n))
 	assert.Equal(t, 1, n, "goose should have run when fast path is disabled")
 }
+
+// The reporter is what lets startup say a database is being upgraded while
+// that is actually happening. Saying it unconditionally told every ordinary
+// start, which opens its databases in about a second, to expect minutes.
+func TestReportMigrations_OnlyFiresWhenThereIsWorkToDo(t *testing.T) {
+	var gotLabel string
+	var gotPending int
+	var calls int
+	restore := SetMigrationReporter(func(dbLabel string, pending int) {
+		calls++
+		gotLabel, gotPending = dbLabel, pending
+	})
+
+	reportMigrations("/data/zaparoo/media.db", 0)
+	assert.Zero(t, calls, "a database with nothing pending must say nothing")
+
+	reportMigrations("/data/zaparoo/media.db", 3)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, "media.db", gotLabel, "the label names the database, not its whole path")
+	assert.Equal(t, 3, gotPending)
+
+	restore()
+	reportMigrations("/data/zaparoo/media.db", 3)
+	assert.Equal(t, 1, calls, "a restored reporter must not keep receiving reports")
+}
+
+// Startup installs a reporter for the length of one startup. Nothing may be
+// left behind for the next one, which would report into a server that has
+// moved on.
+func TestSetMigrationReporter_RestoresWhatItReplaced(t *testing.T) {
+	var outer int
+	restoreOuter := SetMigrationReporter(func(string, int) { outer++ })
+	defer restoreOuter()
+
+	var inner int
+	restoreInner := SetMigrationReporter(func(string, int) { inner++ })
+	reportMigrations("/data/zaparoo/user.db", 1)
+	assert.Equal(t, 1, inner)
+	assert.Zero(t, outer)
+
+	restoreInner()
+	reportMigrations("/data/zaparoo/user.db", 1)
+	assert.Equal(t, 1, outer, "the replaced reporter comes back")
+	assert.Equal(t, 1, inner)
+}

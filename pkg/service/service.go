@@ -504,10 +504,19 @@ func startService(
 
 	log.Info().Msg("opening databases")
 	databaseStarted := time.Now()
-	startupServer.SetStartingDetail(
-		"Opening databases. On a large library this can take several minutes.",
-	)
+	startupServer.SetStartingDetail("Opening databases.")
+	// Opening a database is fast. Upgrading one is not: a media database
+	// migration on a 229k-item library took 2m14s (#1372), and saying so up
+	// front would tell every ordinary start, which finishes in about a second,
+	// to expect minutes. Say it only once a migration is actually running.
+	restoreReporter := database.SetMigrationReporter(func(dbLabel string, pending int) {
+		startupServer.SetStartingDetail(fmt.Sprintf(
+			"Upgrading %s (%d to apply). This can take several minutes on a large library.",
+			dbLabel, pending,
+		))
+	})
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
+	restoreReporter()
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		headline, detail := describeDatabaseStartupFailure(pl, err)
