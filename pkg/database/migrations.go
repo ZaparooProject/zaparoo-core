@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -141,6 +142,7 @@ func MigrateUp(
 
 	log.Debug().Str("migration_dir", migrationDir).Msg("running goose up migrations")
 	pending := logPendingMigrations(db, migrationDir, dbPath)
+	reportMigrations(dbPath, len(pending))
 	upStart := time.Now()
 	if err := goose.Up(db, migrationDir); err != nil {
 		return fmt.Errorf("error running migrations up: %w", err)
@@ -315,6 +317,42 @@ func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string
 
 // databaseLabel names a database in logs by its file name, so a line says
 // which of the two is being worked on without the caller passing a label down.
+// MigrationReporter is told that a database is about to have migrations
+// applied, and how many. It is called before the work starts, on the goroutine
+// running it.
+type MigrationReporter func(dbLabel string, pending int)
+
+var migrationReporter atomic.Pointer[MigrationReporter]
+
+// SetMigrationReporter installs fn for the duration of a startup and returns a
+// function that removes it again. It exists so startup can say that a database
+// is being upgraded while that is actually happening, without threading a
+// parameter through the two databases' MigrateUp interface methods and every
+// mock that implements them.
+//
+// The returned restore function must be called — a reporter that outlives the
+// startup it belongs to would report into a server that has moved on.
+func SetMigrationReporter(fn MigrationReporter) (restore func()) {
+	previous := migrationReporter.Swap(&fn)
+	return func() {
+		if previous == nil {
+			migrationReporter.Store(nil)
+			return
+		}
+		migrationReporter.Store(previous)
+	}
+}
+
+// reportMigrations tells the installed reporter, if any, what is about to run.
+func reportMigrations(dbPath string, pending int) {
+	if pending <= 0 {
+		return
+	}
+	if fn := migrationReporter.Load(); fn != nil && *fn != nil {
+		(*fn)(databaseLabel(dbPath), pending)
+	}
+}
+
 func databaseLabel(dbPath string) string {
 	if dbPath == "" {
 		return "unknown"

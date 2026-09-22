@@ -685,3 +685,48 @@ func TestArcadeSystemLaunchersPreserveArcadeAndAddGranularSystems(t *testing.T) 
 		assert.NotNil(t, launcher.Launch, spec.systemID)
 	}
 }
+
+// Granular arcade classification walks _Arcade through the same matcher as the
+// media scan, so the launcher's scan_duplicates setting has to reach it too.
+func TestArcadeSystemCacheScanFilesIncludesOrganizerWhenScanDuplicatesEnabled(t *testing.T) {
+	root := t.TempDir()
+	arcadeRoot := filepath.Join(root, "_Arcade")
+	organizedDir := filepath.Join(arcadeRoot, "_Organized", "_1 A-E")
+	inPlaceDir := filepath.Join(arcadeRoot, "_1 A-E")
+	require.NoError(t, os.MkdirAll(organizedDir, 0o750))
+	require.NoError(t, os.MkdirAll(inPlaceDir, 0o750))
+	canonicalPath := filepath.Join(arcadeRoot, "Pooyan.mra")
+	require.NoError(t, os.WriteFile(canonicalPath, []byte("test"), 0o600))
+	organizedAlias := filepath.Join(organizedDir, "Pooyan.mra")
+	inPlaceAlias := filepath.Join(inPlaceDir, "Pooyan.mra")
+	yearAlias := filepath.Join(arcadeRoot, "}82 Pooyan.mra")
+	for _, alias := range []string{organizedAlias, inPlaceAlias, yearAlias} {
+		require.NoError(t, os.Symlink(canonicalPath, alias))
+	}
+	// An alias the Organizer left behind after its media was deleted.
+	brokenAlias := filepath.Join(organizedDir, "Gone.mra")
+	require.NoError(t, os.Symlink(filepath.Join(arcadeRoot, "Gone.mra"), brokenAlias))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf(
+		"[launchers]\nindex_root = [%q]\n\n[[launchers.default]]\nlauncher = %q\nscan_duplicates = true\n",
+		root, systemdefs.SystemArcade)))
+	platform := NewPlatform()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(platform.Launchers(cfg))
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+	cache := newArcadeSystemCache(platform)
+
+	results, err := cache.scanFiles(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []platforms.ScanResult{
+		{Path: canonicalPath},
+		{Path: organizedAlias},
+		{Path: inPlaceAlias},
+		{Path: yearAlias},
+	}, results)
+	assert.NotContains(t, results, platforms.ScanResult{Path: brokenAlias},
+		"a dangling alias must not reach classification")
+}

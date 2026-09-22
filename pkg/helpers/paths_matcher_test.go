@@ -627,3 +627,143 @@ func TestLauncherMatcher_EquivalentToMatchSystemFile(t *testing.T) {
 			p.system, p.path, expected, actual)
 	}
 }
+
+func TestLauncherMatcher_ShouldSkipScanDirectory_ScanDuplicates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:                    "Arcade",
+			SystemID:              "Arcade",
+			Folders:               []string{"_Arcade"},
+			Extensions:            []string{".mra"},
+			ScanExcludes:          []string{"boot.rom"},
+			ScanDirectoryExcludes: []string{"_Organized"},
+		},
+		{
+			ID:                    "SharedToggled",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".bin"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                    "SharedPlain",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".bin"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+	})
+
+	cfg := scanDuplicatesConfig(t, "Arcade")
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(arcadeDir, "_Organized")),
+		"an excluded directory must be scanned once the launcher scans duplicates")
+	assert.True(t, matcher.ShouldSkipScanDirectory("Shared", filepath.Join(rootDir, "shared", "generated")),
+		"a launcher the config does not name keeps its excludes")
+
+	assert.True(t, matcher.MatchSystemFileForScan("Arcade", filepath.Join(arcadeDir, "_Organized", "Pooyan.mra")),
+		"media inside the previously excluded directory is now indexed")
+	assert.False(t, matcher.MatchSystemFileForScan("Arcade", filepath.Join(arcadeDir, "boot.rom")),
+		"scan_duplicates must not disable file excludes for non-media files")
+}
+
+// TestLauncherMatcher_ScanDuplicatesDuplicateLauncherIDs covers the
+// launcherPaths fallback: a blanked cache entry recomputes its precomp inside
+// the walk, so it must read the same scan_duplicates answer as construction did.
+func TestLauncherMatcher_ScanDuplicatesDuplicateLauncherIDs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	tmpDir := t.TempDir()
+	launcher := platforms.Launcher{
+		ID:                    "PS2",
+		SystemID:              "PS2",
+		Folders:               []string{tmpDir},
+		Extensions:            []string{".iso"},
+		ScanDirectoryExcludes: []string{"updates"},
+	}
+	other := launcher
+	other.Extensions = []string{".chd"}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{launcher, other})
+
+	cfg := scanDuplicatesConfig(t, "PS2")
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.False(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "updates")),
+		"a duplicate launcher ID must recompute with scan_duplicates still applied")
+}
+
+// TestLauncherMatcher_ScanDuplicatesReachesEverySharingLauncher pins how far
+// the opt-in reaches. A directory is only skipped when every scanning launcher
+// on that root excludes it, so naming one launcher opens the directory for the
+// whole system's walk, including launchers the config never mentions.
+func TestLauncherMatcher_ScanDuplicatesReachesEverySharingLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:                    "SharedToggled",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".bin"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                    "SharedPlain",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".chd"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+	})
+
+	cfg := scanDuplicatesConfig(t, "SharedToggled")
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	generated := filepath.Join(rootDir, "shared", "generated")
+	assert.False(t, matcher.ShouldSkipScanDirectory("Shared", generated),
+		"one launcher opting in stops the shared directory being skipped")
+	assert.True(t, matcher.MatchSystemFileForScan("Shared", filepath.Join(generated, "dupe.chd")),
+		"the launcher that did not opt in indexes the reopened directory too")
+}

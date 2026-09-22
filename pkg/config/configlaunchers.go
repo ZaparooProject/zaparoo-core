@@ -55,7 +55,14 @@ type Launchers struct {
 }
 
 type LaunchersDefault struct {
-	RenderScale      *int   `toml:"render_scale,omitempty"`
+	RenderScale *int `toml:"render_scale,omitempty"`
+	// ScanDuplicates makes a launcher index the media it normally skips as a
+	// duplicate of media it already indexes: directories it excludes as alias
+	// trees, and symlinks resolving back inside its own folders. Excludes for
+	// files that are not media at all, such as MiSTer's boot.rom, still apply.
+	// A pointer so an entry that omits the key leaves an earlier entry alone
+	// and an explicit false can override a group-wide true.
+	ScanDuplicates   *bool  `toml:"scan_duplicates,omitempty"`
 	Launcher         string `toml:"launcher"`
 	InstallDir       string `toml:"install_dir,omitempty"`
 	ServerURL        string `toml:"server_url,omitempty"`
@@ -72,6 +79,12 @@ type LaunchersDefault struct {
 	// BeforeExit is a ZapScript run just before media started by a matching
 	// launcher stops or is replaced.
 	BeforeExit string `toml:"before_exit,omitempty"`
+}
+
+// ScanDuplicatesEnabled reports the resolved scan_duplicates setting, treating
+// an unset key as off.
+func (d *LaunchersDefault) ScanDuplicatesEnabled() bool {
+	return d.ScanDuplicates != nil && *d.ScanDuplicates
 }
 
 const (
@@ -162,7 +175,10 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Msg("LookupLauncherDefaults: resolving launcher defaults")
 
 	mergeMatching := func(matchedOn string, matches func(entryLauncher string) bool) {
-		for _, entry := range c.vals.Launchers.Default {
+		// Indexed rather than ranged by value: LaunchersDefault is large enough
+		// that copying one per iteration trips gocritic's rangeValCopy.
+		for i := range c.vals.Launchers.Default {
+			entry := &c.vals.Launchers.Default[i]
 			// An entry with no launcher field names nothing. Custom launchers
 			// take their groups straight from user TOML, which does not reject a
 			// blank one, so without this such an entry becomes a wildcard for
@@ -175,7 +191,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 				Str("launcherID", launcherID).
 				Str("matchedOn", matchedOn).
 				Msg("LookupLauncherDefaults: merging matching entry")
-			mergeLauncherDefault(&result, &entry)
+			mergeLauncherDefault(&result, entry)
 		}
 	}
 	mergeMatching("group", func(entryLauncher string) bool {
@@ -192,6 +208,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Str("resolvedInstallDir", result.InstallDir).
 		Str("resolvedLoadPath", result.LoadPath).
 		Bool("resolvedBeforeExit", result.BeforeExit != "").
+		Bool("resolvedScanDuplicates", result.ScanDuplicatesEnabled()).
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result
@@ -240,6 +257,10 @@ func mergeLauncherDefault(dst, entry *LaunchersDefault) {
 	if entry.RenderResolution != "" {
 		dst.RenderScale = nil
 		dst.RenderResolution = entry.RenderResolution
+	}
+	if entry.ScanDuplicates != nil {
+		scanDuplicates := *entry.ScanDuplicates
+		dst.ScanDuplicates = &scanDuplicates
 	}
 }
 

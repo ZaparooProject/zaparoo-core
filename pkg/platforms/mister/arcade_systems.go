@@ -4,6 +4,7 @@ package mister
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,13 +308,23 @@ func (c *arcadeSystemCache) scanFiles(
 					}
 					return nil
 				}
-				if info.Mode()&os.ModeSymlink != 0 && readLink != nil {
-					skip, skipErr := matcher.ShouldSkipScanSymlink(
-						systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+				if info.Mode()&os.ModeSymlink != 0 {
+					if readLink != nil {
+						skip, skipErr := matcher.ShouldSkipScanSymlink(
+							systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+						)
+						if skipErr != nil {
+							log.Debug().Err(skipErr).Str("path", path).
+								Msg("unable to read MiSTer arcade symlink")
+						} else if skip {
+							return nil
+						}
+					}
+					broken, brokenErr := matcher.ShouldSkipBrokenScanSymlink(
+						systemdefs.SystemArcade, path,
+						func() (bool, error) { return arcadeSymlinkTargetExists(c.platform.filesystem(), path) },
 					)
-					if skipErr != nil {
-						log.Debug().Err(skipErr).Str("path", path).Msg("unable to read MiSTer arcade symlink")
-					} else if skip {
+					if brokenErr == nil && broken {
 						return nil
 					}
 				}
@@ -334,6 +345,16 @@ func (c *arcadeSystemCache) scanFiles(
 		}
 	}
 	return results, nil
+}
+
+// arcadeSymlinkTargetExists reports whether a symlink still resolves. Only a
+// definite "not found" answers false, so a stat that fails for any other
+// reason leaves the entry to be classified as usual.
+func arcadeSymlinkTargetExists(fs afero.Fs, path string) (bool, error) {
+	if _, err := fs.Stat(path); err != nil {
+		return !errors.Is(err, os.ErrNotExist), nil
+	}
+	return true, nil
 }
 
 func addNeoGeoMVSLauncher(
