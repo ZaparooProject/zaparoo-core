@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -299,6 +300,12 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+
+	// Media.Path is stored canonically by the indexing pipeline
+	// (pathutil.CanonicalMediaPath in mediascanner), so an exact match has to
+	// normalize the caller's path too. On Windows a native path arrives with
+	// backslashes and would never match.
+	path = pathutil.CanonicalMediaPath(path)
 
 	// The disambiguating types are precomputed per title, so this is a single
 	// indexed lookup: return the target media's tags whose type is listed for its
