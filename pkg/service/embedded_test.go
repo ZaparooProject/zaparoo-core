@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -68,7 +67,7 @@ func embeddedFixture(t *testing.T, dir string) (*embeddedTestPlatform, *config.I
 	platform.SetupBasicMock()
 	cfg, err := testhelpers.NewTestConfigWithPort(testhelpers.NewMemoryFS(), dir, 0)
 	require.NoError(t, err)
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "s"))
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", testhelpers.TempSocketPath(t, "s"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 	player := mocks.NewMockPlayer()
@@ -106,18 +105,22 @@ func TestEmbeddedLifecycle(t *testing.T) {
 	}
 }
 
+// TestEmbeddedPreStartFailure also pins the rule the standalone path states at
+// its own StartPre failure: a StartPre that failed partway is not stopped,
+// because its counterpart has nothing well-defined to undo. The embedded
+// cleanup must not reach a platform that never finished starting.
 func TestEmbeddedPreStartFailure(t *testing.T) {
 	platform, cfg, opts := embeddedFixture(t, t.TempDir())
 	startupErr := errors.New("host unavailable")
 	platform.On("StartPre", mock.Anything).Return(startupErr)
-	platform.On("Stop").Return(nil)
+	platform.On("Stop").Return(nil).Maybe()
 	var fatal error
 	opts.OnFatal = func(err error) { fatal = err }
 	result, err := StartEmbedded(platform, cfg, opts)
 	require.ErrorIs(t, err, startupErr)
 	assert.Nil(t, result)
 	require.ErrorIs(t, fatal, startupErr)
-	platform.AssertCalled(t, "Stop")
+	platform.AssertNotCalled(t, "Stop")
 	_, err = opts.Listener.Accept()
 	assert.ErrorIs(t, err, net.ErrClosed)
 }

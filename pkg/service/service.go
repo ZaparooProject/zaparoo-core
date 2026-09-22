@@ -551,12 +551,13 @@ func startServiceWithOptions(
 	log.Info().Msg("running platform pre start")
 	preStartStarted := time.Now()
 	startupServer.SetStartingDetail("Starting platform support.")
-	preStarted = true
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		// Not stopping the platform: StartPre failed partway, so its
-		// counterpart has nothing well-defined to undo.
+		// counterpart has nothing well-defined to undo. preStarted stays
+		// false for the same reason, so the cleanup deferred above leaves the
+		// platform alone too.
 		return nil, startupFailure(
 			false,
 			"Zaparoo could not start",
@@ -564,6 +565,7 @@ func startServiceWithOptions(
 			fmt.Errorf("platform start pre failed: %w", err),
 		)
 	}
+	preStarted = true
 	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
 	opts.phase("migrating")
