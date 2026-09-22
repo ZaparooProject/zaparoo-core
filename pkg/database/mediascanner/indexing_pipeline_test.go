@@ -25,9 +25,11 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -724,10 +726,14 @@ func TestReconcileStagedSystem_PersistsStagedMediaProperty(t *testing.T) {
 	require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	path := filepath.Join("roms", systemdefs.SystemPSX, "Final Fantasy VII (Disc 1).cue")
+	// Staged the way the scanner stages: the pipeline canonicalizes a scan
+	// result's path before staging it (see stageScanResult), so a fixture that
+	// stages a native path would store something production never stores.
+	path := pathutil.CanonicalMediaPath(
+		filepath.Join("roms", systemdefs.SystemPSX, "Final Fantasy VII (Disc 1).cue"))
 	require.NoError(t, mediaDB.StageScannedMedia(&database.ScanStagedMedia{
 		Path:          path,
-		ParentDir:     filepath.Dir(path),
+		ParentDir:     mediadb.ParentDirForMediaPath(path),
 		Slug:          "final-fantasy-vii",
 		TitleName:     "Final Fantasy VII",
 		SortName:      "Final Fantasy VII",

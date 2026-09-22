@@ -95,7 +95,7 @@ func TestHasMediaPropertyForPath_MatchesStoredProperty(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, has)
 
-	wrongPath, err := mediaDB.HasMediaPropertyForPath(ctx, "PSX", filepath.Join("roms", "PSX", "missing.cue"),
+	wrongPath, err := mediaDB.HasMediaPropertyForPath(ctx, "PSX", "roms/PSX/missing.cue",
 		string(tags.TagPropertyGameID))
 	require.NoError(t, err)
 	assert.False(t, wrongPath)
@@ -124,7 +124,7 @@ func insertMediaWithGameIDProperty(t *testing.T, mediaDB *MediaDB, systemID, gam
 		SystemDBID: system.DBID, Slug: "ff7", Name: "Final Fantasy VII",
 	})
 	require.NoError(t, err)
-	path := filepath.Join("roms", systemID, "Final Fantasy VII (Disc 1).cue")
+	path := "roms/" + systemID + "/Final Fantasy VII (Disc 1).cue"
 	media, err := mediaDB.InsertMedia(database.Media{
 		MediaTitleDBID: title.DBID, SystemDBID: system.DBID, Path: path,
 	})

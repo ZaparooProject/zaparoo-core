@@ -979,7 +979,7 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	media := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           filepath.Join("roms", "nes", "players2.nes"),
+		Path:           "roms/nes/players2.nes",
 	}
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
@@ -992,7 +992,7 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	siblingMedia := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           filepath.Join("roms", "nes", "players4.nes"),
+		Path:           "roms/nes/players4.nes",
 	}
 	insertedSibling, err := mediaDB.InsertMedia(siblingMedia)
 	require.NoError(t, err)
@@ -1011,7 +1011,7 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	resultTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(
 		ctx,
 		nesSystem.ID,
-		filepath.Join("roms", "nes", "players2.nes"),
+		"roms/nes/players2.nes",
 	)
 	require.NoError(t, err)
 	require.Len(t, resultTags, 1)
