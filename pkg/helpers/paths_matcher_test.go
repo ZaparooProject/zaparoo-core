@@ -721,3 +721,49 @@ func TestLauncherMatcher_ScanDuplicatesDuplicateLauncherIDs(t *testing.T) {
 	assert.False(t, matcher.ShouldSkipScanDirectory("PS2", filepath.Join(tmpDir, "updates")),
 		"a duplicate launcher ID must recompute with scan_duplicates still applied")
 }
+
+// TestLauncherMatcher_ScanDuplicatesReachesEverySharingLauncher pins how far
+// the opt-in reaches. A directory is only skipped when every scanning launcher
+// on that root excludes it, so naming one launcher opens the directory for the
+// whole system's walk, including launchers the config never mentions.
+func TestLauncherMatcher_ScanDuplicatesReachesEverySharingLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:                    "SharedToggled",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".bin"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                    "SharedPlain",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			Extensions:            []string{".chd"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+	})
+
+	cfg := scanDuplicatesConfig(t, "SharedToggled")
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	generated := filepath.Join(rootDir, "shared", "generated")
+	assert.False(t, matcher.ShouldSkipScanDirectory("Shared", generated),
+		"one launcher opting in stops the shared directory being skipped")
+	assert.True(t, matcher.MatchSystemFileForScan("Shared", filepath.Join(generated, "dupe.chd")),
+		"the launcher that did not opt in indexes the reopened directory too")
+}

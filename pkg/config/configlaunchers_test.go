@@ -981,3 +981,34 @@ func TestLookupLauncherDefaults_ScanDuplicatesDoesNotAliasConfig(t *testing.T) {
 	reread := cfg.LookupLauncherDefaults("Arcade", nil)
 	assert.True(t, reread.ScanDuplicatesEnabled(), "the returned pointer must not alias config memory")
 }
+
+func TestLookupLauncherDefaults_ScanDuplicatesSaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs("/config", BaseDefaults, memFs)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Arcade"
+scan_duplicates = true
+
+[[launchers.default]]
+launcher = "SNES"
+scan_duplicates = false
+`))
+	require.NoError(t, cfg.Save())
+
+	contents, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(contents), "scan_duplicates = true")
+	assert.Contains(t, string(contents), "scan_duplicates = false",
+		"an explicit false must be written back, not dropped as a zero value")
+
+	require.NoError(t, cfg.Load())
+	arcade := cfg.LookupLauncherDefaults("Arcade", nil)
+	snes := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.True(t, arcade.ScanDuplicatesEnabled(), "a saved true must reload as true")
+	require.NotNil(t, snes.ScanDuplicates, "a saved false must reload as set, not unset")
+	assert.False(t, snes.ScanDuplicatesEnabled())
+}
