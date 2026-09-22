@@ -102,7 +102,16 @@ func (p *Platform) StartPost(
 	return nil
 }
 
-func (*Platform) Stop() error { return nil }
+// Stop drops the launcher contexts StartPost supplied. A host reuses one
+// Platform across starts, and the manager from the previous run holds a
+// cancelled context: leaving it in place makes launcherContext's readiness
+// check pass with a dead context instead of refusing the launch.
+func (p *Platform) Stop() error {
+	p.mu.Lock()
+	p.launcherContexts = nil
+	p.mu.Unlock()
+	return nil
+}
 
 func (p *Platform) Settings() platforms.Settings { return p.settings }
 

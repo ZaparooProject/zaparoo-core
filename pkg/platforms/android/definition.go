@@ -92,6 +92,16 @@ type LaunchDefinition struct {
 	ClipData      bool          `json:"clipData,omitempty"`
 }
 
+// copy returns a definition that shares nothing with the receiver, so a caller
+// outside Core cannot reach the catalog entry it came from. A plain value copy
+// would still share the Extensions and Extras backing arrays.
+func (d *LaunchDefinition) copy() LaunchDefinition {
+	duplicate := *d
+	duplicate.Extensions = slices.Clone(d.Extensions)
+	duplicate.Extras = slices.Clone(d.Extras)
+	return duplicate
+}
+
 // parseLaunchDefinition rejects unknown fields, trailing payloads and
 // unsupported capabilities.
 func parseLaunchDefinition(data []byte) (LaunchDefinition, error) {

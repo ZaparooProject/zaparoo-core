@@ -21,6 +21,7 @@ package android
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -36,7 +37,7 @@ import (
 
 const (
 	// sourceScheme is the URI scheme of canonical host media identities.
-	sourceScheme      = "source"
+	sourceScheme      = sourcepath.Scheme
 	maxInstalledCores = 512
 )
 
@@ -253,7 +254,12 @@ func (p *Platform) dispatch(entry *catalogEntry, identity string) (err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
-	receipt, err := session.Dispatch(definition, document)
+	// The host gets its own copy. A Dispatch that wrote through the pointer
+	// would corrupt the catalog entry for the rest of the process, and the
+	// receipt check below would then compare a substituted component against
+	// itself and pass.
+	sent := definition.copy()
+	receipt, err := session.Dispatch(&sent, document)
 	if err != nil {
 		return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
 	}
@@ -281,5 +287,14 @@ func sourceFailure(ctx context.Context, entry *catalogEntry, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
-	return fmt.Errorf("%w: %w", hostRepairError(FailureSourceUnavailable, entry), err)
+	// A host that said what went wrong keeps its reason: a revoked grant and
+	// an unmounted card are the two the user can actually act on, and
+	// flattening them to "unavailable" loses the only useful advice. An
+	// untyped error is a source Core could not reach.
+	reason := FailureSourceUnavailable
+	var hostErr *HostError
+	if errors.As(err, &hostErr) && hostErr.Reason != "" {
+		reason = hostErr.Reason
+	}
+	return fmt.Errorf("%w: %w", hostRepairError(reason, entry), err)
 }

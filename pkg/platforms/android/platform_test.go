@@ -45,6 +45,7 @@ type fakeHost struct {
 	failures    map[string]FailureReason
 	dispatchErr error
 	openErr     error
+	substitute  string
 	receipt     *DispatchReceipt
 	cores       []string
 	inspections []string
@@ -121,6 +122,14 @@ func (s *fakeSession) Dispatch(definition *LaunchDefinition, document hostmedia.
 	s.host.mu.Lock()
 	defer s.host.mu.Unlock()
 	s.host.dispatched = append(s.host.dispatched, dispatchCall{definition: *definition, document: document})
+	if s.host.substitute != "" {
+		// A host that writes through the pointer it was handed, and reports
+		// the component it actually started.
+		definition.Package = s.host.substitute
+		if len(definition.Extensions) > 0 {
+			definition.Extensions[0] = ".substituted"
+		}
+	}
 	if s.host.dispatchErr != nil {
 		return DispatchReceipt{}, s.host.dispatchErr
 	}
@@ -504,4 +513,83 @@ func TestRepairMessagesCoverEveryReason(t *testing.T) {
 	assert.Equal(t, FailureHostUnavailable, failureReason(errors.New("plain")))
 	assert.Equal(t, FailureRefused, failureReason(&HostError{Reason: FailureRefused}))
 	assert.Equal(t, "android host: refused", (&HostError{Reason: FailureRefused}).Error())
+}
+
+// TestDispatchDefinitionIsNotHostWritable proves the receipt check cannot be
+// defeated by the host it checks. The definition handed to Dispatch must be a
+// copy, or a host that rewrites it both substitutes a component undetected and
+// leaves the catalog entry corrupted for every later launch.
+func TestDispatchDefinitionIsNotHostWritable(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{substitute: "org.example.substituted"}
+	platform := startedPlatform(t.Context(), t, host)
+	before := platform.entryByID["RetroArch.Mesen"].definition
+
+	err := platform.LaunchMedia(&config.Instance{}, identity(t, "nes", "Game.nes"),
+		&platforms.Launcher{ID: "RetroArch.Mesen"}, nil, nil)
+
+	var repair *platforms.LaunchRepairError
+	require.ErrorAs(t, err, &repair, "a substituted component must be reported")
+	assert.Equal(t, msgReceiptMismatch, repair.Error())
+	assert.Equal(t, platforms.LaunchRepairOutcomeUnknown, repair.Reason())
+	assert.Equal(t, before, platform.entryByID["RetroArch.Mesen"].definition,
+		"the catalog entry must be unchanged after the host wrote to what it was given")
+	assert.Equal(t, retroArchPackage, platform.entryByID["RetroArch.Mesen"].definition.Package)
+}
+
+// TestStopDropsLauncherContexts covers a host that reuses one Platform across
+// starts: the previous run's context is cancelled, so a launch between the API
+// coming up and StartPost must be refused rather than dispatched against it.
+func TestStopDropsLauncherContexts(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	ctx, cancel := context.WithCancel(t.Context())
+	platform := startedPlatform(ctx, t, host)
+	require.NoError(t, platform.Stop())
+	cancel()
+
+	err := platform.LaunchMedia(&config.Instance{}, identity(t, "nes", "Game.nes"),
+		&platforms.Launcher{ID: "RetroArch.Mesen"}, nil, nil)
+
+	require.ErrorIs(t, err, platforms.ErrNotSupported)
+	assert.Empty(t, host.dispatched, "no launch may reach the host after a stop")
+}
+
+// TestSourceFailureKeepsTheHostReason covers the two source failures a user can
+// act on. Flattening them to "unavailable" costs the only advice that helps.
+func TestSourceFailureKeepsTheHostReason(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		err        error
+		name       string
+		wantReason platforms.LaunchRepairReason
+		want       FailureReason
+	}{
+		{
+			name: "revoked grant", err: &HostError{Reason: FailureStorageDenied},
+			want: FailureStorageDenied, wantReason: platforms.LaunchRepairStoragePermissionRequired,
+		},
+		{
+			name: "card removed", err: &HostError{Reason: FailureStorageUnmounted},
+			want: FailureStorageUnmounted, wantReason: platforms.LaunchRepairStorageUnavailable,
+		},
+		{
+			name: "untyped failure stays a source failure", err: hostmedia.ErrUnavailable,
+			want: FailureSourceUnavailable, wantReason: platforms.LaunchRepairMediaUnavailable,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			host := &fakeHost{openErr: test.err}
+			platform := startedPlatform(t.Context(), t, host)
+
+			err := platform.LaunchMedia(&config.Instance{}, identity(t, "nes", "Game.nes"),
+				&platforms.Launcher{ID: "RetroArch.Mesen"}, nil, nil)
+
+			var repair *platforms.LaunchRepairError
+			require.ErrorAs(t, err, &repair)
+			assert.Equal(t, repairMessage(test.want, ""), repair.Error())
+			assert.Equal(t, test.wantReason, repair.Reason())
+		})
+	}
 }
