@@ -817,6 +817,23 @@ func handlePlaylist(
 	default:
 		// active playlist updated
 		if !pls.ForceRelaunch && !playlistNeedsUpdate(pls, activePlaylist) {
+			if pls.ID != activePlaylist.ID {
+				// A different playlist that opens on the item already playing
+				// still has to take the slot, or every later playlist command
+				// acts on the one it replaced. Nothing is launched: the media
+				// it wants is the media running.
+				if pls.Slot == "" {
+					pls.Slot = slot
+				}
+				if slot == mediaslot.Background {
+					svc.State.SetBackgroundPlaylist(pls)
+				} else {
+					svc.State.SetActivePlaylist(pls)
+				}
+				log.Info().Any("pls", playlistForLog(pls)).
+					Msg("switching playlist, its current item is already playing")
+				return
+			}
 			log.Debug().Msg("playlist current token unchanged, skipping")
 			return
 		}

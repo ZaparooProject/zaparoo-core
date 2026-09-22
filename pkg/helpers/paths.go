@@ -239,6 +239,7 @@ type launcherPrecomp struct {
 	scanExcludes          []string // pre-normalized scan-only file exclude patterns
 	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
 	skipInternalSymlinks  bool     // skip symlinks whose target is inside this launcher's roots
+	scanDuplicates        bool     // launcher opted into indexing its own alias trees
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -248,6 +249,7 @@ type LauncherMatcher struct {
 	cfg             *config.Instance
 	normFolderCache map[string]string
 	precomp         map[string]*launcherPrecomp
+	scanDuplicates  map[string]bool
 	normDataDir     string
 	normMediaPrefix string
 	normRootDirs    []string
@@ -262,7 +264,12 @@ func (m *LauncherMatcher) launcherPaths(l *platforms.Launcher) *launcherPrecomp 
 	if lc := m.precomp[l.ID]; lc != nil {
 		return lc
 	}
-	return newLauncherPrecomp(l, m.normRootDirs, m.normFolderCache, m.normMediaPrefix)
+	// This runs inside the walk callback, so the scan_duplicates answer comes
+	// from the map built at construction rather than a config lock per entry.
+	return newLauncherPrecomp(
+		l, m.normRootDirs, m.normFolderCache, m.normMediaPrefix,
+		m.scanDuplicates[strings.ToLower(l.ID)],
+	)
 }
 
 // newLauncherPrecomp normalizes everything path matching needs from a single
@@ -273,6 +280,7 @@ func newLauncherPrecomp(
 	normRoots []string,
 	folderCache map[string]string,
 	normMediaPrefix string,
+	scanDuplicates bool,
 ) *launcherPrecomp {
 	lp := &launcherPrecomp{}
 
@@ -307,16 +315,22 @@ func newLauncherPrecomp(
 	for _, e := range l.Extensions {
 		lp.extensions = append(lp.extensions, strings.ToLower(e))
 	}
+	// scan_duplicates only drops the two exclusions that suppress copies of
+	// media the launcher already indexes. ScanExcludes names files that are not
+	// media at all, so it holds either way.
 	for _, exclude := range l.ScanExcludes {
 		lp.scanExcludes = append(lp.scanExcludes, NormalizePathForComparison(exclude))
 	}
-	for _, exclude := range l.ScanDirectoryExcludes {
-		lp.scanDirectoryExcludes = append(
-			lp.scanDirectoryExcludes,
-			NormalizePathForComparison(exclude),
-		)
+	if !scanDuplicates {
+		for _, exclude := range l.ScanDirectoryExcludes {
+			lp.scanDirectoryExcludes = append(
+				lp.scanDirectoryExcludes,
+				NormalizePathForComparison(exclude),
+			)
+		}
 	}
-	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks
+	lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks && !scanDuplicates
+	lp.scanDuplicates = scanDuplicates
 
 	return lp
 }
@@ -366,6 +380,30 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		normMediaPrefix = NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
 	}
 
+	// Only launchers that suppress duplicates can be affected, so the config
+	// lookup is skipped for the rest. Only enabled entries are stored, leaving
+	// the map empty for every ordinary setup.
+	var scanDuplicates map[string]bool
+	for i := range allLaunchers {
+		l := &allLaunchers[i]
+		if len(l.ScanDirectoryExcludes) == 0 && !l.ScanSkipInternalSymlinks {
+			continue
+		}
+		if cfg == nil {
+			continue
+		}
+		defaults := cfg.LookupLauncherDefaults(l.ID, l.Groups)
+		if !defaults.ScanDuplicatesEnabled() {
+			continue
+		}
+		if scanDuplicates == nil {
+			scanDuplicates = make(map[string]bool)
+		}
+		scanDuplicates[strings.ToLower(l.ID)] = true
+		log.Info().Str("launcherID", l.ID).
+			Msg("launcher configured to scan duplicate media")
+	}
+
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
@@ -380,7 +418,10 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 			precomp[l.ID] = nil
 			continue
 		}
-		precomp[l.ID] = newLauncherPrecomp(l, normRoots, folderCache, normMediaPrefix)
+		precomp[l.ID] = newLauncherPrecomp(
+			l, normRoots, folderCache, normMediaPrefix,
+			scanDuplicates[strings.ToLower(l.ID)],
+		)
 	}
 
 	return &LauncherMatcher{
@@ -391,6 +432,7 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		normMediaPrefix: normMediaPrefix,
 		normFolderCache: folderCache,
 		precomp:         precomp,
+		scanDuplicates:  scanDuplicates,
 	}
 }
 
@@ -555,6 +597,57 @@ func (m *LauncherMatcher) ShouldSkipScanSymlink(
 		}
 	}
 	return false, nil
+}
+
+// ShouldSkipBrokenScanSymlink reports whether a symlink under a launcher scan
+// root should be skipped because its target no longer exists. Only a launcher
+// that opted into scanning duplicates asks for this. Indexing its own alias
+// trees otherwise indexes every alias left behind by media that has since been
+// deleted, and those rows can be browsed but never launched. An alias tree that
+// has outlived some of its media carries thousands. targetExists is only called
+// once such a launcher owns the link, so every ordinary scan pays nothing.
+func (m *LauncherMatcher) ShouldSkipBrokenScanSymlink(
+	systemID, linkPath string,
+	targetExists func() (bool, error),
+) (bool, error) {
+	if !m.scanDuplicatesCoversLink(systemID, linkPath) {
+		return false, nil
+	}
+	exists, err := targetExists()
+	if err != nil {
+		return false, err
+	}
+	return !exists, nil
+}
+
+// scanDuplicatesCoversLink reports whether a launcher scanning duplicates owns
+// the given path. The empty-map check keeps this free for every setup without
+// the opt-in, which is the only reason it can sit in the walk's symlink branch.
+func (m *LauncherMatcher) scanDuplicatesCoversLink(systemID, linkPath string) bool {
+	if len(m.scanDuplicates) == 0 {
+		return false
+	}
+
+	normLink := NormalizePathForComparison(linkPath)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.launcherPaths(launcher)
+		if !lc.scanDuplicates {
+			continue
+		}
+		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+			for _, root := range roots {
+				if normLink != root && pathHasPrefixNormalized(normLink, root) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // resolveSymlinkTargetLexically turns a raw symlink target into an absolute

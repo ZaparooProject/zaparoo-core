@@ -1389,3 +1389,413 @@ func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
 	_, err := readPlaylistFolder(nil, nil, filepath.Join("nonexistent", "path", "12345"))
 	require.Error(t, err)
 }
+
+// threePlaylistItems matches the contents written by writePlsFile.
+func threePlaylistItems() []playlists.PlaylistItem {
+	return []playlists.PlaylistItem{
+		{Name: "Item 1", ZapScript: "**test1"},
+		{Name: "Item 2", ZapScript: "**test2"},
+		{Name: "Item 3", ZapScript: "**test3"},
+	}
+}
+
+// writePlsFile writes a playlist file and returns its path. The path is also
+// the ID the playlist loads with, so it is what a token names to reach it.
+func writePlsFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.pls")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+func writeThreeItemPls(t *testing.T) string {
+	t.Helper()
+	return writePlsFile(t, `[playlist]
+File1=**test1
+Title1=Item 1
+File2=**test2
+Title2=Item 2
+File3=**test3
+Title3=Item 3`)
+}
+
+// playScanEnv is the environment a token carrying "playlist.play:<path>"
+// produces. slot is optional; empty means the command names no slot.
+func playScanEnv(
+	t *testing.T, path, slot string, controller playlists.PlaylistController,
+) platforms.CmdEnv {
+	t.Helper()
+	cmd := zapscript.Command{Name: "playlist.play", Args: []string{path}}
+	if slot != "" {
+		cmd.AdvArgs = cmd.AdvArgs.With(zapscript.KeySlot, slot)
+	}
+	return platforms.CmdEnv{
+		ServiceCtx: t.Context(),
+		Cfg:        &config.Instance{},
+		Cmd:        cmd,
+		Playlist:   controller,
+	}
+}
+
+// TestCmdPlaylistPlay_AdvancesActivePlaylistOnRepeatScan is the behaviour
+// issue #1443 asks for: scanning the token of the playlist already playing
+// moves it on instead of starting it over.
+func TestCmdPlaylistPlay_AdvancesActivePlaylistOnRepeatScan(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	active := &playlists.Playlist{
+		ID:      plsFile,
+		Name:    "test",
+		Items:   threePlaylistItems(),
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 1, result.Playlist.Index, "a repeat scan moves to the next item")
+	assert.True(t, result.Playlist.Playing)
+	assert.False(t, result.Playlist.ForceRelaunch)
+	queued := <-queue
+	assert.Equal(t, 1, queued.Index)
+	assert.Equal(t, plsFile, queued.ID)
+}
+
+func TestCmdPlaylistPlay_WrapsActivePlaylistAfterTheLastItem(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	// The playlist is in an order of its own, so wrapping to its first item
+	// cannot be confused with the first item of a freshly loaded copy.
+	active := &playlists.Playlist{
+		ID: plsFile,
+		Items: []playlists.PlaylistItem{
+			{Name: "Item 3", ZapScript: "**test3"},
+			{Name: "Item 1", ZapScript: "**test1"},
+			{Name: "Item 2", ZapScript: "**test2"},
+		},
+		Index:   2,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 0, result.Playlist.Index, "the item after the last is the first")
+	assert.Equal(t, "**test3", result.Playlist.Current().ZapScript)
+	<-queue
+}
+
+// TestCmdPlaylistPlay_ResumesPausedPlaylistItNames pins the case persistent
+// playlist state depends on: a playlist that is not playing starts where it
+// left off rather than skipping the item it is sitting on.
+func TestCmdPlaylistPlay_ResumesPausedPlaylistItNames(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	active := &playlists.Playlist{
+		ID:      plsFile,
+		Items:   threePlaylistItems(),
+		Index:   2,
+		Playing: false,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 2, result.Playlist.Index, "a paused playlist keeps its position")
+	assert.True(t, result.Playlist.Playing)
+	queued := <-queue
+	assert.Equal(t, 2, queued.Index)
+	assert.True(t, queued.Playing)
+}
+
+// TestCmdPlaylistPlay_DoesNotAdvanceAnUnrelatedPlaylist checks the identity
+// rule: another playlist being active is no reason to skip an item of the one
+// the token names.
+func TestCmdPlaylistPlay_DoesNotAdvanceAnUnrelatedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	unrelated := &playlists.Playlist{
+		ID:      "some other playlist",
+		Items:   threePlaylistItems(),
+		Index:   1,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: unrelated, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, plsFile, result.Playlist.ID)
+	assert.Equal(t, 0, result.Playlist.Index, "a playlist that was not active starts at its first item")
+	assert.Equal(t, 1, unrelated.Index, "the playlist that was active is left alone")
+	queued := <-queue
+	assert.Equal(t, plsFile, queued.ID)
+}
+
+// TestCmdPlaylistPlay_KeepsTheOrderTheActivePlaylistIsPlaying pins that the
+// freshly loaded copy is discarded. A shuffled playlist draws a new order
+// every time it loads, and "next" only means something against the order the
+// playlist is actually playing in.
+func TestCmdPlaylistPlay_KeepsTheOrderTheActivePlaylistIsPlaying(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	shuffled := []playlists.PlaylistItem{
+		{Name: "Item 3", ZapScript: "**test3"},
+		{Name: "Item 1", ZapScript: "**test1"},
+		{Name: "Item 2", ZapScript: "**test2"},
+	}
+	active := &playlists.Playlist{ID: plsFile, Items: shuffled, Index: 0, Playing: true}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, shuffled, result.Playlist.Items)
+	assert.Equal(t, "**test1", result.Playlist.Current().ZapScript)
+	<-queue
+}
+
+// TestCmdPlaylistPlay_SingleItemPlaylistRelaunchesItsItem covers the playlist
+// that wraps onto the item it is already on, which the queue would otherwise
+// drop as no change.
+func TestCmdPlaylistPlay_SingleItemPlaylistRelaunchesItsItem(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writePlsFile(t, `[playlist]
+File1=**test1
+Title1=Item 1`)
+	active := &playlists.Playlist{
+		ID:      plsFile,
+		Items:   []playlists.PlaylistItem{{Name: "Item 1", ZapScript: "**test1"}},
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 0, result.Playlist.Index)
+	queued := <-queue
+	assert.True(t, queued.ForceRelaunch, "a playlist of one must still relaunch its item")
+}
+
+func TestCmdPlaylistPlay_AdvancesTheBackgroundPlaylistItNames(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	background := &playlists.Playlist{
+		ID:      plsFile,
+		Items:   threePlaylistItems(),
+		Index:   1,
+		Playing: true,
+		Slot:    mediaslot.Background,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(),
+		playScanEnv(t, plsFile, mediaslot.Background,
+			playlists.PlaylistController{Background: background, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 2, result.Playlist.Index)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, 2, queued.Index)
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+// TestCmdPlaylistPlay_DoesNotAdvanceAnUnidentifiedJSONPlaylist checks that a
+// playlist written inline with no "id" is not mistaken for another one. Two
+// such playlists both load with an empty ID, so matching on it alone would
+// make a card naming the second playlist advance the first.
+func TestCmdPlaylistPlay_DoesNotAdvanceAnUnidentifiedJSONPlaylist(t *testing.T) {
+	t.Parallel()
+
+	active := &playlists.Playlist{
+		ID:      "",
+		Name:    "discs",
+		Items:   threePlaylistItems(),
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+	other := `{"name":"ports","items":[{"name":"Only","zapscript":"**only"}]}`
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, other, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, "ports", result.Playlist.Name, "the playlist the token names is the one that plays")
+	assert.Equal(t, 0, result.Playlist.Index)
+	require.Len(t, result.Playlist.Items, 1)
+	assert.Equal(t, "**only", result.Playlist.Items[0].ZapScript)
+	assert.Equal(t, 0, active.Index, "the playlist that was active is left alone")
+	<-queue
+}
+
+// TestCmdPlaylistPlay_RelaunchesWhenTheNextItemRepeatsTheCurrent covers a
+// playlist whose next item is the same as the one playing. The queue drops an
+// update whose current item and playing state are unchanged, so without a
+// forced relaunch the advance is thrown away and the playlist never moves.
+func TestCmdPlaylistPlay_RelaunchesWhenTheNextItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	active := &playlists.Playlist{
+		ID:      plsFile,
+		Items:   []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	_, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	queued := <-queue
+	assert.Equal(t, 1, queued.Index)
+	assert.True(t, queued.ForceRelaunch, "an advance onto the same item must still relaunch it")
+}
+
+// TestCmdPlaylistPlay_EmptyActivePlaylistDoesNotForceRelaunch covers the
+// playlist with nothing in it. Advancing has nowhere to go, and forcing the
+// relaunch would hand the launcher an empty item on every scan.
+func TestCmdPlaylistPlay_EmptyActivePlaylistDoesNotForceRelaunch(t *testing.T) {
+	t.Parallel()
+
+	arg := `{"id":"empty","name":"empty","items":[]}`
+	active := &playlists.Playlist{ID: "empty", Name: "empty", Index: 0, Playing: true}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, arg, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 0, result.Playlist.Index)
+	queued := <-queue
+	assert.Empty(t, queued.Items)
+	assert.False(t, queued.ForceRelaunch, "an empty playlist has no item to relaunch")
+}
+
+// TestCmdPlaylistNext_RelaunchesWhenTheNextItemRepeatsTheCurrent covers the
+// playlist whose next item is the one already playing. The queue drops an
+// update whose current item and playing state are unchanged, so without a
+// forced relaunch the command moved nothing and launched nothing.
+func TestCmdPlaylistNext_RelaunchesWhenTheNextItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	tests := []struct {
+		name  string
+		items []playlists.PlaylistItem
+		index int
+	}{
+		{
+			name:  "a playlist of one wraps onto its only item",
+			items: []playlists.PlaylistItem{repeated},
+			index: 0,
+		},
+		{
+			name:  "a playlist listing the same item twice",
+			items: []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+			index: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			active := &playlists.Playlist{ID: "pls", Items: tt.items, Index: 0, Playing: true}
+			queue := make(chan *playlists.Playlist, 1)
+
+			result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+				Playlist: playlists.PlaylistController{Active: active, Queue: queue},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result.Playlist)
+			assert.Equal(t, tt.index, result.Playlist.Index)
+			queued := <-queue
+			assert.Equal(t, tt.index, queued.Index)
+			assert.True(t, queued.ForceRelaunch, "an advance onto the same item must still relaunch it")
+		})
+	}
+}
+
+// TestCmdPlaylistPrevious_RelaunchesWhenThePreviousItemRepeatsTheCurrent is
+// the same case as its next counterpart, the other way round. The early
+// restart only covers native playback past its threshold, so a playlist of
+// games reaches the move itself.
+func TestCmdPlaylistPrevious_RelaunchesWhenThePreviousItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	tests := []struct {
+		name  string
+		items []playlists.PlaylistItem
+		from  int
+		index int
+	}{
+		{
+			name:  "a playlist of one wraps onto its only item",
+			items: []playlists.PlaylistItem{repeated},
+			from:  0,
+			index: 0,
+		},
+		{
+			name:  "a playlist listing the same item twice",
+			items: []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+			from:  1,
+			index: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			active := &playlists.Playlist{ID: "pls", Items: tt.items, Index: tt.from, Playing: true}
+			queue := make(chan *playlists.Playlist, 1)
+
+			result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+				Playlist: playlists.PlaylistController{Active: active, Queue: queue},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result.Playlist)
+			assert.Equal(t, tt.index, result.Playlist.Index)
+			queued := <-queue
+			assert.Equal(t, tt.index, queued.Index)
+			assert.True(t, queued.ForceRelaunch, "a step back onto the same item must still relaunch it")
+		})
+	}
+}

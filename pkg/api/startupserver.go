@@ -135,7 +135,7 @@ func NewStartupServer(ctx context.Context, cfg *config.Instance) (*StartupServer
 	s.status.Store(&serviceStatus{
 		State:    ServiceStateStarting,
 		Headline: "Zaparoo is starting",
-		Detail:   "Setting up and opening databases. This can take a few minutes on a large library.",
+		Detail:   "Setting up and opening databases.",
 	})
 	s.handler.Store(&handlerHolder{handler: http.HandlerFunc(s.serveStartup)})
 

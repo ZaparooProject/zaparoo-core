@@ -1404,3 +1404,30 @@ func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid set_name")
 }
+
+// The scan_duplicates opt-in is applied by the launcher matcher, not by the
+// platform: the Arcade launcher keeps declaring its Organizer excludes whatever
+// the config says, so nothing else that reads the definition is misled.
+func TestArcadeLauncherKeepsExcludesWithScanDuplicates(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "`+systemdefs.SystemArcade+`"
+scan_duplicates = true
+`))
+
+	var arcadeLauncher *platforms.Launcher
+	launchers := NewPlatform().Launchers(cfg)
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemArcade {
+			arcadeLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
+	assert.Equal(t, arcadeOrganizerScanDirectoryExcludes, arcadeLauncher.ScanDirectoryExcludes)
+	assert.True(t, arcadeLauncher.ScanSkipInternalSymlinks)
+}

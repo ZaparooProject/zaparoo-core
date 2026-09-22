@@ -101,10 +101,20 @@ type restartExecConfig struct {
 }
 
 const (
-	serviceStopTimeout         = 10 * time.Second
-	serviceKillTimeout         = 3 * time.Second
-	serviceStopPollInterval    = 100 * time.Millisecond
-	servicePortReleaseTimeout  = 3 * time.Second
+	serviceStopTimeout        = 10 * time.Second
+	serviceKillTimeout        = 3 * time.Second
+	serviceStopPollInterval   = 100 * time.Millisecond
+	servicePortReleaseTimeout = 3 * time.Second
+	// apiPortProbeTimeout caps one dial while probing whether the API port is
+	// still held, and apiPortMinProbeTimeout floors it. Both are independent of
+	// the poll interval: how often to look and how long to wait for an answer are
+	// different questions, and an interval short enough to poll responsively is
+	// far too short to conclude anything from. Each probe is also clamped to the
+	// time left before the caller's deadline, so waiting for an answer cannot
+	// outlast the release timeout it belongs to; the floor keeps a probe long
+	// enough to come back with a real answer rather than only ever timing out.
+	apiPortProbeTimeout        = time.Second
+	apiPortMinProbeTimeout     = 25 * time.Millisecond
 	daemonReadyTimeout         = 3 * time.Second
 	serviceManifestName        = "service_manifest.json"
 	serviceHashLength          = 16
@@ -1420,6 +1430,31 @@ func waitForPIDExit(
 	return nil
 }
 
+// apiPortHeld reports whether something is still listening on addr.
+//
+// Only a refusal is evidence the port was released. A dial that gets no answer
+// in time proves nothing, and it happens to a port that is very much still held
+// whenever the machine is loaded, so a timeout counts as held and the caller
+// keeps waiting. Any other error means the address cannot be reached at all — an
+// IPv6 loopback on a host without one, say — and a port nothing can reach is not
+// one worth waiting for.
+func apiPortHeld(addr string, probeTimeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Duration) error {
 	if cfg == nil || cfg.APIPort() == 0 {
 		return nil
@@ -1428,18 +1463,16 @@ func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Dura
 	addrs := apiDialAddresses(cfg)
 	deadline := time.Now().Add(timeout)
 	for {
-		released := true
+		probeTimeout := min(apiPortProbeTimeout, max(time.Until(deadline), apiPortMinProbeTimeout))
+
+		held := false
 		for _, addr := range addrs {
-			ctx, cancel := context.WithTimeout(context.Background(), pollInterval)
-			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-			cancel()
-			if err != nil {
-				continue
+			if apiPortHeld(addr, probeTimeout) {
+				held = true
+				break
 			}
-			released = false
-			_ = conn.Close()
 		}
-		if released {
+		if !held {
 			return nil
 		}
 
