@@ -790,6 +790,15 @@ func GetPathInfo(path string) PathInfo {
 
 	// For URIs (containing ://), check if they need special handling
 	if strings.Contains(path, "://") {
+		// A host media identity escapes each of its components, so its leaf
+		// has to be decoded on its own rather than read off the raw path.
+		if leaf := SourceIdentityLeaf(path); leaf != "" {
+			info.Filename = leaf
+			info.Extension = getPathExt(leaf)
+			info.Name = strings.TrimSuffix(leaf, info.Extension)
+			return info
+		}
+
 		// Extract scheme manually to avoid url.Parse dependency
 		schemeEnd := strings.Index(path, "://")
 		if schemeEnd >= 0 {
