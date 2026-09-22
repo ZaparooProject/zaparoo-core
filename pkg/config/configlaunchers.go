@@ -50,7 +50,14 @@ type Launchers struct {
 }
 
 type LaunchersDefault struct {
-	RenderScale      *int   `toml:"render_scale,omitempty"`
+	RenderScale *int `toml:"render_scale,omitempty"`
+	// ScanDuplicates makes a launcher index the media it normally skips as a
+	// duplicate of media it already indexes: directories it excludes as alias
+	// trees, and symlinks resolving back inside its own folders. Excludes for
+	// files that are not media at all, such as MiSTer's boot.rom, still apply.
+	// A pointer so an entry that omits the key leaves an earlier entry alone
+	// and an explicit false can override a group-wide true.
+	ScanDuplicates   *bool  `toml:"scan_duplicates,omitempty"`
 	Launcher         string `toml:"launcher"`
 	InstallDir       string `toml:"install_dir,omitempty"`
 	ServerURL        string `toml:"server_url,omitempty"`
@@ -64,6 +71,12 @@ type LaunchersDefault struct {
 	// like "_Unstable/SNES" (no extension, relative to /media/fat). Launchers
 	// that do not load an implementation file ignore this field.
 	LoadPath string `toml:"load_path,omitempty"`
+}
+
+// ScanDuplicatesEnabled reports the resolved scan_duplicates setting, treating
+// an unset key as off.
+func (d *LaunchersDefault) ScanDuplicatesEnabled() bool {
+	return d.ScanDuplicates != nil && *d.ScanDuplicates
 }
 
 const (
@@ -189,6 +202,10 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 				result.RenderScale = nil
 				result.RenderResolution = entry.RenderResolution
 			}
+			if entry.ScanDuplicates != nil {
+				scanDuplicates := *entry.ScanDuplicates
+				result.ScanDuplicates = &scanDuplicates
+			}
 		}
 	}
 
@@ -198,6 +215,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Str("resolvedAction", result.Action).
 		Str("resolvedInstallDir", result.InstallDir).
 		Str("resolvedLoadPath", result.LoadPath).
+		Bool("resolvedScanDuplicates", result.ScanDuplicatesEnabled()).
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result

@@ -271,3 +271,80 @@ func TestMigrateUp_EmptyPathsDisableFastPath(t *testing.T) {
 	require.NoError(t, row.Scan(&n))
 	assert.Equal(t, 1, n, "goose should have run when fast path is disabled")
 }
+
+// The reporter is what lets startup say a database is being upgraded while
+// that is actually happening. Saying it unconditionally told every ordinary
+// start, which opens its databases in about a second, to expect minutes.
+func TestReportMigrations_OnlyFiresWhenThereIsWorkToDo(t *testing.T) {
+	var gotLabel string
+	var gotPending int
+	var calls int
+	restore := SetMigrationReporter(func(dbLabel string, pending int) {
+		calls++
+		gotLabel, gotPending = dbLabel, pending
+	})
+
+	reportMigrations("/data/zaparoo/media.db", 0)
+	assert.Zero(t, calls, "a database with nothing pending must say nothing")
+
+	reportMigrations("/data/zaparoo/media.db", 3)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, "media.db", gotLabel, "the label names the database, not its whole path")
+	assert.Equal(t, 3, gotPending)
+
+	restore()
+	reportMigrations("/data/zaparoo/media.db", 3)
+	assert.Equal(t, 1, calls, "a restored reporter must not keep receiving reports")
+}
+
+// Startup installs a reporter for the length of one startup. Nothing may be
+// left behind for the next one, which would report into a server that has
+// moved on.
+func TestSetMigrationReporter_RestoresWhatItReplaced(t *testing.T) {
+	var outer int
+	restoreOuter := SetMigrationReporter(func(string, int) { outer++ })
+	defer restoreOuter()
+
+	var inner int
+	restoreInner := SetMigrationReporter(func(string, int) { inner++ })
+	reportMigrations("/data/zaparoo/user.db", 1)
+	assert.Equal(t, 1, inner)
+	assert.Zero(t, outer)
+
+	restoreInner()
+	reportMigrations("/data/zaparoo/user.db", 1)
+	assert.Equal(t, 1, outer, "the replaced reporter comes back")
+	assert.Equal(t, 1, inner)
+}
+
+// The unit tests above drive reportMigrations directly, which would keep
+// passing if MigrateUp stopped calling it — and MigrateUp only reaches it when
+// migrations are genuinely pending, the one path the startup page exists for.
+// This runs the real thing.
+func TestMigrateUp_ReportsPendingWorkBeforeApplyingIt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "media.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	type report struct {
+		label   string
+		pending int
+	}
+	var reports []report
+	restore := SetMigrationReporter(func(dbLabel string, pending int) {
+		reports = append(reports, report{dbLabel, pending})
+	})
+	defer restore()
+
+	require.NoError(t, MigrateUp(db, testMigrationFiles, "testdata/migrations", dbPath, ""))
+	require.Len(t, reports, 1, "a fresh database has its whole chain to apply and must say so")
+	assert.Equal(t, "media.db", reports[0].label)
+	assert.Equal(t, 2, reports[0].pending, "both fixture migrations are pending on a fresh database")
+
+	// Migrating an already-current database must stay silent: this is what
+	// every ordinary start does, and it is what used to claim minutes.
+	reports = nil
+	require.NoError(t, MigrateUp(db, testMigrationFiles, "testdata/migrations", dbPath, ""))
+	assert.Empty(t, reports, "a database with nothing to apply must report nothing")
+}

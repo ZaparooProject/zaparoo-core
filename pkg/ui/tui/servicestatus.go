@@ -155,7 +155,7 @@ func serviceStatusText(cfg *config.Instance, pl platforms.Platform, condition se
 		return "[" + t.SuccessColorName + "]* RUNNING[-]"
 	case serviceStarting:
 		return "[" + t.WarningColorName + "]~ STARTING[-]" +
-			"\nZaparoo is still starting.\nThis can take a few minutes on a large library."
+			"\nZaparoo is still starting."
 	case serviceFailed:
 		text := "[" + t.ErrorColorName + "]x NOT WORKING[-]" +
 			"\nZaparoo started but stopped on a problem\nthat needs to be fixed."

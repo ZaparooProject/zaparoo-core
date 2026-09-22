@@ -427,3 +427,54 @@ func TestDescribeDatabaseStartupFailure_WordsBothSchemaAheadCases(t *testing.T) 
 			"only the schema-ahead refusal is about a version")
 	})
 }
+
+// The startup page is the only progress a user gets during a long migration,
+// and the sentence it shows is the one that used to claim minutes on every
+// ordinary start. This drives the reporter startup installs and reads the page
+// a user would actually load, rather than racing a fixture migration that
+// finishes in under a millisecond.
+func TestMigrationStartupReporter_NamesTheDatabaseOnThePage(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	pl := testmocks.NewMockPlatform()
+	pl.On("ID").Return("mock-platform")
+	pl.On("Settings").Return(platforms.Settings{
+		DataDir:   dataDir,
+		ConfigDir: dataDir,
+		TempDir:   t.TempDir(),
+		LogDir:    t.TempDir(),
+	})
+
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, dataDir, "127.0.0.1", freePort(t))
+	require.NoError(t, err)
+	startupServer, err := api.NewStartupServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		http.DefaultClient.CloseIdleConnections()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = startupServer.Shutdown(shutdownCtx)
+	})
+
+	page := func() string {
+		t.Helper()
+		resp, getErr := http.Get(fmt.Sprintf("http://127.0.0.1:%d/app/", startupServer.Port())) //nolint:noctx // test
+		require.NoError(t, getErr)
+		defer func() { _ = resp.Body.Close() }()
+		body, readErr := io.ReadAll(resp.Body)
+		require.NoError(t, readErr)
+		return string(body)
+	}
+
+	assert.NotContains(t, page(), "minutes",
+		"an ordinary start opens its databases in about a second and must not mention minutes")
+
+	migrationStartupReporter(startupServer)("media.db", 4)
+
+	shown := page()
+	assert.Contains(t, shown, "Upgrading media.db (4 to apply)",
+		"the page names the database being upgraded and how much is left")
+	assert.Contains(t, shown, "several minutes",
+		"a duration is honest here, because this only runs while a migration does")
+}
