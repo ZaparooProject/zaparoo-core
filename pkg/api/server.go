@@ -2507,7 +2507,7 @@ func StartWithListener(
 			ReadTimeout:       config.APIRequestTimeout,
 		}
 		serving := &servingListener{Listener: listener, accepting: func() { notifyReady(nil) }}
-		if opts.Network {
+		if opts.Listener != nil {
 			// BaseContext runs once per Serve call with the listener being
 			// served, so the supplied key provider follows the listener that
 			// accepted a connection and cannot reach the network listener.
@@ -2515,7 +2515,10 @@ func StartWithListener(
 			// An embedding host shares loopback with every other app on the
 			// device, so no TCP peer of this server is local: only Unix peers
 			// of the supplied listener are. The mark covers every listener so
-			// that locality never depends on telling them apart.
+			// that locality never depends on telling them apart, and it is set
+			// for any supplied listener, not just when a network listener joins
+			// it: a host that supplies a loopback TCP listener instead of a
+			// socket gets the same rule rather than standalone's.
 			server.BaseContext = func(accepting net.Listener) context.Context {
 				ctx := apimiddleware.UntrustedLoopback(context.Background())
 				if accepting == net.Listener(serving) {

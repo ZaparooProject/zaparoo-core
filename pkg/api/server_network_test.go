@@ -73,22 +73,41 @@ type networkTestServer struct {
 	configDir string
 }
 
+// apiTestArrangement selects which listeners the server under test is given.
+type apiTestArrangement int
+
+const (
+	// apiTestStandalone supplies no listener: Core binds the configured TCP
+	// address itself, the way a service binary runs.
+	apiTestStandalone apiTestArrangement = iota
+	// apiTestUnixNetwork supplies a Unix listener and asks for the network
+	// listener as well, the arrangement an embedding host uses.
+	apiTestUnixNetwork
+	// apiTestSuppliedTCP supplies a loopback TCP listener and no network
+	// listener, for a host that has no Unix sockets to offer.
+	apiTestSuppliedTCP
+)
+
 func startNetworkTestServer(
 	t *testing.T, fs *helpers.FSHelper, listenHost string, port int,
 ) *networkTestServer {
 	t.Helper()
-	return startAPITestServer(t, fs, listenHost, port, true)
+	return startAPITestServer(t, fs, listenHost, port, apiTestUnixNetwork)
 }
 
-// startAPITestServer starts the embedded arrangement, or with network false a
-// standalone server that binds the configured TCP address itself.
+// startAPITestServer starts one of the arrangements in apiTestArrangement.
 func startAPITestServer(
-	t *testing.T, fs *helpers.FSHelper, listenHost string, port int, network bool,
+	t *testing.T, fs *helpers.FSHelper, listenHost string, port int, arrangement apiTestArrangement,
 ) *networkTestServer {
 	t.Helper()
 	dir := t.TempDir()
-	socket := filepath.Join(dir, "s")
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
+	socket := helpers.TempSocketPath(t, "s")
+	network := "unix"
+	address := socket
+	if arrangement == apiTestSuppliedTCP {
+		network, address = "tcp", "127.0.0.1:0"
+	}
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), network, address)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 	platform := mocks.NewMockPlatform()
@@ -122,10 +141,10 @@ func startAPITestServer(
 	opts := ListenerOptions{
 		Listener:  listener,
 		APIKeys:   func() []string { return []string{networkTestListenerKey} },
-		Network:   true,
+		Network:   arrangement == apiTestUnixNetwork,
 		OnNetwork: func(bound int) { server.ports <- bound },
 	}
-	if !network {
+	if arrangement == apiTestStandalone {
 		require.NoError(t, listener.Close())
 		opts = ListenerOptions{}
 	}
@@ -606,7 +625,7 @@ func TestNetworkListenerLoopbackIsNotLocal(t *testing.T) {
 //nolint:paralleltest // Replaces the process-wide configured API keys.
 func TestStandaloneLoopbackStaysLocal(t *testing.T) {
 	fs := helpers.NewMemoryFS()
-	server := startAPITestServer(t, fs, "127.0.0.1", 0, false)
+	server := startAPITestServer(t, fs, "127.0.0.1", 0, apiTestStandalone)
 	require.NoError(t, server.ready)
 	hostPort := net.JoinHostPort("127.0.0.1", strconv.Itoa(server.cfg.APIPort()))
 	tcp := &http.Client{Timeout: 2 * time.Second}
@@ -639,5 +658,60 @@ func TestStandaloneLoopbackStaysLocal(t *testing.T) {
 		assert.NotEqual(t, http.StatusTooManyRequests, response.StatusCode,
 			"standalone loopback is exempt from rate limits")
 	}
+	server.stop(t)
+}
+
+// TestSuppliedTCPListenerIsNotLocal covers the host that hands Core a loopback
+// TCP listener instead of a Unix socket and does not ask for the network
+// listener. Locality must follow the same rule as every other supplied
+// listener: an embedding app shares loopback with every other app on the
+// device, so such a client authenticates, is filtered and is not at the device.
+//
+//nolint:paralleltest // Replaces the process-wide configured API keys.
+func TestSuppliedTCPListenerIsNotLocal(t *testing.T) {
+	fs := helpers.NewMemoryFS()
+	server := startAPITestServer(t, fs, "127.0.0.1", 0, apiTestSuppliedTCP)
+	require.NoError(t, server.ready)
+	base := "http://" + server.listener.Addr().String()
+	wsURL := "ws://" + server.listener.Addr().String() + "/api/v0.1"
+	tcp := &http.Client{Timeout: 2 * time.Second}
+	t.Cleanup(tcp.CloseIdleConnections)
+	tcpDialer := &websocket.Dialer{HandshakeTimeout: 2 * time.Second}
+	t.Cleanup(func() { networkTestSetConfiguredKeys(t, fs, server, "") })
+	networkTestSetConfiguredKeys(t, fs, server, `"`+networkTestConfigKey+`"`)
+
+	t.Run("http_is_filtered_and_authenticated", func(t *testing.T) {
+		assert.Equal(t, http.StatusForbidden, networkTestPost(t, tcp, base+"/api/v0.1", networkTestListenerKey),
+			"a supplied listener's TCP peer is subject to the IP allowlist")
+		require.NoError(t, server.cfg.LoadTOML("[service]\nallowed_ips = ['127.0.0.1']\n"))
+		assert.Equal(t, http.StatusUnauthorized, networkTestPost(t, tcp, base+"/api/v0.1", ""),
+			"a supplied listener's TCP peer must present the listener key")
+		assert.Equal(t, http.StatusOK, networkTestPost(t, tcp, base+"/api/v0.1", networkTestListenerKey))
+	})
+
+	t.Run("websocket_requires_the_listener_key", func(t *testing.T) {
+		status, answered := networkTestWebSocket(t, tcpDialer, wsURL, "")
+		assert.Equal(t, http.StatusUnauthorized, status)
+		assert.False(t, answered)
+		status, answered = networkTestWebSocket(t, tcpDialer, wsURL, networkTestListenerKey)
+		assert.Equal(t, http.StatusSwitchingProtocols, status)
+		assert.True(t, answered)
+	})
+
+	t.Run("local_only_methods_are_refused", func(t *testing.T) {
+		status, reply := networkTestRPC(t, tcp, base+"/api/v0.1", networkTestListenerKey,
+			models.MethodClientsPairStart)
+		assert.Equal(t, http.StatusOK, status)
+		assert.Contains(t, reply, "error", "an authenticated TCP client is still not at the device")
+		assert.NotContains(t, reply, "result")
+	})
+
+	t.Run("encryption_is_required", func(t *testing.T) {
+		server.cfg.SetEncryptionEnabled(true)
+		defer server.cfg.SetEncryptionEnabled(false)
+		_, answered := networkTestWebSocket(t, tcpDialer, wsURL, networkTestListenerKey)
+		assert.False(t, answered, "the listener key must not unlock plaintext over TCP")
+	})
+
 	server.stop(t)
 }
