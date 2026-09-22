@@ -1584,3 +1584,175 @@ func TestCmdPlaylistPlay_AdvancesTheBackgroundPlaylistItNames(t *testing.T) {
 	assert.Equal(t, 2, queued.Index)
 	assert.Equal(t, mediaslot.Background, queued.Slot)
 }
+
+// TestCmdPlaylistPlay_DoesNotAdvanceAnUnidentifiedJSONPlaylist checks that a
+// playlist written inline with no "id" is not mistaken for another one. Two
+// such playlists both load with an empty ID, so matching on it alone would
+// make a card naming the second playlist advance the first.
+func TestCmdPlaylistPlay_DoesNotAdvanceAnUnidentifiedJSONPlaylist(t *testing.T) {
+	t.Parallel()
+
+	active := &playlists.Playlist{
+		ID:      "",
+		Name:    "discs",
+		Items:   threePlaylistItems(),
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+	other := `{"name":"ports","items":[{"name":"Only","zapscript":"**only"}]}`
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, other, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, "ports", result.Playlist.Name, "the playlist the token names is the one that plays")
+	assert.Equal(t, 0, result.Playlist.Index)
+	require.Len(t, result.Playlist.Items, 1)
+	assert.Equal(t, "**only", result.Playlist.Items[0].ZapScript)
+	assert.Equal(t, 0, active.Index, "the playlist that was active is left alone")
+	<-queue
+}
+
+// TestCmdPlaylistPlay_RelaunchesWhenTheNextItemRepeatsTheCurrent covers a
+// playlist whose next item is the same as the one playing. The queue drops an
+// update whose current item and playing state are unchanged, so without a
+// forced relaunch the advance is thrown away and the playlist never moves.
+func TestCmdPlaylistPlay_RelaunchesWhenTheNextItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	plsFile := writeThreeItemPls(t)
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	active := &playlists.Playlist{
+		ID:      plsFile,
+		Items:   []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+		Index:   0,
+		Playing: true,
+	}
+	queue := make(chan *playlists.Playlist, 1)
+
+	_, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, plsFile, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	queued := <-queue
+	assert.Equal(t, 1, queued.Index)
+	assert.True(t, queued.ForceRelaunch, "an advance onto the same item must still relaunch it")
+}
+
+// TestCmdPlaylistPlay_EmptyActivePlaylistDoesNotForceRelaunch covers the
+// playlist with nothing in it. Advancing has nowhere to go, and forcing the
+// relaunch would hand the launcher an empty item on every scan.
+func TestCmdPlaylistPlay_EmptyActivePlaylistDoesNotForceRelaunch(t *testing.T) {
+	t.Parallel()
+
+	arg := `{"id":"empty","name":"empty","items":[]}`
+	active := &playlists.Playlist{ID: "empty", Name: "empty", Index: 0, Playing: true}
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := cmdPlaylistPlay(newPlaylistTestPlatform(), playScanEnv(t, arg, "",
+		playlists.PlaylistController{Active: active, Queue: queue}))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, 0, result.Playlist.Index)
+	queued := <-queue
+	assert.Empty(t, queued.Items)
+	assert.False(t, queued.ForceRelaunch, "an empty playlist has no item to relaunch")
+}
+
+// TestCmdPlaylistNext_RelaunchesWhenTheNextItemRepeatsTheCurrent covers the
+// playlist whose next item is the one already playing. The queue drops an
+// update whose current item and playing state are unchanged, so without a
+// forced relaunch the command moved nothing and launched nothing.
+func TestCmdPlaylistNext_RelaunchesWhenTheNextItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	tests := []struct {
+		name  string
+		items []playlists.PlaylistItem
+		index int
+	}{
+		{
+			name:  "a playlist of one wraps onto its only item",
+			items: []playlists.PlaylistItem{repeated},
+			index: 0,
+		},
+		{
+			name:  "a playlist listing the same item twice",
+			items: []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+			index: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			active := &playlists.Playlist{ID: "pls", Items: tt.items, Index: 0, Playing: true}
+			queue := make(chan *playlists.Playlist, 1)
+
+			result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+				Playlist: playlists.PlaylistController{Active: active, Queue: queue},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result.Playlist)
+			assert.Equal(t, tt.index, result.Playlist.Index)
+			queued := <-queue
+			assert.Equal(t, tt.index, queued.Index)
+			assert.True(t, queued.ForceRelaunch, "an advance onto the same item must still relaunch it")
+		})
+	}
+}
+
+// TestCmdPlaylistPrevious_RelaunchesWhenThePreviousItemRepeatsTheCurrent is
+// the same case as its next counterpart, the other way round. The early
+// restart only covers native playback past its threshold, so a playlist of
+// games reaches the move itself.
+func TestCmdPlaylistPrevious_RelaunchesWhenThePreviousItemRepeatsTheCurrent(t *testing.T) {
+	t.Parallel()
+
+	repeated := playlists.PlaylistItem{Name: "Item 1", ZapScript: "**test1"}
+	tests := []struct {
+		name  string
+		items []playlists.PlaylistItem
+		from  int
+		index int
+	}{
+		{
+			name:  "a playlist of one wraps onto its only item",
+			items: []playlists.PlaylistItem{repeated},
+			from:  0,
+			index: 0,
+		},
+		{
+			name:  "a playlist listing the same item twice",
+			items: []playlists.PlaylistItem{repeated, repeated, {Name: "Item 2", ZapScript: "**test2"}},
+			from:  1,
+			index: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			active := &playlists.Playlist{ID: "pls", Items: tt.items, Index: tt.from, Playing: true}
+			queue := make(chan *playlists.Playlist, 1)
+
+			result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+				Playlist: playlists.PlaylistController{Active: active, Queue: queue},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result.Playlist)
+			assert.Equal(t, tt.index, result.Playlist.Index)
+			queued := <-queue
+			assert.Equal(t, tt.index, queued.Index)
+			assert.True(t, queued.ForceRelaunch, "a step back onto the same item must still relaunch it")
+		})
+	}
+}
