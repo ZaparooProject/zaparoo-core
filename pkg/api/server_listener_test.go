@@ -26,7 +26,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +52,7 @@ func TestHostUnixListener(t *testing.T) {
 	require.True(t, ok)
 
 	dir := t.TempDir()
-	socket := filepath.Join(dir, "s")
+	socket := helpers.TempSocketPath(t, "s")
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", socket)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
@@ -153,7 +152,7 @@ func TestHostUnixListener(t *testing.T) {
 func TestSuppliedListenerRejectsStartupServer(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "s"))
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", helpers.TempSocketPath(t, "s"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 	platform := mocks.NewMockPlatform()
