@@ -1262,7 +1262,7 @@ func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {
 
 	gateHeld := false
 	finished := false
-	env.Manager.WithRestoreGate(func() (func(bool), error) {
+	env.Manager.WithRestoreGate(func(context.Context) (func(bool), error) {
 		gateHeld = true
 		return func(success bool) {
 			assert.True(t, success)
@@ -1319,7 +1319,7 @@ func TestManagerRestoreSucceedsWhenCommittedCleanupSyncFails(t *testing.T) {
 		return syncDirectory(path)
 	}
 	gateSucceeded := false
-	env.Manager.WithRestoreGate(func() (func(bool), error) {
+	env.Manager.WithRestoreGate(func(context.Context) (func(bool), error) {
 		return func(success bool) { gateSucceeded = success }, nil
 	})
 

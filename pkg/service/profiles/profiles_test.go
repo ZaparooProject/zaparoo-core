@@ -91,7 +91,7 @@ func TestActivateByIDRejectedDuringRestore(t *testing.T) {
 	t.Parallel()
 	svc, mockDB, st := newTestService(t)
 	mockDB.On("GetProfile", "profile-1").Return(pinProfile(t, ""), nil)
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	defer finishRestore(false)
 

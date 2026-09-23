@@ -730,6 +730,16 @@ func TestBackupActionErrorTextMapsSafeGuidance(t *testing.T) {
 			expected: "Restart Zaparoo Core before starting another backup",
 		},
 		{
+			name:     "restart pending from api",
+			err:      errors.New("cannot restore backup until Zaparoo restarts to finish the previous restore"),
+			expected: "Restart Zaparoo Core before starting another backup",
+		},
+		{
+			name:     "gate busy",
+			err:      errors.New("cannot restore backup while Zaparoo is busy with another request or a media launch"),
+			expected: "Wait a moment, then try restoring again",
+		},
+		{
 			name: "unlinked", err: errors.New("remote backup is unlinked"),
 			expected: "Relink this device to Zaparoo Online",
 		},

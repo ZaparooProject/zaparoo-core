@@ -483,7 +483,7 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	}
 	defer lease.Release()
 	ctx = lease.Context()
-	finishRestore, err := m.beginRestoreGate()
+	finishRestore, err := m.beginRestoreGate(ctx)
 	if err != nil {
 		return RemoteRestoreInfo{}, err
 	}

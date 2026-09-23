@@ -508,7 +508,7 @@ func TestHandleUpdateApply_ErrorReleasesAcquiredGates(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 
-	finishRestore, err := appState.BeginRestoreGate()
+	finishRestore, err := appState.BeginRestoreGate(t.Context())
 	require.NoError(t, err, "failed apply retained restore access")
 	finishRestore(false)
 

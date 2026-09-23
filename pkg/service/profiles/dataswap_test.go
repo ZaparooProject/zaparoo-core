@@ -154,7 +154,7 @@ func TestDataSwap_WaitsForRestoreRollback(t *testing.T) {
 	t.Parallel()
 	swapper := &fakeSwapper{}
 	fix := newTestCoordinator(t, swapper)
-	finishRestore, err := fix.st.BeginRestoreGate()
+	finishRestore, err := fix.st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	requested := make(chan struct{})
 	go func() {
@@ -178,7 +178,7 @@ func TestDataSwap_RestartPendingSkipsFailureNotification(t *testing.T) {
 	t.Parallel()
 	swapper := &fakeSwapper{}
 	fix := newTestCoordinator(t, swapper)
-	finishRestore, err := fix.st.BeginRestoreGate()
+	finishRestore, err := fix.st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	finishRestore(true)
 

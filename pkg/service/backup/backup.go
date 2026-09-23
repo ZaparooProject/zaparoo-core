@@ -97,7 +97,7 @@ type Manager struct {
 	inbox         *inboxservice.Service
 	coordinator   *Coordinator
 	activeMedia   func() *models.ActiveMedia
-	restoreGate   func() (func(bool), error)
+	restoreGate   func(context.Context) (func(bool), error)
 	directorySync func(string) error
 	sourceOpener  sourceOpener
 	pauser        *syncutil.Pauser
@@ -218,7 +218,7 @@ func (m *Manager) WithActiveMedia(activeMedia func() *models.ActiveMedia) *Manag
 	return m
 }
 
-func (m *Manager) WithRestoreGate(restoreGate func() (func(bool), error)) *Manager {
+func (m *Manager) WithRestoreGate(restoreGate func(context.Context) (func(bool), error)) *Manager {
 	m.restoreGate = restoreGate
 	return m
 }
@@ -467,7 +467,7 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 	}
 	defer lease.Release()
 	ctx = lease.Context()
-	finishRestore, err := m.beginRestoreGate()
+	finishRestore, err := m.beginRestoreGate(ctx)
 	if err != nil {
 		return RestoreInfo{}, err
 	}

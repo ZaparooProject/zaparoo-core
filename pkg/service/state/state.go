@@ -661,7 +661,18 @@ var (
 	ErrRestoreInProgress      = errors.New("backup restore is in progress")
 	ErrMediaLaunchInProgress  = errors.New("media launch is in progress")
 	ErrRestoreRestartRequired = errors.New("backup restore restart is pending")
+	ErrRestoreGateBusy        = errors.New("another request or media launch is in progress")
 )
+
+// restoreGateWait bounds how long a restore waits for the exclusive side of
+// the restore gate. Every API request holds the read side for the whole time
+// its handler runs (see apiMethodManagesRestoreAccess in pkg/api/server.go),
+// and a media launch holds it too, so a single attempt loses the race
+// whenever anything else is in flight - including requests from the very
+// client asking for the restore. Waiting turns an ordinary overlap into a
+// short pause instead of a refusal, and a real conflict still reports itself
+// once the budget runs out.
+const restoreGateWait = 5 * time.Second
 
 func (s *State) restoreAccessAfterLock() (func(), error) {
 	s.mu.RLock()
@@ -779,15 +790,23 @@ func acquireExclusiveGate(ctx context.Context, gate *syncutil.RWMutex) (func(), 
 	}
 }
 
-func (s *State) BeginRestoreGate() (func(bool), error) {
-	if !s.mediaRestoreMu.TryLock() {
-		return nil, ErrMediaLaunchInProgress
+func (s *State) BeginRestoreGate(ctx context.Context) (func(bool), error) {
+	waitCtx, cancel := context.WithTimeout(ctx, restoreGateWait)
+	defer cancel()
+
+	release, err := acquireExclusiveGate(waitCtx, &s.mediaRestoreMu)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
+		return nil, ErrRestoreGateBusy
 	}
+
 	s.mu.RLock()
 	pendingRestart := s.restorePendingRestart
 	s.mu.RUnlock()
 	if pendingRestart {
-		s.mediaRestoreMu.Unlock()
+		release()
 		return nil, ErrRestoreRestartRequired
 	}
 	return func(success bool) {
@@ -796,7 +815,7 @@ func (s *State) BeginRestoreGate() (func(bool), error) {
 			s.restorePendingRestart = true
 			s.mu.Unlock()
 		}
-		s.mediaRestoreMu.Unlock()
+		release()
 	}, nil
 }
 

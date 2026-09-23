@@ -144,11 +144,11 @@ type restorePolicyMatch struct {
 	categoryRel string
 }
 
-func (m *Manager) beginRestoreGate() (func(bool), error) {
+func (m *Manager) beginRestoreGate(ctx context.Context) (func(bool), error) {
 	if m.restoreGate == nil {
 		return func(bool) {}, nil
 	}
-	finish, err := m.restoreGate()
+	finish, err := m.restoreGate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrRestoreLaunchInProgress, err)
 	}
