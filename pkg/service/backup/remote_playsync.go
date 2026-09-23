@@ -260,14 +260,14 @@ func isValidationRefusal(err error) bool {
 // the batch where it does not. Everything else then uploads, and each refused
 // session is reported so it can be repaired rather than silently dropped.
 func (c *remoteClient) uploadWithoutRefused(
-	ctx context.Context, sessions []remotePlaySessionItem, offset int, refused *[]int,
+	ctx context.Context, sessions []remotePlaySessionItem, offset int, refused *[]int, allowance int,
 ) (remotePlaySessionResponse, error) {
 	resp, err := c.uploadPlaySessions(ctx, sessions)
 	if err == nil || !isValidationRefusal(err) {
 		return resp, err
 	}
 	if len(sessions) == 1 {
-		if len(*refused) >= maxRefusedPerPass {
+		if len(*refused) >= allowance {
 			return remotePlaySessionResponse{}, err
 		}
 		*refused = append(*refused, offset)
@@ -281,11 +281,11 @@ func (c *remoteClient) uploadWithoutRefused(
 		split = named[0]
 	}
 
-	head, headErr := c.uploadWithoutRefused(ctx, sessions[:split], offset, refused)
+	head, headErr := c.uploadWithoutRefused(ctx, sessions[:split], offset, refused, allowance)
 	if headErr != nil {
 		return remotePlaySessionResponse{}, headErr
 	}
-	tail, tailErr := c.uploadWithoutRefused(ctx, sessions[split:], offset+split, refused)
+	tail, tailErr := c.uploadWithoutRefused(ctx, sessions[split:], offset+split, refused, allowance)
 	if tailErr != nil {
 		return remotePlaySessionResponse{}, tailErr
 	}
@@ -383,7 +383,10 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 		var resp remotePlaySessionResponse
 		if len(items) > 0 {
 			var uploadErr error
-			resp, uploadErr = client.uploadWithoutRefused(ctx, items, 0, &refused)
+			// The allowance is for the whole pass, not each batch.
+			resp, uploadErr = client.uploadWithoutRefused(
+				ctx, items, 0, &refused, maxRefusedPerPass-info.Refused,
+			)
 			if uploadErr != nil {
 				return info, uploadErr
 			}
