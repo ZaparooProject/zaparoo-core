@@ -35,9 +35,12 @@ import (
 // reads as it always has.
 type APIError struct {
 	sentinel error
-	Code     string
-	Message  string
-	Status   int
+	// Fields names the request fields a validation error refused, as the
+	// server rendered them. Empty for errors that name none.
+	Fields  map[string]string
+	Code    string
+	Message string
+	Status  int
 }
 
 func (e *APIError) Error() string {

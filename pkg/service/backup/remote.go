@@ -305,8 +305,13 @@ type remoteDeviceMeResponse struct {
 }
 
 type remoteAPIErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	// Fields names the request fields a validation error refused, keyed as
+	// the server renders them (e.g. "Sessions[3].MediaName"). Without it a
+	// rejected batch reports only "Request validation failed", which cannot
+	// be acted on.
+	Fields  map[string]string `json:"fields,omitempty"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
 }
 
 type remoteAPIError struct {
@@ -1998,7 +2003,12 @@ func remoteStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusTooManyRequests || apiErr.Error.Code == "rate_limited" {
 		return &remoteRateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
-	result := &APIError{Status: resp.StatusCode, Code: apiErr.Error.Code, Message: apiErr.Error.Message}
+	result := &APIError{
+		Status:  resp.StatusCode,
+		Code:    apiErr.Error.Code,
+		Message: apiErr.Error.Message,
+		Fields:  apiErr.Error.Fields,
+	}
 	switch apiErr.Error.Code {
 	case "not_available":
 		result.sentinel = errRemoteNotAvailable
