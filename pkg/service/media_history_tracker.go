@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -35,6 +36,23 @@ import (
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
 )
+
+// historyMediaName is the name a history row records for active media. An
+// indexed title can be empty - a directory whose files all begin with a number
+// has that prefix stripped, and a title that is only a number is left with
+// nothing - and a blank name is not merely cosmetic: the row cannot be
+// uploaded to an account, which stops play-history sync for the whole device.
+// Fall back to the filename the way a launch already does for its display
+// name, so a row is never written without one.
+func historyMediaName(active *models.ActiveMedia) string {
+	if active.Name != "" {
+		return active.Name
+	}
+	if active.Path == "" {
+		return ""
+	}
+	return tags.ParseTitleFromFilename(helpers.GetPathName(active.Path), false)
+}
 
 const (
 	mediaHistoryUpdateInterval = 15 * time.Second
@@ -132,7 +150,7 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					SystemID:       activeMedia.SystemID,
 					SystemName:     activeMedia.SystemName,
 					MediaPath:      activeMedia.Path,
-					MediaName:      activeMedia.Name,
+					MediaName:      historyMediaName(activeMedia),
 					LauncherID:     activeMedia.LauncherID,
 					PlayTime:       0,
 					BootUUID:       t.st.BootUUID(),
