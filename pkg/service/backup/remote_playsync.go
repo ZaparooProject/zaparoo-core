@@ -24,9 +24,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,6 +61,10 @@ func IsPlaySyncDisabledError(err error) bool {
 type PlaySyncInfo struct {
 	Uploaded int
 	Batches  int
+	// Refused counts sessions the account would not accept. They are worked
+	// around rather than retried forever, and reported so they can be
+	// repaired.
+	Refused int
 }
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
@@ -139,6 +147,122 @@ func (c *remoteClient) uploadPlaySessions(
 	return resp, nil
 }
 
+// maxRefusedPerPass bounds how many individually refused sessions one pass
+// will isolate. A handful is malformed local data worth working around; more
+// than that is systemic, and hunting each one costs the server a request.
+const maxRefusedPerPass = 16
+
+// refusedSessionIndexes reads the session positions a validation refusal
+// names. The server reports refused fields keyed as they appear in the
+// request, e.g. "Sessions[3].MediaName", so the batch position can be read
+// straight out of the key without Core knowing what the rule was.
+func refusedSessionIndexes(err error, batchLen int) []int {
+	apiErr, ok := AsAPIError(err)
+	if !ok || apiErr.Status != http.StatusBadRequest {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(apiErr.Fields))
+	for field := range apiErr.Fields {
+		_, rest, found := strings.Cut(field, "[")
+		if !found {
+			continue
+		}
+		digits, _, found := strings.Cut(rest, "]")
+		if !found {
+			continue
+		}
+		index, convErr := strconv.Atoi(digits)
+		if convErr != nil || index < 0 || index >= batchLen {
+			continue
+		}
+		seen[index] = struct{}{}
+	}
+	indexes := make([]int, 0, len(seen))
+	for index := range seen {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
+// isValidationRefusal reports a response that refused the request's contents
+// rather than failing for a transport or availability reason. Only those are
+// worth isolating: retrying the same rows cannot make them acceptable.
+func isValidationRefusal(err error) bool {
+	apiErr, ok := AsAPIError(err)
+	return ok && apiErr.Status == http.StatusBadRequest
+}
+
+// uploadWithoutRefused uploads sessions, working around any the server refuses
+// rather than letting them stop the pass.
+//
+// A refusal fails the whole request, so one unacceptable row used to stop
+// play-history sync for the device permanently: the same batch was retried
+// forever and nothing after it ever reached the account. The refused positions
+// are read from the response where the server names them, and found by halving
+// the batch where it does not. Everything else then uploads, and each refused
+// session is reported so it can be repaired rather than silently dropped.
+func (c *remoteClient) uploadWithoutRefused(
+	ctx context.Context, sessions []remotePlaySessionItem, offset int, refused *[]int,
+) (remotePlaySessionResponse, error) {
+	resp, err := c.uploadPlaySessions(ctx, sessions)
+	if err == nil || !isValidationRefusal(err) {
+		return resp, err
+	}
+	if len(sessions) == 1 {
+		if len(*refused) >= maxRefusedPerPass {
+			return remotePlaySessionResponse{}, err
+		}
+		*refused = append(*refused, offset)
+		return remotePlaySessionResponse{}, nil
+	}
+
+	// Split on the positions the server named when it named any, and down the
+	// middle when it did not.
+	split := len(sessions) / 2
+	if named := refusedSessionIndexes(err, len(sessions)); len(named) > 0 && named[0] > 0 {
+		split = named[0]
+	}
+
+	head, headErr := c.uploadWithoutRefused(ctx, sessions[:split], offset, refused)
+	if headErr != nil {
+		return remotePlaySessionResponse{}, headErr
+	}
+	tail, tailErr := c.uploadWithoutRefused(ctx, sessions[split:], offset+split, refused)
+	if tailErr != nil {
+		return remotePlaySessionResponse{}, tailErr
+	}
+	combined := remotePlaySessionResponse{Accepted: head.Accepted + tail.Accepted}
+	combined.Watermark = tail.Watermark
+	if combined.Watermark == nil {
+		combined.Watermark = head.Watermark
+	}
+	return combined, nil
+}
+
+// notifyRefusedSessions tells the user that some play sessions cannot be
+// uploaded. Without it the only trace is a log line, and a device can go on
+// failing to record history with nothing to notice.
+func (m *Manager) notifyRefusedSessions(refused int) {
+	if m.inbox == nil || refused == 0 {
+		return
+	}
+	body := fmt.Sprintf(
+		"%d play session(s) could not be added to your Zaparoo Online history because the "+
+			"account would not accept them. The rest of your history is syncing normally. "+
+			"See the log for which sessions were affected.",
+		refused,
+	)
+	if addErr := m.inbox.Add(
+		"Some play sessions were not synced",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityWarning),
+		inboxservice.WithCategory(inboxservice.CategoryPlayHistorySessionsRefused),
+	); addErr != nil {
+		log.Warn().Err(addErr).Msg("failed to add refused play sessions inbox message")
+	}
+}
+
 // SyncPlayHistory uploads every session updated since the server's
 // watermark. The first call after linking is the bulk import of the whole
 // local history; afterwards each pass sends only what changed. A pass is
@@ -190,9 +314,32 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 		if !m.cfg.PlaytimeSyncEnabled() {
 			return info, errPlaySyncDisabled
 		}
-		resp, uploadErr := client.uploadPlaySessions(ctx, items)
+		var refused []int
+		resp, uploadErr := client.uploadWithoutRefused(ctx, items, 0, &refused)
 		if uploadErr != nil {
 			return info, uploadErr
+		}
+		if len(refused) > 0 {
+			refusedSet := make(map[int]struct{}, len(refused))
+			for _, index := range refused {
+				refusedSet[index] = struct{}{}
+				entry := &batch[index]
+				log.Warn().
+					Int64("dbid", entry.DBID).
+					Str("session", entry.ID).
+					Str("system", entry.SystemID).
+					Str("name", entry.MediaName).
+					Str("path", entry.MediaPath).
+					Msg("account refused a play session; skipping it and syncing the rest")
+			}
+			kept := refs[:0:0]
+			for i := range refs {
+				if _, skip := refusedSet[i]; !skip {
+					kept = append(kept, refs[i])
+				}
+			}
+			refs = kept
+			info.Refused += len(refused)
 		}
 
 		if markErr := m.database.UserDB.MarkMediaHistorySynced(refs, time.Now().UTC()); markErr != nil {
@@ -202,7 +349,7 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 			return info, fmt.Errorf("marking media history rows synced: %w", markErr)
 		}
 
-		info.Uploaded += len(batch)
+		info.Uploaded += len(refs)
 		info.Batches++
 		last := &batch[len(batch)-1]
 		cursor = last.UpdatedAt
@@ -218,10 +365,12 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 		}
 	}
 
-	if info.Uploaded > 0 {
+	m.notifyRefusedSessions(info.Refused)
+	if info.Uploaded > 0 || info.Refused > 0 {
 		log.Info().
 			Int("sessions", info.Uploaded).
 			Int("batches", info.Batches).
+			Int("refused", info.Refused).
 			Msg("play history sync completed")
 	}
 	return info, nil

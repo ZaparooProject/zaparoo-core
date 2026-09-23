@@ -59,6 +59,7 @@ const (
 	CategoryBackupRemoteFailed               = "backup_remote_failed"
 	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"
 	CategoryBackupRemoteStale                = "backup_remote_stale"
+	CategoryPlayHistorySessionsRefused       = "play_history_sessions_refused"
 	CategoryLibraryInventoryTooLarge         = "library_inventory_too_large"
 	CategoryScrapeSourceUnreadable           = "scrape_source_unreadable"
 )

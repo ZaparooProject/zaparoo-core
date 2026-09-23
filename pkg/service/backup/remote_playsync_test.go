@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -347,4 +348,111 @@ func TestSyncPlayHistory_Unlinked(t *testing.T) {
 
 	_, err := env.Manager.SyncPlayHistory(context.Background())
 	require.ErrorIs(t, err, errRemoteUnlinked)
+}
+
+// refusingPlaySyncServer refuses any batch containing refusedUUID, the way the
+// account refuses a session it will not accept. nameFields controls whether
+// the response names the offending position, so both the named and the
+// unnamed path can be exercised.
+func refusingPlaySyncServer(
+	t *testing.T, refusedUUID string, nameFields bool,
+) (*httptest.Server, *[][]remotePlaySessionItem) {
+	t.Helper()
+	var batches [][]remotePlaySessionItem
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/play-sessions/watermark":
+			assert.NoError(t, json.NewEncoder(w).Encode(remotePlayWatermarkResponse{}))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/play-sessions":
+			var req remotePlaySessionRequest
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&req)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			batches = append(batches, req.Sessions)
+			for i := range req.Sessions {
+				if req.Sessions[i].SessionUUID != refusedUUID {
+					continue
+				}
+				body := map[string]any{"error": map[string]any{
+					"code":    "validation_failed",
+					"message": "Request validation failed",
+				}}
+				if nameFields {
+					if errBody, ok := body["error"].(map[string]any); ok {
+						errBody["fields"] = map[string]string{
+							fmt.Sprintf("Sessions[%d].MediaName", i): "required",
+						}
+					}
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				assert.NoError(t, json.NewEncoder(w).Encode(body))
+				return
+			}
+			newest := req.Sessions[len(req.Sessions)-1].CoreUpdatedAt
+			assert.NoError(t, json.NewEncoder(w).Encode(remotePlaySessionResponse{
+				Accepted:  int64(len(req.Sessions)),
+				Watermark: &newest,
+			}))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, &batches
+}
+
+// TestSyncPlayHistory_RefusedSessionDoesNotStopThePass is the regression for a
+// single unacceptable row stopping play-history sync for good. The whole batch
+// used to fail, nothing was marked synced, and the identical batch was retried
+// forever, so no session written after the bad one ever reached the account.
+func TestSyncPlayHistory_RefusedSessionDoesNotStopThePass(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		nameFields bool
+	}{
+		{name: "server names the refused position", nameFields: true},
+		{name: "server names nothing and the batch is halved", nameFields: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// No t.Parallel(): configurePlaytimeTestAuth mutates global auth config.
+			env := newBackupTestEnv(t, "mister")
+			env.Manager.cfg.SetPlaytimeSync(true)
+			base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+
+			good := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
+			bad := playSyncTestEntry(2, "22222222-2222-4222-8222-222222222222", "", base.Add(time.Hour))
+			later := playSyncTestEntry(3, "33333333-3333-4333-8333-333333333333", "Game C", base.Add(2*time.Hour))
+
+			server, batches := refusingPlaySyncServer(t, bad.ID, tc.nameFields)
+			configurePlaytimeTestAuth(t, env.Manager, server.URL)
+
+			env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+			env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+				Return([]database.MediaHistoryEntry{good, bad, later}, nil).Once()
+			// Only the acceptable sessions are acknowledged; the refused one
+			// stays unsynced so a repaired copy can still be uploaded later.
+			env.UserDB.On("MarkMediaHistorySynced", []database.MediaHistorySyncRef{
+				{DBID: good.DBID, UpdatedAt: good.UpdatedAt},
+				{DBID: later.DBID, UpdatedAt: later.UpdatedAt},
+			}, testifymock.AnythingOfType("time.Time")).Return(nil).Once()
+
+			info, err := env.Manager.SyncPlayHistory(context.Background())
+			require.NoError(t, err, "one refused session must not fail the pass")
+			assert.Equal(t, 2, info.Uploaded, "the acceptable sessions still upload")
+			assert.Equal(t, 1, info.Refused, "the refused session is counted, not hidden")
+
+			var delivered []string
+			for _, batch := range *batches {
+				for i := range batch {
+					if batch[i].SessionUUID != bad.ID {
+						delivered = append(delivered, batch[i].SessionUUID)
+					}
+				}
+			}
+			assert.Contains(t, delivered, good.ID)
+			assert.Contains(t, delivered, later.ID)
+		})
+	}
 }

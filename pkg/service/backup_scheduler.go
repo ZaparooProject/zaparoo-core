@@ -255,7 +255,8 @@ func remoteBackupSchedulerLoop(
 	var idlePlaySyncConfiguration playSyncConfiguration
 	tryPlaySync := func() {
 		now := time.Now()
-		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+		mgr := backupsvc.NewManager(cfg, pl, db).
+			WithCoordinator(st.BackupCoordinator()).WithInbox(st.Inbox())
 		configuration := currentPlaySyncConfiguration(cfg)
 		if !configuration.eligible() {
 			playSyncState.idle = true
@@ -278,9 +279,16 @@ func remoteBackupSchedulerLoop(
 				idlePlaySyncConfiguration = configuration
 			}
 			if onlineFailureRequiresWarning(err, expected) {
-				log.Warn().Err(err).
-					Dur("retry_in", playSyncState.nextAttempt.Sub(now)).
-					Msg("play history sync failed")
+				event := log.Warn().Err(err).
+					Dur("retry_in", playSyncState.nextAttempt.Sub(now))
+				// A validation refusal names the fields it refused. Without
+				// them the log says only "Request validation failed", and a
+				// single unacceptable row stops the whole device's sync with
+				// nothing to act on.
+				if apiErr, ok := backupsvc.AsAPIError(err); ok && len(apiErr.Fields) > 0 {
+					event = event.Interface("rejected_fields", apiErr.Fields)
+				}
+				event.Msg("play history sync failed")
 			} else {
 				log.Debug().Err(err).Msg("play history sync not run")
 			}
