@@ -61,6 +61,7 @@ const (
 	CategoryBackupRemoteStale                = "backup_remote_stale"
 	CategoryPlayHistorySessionsRefused       = "play_history_sessions_refused"
 	CategoryRestoreLibrarySyncAuthoritative  = "restore_library_sync_authoritative"
+	CategoryRestoreCompletedDetached         = "restore_completed_detached"
 	CategoryLibraryInventoryTooLarge         = "library_inventory_too_large"
 	CategoryScrapeSourceUnreadable           = "scrape_source_unreadable"
 )

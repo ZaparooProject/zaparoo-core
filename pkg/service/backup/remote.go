@@ -482,6 +482,8 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 		return RemoteRestoreInfo{}, err
 	}
 	defer lease.Release()
+	// See Restore: the lease context deliberately survives the caller.
+	requestCtx := ctx
 	ctx = lease.Context()
 	finishRestore, err := m.beginRestoreGate(ctx)
 	if err != nil {
@@ -586,6 +588,7 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	preInfo := pre
 	restoreSucceeded = true
 	m.notifyRestoreLibrarySync()
+	m.notifyRestoreCompletedDetached(requestCtx)
 	return RemoteRestoreInfo{PreRestoreBackup: &preInfo, RestoredFrom: remoteBackupToInfo(&resp)}, nil
 }
 

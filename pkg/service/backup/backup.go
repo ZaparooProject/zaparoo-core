@@ -466,6 +466,9 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 		return RestoreInfo{}, err
 	}
 	defer lease.Release()
+	// The lease context outlives the request on purpose, so keep the caller's
+	// own context to tell whether anyone is still waiting for the result.
+	requestCtx := ctx
 	ctx = lease.Context()
 	finishRestore, err := m.beginRestoreGate(ctx)
 	if err != nil {
@@ -514,6 +517,7 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 	}
 	restoreSucceeded = true
 	m.notifyRestoreLibrarySync()
+	m.notifyRestoreCompletedDetached(requestCtx)
 	return RestoreInfo{PreRestoreBackup: &pre, RestoredFrom: staged.result.Info}, nil
 }
 

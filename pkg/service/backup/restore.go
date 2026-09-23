@@ -185,6 +185,29 @@ func (m *Manager) notifyRestoreLibrarySync() {
 	}
 }
 
+// notifyRestoreCompletedDetached tells the user a restore finished when the
+// client that asked for it had already stopped listening. A restore no longer
+// dies with its caller, so a slow one now succeeds behind a request that
+// reported a timeout, and this is the only place the user would hear that it
+// worked.
+func (m *Manager) notifyRestoreCompletedDetached(requestCtx context.Context) {
+	if m.inbox == nil || requestCtx == nil || requestCtx.Err() == nil {
+		return
+	}
+	if addErr := m.inbox.Add(
+		"Backup restore finished",
+		inboxservice.WithBody(
+			"Whatever started this restore stopped waiting before it finished, so it may have "+
+				"reported a timeout or an error. The restore itself completed and Zaparoo "+
+				"restarts to finish applying it. Nothing needs to be done again.",
+		),
+		inboxservice.WithSeverity(inboxservice.SeverityInfo),
+		inboxservice.WithCategory(inboxservice.CategoryRestoreCompletedDetached),
+	); addErr != nil {
+		log.Warn().Err(addErr).Msg("failed to add detached restore completion inbox message")
+	}
+}
+
 func (m *Manager) requireRestoreIdle() error {
 	if m.activeMedia != nil && m.activeMedia() != nil {
 		return ErrRestoreMediaActive

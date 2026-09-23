@@ -5065,3 +5065,59 @@ func TestNotifyRestoreLibrarySyncOnlyWhenSyncing(t *testing.T) {
 		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
 	})
 }
+
+// TestManagerRestoreSurvivesACancelledCaller covers the release-candidate bug
+// where a restore died with the request that asked for it. A restore on a
+// MiSTer took 308 seconds against a client that gave up at 120, and Core
+// treated the disconnect as a reason to abort and roll back a restore that was
+// working. A cancelled request means the caller no longer wants the response,
+// not that the half-applied restore should be undone.
+func TestManagerRestoreSurvivesACancelledCaller(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = env.Manager.Restore(ctx, info.Name)
+	require.NoError(t, err, "a caller that stopped waiting must not roll back the restore")
+}
+
+// TestNotifyRestoreCompletedDetached covers the other half: once a restore can
+// outlive its caller, a slow one succeeds behind a request that already
+// reported a timeout, and the inbox is the only place the user hears that it
+// worked.
+func TestNotifyRestoreCompletedDetached(t *testing.T) {
+	t.Parallel()
+
+	t.Run("caller gone leaves the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		ns := make(chan models.Notification, 1)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryRestoreCompletedDetached
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryRestoreCompletedDetached,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		env.Manager.notifyRestoreCompletedDetached(ctx)
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+
+	t.Run("caller still waiting stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		ns := make(chan models.Notification, 1)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreCompletedDetached(context.Background())
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+}
