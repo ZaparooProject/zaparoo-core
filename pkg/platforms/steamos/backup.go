@@ -98,27 +98,6 @@ var (
 		{Glob: "VideoDecodeStats/**"},
 		{Glob: "WebStorage/**"},
 	}
-	providerBIOSExclusions = []platforms.BackupPattern{
-		{Glob: "RetroArch_v*.zip"},
-		{Glob: "RetroArch_v*/**"},
-		{Glob: "HdPacks/**"},
-		{Glob: "Mupen64plus/cache/**"},
-		{Glob: "Mupen64plus/hires_texture/**"},
-		{Glob: "PPSSPP/**"},
-		{Glob: "Vita3K/ux0/user/**"},
-		{Glob: "azahar/keys/**"},
-		{Glob: "cemu/usr/save/**"},
-		{Glob: "dolphin-emu/Sys/**"},
-		{Glob: "fbneo/patched/**"},
-		{Glob: "pico-8/carts/**"},
-		{Glob: "pico-8/cdata/**"},
-		{Glob: "rpcs3/dev_hdd0/home/**"},
-		{Glob: "ryujinx/keys/**"},
-		{Glob: "scummvm/extra/**"},
-		{Glob: "shadps4/sys_modules/**"},
-		{Glob: "ume/**"},
-		{Contains: "themes/"},
-	}
 	emuDeckManagedSaveExclusions = []platforms.BackupPattern{
 		{Glob: "Cemu/saves/**"},
 		{Glob: "Vita3K/saves/**"},
@@ -444,8 +423,6 @@ func emuDeckDefinitions(paths *linuxemu.EmuDeckPaths) []platforms.BackupDefiniti
 			appendBackupPatterns(savestatePatterns, emuDeckManagedSaveExclusions...)),
 		definition(paths.SavesPath, filepath.Join("Emulation", "saves"), backupCategorySavestates,
 			savestatePatterns, emuDeckManagedSaveExclusions),
-		definition(paths.BiosPath, filepath.Join("Emulation", "bios"), backupCategorySettings,
-			[]platforms.BackupPattern{{All: true}}, providerBIOSExclusions),
 		definition(
 			filepath.Join(paths.StoragePath, "rpcs3", "dev_hdd0", "home"),
 			filepath.Join("Emulation", "storage", "rpcs3", "dev_hdd0", "home"),
@@ -510,8 +487,6 @@ func retroDECKDefinitions(home string, paths *linuxemu.RetroDECKPaths) []platfor
 			[]platforms.BackupPattern{{All: true}}, nil),
 		definition(paths.StatesPath, filepath.Join("retrodeck", "states"), backupCategorySavestates,
 			[]platforms.BackupPattern{{All: true}}, nil),
-		definition(paths.BiosPath, filepath.Join("retrodeck", "bios"), backupCategorySettings,
-			[]platforms.BackupPattern{{All: true}}, providerBIOSExclusions),
 		definition(esdeRoot, filepath.Join("retrodeck", "ES-DE"), backupCategorySettings,
 			[]platforms.BackupPattern{
 				{Glob: "es_settings.xml"},

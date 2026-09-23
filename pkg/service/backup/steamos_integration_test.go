@@ -193,7 +193,6 @@ func TestSteamOSBackupRestoresDurableDataAndExcludesReplaceableContent(t *testin
 		filepath.Join(
 			".var", "app", "org.libretro.RetroArch", "config", "retroarch", "states", "game.state",
 		): "emulator-state\n",
-		filepath.Join("Emulation", "bios", "scph5501.bin"):                 "user-bios\n",
 		filepath.Join("ES-DE", "collections", "custom.cfg"):                "custom-collection\n",
 		filepath.Join(".config", "EmuDeck", "settings.sh"):                 "savesPath=\"/tmp/saves\"\n",
 		filepath.Join(".config", "EmuDeck", "custom_scripts", "custom.sh"): "custom-script\n",
@@ -278,6 +277,11 @@ func TestSteamOSBackupRestoresDurableDataAndExcludesReplaceableContent(t *testin
 		filepath.Join("retrodeck", "saves", "nes", "game.srm"): "retrodeck-save\n",
 	}
 	excluded := map[string]string{
+		// BIOS and firmware are no longer collected at all: large, not user
+		// state, and not ours to copy into cloud storage. The definition
+		// survives as restore-only so older snapshots still restore.
+		filepath.Join("Emulation", "bios", "scph5501.bin"):                                    "user-bios\n",
+		filepath.Join("retrodeck", "bios", "scph5501.bin"):                                    "retrodeck-bios\n",
 		filepath.Join("Emulation", "roms", "nes", "game.nes"):                                 "rom\n",
 		filepath.Join("Emulation", "bios", "RetroArch_v1.10.1.zip"):                           "runtime-archive\n",
 		filepath.Join("Emulation", "bios", "RetroArch_v1.10.1", "retroarch"):                  "runtime\n",

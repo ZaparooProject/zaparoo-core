@@ -46,9 +46,6 @@ func TestBackupDefinitionsCoverDurableDataWithoutBroadGameRoots(t *testing.T) {
 		backupCategorySavestates,
 	)
 	assertDefinition(
-		filepath.Join(home, "Emulation", "bios"), filepath.Join("Emulation", "bios"), backupCategorySettings,
-	)
-	assertDefinition(
 		filepath.Join(home, "retrodeck", "saves"), filepath.Join("retrodeck", "saves"), backupCategorySaves,
 	)
 	assertDefinition(
@@ -300,10 +297,8 @@ func TestBackupDefinitionsUseIndependentProviderTargets(t *testing.T) {
 		t.Fatalf("missing target %s -> %s (%s)", restoreRoot, target, category)
 	}
 	assertTarget(filepath.Join("Emulation", "saves"), backupCategorySaves, emuSaves)
-	assertTarget(filepath.Join("Emulation", "bios"), backupCategorySettings, emuBios)
 	assertTarget(filepath.Join("retrodeck", "saves"), backupCategorySaves, retroSaves)
 	assertTarget(filepath.Join("retrodeck", "states"), backupCategorySavestates, retroStates)
-	assertTarget(filepath.Join("retrodeck", "bios"), backupCategorySettings, retroBios)
 }
 
 func TestPrepareBackupRestorePreservesDestinationProviderPaths(t *testing.T) {
@@ -493,5 +488,19 @@ func TestDiscoverBottlesAndFaugusDefinitionsAvoidInstalledGames(t *testing.T) {
 	assert.Contains(t, sources, filepath.Join(faugusRoot, "drive_c", "users"))
 	for _, source := range sources {
 		assert.NotContains(t, source, filepath.Join("drive_c", "Program Files"))
+	}
+}
+
+// TestBIOSIsNotBackedUp keeps firmware out of backups. A Steam Deck's
+// ~/Emulation/bios ran to 1.1 GB and pushed its cloud backup past the account
+// quota, taking the user database down with it, and firmware images are not
+// user state worth storing.
+func TestBIOSIsNotBackedUp(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+
+	for _, definition := range BackupDefinitions(home) {
+		assert.NotContains(t, definition.RestoreRoot, "bios",
+			"BIOS and firmware must not be collected")
 	}
 }
