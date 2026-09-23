@@ -1004,6 +1004,20 @@ func TestRunningRemovesStalePIDFile(t *testing.T) {
 	assert.NoFileExists(t, pidFile)
 }
 
+// TestPidAcceptsTrailingNewline keeps a pid written with a trailing newline
+// readable rather than merely discarded.
+func TestPidAcceptsTrailingNewline(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	require.NoError(t, os.WriteFile(pidFile, []byte("4242\n"), 0o600))
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, 4242, pid)
+}
+
 func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
 	requireLinuxProc(t, "zombie detection")
 

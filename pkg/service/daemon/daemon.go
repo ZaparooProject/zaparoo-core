@@ -202,14 +202,22 @@ func (s *Service) Pid() (int, error) {
 		return pid, fmt.Errorf("error reading pid file: %w", err)
 	}
 
-	pidInt, err := strconv.Atoi(string(pidFile))
+	pidInt, err := strconv.Atoi(strings.TrimSpace(string(pidFile)))
 	if err != nil {
-		return pid, fmt.Errorf("error parsing pid: %w", err)
+		return pid, fmt.Errorf("%w: %w", ErrUnreadablePIDFile, err)
 	}
 
 	pid = pidInt
 	return pid, nil
 }
+
+// ErrUnreadablePIDFile reports a pid file whose contents are not a number:
+// truncated to nothing by an interrupted write, or left as debris. It is
+// handled like a stale file rather than as a fatal error - refusing to start
+// because of it leaves the service permanently down with no way for a user to
+// know why, and on platforms whose temp directory survives a reboot, not even
+// restarting clears it.
+var ErrUnreadablePIDFile = errors.New("pid file does not contain a pid")
 
 func validatePIDFileInfo(info os.FileInfo) error {
 	if info.Mode()&os.ModeSymlink != 0 {
@@ -1665,6 +1673,15 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 	return nil, errors.New("daemon failed to start within 3 seconds")
 }
 
+// reportServiceCommandError records a service command failure in the log and
+// on stderr. The log alone leaves the caller with a bare exit code: an
+// unreadable PID file, for instance, makes every start fail with no output at
+// all, and the user has no way to learn what to clear.
+func reportServiceCommandError(err error, msg string) {
+	log.Error().Err(err).Msg(msg)
+	_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", msg, err)
+}
+
 func (s *Service) ServiceHandler(cmd *string) error {
 	switch *cmd {
 	case "exec":
@@ -1673,28 +1690,28 @@ func (s *Service) ServiceHandler(cmd *string) error {
 	case "start":
 		err := s.Start()
 		if err != nil {
-			log.Error().Err(err).Msg("error starting service")
+			reportServiceCommandError(err, "error starting service")
 			os.Exit(1)
 		}
 		os.Exit(0)
 	case "stop":
 		err := s.Stop()
 		if err != nil {
-			log.Error().Err(err).Msg("error stopping service")
+			reportServiceCommandError(err, "error stopping service")
 			os.Exit(1)
 		}
 		os.Exit(0)
 	case "restart":
 		err := s.Restart()
 		if err != nil {
-			log.Error().Err(err).Msg("error restarting service")
+			reportServiceCommandError(err, "error restarting service")
 			os.Exit(1)
 		}
 		os.Exit(0)
 	case "status":
 		running, err := s.Running()
 		if err != nil {
-			log.Error().Err(err).Msg("service PID file conflict")
+			reportServiceCommandError(err, "service PID file conflict")
 			os.Exit(1)
 		}
 		if running {
