@@ -178,6 +178,10 @@ func (s *Service) buildAndCommit(
 	generation int64,
 ) (InventoryResult, error) {
 	mediaDB := s.db.MediaDB
+	// Building the inventory resolves every title against the account, which
+	// took 22 minutes for a 200,000-file library and was silent throughout.
+	started := s.now()
+	log.Info().Int64("generation", generation).Msg("building library inventory")
 	bitmap, result, err := s.buildInventory(ctx, client, generation)
 	if err != nil {
 		return InventoryResult{}, err
@@ -256,7 +260,8 @@ func (s *Service) buildAndCommit(
 	result.Outcome = InventoryUploaded
 	log.Info().Int("items", result.ItemCount).Int("bytes", len(body)).Int64("generation", generation).
 		Int("resolved", result.Resolved).Int("rejected", result.Rejected).Int("skipped", result.Skipped).
-		Int("unanswered", result.Unanswered).Msg("library inventory committed")
+		Int("unanswered", result.Unanswered).Dur("took", s.now().Sub(started)).
+		Msg("library inventory committed")
 	return result, nil
 }
 

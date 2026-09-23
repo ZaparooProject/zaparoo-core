@@ -332,6 +332,7 @@ func librarySyncLoop(
 	requested := false
 	indexChanged := false
 	retry := intervalState{backoff: timings.initialBackoff}
+	status := newInventoryStatus()
 	for {
 		select {
 		case <-ctx.Done():
@@ -359,7 +360,7 @@ func librarySyncLoop(
 		}
 		requested = false
 
-		err := runLibrarySyncPass(ctx, runner, idleSched, timings)
+		err := runLibrarySyncPass(ctx, runner, idleSched, timings, status)
 		indexChanged = false
 		// A first sync of a large library runs for far longer than the first
 		// backoff, so the interval is measured from when the pass finished. From
@@ -426,6 +427,7 @@ func runLibrarySyncPass(
 	runner librarySyncRunner,
 	idleSched *idle.Scheduler,
 	timings *librarySyncTimings,
+	status *inventoryStatus,
 ) error {
 	if _, err := runner.ApplySetting(ctx); err != nil {
 		return fmt.Errorf("apply library sync setting: %w", err)
@@ -437,24 +439,83 @@ func runLibrarySyncPass(
 	// pass while sync is off. Everything below serves an upload, so waiting
 	// for the device to fall idle first would be a wait for nothing.
 	if !runner.Enabled() {
+		status.report("library sync is off")
 		return nil
 	}
 	if err := waitForQuietDevice(ctx, runner, idleSched, timings); err != nil {
 		return err
 	}
 	if !runner.Enabled() {
+		status.report("library sync is off")
 		return nil
 	}
 	result, err := runner.SyncInventory(ctx, false)
 	if err != nil {
 		if librarysync.IsIdleError(err) {
-			log.Debug().Err(err).Msg("library inventory not synced")
+			status.report(idleInventoryReason(err))
 		}
 		return err //nolint:wrapcheck // the service already names the failing step
 	}
-	if result.Outcome != librarysync.InventorySkipped {
-		log.Debug().Str("outcome", result.Outcome).Int("items", result.ItemCount).
-			Msg("library inventory pass finished")
-	}
+	status.report(inventoryOutcomeReason(&result))
 	return nil
+}
+
+// inventoryStatus says why the library inventory is not being uploaded, once
+// each time the reason changes.
+//
+// Every pass that does not upload used to be silent, including the ones that
+// never would: a device whose inventory could not upload looked exactly like
+// one that was simply up to date. A line on every pass would be noise on a
+// quiet device, so the reason is logged only when it differs from the last.
+// An upload clears it, so the steady state after one is reported once.
+type inventoryStatus struct {
+	emit func(reason string)
+	last string
+}
+
+func newInventoryStatus() *inventoryStatus {
+	return &inventoryStatus{emit: func(reason string) {
+		log.Info().Str("reason", reason).Msg("library inventory not uploaded")
+	}}
+}
+
+func (s *inventoryStatus) report(reason string) {
+	if s == nil || reason == s.last {
+		return
+	}
+	s.last = reason
+	if reason != "" {
+		s.emit(reason)
+	}
+}
+
+func idleInventoryReason(err error) string {
+	switch {
+	case errors.Is(err, librarysync.ErrDisabled):
+		return "library sync is off"
+	case backupsvc.IsRemoteUnlinkedError(err):
+		return "this device is not linked to an account"
+	default:
+		// Not settled, a transaction open, or the database not yet open: all
+		// mean the index is busy and the pass will run again once it is not.
+		return "the media index is busy"
+	}
+}
+
+// inventoryOutcomeReason is empty for an upload, which logs its own start and
+// finish, and names the reason for every other outcome.
+func inventoryOutcomeReason(result *librarysync.InventoryResult) string {
+	switch result.Outcome {
+	case librarysync.InventoryUploaded:
+		return ""
+	case librarysync.InventoryTooLarge:
+		return "the library is larger than the account accepts"
+	case librarysync.InventorySkipped:
+		if result.Generation == 0 {
+			return "nothing has been indexed yet"
+		}
+		return "already up to date with the account"
+	default:
+		return "already up to date with the account"
+	}
 }
