@@ -2006,8 +2006,20 @@ func (db *MediaDB) MigrateUp() error {
 	// longer accepts, and that has to happen at startup rather than at the
 	// next index run, because scrapes write tags without one. A brand-new
 	// database has nothing to remove and is seeded by its first index.
-	if err := sqlSeedCanonicalTags(db.ctx, db.sql.Load()); err != nil {
+	pruned, err := sqlSeedCanonicalTags(db.ctx, db.sql.Load())
+	if err != nil {
 		log.Warn().Err(err).Msg("failed to seed the tag vocabulary")
+	}
+	if pruned {
+		// The tag lists cached in memory, in SQL and on disk still hold what
+		// was just removed, and the persisted snapshot carries the same index
+		// generation, so startup would load it back.
+		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
+		if path := db.tagCachePath(); path != "" {
+			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				log.Warn().Err(rmErr).Msg("failed to remove the persisted tag cache after pruning")
+			}
+		}
 	}
 	// Best-effort: stamp the disambiguation version on a database with no
 	// titles before the first index writes any. The pending check performs the
@@ -2508,7 +2520,10 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSeedCanonicalTags(ctx, db.conn())
+	// Seeding here opens an index run, which rebuilds every tag cache when it
+	// finishes; startup, where a prune matters, goes through MigrateUp.
+	_, err := sqlSeedCanonicalTags(ctx, db.conn())
+	return err
 }
 
 func (db *MediaDB) clearTransactionState() {

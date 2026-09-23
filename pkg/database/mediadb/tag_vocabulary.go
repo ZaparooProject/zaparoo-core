@@ -155,16 +155,17 @@ var scanCreatableTagTypes = func() []string {
 	return out
 }()
 
-// sqlPruneOffVocabularyTags deletes every tag type Core no longer defines and
+// sqlPruneOffVocabularyTags reports whether it changed anything. It deletes
+// every tag type Core no longer defines and
 // every tag value its type no longer accepts, with the links to them. It runs
 // when the vocabulary stamp changes (sqlSeedCanonicalTags), so a release that
 // narrows the vocabulary cleans existing databases rather than leaving old
 // values reachable through filters and tag lists. Property tags are excluded:
 // they are Core's own schema keys, checked when they are resolved.
-func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (int, error) {
+func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (bool, error) {
 	refused, err := readRefusedTagIDs(ctx, db)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
 	const chunkSize = 500
@@ -183,19 +184,19 @@ func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (int, error
 			//nolint:gosec // table and column are constants; holders are "?" placeholders.
 			query := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)", table, column, holders)
 			if _, execErr := db.ExecContext(ctx, query, args...); execErr != nil {
-				return 0, fmt.Errorf("failed to prune %s: %w", table, execErr)
+				return false, fmt.Errorf("failed to prune %s: %w", table, execErr)
 			}
 		}
 	}
 
 	unknownTypes, err := readUnknownTagTypeIDs(ctx, db)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	for _, id := range unknownTypes {
 		// Their tags were all refused above, so no link still points at them.
 		if _, execErr := db.ExecContext(ctx, "DELETE FROM TagTypes WHERE DBID = ?", id); execErr != nil {
-			return 0, fmt.Errorf("failed to prune tag type: %w", execErr)
+			return false, fmt.Errorf("failed to prune tag type: %w", execErr)
 		}
 	}
 
@@ -208,7 +209,7 @@ func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (int, error
 		string(tags.TagTypeDeveloper), string(tags.TagTypePublisher), string(tags.TagTypeCredit),
 		string(tags.TagTypeProperty))
 	if err != nil {
-		return 0, fmt.Errorf("failed to clear labels on shared tags: %w", err)
+		return false, fmt.Errorf("failed to clear labels on shared tags: %w", err)
 	}
 	cleared, err := res.RowsAffected()
 	if err != nil {
@@ -219,7 +220,7 @@ func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (int, error
 		log.Info().Int("tags", len(refused)).Int("types", len(unknownTypes)).Int64("labels", cleared).
 			Msg("removed tags that are no longer in the tag vocabulary")
 	}
-	return len(refused), nil
+	return len(refused) > 0 || len(unknownTypes) > 0 || cleared > 0, nil
 }
 
 // readRefusedTagIDs returns every non-property tag whose value its type's rule

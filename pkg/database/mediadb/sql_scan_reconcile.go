@@ -1128,7 +1128,7 @@ func invalidateCanonicalTagVocabStampIfDeleted(ctx context.Context, db sqlQuerya
 // for values. Replaces the per-row ScanState-driven seeding. A DBConfig stamp
 // of the vocabulary hash short-circuits the whole pass when a previous run
 // already seeded this exact vocabulary.
-func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
+func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) (bool, error) {
 	// Dedupe within the statement: the NOT EXISTS anti-join only sees rows
 	// already in the table, not other rows of the same INSERT ... SELECT.
 	seenTypes := map[string]struct{}{}
@@ -1172,7 +1172,7 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 	).Scan(&storedHash)
 	if stampErr == nil && storedHash == vocabHash {
 		log.Debug().Msg("canonical tag vocabulary already seeded, skipping")
-		return nil
+		return false, nil
 	}
 	if stampErr != nil && !errors.Is(stampErr, sql.ErrNoRows) {
 		log.Warn().Err(stampErr).Msg("failed to read canonical tag vocabulary stamp, seeding anyway")
@@ -1192,7 +1192,7 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		INSERT INTO TagTypes (Type, IsExclusive) VALUES %s
 		ON CONFLICT(Type) DO UPDATE SET IsExclusive = excluded.IsExclusive`, sb.String())
 	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("failed to seed canonical tag types: %w", err)
+		return false, fmt.Errorf("failed to seed canonical tag types: %w", err)
 	}
 
 	const chunkSize = 400
@@ -1218,14 +1218,15 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 			WHERE NOT EXISTS (SELECT 1 FROM Tags t WHERE t.TypeDBID = tt.DBID AND t.Tag = v.Tag)`,
 			sb.String())
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("failed to seed canonical tags: %w", err)
+			return false, fmt.Errorf("failed to seed canonical tags: %w", err)
 		}
 	}
 
 	// The vocabulary changed, so values it no longer accepts go too. A failed
 	// prune leaves the stamp unwritten, so the next start tries again.
-	if _, err := sqlPruneOffVocabularyTags(ctx, db); err != nil {
-		return err
+	changed, err := sqlPruneOffVocabularyTags(ctx, db)
+	if err != nil {
+		return false, err
 	}
 
 	// Non-fatal: a missed stamp only means the next run seeds again.
@@ -1235,5 +1236,5 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 	); err != nil {
 		log.Warn().Err(err).Msg("failed to write canonical tag vocabulary stamp")
 	}
-	return nil
+	return changed, nil
 }
