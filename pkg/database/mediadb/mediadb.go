@@ -4685,6 +4685,13 @@ func (db *MediaDB) validateTagRow(row database.Tag) error {
 	if db.tx != nil {
 		q = db.tx
 	}
+	// In batch mode a type inserted moments ago may still be queued, so make
+	// it visible to this transaction before looking it up.
+	if db.batchInsertTagType != nil {
+		if err := db.batchInsertTagType.Flush(); err != nil {
+			return fmt.Errorf("insert tag: flush queued tag types: %w", err)
+		}
+	}
 	if err := q.QueryRowContext(db.ctx,
 		"SELECT Type FROM TagTypes WHERE DBID = ?", row.TypeDBID,
 	).Scan(&tagType); err != nil {

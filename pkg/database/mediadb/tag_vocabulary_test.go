@@ -255,3 +255,23 @@ func TestSeedingPrunesTagsTheVocabularyNoLongerAccepts(t *testing.T) {
 	assert.Positive(t, countRows(t, mediaDB, "SELECT COUNT(*) FROM Tags WHERE Tag = 'world'"),
 		"canonical values stay seeded")
 }
+
+// TestInsertTagValidatesATypeQueuedInTheSameBatch covers batch mode, where
+// InsertTagType only queues the row: the tag inserted straight after it must
+// still find its type to be validated, rather than fail the lookup.
+func TestInsertTagValidatesATypeQueuedInTheSameBatch(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, err := mediaDB.InsertTagType(database.TagType{DBID: 9001, Type: string(tags.TagTypeGenre)})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertTag(database.Tag{DBID: 9101, TypeDBID: 9001, Tag: "shmup:v"})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertTag(database.Tag{DBID: 9102, TypeDBID: 9001, Tag: "shootem-up"})
+	require.ErrorIs(t, err, tags.ErrTagNotInVocabulary)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	assert.Equal(t, 1, countRows(t, mediaDB, "SELECT COUNT(*) FROM Tags WHERE Tag = 'shmup:v'"))
+}
