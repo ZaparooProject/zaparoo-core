@@ -1446,6 +1446,8 @@ func TestParseFilenameToCanonicalTagsForMedia_LooseTokenRouting(t *testing.T) {
 		{"180 (1986)(Mastertronic)[48-128K].atr", "compatibility:memory:48k-128k"},
 		// year-month build date (previously unknown)
 		{"720 (1988-01).nsf", "builddate:1988-01"},
+		// a spelled-out revision (previously a company credit)
+		{"1942 (Revision B).mra", "rev:b"},
 		// keyword mappings whose values already existed
 		{"Game (New Zealand).z64", "region:nz"},
 		{"Game (PAL60).md", "video:pal-60"},

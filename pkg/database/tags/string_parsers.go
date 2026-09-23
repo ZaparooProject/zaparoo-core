@@ -381,8 +381,8 @@ func findDiscPattern(s string) parseMatch {
 	}
 }
 
-// findRevPattern finds "(Rev X)" or "(Rev-X)" case-insensitively.
-// Replaces: reRev = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
+// findRevPattern finds "(Rev X)", "(Rev-X)" or "(Revision X)" case-insensitively.
+// Replaces: reRev = regexp.MustCompile(`(?i)\(Rev(?:ision)?[\s-]([A-Z0-9]+)\)`)
 func findRevPattern(s string) parseMatch {
 	lower := strings.ToLower(s)
 	searchFrom := 0
@@ -397,6 +397,13 @@ func findRevPattern(s string) parseMatch {
 		}
 
 		pos := idx + 4
+		// "(Revision B)" spells the word out; MRA filenames use it.
+		if strings.HasPrefix(lower[pos:], "ision") {
+			pos += len("ision")
+			if pos >= len(s) {
+				return parseMatch{}
+			}
+		}
 		// expect whitespace or '-'
 		if !isWhitespace(s[pos]) && s[pos] != '-' {
 			searchFrom = idx + 1
