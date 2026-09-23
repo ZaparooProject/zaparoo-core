@@ -377,11 +377,40 @@ func appendNormalizedTitleTag(write *pendingWrite, tagType tags.TagType, raw str
 	if raw == "" {
 		return
 	}
-	normalized := tags.NormalizeTagValue(string(tagType), raw)
+	source := tagValueSource(tagType, raw)
+	normalized := tags.NormalizeTagValue(string(tagType), source)
 	if normalized == "" {
 		return
 	}
-	setTitleTag(write, database.TagInfo{Type: string(tagType), Tag: normalized, Label: raw})
+	setTitleTag(write, database.TagInfo{Type: string(tagType), Tag: normalized, Label: source})
+}
+
+// tagValueSource picks the part of a pack field that becomes the tag value.
+//
+// The pack writes a genre as a "/"-separated hierarchy, so the whole field
+// normalizes into one run-together value: "Shoot'em Up / Vertical/Shoot'em Up"
+// becomes "shootem-up-verticalshootem-up", which nothing can filter on and
+// which adds an entry to the system's tag vocabulary that matches no other
+// title. Most genres in the published packs carry a separator, so this is the
+// common case rather than an edge one.
+//
+// Take the broad genre the hierarchy opens with. A title holds one tag per
+// type here, so the narrower components cannot be kept as tags of their own
+// without changing that. The label is the same segment: it names the shared
+// tag every title in the genre links to, so one title's hierarchy must not
+// become it.
+func tagValueSource(tagType tags.TagType, raw string) string {
+	if tagType != tags.TagTypeGenre {
+		return raw
+	}
+	primary, _, found := strings.Cut(raw, "/")
+	if !found {
+		return raw
+	}
+	if trimmed := strings.TrimSpace(primary); trimmed != "" {
+		return trimmed
+	}
+	return raw
 }
 
 func normalizedYear(value string) string {

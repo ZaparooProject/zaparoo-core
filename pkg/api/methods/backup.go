@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 )
 
 func requireBackupAccess(env *requests.RequestEnv) error {
@@ -52,6 +53,16 @@ func requireBackupRuntime(env *requests.RequestEnv) error {
 func backupMethodError(action string, err error) error {
 	if errors.Is(err, backupsvc.ErrRestoreMediaActive) {
 		return models.ClientErrf("cannot restore backup while media is active")
+	}
+	// These two arrive wrapped in ErrRestoreLaunchInProgress and used to share
+	// one message, which told a user their media was launching when in fact
+	// the previous restore was waiting on a restart, or something unrelated
+	// was mid-request. Report the condition that actually fired.
+	if errors.Is(err, state.ErrRestoreRestartRequired) {
+		return models.ClientErrf("cannot restore backup until Zaparoo restarts to finish the previous restore")
+	}
+	if errors.Is(err, state.ErrRestoreGateBusy) {
+		return models.ClientErrf("cannot restore backup while Zaparoo is busy with another request or a media launch")
 	}
 	if errors.Is(err, backupsvc.ErrRestoreLaunchInProgress) {
 		return models.ClientErrf("cannot restore backup while media is launching or restart is pending")

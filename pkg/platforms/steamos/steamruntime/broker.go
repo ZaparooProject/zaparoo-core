@@ -567,6 +567,10 @@ func (b *Broker) claimPeer(ctx context.Context) (*peerConn, error) {
 		peer, poked, err := b.claimFromHost(ctx, waiter)
 		b.endWait(waiter)
 		if peer != nil {
+			// Which peer ran a launch is otherwise invisible: both end up as
+			// a Steam-owned session, and the only outward difference is how
+			// many Steam apps the user sees.
+			log.Info().Int("pid", peer.pid).Msg("launch hosted by the running frontend")
 			return peer, nil
 		}
 		if err != nil && poked != nil {
@@ -581,6 +585,7 @@ func (b *Broker) claimPeer(ctx context.Context) (*peerConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	log.Info().Msg("launch handed to the Zaparoo Runtime shortcut")
 	if launchErr := b.launch(ctx, shortcutURL(shortcutID)); launchErr != nil {
 		return nil, fmt.Errorf("launch Zaparoo Steam shortcut: %w", launchErr)
 	}

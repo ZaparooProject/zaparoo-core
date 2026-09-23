@@ -1004,6 +1004,20 @@ func TestRunningRemovesStalePIDFile(t *testing.T) {
 	assert.NoFileExists(t, pidFile)
 }
 
+// TestPidAcceptsTrailingNewline keeps a pid written with a trailing newline
+// readable rather than merely discarded.
+func TestPidAcceptsTrailingNewline(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	require.NoError(t, os.WriteFile(pidFile, []byte("4242\n"), 0o600))
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, 4242, pid)
+}
+
 func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
 	requireLinuxProc(t, "zombie detection")
 
@@ -1305,6 +1319,30 @@ func TestStart_StaleNonexistentPIDFileDoesNotBlockStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Positive(t, pid)
 	assert.NotEqual(t, 99999999, pid)
+}
+
+func TestStart_UnreadablePIDFileDoesNotBlockStart(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	require.NoError(t, os.WriteFile(pidFile, nil, 0o600))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
 }
 
 func TestWaitForServicePidFile_ReturnsWhenFileAppears(t *testing.T) {

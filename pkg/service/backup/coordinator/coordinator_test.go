@@ -172,3 +172,54 @@ func TestCoordinatorActiveTracksReadAndWriteLeases(t *testing.T) {
 	_, _, active = coordinator.Active()
 	assert.False(t, active)
 }
+
+// TestRestoreLeaseOutlivesItsCaller pins which operations may die with the
+// client that asked for them. A restore must not: cancelling the request means
+// the caller stopped waiting for a response, and rolling back a restore that is
+// already applying costs the user their data twice over. A backup still dies
+// with its caller, where the whole cost is a partial file.
+func TestRestoreLeaseOutlivesItsCaller(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name     string
+		kind     OperationKind
+		detached bool
+	}{
+		{name: "local restore", kind: OperationLocalRestore, detached: true},
+		{name: "remote restore", kind: OperationRemoteRestore, detached: true},
+		{name: "recovery", kind: OperationRecovery, detached: true},
+		{name: "local create", kind: OperationLocalCreate, detached: false},
+		{name: "remote upload", kind: OperationRemoteUpload, detached: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := New()
+			ctx, cancel := context.WithCancel(context.Background())
+			lease, err := c.Begin(ctx, tt.kind, OperationWrite)
+			require.NoError(t, err)
+			defer lease.Release()
+
+			cancel()
+
+			if tt.detached {
+				require.NoError(t, lease.Context().Err(), "the caller going away must not cancel this")
+			} else {
+				require.Error(t, lease.Context().Err())
+			}
+		})
+	}
+}
+
+// TestCancelRestoreStillStopsADetachedLease keeps the bound that makes
+// detaching safe: the coordinator can still stop a restore, which is what
+// happens when media starts playing.
+func TestCancelRestoreStillStopsADetachedLease(t *testing.T) {
+	t.Parallel()
+	c := New()
+	lease, err := c.Begin(context.Background(), OperationLocalRestore, OperationWrite)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	require.True(t, c.CancelRestore())
+	require.Error(t, lease.Context().Err())
+}

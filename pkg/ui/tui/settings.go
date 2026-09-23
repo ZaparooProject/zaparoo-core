@@ -656,6 +656,10 @@ func backupActionErrorText(title string, err error) string {
 		guidance = "Another backup or restore is already running. Wait for it to finish, then try again."
 	case strings.Contains(message, "cannot restore backup while media is active"):
 		guidance = "Stop active media before restoring this backup."
+	case strings.Contains(message, "zaparoo is busy with another request or a media launch"):
+		guidance = "Something else was using Zaparoo. Wait a moment, then try restoring again."
+	case strings.Contains(message, "until zaparoo restarts to finish the previous restore"):
+		guidance = "Restart Zaparoo Core before starting another backup or restore operation."
 	case strings.Contains(message, "cannot restore backup while media is launching") ||
 		strings.Contains(message, "media launch is in progress"):
 		guidance = "Wait for media launch to finish, then try restoring again."

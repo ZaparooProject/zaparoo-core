@@ -100,7 +100,7 @@ func (c *Coordinator) Begin(ctx context.Context, kind OperationKind, mode Operat
 	}
 
 	//nolint:gosec // Lease.Release or Coordinator.Shutdown owns cancellation.
-	opCtx, cancel := context.WithCancel(ctx)
+	opCtx, cancel := context.WithCancel(detachIfRestore(ctx, kind))
 	c.nextID++
 	id := c.nextID
 	if len(c.operations) == 0 {
@@ -113,6 +113,29 @@ func (c *Coordinator) Begin(ctx context.Context, kind OperationKind, mode Operat
 		mode:      mode,
 	}
 	return &Lease{coordinator: c, ctx: opCtx, id: id}, nil
+}
+
+// detachIfRestore keeps a restore alive when the client that asked for it
+// goes away. A cancelled request means the caller no longer wants the
+// response; it does not mean the half-applied restore should be rolled back,
+// and a restore on a slow device outlives an ordinary client timeout easily -
+// 308 seconds against a 120 second timeout on a MiSTer, which cancelled and
+// rolled back a restore that was working correctly.
+//
+// Detaching is only safe because these operations keep their own bounds:
+// Lease.Release ends them, Coordinator.Shutdown cancels them, and
+// CancelRestore stops them when media starts playing. Every other kind still
+// dies with its caller, where a cancelled backup costs nothing but a partial
+// file.
+func detachIfRestore(ctx context.Context, kind OperationKind) context.Context {
+	switch kind {
+	case OperationLocalRestore, OperationRemoteRestore, OperationRecovery:
+		return context.WithoutCancel(ctx)
+	case OperationLocalCreate, OperationLocalInspect, OperationLocalDelete, OperationRemoteUpload:
+		return ctx
+	default:
+		return ctx
+	}
 }
 
 func (c *Coordinator) conflictingOperation(mode OperationMode) *activeOperation {

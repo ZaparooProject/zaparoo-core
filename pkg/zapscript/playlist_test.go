@@ -1064,6 +1064,83 @@ func TestCmdPlaylistStop_PrimarySlotStopsBeforeClearing(t *testing.T) {
 	mp.AssertExpectations(t)
 }
 
+// TestCmdPlaylistStop_OwnCancellationIsNotAFailure covers a stop issued while
+// a playlist item is still launching. Stopping the launcher cancels the
+// launcher context, and the clear was then queued through a select that gave
+// up as soon as that same context was done. If the playlist handler was not
+// ready to receive at that instant, the stop reported "context canceled" -
+// and could leave the clear unqueued - for a stop that had worked.
+func TestCmdPlaylistStop_OwnCancellationIsNotAFailure(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	pls, _ := makePlaylistEnv()
+	queue := make(chan *playlists.Playlist)
+	launcherCtx, cancelLauncher := context.WithCancel(t.Context())
+	defer cancelLauncher()
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		// What stopping the real launcher does to its context.
+		cancelLauncher()
+	}).Return(nil).Once()
+
+	received := make(chan *playlists.Playlist, 1)
+	go func() {
+		// The handler is busy with the launch being stopped, so it is not
+		// ready to receive until a moment after the stop.
+		time.Sleep(50 * time.Millisecond)
+		received <- <-queue
+	}()
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Playlist:    playlists.PlaylistController{Active: pls, Queue: queue},
+		LauncherCtx: launcherCtx,
+		ServiceCtx:  t.Context(),
+	})
+	require.NoError(t, err, "a stop that reached its end state must report success")
+	assert.True(t, result.PlaylistChanged)
+
+	select {
+	case queued := <-received:
+		require.NotNil(t, queued)
+		assert.True(t, queued.Clear, "the clear must still be queued")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the playlist clear was never queued")
+	}
+	mp.AssertExpectations(t)
+}
+
+// TestCmdPlaylistStop_ServiceShutdownStillAbandonsTheClear keeps the bound
+// on the fix above. With the launcher context no longer watched, the clear
+// waits for the playlist handler; a service shutting down must still end
+// that wait rather than leave the command blocked on a queue nobody reads.
+func TestCmdPlaylistStop_ServiceShutdownStillAbandonsTheClear(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	pls, _ := makePlaylistEnv()
+	queue := make(chan *playlists.Playlist) // nobody ever receives
+	serviceCtx, stopService := context.WithCancel(t.Context())
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopService()
+	}).Return(nil).Once()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+			Playlist:   playlists.PlaylistController{Active: pls, Queue: queue},
+			ServiceCtx: serviceCtx,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stopping service must not leave playlist.stop blocked")
+	}
+}
+
 // A stop the platform could not carry out leaves the game running. The
 // playlist belongs to that game and must stay attached to it; a clear queued
 // beforehand could not be taken back.

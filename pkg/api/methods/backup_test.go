@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -342,6 +343,16 @@ func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
 	}{
 		{err: backupsvc.ErrRestoreMediaActive, contains: "while media is active"},
 		{err: backupsvc.ErrRestoreLaunchInProgress, contains: "media is launching or restart is pending"},
+		{
+			// Both arrive wrapped the way Manager.beginRestoreGate wraps them,
+			// and each has to survive as its own message.
+			err:      fmt.Errorf("%w: %w", backupsvc.ErrRestoreLaunchInProgress, state.ErrRestoreRestartRequired),
+			contains: "until Zaparoo restarts to finish the previous restore",
+		},
+		{
+			err:      fmt.Errorf("%w: %w", backupsvc.ErrRestoreLaunchInProgress, state.ErrRestoreGateBusy),
+			contains: "busy with another request or a media launch",
+		},
 		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},
 	}
 	for _, tt := range tests {

@@ -46,6 +46,59 @@ func drainState(t *testing.T, st *State, ns <-chan models.Notification) {
 	})
 }
 
+// TestRestoreGateWaitsOutAnInFlightRequest covers the release-candidate bug
+// where a restore was refused whenever anything else was mid-flight. Every API
+// request holds the read side of the restore gate for as long as its handler
+// runs, so a single-shot TryLock lost the race against ordinary traffic - often
+// traffic from the same client that asked for the restore - and reported it as
+// "media is launching or restart is pending" with nothing launching.
+func TestRestoreGateWaitsOutAnInFlightRequest(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	// The read side is held on its own goroutine because that is how it
+	// happens: an API request handler holds it while the restore arrives on
+	// another connection. Taking both sides on one goroutine would be a real
+	// recursive-lock fault, and go-deadlock rightly refuses it.
+	held := make(chan struct{})
+	accessErr := make(chan error, 1)
+	go func() {
+		release, err := st.TryAcquireRestoreAccess()
+		close(held)
+		if err != nil {
+			accessErr <- err
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+		release()
+		accessErr <- nil
+	}()
+	<-held
+
+	finish, err := st.BeginRestoreGate(t.Context())
+	require.NoError(t, err, "a request that finishes must not refuse the restore")
+	finish(false)
+	require.NoError(t, <-accessErr)
+}
+
+// TestRestoreGateReportsRestartSeparately keeps the two refusals distinct: a
+// restore that has already run and is waiting for a restart is a different
+// condition from losing the gate, and the client message depends on which.
+func TestRestoreGateReportsRestartSeparately(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	finish, err := st.BeginRestoreGate(t.Context())
+	require.NoError(t, err)
+	finish(true)
+
+	_, err = st.BeginRestoreGate(t.Context())
+	require.ErrorIs(t, err, ErrRestoreRestartRequired)
+	require.NotErrorIs(t, err, ErrRestoreGateBusy)
+}
+
 func TestMediaRestoreGateMutualExclusion(t *testing.T) {
 	t.Parallel()
 	st, _ := NewState(nil, "test-boot")
@@ -55,16 +108,20 @@ func TestMediaRestoreGateMutualExclusion(t *testing.T) {
 	require.NoError(t, err)
 	restoreErr := make(chan error, 1)
 	go func() {
-		finish, beginErr := st.BeginRestoreGate()
+		// A launch that never finishes must not hold a restore forever, so
+		// this asks for a short budget rather than the full default wait.
+		waitCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		finish, beginErr := st.BeginRestoreGate(waitCtx)
 		if finish != nil {
 			finish(false)
 		}
 		restoreErr <- beginErr
 	}()
-	require.ErrorIs(t, <-restoreErr, ErrMediaLaunchInProgress)
+	require.ErrorIs(t, <-restoreErr, ErrRestoreGateBusy)
 	launchAccess.Release()
 
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	launchErr := make(chan error, 1)
 	go func() {
@@ -270,7 +327,7 @@ func TestExternalActiveMediaCancelsRestoreBeforeUpdatingState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer lease.Release()
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	updated := make(chan struct{})
 	go func() {
@@ -311,7 +368,7 @@ func TestReleasedMediaLaunchPublisherUsesExternalRestoreAccess(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer lease.Release()
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 
 	updated := make(chan struct{})
@@ -343,7 +400,7 @@ func TestBlockingRestoreAccessWaitsForRollback(t *testing.T) {
 	t.Parallel()
 	st, _ := NewState(nil, "test-boot")
 	defer st.StopService()
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	acquired := make(chan error, 1)
 	go func() {
@@ -367,13 +424,13 @@ func TestSuccessfulRestoreGateBlocksLaunchUntilRestart(t *testing.T) {
 	st, _ := NewState(nil, "test-boot")
 	defer st.StopService()
 
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	finishRestore(true)
 
 	_, err = st.AcquireMediaLaunch()
 	require.ErrorIs(t, err, ErrRestoreRestartRequired)
-	_, err = st.BeginRestoreGate()
+	_, err = st.BeginRestoreGate(t.Context())
 	require.ErrorIs(t, err, ErrRestoreRestartRequired)
 }
 

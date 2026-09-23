@@ -3256,3 +3256,104 @@ func storedTagValues(t *testing.T, db *MediaDB, table, column string, id int64) 
 	require.NoError(t, rows.Err())
 	return values
 }
+
+// TestTagReadsReturnPaddedAndUnpaddedRowsOnce covers a database written before
+// numeric tag values were padded. It can hold "players:0002" and "players:2" as
+// separate rows; both unpad to "players:2", so every reader must return that
+// tag once rather than listing it twice.
+func TestTagReadsReturnPaddedAndUnpaddedRowsOnce(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	conn := mediaDB.sql.Load()
+
+	_, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO TagTypes (Type) VALUES ('players')`)
+	require.NoError(t, err)
+	var typeDBID int64
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT DBID FROM TagTypes WHERE Type = 'players'`).Scan(&typeDBID))
+
+	// Every live write path pads, so the legacy unpadded row is written by hand.
+	for _, value := range []string{"0002", "2"} {
+		res, insErr := conn.ExecContext(ctx,
+			`INSERT INTO Tags (TypeDBID, Tag, DisplayName) VALUES (?, ?, '')`, typeDBID, value)
+		require.NoError(t, insErr)
+		tagDBID, idErr := res.LastInsertId()
+		require.NoError(t, idErr)
+		_, err = conn.ExecContext(ctx,
+			`INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, ?)`, tagDBID)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx,
+			`INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (1, ?)`, tagDBID)
+		require.NoError(t, err)
+	}
+
+	countPlayers := func(infos []database.TagInfo) int {
+		n := 0
+		for _, info := range infos {
+			if info.Type == "players" {
+				assert.Equal(t, "2", info.Tag)
+				n++
+			}
+		}
+		return n
+	}
+
+	single, err := mediaDB.GetMediaTagsByMediaDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countPlayers(single), "single media read")
+
+	singleTitle, err := mediaDB.GetMediaTitleTagsByMediaTitleDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countPlayers(singleTitle), "single title read")
+
+	grouped, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, []int64{1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, countPlayers(grouped[1]), "grouped media read")
+
+	groupedTitles, err := mediaDB.GetMediaTitleTagsByMediaTitleDBIDs(ctx, []int64{1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, countPlayers(groupedTitles[1]), "grouped title read")
+}
+
+// TestScrapeWriteStoresNumericTagsPadded guards the write side of the padded
+// tag storage rule. The MiSTer arcade scraper produces values like
+// "buttons:2", and a device database was found holding them unpadded beside
+// their padded twins, so every reader returned the tag twice. Numeric values
+// must only ever be stored padded.
+func TestScrapeWriteStoresNumericTagsPadded(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	write := &database.ScrapeWrite{
+		Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+		TitleTags: []database.TagInfo{
+			{Type: "input", Tag: "buttons:2"},
+			{Type: "players", Tag: "2"},
+		},
+		MediaTags: []database.TagInfo{{Type: "input", Tag: "joystick:4"}},
+	}
+	target := database.ScrapeWriteTarget{MediaDBID: 1, MediaTitleDBID: 1, Write: write}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, `
+		SELECT tt.Type, t.Tag FROM Tags t JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE (tt.Type = 'input' AND t.Tag IN ('buttons:2', 'buttons:0002', 'joystick:4', 'joystick:0004'))
+		   OR (tt.Type = 'players' AND t.Tag IN ('2', '0002'))`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var stored []string
+	for rows.Next() {
+		var typ, tag string
+		require.NoError(t, rows.Scan(&typ, &tag))
+		stored = append(stored, typ+":"+tag)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.ElementsMatch(t,
+		[]string{"input:buttons:0002", "input:joystick:0004", "players:0002"}, stored,
+		"numeric tag values must be stored padded, and only padded")
+}

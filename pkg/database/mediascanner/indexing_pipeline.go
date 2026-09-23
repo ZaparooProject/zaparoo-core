@@ -326,6 +326,16 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			fileNameForTitle = stripped
 		}
 		f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+		// A directory whose files mostly open with a number gets that prefix
+		// stripped, which is right for "01 - Track" and wrong where the number
+		// is the whole title: "1942 (W, Rev B)" strips to " (W, Rev B)" and
+		// parses to nothing. A nameless title is not cosmetic - it reaches
+		// play history, where an account refuses the session and fails the
+		// whole upload batch. Keep the unstripped name rather than none.
+		if f.Title == "" && fileNameForTitle != f.FileName {
+			fileNameForTitle = f.FileName
+			f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+		}
 		f.DisplayTitle = tags.ParseDisplayTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
 	}
 	if f.DisplayTitle == "" {

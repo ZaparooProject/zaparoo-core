@@ -38,6 +38,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1262,7 +1263,7 @@ func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {
 
 	gateHeld := false
 	finished := false
-	env.Manager.WithRestoreGate(func() (func(bool), error) {
+	env.Manager.WithRestoreGate(func(context.Context) (func(bool), error) {
 		gateHeld = true
 		return func(success bool) {
 			assert.True(t, success)
@@ -1319,7 +1320,7 @@ func TestManagerRestoreSucceedsWhenCommittedCleanupSyncFails(t *testing.T) {
 		return syncDirectory(path)
 	}
 	gateSucceeded := false
-	env.Manager.WithRestoreGate(func() (func(bool), error) {
+	env.Manager.WithRestoreGate(func(context.Context) (func(bool), error) {
 		return func(success bool) { gateSucceeded = success }, nil
 	})
 
@@ -3228,11 +3229,12 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 	ns := make(chan models.Notification, 1)
 	env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
-		return msg.Title == "Remote backup storage full" &&
+		// One byte free is "this backup does not fit", not "storage is full".
+		return msg.Title == "Online backup did not fit" &&
 			msg.Category == inboxservice.CategoryBackupRemoteQuotaExceeded &&
 			msg.Severity == inboxservice.SeverityError
 	})).Return(&database.InboxMessage{
-		DBID: 1, Title: "Remote backup storage full", Category: inboxservice.CategoryBackupRemoteQuotaExceeded,
+		DBID: 1, Title: "Online backup did not fit", Category: inboxservice.CategoryBackupRemoteQuotaExceeded,
 	}, nil).Once()
 	env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
 
@@ -3249,6 +3251,67 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 	default:
 		t.Fatal("expected inbox notification")
 	}
+}
+
+// TestManagerRunRemoteCountsQuotaSkippedFiles covers a backup trimmed to fit
+// the quota reporting nothing skipped. The files left out for space were
+// dropped from the snapshot, but the run result and the persisted status only
+// counted files too large for a pack, so a partial backup read as complete.
+func TestManagerRunRemoteCountsQuotaSkippedFiles(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	// Big enough that the savestate cannot fit in what the quota leaves, while
+	// everything else can.
+	writeTestFile(t, filepath.Join(env.RootDir, "savestates", "game.ss"), strings.Repeat("s", 1<<20))
+	var committed remoteSnapshotRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "test", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			var req remoteCheckRequest
+			decodeErr := json.NewDecoder(r.Body).Decode(&req)
+			if !assert.NoError(t, decodeErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			body, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remotePackResponse{
+				PackHash: sha256Hex(body), ObjectCount: len(parseTestPack(t, body)), CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			decodeErr := json.NewDecoder(r.Body).Decode(&committed)
+			if !assert.NoError(t, decodeErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, testCommittedRemoteResponse(t, "backup-1", platformids.Mister, &committed))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 0, StorageQuotaBytes: 512 << 10})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	env.Manager.cfg.SetBackupRemoteEnabled(false)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.NotContains(t, committed.Categories, CategorySavestates)
+	assert.Contains(t, committed.Categories, CategorySaves)
+	assert.Equal(t, 1, info.SkippedFiles, "the file left out for space is skipped")
+	status := env.Manager.Status()
+	assert.Equal(t, StatusPartial, status.Remote.LastStatus)
+	assert.Equal(t, 1, status.Remote.SkippedFiles)
 }
 
 func TestRemotePackPlanReportsExactUploadBytes(t *testing.T) {
@@ -5014,4 +5077,218 @@ func TestManagerRunRemoteRecordsNoChangesOnDedupe(t *testing.T) {
 	require.NotNil(t, remote.LastSnapshotCreatedAt)
 	assert.Equal(t, formatTime(snapshotCreatedAt), *remote.LastSnapshotCreatedAt,
 		"lastSnapshotCreatedAt preserves when the stored content last changed")
+}
+
+// TestNotifyRestoreLibrarySyncOnlyWhenSyncing covers the message a restore
+// leaves behind. Favorites, likes, play later and decks are owned by the
+// account once Library sync is on, so a restore puts the backup's copy back and
+// the next sync pass replaces it with the account's. Without the message the
+// user watches their restored favorites reappear and silently revert.
+func TestNotifyRestoreLibrarySyncOnlyWhenSyncing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sync on adds the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(true)
+		ns := make(chan models.Notification, 1)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryRestoreLibrarySyncAuthoritative &&
+				msg.Severity == inboxservice.SeverityInfo
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryRestoreLibrarySyncAuthoritative,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+
+	t.Run("sync off stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(false)
+		ns := make(chan models.Notification, 1)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+
+	t.Run("no inbox is not a panic", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(true)
+		env.Manager.inbox = nil
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+}
+
+// TestManagerRestoreSurvivesACancelledCaller covers the release-candidate bug
+// where a restore died with the request that asked for it. A restore on a
+// MiSTer took 308 seconds against a client that gave up at 120, and Core
+// treated the disconnect as a reason to abort and roll back a restore that was
+// working. A cancelled request means the caller no longer wants the response,
+// not that the half-applied restore should be undone.
+func TestManagerRestoreSurvivesACancelledCaller(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = env.Manager.Restore(ctx, info.Name)
+	require.NoError(t, err, "a caller that stopped waiting must not roll back the restore")
+}
+
+// TestNotifyRestoreCompletedDetached covers the other half: once a restore can
+// outlive its caller, a slow one succeeds behind a request that already
+// reported a timeout, and the inbox is the only place the user hears that it
+// worked.
+func TestNotifyRestoreCompletedDetached(t *testing.T) {
+	t.Parallel()
+
+	t.Run("caller gone leaves the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		ns := make(chan models.Notification, 1)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryRestoreCompletedDetached
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryRestoreCompletedDetached,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		env.Manager.notifyRestoreCompletedDetached(ctx)
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+
+	t.Run("caller still waiting stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		ns := make(chan models.Notification, 1)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreCompletedDetached(context.Background())
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+}
+
+// buildQuotaPlan builds a pack plan from files of known size in each
+// category, which is all the trimming logic looks at.
+func buildQuotaPlan(t *testing.T, sizes map[string]int64) remotePackPlan {
+	t.Helper()
+	files := make([]FileRef, 0, len(sizes))
+	missing := make(map[string]struct{}, len(sizes))
+	for category, size := range sizes {
+		// Distinct per category: equal hashes deduplicate, and two categories
+		// sharing a first letter would silently collapse into one pack.
+		sum := sha256.Sum256([]byte(category))
+		hash := hex.EncodeToString(sum[:])
+		files = append(files, FileRef{
+			Category:    category,
+			RestorePath: category + "/file.bin",
+			SHA256:      hash,
+			Size:        size,
+		})
+		missing[hash] = struct{}{}
+	}
+	plan, err := planRemotePacks(files, missing)
+	require.NoError(t, err)
+	return plan
+}
+
+func planCategories(plan *remotePackPlan) []string {
+	categories := make([]string, 0, len(plan.packs))
+	for i := range plan.packs {
+		categories = append(categories, packCategory(&plan.packs[i]))
+	}
+	sort.Strings(categories)
+	return categories
+}
+
+// TestTrimRemotePlanToQuota covers the release-candidate bug where a backup
+// larger than the remaining quota failed wholesale, so a Steam Deck whose
+// settings category ran to 1.8 GB never uploaded its user database either.
+func TestTrimRemotePlanToQuota(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps the user's own state and drops settings first", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{
+			CategoryZaparoo:  1024,
+			CategorySaves:    1024,
+			CategorySettings: 4 << 20,
+		})
+		full := plan.uploadBytes
+
+		dropped, ok := trimRemotePlanToQuota(&plan, full/2)
+
+		require.True(t, ok)
+		assert.Equal(t, []string{CategorySaves, CategoryZaparoo}, planCategories(&plan))
+		require.Len(t, dropped, 1)
+		assert.Equal(t, CategorySettings, dropped[0].Category)
+		var kept int64
+		for i := range plan.packs {
+			kept += plan.packs[i].size
+		}
+		assert.Equal(t, kept, plan.uploadBytes, "kept bytes must be exact, not estimated")
+		assert.LessOrEqual(t, plan.uploadBytes, full/2)
+	})
+
+	t.Run("refuses when the zaparoo payload cannot fit", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{
+			CategoryZaparoo:  4 << 20,
+			CategorySettings: 1024,
+		})
+
+		// Room for settings but not for user.db. A snapshot without the
+		// user database fails manifest validation on restore, so there is no
+		// useful backup to make here.
+		_, ok := trimRemotePlanToQuota(&plan, 8192)
+
+		assert.False(t, ok)
+	})
+
+	t.Run("everything fits", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{CategoryZaparoo: 512, CategorySaves: 512})
+		before := plan.uploadBytes
+
+		dropped, ok := trimRemotePlanToQuota(&plan, before*4)
+
+		require.True(t, ok)
+		assert.Empty(t, dropped)
+		assert.Equal(t, before, plan.uploadBytes)
+	})
+}
+
+// TestRemoteQuotaMessageDistinguishesFullFromTooLarge pins the wording split:
+// "your storage is full" and "this backup is bigger than the space left" need
+// different actions from the user, and neither is about the device's disk.
+func TestRemoteQuotaMessageDistinguishesFullFromTooLarge(t *testing.T) {
+	t.Parallel()
+
+	fullTitle, fullBody := remoteQuotaMessage(&remoteQuotaError{Used: 100, Quota: 100, Required: 10})
+	assert.Equal(t, "Online backup storage is full", fullTitle)
+	assert.Contains(t, fullBody, "Delete an older cloud backup")
+
+	fitTitle, fitBody := remoteQuotaMessage(&remoteQuotaError{
+		Used: 50, Quota: 100, Required: 4 << 20,
+	})
+	assert.Equal(t, "Online backup did not fit", fitTitle)
+	assert.Contains(t, fitBody, "4.0 MB")
+	assert.NotContains(t, fitBody, "is full")
 }

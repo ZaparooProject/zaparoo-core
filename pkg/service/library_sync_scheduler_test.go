@@ -172,7 +172,7 @@ func TestLibrarySyncPass_OffDoesNotWaitForIdle(t *testing.T) {
 	timings.idleMaxWait = 30 * time.Second
 
 	done := make(chan error, 1)
-	go func() { done <- runLibrarySyncPass(context.Background(), runner, idleSched, timings) }()
+	go func() { done <- runLibrarySyncPass(context.Background(), runner, idleSched, timings, nil) }()
 
 	select {
 	case err := <-done:
@@ -267,7 +267,7 @@ func TestWaitForQuietDevice_GivesUpAtTheLimit(t *testing.T) {
 func TestLibrarySyncPass_SettingFailureStopsThePass(t *testing.T) {
 	t.Parallel()
 	runner := &failingSettingRunner{}
-	err := runLibrarySyncPass(context.Background(), runner, nil, testLibrarySyncTimings(time.Millisecond))
+	err := runLibrarySyncPass(context.Background(), runner, nil, testLibrarySyncTimings(time.Millisecond), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apply library sync setting")
 	assert.Zero(t, runner.passes.Load(), "no upload is attempted")
@@ -526,4 +526,48 @@ func TestOfferLibraryHint(t *testing.T) {
 	got := <-hints
 	assert.Equal(t, []string{"state"}, got.kinds)
 	assert.Equal(t, int64(3), got.revision)
+}
+
+// TestInventoryStatusReportsOnlyChanges covers the silent inventory upload. A
+// device whose inventory never uploads used to log nothing at any level, so it
+// looked the same as one that was up to date. The reason is now logged, but
+// only when it changes, so a quiet device does not log on every pass.
+func TestInventoryStatusReportsOnlyChanges(t *testing.T) {
+	t.Parallel()
+	var emitted []string
+	status := &inventoryStatus{emit: func(reason string) { emitted = append(emitted, reason) }}
+
+	status.report("the media index is busy")
+	status.report("the media index is busy")
+	status.report("the media index is busy")
+	assert.Equal(t, []string{"the media index is busy"}, emitted, "a repeated reason logs once")
+
+	status.report("already up to date with the account")
+	assert.Len(t, emitted, 2, "a different reason logs again")
+
+	// An upload clears the reason, so the steady state after it is reported
+	// again even though it matches the one before.
+	status.report("")
+	status.report("already up to date with the account")
+	assert.Equal(t, []string{
+		"the media index is busy",
+		"already up to date with the account",
+		"already up to date with the account",
+	}, emitted)
+
+	var noStatus *inventoryStatus
+	assert.NotPanics(t, func() { noStatus.report("anything") })
+}
+
+func TestInventoryReasonsNameEachOutcome(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, inventoryOutcomeReason(&librarysync.InventoryResult{Outcome: librarysync.InventoryUploaded}))
+	assert.Equal(t, "nothing has been indexed yet",
+		inventoryOutcomeReason(&librarysync.InventoryResult{Outcome: librarysync.InventorySkipped}))
+	assert.Equal(t, "already up to date with the account",
+		inventoryOutcomeReason(&librarysync.InventoryResult{Outcome: librarysync.InventorySkipped, Generation: 3}))
+	assert.Equal(t, "the library is larger than the account accepts",
+		inventoryOutcomeReason(&librarysync.InventoryResult{Outcome: librarysync.InventoryTooLarge}))
+	assert.Equal(t, "library sync is off", idleInventoryReason(librarysync.ErrDisabled))
+	assert.Equal(t, "the media index is busy", idleInventoryReason(librarysync.ErrNotSettled))
 }

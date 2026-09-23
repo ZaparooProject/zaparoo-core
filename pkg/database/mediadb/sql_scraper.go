@@ -3259,21 +3259,42 @@ func mediaPropertyMetadataQuery(where string, groupMode propertyGroupMode) strin
 		` + where
 }
 
+// tagInfoKey identifies a tag after unpadding. A database written before
+// numeric values were padded can hold both "players:0002" and "players:2" as
+// separate rows; both read back as "players:2", so they are one tag to a caller
+// and must be returned once.
+type tagInfoKey struct {
+	typ string
+	tag string
+}
+
 func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 	result := make([]database.TagInfo, 0)
+	seen := make(map[tagInfoKey]struct{})
 	for rows.Next() {
 		var t database.TagInfo
 		if err := rows.Scan(&t.Tag, &t.Type, &t.Label); err != nil {
 			return nil, fmt.Errorf("failed to scan TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)
+		key := tagInfoKey{typ: t.Type, tag: t.Tag}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		result = append(result, t)
 	}
 	return result, rows.Err()
 }
 
+type groupedTagInfoKey struct {
+	tagInfoKey
+	dbid int64
+}
+
 func scanGroupedTagInfos(rows *sql.Rows) (map[int64][]database.TagInfo, error) {
 	result := make(map[int64][]database.TagInfo)
+	seen := make(map[groupedTagInfoKey]struct{})
 	for rows.Next() {
 		var dbid int64
 		var t database.TagInfo
@@ -3281,6 +3302,11 @@ func scanGroupedTagInfos(rows *sql.Rows) (map[int64][]database.TagInfo, error) {
 			return nil, fmt.Errorf("failed to scan grouped TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)
+		key := groupedTagInfoKey{tagInfoKey: tagInfoKey{typ: t.Type, tag: t.Tag}, dbid: dbid}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		result[dbid] = append(result[dbid], t)
 	}
 	return result, rows.Err()

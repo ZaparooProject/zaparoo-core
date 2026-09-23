@@ -40,7 +40,7 @@ func TestHandleRequestRejectsOtherMethodsDuringRestore(t *testing.T) {
 		called = true
 		return "ok", nil
 	}))
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 
 	type handleResult struct {
@@ -78,7 +78,7 @@ func TestHandleRequestAllowsRestoreMethodToOwnExclusiveGate(t *testing.T) {
 		models.MethodSettingsBackupRestore,
 		func(requests.RequestEnv) (any, error) { return "restore", nil },
 	))
-	finishRestore, err := st.BeginRestoreGate()
+	finishRestore, err := st.BeginRestoreGate(t.Context())
 	require.NoError(t, err)
 	defer finishRestore(false)
 

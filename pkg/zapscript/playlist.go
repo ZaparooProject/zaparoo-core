@@ -866,7 +866,14 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		// stays put rather than being cleared as though it had ended.
 		return platforms.CmdResult{}, fmt.Errorf("failed to stop active launcher: %w", stopErr)
 	}
-	if err := queuePlaylistUpdate(&env, clearUpdate); err != nil {
+	// Stopping the launcher cancels the launcher context, so it can no longer
+	// gate the clear: a queue send that watched it would give up on the
+	// cancellation this command just caused, report a stop that worked as
+	// failed, and could leave the clear unqueued. Only a service shutdown may
+	// abandon it now.
+	clearEnv := env
+	clearEnv.LauncherCtx = nil
+	if err := queuePlaylistUpdate(&clearEnv, clearUpdate); err != nil {
 		return platforms.CmdResult{}, err
 	}
 	if stopErr != nil {

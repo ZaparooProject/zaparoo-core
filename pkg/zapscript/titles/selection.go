@@ -256,32 +256,43 @@ func FilterOutVariants(results []database.SearchResultWithCursor) []database.Sea
 	return filtered
 }
 
+// inTagFamily reports whether tag is family itself or one of its qualified
+// members. Qualified values are always "family:suffix" (beta:1, demo:kiosk,
+// translation:old), so a bare prefix test would also match an unrelated value
+// that merely starts with the same letters.
+func inTagFamily(tag string, family tags.TagValue) bool {
+	name := string(family)
+	return tag == name || strings.HasPrefix(tag, name+":")
+}
+
 // IsVariant checks if a result is a variant (demo, beta, prototype, hack, etc.)
 func IsVariant(result *database.SearchResultWithCursor) bool {
 	for _, tag := range result.Tags {
 		switch tag.Type {
 		case string(tags.TagTypeUnfinished):
 			// Exclude demos, betas, prototypes, samples, previews, prereleases
-			if strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedDemo)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedBeta)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedProto)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedAlpha)) ||
-				tag.Tag == string(tags.TagUnfinishedSample) ||
-				tag.Tag == string(tags.TagUnfinishedPreview) ||
-				tag.Tag == string(tags.TagUnfinishedPrerelease) {
+			if inTagFamily(tag.Tag, tags.TagUnfinishedDemo) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedBeta) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedProto) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedAlpha) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedSample) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedPreview) ||
+				inTagFamily(tag.Tag, tags.TagUnfinishedPrerelease) {
 				return true
 			}
 		case string(tags.TagTypeUnlicensed):
-			// Exclude hacks, translations, bootlegs
-			if tag.Tag == string(tags.TagUnlicensedHack) ||
-				tag.Tag == string(tags.TagUnlicensedTranslation) ||
-				tag.Tag == string(tags.TagUnlicensedBootleg) ||
-				tag.Tag == string(tags.TagUnlicensedClone) {
+			// Exclude hacks, translations, bootlegs. Qualified members count
+			// too: "translation:old" is what a [T-Fre] fan translation parses
+			// to, and an exact-match test let every one of them through.
+			if inTagFamily(tag.Tag, tags.TagUnlicensedHack) ||
+				inTagFamily(tag.Tag, tags.TagUnlicensedTranslation) ||
+				inTagFamily(tag.Tag, tags.TagUnlicensedBootleg) ||
+				inTagFamily(tag.Tag, tags.TagUnlicensedClone) {
 				return true
 			}
 		case string(tags.TagTypeDump):
 			// Exclude bad dumps
-			if tag.Tag == string(tags.TagDumpBad) {
+			if inTagFamily(tag.Tag, tags.TagDumpBad) {
 				return true
 			}
 		}
