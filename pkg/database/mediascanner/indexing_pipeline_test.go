@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -759,4 +760,35 @@ func TestReconcileStagedSystem_PersistsStagedMediaProperty(t *testing.T) {
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyGameID), props[0].TypeTag)
 	assert.Equal(t, "SLUS-00594", props[0].Text)
+}
+
+// TestGetPathFragments_PrefixStripNeverEmptiesTitle covers the arcade case
+// where a directory's files mostly open with a four-digit year, so the year is
+// stripped from every one of them. That is right when the year is a date
+// prefix and wrong when it is the whole title: "1942 (W, Rev B)" strips to
+// " (W, Rev B)", which parses to nothing. A title with no name reaches play
+// history, where an account refuses the session and fails the entire upload
+// batch, so the strip has to give way rather than produce one.
+func TestGetPathFragments_PrefixStripNeverEmptiesTitle(t *testing.T) {
+	t.Parallel()
+
+	datePolicy := browseprefix.Policy{Kind: browseprefix.KindDate, Enabled: true}
+
+	numericTitle := GetPathFragments(&PathFragmentParams{
+		Path:         string(filepath.Separator) + filepath.Join("_Arcade", "1942 (W, Rev B).mra"),
+		SystemID:     "Arcade",
+		PrefixPolicy: datePolicy,
+	})
+	assert.Equal(t, "1942", numericTitle.Title,
+		"a title that is only the stripped prefix must keep its unstripped name")
+	assert.NotEmpty(t, numericTitle.Slug, "a kept title must still slugify")
+
+	// The policy must still do its job where something survives the strip.
+	datedRelease := GetPathFragments(&PathFragmentParams{
+		Path:         string(filepath.Separator) + filepath.Join("NES", "1989-01 Bomberman (USA).nes"),
+		SystemID:     "NES",
+		PrefixPolicy: datePolicy,
+	})
+	assert.Equal(t, "Bomberman", datedRelease.Title,
+		"a real date prefix must still be stripped")
 }
