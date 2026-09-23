@@ -193,10 +193,11 @@ func DirectoryArtworkFallbackNames(directoryPath, systemRootPath string) []strin
 }
 
 // isDiscFolderExt reports whether ext is one EmulationStation uses to name a
-// folder after the disc image or playlist it stands in for.
+// folder after the disc image or playlist it stands in for, or after the
+// ScummVM game whose data it holds.
 func isDiscFolderExt(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".cue", ".m3u", ".chd", ".iso", ".bin", ".img", ".pbp":
+	case ".cue", ".m3u", ".chd", ".iso", ".bin", ".img", ".pbp", ".scummvm":
 		return true
 	default:
 		return false

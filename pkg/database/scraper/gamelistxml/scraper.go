@@ -636,8 +636,8 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
 	var containerPathResolutions, folderEntries, folderMatches, folderUnmatched int
 	var arcadeSetsUnresolved, arcadeSetsSuperseded int
-	var sourceParentEntries, sourceInheritedMatches int
-	var parentEntries []parentEntry
+	var sourceParentEntries, sourceInheritedMatches, sourceGroupEntries, sourceGroupMatches int
+	var parentEntries, groupEntries []folderEntry
 
 outer:
 	for _, file := range parsed.Files {
@@ -670,10 +670,14 @@ outer:
 			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
 			holdsSources := sourceRecords.hasChildren(resolved)
 			if holdsSources {
-				parentEntries = append(parentEntries, parentEntry{file: &file, directory: resolved, game: *game})
+				parentEntries = append(parentEntries, folderEntry{file: &file, directory: resolved, game: *game})
 			}
 			if record := g.matchSourceRecord(indexes, sourceRecords, &file, game, resolved); record != nil {
 				records = append(records, record)
+				continue
+			}
+			if sourceRecords.isGroup(resolved) {
+				groupEntries = append(groupEntries, folderEntry{file: &file, directory: resolved, game: *game})
 				continue
 			}
 			if holdsSources {
@@ -851,10 +855,14 @@ outer:
 			game := folderAsGame(folder)
 			holdsSources := sourceRecords.hasChildren(resolved)
 			if holdsSources {
-				parentEntries = append(parentEntries, parentEntry{file: &file, directory: resolved, game: game})
+				parentEntries = append(parentEntries, folderEntry{file: &file, directory: resolved, game: game})
 			}
 			if record := g.matchSourceRecord(indexes, sourceRecords, &file, &game, resolved); record != nil {
 				records = append(records, record)
+				continue
+			}
+			if sourceRecords.isGroup(resolved) {
+				groupEntries = append(groupEntries, folderEntry{file: &file, directory: resolved, game: game})
 				continue
 			}
 			if holdsSources {
@@ -883,8 +891,15 @@ outer:
 		}
 	}
 
+	// An entry naming the folder a group is configured on outranks one naming
+	// the folder that holds it.
+	if len(groupEntries) > 0 {
+		grouped := sourceRecords.claimFolders(indexes, groupEntries, sourceRecords.sources.Group)
+		sourceGroupEntries, sourceGroupMatches = len(groupEntries), len(grouped)
+		records = append(records, grouped...)
+	}
 	if len(parentEntries) > 0 {
-		inherited := sourceRecords.inherit(indexes, parentEntries)
+		inherited := sourceRecords.claimFolders(indexes, parentEntries, sourceRecords.sources.UnderParent)
 		sourceParentEntries, sourceInheritedMatches = len(parentEntries), len(inherited)
 		records = append(records, inherited...)
 	}
@@ -933,6 +948,8 @@ outer:
 		Int("folder_unmatched", folderUnmatched).
 		Int("source_parent_entries", sourceParentEntries).
 		Int("source_inherited_matches", sourceInheritedMatches).
+		Int("source_group_entries", sourceGroupEntries).
+		Int("source_group_matches", sourceGroupMatches).
 		Int("unmatched_records", unmatchedRecords).
 		Int("matched_records", len(records)).
 		Int("remaining_unmatched_titles", len(indexes.TitlesBySlug)).

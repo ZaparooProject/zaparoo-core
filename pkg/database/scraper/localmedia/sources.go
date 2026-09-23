@@ -33,13 +33,15 @@ func mediaArtworkNames(
 ) (lookupRoots, names, cleanupNames []string) {
 	if sources != nil && sources.HasMedia(media.Path) {
 		source, ok := sources.ForMedia(media.Path)
-		if !ok || !source.Unique || media.IsMissing {
+		if !ok || (!source.Unique && !sources.Grouped(&source)) || media.IsMissing {
 			return nil, nil, nil
 		}
 		// Source-backed virtual targets never search another root: equal names on
 		// separate drives must not share artwork.
 		switch source.SourceKind {
 		case "directory":
+			// Variants of one game configured on the same directory share its
+			// artwork, so every one of them is named after it.
 			names = esmedia.DirectoryArtworkFallbackNames(source.SourcePath, source.SourceRoot)
 			// A variant without artwork of its own takes the artwork of the
 			// game folder holding it. The root is the collection, not a game,

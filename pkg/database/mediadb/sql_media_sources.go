@@ -80,14 +80,17 @@ func (db *MediaDB) GetMediaSourcesForScrape(
 		WITH source_rows AS (
 			SELECT m.DBID, m.Path, m.SystemDBID, m.IsMissing,
 			       ms.SourcePath, ms.SourceKey, ms.SourceRoot, ms.SourceKind,
-			       COUNT(*) OVER (PARTITION BY ms.SourceKey) AS SourceCount
+			       COUNT(*) OVER key_rows AS SourceCount,
+			       ms.SourceGroup <> ''
+			           AND MIN(ms.SourceGroup) OVER key_rows = MAX(ms.SourceGroup) OVER key_rows AS SharedGame
 			FROM MediaSources ms
 			JOIN Media m ON m.DBID = ms.MediaDBID
 			JOIN Systems s ON s.DBID = m.SystemDBID
 			WHERE s.SystemID = ? AND m.IsMissing = 0
+			WINDOW key_rows AS (PARTITION BY ms.SourceKey)
 		)
 		SELECT m.DBID, m.Path, m.SystemDBID, m.SourcePath, m.SourceKey,
-		       m.SourceRoot, m.SourceKind, m.SourceCount = 1
+		       m.SourceRoot, m.SourceKind, m.SourceCount = 1, m.SharedGame
 		FROM source_rows m
 		WHERE `+where+`
 		ORDER BY m.Path`, args...)
@@ -105,7 +108,7 @@ func (db *MediaDB) GetMediaSourcesForScrape(
 		if scanErr := rows.Scan(
 			&source.MediaDBID, &source.MediaPath, &source.SystemDBID,
 			&source.SourcePath, &source.SourceKey, &source.SourceRoot,
-			&source.SourceKind, &source.Unique,
+			&source.SourceKind, &source.Unique, &source.SharedGame,
 		); scanErr != nil {
 			return nil, fmt.Errorf("scan media source: %w", scanErr)
 		}

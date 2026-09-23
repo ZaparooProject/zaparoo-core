@@ -103,3 +103,79 @@ func TestMediaSourcesForScrape(t *testing.T) {
 	_, err = db.GetMediaSourcesForScrape(ctx, "SNES", scope)
 	require.Error(t, err)
 }
+
+func TestMediaSourceGroupsMigrationDown(t *testing.T) {
+	db, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	require.NoError(t, goose.DownTo(db.sql.Load(), "migrations", 20260920120000))
+	for _, table := range []string{"MediaSources", "ScanStageSources"} {
+		_, err := db.sql.Load().ExecContext(ctx, "SELECT SourceGroup FROM "+table+" LIMIT 1")
+		require.Error(t, err, table)
+	}
+	require.NoError(t, goose.Up(db.sql.Load(), "migrations"))
+	for _, table := range []string{"MediaSources", "ScanStageSources"} {
+		_, err := db.sql.Load().ExecContext(ctx, "SELECT SourceGroup FROM "+table+" LIMIT 1")
+		require.NoError(t, err, table)
+	}
+}
+
+// Rows sharing a directory are one game only when every row on it carries the
+// same non-empty group, judged across the system before any scope applies.
+func TestMediaSourcesForScrapeSharedGame(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	root := filepath.ToSlash(filepath.Join(t.TempDir(), "games"))
+	dir := func(name string) string { return filepath.ToSlash(filepath.Join(root, name)) }
+	rows := []struct {
+		media, source, group string
+		shared               bool
+	}{
+		{media: "test://kyra3-en/K", source: dir("kyra3"), group: "kyra3", shared: true},
+		{media: "test://kyra3-fr/K", source: dir("kyra3"), group: "kyra3", shared: true},
+		{media: "test://comp-a/A", source: dir("compilation"), group: "a"},
+		{media: "test://comp-b/B", source: dir("compilation"), group: "b"},
+		{media: "test://nogroup-a/A", source: dir("nogroup"), group: ""},
+		{media: "test://nogroup-b/B", source: dir("nogroup"), group: ""},
+		{media: "test://partial-a/A", source: dir("partial"), group: "a"},
+		{media: "test://partial-b/B", source: dir("partial"), group: ""},
+		{media: "test://single/S", source: dir("single"), group: "single", shared: true},
+	}
+	_, err := db.sql.Load().ExecContext(ctx, "DELETE FROM Media")
+	require.NoError(t, err)
+	for i, row := range rows {
+		id := i + 1
+		_, err = db.sql.Load().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (?, 1, 1, ?, 0)",
+			id, row.media)
+		require.NoError(t, err)
+		_, err = db.sql.Load().ExecContext(ctx, `
+			INSERT INTO MediaSources (MediaDBID, SourcePath, SourceKey, SourceRoot, SourceKind, SourceGroup)
+			VALUES (?, ?, ?, ?, 'directory', ?)`, id, row.source, row.source, root, row.group)
+		require.NoError(t, err)
+	}
+
+	all, err := db.GetMediaSourcesForScrape(ctx, "NES", nil)
+	require.NoError(t, err)
+	require.Len(t, all, len(rows))
+	want := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		want[row.media] = row.shared
+	}
+	for _, source := range all {
+		require.Equal(t, want[source.MediaPath], source.SharedGame, source.MediaPath)
+	}
+
+	for i, media := range []string{"test://kyra3-en/K", "test://comp-a/A", "test://partial-a/A"} {
+		scope := &database.ScrapeScope{SystemID: "NES", Path: media, MediaID: int64([]int{1, 3, 7}[i])}
+		scoped, scopeErr := db.GetMediaSourcesForScrape(ctx, "NES", scope)
+		require.NoError(t, scopeErr)
+		require.Len(t, scoped, 1)
+		require.Equal(t, want[media], scoped[0].SharedGame, "scope must not hide the rows %s shares with", media)
+	}
+}

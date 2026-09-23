@@ -29,6 +29,7 @@ type ScummVMGame struct {
 	TargetID    string // Section name, used to launch the game
 	Description string // Human-readable game title
 	Path        string // Configured game directory, used for metadata discovery
+	GameID      string // Engine game ID, shared by every variant of one game
 }
 
 // findScummVMBinary searches for ScummVM executable in the ScummVM directory
@@ -131,6 +132,8 @@ func parseScummVMIniFS(ctx context.Context, fs afero.Fs, iniPath string) ([]Scum
 					currentGame.Description = value
 				case "path":
 					currentGame.Path = value
+				case "gameid":
+					currentGame.GameID = value
 				}
 			}
 		}

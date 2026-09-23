@@ -22,6 +22,7 @@ package mediascanner
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -38,12 +39,21 @@ func TestNormalizeScanSource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Clean(valid.Path), got.Path)
 	require.NotEmpty(t, got.Key)
+	require.Empty(t, got.Group)
+
+	grouped := *valid
+	grouped.Group = "kyra3"
+	got, err = normalizeScanSource("test://one/One", &grouped)
+	require.NoError(t, err)
+	require.Equal(t, "kyra3", got.Group)
 
 	for _, source := range []*platforms.MediaSource{
 		{Path: valid.Path, Root: root, Kind: "unknown"},
 		{Path: "relative", Root: root, Kind: platforms.MediaSourceDirectory},
 		{Path: filepath.Join(root, "..", "escape"), Root: root, Kind: platforms.MediaSourceDirectory},
 		{Path: valid.Path + "\x00", Root: root, Kind: platforms.MediaSourceDirectory},
+		{Path: valid.Path, Root: root, Kind: platforms.MediaSourceDirectory, Group: "kyra\n3"},
+		{Path: valid.Path, Root: root, Kind: platforms.MediaSourceDirectory, Group: strings.Repeat("g", 257)},
 		{
 			Path: valid.Path, Root: filepath.VolumeName(root) + string(filepath.Separator),
 			Kind: platforms.MediaSourceDirectory,
@@ -82,6 +92,15 @@ func TestMediaSourceReconcileLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, filepath.Clean(source.Path), rows[0].SourcePath)
+	require.False(t, rows[0].SharedGame)
+
+	grouped := *source
+	grouped.Group = "one"
+	reconcile(&grouped, false)
+	rows, err = mediaDB.GetMediaSourcesForScrape(ctx, "NES", nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].SharedGame, "a changed group is written back on reindex")
 
 	reconcile(nil, true)
 	rows, err = mediaDB.GetMediaSourcesForScrape(ctx, "NES", nil)
