@@ -154,6 +154,8 @@ func TestMapToDB_UnmappedValuesDroppedAndNoted(t *testing.T) {
 		ArcadeSystemName: "Imaginary Board 9000",
 		Family:           "No Such Series",
 		Players:          "1-32",
+		ReleaseDate:      "18990101T000000",
+		Rating:           "1.5",
 		Developer:        "Some Studio",
 	}}
 	result := mapToDBValid(t, g, &rec)
@@ -165,10 +167,17 @@ func TestMapToDB_UnmappedValuesDroppedAndNoted(t *testing.T) {
 	assert.Equal(t, 2, g.unmapped.Count(tags.TagTypeGenre))
 	for _, tagType := range []tags.TagType{
 		tags.TagTypeRegion, tags.TagTypeLang, tags.TagTypeArcadeBoard, tags.TagTypeSearch, tags.TagTypePlayers,
+		tags.TagTypeYear, tags.TagTypeRating,
 	} {
 		assert.Equalf(t, 1, g.unmapped.Count(tagType), "unmapped %s not noted", tagType)
 	}
 	scrapertest.RequireValidTags(t, result.TitleTags)
+
+	// A players field with no number in it is dropped and noted too.
+	g = &GamelistXMLScraper{}
+	rec = GamelistRecord{Game: esapi.Game{Players: "many"}}
+	mapToDBValid(t, g, &rec)
+	assert.Equal(t, 1, g.unmapped.Count(tags.TagTypePlayers))
 }
 
 // recalboxGenresEnum is every value of Recalbox's GameGenres enum

@@ -1496,17 +1496,15 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 	titleTags = appendCompanyTag(titleTags, tags.TagTypeDeveloper, game.Developer)
 	titleTags = appendCompanyTag(titleTags, tags.TagTypePublisher, game.Publisher)
-	titleTags = appendFormatTag(titleTags, tags.TagTypeYear, extractYear(game.ReleaseDate))
-	titleTags = appendFormatTag(titleTags, tags.TagTypeRating, normalizeRating(game.Rating))
+	titleTags = g.appendFormatTag(titleTags, tags.TagTypeYear, extractYear(game.ReleaseDate), game.ReleaseDate)
+	titleTags = g.appendFormatTag(titleTags, tags.TagTypeRating, normalizeRating(game.Rating), game.Rating)
 	titleTags = g.appendGenreTags(titleTags, game.Genre, game.GenreID)
 	// Players: title-level because it describes the game, not a per-ROM
 	// variant. Only the highest count in the field is kept.
-	if p := normalizePlayers(game.Players); p != "" {
-		if tags.IsCanonicalValue(tags.TagTypePlayers, tags.TagValue(p)) {
-			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: p})
-		} else {
-			g.unmapped.Note(unmappedScraperID, tags.TagTypePlayers, game.Players)
-		}
+	if p := normalizePlayers(game.Players); p != "" && tags.IsCanonicalValue(tags.TagTypePlayers, tags.TagValue(p)) {
+		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: p})
+	} else if strings.TrimSpace(game.Players) != "" {
+		g.unmapped.Note(unmappedScraperID, tags.TagTypePlayers, game.Players)
 	}
 	if game.ArcadeSystemName != "" {
 		if board, ok := tags.LookupArcadeBoard(game.ArcadeSystemName); ok {
@@ -1738,8 +1736,16 @@ func appendCompanyTag(tagInfos []database.TagInfo, tagType tags.TagType, raw str
 
 // appendFormatTag adds a value its type's format rule accepts and drops any
 // other: a year outside the rule's range, a rating above 100.
-func appendFormatTag(tagInfos []database.TagInfo, tagType tags.TagType, value string) []database.TagInfo {
+// appendFormatTag adds a format-rule value derived from a source field, and
+// notes the source field when it is present but yields no value the rule
+// accepts ("18990101", a rating of "1.5").
+func (g *GamelistXMLScraper) appendFormatTag(
+	tagInfos []database.TagInfo, tagType tags.TagType, value, source string,
+) []database.TagInfo {
 	if value == "" || !tags.IsValidTagValue(tagType, value) {
+		if strings.TrimSpace(source) != "" {
+			g.unmapped.Note(unmappedScraperID, tagType, source)
+		}
 		return tagInfos
 	}
 	return append(tagInfos, database.TagInfo{Type: string(tagType), Tag: value})
