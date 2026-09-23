@@ -513,6 +513,7 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 		log.Warn().Err(finishErr).Msg("committed restore profile cleanup deferred until restart")
 	}
 	restoreSucceeded = true
+	m.notifyRestoreLibrarySync()
 	return RestoreInfo{PreRestoreBackup: &pre, RestoredFrom: staged.result.Info}, nil
 }
 

@@ -585,6 +585,7 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	}
 	preInfo := pre
 	restoreSucceeded = true
+	m.notifyRestoreLibrarySync()
 	return RemoteRestoreInfo{PreRestoreBackup: &preInfo, RestoredFrom: remoteBackupToInfo(&resp)}, nil
 }
 

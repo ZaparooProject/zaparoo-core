@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
 
@@ -152,6 +153,36 @@ func (m *Manager) beginRestoreGate() (func(bool), error) {
 		return nil, fmt.Errorf("%w: %w", ErrRestoreLaunchInProgress, err)
 	}
 	return finish, nil
+}
+
+// notifyRestoreLibrarySync explains why part of a restore will not stay as the
+// backup left it.
+//
+// Favorites, likes, play later and decks are owned by the linked account once
+// Library sync is on. A restore puts the backup's copy back, and then the next
+// sync pass pulls the account's newer copy down over it, because restoring also
+// rolls this device's sync bookkeeping back to the backup's revisions. The
+// account is the right winner - the alternative would push an old copy out to
+// every other device, and could bring back a deck deleted somewhere else - but
+// without saying so the user watches their restored favorites reappear and then
+// silently revert a minute later.
+func (m *Manager) notifyRestoreLibrarySync() {
+	if m.inbox == nil || !m.cfg.LibrarySyncEnabled() {
+		return
+	}
+	if addErr := m.inbox.Add(
+		"Favorites and decks will come back from your account",
+		inboxservice.WithBody(
+			"This device restored everything in the backup, but favorites, likes, play later "+
+				"and decks are kept in sync with your Zaparoo account. Those will shortly be "+
+				"replaced by whatever your account currently holds, which may not match the "+
+				"backup. Everything else in the backup is restored as it was.",
+		),
+		inboxservice.WithSeverity(inboxservice.SeverityInfo),
+		inboxservice.WithCategory(inboxservice.CategoryRestoreLibrarySyncAuthoritative),
+	); addErr != nil {
+		log.Warn().Err(addErr).Msg("failed to add restore library sync inbox message")
+	}
 }
 
 func (m *Manager) requireRestoreIdle() error {

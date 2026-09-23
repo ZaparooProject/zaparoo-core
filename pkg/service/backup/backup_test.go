@@ -5015,3 +5015,53 @@ func TestManagerRunRemoteRecordsNoChangesOnDedupe(t *testing.T) {
 	assert.Equal(t, formatTime(snapshotCreatedAt), *remote.LastSnapshotCreatedAt,
 		"lastSnapshotCreatedAt preserves when the stored content last changed")
 }
+
+// TestNotifyRestoreLibrarySyncOnlyWhenSyncing covers the message a restore
+// leaves behind. Favorites, likes, play later and decks are owned by the
+// account once Library sync is on, so a restore puts the backup's copy back and
+// the next sync pass replaces it with the account's. Without the message the
+// user watches their restored favorites reappear and silently revert.
+func TestNotifyRestoreLibrarySyncOnlyWhenSyncing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sync on adds the notice", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(true)
+		ns := make(chan models.Notification, 1)
+		env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+			return msg.Category == inboxservice.CategoryRestoreLibrarySyncAuthoritative &&
+				msg.Severity == inboxservice.SeverityInfo
+		})).Return(&database.InboxMessage{
+			DBID: 1, Category: inboxservice.CategoryRestoreLibrarySyncAuthoritative,
+		}, nil).Once()
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	})
+
+	t.Run("sync off stays quiet", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(false)
+		ns := make(chan models.Notification, 1)
+		env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+
+	t.Run("no inbox is not a panic", func(t *testing.T) {
+		t.Parallel()
+		env := newBackupTestEnv(t, platformids.Mister)
+		env.Manager.cfg.SetLibrarySync(true)
+		env.Manager.inbox = nil
+
+		env.Manager.notifyRestoreLibrarySync()
+
+		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
+	})
+}

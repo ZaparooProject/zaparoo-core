@@ -60,6 +60,7 @@ const (
 	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"
 	CategoryBackupRemoteStale                = "backup_remote_stale"
 	CategoryPlayHistorySessionsRefused       = "play_history_sessions_refused"
+	CategoryRestoreLibrarySyncAuthoritative  = "restore_library_sync_authoritative"
 	CategoryLibraryInventoryTooLarge         = "library_inventory_too_large"
 	CategoryScrapeSourceUnreadable           = "scrape_source_unreadable"
 )
