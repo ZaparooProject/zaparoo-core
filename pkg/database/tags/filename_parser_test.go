@@ -1448,6 +1448,9 @@ func TestParseFilenameToCanonicalTagsForMedia_LooseTokenRouting(t *testing.T) {
 		{"720 (1988-01).nsf", "builddate:1988-01"},
 		// a spelled-out revision (previously a company credit)
 		{"1942 (Revision B).mra", "rev:b"},
+		// TOSEC hacked intro (previously read as Hindi)
+		{"Game (1987)(Publisher)[hI].d64", "dump:hacked:intro"},
+		{"Game (Hi).nes", "lang:hi"},
 		// keyword mappings whose values already existed
 		{"Game (New Zealand).z64", "region:nz"},
 		{"Game (PAL60).md", "video:pal-60"},

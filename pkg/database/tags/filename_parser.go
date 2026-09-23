@@ -1781,6 +1781,12 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpBad, Source: TagSourceBracketed}}
 	case "h":
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed}}
+	case "hi":
+		// TOSEC "[hI]": a hacked intro, not Hindi, which only parentheses carry.
+		return []CanonicalTag{
+			{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed},
+			{Type: TagTypeDump, Value: TagDumpHackedIntro, Source: TagSourceBracketed},
+		}
 	case "f":
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpFixed, Source: TagSourceBracketed}}
 	case "cr":
@@ -1902,14 +1908,8 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		return []CanonicalTag{{Type: TagTypeLang, Value: TagLangBS, Source: TagSourceBracketed}}
 
 	case "hi":
-		// In brackets, "hi" is "hacked intro"
-		if ctx.CurrentBracketType == BracketTypeSquare {
-			return []CanonicalTag{
-				{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed},
-				{Type: TagTypeDump, Value: TagDumpHackedIntro, Source: TagSourceBracketed},
-			}
-		}
-		// In parentheses, "hi" is Hindi language
+		// In parentheses, "hi" is Hindi language. The bracketed "[hI]" (hacked
+		// intro) never reaches here: mapBracketTag handles square brackets.
 		return []CanonicalTag{{Type: TagTypeLang, Value: TagLangHI, Source: TagSourceBracketed}}
 
 	case "st":
