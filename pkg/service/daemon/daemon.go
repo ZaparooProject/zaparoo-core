@@ -1161,6 +1161,15 @@ func (s *Service) Start() error {
 		log.Warn().Int("pid", pid).Msg("removed stale service PID file without signaling unrelated process")
 		err = nil
 	}
+	if errors.Is(err, ErrUnreadablePIDFile) {
+		// The file names no process, so there is nothing to signal. Under the
+		// gate no start of ours can be midway through writing it.
+		if removeErr := s.removePidFile(); removeErr != nil {
+			return removeErr
+		}
+		log.Warn().Err(err).Msg("removed unreadable service PID file")
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
