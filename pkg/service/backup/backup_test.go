@@ -3253,6 +3253,67 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 	}
 }
 
+// TestManagerRunRemoteCountsQuotaSkippedFiles covers a backup trimmed to fit
+// the quota reporting nothing skipped. The files left out for space were
+// dropped from the snapshot, but the run result and the persisted status only
+// counted files too large for a pack, so a partial backup read as complete.
+func TestManagerRunRemoteCountsQuotaSkippedFiles(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	// Big enough that the savestate cannot fit in what the quota leaves, while
+	// everything else can.
+	writeTestFile(t, filepath.Join(env.RootDir, "savestates", "game.ss"), strings.Repeat("s", 1<<20))
+	var committed remoteSnapshotRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "test", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			var req remoteCheckRequest
+			decodeErr := json.NewDecoder(r.Body).Decode(&req)
+			if !assert.NoError(t, decodeErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			body, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remotePackResponse{
+				PackHash: sha256Hex(body), ObjectCount: len(parseTestPack(t, body)), CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			decodeErr := json.NewDecoder(r.Body).Decode(&committed)
+			if !assert.NoError(t, decodeErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, testCommittedRemoteResponse(t, "backup-1", platformids.Mister, &committed))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 0, StorageQuotaBytes: 512 << 10})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+	env.Manager.cfg.SetBackupRemoteEnabled(false)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.NotContains(t, committed.Categories, CategorySavestates)
+	assert.Contains(t, committed.Categories, CategorySaves)
+	assert.Equal(t, 1, info.SkippedFiles, "the file left out for space is skipped")
+	status := env.Manager.Status()
+	assert.Equal(t, StatusPartial, status.Remote.LastStatus)
+	assert.Equal(t, 1, status.Remote.SkippedFiles)
+}
+
 func TestRemotePackPlanReportsExactUploadBytes(t *testing.T) {
 	t.Parallel()
 	files := []FileRef{

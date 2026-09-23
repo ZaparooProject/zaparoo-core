@@ -1087,7 +1087,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		Warnings:          collection.Warnings,
 		UploadedFiles:     uploadedFiles,
 		DedupedFiles:      len(uniqueHashes(files)) - uploadedFiles,
-		SkippedFiles:      len(uploaded.skipped),
+		SkippedFiles:      len(uploaded.skipped) + len(uploaded.quotaSkipped),
 		UploadedPacks:     uploaded.packs,
 		UploadedBytes:     uploaded.bytesUploaded,
 		StorageUsedBytes:  list.StorageUsedBytes,
