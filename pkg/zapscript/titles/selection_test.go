@@ -450,6 +450,57 @@ func TestIsVariantEdgeCases(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			// A [T-Fre] style fan translation parses to "translation:old".
+			// Matching the unlicensed family by exact equality let every
+			// qualified member through, so a bare title resolved to the
+			// translation instead of the real release.
+			name: "old translation is variant",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslationOld)},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "qualified hack is variant",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: string(tags.TagTypeUnlicensed), Tag: "hack:improvement"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "qualified bootleg is variant",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: string(tags.TagTypeUnlicensed), Tag: "bootleg:pirate"},
+				},
+			},
+			expected: true,
+		},
+		{
+			// The family test must not match a value that merely starts with
+			// the same letters, which a bare prefix test would.
+			name: "unrelated value sharing a family prefix is not variant",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: string(tags.TagTypeUnlicensed), Tag: "clonebuster"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "aftermarket release is not a variant",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedAftermarket)},
+				},
+			},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
