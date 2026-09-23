@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -252,11 +253,11 @@ func TestSplitCSV_Empty(t *testing.T) {
 func TestCompanionChildTags_NormalizesCSV(t *testing.T) {
 	t.Parallel()
 
-	got := companionChildTags(companionChild{Region: "USA, EUR", Lang: "EN, JA"})
+	got := (&GamelistXMLScraper{}).companionChildTags(companionChild{Region: "USA, EUR", Lang: "EN, JA"})
 
 	assert.Equal(t, []database.TagInfo{
-		{Type: string(tags.TagTypeRegion), Tag: "usa"},
-		{Type: string(tags.TagTypeRegion), Tag: "eur"},
+		{Type: string(tags.TagTypeRegion), Tag: "us"},
+		{Type: string(tags.TagTypeRegion), Tag: "eu"},
 		{Type: string(tags.TagTypeLang), Tag: "en"},
 		{Type: string(tags.TagTypeLang), Tag: "ja"},
 	}, got)
@@ -283,14 +284,45 @@ func assertCompanionCounts(t *testing.T, stats *companionStats, processed, match
 }
 
 type batchMockMediaDB struct {
+	t testing.TB
 	*helpers.MockMediaDBI
 	batchErr error
 	batches  [][]database.ScrapeWriteTarget
 }
 
+// mapToDBValid maps a record and checks every tag it produced against the
+// tag vocabulary.
+func mapToDBValid(t testing.TB, g *GamelistXMLScraper, record *GamelistRecord) scraper.MapResult {
+	t.Helper()
+	result := g.MapToDB(record)
+	scrapertest.RequireValidTags(t, result.MediaTags, result.TitleTags)
+	return result
+}
+
+// newMockMediaDB returns a media DB mock that checks, once the test ends,
+// every scrape write it received against the tag vocabulary.
+func newMockMediaDB(t testing.TB) *helpers.MockMediaDBI {
+	t.Helper()
+	m := helpers.NewMockMediaDBI()
+	t.Cleanup(func() {
+		for i := range m.Calls {
+			if m.Calls[i].Method != "ApplyScrapeResult" {
+				continue
+			}
+			if write, ok := m.Calls[i].Arguments.Get(3).(*database.ScrapeWrite); ok {
+				scrapertest.RequireValidWrite(t, write)
+			}
+		}
+	})
+	return m
+}
+
 func (m *batchMockMediaDB) ApplyScrapeResults(
 	_ context.Context, targets []database.ScrapeWriteTarget,
 ) error {
+	for i := range targets {
+		scrapertest.RequireValidWrite(m.t, targets[i].Write)
+	}
 	batch := append([]database.ScrapeWriteTarget(nil), targets...)
 	m.batches = append(m.batches, batch)
 	return m.batchErr
@@ -387,7 +419,7 @@ func TestLoadRecords_CustomGamelistBundle(t *testing.T) {
 	assert.Equal(t, filepath.Join(romRoot, "media", "boxart"), record.MediaDirsByRoot[1]["boxart"])
 	assert.Equal(t, filepath.Join(mirrorRoot, "media", "screenshots"), record.MediaDirsByRoot[2]["screenshots"])
 
-	mapped := s.MapToDB(record)
+	mapped := mapToDBValid(t, s, record)
 	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	image, ok := propertyByType(mapped.MediaProps, imageType)
 	require.True(t, ok)
@@ -405,7 +437,7 @@ func TestMapToDB_MissingImagePolicyDependsOnGamelistSource(t *testing.T) {
 	root := t.TempDir()
 	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 
-	regular := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{
+	regular := mapToDBValid(t, (&GamelistXMLScraper{}), &GamelistRecord{
 		SystemRootPath: root,
 		Game:           esapi.Game{Image: "./assets/missing.png"},
 	})
@@ -413,7 +445,7 @@ func TestMapToDB_MissingImagePolicyDependsOnGamelistSource(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "assets", "missing.png")), regularImage.Text)
 
-	custom := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{
+	custom := mapToDBValid(t, (&GamelistXMLScraper{}), &GamelistRecord{
 		SystemRootPath:       root,
 		AssetRootPath:        root,
 		RequireExistingImage: true,
@@ -706,7 +738,7 @@ func TestLoadRecords_SlugOnlySingleMediaRowIsWriteSafe(t *testing.T) {
 	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
 	assert.True(t, records[0].MediaLevelWriteSafe)
 	// Confirm MapToDB produces an image prop that will not be dropped.
-	mapped := (&GamelistXMLScraper{}).MapToDB(records[0])
+	mapped := mapToDBValid(t, (&GamelistXMLScraper{}), records[0])
 	assert.NotEmpty(t, mapped.MediaProps, "image prop must survive to the write when write-safe")
 }
 
@@ -861,7 +893,7 @@ func TestLoadRecords_TrackPathResolvesToCueMedia(t *testing.T) {
 	assert.Equal(t, gamelistMatchSlugPath, records[0].MatchKind)
 	assert.True(t, records[0].MediaLevelWriteSafe)
 
-	result := (&GamelistXMLScraper{}).MapToDB(records[0])
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), records[0])
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
 	for _, p := range result.MediaProps {
@@ -1316,7 +1348,7 @@ func TestScrape_DBError(t *testing.T) {
 	t.Parallel()
 
 	dbErr := assert.AnError
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("IndexedSystems").Return([]string(nil), dbErr)
 
 	ps := NewPlatformScraper()
@@ -1379,10 +1411,10 @@ func TestMapToDB_FullGame(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: "en"})
-	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
+	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "us"})
 
 	// Title-level tags
 	assert.Contains(t, result.TitleTags, database.TagInfo{
@@ -1394,9 +1426,13 @@ func TestMapToDB_FullGame(t *testing.T) {
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: "1985"})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: "75"})
 	assert.Contains(t, result.TitleTags, database.TagInfo{
-		Type: string(tags.TagTypeGenre), Tag: "platform", Label: "Platform",
+		Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenreActionPlatformer),
+	})
+	assert.Contains(t, result.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenreAction),
 	})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: "4"})
+	scrapertest.RequireValidTags(t, result.MediaTags, result.TitleTags)
 
 	// Title-level properties
 	descPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
@@ -1429,7 +1465,7 @@ func TestMapToDB_FullGame(t *testing.T) {
 
 func TestMapToDB_EmptyGame_NoTags(t *testing.T) {
 	t.Parallel()
-	result := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{})
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &GamelistRecord{})
 	assert.Empty(t, result.MediaTags)
 	assert.Empty(t, result.TitleTags)
 	assert.Empty(t, result.TitleProps)
@@ -1445,7 +1481,7 @@ func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
 			Image: "", // empty → skip
 		},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	titleProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleProps
 	for _, p := range titleProps {
 		assert.NotEqual(t, string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageImage), p.TypeTag,
 			"empty image path should not produce an image property")
@@ -1455,13 +1491,11 @@ func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
 func TestMapToDB_ArcadeBoard(t *testing.T) {
 	t.Parallel()
 	rec := GamelistRecord{
-		Game: esapi.Game{ArcadeSystemName: "CPS2"},
+		Game: esapi.Game{ArcadeSystemName: "Capcom CPS-2"},
 	}
-	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
-	require.NotEmpty(t, titleTags)
-	assert.Contains(t, titleTags, database.TagInfo{
-		Type: string(tags.TagTypeArcadeBoard), Tag: "cps2", Label: "CPS2",
-	})
+	titleTags := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleTags
+	assert.Equal(t, []database.TagInfo{{Type: string(tags.TagTypeArcadeBoard), Tag: "capcom:cps2"}}, titleTags)
+	scrapertest.RequireValidTags(t, titleTags)
 }
 
 // --- MapToDB ScreenScraper ID ---
@@ -1471,7 +1505,7 @@ func TestMapToDB_ScreenScraperIDAttr(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{ScreenScraperIDAttr: "12345"},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	titleProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
 	var found bool
 	for _, p := range titleProps {
@@ -1490,7 +1524,7 @@ func TestMapToDB_ScreenScraperIDAttr_ZeroSkipsToElement(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{ScreenScraperIDAttr: "0", ScreenScraperID: 99},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	titleProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
 	var found bool
 	for _, p := range titleProps {
@@ -1508,7 +1542,7 @@ func TestMapToDB_ScreenScraperIDElement(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{ScreenScraperID: 42},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	titleProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
 	var found bool
 	for _, p := range titleProps {
@@ -1526,7 +1560,7 @@ func TestMapToDB_ScreenScraperID_NeitherSet(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{ScreenScraperIDAttr: "", ScreenScraperID: 0},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	titleProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
 	for _, p := range titleProps {
 		assert.NotEqual(t, propKey, p.TypeTag, "xml-game-id should not be emitted when both ID fields are absent")
@@ -1553,7 +1587,7 @@ func TestMapToDB_ContentType_Image(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Image: "./images/mario.png"},
 	}
-	mediaProps := (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps
+	mediaProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	for _, p := range mediaProps {
 		if p.TypeTag == propKey {
@@ -1662,7 +1696,7 @@ func TestMapToDB_NestedExplicitImagePath(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1692,7 +1726,7 @@ func TestMapToDB_FilesystemFallback_Image(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1723,7 +1757,7 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1752,7 +1786,7 @@ func TestMapToDB_FilesystemFallback_CrossRoot(t *testing.T) {
 		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1782,7 +1816,7 @@ func TestMapToDB_FilesystemFallback_PrefersEarlierRootInOrder(t *testing.T) {
 		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1812,7 +1846,7 @@ func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 		Game:            esapi.Game{Path: "./Japan/Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1840,7 +1874,7 @@ func TestMapToDB_FilesystemFallback_ThumbnailBox2DFrontAlias(t *testing.T) {
 		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageThumbnail)
 	var found bool
@@ -1867,7 +1901,7 @@ func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
 		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	var found bool
@@ -1902,7 +1936,7 @@ func TestMapToDB_FallbackFindsBox2DLogoTitleScreenDirs(t *testing.T) {
 		Game: esapi.Game{Path: "./Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 	props := map[string]string{}
 	for _, p := range result.MediaProps {
 		props[p.TypeTag] = p.Text
@@ -1938,7 +1972,7 @@ func TestMapToDB_FallbackFindsJPGMediaFile(t *testing.T) {
 		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
@@ -1975,7 +2009,7 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var count int
@@ -1996,7 +2030,7 @@ func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Path: "./roms/mario.nes"},
 	}
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 	for _, p := range result.TitleProps {
 		assert.NotContains(t, p.TypeTag, "image-", "no image props expected when no media dir and no XML paths")
 	}
@@ -2018,7 +2052,7 @@ func TestMapToDB_Boxart3D_XMLPath(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
 	var found bool
@@ -2051,7 +2085,7 @@ func TestMapToDB_Boxart2D_And_Boxart3D_AreIndependent(t *testing.T) {
 		},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	key2d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	key3d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
@@ -2084,7 +2118,7 @@ func TestMapToDB_FilesystemFallback_Boxart3D(t *testing.T) {
 		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
 	var found bool
@@ -2111,7 +2145,7 @@ func TestMapToDB_FilesystemFallback_BoxartSide(t *testing.T) {
 		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartSide)
 	var found bool
@@ -2138,7 +2172,7 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
-	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	result := mapToDBValid(t, (&GamelistXMLScraper{}), &rec)
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartBack)
 	var found bool
@@ -2266,13 +2300,14 @@ func TestMimeFromExt_M4V(t *testing.T)  { assert.Equal(t, "video/mp4", mimeFromE
 
 // --- MapToDB additional ---
 
-func TestMapToDB_GameFamily(t *testing.T) {
+func TestMapToDB_FamilyBecomesFranchise(t *testing.T) {
 	t.Parallel()
-	rec := GamelistRecord{Game: esapi.Game{Family: "Mario"}}
-	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
-	assert.Contains(t, titleTags, database.TagInfo{
-		Type: string(tags.TagTypeGameFamily), Tag: "mario", Label: "Mario",
-	})
+	rec := GamelistRecord{Game: esapi.Game{Family: "Castlevania"}}
+	titleTags := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).TitleTags
+	assert.Equal(t, []database.TagInfo{
+		{Type: string(tags.TagTypeSearch), Tag: string(tags.TagSearchFranchiseCastlevania)},
+	}, titleTags)
+	scrapertest.RequireValidTags(t, titleTags)
 }
 
 func TestMapToDB_Manual(t *testing.T) {
@@ -2282,7 +2317,7 @@ func TestMapToDB_Manual(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Manual: "./manuals/game.pdf"},
 	}
-	mediaProps := (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps
+	mediaProps := mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyManual)
 	var found bool
 	for _, p := range mediaProps {
@@ -2307,7 +2342,7 @@ func TestMapToDB_WheelXMLLogoTakesPriority(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "logo_source", "Logo field should take priority over Wheel")
@@ -2329,7 +2364,7 @@ func TestMapToDB_WheelXMLFromWheelWhenNoLogo(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "wheel_source")
@@ -2351,7 +2386,7 @@ func TestMapToDB_TitleShotXMLFromTitleScreen(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "titlescreen_source", "TitleScreen should take priority over TitleShot")
@@ -2373,7 +2408,7 @@ func TestMapToDB_TitleShotXMLFromTitleShotWhenNoTitleScreen(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "titleshot_source")
@@ -2391,7 +2426,7 @@ func TestMapToDB_MarqueeXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMarquee)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -2409,7 +2444,7 @@ func TestMapToDB_FanArtXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageFanart)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -2427,7 +2462,7 @@ func TestMapToDB_MapXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMap)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 		}
@@ -2444,7 +2479,7 @@ func TestMapToDB_ScreenshotXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageScreenshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
+	for _, p := range mapToDBValid(t, (&GamelistXMLScraper{}), &rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -2671,7 +2706,7 @@ func TestProcessCompanionEntries_NoEntries(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	stats := s.processCompanionEntries(
@@ -2688,11 +2723,11 @@ func TestProcessCompanionEntries_ChildByExactPath(t *testing.T) {
 
 	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
 	childTags := []database.TagInfo{
-		{Type: string(tags.TagTypeRegion), Tag: "usa"},
+		{Type: string(tags.TagTypeRegion), Tag: "us"},
 		{Type: string(tags.TagTypeLang), Tag: "en"},
 	}
 	titleTags := []database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "dev-corp", Label: "Dev Corp"}}
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20),
 		companionWriteMatcher(childTags, titleTags, companionXMLGameIDProps("42"))).Return(nil)
 
@@ -2717,7 +2752,7 @@ func TestProcessCompanionEntries_ChildBySlugFile(t *testing.T) {
   </game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(30),
 		companionWriteMatcher(
 			nil,
@@ -2749,7 +2784,7 @@ func TestProcessCompanionEntries_ChildBySlugFileWritesAllTitleMedia(t *testing.T
   </game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
 	indexes := mediaByPath(
@@ -2797,7 +2832,7 @@ func TestProcessCompanionEntries_DuplicateSlugChildConsumesTitleMedia(t *testing
   <game parentid="99" source="ZaparooCompanion"><path>./myslug.slug</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
 	indexes := mediaByPath(
@@ -2837,7 +2872,7 @@ func TestProcessCompanionEntries_ConflictingChildSlugPrefersConsistentParent(t *
   <game parentid="30" source="ZaparooCompanion"><path>./phantasystar4.slug</path></game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(500),
 		companionWriteMatcher(
 			nil,
@@ -2992,7 +3027,7 @@ func TestProcessCompanionEntries_RewritesAlreadyScraped(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
 	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
@@ -3016,7 +3051,7 @@ func TestProcessCompanionEntries_ForceRewritesAlreadyScraped(t *testing.T) {
 			Tag:  runID,
 		})
 	})
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), runMarkerMatcher).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
@@ -3042,7 +3077,7 @@ func TestProcessCompanionEntries_SlugNotIndexed(t *testing.T) {
   </game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
@@ -3064,7 +3099,7 @@ func TestProcessCompanionEntries_ParentNotFoundForChild(t *testing.T) {
   </game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	stats := s.processCompanionEntries(
@@ -3100,7 +3135,7 @@ func TestProcessCompanionEntries_MapsIssue161CompanionArtwork(t *testing.T) {
 		propPrefix + string(tags.TagPropertyImageBoxart3D):   filepath.Join(root, "media", "box3d", "Doom.png"),
 		propPrefix + string(tags.TagPropertyImageWheel):      filepath.Join(root, "media", "logo", "Doom.png"),
 	}
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On(
 		"ApplyScrapeResult", mock.Anything, int64(10), int64(20), companionArtworkWriteMatcher(t, expectedArtwork),
 	).Return(nil)
@@ -3130,7 +3165,7 @@ func TestProcessCompanionEntries_ExternalCompanionArtwork(t *testing.T) {
 
 	childPath := filepath.ToSlash(filepath.Join(root, "Doom.rom"))
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On(
 		"ApplyScrapeResult", mock.Anything, int64(10), int64(20),
 		companionArtworkWriteMatcher(t, map[string]string{propKey: assetPath}),
@@ -3168,7 +3203,7 @@ func TestProcessCompanionEntries_StatsAggregateWithNormalProgress(t *testing.T) 
 		systemDBID         = int64(1)
 	)
 	companionPath := filepath.ToSlash(filepath.Join(root, "companion.rom"))
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{{
 			DBID: normalTitleDBID, SystemDBID: systemDBID, Slug: "normal-game", Name: "Normal Game",
@@ -3233,7 +3268,7 @@ func TestProcessCompanionEntries_EachChildUsesAtomicScrapeWrite(t *testing.T) {
 
 	child1Path := filepath.ToSlash(filepath.Join(root, "child1.rom"))
 	child2Path := filepath.ToSlash(filepath.Join(root, "child2.rom"))
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(20), mock.Anything).Return(nil)
 
@@ -3257,7 +3292,7 @@ func TestProcessCompanionEntries_UsesBatchWritesWhenAvailable(t *testing.T) {
   <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	indexes := mediaByPath(
@@ -3283,7 +3318,7 @@ func TestProcessCompanionEntries_DeduplicatesIdenticalTitleWrites(t *testing.T) 
   <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	indexes := mediaByPath(
@@ -3314,7 +3349,7 @@ func TestProcessCompanionEntries_PreservesConflictingTitleWrites(t *testing.T) {
   <game parentid="2" source="ZaparooCompanion"><path>./child2.rom</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	indexes := mediaByPath(
@@ -3350,7 +3385,7 @@ func TestProcessCompanionEntries_ThrottlesBatchProgress(t *testing.T) {
 	_, _ = xml.WriteString(`</gameList>`)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(xml.String()), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	ch := make(chan scraper.ScrapeUpdate, 128)
@@ -3395,7 +3430,7 @@ func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
   <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t)}
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	indexes := mediaByPath(
@@ -3440,7 +3475,7 @@ func TestProcessCompanionEntries_BatchFailureFallsBackToPerTargetWrites(t *testi
   <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
 </gameList>`), 0o600))
 
-	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI(), batchErr: assert.AnError}
+	mockDB := &batchMockMediaDB{t: t, MockMediaDBI: newMockMediaDB(t), batchErr: assert.AnError}
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(21), mock.Anything).Return(assert.AnError)
 
@@ -3473,7 +3508,7 @@ func TestProcessCompanionEntries_NoRegionLangStillWritesSentinel(t *testing.T) {
 </gameList>`), 0o600))
 
 	gamePath := filepath.ToSlash(filepath.Join(root, "game.rom"))
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(5), int64(6),
 		companionWriteMatcher(
 			nil,
@@ -3495,7 +3530,7 @@ func TestProcessCompanionEntries_AmbiguousSuffixMatchSkipped(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
 	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
@@ -3516,7 +3551,7 @@ func TestProcessCompanionEntries_FilenameNotIndexed(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
@@ -3575,7 +3610,7 @@ func TestScrapeLoop_ProgressIsPerSystem(t *testing.T) {
 	_, _ = builder.WriteString("</gameList>")
 	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(builder.String()), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
 		DBID: 1, SystemDBID: 10, Slug: "first", Name: "First",
 	}}, nil)
@@ -3645,7 +3680,7 @@ func TestScrapeLoop_PauseCancelBeforeNextSystemPreservesProgress(t *testing.T) {
 
 	pauser := syncutil.NewPauser()
 	paused := make(chan struct{})
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
 		DBID: 1, SystemDBID: 10, Slug: "first", Name: "First",
 	}}, nil)
@@ -3723,7 +3758,7 @@ func TestScrapeLoop_ProgressIncludesCompanionBaseline(t *testing.T) {
   <game><path>./normal.nes</path><name>Normal</name></game>
 </gameList>`), 0o600))
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
 		{DBID: 10, MediaTitleDBID: 1000, Path: companionPath},
 		{DBID: 11, MediaTitleDBID: 1001, Path: normalPath},
@@ -3771,7 +3806,7 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 		systemDBID = int64(100)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -3782,8 +3817,8 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 		Return(map[int64]struct{}{}, nil)
 	mediaTagMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
 		return w != nil && assert.ElementsMatch(t, []database.TagInfo{
-			{Type: string(tags.TagTypeRegion), Tag: "usa"},
-			{Type: string(tags.TagTypeRegion), Tag: "eur"},
+			{Type: string(tags.TagTypeRegion), Tag: "us"},
+			{Type: string(tags.TagTypeRegion), Tag: "eu"},
 			{Type: string(tags.TagTypeLang), Tag: "en"},
 		}, w.MediaTags)
 	})
@@ -3837,7 +3872,7 @@ func TestScrapeLoop_ForceResumeSkipsCompletedRunMedia(t *testing.T) {
 			Tag:  runID,
 		})
 	})
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{
 		{DBID: firstTitleDBID, SystemDBID: systemDBID, Slug: "first", Name: "First"},
 		{DBID: secondTitleDBID, SystemDBID: systemDBID, Slug: "second", Name: "Second"},
@@ -3916,10 +3951,12 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 			root, "media", "images", "Japan", "10-Yard Fight (Japan) (Rev 1).png",
 		)), got[imageProp]) && assert.Equal(t, filepath.ToSlash(filepath.Join(
 			root, "media", "box2dfront", "Japan", "10-Yard Fight (Japan) (Rev 1).png",
-		)), got[thumbnailProp])
+		)), got[thumbnailProp]) && assert.ElementsMatch(t, []string{
+			string(tags.TagGameGenreSportsFootball), string(tags.TagGameGenreSports),
+		}, tagValuesOfType(w.TitleTags, tags.TagTypeGenre))
 	})
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4067,6 +4104,11 @@ func TestScrapeLoop_UnreadableGamelistIsReported(t *testing.T) {
 		if w == nil {
 			return false
 		}
+		if !assert.ElementsMatch(t, []string{
+			string(tags.TagGameGenreActionPlatformer), string(tags.TagGameGenreAction),
+		}, tagValuesOfType(w.TitleTags, tags.TagTypeGenre)) {
+			return false
+		}
 		for _, p := range w.MediaProps {
 			if p.TypeTag == imageProp {
 				return p.Text == filepath.ToSlash(filepath.Join(
@@ -4077,7 +4119,7 @@ func TestScrapeLoop_UnreadableGamelistIsReported(t *testing.T) {
 		return false
 	})
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "C64").
@@ -4139,7 +4181,7 @@ func TestScrapeLoop_SlugOnlySingleMediaMatchWritesImageAndTitle(t *testing.T) {
 		systemDBID = int64(200)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4207,7 +4249,7 @@ func TestScrapeLoop_SlugOnlyMultipleMediaMatchDropsImage(t *testing.T) {
 		systemDBID = int64(200)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4264,7 +4306,7 @@ func TestScrapeLoop_ForceMode_Success(t *testing.T) {
 		systemDBID = int64(200)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("GetMediaBySystemID", "genesis").
 		Return([]database.MediaWithFullPath{{
 			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "sonic.md"),
@@ -4306,7 +4348,7 @@ func TestScrapeLoop_WriteError_RecordSkipped(t *testing.T) {
 		systemDBID = int64(300)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4353,7 +4395,7 @@ func TestScrapeLoop_AllMediaScraped_SkipsSystem(t *testing.T) {
 		systemDBID = int64(400)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4402,7 +4444,7 @@ func TestScrapeLoop_CompanionSkipsAlreadyScrapedMedia(t *testing.T) {
 		systemDBID = int64(401)
 	)
 
-	mockDB := helpers.NewMockMediaDBI()
+	mockDB := newMockMediaDB(t)
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
 		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
@@ -4560,7 +4602,7 @@ func TestMapToDB_FolderEntryFindsFolderNamedArtwork(t *testing.T) {
 		MatchKind:       gamelistMatchPathOnly,
 	}
 
-	mapped := (&GamelistXMLScraper{}).MapToDB(record)
+	mapped := mapToDBValid(t, (&GamelistXMLScraper{}), record)
 
 	desc, ok := propertyByType(mapped.TitleProps, tags.PropertyTypeTag(tags.TagPropertyDescription))
 	require.True(t, ok)

@@ -62,7 +62,7 @@ func TestScrapeLoop_ArcadeSetNameBundle(t *testing.T) {
 		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
 		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
 	}
-	mdb := helpers.NewMockMediaDBI()
+	mdb := newMockMediaDB(t)
 	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
 		DBID: 1, Slug: "pacman", Name: "Pac-Man", SystemDBID: 100,
 	}}, nil)
@@ -197,7 +197,7 @@ func TestArcadeArtworkFallbackAndBoundary(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(filepath.Dir(image), 0o750))
 	require.NoError(t, afero.WriteFile(fs, image, []byte("art"), 0o600))
 	s := &GamelistXMLScraper{fs: fs}
-	mapped := s.MapToDB(&GamelistRecord{
+	mapped := mapToDBValid(t, s, &GamelistRecord{
 		SystemRootPath: root, AssetRootPath: bundle, MatchKind: gamelistMatchArcadeSet,
 		MediaLevelWriteSafe: true, RequireExistingImage: true,
 		MediaDirsByRoot: []map[string]string{statMediaDirsFS(fs, bundle)},
@@ -354,7 +354,7 @@ func TestResolveSystemsKeepsCustomBundleWithoutLauncherPaths(t *testing.T) {
 		[]byte(`<gameList><game><path>./sf2.zip</path><name>Street Fighter II</name></game></gameList>`), 0o600))
 	pl := mocks.NewMockPlatform()
 	pl.SetupBasicMock()
-	mdb := helpers.NewMockMediaDBI()
+	mdb := newMockMediaDB(t)
 	mdb.On("IndexedSystems").Return([]string{systemdefs.SystemCPS1, systemdefs.SystemCPS2}, nil)
 	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS1).Return(database.System{DBID: 1}, nil)
 	mdb.On("FindSystemBySystemID", systemdefs.SystemCPS2).Return(database.System{DBID: 2}, nil)
@@ -395,7 +395,7 @@ func TestPlatformScraperGatesArcadeSetsByPlatform(t *testing.T) {
 			pl.On("Settings").Return(platforms.Settings{})
 			pl.On("RootDirs", mock.Anything).Return([]string{})
 			pl.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
-			mdb := helpers.NewMockMediaDBI()
+			mdb := newMockMediaDB(t)
 			mdb.On("IndexedSystems").Return([]string{}, nil)
 			cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 			require.NoError(t, err)
@@ -430,7 +430,7 @@ func TestArcadeArtworkFallbackExtensions(t *testing.T) {
 			image := filepath.Join(bundle, "media", "images", tc.artwork)
 			require.NoError(t, fs.MkdirAll(filepath.Dir(image), 0o750))
 			require.NoError(t, afero.WriteFile(fs, image, []byte("art"), 0o600))
-			mapped := (&GamelistXMLScraper{fs: fs}).MapToDB(&GamelistRecord{
+			mapped := mapToDBValid(t, (&GamelistXMLScraper{fs: fs}), &GamelistRecord{
 				SystemRootPath: t.TempDir(), AssetRootPath: bundle, MatchKind: gamelistMatchArcadeSet,
 				MediaLevelWriteSafe: true,
 				MediaDirsByRoot:     []map[string]string{statMediaDirsFS(fs, bundle)},
@@ -607,7 +607,7 @@ func TestScrapeLoop_ArcadeIndexCanceled(t *testing.T) {
 		[]byte(`<gameList><game><path>./pacman.zip</path><name>Pac-Man</name></game></gameList>`), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	mdb := helpers.NewMockMediaDBI()
+	mdb := newMockMediaDB(t)
 	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
 		DBID: 1, Slug: "pacman", Name: "Pac-Man", SystemDBID: 100,
 	}}, nil)

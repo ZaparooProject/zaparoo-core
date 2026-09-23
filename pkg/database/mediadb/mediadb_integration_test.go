@@ -74,7 +74,7 @@ func insertNESGameWithTag(t *testing.T, mediaDB *MediaDB) {
 	})
 	require.NoError(t, err)
 
-	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "action:platformer"})
 	require.NoError(t, err)
 
 	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: platformTag.DBID})
@@ -1257,7 +1257,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 
 	// Create tag type BEFORE transaction (TagType doesn't support transactions properly)
 	tagType := database.TagType{
-		Type: "Genre",
+		Type: "genre",
 	}
 	insertedTagType, err := mediaDB.FindOrInsertTagType(tagType)
 	require.NoError(t, err)
@@ -1276,7 +1276,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	// Create tags
 	actionTag := database.Tag{
 		TypeDBID:    insertedTagType.DBID,
-		Tag:         "Action",
+		Tag:         "action",
 		DisplayName: "Action",
 	}
 	insertedActionTag, err := mediaDB.FindOrInsertTag(actionTag)
@@ -1284,7 +1284,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 
 	platformerTag := database.Tag{
 		TypeDBID:    insertedTagType.DBID,
-		Tag:         "Platformer",
+		Tag:         "action:platformer",
 		DisplayName: "Platformer",
 	}
 	insertedPlatformerTag, err := mediaDB.FindOrInsertTag(platformerTag)
@@ -1348,7 +1348,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	filters := &database.SearchFilters{
 		Systems: []systemdefs.System{*nesSystem},
 		Query:   "mario",
-		Tags:    []zapscript.TagFilter{{Type: "Genre", Value: "Action"}},
+		Tags:    []zapscript.TagFilter{{Type: "genre", Value: "action"}},
 		Limit:   10,
 	}
 	results, err := mediaDB.SearchMediaWithFilters(ctx, filters)
@@ -1517,14 +1517,14 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 			systemDBID: insertedSNESSystem.DBID,
 			name:       "Super Mario World",
 			path:       "/roms/snes/Super Mario World.smc",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemID:   snesSystem.ID,
 			systemDBID: insertedSNESSystem.DBID,
 			name:       "Super Mario World 2: Yoshi's Island",
 			path:       "/roms/snes/Super Mario World 2 - Yoshi's Island.smc",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemID:      snesSystem.ID,
@@ -1534,35 +1534,35 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 			path: filepath.Join(
 				string(filepath.Separator), "roms", "snes", "Zelda - A Link to the Past.smc",
 			),
-			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "adventure"}},
 		},
 		{
 			systemID:   nesSystem.ID,
 			systemDBID: insertedNESSystem.DBID,
 			name:       "Super Mario Bros",
 			path:       "/roms/nes/Super Mario Bros.nes",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemID:   nesSystem.ID,
 			systemDBID: insertedNESSystem.DBID,
 			name:       "Super Mario Bros 2",
 			path:       "/roms/nes/Super Mario Bros 2.nes",
-			tags:       []database.TagInfo{{Type: "region", Tag: "japan"}, {Type: "genre", Tag: "platform"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "jp"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemID:   nesSystem.ID,
 			systemDBID: insertedNESSystem.DBID,
 			name:       "Dr. Mario",
 			path:       "/roms/nes/Dr. Mario.nes",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "puzzle"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "puzzle"}},
 		},
 		{
 			systemID:   nesSystem.ID,
 			systemDBID: insertedNESSystem.DBID,
 			name:       "Ms. Pac-Man",
 			path:       "/roms/nes/Ms. Pac-Man.nes",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "maze"}},
+			tags:       []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:maze"}},
 		},
 	}
 
@@ -1633,21 +1633,21 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Len(t, results, 1) // Only Super Mario World (exact match)
 
 	// Test 3: Slug search with tag filtering
-	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "us"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1) // Only Super Mario World (exact match) and it's USA region
 
 	// Test 4: Slug search with restrictive tag filtering
-	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "jp"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Empty(t, results) // No Japanese SNES Mario games
 
 	// Test 5: Slug search with multiple tag filters (AND logic)
 	tags = []zapscript.TagFilter{
-		{Type: "region", Value: "usa"},
-		{Type: "genre", Value: "platform"},
+		{Type: "region", Value: "us"},
+		{Type: "genre", Value: "action:platformer"},
 	}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
@@ -1659,33 +1659,33 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	require.NotNil(t, cache)
 	require.True(t, cache.CanServeSystems([]string{"SNES"}))
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "jp"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "us"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "jp"}}
 	results, err = mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "zelda3", tags)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "us"}}
 	results, err = mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "zelda3", tags)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "The Legend of Zelda: A Link to the Past", results[0].Name)
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "jp"}}
 	results, err = mediaDB.SearchMediaBySlugPrefix(ctx, "SNES", "supermarioworld2", tags)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 
-	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "us"}}
 	results, err = mediaDB.SearchMediaBySlugPrefix(ctx, "SNES", "supermarioworld2", tags)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -1730,7 +1730,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Len(t, results[0].Tags, 2) // region:usa and genre:puzzle
-	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "region", Tag: "usa"})
+	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "region", Tag: "us"})
 	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "genre", Tag: "puzzle"})
 
 	// Test 13: Lowercase slug matching (slugs are always normalized to lowercase)
@@ -1796,7 +1796,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 
 	usaTag := database.Tag{
 		TypeDBID: regionTagType.DBID,
-		Tag:      "usa",
+		Tag:      "us",
 	}
 	insertedTag, err := mediaDB.FindOrInsertTag(usaTag)
 	require.NoError(t, err)
@@ -2434,24 +2434,24 @@ func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
 	games := []testGame{
 		{
 			systemDBID: insertedNES.DBID, name: "Super Mario Bros", path: "/roms/nes/smb.nes",
-			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemDBID: insertedNES.DBID, name: "Super Mario Bros 2", path: "/roms/nes/smb2.nes",
-			tags: []database.TagInfo{{Type: "region", Tag: "japan"}, {Type: "genre", Tag: "platform"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "jp"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemDBID: insertedNES.DBID, name: "Dr. Mario", path: "/roms/nes/dr_mario.nes",
-			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "puzzle"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "puzzle"}},
 		},
 		{
 			systemDBID: insertedSNES.DBID, name: "Super Mario World", path: "/roms/snes/smw.smc",
-			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "action:platformer"}},
 		},
 		{
 			systemDBID: insertedSNES.DBID, name: "The Legend of Zelda: A Link to the Past", secSlug: "zelda3",
 			path: "/roms/snes/zelda_lttp.smc",
-			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+			tags: []database.TagInfo{{Type: "region", Tag: "us"}, {Type: "genre", Tag: "adventure"}},
 		},
 	}
 
@@ -4103,7 +4103,7 @@ func TestMediaDB_RebuildTagCache_SelectiveIndexingWarmsTouchedAndUntouchedSystem
 		"Super Mario Bros",
 		filepath.Join("roms", "nes", "smb.nes"),
 		"genre",
-		"platform",
+		"action:platformer",
 	)
 	insertTaggedGame(
 		t,
@@ -4138,7 +4138,7 @@ func TestMediaDB_RebuildTagCache_SelectiveIndexingWarmsTouchedAndUntouchedSystem
 
 	nesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
 	require.NoError(t, err)
-	assert.Contains(t, nesTags, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+	assert.Contains(t, nesTags, database.TagInfo{Type: "genre", Tag: "action:platformer", Count: 1})
 
 	snesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*snesSystem})
 	require.NoError(t, err)
@@ -4189,13 +4189,13 @@ func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// File-level tag (MediaTags): region:usa
-	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: "usa"})
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: "us"})
 	require.NoError(t, err)
 	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: usaTag.DBID})
 	require.NoError(t, err)
 
 	// Title-level tag (MediaTitleTags): genre:platform
-	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "action:platformer"})
 	require.NoError(t, err)
 
 	err = mediaDB.CommitTransaction()
@@ -4215,8 +4215,8 @@ func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 	assert.Equal(t, "Super Mario Bros", result.Name)
 	assert.Len(t, result.Tags, 2, "should have both file-level and title-level tags")
-	assert.Contains(t, result.Tags, database.TagInfo{Type: "region", Tag: "usa"})
-	assert.Contains(t, result.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+	assert.Contains(t, result.Tags, database.TagInfo{Type: "region", Tag: "us"})
+	assert.Contains(t, result.Tags, database.TagInfo{Type: "genre", Tag: "action:platformer"})
 
 	// --- Title-level only: media with no file-level tags ---
 	err = mediaDB.BeginTransaction(false)
@@ -4249,7 +4249,7 @@ func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
 	result2, err := mediaDB.GetMediaByDBID(ctx, insertedMedia2.DBID)
 	require.NoError(t, err)
 	assert.Len(t, result2.Tags, 1, "should have only the title-level tag")
-	assert.Contains(t, result2.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+	assert.Contains(t, result2.Tags, database.TagInfo{Type: "genre", Tag: "action:platformer"})
 
 	// --- Dedup: same tag at both file and title level ---
 	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
@@ -4260,8 +4260,8 @@ func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
 	result3, err := mediaDB.GetMediaByDBID(ctx, insertedMedia.DBID)
 	require.NoError(t, err)
 	assert.Len(t, result3.Tags, 2, "DISTINCT should deduplicate tag present at both levels")
-	assert.Contains(t, result3.Tags, database.TagInfo{Type: "region", Tag: "usa"})
-	assert.Contains(t, result3.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+	assert.Contains(t, result3.Tags, database.TagInfo{Type: "region", Tag: "us"})
+	assert.Contains(t, result3.Tags, database.TagInfo{Type: "genre", Tag: "action:platformer"})
 }
 
 // TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration is a regression
@@ -4308,7 +4308,7 @@ func TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration(t *testin
 	allTags, err := mediaDB.GetAllUsedTags(ctx)
 	require.NoError(t, err)
 	assert.NotEmpty(t, allTags, "GetAllUsedTags must return tags even after UpdateLastGenerated wipes SystemTagsCache")
-	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "action:platformer", Count: 1})
 
 	// Repopulate as the corrected NewNamesIndex does (after UpdateLastGenerated).
 	err = mediaDB.PopulateSystemTagsCache(ctx)
@@ -4320,7 +4320,7 @@ func TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration(t *testin
 	allTagsAfter, err := mediaDB.GetAllUsedTags(ctx)
 	require.NoError(t, err)
 	assert.NotEmpty(t, allTagsAfter, "GetAllUsedTags must return tags after post-UpdateLastGenerated repopulation")
-	assert.Contains(t, allTagsAfter, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+	assert.Contains(t, allTagsAfter, database.TagInfo{Type: "genre", Tag: "action:platformer", Count: 1})
 }
 
 // TestMediaDB_GetAllUsedTags_NilInMemoryCache_Integration is a regression test for
@@ -4349,7 +4349,7 @@ func TestMediaDB_GetAllUsedTags_NilInMemoryCache_Integration(t *testing.T) {
 	allTags, err := mediaDB.GetAllUsedTags(ctx)
 	require.NoError(t, err)
 	assert.NotEmpty(t, allTags, "GetAllUsedTags must fall through to SQL when in-memory cache is nil")
-	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "action:platformer", Count: 1})
 }
 
 // TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration verifies that
@@ -4393,7 +4393,7 @@ func TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration(t *testing
 	})
 	require.NoError(t, err)
 
-	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "action:platformer"})
 	require.NoError(t, err)
 
 	// File-level contribution (MediaTags): Count += 1
@@ -4442,9 +4442,9 @@ func TestMediaDB_PopulateSystemTagsCache_LegacyQueryEquivalence_Integration(t *t
 
 	require.NoError(t, mediaDB.BeginTransaction(false))
 
-	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreType.DBID, Tag: "platform"})
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreType.DBID, Tag: "action:platformer"})
 	require.NoError(t, err)
-	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "usa"})
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "us"})
 	require.NoError(t, err)
 
 	for sysIdx, sysID := range []string{"NES", "SNES"} {

@@ -28,7 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -57,7 +56,7 @@ func TestScrapeScopedGamelist(t *testing.T) {
 </gameList>`
 			}
 			require.NoError(t, afero.WriteFile(fs, filepath.Join(root, "gamelist.xml"), []byte(xmlData), 0o600))
-			mdb := helpers.NewMockMediaDBI()
+			mdb := newMockMediaDB(t)
 			scope := &database.ScrapeScope{SystemID: "NES", Path: path, MediaID: 1}
 			opts := scraper.ScrapeOptions{Scope: scope, Force: mode == "force" || mode == "resume"}
 			runID := ""
@@ -134,7 +133,7 @@ func TestScrapeScopedGamelist_UnreadableRootKeepsProgress(t *testing.T) {
 
 	path := filepath.ToSlash(filepath.Join(goodRoot, "Game.nes"))
 	scope := &database.ScrapeScope{SystemID: "NES", Path: path, MediaID: 1}
-	mdb := helpers.NewMockMediaDBI()
+	mdb := newMockMediaDB(t)
 	mdb.On("GetScrapeMedia", mock.Anything, *scope).Return([]database.MediaFullRow{{
 		Media:  database.Media{DBID: 1, MediaTitleDBID: 10, Path: path},
 		Title:  database.MediaTitle{DBID: 10, SystemDBID: 100, Name: "Game", Slug: "game"},

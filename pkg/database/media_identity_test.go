@@ -68,8 +68,7 @@ func TestLookupMediaIdentity_CapturesCompleteScannerSnapshot(t *testing.T) {
 			{Type: "user", Tag: "favorite"},
 			{Type: "property", Tag: "description"},
 			{Type: "rating", Tag: "95"},
-			{Type: "genre", Tag: "platformer"},
-			{Type: "gamefamily", Tag: "mario"},
+			{Type: "genre", Tag: "action:platformer"},
 			{Type: "scraper.gamelist.xml", Tag: "scraped"},
 			{Type: "scraper-run.gamelist.xml", Tag: "run-1"},
 		}, nil).Once()

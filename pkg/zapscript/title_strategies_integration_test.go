@@ -1944,7 +1944,7 @@ func TestResolveTitle_CachedResolutionKeepsItsConfidence(t *testing.T) {
 		{Type: "publisher", Tag: "b"},
 		{Type: "year", Tag: "1986"},
 		{Type: "video", Tag: "ntsc"},
-		{Type: "edition", Tag: "x"},
+		{Type: "edition", Tag: "remaster"},
 		{Type: "region", Tag: "us"},
 	}))
 
@@ -1956,7 +1956,7 @@ func TestResolveTitle_CachedResolutionKeepsItsConfidence(t *testing.T) {
 	}{
 		{
 			name:     "weak match",
-			gameName: "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:x) (region:eu)",
+			gameName: "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:remaster) (region:eu)",
 			slug:     "metroid",
 			weak:     true,
 		},

@@ -80,7 +80,7 @@ func TestAllTagMappingsValid(t *testing.T) {
 	requiredTypes := []TagType{
 		TagTypeInput,
 		TagTypePlayers,
-		TagTypeGameGenre,
+		TagTypeGenre,
 		TagTypeAddon,
 		TagTypeEmbedded,
 		TagTypeSave,
@@ -132,13 +132,13 @@ func TestCanonicalTagStringFormat(t *testing.T) {
 	}{
 		{
 			name:     "flat tag with no value",
-			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: "", Source: TagSourceBracketed},
-			expected: "gamegenre",
+			tag:      CanonicalTag{Type: TagTypeGenre, Value: "", Source: TagSourceBracketed},
+			expected: "genre",
 		},
 		{
 			name:     "hierarchical tag with value",
-			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: "action:platformer", Source: TagSourceBracketed},
-			expected: "gamegenre:action:platformer",
+			tag:      CanonicalTag{Type: TagTypeGenre, Value: "action:platformer", Source: TagSourceBracketed},
+			expected: "genre:action:platformer",
 		},
 		{
 			name:     "simple tag with value",

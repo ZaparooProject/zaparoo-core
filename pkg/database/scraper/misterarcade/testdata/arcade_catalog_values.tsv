@@ -1,0 +1,2056 @@
+# Distinct values of the MiSTer arcade catalog columns the misterarcade
+# mapper reads, pinned so the coverage tests do not depend on the
+# gitignored, build-time download of the moving upstream file.
+# Source: https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/main/ArcadeDatabase.csv
+# (GPL-3.0), fetched 2026-09-24, md5 4ff5affea69fbce0c3791492c2af43f9.
+# Refresh it from a newer catalog when upstream adds values, then curate
+# whatever the coverage tests report. Format: column<TAB>value.
+region	Argentina
+region	Asia
+region	Brazil
+region	Canada
+region	China
+region	Etc.
+region	Europe
+region	France
+region	Germany
+region	Greece
+region	Hispanic
+region	Hong Kong
+region	Italy
+region	Japan
+region	Korea
+region	Spain
+region	Taiwan
+region	UK
+region	US
+region	USA
+region	USA - Asia
+region	World
+region	bootleg
+version	(AT- HK) (Sat Feb 3 1996)
+version	(EU- US - JP - AS) (Sat Feb 3 1996)
+version	(KO-GR)
+version	(New version) (P0-041A PCB)
+version	(P0-028-A PCB)
+version	(TW- DE) (Thu Feb 1 1996)
+version	(Wed Jan 17 1996)
+version	(Zakk roms) (EU- US - JP - AS) (Sat Feb 3 1996)
+version	(old version) (P0-041A PCB)
+version	(prototype) (P0-041-1 PCB)
+version	(unknown version) (P0-041A PCB)
+version	001128 V1.200
+version	010117, Second Loop
+version	02-03-88
+version	1010
+version	1011
+version	10117
+version	10205
+version	10226
+version	10302
+version	10820
+version	111187 Sound Program
+version	12-26-1985
+version	121
+version	128k Version, 315-5051
+version	160117
+version	1986 Year Hack
+version	1P Set
+version	2 Marios
+version	2 Player, Rev 1
+version	2 Player, Version -
+version	2 Player, Version 1
+version	2 Player, Version U
+version	2 Players
+version	2 Players, FD1094 317-0080
+version	2 Players, Rev 1
+version	2 Players, Rev 2
+version	2 Players, Rev 3
+version	2 Players, Rev 4
+version	2 Players, Rev 5
+version	2 Players, Rev 6
+version	2 player alternating
+version	2 player cooperative
+version	2002.05.15 Master Ver
+version	2003.01.01. Master Ver.
+version	2003.10.15 Master Ver
+version	2006 BIOS
+version	210408
+version	255 Maze Fix
+version	255th Maze Fix
+version	2600 GFX
+version	2K0411
+version	2P
+version	2P Set
+version	31222
+version	315-5030
+version	315-5033, Rev A
+version	315-5041
+version	315-5048
+version	315-5056
+version	315-5064
+version	315-5093
+version	315-5102
+version	315-5110
+version	315-5115, New Ver
+version	315-5135
+version	315-5162
+version	315-5xxx
+version	317-0006
+version	317-0011a
+version	317-0015
+version	317-0016
+version	317-0018
+version	317-5000
+version	32k Ver
+version	4 Player, Version -
+version	4 Player, Version 2
+version	4 Player, Version F
+version	4 Player, Version H
+version	4 Player, Version J
+version	4 Player, Version N
+version	4 Player, Version R
+version	4 Player, Version S
+version	4 Player, Version X
+version	4 Players
+version	4 Players, 8751 315-5194
+version	4 Players, FD1094 317-0070
+version	4 Players, FD1094 317-0071
+version	4 Players, FD1094 317-0074
+version	4 Players, Prototype
+version	40202
+version	412
+version	6 Bullet
+version	620
+version	68705
+version	8085A CPU
+version	851115
+version	851115, Censored
+version	851115, Set 1
+version	851115, Set 2
+version	860408
+version	861128
+version	861129
+version	861202
+version	8751 317-0010
+version	88622B-3
+version	89624B
+version	900112
+version	900227
+version	900302
+version	900305
+version	900405
+version	900424
+version	900608
+version	900613
+version	900619
+version	900623
+version	900715
+version	900725
+version	901012
+version	901109
+version	901120
+version	901130
+version	901990
+version	910129
+version	910204
+version	910204, Conversion
+version	910206
+version	910214
+version	910306
+version	910318
+version	910411
+version	910513
+version	910520
+version	910522
+version	910522, Rev G
+version	910522, Rev H
+version	910522, Rev I
+version	910711
+version	910731
+version	910805
+version	910910
+version	911014
+version	911101
+version	911127
+version	911127, B-Board 89625B-1
+version	911127, B-Board 91634B-2
+version	911202
+version	911210, CPS-B-13
+version	911210, CPS-B-17
+version	920312
+version	920313
+version	920322
+version	920513
+version	920520
+version	920611
+version	920611, B-Board 90629B-3, no battery
+version	920611, B-Board 91634B-2
+version	920612
+version	920701
+version	920714
+version	920714 Resale
+version	920803
+version	920928
+version	921002
+version	921005
+version	921031
+version	921209
+version	925
+version	930201
+version	930223
+version	930422
+version	930713
+version	930910
+version	930911
+version	930914
+version	931005
+version	931119
+version	931203
+version	931206
+version	931220 L, Prototype
+version	940113
+version	940125
+version	940215
+version	940223
+version	940223, Training Edition
+version	940311
+version	940322
+version	940323
+version	940412
+version	940520
+version	940524
+version	940608
+version	940630
+version	940705
+version	940705, alt
+version	940808
+version	940818
+version	940831
+version	940902
+version	940916
+version	940920
+version	941011
+version	941024
+version	941208, rent version
+version	941217
+version	941219
+version	941219, Unlocked
+version	941222
+version	950105
+version	950117 V1.000
+version	950123
+version	950302
+version	950307
+version	950307, stop version
+version	950314 V2.001
+version	950316
+version	950331
+version	950403
+version	950406
+version	950407 V1.000
+version	950420
+version	950424
+version	950428 V1.000
+version	950511
+version	950601
+version	950605
+version	950613 V1.000
+version	950623 V1.005
+version	950627
+version	950718
+version	950727
+version	950727, Unlocked
+version	950913 V0.990
+version	950922
+version	951006
+version	951020 V1.208
+version	951024
+version	951109
+version	951114 V1.000
+version	951117
+version	951117, Unlocked
+version	951207
+version	951218
+version	951218 V1.000
+version	951225
+version	960104
+version	960108 V1.000
+version	960206
+version	960208
+version	960209
+version	960213 V1.000
+version	960223
+version	960227
+version	960229
+version	960229, Training Edition
+version	960304
+version	960306
+version	960314 V1.000
+version	960319 V0.000
+version	960430
+version	960507 V1.000
+version	960515 V1.000
+version	960529
+version	960531
+version	960619
+version	960620
+version	960708
+version	960709 V1.001
+version	960712
+version	960805
+version	960805, Unlocked
+version	960813
+version	960821 V1.000
+version	960826
+version	960826, Unlocked
+version	960909
+version	960910
+version	960910 V1.000
+version	960919
+version	961004
+version	961023
+version	961023, NO CD
+version	961115 V0.001
+version	961121, NO CD
+version	961209 V1.000
+version	961226 V1.000
+version	970204, NO CD, BIOS set 1
+version	970204, NO CD, BIOS set 2
+version	970319
+version	970416 V1.001
+version	970519
+version	970519, Aesthetic Mod v1.3
+version	9705199, Aesthetic Mod
+version	9705199, Training Edition
+version	9705199, Unlocked
+version	970620
+version	970625
+version	970702
+version	970707
+version	970707, Unlocked
+version	970722
+version	970827
+version	970902 V1.000
+version	970904
+version	970913
+version	970929
+version	970930, NO CD
+version	971007 V1.010
+version	971012 V1.000
+version	971017
+version	971110 V0.001
+version	971123 V1.000
+version	971212 V1.000
+version	971216 V1.000
+version	971222
+version	980112
+version	980112, Onslaught Edition
+version	980123
+version	980123, Single PCB
+version	980123, Unlocked
+version	980124
+version	980216 V1.000
+version	980318 V0.105
+version	980410 V1.000
+version	980423 V1.002
+version	980514 V1.002
+version	980523 V1.000
+version	980608 V1.000
+version	980616, SAMPLE Version
+version	980629
+version	980629, Training Edition v1.1
+version	980701
+version	980709 V1.000
+version	980727
+version	980904
+version	980904, Unlocked
+version	980922 V1.006
+version	981009 Japan
+version	981110 V1.000
+version	981202, NO CD
+version	990108, NO CD
+version	990128, NO CD
+version	990222
+version	990512, NO CD
+version	990519
+version	990527
+version	990607 V1.400
+version	990608, NO CD
+version	990930 V1.100
+version	Accelerator Pt. II
+version	Accelerator, Set 1
+version	Accelerator, Set 2
+version	Alt
+version	Alt.
+version	Alternate
+version	Alternative Levels
+version	Amidar, Artemi
+version	Amstar, Set 1
+version	Amstar, Set 2
+version	Arfyc
+version	Assa, Spanish
+version	Asteroids
+version	Asteroids, Proel
+version	Asteroids, Spanish
+version	Asteroids, VGG
+version	Atari
+version	Atari, Rev 1
+version	Atari, Rev 2
+version	Attract Mode
+version	B-Board 89624B-1
+version	B-Board, 89624B-2
+version	B-Board, 89624B-3
+version	B-Board, 89625B-1
+version	B-Board, 90629B-3
+version	BKG
+version	Baby Maze 1
+version	Baby Maze 2
+version	Baby Maze 3
+version	Baby Maze 4
+version	Barrel Control Coloring
+version	Bell
+version	Bootleg
+version	Bootleg BA
+version	Bubble Bobble
+version	Bubble Bobble PCB
+version	Bubble System
+version	Budweiser
+version	Budweiser, 831209
+version	Budweiser, 840127
+version	Budweiser, 840127, Alt. GFX
+version	Bug Sprites
+version	C64 BGM
+version	CPS 1.5 Qsound
+version	CPS Changer
+version	CPS Changer, 950727
+version	CPS Changer, 951020
+version	CPS-2, 950922
+version	CPS1.5 Qsound
+version	CPS2, 950925, SAMPLE Version
+version	CPS2, 950926, SAMPLE Version
+version	CPS2, 951006, SAMPLE Version
+version	Cadillacs and Dinosaurs, CPS1, Chinese
+version	Cameltry Conversion
+version	Casino Tech
+version	Centuri
+version	Centuri, Earlier
+version	Centuri, Set 1
+version	Centuri, Set 2
+version	Cheat
+version	Chinese
+version	Chinese, Sangokushi II
+version	Cockpit, German, Rev 1
+version	Cockpit, Rev 1
+version	Cockpit, Rev 2
+version	Cocktail
+version	Cocktail, Prototype
+version	Cocktail, Set 1
+version	Cocktail, Set 2
+version	Color Hack
+version	Comodo
+version	Cruisin
+version	Crunchy
+version	Crush Roller Hardware
+version	D and L
+version	DS2
+version	DStreet-6
+version	Data East, Set 2
+version	Dig Dug Conversion, Set 2
+version	Dooyong License
+version	Dual PCB
+version	EAB
+version	EPROM version
+version	Earlier
+version	Earlier Code
+version	Early Test Version
+version	Edition
+version	Electric Cowboy
+version	Electrogame, Spanish, Phoenix
+version	Engineering Sample
+version	English
+version	English Prototype
+version	English, Spanish, Set 1
+version	English, Virtual Console
+version	Ex Super, v090210
+version	Extra Version
+version	FD1089A 317-0018
+version	FD1089A 317-0022
+version	FD1089B 317-5021
+version	FD1089B 317-unknown
+version	FD1089B 317-xxxx
+version	FD1094 317-0041
+version	FD1094 317-0045
+version	FD1094 317-0046
+version	FD1094 317-0053
+version	FD1094 317-0059
+version	FD1094 317-0060
+version	FD1094 317-0079
+version	FD1094 317-0139
+version	FD1094 317-0146
+version	FD1094 317-0147
+version	FD1094 317-0148
+version	FD1094 317-0154
+version	FD1094 317-0164
+version	FD1094 317-0165
+version	FD1094 317-0166
+version	FD1094 317-0175
+version	FD1094 317-0176
+version	FD1094 317-0182
+version	FD1094 317-0184
+version	FD1094 317-0185
+version	FD1094 317-0186
+version	FD1094 317-0187
+version	FD1094 317-0190
+version	FD1094 317-0194
+version	FD1094 317-0196
+version	FD1094 317-0197A
+version	FD1094 317-0197B
+version	FD1094 317-0198A
+version	FD1094 317-5023
+version	FD1094-8751 317-0157
+version	FD1094-8751 317-0158
+version	FD1094-8751 317-0159
+version	FR Revision 1
+version	FT Revision 1
+version	FT Version
+version	FU Version
+version	FX version
+version	Fast
+version	Fast Shoot
+version	Fast Shoot, Set 1
+version	Fillmore license
+version	First Version
+version	Foundry
+version	Foundry, Hack
+version	Free Play
+version	Freerun
+version	French Speech, Rev RC31
+version	Fri Feb 13 1998
+version	G. Universal Video
+version	GDR
+version	GFX Fix
+version	GP2
+version	GP2 Rev B
+version	GP3
+version	GP3 Rev C
+version	GP3 Rev D
+version	GalagaX + C64 Music
+version	Galaxian Hardware
+version	Galaxy X
+version	Game Corporation, Set 1
+version	Game Corporation, Set 2
+version	German
+version	German Speech, Rev RC31
+version	Greek
+version	Gyruss
+version	Hack
+version	Hack, v0.29.7
+version	Hard
+version	Hearts
+version	Hellomat Automaten
+version	I-Vics
+version	Irecsa
+version	Irecsa - G.G.I Corp, Set 1
+version	Irecsa - G.G.I Corp, Set 2
+version	Irecsa - G.G.I Corp, Set 3
+version	Irecsa - G.G.I Corp, Set 4
+version	Irem
+version	Italian Bootleg, Harder
+version	Itisa
+version	JT, Set 1
+version	Jail
+version	Japan YM2610
+version	Japan, Set 1
+version	Japan, Set 2
+version	Japanese
+version	Jeutal
+version	Joystick
+version	Karateco
+version	Karateco, Set 1
+version	Karateco, Set 2
+version	Konami Bugfixed
+version	Kyoei
+version	Kyoko
+version	Lady Bug, Set 2
+version	Laguna, Spanish, Phoenix
+version	Latest Version
+version	Level Select Set 1
+version	Level Select, Set 2
+version	Level Select, Set 3
+version	Level Selection
+version	M10
+version	M107 hardware
+version	M3
+version	M72 hardware
+version	MC-8123
+version	MC-8123, 317-0040
+version	MC-8123, 317-0042
+version	MC-8123, 317-0064
+version	MC8123, 317-0057
+version	MCR-3 Mono Board Version
+version	Marti Colls
+version	Mask Rom version
+version	Maze 1
+version	Maze 2
+version	Maze 3
+version	Maze 4
+version	Midway
+version	Midway, Cocktail
+version	Midway, Harder
+version	Midway, Set 1
+version	Midway, Speedup
+version	Mixed
+version	Mon Dec 22 1997
+version	Moon Cresta hardware
+version	Moon Patrol
+version	Moonaln
+version	Ms. Pac-Man Attack 1
+version	Ms. Pac-Man Attack 2
+version	Ms. Pac-Man Attack 3
+version	Ms. Pac-Man Attack 4
+version	Ms. Pac-Man Maze 1
+version	Ms. Pac-Man Maze 2
+version	Ms. Pac-Man Maze 3
+version	Ms. Pac-Man Maze 4
+version	Mstreet-6, Set 1
+version	Mstreet-6, Set 2
+version	Mstreet-6, Set 3
+version	Namco
+version	Namco Rev. B
+version	Namco, Set 1
+version	New
+version	New Invasion
+version	New Legacy v0.4
+version	New Ver
+version	New Ver.
+version	New Ver. (DS3)
+version	New Ver. (YD2, Rev B)
+version	New Version (AT- HK) (Sat Mar 2 1996)
+version	New Version, SH3
+version	New Version, Virtual Console
+version	Newer
+version	Niemer
+version	Niemer S.A.
+version	No Level Select
+version	No Protection
+version	Old
+version	Old Ver
+version	Old Ver. (DS1)
+version	Old Ver. (YD1)
+version	Old Version, SH2
+version	Old Version, Virtual Console
+version	Old ver
+version	Older
+version	Oldest
+version	Orca Bootleg
+version	Original Inviso
+version	Pac-Man Conversion
+version	Pac-Man Font
+version	Pac-Man GFX
+version	Pac-Man Hardware
+version	Pace
+version	Patched
+version	Patched, Blue-201
+version	Pauline, Rev 5
+version	Petaco S.A.
+version	Phoenix
+version	Phoenix Edition
+version	Phoenix, 8085A CPU
+version	Phoenix, Z80 CPU, Single PROM
+version	Playtronic
+version	Pneumatic Buttons
+version	Ponpoko with Mario
+version	Popeye
+version	Popeye, Cheat
+version	Popeye, Fast
+version	Program 1
+version	Program code G
+version	Program code I
+version	Protected
+version	Protected, Set 2
+version	Prototype
+version	Quicken
+version	Quicken Pt. 1
+version	RE
+version	Rainbow, Set 3
+version	Recreativos Franco, Spanish, Phoenix
+version	Red
+version	Red Label
+version	Red Wave
+version	Red Wave Pt. II
+version	Redux, for BB PCB
+version	Remix, Rev 1.8
+version	Rental Version
+version	Resale
+version	Resale, 940921
+version	Rescue
+version	Rev 0
+version	Rev 0.2
+version	Rev 04
+version	Rev 1
+version	Rev 1+
+version	Rev 1.0
+version	Rev 1.3, DE-0397-0 PCB
+version	Rev 1.4
+version	Rev 1.6
+version	Rev 1.9
+version	Rev 10
+version	Rev 12
+version	Rev 13
+version	Rev 14
+version	Rev 15
+version	Rev 2
+version	Rev 2, 860804
+version	Rev 3
+version	Rev 3 hack
+version	Rev 3, 860827
+version	Rev 4
+version	Rev 4.0 09-28-92
+version	Rev 5
+version	Rev 6
+version	Rev 7
+version	Rev 7.00
+version	Rev 8
+version	Rev 8.00
+version	Rev 9
+version	Rev A
+version	Rev A, 4 Players
+version	Rev A, 88616B
+version	Rev A, FD1089A 317-0022
+version	Rev A, FD1094 317-5023A
+version	Rev A, No Protection
+version	Rev AA, 88618B-2
+version	Rev B
+version	Rev C
+version	Rev C, 88618B-2
+version	Rev C, 88621B-2
+version	Rev C, FD1089A 317-0022
+version	Rev D
+version	Rev E
+version	Rev E, 88618B-2
+version	Rev G
+version	Rev LA1
+version	Rev LA1 01-10-92
+version	Rev LA4 08-03-92
+version	Rev LA5 02-15-91
+version	Rev Old
+version	Rev RA1
+version	Rev RC28
+version	Rev RC31
+version	Rev. 1
+version	Rev. 2
+version	Rev. 3
+version	Rev. 4
+version	Rev. 5
+version	Rev. A, unprotected
+version	Rev. B
+version	Reverse
+version	Revised Code
+version	Revised Hardware
+version	Revised Sound hw
+version	Revised code, Rev 1
+version	Revision 1
+version	Revision 2
+version	Rom Version
+version	Romstar
+version	Root Beer
+version	Rotary
+version	S16A, FD1089B 317-0027
+version	S16A, No Protection
+version	S16A, Set 6, No Protection
+version	S16A,Old Ver
+version	S16B, FD1089A 317-0028
+version	S16B, Set 1
+version	S16B, Set 2
+version	S16B, Set 3
+version	S16B, Set 4
+version	S16B, Set 5, No Protection
+version	S16B, Set 6, No Protection
+version	SB1
+version	SB2
+version	SC
+version	SH1
+version	SP Ver
+version	SP Ver Old
+version	Satsuei Version
+version	Scramble
+version	Scramble Hardware
+version	Scramble ver
+version	Scramble, Spanish
+version	Sega
+version	Sega, Set 2
+version	Set 1
+version	Set 1 bootleg with I8031
+version	Set 1, 315-5177
+version	Set 1, 317-0021
+version	Set 1, 8751 317-0095
+version	Set 1, 8751 317-0099
+version	Set 1, Alpha68k II PCB
+version	Set 1, FD1089A 317-0167
+version	Set 1, FD1094 317-0110
+version	Set 1, FD1094 317-0127A
+version	Set 1, FD1094 317-0131
+version	Set 1, FD1094 317-0142
+version	Set 1, Rev A
+version	Set 1, Rev C
+version	Set 1, unprotected
+version	Set 2
+version	Set 2 bootleg with I8031
+version	Set 2, 317-0115
+version	Set 2, 8751 317-0104
+version	Set 2, 8751 317-0112
+version	Set 2, FD1089B 317-0168
+version	Set 2, FD1094 317-0094
+version	Set 2, FD1094 317-0127A
+version	Set 2, FD1094 317-0128
+version	Set 2, FD1094 317-0143
+version	Set 2, No Protection
+version	Set 2, Rev B
+version	Set 2, bootleg?
+version	Set 3
+version	Set 3, FD1094 317-0096
+version	Set 3, FD1094 317-0116
+version	Set 3, FD1094 317-0120
+version	Set 3, FD1094 317-0129
+version	Set 3, bootleg
+version	Set 3, unprotected
+version	Set 4
+version	Set 4, FD1094 317-0121
+version	Set 4, FD1094 317-0130
+version	Set 4, earlier
+version	Set 5
+version	Set 5, FD1094 317-0122
+version	Set 6
+version	Set 6, 8751 317-123A
+version	Set 7
+version	Set 8
+version	Set 9
+version	Set F-2
+version	Shot in the Corner, 1987
+version	Shuffle
+version	Sidam
+version	Sil Hack, Cheat
+version	Simpsons
+version	Simpsons, v81
+version	Single
+version	Single PCB
+version	Solid Red Label
+version	Sonic, Spanish
+version	Spanish
+version	Spanish Speech, Rev RC32
+version	Spanish, Centromatic S.A.
+version	Spanish, Crazy Kong
+version	Spanish, Petaco, S.A.
+version	Spanish, UniWar S
+version	Special
+version	Speech
+version	Speedy
+version	Sr Street hack
+version	Stargate upgrade
+version	Stern
+version	Stern, Set 1
+version	Stern, Set 1, Cheat
+version	Stern, Set 2
+version	Suntory
+version	Super Cobra
+version	Supercharger + C64 Music
+version	Superg
+version	Swarm
+version	System 16C
+version	System E
+version	T.P.N.
+version	TTL
+version	Taito
+version	Taito, Bigger ROMs
+version	Taiwan, PAL
+version	Tayto
+version	Tayto, Harder
+version	Tecfri
+version	Tecfri PCB
+version	Tecfri license
+version	Teki Paki hardware
+version	Tester
+version	The Punisher, CPS1, Chinese
+version	The Punisher, CPS1.5, Chinese
+version	Tie-Die
+version	Tie-Die v2, 2015
+version	Tokio Prototype
+version	Trainer
+version	Tron Conversion
+version	Tron Hardware
+version	Tue Jun 8 1999
+version	Type 2 (DK- CN) (Tue Apr 2 1996)
+version	Type 2 (EU - US - JP - AS) (Sat Mar 2 1996)
+version	ULA protected, set 1
+version	ULA protected, set 2
+version	UPL
+version	US Rev 5
+version	US Rev 6
+version	US YM2610
+version	Unencrypted, Cheat
+version	UniWar S
+version	UniWar S, Spanish
+version	Universal, Set 1
+version	Unknown Rev
+version	Unl. Lives
+version	Unl. Lives, slower
+version	Unprotected
+version	Upright, AY8912
+version	Upright, German, Rev 1
+version	Upright, German, Rev 2
+version	Upright, German, Rev 3
+version	Upright, German, Rev X
+version	Upright, Rev 1
+version	Upright, Rev 2
+version	Upright, Rev 3
+version	Upright, Rev 4
+version	Vector
+version	Venture Line
+version	Ver -
+version	Ver 1.0
+version	Ver 1.1
+version	Ver 3
+version	Ver 5-12
+version	Ver 6-15
+version	Ver 6-17
+version	Ver 6-25
+version	Ver AAD
+version	Ver ABD
+version	Ver ADD
+version	Ver D
+version	Ver EAA
+version	Ver EAA 1993 10.4
+version	Ver EAA 1993 10.8
+version	Ver EAA 1993 9.10 prototype
+version	Ver EAB
+version	Ver EAC
+version	Ver EAD
+version	Ver EB-A
+version	Ver EBC
+version	Ver EBD
+version	Ver JA1, Type H
+version	Ver JAB
+version	Ver JAC
+version	Ver JAD
+version	Ver JBD
+version	Ver N
+version	Ver P
+version	Ver R
+version	Ver T
+version	Ver U
+version	Ver UAB
+version	Ver UAB 1993 10.12, dedicated twin cabinet
+version	Ver UAB 1993 9.10, dedicated twin cabinet
+version	Ver UAC
+version	Ver UBA 1993 10.8
+version	Ver UBA 1993 10.8, demux adapter
+version	Ver UBC
+version	Ver UDA
+version	Ver W
+version	Ver Z
+version	Ver. 1
+version	Ver. 1.01
+version	Ver. 2
+version	Ver. 3
+version	Ver. 4
+version	Ver. 94.04.08, set 1
+version	Ver. 94.04.08, set 2
+version	Ver. 95.06.20
+version	Ver. AAA
+version	Ver. ADA
+version	Ver. AEA
+version	Ver. EAA
+version	Ver. EBA
+version	Ver. EM-1
+version	Ver. EM-2
+version	Ver. EM-3
+version	Ver. EM-4
+version	Ver. EM-5
+version	Ver. JAA
+version	Ver. JBA
+version	Ver. JEA
+version	Ver. JM-3
+version	Ver. K
+version	Ver. L
+version	Ver. M
+version	Ver. N
+version	Ver. UAB
+version	Ver. UBB
+version	Ver. UEB
+version	Version 95-03-21
+version	Version 95-03-22
+version	Version 95-03-22B
+version	Version ADA
+version	Version D
+version	Version E
+version	Version E, Encrypted
+version	Version EAA
+version	Version EBA
+version	Version G, Encrypted
+version	Version H, Encrypted
+version	Version I, Encrypted
+version	Version J
+version	Version K
+version	Version L
+version	Version M
+version	Version N
+version	Version OAA
+version	Version P
+version	Version R
+version	Version S
+version	Version T
+version	Version UAA
+version	Version UDA
+version	Version UEA
+version	Videotron
+version	Vulgus
+version	Wave 201 Start, 2012
+version	Wed Apr 7 1999
+version	Weird Fruit
+version	White-Red Label
+version	Williams
+version	Williams license
+version	World Games
+version	World YM2610
+version	YD3
+version	YM3526 set 1
+version	YM3526 set 2
+version	YM3526 set 3
+version	YYC
+version	Yada East bootleg
+version	Yellow-Orange Label
+version	Z80 sound, set 1
+version	Z80 sound, set 2
+version	Zero Wing TP-015 PCB Conversion
+version	bootleg
+version	bootleg of FD1089B 317-0034 set
+version	bootleg on Naughty Boy PCB
+version	bootleg, set 1
+version	bootleg, set 2
+version	decrypted
+version	dual screen
+version	dual screen, rev 1
+version	dual screen, rev 2
+version	earlier version
+version	easier
+version	hack
+version	harder
+version	no BKG
+version	no Protection
+version	not Encrypted
+version	prototype
+version	prototypex
+version	rev 1
+version	rev 2
+version	rev 2, set 1
+version	rev 2, set 2
+version	rev 3
+version	rev 4
+version	rev 7
+version	rev A
+version	revision 3
+version	revision B
+version	set 1
+version	set 2
+version	unprotected
+version	unprotected, ver. 2.0
+version	v0.0
+version	v0.05
+version	v0.1
+version	v0.10
+version	v0.11
+version	v0.98c
+version	v1.0
+version	v1.01
+version	v1.1
+version	v1.2
+version	v1.2, Bubble Bobble PCB
+version	v1.3, 92.11.26
+version	v1.3, Fast
+version	v1.5, 92.12.07
+version	v1.7, 92.12.14
+version	v2
+version	v2.1
+version	v3.0
+version	v3.0 set 1
+version	v3.0 set 2
+version	v5.0
+version	v5.1
+version	ver 4
+version	ver. 1
+version	ver. 1.0
+version	ver. 1.0.1870
+version	ver. 1.0.1878
+version	ver. 1.0.1884
+version	ver. 1.0.1885
+version	ver. 100
+version	ver. 100MG
+version	ver. 102
+version	ver. 103
+version	ver. 104
+version	ver. 105
+version	ver. 106
+version	ver. 107
+version	ver. 109
+version	ver. 126
+version	ver. 200
+version	ver. 300
+version	ver. B
+version	version 1
+version	version 2
+version	version 3
+version	version 3, newer
+version	version R
+version	version S
+version	version S, split
+alternative	no
+alternative	yes
+platform	Alpha Denshi Champion Base Ball hardware
+platform	Atari 6502
+platform	Atari 68000
+platform	Atari Battle Zone hardware
+platform	Atari Centipede based
+platform	Atari Discrete hardware
+platform	Atari Gauntlet based
+platform	Atari Klax hardware
+platform	Atari Missile Command
+platform	Atari System-1
+platform	Atari System-2
+platform	Atari Vector
+platform	Blue Print hardware
+platform	CAVE 68000
+platform	Capcom CPS-0
+platform	Capcom CPS-1
+platform	Capcom CPS-1.5
+platform	Capcom CPS-2
+platform	Capcom CPS-3
+platform	Capcom Mitchell
+platform	Cinematronics Jack The Giantkiller hardware
+platform	Cinematronics Laserdisc
+platform	Computer Space
+platform	DATA EAST MEC-M1
+platform	Data East Act-Fancer hardware
+platform	Data East Burger Time hardware
+platform	Data East Caveman Ninja hardware
+platform	Data East Crude Buster hardware
+platform	Data East DE-0359 hardware
+platform	Data East DE-0379 hardware
+platform	Data East DE-0397 hardware
+platform	Data East DEC8 hardware
+platform	Data East DECO Cassette
+platform	Data East Dark Seal hardware
+platform	Data East Diet Go Go hardware
+platform	Data East Double Wings hardware
+platform	Data East Karnov hardware
+platform	Data East MEC-M1
+platform	Data East Pocket Gal hardware
+platform	Data East Rohga hardware
+platform	Data East Super Burger Time hardware
+platform	Data East Thunder Zone hardware
+platform	Data East Tumble Pop hardware
+platform	Data East Unique
+platform	Data East Vapor Trail hardware
+platform	Data East Z80 based
+platform	Donkey Kong hardware
+platform	Dottori-Kun hardware
+platform	Exidy Licensed
+platform	Exidy Universal Game Board Ver. 2
+platform	Gaelco hardware
+platform	Game Plan hardware
+platform	IGS PGM
+platform	Irem M107
+platform	Irem M52
+platform	Irem M57
+platform	Irem M62
+platform	Irem M72
+platform	Irem M75
+platform	Irem M90
+platform	Irem M92
+platform	Irem Unique
+platform	Jaleco Exerion based
+platform	Jaleco Ginga Ninkyouden hardware
+platform	Jaleco Mega System 1
+platform	Jaleco Naughty Boy hardware
+platform	Jaleco Psychic 5 hardware
+platform	Jaleco Unique
+platform	Kaneko Gals Panic hardware
+platform	Kangaroo hardware
+platform	Kiwako Mr. Jong hardware
+platform	Konami 6309 based
+platform	Konami 6809 based
+platform	Konami Ajax hardware
+platform	Konami Aliens based
+platform	Konami Asterix hardware
+platform	Konami Contra based
+platform	Konami Double Dribble based
+platform	Konami Dual 6809 based
+platform	Konami G.I. Joe hardware
+platform	Konami GX400
+platform	Konami Gradius III hardware
+platform	Konami Green Beret based
+platform	Konami Juno First hardware
+platform	Konami Run and Gun hardware
+platform	Konami Scramble based
+platform	Konami Surprise Attack hardware
+platform	Konami TMNT 2 based
+platform	Konami TMNT based
+platform	Konami The Simpsons hardware
+platform	Konami Thunder X hardware
+platform	Konami Tutankham hardware
+platform	Konami Twin16 hardware
+platform	Konami Unique
+platform	Konami Vendetta hardware
+platform	Konami X-Men hardware
+platform	Konami Z80
+platform	Kyugo hardware
+platform	Mario Bros. hardware
+platform	Mat Mania hardware
+platform	Midway 8080
+platform	Midway Astrocade
+platform	Midway MCR
+platform	Midway MCR1
+platform	Midway MCR2
+platform	Midway MCR3
+platform	Midway Y-Unit
+platform	Mr. Do hardware
+platform	Mylstar
+platform	Namco Baraduke hardware
+platform	Namco Galaga based
+platform	Namco Galaxian based
+platform	Namco Pac-Man hardware
+platform	Namco Super Pac-Man hardware
+platform	Namco System 86
+platform	Namco System-1
+platform	Namco Unique
+platform	Nichibutsu M68000 (Armed F)
+platform	Nichibutsu M68000 (Terra Cresta)
+platform	Nichibutsu Z80 (Galivan)
+platform	Nintendo Aleck64 hardware
+platform	Nintendo Arcade
+platform	Poly Play hardware
+platform	Psikyo SH-2 hardware
+platform	Rare Unique hardware
+platform	SNK - Alpha Denshi
+platform	SNK 68000
+platform	SNK Triple Z80
+platform	SNK Unique
+platform	SNK6502 hardware
+platform	Sega Blockade hardware
+platform	Sega G80 Vector
+platform	Sega Out Run hardware
+platform	Sega ST-V
+platform	Sega System 1
+platform	Sega System 16
+platform	Sega System 18
+platform	Sega System E
+platform	Sega Unique
+platform	Sega VIC Dual
+platform	Sega Z80
+platform	Sega Zaxxon based
+platform	Seibu Blood Bros hardware
+platform	Seibu Cabal hardware
+platform	Seibu D-Con hardware
+platform	Seibu Legionnaire hardware
+platform	Seibu Raiden 2 hardware
+platform	Seibu Raiden hardware
+platform	Seibu Toki hardware
+platform	Seta 68000 based
+platform	Solomon's Key hardware
+platform	Stern based
+platform	Sun Electronics Arabian hardware
+platform	TIAMC1
+platform	Taito 68000 based
+platform	Taito 8080
+platform	Taito Arkanoid hardware
+platform	Taito Bubble Booble based
+platform	Taito Darius hardware
+platform	Taito F2 System
+platform	Taito Kick and Run hardware
+platform	Taito Licensed
+platform	Taito N.Y. Captor hardware
+platform	Taito Ninja Warriors hardware
+platform	Taito Qix Hardware
+platform	Taito System SJ
+platform	Taito The FairyLand Story hardware
+platform	Taito The NewZealand Story hardware
+platform	Taito Unique
+platform	Taito Volfied hardware
+platform	Taito Warrior Blade hardware
+platform	Taito Z80
+platform	Technos 6309 based
+platform	Technos Block Out hardware
+platform	Technos Unique
+platform	Technos Xain'd Sleena hardware
+platform	Tecmo Ninja Gaiden hardware
+platform	Tecmo Senjyo hardware
+platform	Tecmo Tehkan hardware
+platform	Tecmo hardware
+platform	Tehkan hardware
+platform	Toaplan 1
+platform	Toaplan 2
+platform	Toaplan Slap Fight hardware
+platform	Toaplan Snow Bros hardware
+platform	Toaplan Twin Cobra hardware
+platform	UPL Unique
+platform	Universal Cosmic Guerilla hardware
+platform	Universal Cosmic hardware
+platform	Universal Lady Bug
+platform	Vastar hardware
+platform	Williams 1st Generation
+platform	Williams 2nd Generation
+series	19XX
+series	Adventure Canoe
+series	Air Duel
+series	Alien
+series	All Japan Pro Wrestling
+series	Alpine Ski
+series	Arkanoid
+series	Asteroids
+series	Bank Panic
+series	Baraduke
+series	Battle Zone
+series	Battletoads
+series	Bio Attack
+series	Blade Master
+series	Block Block
+series	BlockBuster
+series	Bomber Man
+series	Bosconian
+series	Boulder Dash
+series	Bradley Trainer
+series	Breakout
+series	Bubble Bobble
+series	Castlevania
+series	Centipede
+series	Chelnov
+series	Chuka Taisen
+series	Columns
+series	Combat Hawk
+series	Commando
+series	Congo Bongo
+series	Contra
+series	Cosmic Guerilla
+series	Cosmo Police Galivan
+series	Cotton
+series	Crazy Blocks
+series	Crazy Climber
+series	Crime Fighters
+series	Crystal Castles
+series	Darius
+series	Darkstalkers
+series	Demon's World
+series	Dig Dug
+series	Dokaben
+series	DonPachi
+series	Donkey Kong
+series	Dr. Toppel's Adventure
+series	Dragon Spirit
+series	Dragon World
+series	Dream Soccer
+series	Drift Out
+series	Dungeons &amp; Dragons
+series	Dynamite Deka
+series	Dynasty Wars
+series	Elevator Action
+series	Engima II
+series	Exerion
+series	Express Raider
+series	Extermination
+series	Fantasy Zone
+series	Final Fight
+series	Freeze
+series	Front Line
+series	Funky Fish
+series	Galaga
+series	Galaxian
+series	Gang Wars
+series	Gauntlet
+series	Gemini Wing
+series	Get Star
+series	Ghosts 'n
+series	Ginga Ninkyouden
+series	Gold Medalist
+series	Golden Axe
+series	Golfing Greats
+series	Gradius
+series	Green Beret
+series	Gun &amp; Frontier
+series	Gun Force
+series	Hang-On
+series	Hayaoshi Quiz
+series	Hello Kitty
+series	High Impact Football
+series	High Way Race
+series	Hook
+series	Ikari Warriors
+series	In The Hunt
+series	Indiana Jones
+series	Inferno
+series	Insector X
+series	Jack The Giantkiller
+series	Joust
+series	Jungle King
+series	Juno First
+series	Kageki
+series	Kangaroo
+series	Karate Champ
+series	Karnov
+series	KiKi KaiKai
+series	Kick and Run
+series	Knights of Valour
+series	Lethal Thunder
+series	Lode Runner
+series	Major League
+series	Major Title
+series	Mappy
+series	Marble Madness
+series	Mario
+series	Marvel - Capcom
+series	Mazinger Z
+series	Mega Man
+series	Mega Twins
+series	Moero!!
+series	Moon Quasar
+series	Mortal Kombat
+series	Mr. Do
+series	Mr. Jong
+series	Ms. Pac-man
+series	Muscle Bomber
+series	Mystic Riders
+series	Ninja Baseball Bat Man
+series	Ninja-Kid
+series	Nova 2001
+series	Oriental Legend
+series	Othello
+series	Out Run
+series	Out Zone
+series	P-47
+series	P.O.W. Prisoners of War
+series	Pac-Man
+series	Paddle Mania
+series	Pang!
+series	Parodius
+series	Performan
+series	Peter Pack Rat
+series	Pipi and Bibis - Whoopee!!
+series	Pirate Pete
+series	Pitfall
+series	Plump Pop
+series	Port Man
+series	Power Instinct
+series	Prehistoric Isle
+series	Pro Mahjong Kiwame
+series	Puyo Puyo
+series	Puzz Loop
+series	Puzzle &amp; Action
+series	Q'bert
+series	Qix
+series	Quatret
+series	Quiz Crayon Shinchan
+series	R-Type
+series	Radiant Silvergun
+series	Raiders5
+series	Rally-X
+series	Red Baron
+series	Road Blasters
+series	Road Runner
+series	Robocop
+series	Robotron 2084
+series	Rod-Land
+series	Rolling Thunder
+series	Run and Gun
+series	Rygar
+series	SAR - Search And Rescue
+series	Scramble
+series	Sea Fighter Poseidon
+series	Sea Wolf
+series	Shanghai
+series	Shinobi
+series	Silk Worm
+series	Sky Adventure
+series	Sky Kid
+series	Sky Soldiers
+series	Slam Masters
+series	Slap Fight
+series	Snow Bros
+series	Soldam
+series	SonSon
+series	Space Cruiser
+series	Space Invaders
+series	Space Seeker
+series	Spelunker
+series	Sprint
+series	Star Force
+series	Star Wars
+series	Street Fighter
+series	Street Smart
+series	Strider
+series	Subs
+series	Sunset Riders
+series	Super Casino
+series	Super Champion Basebal
+series	Superior Soldiers
+series	Taito Football Champ
+series	Tank Battalion
+series	Targ
+series	Tecmo World Cup
+series	Teenage Mutant Ninja Turtles
+series	Tetris
+series	The NewZealand Story
+series	The Next Space
+series	The Tin Star
+series	Thunder Cross
+series	Tiger Heli
+series	Time Pilot
+series	Time Soldiers
+series	Time Tunnel
+series	Tower of Druaga
+series	Tri-Pool
+series	Tron
+series	Tropical Angel
+series	Truxton - Tatsujin
+series	Twin Bee
+series	Twin Cobra
+series	U.N. Squadron
+series	Ufo Robo Dangar
+series	Ultraman
+series	Underconver Cops
+series	Vindicators
+series	Violence Fight
+series	Virtua Fighter
+series	Virtual Mahjong
+series	WWF Superstars
+series	Water Ski
+series	Wild Western
+series	Wonder Boy
+series	Wonder Planet
+series	World Court
+series	World Stadium
+series	X-Men
+series	X-Men - Marvel
+series	Xain'd Sleena
+series	Zaxxon
+series	Zzyzzyxx
+homebrew	no
+homebrew	yes
+bootleg	no
+bootleg	yes
+bootleg	ys
+year	1971
+year	1972
+year	1973
+year	1975
+year	1976
+year	1977
+year	1978
+year	1979
+year	1980
+year	1981
+year	1982
+year	1983
+year	1984
+year	1985
+year	1986
+year	1987
+year	1988
+year	1989
+year	1990
+year	1991
+year	1992
+year	1993
+year	1994
+year	1995
+year	1996
+year	1997
+year	1998
+year	1999
+year	2000
+year	2001
+year	2002
+year	2003
+year	2004
+year	2005
+year	2006
+year	2008
+year	2012
+year	2013
+year	2018
+year	2020
+year	2021
+year	2022
+manufacturer	A wave inc. (Able License)
+manufacturer	Able Corp, Ltd
+manufacturer	Acclaim
+manufacturer	Alpha Denshi - Kural Esco Electric, Ltd.
+manufacturer	Alpha Denshi Co.
+manufacturer	Alpha Denshi Co. (Sega license)
+manufacturer	Alpha Denshi Co. (Volt Electronics license)
+manufacturer	Altron
+manufacturer	Altron (Tecmo License)
+manufacturer	Amenip - Palcom Queen River
+manufacturer	Amstar
+manufacturer	Arika
+manufacturer	Armenia - Food and Fun Corp
+manufacturer	Armenia - Super Video Games
+manufacturer	Artic
+manufacturer	Aruze
+manufacturer	Aruze / Seta
+manufacturer	Aruze / Seta / Paon
+manufacturer	Aruze / Takumi
+manufacturer	Atari
+manufacturer	Atari Games
+manufacturer	Athena
+manufacturer	Atlus
+manufacturer	BGV Ltd.
+manufacturer	Bally
+manufacturer	Bally - Midway
+manufacturer	Bally - Midway - Playtronic
+manufacturer	Banpresto
+manufacturer	Banpresto / Bandai
+manufacturer	Banpresto / Gazelle
+manufacturer	Banpresto / Pandorabox
+manufacturer	Blue Justice
+manufacturer	Bobby Tribble
+manufacturer	Brent Cobb
+manufacturer	CAVE
+manufacturer	CYBERYOGI =CO= Windler
+manufacturer	Capcom
+manufacturer	Capcom (Williams Electronics license)
+manufacturer	Capcom - Cave - Victor Interactive Software
+manufacturer	Capcom - Romstar
+manufacturer	Cave - Capcom
+manufacturer	Centuri
+manufacturer	Century II (GDI license)
+manufacturer	Chris Covell
+manufacturer	Cinematronics
+manufacturer	Comad
+manufacturer	Compile
+manufacturer	Comsoft
+manufacturer	Crazy Ivan
+manufacturer	Crux
+manufacturer	Crux / Kyugo?
+manufacturer	Crux / Sega
+manufacturer	Daiki - FCF
+manufacturer	Data Amusement
+manufacturer	Data East
+manufacturer	Data East - Midway
+manufacturer	Data East Corporation
+manufacturer	Data East Corporation (I-Vics license)
+manufacturer	Data East USA
+manufacturer	Dave Nutting Associates - Bally - Midway
+manufacturer	Dave Nutting Associates - Midway
+manufacturer	David Widel
+manufacturer	Deluxe
+manufacturer	Duncan Brown
+manufacturer	Eighting
+manufacturer	Eighting - Raizing (Capcom license)
+manufacturer	Eighting - Raizing - Capcom
+manufacturer	Electrogame S.A.
+manufacturer	Electronic Games Systems
+manufacturer	Epos Corporation
+manufacturer	Exidy
+manufacturer	Falcon
+manufacturer	Falcon - Jeutel
+manufacturer	Falcon - Kyoei
+manufacturer	Gaelco
+manufacturer	Gaelco / Zeus
+manufacturer	Game Plan
+manufacturer	Gatinho
+manufacturer	General Computer Corporation - Atari
+manufacturer	Gottlieb
+manufacturer	Gremlin
+manufacturer	Grimlick
+manufacturer	Hanafram
+manufacturer	Hanshin Goraku - Peni
+manufacturer	Hebus
+manufacturer	Hoei
+manufacturer	Honly
+manufacturer	Hudson Soft
+manufacturer	Hudson Soft / Seta
+manufacturer	IGS
+manufacturer	IGS (Metro license)
+manufacturer	IGS / Idea Factory
+manufacturer	IREM
+manufacturer	Irem
+manufacturer	Irem (Data East Corporation license)
+manufacturer	Irem (licensed from Hudson Soft)
+manufacturer	Irem - Broderbund
+manufacturer	Irem - Tecfri
+manufacturer	Irem - Williams
+manufacturer	Itisa
+manufacturer	Jaleco
+manufacturer	Jaleco (Kitkorp license)
+manufacturer	Jaleco (Taito America License)
+manufacturer	Jeff Morris
+manufacturer	Jerky
+manufacturer	Jetsoft
+manufacturer	Jeutel
+manufacturer	Jim Bagley
+manufacturer	Kaneko
+manufacturer	Kaneko - Taito America Corporation (Romstar license)
+manufacturer	Kaneko - Taito Corporation Japan
+manufacturer	Kiwako
+manufacturer	Kiwako (ECI license)
+manufacturer	Konami
+manufacturer	Konami (Gottlieb license)
+manufacturer	Konami (Stern Electronics license)
+manufacturer	Konami - Artemi
+manufacturer	Konami - Atari
+manufacturer	Konami - Centuri
+manufacturer	Konami - Sega
+manufacturer	Konami - Stern
+manufacturer	Kyugo
+manufacturer	Kyugo / Sega
+manufacturer	Kyugo / Taito
+manufacturer	Laguna
+manufacturer	Linear Elect
+manufacturer	MOSS / Psikyo
+manufacturer	MTM Games
+manufacturer	Mama Top
+manufacturer	Marble
+manufacturer	Marcel Silvius
+manufacturer	Marco and Ivan
+manufacturer	Marti Colls
+manufacturer	Micronet
+manufacturer	Midway
+manufacturer	Miky SRL
+manufacturer	Mitchell
+manufacturer	Mitchell - Capcom
+manufacturer	Namco
+manufacturer	Namco (Bally Midway license)
+manufacturer	Namco - Irem
+manufacturer	Namco - Kyoko
+manufacturer	Namco - Midway
+manufacturer	Namco - Nichibutsu - Karateco
+manufacturer	Namco - Taito
+manufacturer	Nichibutsu
+manufacturer	Niemer
+manufacturer	Nihon
+manufacturer	Nihon System
+manufacturer	Nintendo
+manufacturer	Nintendo (Fortrek license)
+manufacturer	Nittoh
+manufacturer	Noma (Casino Tech license)
+manufacturer	Omori Electric Co., Ltd.
+manufacturer	Orca
+manufacturer	PSV S.A.
+manufacturer	Petaco S.A.
+manufacturer	Phi
+manufacturer	Philko
+manufacturer	Pi
+manufacturer	Psikyo
+manufacturer	Rait Electronics Ltd
+manufacturer	Raizing
+manufacturer	Raizing - Eighting
+manufacturer	Rare - Electronic Arts
+manufacturer	Recreativos Franco S.A.
+manufacturer	Rock-Ola
+manufacturer	Runge Editing
+manufacturer	SNK
+manufacturer	SNK (Rock-Ola license)
+manufacturer	SNK - Pasadena International Corp. license
+manufacturer	Sai-Mate
+manufacturer	Sanritsu
+manufacturer	Sanritsu - Karateco
+manufacturer	Scott Lawrence
+manufacturer	Sega
+manufacturer	Sega - Coreland
+manufacturer	Sega - Elorg
+manufacturer	Sega - Exa
+manufacturer	Sega - M2
+manufacturer	Sega - Santos
+manufacturer	Sega - Sunsoft
+manufacturer	Sega - Toyosuisan
+manufacturer	Sega - Westone
+manufacturer	Sega-Gremlin
+manufacturer	Sega-Sanritsu
+manufacturer	Sega/Gremlin
+manufacturer	Seibu Kaihatsu
+manufacturer	Seibu Kaihatsu (Fabtek license)
+manufacturer	Seibu Kaihatsu (IBL Corporation license)
+manufacturer	Seibu Kaihatsu (Liang HWA Electronics license)
+manufacturer	Seta
+manufacturer	Seta / Able Corporation
+manufacturer	Sigma
+manufacturer	Sigma - Venture Line
+manufacturer	Sir Scotty
+manufacturer	Staizitto
+manufacturer	Stefano Priore
+manufacturer	Stern
+manufacturer	Subelectro
+manufacturer	Success
+manufacturer	Sun Electronics
+manufacturer	Sun Electronics (Atari license)
+manufacturer	Sunsoft
+manufacturer	Sunsoft - Activision
+manufacturer	Sunsoft - Sega
+manufacturer	Sunsoft - Success
+manufacturer	Syzygy Engineering
+manufacturer	T&amp;E Soft
+manufacturer	T-Bone
+manufacturer	TAD Corporation
+manufacturer	TAD Corporation (Alpha Trading license)
+manufacturer	TAD Corporation (Electrocoin license)
+manufacturer	TAD Corporation (Fabtek license)
+manufacturer	TDS &amp; MINTS
+manufacturer	Tago Electronics
+manufacturer	Taito
+manufacturer	Taito (World Games license)
+manufacturer	Taito - Game Corporation
+manufacturer	Taito America
+manufacturer	Taito America Corp
+manufacturer	Taito America Corporation
+manufacturer	Taito America Corporation (Romstar license)
+manufacturer	Taito Corporation
+manufacturer	Taito Corporation (Fox Video Games License)
+manufacturer	Taito Corporation Japan
+manufacturer	Takumi - Takumi
+manufacturer	Technos
+manufacturer	Technos Japan
+manufacturer	Technos Japan (Taito - Romstar license)
+manufacturer	Technos Japan (Taito America License)
+manufacturer	Technos Japan (Taito License)
+manufacturer	Technos Japan / California Dreams
+manufacturer	Techstar
+manufacturer	Techstar - Rock-Ola
+manufacturer	Techstar - Sunn
+manufacturer	Techstar - Telko
+manufacturer	Techstar - Zaccaria
+manufacturer	Tecmo
+manufacturer	Tehkan
+manufacturer	Tehkan - Irecsa
+manufacturer	Tehkan - Niemer SA
+manufacturer	Telko
+manufacturer	Terminal
+manufacturer	The Dog
+manufacturer	Tim Appleton
+manufacturer	Toaplan
+manufacturer	Toaplan (Dooyong license)
+manufacturer	Toaplan (Taito license)
+manufacturer	Toaplan - Data East Corporation
+manufacturer	Toaplan - Taito
+manufacturer	Toaplan - Taito America Corporation (Romstar license)
+manufacturer	Toaplan - Taito Corporation
+manufacturer	Treasure
+manufacturer	TwoBit Score
+manufacturer	UPL
+manufacturer	UPL - Taito
+manufacturer	Uchida
+manufacturer	Universal
+manufacturer	Universal Video Spiel
+manufacturer	VEB Polytechnik
+manufacturer	Valadon Automation
+manufacturer	Valadon Automation - Itisa
+manufacturer	Valadon Automation - Stern
+manufacturer	Valadon Automation - Taito
+manufacturer	Video Game
+manufacturer	Visco
+manufacturer	Vision - Artic
+manufacturer	Warashi
+manufacturer	White Board
+manufacturer	Williams
+manufacturer	Williams - Vid Kidz
+manufacturer	Winkysoft (Banpresto license)
+manufacturer	Zilec Electronics
+manufacturer	Zilec Electronics / Bally Midway
+manufacturer	Zilec Electronics / Jaleco
+manufacturer	bootleg
+manufacturer	bootleg (Darksoft)
+manufacturer	bootleg (ISG)
+manufacturer	bootleg (Nagoya Kaihatsu)
+manufacturer	hack
+category	Arcade - Pinball
+category	Ball &amp; Paddle - Breakout
+category	Ball &amp; Paddle - Breakout [Mature]
+category	Ball &amp; Paddle - Jump and Touch
+category	Casino - Cards
+category	Climbing - Building
+category	Climbing - Tree - Plant
+category	Driving - 1st Person
+category	Driving - Boat
+category	Driving - Demolition Derby
+category	Driving - Landing
+category	Driving - Motorbike
+category	Driving - Race
+category	Driving - Race (chase view)
+category	Driving - Race Track
+category	Fighter - 2.5D
+category	Fighter - 2D
+category	Fighter - Field
+category	Fighter - Versus
+category	Fighter - Versus Co-op
+category	Fighter - Vertical
+category	Maze
+category	Maze - Ball Guide
+category	Maze - Blocks
+category	Maze - Collect
+category	Maze - Cross
+category	Maze - Defeat Enemies
+category	Maze - Digging
+category	Maze - Driving
+category	Maze - Escape
+category	Maze - Fighter
+category	Maze - Horizontal
+category	Maze - Move and Sort
+category	Maze - Outline
+category	Maze - Paint
+category	Maze - Shooter
+category	Maze - Shooter Large
+category	Maze - Shooter Small
+category	Maze - Surround
+category	Medal Game - Versus
+category	Misc. - Hot-air Balloon
+category	Misc. - Mini-Games
+category	MultiGame - Compilation
+category	MultiGame - Mini-Games
+category	Multiplay - Mini-Games
+category	Platform - Fighter
+category	Platform - Fighter Scrolling
+category	Platform - Run Jump
+category	Platform - Run Jump [Mature]
+category	Platform - Run, Jump &amp; Scrolling
+category	Platform - Shooter
+category	Platform - Shooter Scrolling
+category	Puzzle - Cards
+category	Puzzle - Drop
+category	Puzzle - Match [Mature]
+category	Puzzle - Maze
+category	Puzzle - Misc.
+category	Puzzle - Outline
+category	Puzzle - Reconstruction
+category	Puzzle - Sliding
+category	Puzzle - Toss
+category	Quiz - Questions in English
+category	Quiz - Questions in Japanese
+category	Racing
+category	Shooter
+category	Shooter - 1st Person
+category	Shooter - 3rd Person
+category	Shooter - Command
+category	Shooter - Driving
+category	Shooter - Driving 1st Person
+category	Shooter - Driving Diagonal
+category	Shooter - Driving Horizontal
+category	Shooter - Driving Vertical
+category	Shooter - Field
+category	Shooter - Flying
+category	Shooter - Flying (chase view)
+category	Shooter - Flying 1st Person
+category	Shooter - Flying Diagonal
+category	Shooter - Flying Horizontal
+category	Shooter - Flying Vertical
+category	Shooter - Gallery
+category	Shooter - Gun
+category	Shooter - Misc.
+category	Shooter - Misc. Horizontal
+category	Shooter - Misc. Vertical
+category	Shooter - Versus
+category	Shooter - Walking
+category	Slot Machine - Video Slot
+category	Sports - Baseball
+category	Sports - Basketball
+category	Sports - Boxing
+category	Sports - Bull Fighting
+category	Sports - Cards
+category	Sports - Fishing
+category	Sports - Football
+category	Sports - Golf
+category	Sports - Hockey
+category	Sports - Misc.
+category	Sports - Multiplay
+category	Sports - Ping Pong
+category	Sports - Pool
+category	Sports - Shuffleboard
+category	Sports - Skiing
+category	Sports - Soccer
+category	Sports - Tennis
+category	Sports - Track &amp; Field
+category	Sports - Volleyball
+category	Sports - Wrestling
+category	System - BIOS
+category	TTL - Ball &amp; Paddle - Breakout
+category	TTL - Ball &amp; Paddle - Pong
+category	Tabletop - Hanafuda
+category	Tabletop - Mahjong
+category	Tabletop - Mahjong [Mature]
+category	Tabletop - Othello - Reversi
+category	Tabletop - Shanghai
+resolution	15 kHz
+resolution	15kHz
+resolution	31kHz
+rotation	horizontal
+rotation	horizontal (180)
+rotation	vertical (ccw)
+rotation	vertical (cw)
+flip	n-a
+flip	no
+flip	yes
+players	1
+players	2 (alternating)
+players	2 (simultaneous)
+players	2-3 (simultaneous)
+players	2-4 (alternating)
+players	2-4 (simultaneous)
+players	3 (simultaneous)
+players	4 (alternating)
+players	4 (simultaneous)
+move_inputs	2
+move_inputs	2-way
+move_inputs	2-way horizontal
+move_inputs	2-way vertical
+move_inputs	4-way
+move_inputs	4-way diagonal
+move_inputs	8-way
+move_inputs	8-way - Pedal
+move_inputs	8-way double
+move_inputs	8-way,Positional
+move_inputs	Buttons
+move_inputs	Dial
+move_inputs	Paddle
+move_inputs	Rotary Joystick
+move_inputs	Stick
+move_inputs	Stick - Pedal
+move_inputs	Trackball
+move_inputs	Wheel
+move_inputs	buttons
+move_inputs	dial
+move_inputs	lightgun
+move_inputs	n-a
+move_inputs	positional
+special_controls	Buttons Only
+special_controls	Dial
+special_controls	Double Joystick
+special_controls	Double Joysticks
+special_controls	Double joystick
+special_controls	Lightgun
+special_controls	Paddle
+special_controls	Pedal
+special_controls	Rotary
+special_controls	Spinner
+special_controls	Stick
+special_controls	Stick - Pedal
+special_controls	Trackball
+special_controls	dial
+special_controls	lightgun
+special_controls	mahjong
+special_controls	n-a
+special_controls	optical stick
+special_controls	paddle
+special_controls	paddle - pedal
+special_controls	positional
+special_controls	rotary
+special_controls	spinner
+special_controls	tilt
+special_controls	trackball
+special_controls	trackball, twin stick
+special_controls	twin stick
+special_controls	wheel
+num_buttons	0
+num_buttons	1
+num_buttons	2
+num_buttons	20
+num_buttons	3
+num_buttons	4
+num_buttons	5
+num_buttons	6

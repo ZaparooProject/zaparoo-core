@@ -26,20 +26,22 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/rs/zerolog/log"
 )
 
 // writeBuilder accumulates one media row's write, keeping each tag type's
-// values distinct and preserving the order they were derived in.
+// values distinct and preserving the order they were derived in. A value the
+// vocabulary would refuse is dropped and reported rather than written.
 type writeBuilder struct {
-	write *database.ScrapeWrite
-	seen  map[string]struct{}
+	write    *database.ScrapeWrite
+	seen     map[string]struct{}
+	unmapped *scraper.UnmappedValues
 }
 
-func newWriteBuilder(runID string) *writeBuilder {
+func newWriteBuilder(runID string, unmapped *scraper.UnmappedValues) *writeBuilder {
 	b := &writeBuilder{
-		write: &database.ScrapeWrite{Sentinel: scraper.SentinelTagInfo(scraperID)},
-		seen:  make(map[string]struct{}),
+		write:    &database.ScrapeWrite{Sentinel: scraper.SentinelTagInfo(scraperID)},
+		seen:     make(map[string]struct{}),
+		unmapped: unmapped,
 	}
 	if runID != "" {
 		b.write.MediaTags = append(b.write.MediaTags, scraper.RunTagInfo(scraperID, runID))
@@ -47,8 +49,19 @@ func newWriteBuilder(runID string) *writeBuilder {
 	return b
 }
 
+// note reports a catalog value that has no tag mapping.
+func (b *writeBuilder) note(tagType tags.TagType, raw string) {
+	if b.unmapped != nil {
+		b.unmapped.Note(scraperID, tagType, raw)
+	}
+}
+
 func (b *writeBuilder) add(target *[]database.TagInfo, tagType tags.TagType, value tags.TagValue, label string) {
 	if value == "" {
+		return
+	}
+	if !tags.IsValidTagValue(tagType, string(value)) {
+		b.note(tagType, string(value))
 		return
 	}
 	key := string(tagType) + ":" + string(value)
@@ -59,25 +72,27 @@ func (b *writeBuilder) add(target *[]database.TagInfo, tagType tags.TagType, val
 	*target = append(*target, database.TagInfo{Type: string(tagType), Tag: string(value), Label: label})
 }
 
-func (b *writeBuilder) title(tagType tags.TagType, value tags.TagValue, label string) {
-	b.add(&b.write.TitleTags, tagType, value, label)
+// title and media write a closed or format tag, which never carries a label.
+func (b *writeBuilder) title(tagType tags.TagType, value tags.TagValue) {
+	b.add(&b.write.TitleTags, tagType, value, "")
 }
 
-func (b *writeBuilder) media(tagType tags.TagType, value tags.TagValue, label string) {
-	b.add(&b.write.MediaTags, tagType, value, label)
+func (b *writeBuilder) media(tagType tags.TagType, value tags.TagValue) {
+	b.add(&b.write.MediaTags, tagType, value, "")
 }
 
-// yearPattern accepts only a plain four-digit year. The catalog's year column
-// is otherwise clean, and a partial or ranged value is not a year.
+// yearPattern accepts only a plain four-digit year.
 var yearPattern = regexp.MustCompile(`^\d{4}$`) //nolint:gochecknoglobals // Compiled once.
 
 // buildWrite maps one catalog entry onto the write that enriches a media row.
+// Catalog values with no tag mapping are dropped and noted in unmapped, which
+// may be nil.
 //
 // Shared facts about the game — when it came out, who made it, what it plays
 // like, what it runs on — go to the title, so every regional variant of one
 // game carries them. Facts about the individual romset go to the media row.
-func buildWrite(entry *Entry, runID string) *database.ScrapeWrite {
-	b := newWriteBuilder(runID)
+func buildWrite(entry *Entry, runID string, unmapped *scraper.UnmappedValues) *database.ScrapeWrite {
+	b := newWriteBuilder(runID, unmapped)
 	titleTags(b, entry)
 	mediaTags(b, entry)
 	if setName := field(entry.SetName); setName != "" {
@@ -90,52 +105,86 @@ func buildWrite(entry *Entry, runID string) *database.ScrapeWrite {
 }
 
 func titleTags(b *writeBuilder, entry *Entry) {
+	// Only a plain four-digit year is a release year: the catalog writes an
+	// unknown one as "19xx", which is not a claim about the decade.
 	if year := field(entry.Year); yearPattern.MatchString(year) {
-		b.title(tags.TagTypeYear, tags.TagValue(year), year)
+		b.title(tags.TagTypeYear, tags.TagValue(year))
+	} else if year != "" {
+		b.note(tags.TagTypeYear, year)
 	}
 	if maker := field(entry.Manufacturer); maker != "" {
-		b.title(tags.TagTypeDeveloper, tags.NormalizeCompanyName(maker), maker)
+		// Company names are the one free-text type, so they keep the
+		// catalog's spelling as a label.
+		b.add(&b.write.TitleTags, tags.TagTypeDeveloper, tags.NormalizeCompanyName(maker), maker)
 	}
-	// The catalog writes a genre as "family - specialisation". Both halves are
-	// written so a broad "shooter" filter and a narrow one both resolve.
-	if category := field(entry.Category); category != "" {
-		b.title(tags.TagTypeGenre, normalized(tags.TagTypeGenre, category), category)
-		if family, _, split := strings.Cut(category, " - "); split {
-			family = strings.TrimSpace(family)
-			b.title(tags.TagTypeGenre, normalized(tags.TagTypeGenre, family), family)
+	genres, known := genreTags(entry.Category)
+	if !known {
+		b.note(tags.TagTypeGenre, field(entry.Category))
+	}
+	for _, value := range genres {
+		b.title(tags.TagTypeGenre, value)
+	}
+	franchiseTags(b, entry)
+	if board := field(entry.Platform); board != "" {
+		if value, ok := tags.LookupArcadeBoard(board); ok {
+			b.title(tags.TagTypeArcadeBoard, value)
+		} else if _, skip := boardSkips[skipKey(board)]; !skip {
+			b.note(tags.TagTypeArcadeBoard, board)
 		}
 	}
-	// gamefamily holds one value, so the curated series wins and the parent
-	// title only fills in for a game the catalog files under no series.
-	family := field(entry.Series)
-	if family == "" {
-		family = field(entry.ParentTitle)
+	players, playersOK := playerTags(entry.Players)
+	if !playersOK {
+		b.note(tags.TagTypePlayers, field(entry.Players))
 	}
-	b.title(tags.TagTypeGameFamily, normalized(tags.TagTypeGameFamily, family), family)
-	if board := field(entry.Platform); board != "" {
-		b.title(tags.TagTypeArcadeBoard, arcadeBoardValue(board), board)
-	}
-	for _, value := range playerTags(entry.Players) {
-		b.title(tags.TagTypePlayers, value, "")
+	for _, value := range players {
+		b.title(tags.TagTypePlayers, value)
 	}
 	controls, unknown := controlTags(entry.MoveInputs, entry.SpecialControls)
 	for _, value := range controls {
-		b.title(tags.TagTypeInput, value, "")
+		b.title(tags.TagTypeInput, value)
 	}
-	if len(unknown) > 0 {
-		log.Debug().Str("setname", entry.SetName).Strs("controls", unknown).
-			Msg("misterarcade: unmapped control phrases")
+	for _, phrase := range unknown {
+		b.note(tags.TagTypeInput, phrase)
 	}
 	if value, ok := buttonTag(entry.NumButtons); ok {
-		b.title(tags.TagTypeInput, value, "")
+		b.title(tags.TagTypeInput, value)
+	} else if raw := field(entry.NumButtons); raw != "" && raw != "0" {
+		b.note(tags.TagTypeInput, "buttons:"+raw)
 	}
-	b.title(tags.TagTypeVideo, scanRateValue(entry.Resolution), "")
-	b.title(tags.TagTypeSearch, tateValue(entry.Rotation), "")
+	if rate := field(entry.Resolution); rate != "" {
+		if value := scanRateValue(rate); value != "" {
+			b.title(tags.TagTypeVideo, value)
+		} else {
+			b.note(tags.TagTypeVideo, rate)
+		}
+	}
+	b.title(tags.TagTypeSearch, tateValue(entry.Rotation))
 	if isYes(entry.Flip) {
-		b.title(tags.TagTypeSearch, tags.TagSearchKeywordFlip, "")
+		b.title(tags.TagTypeSearch, tags.TagSearchKeywordFlip)
 	}
 	if isYes(entry.Homebrew) {
-		b.title(tags.TagTypeRelease, tags.TagReleaseHomebrew, "")
+		b.title(tags.TagTypeRelease, tags.TagReleaseHomebrew)
+	}
+}
+
+// franchiseTags writes the game's series. The catalog's curated series column
+// is the source; a series it files that is not a franchise is dropped
+// deliberately, any other unknown one is reported. The parent title is not a
+// series, but where the catalog names no series and the parent title is
+// itself a listed franchise ("Galaga"), that is used.
+func franchiseTags(b *writeBuilder, entry *Entry) {
+	if series := field(entry.Series); series != "" {
+		if value, ok := tags.LookupFranchise(series); ok {
+			b.title(tags.TagTypeSearch, value)
+			return
+		}
+		if _, skip := notFranchises[skipKey(series)]; !skip {
+			b.note(tags.TagTypeSearch, series)
+		}
+		return
+	}
+	if value, ok := tags.LookupFranchise(field(entry.ParentTitle)); ok {
+		b.title(tags.TagTypeSearch, value)
 	}
 }
 
@@ -144,58 +193,28 @@ func mediaTags(b *writeBuilder, entry *Entry) {
 	// instead of the bootleg one. They state a provenance, not a territory.
 	for _, word := range strings.Split(field(entry.Region), " - ") {
 		word = strings.TrimSpace(word)
+		if word == "" {
+			continue
+		}
 		if strings.EqualFold(word, "bootleg") {
-			b.media(tags.TagTypeUnlicensed, tags.TagUnlicensedBootleg, "")
+			b.media(tags.TagTypeUnlicensed, tags.TagUnlicensedBootleg)
 			continue
 		}
 		if value, ok := tags.LookupRegionWord(word); ok {
-			b.media(tags.TagTypeRegion, value, word)
+			b.media(tags.TagTypeRegion, value)
+		} else {
+			b.note(tags.TagTypeRegion, word)
 		}
 	}
 	if tagType, value, ok := versionTag(entry.Version); ok {
-		b.media(tagType, value, field(entry.Version))
+		b.media(tagType, value)
 	}
 	if isYes(entry.Alternative) {
-		b.media(tags.TagTypeAlt, tags.TagAlt, "")
+		b.media(tags.TagTypeAlt, tags.TagAlt)
 	}
 	if isYes(entry.Bootleg) {
-		b.media(tags.TagTypeUnlicensed, tags.TagUnlicensedBootleg, "")
+		b.media(tags.TagTypeUnlicensed, tags.TagUnlicensedBootleg)
 	}
-}
-
-// normalized runs a free-text catalog value through the shared tag
-// normalization so a value written here matches the same value written by any
-// other source.
-func normalized(tagType tags.TagType, raw string) tags.TagValue {
-	if raw == "" {
-		return ""
-	}
-	return tags.TagValue(tags.NormalizeTagValue(string(tagType), raw))
-}
-
-// arcadeBoardValue splits a board name into a vendor and the rest, which is the
-// spelling the canonical vocabulary uses. There is no alias table between the
-// catalog's 193 hardware families and the canonical list's 74, so a catalog
-// spelling only lands on a canonical value where the two already agree (18 of
-// the 193 when this was written) and every other board keeps the catalog's own
-// spelling. That leaves real disagreements — the catalog yields `capcom:cps1`
-// where the canonical value is `capcom:cps` — but dropping the boards the
-// canonical list does not name would leave most arcade games with none.
-func arcadeBoardValue(board string) tags.TagValue {
-	words := strings.Fields(strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			return r
-		default:
-			return ' '
-		}
-	}, board))
-	if len(words) < 2 {
-		return normalized(tags.TagTypeArcadeBoard, board)
-	}
-	vendor := strings.ToLower(words[0])
-	rest := strings.ToLower(strings.Join(words[1:], ""))
-	return tags.TagValue(vendor + ":" + rest)
 }
 
 // scanRateValue reads the monitor scan rate. The catalog writes one of two

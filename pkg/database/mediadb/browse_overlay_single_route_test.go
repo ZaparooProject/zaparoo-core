@@ -81,7 +81,7 @@ func setupSingleRouteFixture(t *testing.T) (fixture *singleRouteFixture, cleanup
 	require.NoError(t, mediaDB.BeginTransaction(false))
 	regionType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
 	require.NoError(t, err)
-	usa, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "usa"})
+	usa, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "us"})
 	require.NoError(t, err)
 
 	insert := func(name, path string, tagged bool) {
@@ -137,7 +137,7 @@ func TestBrowseOverlaySingleRoute_MatchesTheMergeStatement(t *testing.T) {
 
 	ctx := context.Background()
 	letter := "A"
-	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "us"}}
 
 	for _, cached := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cache=%t", cached), func(t *testing.T) {

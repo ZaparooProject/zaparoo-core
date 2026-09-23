@@ -59,14 +59,10 @@ var CanonicalIsExclusive = map[TagType]bool{
 	// One build/romset date per file
 	TagTypeBuildDate: true,
 
-	// Game family/series — one authoritative value per title
-	TagTypeGameFamily: true,
-
 	// Additive types — explicit false for documentation; these are the default
 	TagTypeLang:          false,
 	TagTypeRegion:        false,
 	TagTypeDump:          false,
-	TagTypeGameGenre:     false, // seeded as "gamegenre" — scrapers use TagTypeGenre
 	TagTypeGenre:         false,
 	TagTypeCompatibility: false,
 }
@@ -88,7 +84,7 @@ func IsUserOwnedType(t TagType) bool {
 // scraper bookkeeping are excluded from scanner-derived identity snapshots.
 func IsScannerOwnedType(t TagType) bool {
 	if t == TagTypeUser || t == TagTypeProperty || t == TagTypeRating ||
-		t == TagTypeGenre || t == TagTypeGameFamily {
+		t == TagTypeGenre {
 		return false
 	}
 

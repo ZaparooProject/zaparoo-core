@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -56,8 +57,10 @@ func arcadeMedia(dbID, titleID int64, path string) database.MediaWithFullPath {
 	}
 }
 
-// captureWrites records every per-record write the scraper makes.
-func captureWrites(mediaDB *testhelpers.MockMediaDBI) *[]database.ScrapeWriteTarget {
+// captureWrites records every per-record write the scraper makes, failing the
+// test for any tag in one that the vocabulary would refuse.
+func captureWrites(t *testing.T, mediaDB *testhelpers.MockMediaDBI) *[]database.ScrapeWriteTarget {
+	t.Helper()
 	writes := &[]database.ScrapeWriteTarget{}
 	mediaDB.On("ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -73,6 +76,7 @@ func captureWrites(mediaDB *testhelpers.MockMediaDBI) *[]database.ScrapeWriteTar
 			if !ok {
 				return
 			}
+			scrapertest.RequireValidWrite(t, write)
 			*writes = append(*writes, database.ScrapeWriteTarget{
 				MediaDBID: mediaDBID, MediaTitleDBID: titleDBID, Write: write,
 			})
@@ -142,7 +146,7 @@ func TestScrapeWritesCatalogMetadataToMatchedDescriptors(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
 		Return(map[int64]struct{}{}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
@@ -156,7 +160,11 @@ func TestScrapeWritesCatalogMetadataToMatchedDescriptors(t *testing.T) {
 	require.Len(t, *writes, 1)
 	assert.Equal(t, int64(100), (*writes)[0].MediaDBID)
 	assert.Equal(t, int64(1), (*writes)[0].MediaTitleDBID)
-	assert.Equal(t, []string{"1990"}, tagValues((*writes)[0].Write.TitleTags, tags.TagTypeYear))
+	title := (*writes)[0].Write.TitleTags
+	assert.Equal(t, []string{"1990"}, tagValues(title, tags.TagTypeYear))
+	assert.Equal(t, []string{"shmup:v", "shmup"}, tagValues(title, tags.TagTypeGenre))
+	assert.Equal(t, []string{"capcom:cps"}, tagValues(title, tags.TagTypeArcadeBoard))
+	assert.Contains(t, tagValues(title, tags.TagTypeSearch), "franchise:19xx")
 	assert.False(t, (*writes)[0].Write.FillMissing)
 }
 
@@ -174,7 +182,7 @@ func TestScrapePrefersThePlatformSetNameCache(t *testing.T) {
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
 		Return(map[int64]struct{}{}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	calls := 0
 	cache := func(queried string) (string, bool) {
@@ -206,7 +214,7 @@ func TestScrapeReadsTheDescriptorWhenTheCacheMisses(t *testing.T) {
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
 		Return(map[int64]struct{}{}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	s := NewPlatformScraper(
 		[]string{systemdefs.SystemArcade},
@@ -233,7 +241,7 @@ func TestScrapeSkipsRowsItHasAlreadyWritten(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
 		Return(map[int64]struct{}{100: {}}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
@@ -258,7 +266,7 @@ func TestFillMissingRevisitsSentinelRowsAndMarksTheWrite(t *testing.T) {
 	// sentinel, so a later index can fill fields the catalog only just gained.
 	mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
 		Return(map[int64]struct{}{}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	entry := cps1Entry()
 	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(entry), nil)
@@ -358,7 +366,7 @@ func TestSharedTitleWritesAreOrderedByPath(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
 		Return(map[int64]struct{}{}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	world1941 := cps1Entry()
 	japan1941 := cps1Entry()
@@ -374,4 +382,31 @@ func TestSharedTitleWritesAreOrderedByPath(t *testing.T) {
 	assert.Equal(t, []string{"1991"}, tagValues((*writes)[0].Write.TitleTags, tags.TagTypeYear),
 		"the lexicographically first descriptor is the one whose title tags land first")
 	assert.True(t, (*writes)[0].Write.FillMissing)
+}
+
+func TestScrapeRunCollectsValuesWithNoMapping(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := descriptor(t, fs, "Odd Game", "oddgame")
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
+		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
+	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
+		Return(map[int64]struct{}{}, nil)
+	writes := captureWrites(t, mediaDB)
+
+	entry := Entry{SetName: "oddgame", Category: "Unheard Of - Genre", Platform: "Mystery Board", Year: "1990"}
+	impl := &scraperImpl{
+		fs: fs, db: mediaDB, entries: index([]Entry{entry}), unmapped: &scraper.UnmappedValues{},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	impl.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []string{systemdefs.SystemArcade}, ch)
+	drain(t, ch)
+
+	require.Len(t, *writes, 1)
+	assert.Equal(t, []string{"1990"}, tagValues((*writes)[0].Write.TitleTags, tags.TagTypeYear))
+	assert.Equal(t, 1, impl.unmapped.Count(tags.TagTypeGenre), "the run keeps the dropped category")
+	assert.Equal(t, 1, impl.unmapped.Count(tags.TagTypeArcadeBoard), "the run keeps the dropped board")
 }

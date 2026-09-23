@@ -37,21 +37,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// scanDynamicTagTypes are the open-ended tag types whose values the scanner may
-// create as new Tags rows during reconcile (arbitrary values like "rev:7-2502"
-// or an unseen file extension). All other types are restricted to the canonical
-// pre-seeded set: staged values with no matching Tags row simply produce no link.
-var scanDynamicTagTypes = []string{
-	string(tags.TagTypeRev),
-	string(tags.TagTypeDeveloper),
-	string(tags.TagTypePublisher),
-	string(tags.TagTypeCredit),
-	string(tags.TagTypeBuildDate),
-	string(tags.TagTypePatch),
-	string(tags.TagTypeTrack),
-	string(tags.TagTypeExtension),
-}
-
 // scanReconcileStep is one named statement in the reconcile sequence.
 type scanReconcileStep struct {
 	step  string
@@ -110,7 +95,7 @@ const (
 	JOIN Tags t ON t.DBID = mt.TagDBID
 	JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 	WHERE m.SystemDBID = ?
-	  AND tt.Type NOT IN (?, ?, ?, ?, ?)
+	  AND tt.Type NOT IN (?, ?, ?, ?)
 	  AND tt.Type NOT LIKE ?
 	  AND tt.Type NOT LIKE ?
 	  AND NOT EXISTS (
@@ -126,7 +111,6 @@ func scanNonScannerTypeArgs(systemDBID int64) []any {
 		string(tags.TagTypeProperty),
 		string(tags.TagTypeRating),
 		string(tags.TagTypeGenre),
-		string(tags.TagTypeGameFamily),
 		string(tags.ScraperType("")) + "%",
 		string(tags.ScraperRunType("")) + "%",
 	}
@@ -851,12 +835,12 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 	}
 
-	// Create Tags rows for staged values of the open-ended types that don't
-	// exist yet. Other staged types must match a pre-seeded canonical tag or
-	// they produce no link.
-	dynamicHolders := prepareVariadic("?", ",", len(scanDynamicTagTypes))
-	dynamicArgs := make([]any, len(scanDynamicTagTypes))
-	for i, t := range scanDynamicTagTypes {
+	// Create Tags rows for staged values of the types that are not closed
+	// lists and don't exist yet. Staging only accepts values the vocabulary
+	// accepts, and closed values are all seeded, so every staged value links.
+	dynamicHolders := prepareVariadic("?", ",", len(scanCreatableTagTypes))
+	dynamicArgs := make([]any, len(scanCreatableTagTypes))
+	for i, t := range scanCreatableTagTypes {
 		dynamicArgs[i] = t
 	}
 	//nolint:gosec // dynamicHolders is only "?" placeholders.
@@ -1099,7 +1083,10 @@ func sqlReadScanTouchedTitles(ctx context.Context, db sqlQueryable) ([]int64, er
 // Stored in DBConfig after a successful seed so later index runs can skip
 // re-proving ~1,400 rows exist — a cost of a minute or more on slow storage.
 func canonicalTagVocabHash(typeRows []canonicalTypeRow, tagRows []canonicalTagRow) string {
-	lines := make([]string, 0, len(typeRows)+len(tagRows))
+	lines := make([]string, 0, len(typeRows)+len(tagRows)+1)
+	// The rules decide which stored values survive a prune, so a rules change
+	// must re-run seeding and pruning even when no listed value changed.
+	lines = append(lines, "r\x00"+strconv.Itoa(tags.RulesVersion))
 	for _, row := range typeRows {
 		lines = append(lines, "t\x00"+row.name+"\x00"+strconv.FormatBool(row.isExclusive))
 	}
@@ -1141,7 +1128,7 @@ func invalidateCanonicalTagVocabStampIfDeleted(ctx context.Context, db sqlQuerya
 // for values. Replaces the per-row ScanState-driven seeding. A DBConfig stamp
 // of the vocabulary hash short-circuits the whole pass when a previous run
 // already seeded this exact vocabulary.
-func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
+func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) (bool, error) {
 	// Dedupe within the statement: the NOT EXISTS anti-join only sees rows
 	// already in the table, not other rows of the same INSERT ... SELECT.
 	seenTypes := map[string]struct{}{}
@@ -1154,8 +1141,6 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		seenTypes[name] = struct{}{}
 		typeRows = append(typeRows, canonicalTypeRow{name, tags.IsExclusiveType(tagType)})
 	}
-	addType(tags.TagTypeUnknown)
-	addType(tags.TagTypeExtension)
 	for tagType := range tags.CanonicalTagDefinitions {
 		addType(tagType)
 	}
@@ -1170,7 +1155,6 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		seenTags[key] = struct{}{}
 		tagRows = append(tagRows, canonicalTagRow{typeName: typeName, value: value})
 	}
-	addTag(string(tags.TagTypeUnknown), "unknown")
 	for tagType, values := range tags.CanonicalTagDefinitions {
 		for _, value := range values {
 			addTag(string(tagType), tags.PadTagValue(strings.ToLower(string(value))))
@@ -1188,7 +1172,7 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 	).Scan(&storedHash)
 	if stampErr == nil && storedHash == vocabHash {
 		log.Debug().Msg("canonical tag vocabulary already seeded, skipping")
-		return nil
+		return false, nil
 	}
 	if stampErr != nil && !errors.Is(stampErr, sql.ErrNoRows) {
 		log.Warn().Err(stampErr).Msg("failed to read canonical tag vocabulary stamp, seeding anyway")
@@ -1208,7 +1192,7 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		INSERT INTO TagTypes (Type, IsExclusive) VALUES %s
 		ON CONFLICT(Type) DO UPDATE SET IsExclusive = excluded.IsExclusive`, sb.String())
 	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("failed to seed canonical tag types: %w", err)
+		return false, fmt.Errorf("failed to seed canonical tag types: %w", err)
 	}
 
 	const chunkSize = 400
@@ -1234,8 +1218,15 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 			WHERE NOT EXISTS (SELECT 1 FROM Tags t WHERE t.TypeDBID = tt.DBID AND t.Tag = v.Tag)`,
 			sb.String())
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("failed to seed canonical tags: %w", err)
+			return false, fmt.Errorf("failed to seed canonical tags: %w", err)
 		}
+	}
+
+	// The vocabulary changed, so values it no longer accepts go too. A failed
+	// prune leaves the stamp unwritten, so the next start tries again.
+	changed, err := sqlPruneOffVocabularyTags(ctx, db)
+	if err != nil {
+		return false, err
 	}
 
 	// Non-fatal: a missed stamp only means the next run seeds again.
@@ -1245,5 +1236,5 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 	); err != nil {
 		log.Warn().Err(err).Msg("failed to write canonical tag vocabulary stamp")
 	}
-	return nil
+	return changed, nil
 }

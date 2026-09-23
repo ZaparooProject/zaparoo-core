@@ -104,6 +104,14 @@ func FuzzParseFilenameToCanonicalTags(f *testing.F) {
 			}
 		}
 
+		// Every tag the parser emits must be one the vocabulary accepts;
+		// anything else would be refused at write time and lost.
+		for _, tag := range result {
+			if err := ValidateTagValue(tag.Type, string(tag.Value)); err != nil {
+				t.Errorf("parser emitted %s:%s from %q: %v", tag.Type, tag.Value, filename, err)
+			}
+		}
+
 		// Deterministic - same input always produces same result
 		result2 := ParseFilenameToCanonicalTags(filename)
 		if len(result) != len(result2) {

@@ -110,8 +110,8 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	ctx := context.Background()
 
 	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "promo"}},
 	})
 
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
@@ -124,9 +124,9 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	}
 	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	require.Len(t, results[0].ZapScriptTags, 1)
-	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, results[0].ZapScriptTags[0])
+	assert.Equal(t, database.TagInfo{Type: "release", Tag: "reissue"}, results[0].ZapScriptTags[0])
 	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, database.TagInfo{Type: "release", Tag: "Europe"}, results[1].ZapScriptTags[0])
+	assert.Equal(t, database.TagInfo{Type: "release", Tag: "promo"}, results[1].ZapScriptTags[0])
 
 	// Search paths carrying title IDs reuse the already fetched media tags
 	// instead of issuing a second disambiguation query.
@@ -183,8 +183,8 @@ func TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps(t *testing.T) {
 	ctx := context.Background()
 
 	_, titleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "promo"}},
 	})
 	// No recompute has run: the stored value stands in for one computed by an
 	// older algorithm that would now disagree with the current one.
@@ -264,12 +264,12 @@ func TestDisambiguationBackfill_ResumesFromCheckpoint(t *testing.T) {
 	ctx := context.Background()
 
 	firstSystemDBID, firstTitleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "promo"}},
 	})
 	_, secondTitleDBID, _ := setupDisambTitle(t, mediaDB, "SNES", "Mario", []disambTitleMedia{
-		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "Japan"}},
+		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "kiosk"}},
 	})
 
 	// Simulate a previous walk interrupted after the first system committed.
@@ -304,12 +304,12 @@ func TestDisambiguationBackfill_InterruptionPersistsProgress(t *testing.T) {
 	defer cleanup()
 
 	firstSystemDBID, firstTitleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "promo"}},
 	})
 	secondSystemDBID, secondTitleDBID, _ := setupDisambTitle(t, mediaDB, "SNES", "Mario", []disambTitleMedia{
-		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "Japan"}},
+		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "kiosk"}},
 	})
 	require.Less(t, firstSystemDBID, secondSystemDBID,
 		"the walk visits systems in DBID order; the test relies on NES running first")
@@ -434,8 +434,8 @@ func TestMigrateUp_LegacyDatabaseStaysPending(t *testing.T) {
 	ctx := context.Background()
 
 	setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "promo"}},
 	})
 
 	require.NoError(t, mediaDB.MigrateUp())
@@ -499,7 +499,7 @@ func TestRecomputeSystemDisambiguation_SingleMediaTitle(t *testing.T) {
 	ctx := context.Background()
 
 	systemDBID, titleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Solo", []disambTitleMedia{
-		{path: "/roms/nes/solo.nes", tags: map[string]string{"release": "USA"}},
+		{path: "/roms/nes/solo.nes", tags: map[string]string{"release": "reissue"}},
 	})
 
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
@@ -513,11 +513,11 @@ func TestRecomputeSystemDisambiguation_MissingMediaExcluded(t *testing.T) {
 	ctx := context.Background()
 
 	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "NES", "Castlevania", []disambTitleMedia{
-		{path: "/roms/nes/cv-usa.nes", tags: map[string]string{"release": "USA"}},
-		{path: "/roms/nes/cv-eur.nes", tags: map[string]string{"release": "Europe"}},
+		{path: "/roms/nes/cv-usa.nes", tags: map[string]string{"release": "reissue"}},
+		{path: "/roms/nes/cv-eur.nes", tags: map[string]string{"release": "promo"}},
 	})
 
-	// Mark the Europe variant missing: only one present variant remains, so the
+	// Mark the promo variant missing: only one present variant remains, so the
 	// title no longer disambiguates.
 	_, err := mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, mediaIDs[1])
 	require.NoError(t, err)
@@ -678,8 +678,8 @@ func TestRecomputeTitleDisambiguation_Success(t *testing.T) {
 	ctx := context.Background()
 
 	_, titleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Contra", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "contra-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "contra-jpn.nes"), tags: map[string]string{"release": "Japan"}},
+		{path: browseTestPath("roms", "nes", "contra-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "contra-jpn.nes"), tags: map[string]string{"release": "kiosk"}},
 	})
 
 	require.NoError(t, mediaDB.RecomputeTitleDisambiguation(ctx, []int64{titleDBID}))
@@ -705,8 +705,8 @@ func TestAttachZapScriptTags_TitleGlobalAcrossPages(t *testing.T) {
 
 	parentDir := browseTestDir("roms", "nes")
 	systemDBID, _, _ := setupDisambTitle(t, mediaDB, "NES", "Double Dragon", []disambTitleMedia{
-		{path: browseTestPath("roms", "nes", "dd-usa.nes"), tags: map[string]string{"release": "USA"}},
-		{path: browseTestPath("roms", "nes", "dd-jpn.nes"), tags: map[string]string{"release": "Japan"}},
+		{path: browseTestPath("roms", "nes", "dd-usa.nes"), tags: map[string]string{"release": "reissue"}},
+		{path: browseTestPath("roms", "nes", "dd-jpn.nes"), tags: map[string]string{"release": "kiosk"}},
 	})
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
 
@@ -727,15 +727,15 @@ func TestGetZapScriptTagsBySystemAndPath_Integration(t *testing.T) {
 
 	usaPath := "/roms/nes/contra-usa.nes"
 	systemDBID, _, _ := setupDisambTitle(t, mediaDB, "NES", "Contra", []disambTitleMedia{
-		{path: usaPath, tags: map[string]string{"release": "USA", "year": "1988"}},
-		{path: "/roms/nes/contra-jpn.nes", tags: map[string]string{"release": "Japan", "year": "1988"}},
+		{path: usaPath, tags: map[string]string{"release": "reissue", "year": "1988"}},
+		{path: "/roms/nes/contra-jpn.nes", tags: map[string]string{"release": "kiosk", "year": "1988"}},
 	})
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
 
 	got, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", usaPath)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "only release differs across the two variants")
-	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, got[0])
+	assert.Equal(t, database.TagInfo{Type: "release", Tag: "reissue"}, got[0])
 }
 
 // TestRecomputeSystemDisambiguation_RegionDisambiguates exercises a newly eligible tag

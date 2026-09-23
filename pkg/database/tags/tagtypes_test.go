@@ -42,13 +42,11 @@ func TestIsScannerOwnedType(t *testing.T) {
 		{tagType: TagTypeExtension, owned: true},
 		{tagType: TagTypeInput, owned: true},
 		{tagType: TagTypePlayers, owned: true},
-		{tagType: TagTypeGameGenre, owned: true},
 		// User intent, scraped metadata and bookkeeping are all excluded.
 		{tagType: TagTypeUser, owned: false},
 		{tagType: TagTypeProperty, owned: false},
 		{tagType: TagTypeRating, owned: false},
 		{tagType: TagTypeGenre, owned: false},
-		{tagType: TagTypeGameFamily, owned: false},
 		{tagType: ScraperType("igdb"), owned: false},
 		{tagType: ScraperRunType("igdb"), owned: false},
 		// An unknown type is scanner-owned by default: new scanner tag types
@@ -67,7 +65,7 @@ func TestIsExclusiveType(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, IsExclusiveType(TagTypeYear), "one authoritative release year")
-	assert.True(t, IsExclusiveType(TagTypeGameFamily))
+	assert.True(t, IsExclusiveType(TagTypeDeveloper))
 	assert.False(t, IsExclusiveType(TagTypeRegion), "media can carry several regions")
 	assert.False(t, IsExclusiveType(TagTypeLang))
 	assert.False(t, IsExclusiveType(TagType("unknown-type")), "unknown types default to additive")

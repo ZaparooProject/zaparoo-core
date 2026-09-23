@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/pinup"
@@ -111,11 +112,14 @@ func fixtureLocate(inst *pinup.Install) Locate {
 	return func(*config.Instance) (pinup.Install, error) { return *inst, nil }
 }
 
-// captureWrites records every per-record write the scraper makes.
-func captureWrites(mediaDB *testhelpers.MockMediaDBI) *[]database.ScrapeWriteTarget {
+// captureWrites records every per-record write the scraper makes and checks
+// each against the tag vocabulary.
+func captureWrites(t *testing.T, mediaDB *testhelpers.MockMediaDBI) *[]database.ScrapeWriteTarget {
+	t.Helper()
 	writes := &[]database.ScrapeWriteTarget{}
 	mediaDB.On("ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
+			scrapertest.RequireValidWrite(t, args.Get(3).(*database.ScrapeWrite))
 			*writes = append(*writes, database.ScrapeWriteTarget{
 				MediaDBID:      args.Get(1).(int64),
 				MediaTitleDBID: args.Get(2).(int64),
@@ -135,6 +139,9 @@ func drain(t *testing.T, ch <-chan scraper.ScrapeUpdate) []scraper.ScrapeUpdate 
 	assert.True(t, updates[len(updates)-1].Done)
 	return updates
 }
+
+// pinballGenres is the genre every Popper table carries.
+var pinballGenres = []string{string(tags.TagGameGenreParlorPinball), string(tags.TagGameGenreParlor)}
 
 func tagValue(write *database.ScrapeWrite, tagType string) []string {
 	values := make([]string, 0, 2)
@@ -175,7 +182,7 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
 		Return(map[int64]struct{}{105: {}}, nil)
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	s := NewPlatformScraper(fixtureLocate(&inst))
 	assert.Equal(t, "pinup-popper", s.ID)
@@ -206,11 +213,14 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 	assert.Equal(t, []string{"4"}, tagValue(afm.Write, string(tags.TagTypePlayers)))
 	assert.Equal(t, []string{tags.NormalizeTagValue(string(tags.TagTypeDeveloper), "Bally")},
 		tagValue(afm.Write, string(tags.TagTypeDeveloper)))
-	assert.Equal(t, []string{
-		tags.NormalizeTagValue(string(tags.TagTypeGenre), "SS"),
-		tags.NormalizeTagValue(string(tags.TagTypeGenre), "Recreation"),
-		tags.NormalizeTagValue(string(tags.TagTypeGenre), "Aliens"),
-	}, tagValue(afm.Write, string(tags.TagTypeGenre)))
+	assert.Equal(t, pinballGenres, tagValue(afm.Write, string(tags.TagTypeGenre)),
+		"game type, category and theme are not genres")
+	assert.Empty(t, tagValue(afm.Write, string(tags.TagTypeSearch)), "Aliens is not a listed feature")
+	for _, tag := range afm.Write.TitleTags {
+		if tag.Type != string(tags.TagTypeDeveloper) {
+			assert.Emptyf(t, tag.Label, "closed-type tag %s:%s carries a label", tag.Type, tag.Tag)
+		}
+	}
 	assert.Equal(t, "Great table", propText(afm.Write.TitleProps, tags.TagPropertyDescription))
 	vpxMedia := filepath.ToSlash(filepath.Join(inst.MediaDir, "Visual Pinball X"))
 	assert.Equal(t, vpxMedia+"/Wheel/afm.png", propText(afm.Write.MediaProps, tags.TagPropertyImageWheel))
@@ -221,7 +231,8 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 
 	fp := byMedia[101]
 	require.NotNil(t, fp.Write)
-	assert.Empty(t, fp.Write.TitleTags)
+	assert.Equal(t, pinballGenres, tagValue(fp.Write, string(tags.TagTypeGenre)))
+	assert.Len(t, fp.Write.TitleTags, len(pinballGenres))
 	assert.Empty(t, fp.Write.TitleProps)
 	fpMedia := filepath.ToSlash(filepath.Join(inst.MediaDir, "Future Pinball"))
 	assert.Equal(t, fpMedia+"/Wheel/fp_table.png", propText(fp.Write.MediaProps, tags.TagPropertyImageWheel),
@@ -229,7 +240,7 @@ func TestScrapeWritesMetadataAndArtwork(t *testing.T) {
 
 	sparse := byMedia[102]
 	require.NotNil(t, sparse.Write)
-	assert.Empty(t, sparse.Write.TitleTags, "zero and blank fields produce no tags")
+	assert.Len(t, sparse.Write.TitleTags, len(pinballGenres), "zero and blank fields produce no tags")
 	assert.Empty(t, sparse.Write.MediaProps)
 	mediaDB.AssertExpectations(t)
 }
@@ -246,7 +257,7 @@ func TestScrapeForceRescrapesAndMarksRun(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "run-1", int64(7)).
 		Return(map[int64]struct{}{}, nil).Once()
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 
 	ch := make(chan scraper.ScrapeUpdate, 16)
 	require.NoError(t, NewPlatformScraper(fixtureLocate(&inst)).Scrape(
@@ -272,7 +283,7 @@ func TestScrapeFillMissingResumesOnlyUnfinishedRows(t *testing.T) {
 	}, nil)
 	mediaDB.On("GetScrapeRunMediaIDs", mock.Anything, scraperID, "resume", int64(7)).
 		Return(map[int64]struct{}{100: {}}, nil).Once()
-	writes := captureWrites(mediaDB)
+	writes := captureWrites(t, mediaDB)
 	ch := make(chan scraper.ScrapeUpdate, 16)
 	require.NoError(t, NewPlatformScraper(fixtureLocate(&inst)).Scrape(
 		t.Context(), nil, nil, afero.NewOsFs(), &database.Database{MediaDB: mediaDB},
@@ -372,4 +383,53 @@ func TestCleanText(t *testing.T) {
 	assert.Equal(t, "Great table", cleanText("  Great \t table\r\n"))
 	assert.Equal(t, "a b", cleanText("a\x01b"))
 	assert.Empty(t, cleanText("   "))
+}
+
+func TestBuildWriteMapsOnlyVocabularyValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		search   []string
+		players  []string
+		year     []string
+		table    pinup.Table
+		unmapped int
+	}{
+		{
+			name:   "feature themes",
+			table:  pinup.Table{Theme: "Superheroes, Spider-Man; X-Men", Year: 2007, Players: 4},
+			search: []string{"feature:spiderman", "feature:xmen"}, players: []string{"4"}, year: []string{"2007"},
+		},
+		{
+			name:  "genre-like theme and game type are dropped",
+			table: pinup.Table{GameType: "EM", Category: "Original", Theme: "Sports, Aliens", Year: 1964},
+			year:  []string{"1964"},
+		},
+		{
+			name:     "players outside the vocabulary",
+			table:    pinup.Table{Players: 20, Year: 1931},
+			unmapped: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &scraperImpl{fs: afero.NewMemMapFs()}
+			write := s.buildWrite(&tt.table, &pinup.Emulator{}, "")
+			scrapertest.RequireValidWrite(t, write)
+			assert.Equal(t, pinballGenres, tagValue(write, string(tags.TagTypeGenre)))
+			assert.Equal(t, tt.search, nilIfEmpty(tagValue(write, string(tags.TagTypeSearch))))
+			assert.Equal(t, tt.players, nilIfEmpty(tagValue(write, string(tags.TagTypePlayers))))
+			assert.Equal(t, tt.year, nilIfEmpty(tagValue(write, string(tags.TagTypeYear))))
+			assert.Equal(t, tt.unmapped, s.unmapped.Count(tags.TagTypePlayers))
+			assert.Zero(t, s.unmapped.Count(tags.TagTypeGenre), "themes are not genres, so none is noted")
+		})
+	}
+}
+
+func nilIfEmpty(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }

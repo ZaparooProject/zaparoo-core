@@ -27,7 +27,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -41,7 +40,7 @@ func TestScopedMiSTerDocsForceCleanup(t *testing.T) {
 	sourcePath := filepath.Join(docsRoot, "SNES", "Manuals")
 	fs := afero.NewMemMapFs()
 	require.NoError(t, fs.MkdirAll(sourcePath, 0o750))
-	mdb := helpers.NewMockMediaDBI()
+	mdb := newMockMediaDB(t)
 	scope := &database.ScrapeScope{SystemID: "SNES", Path: path, MediaID: 1}
 	mdb.On("GetScrapeMedia", mock.Anything, *scope).Return([]database.MediaFullRow{{
 		Media:  database.Media{DBID: 1, MediaTitleDBID: 10, Path: path},

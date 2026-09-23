@@ -76,7 +76,7 @@ func TestGetSystemTagsCached_AutoPopulate_Integration(t *testing.T) {
 	// Add a tag
 	platformTag := database.Tag{
 		TypeDBID: genreTagType.DBID,
-		Tag:      "platform",
+		Tag:      "action:platformer",
 	}
 	insertedTag, err := mediaDB.FindOrInsertTag(platformTag)
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestGetSystemTagsCached_AutoPopulate_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, tags, 1, "should have auto-populated cache and returned 1 tag")
 	assert.Equal(t, "genre", tags[0].Type)
-	assert.Equal(t, "platform", tags[0].Tag)
+	assert.Equal(t, "action:platformer", tags[0].Tag)
 
 	// Second call should use the populated cache
 	tags2, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
@@ -155,14 +155,14 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 	// Add NES tags
 	platformTag := database.Tag{
 		TypeDBID: genreTagType.DBID,
-		Tag:      "platform",
+		Tag:      "action:platformer",
 	}
 	insertedPlatformTag, err := mediaDB.FindOrInsertTag(platformTag)
 	require.NoError(t, err)
 
 	usaTag := database.Tag{
 		TypeDBID: regionTagType.DBID,
-		Tag:      "usa",
+		Tag:      "us",
 	}
 	insertedUSATag, err := mediaDB.FindOrInsertTag(usaTag)
 	require.NoError(t, err)
@@ -289,7 +289,7 @@ func TestPopulateSystemTagsCacheForSystems_UpdateExisting_Integration(t *testing
 	// Add initial tag
 	platformTag := database.Tag{
 		TypeDBID: genreTagType.DBID,
-		Tag:      "platform",
+		Tag:      "action:platformer",
 	}
 	insertedTag, err := mediaDB.FindOrInsertTag(platformTag)
 	require.NoError(t, err)
@@ -340,7 +340,7 @@ func TestPopulateSystemTagsCacheForSystems_UpdateExisting_Integration(t *testing
 	for i, tag := range tags2 {
 		tagValues[i] = tag.Tag
 	}
-	assert.Contains(t, tagValues, "platform")
+	assert.Contains(t, tagValues, "action:platformer")
 	assert.Contains(t, tagValues, "action")
 }
 
@@ -392,7 +392,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 	// Add NES tag
 	platformTag := database.Tag{
 		TypeDBID: genreTagType.DBID,
-		Tag:      "platform",
+		Tag:      "action:platformer",
 	}
 	insertedPlatformTag, err := mediaDB.FindOrInsertTag(platformTag)
 	require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 	nesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
 	require.NoError(t, err)
 	assert.Len(t, nesTags, 1)
-	assert.Equal(t, "platform", nesTags[0].Tag)
+	assert.Equal(t, "action:platformer", nesTags[0].Tag)
 
 	// Verify SNES cache
 	snesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*snesSystem})

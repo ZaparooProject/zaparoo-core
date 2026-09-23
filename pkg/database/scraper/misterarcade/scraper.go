@@ -91,7 +91,10 @@ func NewPlatformScraper(systems []string, catalog Catalog, cache SetNameCache) p
 			if err != nil {
 				return fmt.Errorf("misterarcade: list indexed systems: %w", err)
 			}
-			impl := &scraperImpl{fs: fs, db: db.MediaDB, entries: index(entries), cache: cache}
+			impl := &scraperImpl{
+				fs: fs, db: db.MediaDB, entries: index(entries), cache: cache,
+				unmapped: &scraper.UnmappedValues{},
+			}
 			go impl.scrapeLoop(ctx, opts, targetSystems(supported, indexed, opts.SystemIDs()), ch)
 			return nil
 		},
@@ -125,6 +128,9 @@ type scraperImpl struct {
 	db      database.MediaDBI
 	entries map[string]*Entry
 	cache   SetNameCache
+	// unmapped collects the catalog values this run dropped for want of a
+	// tag mapping; scrapeLoop logs the summary once the run ends.
+	unmapped *scraper.UnmappedValues
 }
 
 type matchStats struct {
@@ -137,6 +143,7 @@ func (s *scraperImpl) scrapeLoop(
 	ctx context.Context, opts scraper.ScrapeOptions, targets []string, ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
+	defer s.unmapped.LogSummary(scraperID)
 	bgpriority.Apply()
 
 	started := time.Now()
@@ -284,7 +291,7 @@ func (s *scraperImpl) buildTargets(
 		}
 		targets = append(targets, database.ScrapeWriteTarget{
 			MediaDBID: row.DBID, MediaTitleDBID: row.MediaTitleDBID,
-			Write: buildWrite(entry, opts.RunID),
+			Write: buildWrite(entry, opts.RunID, s.unmapped),
 		})
 		stats.Matched++
 	}

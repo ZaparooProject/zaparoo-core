@@ -1446,6 +1446,11 @@ func TestParseFilenameToCanonicalTagsForMedia_LooseTokenRouting(t *testing.T) {
 		{"180 (1986)(Mastertronic)[48-128K].atr", "compatibility:memory:48k-128k"},
 		// year-month build date (previously unknown)
 		{"720 (1988-01).nsf", "builddate:1988-01"},
+		// a spelled-out revision (previously a company credit)
+		{"1942 (Revision B).mra", "rev:b"},
+		// TOSEC hacked intro (previously read as Hindi)
+		{"Game (1987)(Publisher)[hI].d64", "dump:hacked:intro"},
+		{"Game (Hi).nes", "lang:hi"},
 		// keyword mappings whose values already existed
 		{"Game (New Zealand).z64", "region:nz"},
 		{"Game (PAL60).md", "video:pal-60"},
@@ -2113,12 +2118,16 @@ func TestParseFilenameToCanonicalTags_Patches(t *testing.T) {
 			name: "generic explicit hack and patch labels",
 			filename: "Game [Hack by Author v1.2] [Alt Font & Controls Hack by Team v2.0] " +
 				"[Optional patch by Group v3.0].sfc",
+			// Patch labels are a closed list: a label the list does not
+			// name is not stored as a patch, though the hack itself is.
 			wantContains: []string{
+				"unlicensed:hack",
 				"patch:hack:1-2",
-				"patch:alt-font-controls:2-0",
-				"patch:optional:3-0",
 			},
-			wantNotContains: []string{"rev:1-2", "rev:2-0", "rev:3-0"},
+			wantNotContains: []string{
+				"rev:1-2", "rev:2-0", "rev:3-0",
+				"patch:alt-font-controls:2-0", "patch:optional:3-0",
+			},
 		},
 		{
 			name: "hardware and enhancement patch labels",

@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -41,15 +42,37 @@ import (
 )
 
 type batchMockMediaDB struct {
+	t testing.TB
 	*testhelpers.MockMediaDBI
 	batchErr error
 	batches  [][]database.ScrapeWriteTarget
+}
+
+// newMockMediaDB returns a media DB mock that checks, once the test ends,
+// every scrape write it received against the tag vocabulary.
+func newMockMediaDB(t testing.TB) *testhelpers.MockMediaDBI {
+	t.Helper()
+	m := testhelpers.NewMockMediaDBI()
+	t.Cleanup(func() {
+		for i := range m.Calls {
+			if m.Calls[i].Method != "ApplyScrapeResult" {
+				continue
+			}
+			if write, ok := m.Calls[i].Arguments.Get(3).(*database.ScrapeWrite); ok {
+				scrapertest.RequireValidWrite(t, write)
+			}
+		}
+	})
+	return m
 }
 
 func (m *batchMockMediaDB) ApplyScrapeResults(
 	_ context.Context,
 	targets []database.ScrapeWriteTarget,
 ) error {
+	for i := range targets {
+		scrapertest.RequireValidWrite(m.t, targets[i].Write)
+	}
 	batch := append([]database.ScrapeWriteTarget(nil), targets...)
 	m.batches = append(m.batches, batch)
 	return m.batchErr
@@ -68,7 +91,7 @@ func TestPlatformScraper_EndToEndLocalArtwork(t *testing.T) {
 
 	pl := mocks.NewMockPlatform()
 	pl.On("RootDirs", assertmock.Anything).Return([]string{root}).Once()
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemSNES}, nil)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{
 		{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES},
@@ -115,7 +138,7 @@ func TestPlatformScraper_ValidatesDependenciesAndIndexLookup(t *testing.T) {
 
 	pl := mocks.NewMockPlatform()
 	pl.On("RootDirs", assertmock.Anything).Return([]string{}).Once()
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("IndexedSystems").Return(nil, errors.New("index lookup failed")).Once()
 	err = platformScraper.Scrape(
 		context.Background(), nil, pl, afero.NewMemMapFs(), &database.Database{MediaDB: mediaDB},
@@ -140,7 +163,7 @@ func TestScrapeLoop_ReportsFatalDatabaseLoadErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mediaDB := testhelpers.NewMockMediaDBI()
+			mediaDB := newMockMediaDB(t)
 			if tt.titleFails {
 				mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).
 					Return(nil, errors.New("load failed")).Once()
@@ -183,7 +206,7 @@ func TestScrapeLoop_ForceSkipsCleanupAfterSourceLoadFailure(t *testing.T) {
 		fs, filepath.Join(sourcePath, indexFileName), []byte("#title\tartwork\n"), 0o600,
 	))
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{
 		{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES},
 	}, nil)
@@ -232,7 +255,7 @@ func TestScrapeLoop_AccumulatesSourceLoadFailures(t *testing.T) {
 		))
 	}
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{}, nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return([]database.MediaWithFullPath{}, nil)
 
@@ -276,7 +299,7 @@ func TestScrapeLoop_ForceCleanupDoesNotInflateStatsOrUseUnavailableRoots(t *test
 		{DBID: 20, Slug: "other", Name: "Other", SystemID: systemdefs.SystemSNES},
 	}
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return(titles, nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return(media, nil)
 	mediaDB.On("GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, []int64{100}).Return(
@@ -329,7 +352,7 @@ func TestScrapeLoop_ForceCleanupDoesNotInflateStatsOrUseUnavailableRoots(t *test
 func TestScrapeLoop_ForceSkipsCleanupWithoutSuccessfulSource(t *testing.T) {
 	t.Parallel()
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{{DBID: 10}}, nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return(
 		[]database.MediaWithFullPath{{DBID: 100, MediaTitleDBID: 10}}, nil,
@@ -423,7 +446,7 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 	titles := []database.TitleWithSystem{{DBID: 10}}
 
 	t.Run("before metadata lookup", func(t *testing.T) {
-		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB := newMockMediaDB(t)
 		impl := &scraperImpl{db: mediaDB, docsRoots: []string{docsRoot}}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -440,7 +463,7 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 	})
 
 	t.Run("before media iteration", func(t *testing.T) {
-		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB := newMockMediaDB(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		mediaDB.On("GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, []int64{100}).Return(
 			map[int64][]database.MediaProperty{100: {staleArtwork}}, nil,
@@ -460,7 +483,7 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 	})
 
 	t.Run("before title iteration", func(t *testing.T) {
-		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB := newMockMediaDB(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		mediaDB.On("GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, []int64{100}).Return(
 			map[int64][]database.MediaProperty{100: {staleArtwork}}, nil,
@@ -510,7 +533,7 @@ func TestScrapeLoop_BatchWritesAndFallback(t *testing.T) {
 				[]byte("#name\tkey\nGame\tGame\n"), 0o600))
 			require.NoError(t, afero.WriteFile(fs, filepath.Join(sourcePath, "Game.jpg"), []byte("image"), 0o600))
 
-			baseDB := testhelpers.NewMockMediaDBI()
+			baseDB := newMockMediaDB(t)
 			baseDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{
 				{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES},
 			}, nil)
@@ -527,7 +550,7 @@ func TestScrapeLoop_BatchWritesAndFallback(t *testing.T) {
 			if tt.batchFails {
 				batchErr = errors.New("batch failed")
 			}
-			mediaDB := &batchMockMediaDB{MockMediaDBI: baseDB, batchErr: batchErr}
+			mediaDB := &batchMockMediaDB{t: t, MockMediaDBI: baseDB, batchErr: batchErr}
 
 			impl := &scraperImpl{
 				fs: fs, db: mediaDB, docsRoots: []string{docsRoot},
@@ -593,7 +616,7 @@ func TestScrapeLoop_ResolvesArcadeArtworkThroughMRASetNames(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
 	}
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{
 		{DBID: 10, Slug: "streetfighteralpha3", Name: "Street Fighter Alpha 3", SystemID: systemdefs.SystemArcade},
 		{DBID: 20, Slug: "shocktroopers", Name: "Shock Troopers", SystemID: systemdefs.SystemArcade},
@@ -656,7 +679,7 @@ func TestScrapeLoop_SkipsMRAScanWithoutArcadeSource(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(artwork, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(artwork, indexFileName), []byte("#name\tkey\n"), 0o600))
 
-	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB := newMockMediaDB(t)
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{}, nil)
 	// An MRA path that does not exist on the filesystem: reading it would
 	// fail, and the scan must not even be attempted for a console system.

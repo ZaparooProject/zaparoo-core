@@ -107,11 +107,34 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 | Storage | Scope | Current normal `gamelist.xml` use |
 |---|---|---|
 | `MediaTags` | ROM-level variant metadata | region, lang, scraper sentinel |
-| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, gamefamily |
+| `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, search (franchise) |
 | `MediaTitleProperties` | Title-level shared static content | description, XML game ID |
 | `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
 
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
+
+### Tag rules
+
+Tags are meant to be as stable as practical: a filter written today must mean the same thing next year, on every device, whichever source the metadata came from. So a scraper does not decide what tags exist. Every tag type has a rule in `pkg/database/tags/rules.go` (`TagRules`), and every type is exactly one of three kinds:
+
+| Kind | Types | What a value must be |
+|---|---|---|
+| Closed list | every type not listed below, including `genre`, `region`, `lang`, `arcadeboard`, `players`, `input`, `search` | one of the type's values in `CanonicalTagDefinitions` |
+| Strict format | `year`, `builddate`, `rating`, `disc`, `disctotal`, `track`, `season`, `episode`, `issue`, `volume`, `set`, `alt`, `rev`, `patch`, `extension`, `mameparent`, `user`, and the `scraper.<id>` / `scraper-run.<id>` bookkeeping types | a value matching the type's rule, such as a year from 1950 to 2099, a real `YYYY-MM-DD` date, a rating from 0 to 100, a positive disc number, or a listed patch label with an optional version |
+| Free text | `developer`, `publisher`, `credit` only | a company name in the form `NormalizeCompanyName` produces: lower-case words joined by single dashes |
+
+Company names are the only free text because they are the only values that cannot be listed. Adding a free-text type is a design change, not a scraper detail; `TestFreeTextTypesAreOnlyCompanyNames` exists to make that visible.
+
+What this means for a scraper:
+
+- **Map or drop.** A scraper maps its source's wording onto an existing canonical value, through a table in its package or a shared lookup (`tags.LookupRegionWord`, `LookupLanguageWord`, `LookupArcadeBoard`, `LookupFranchise`). A source value with no mapping is dropped, never stored as it was written. Genres follow the GameDataBase taxonomy (`shmup:v`, `action:platformer`, `parlor:pinball`), series are `search:franchise:<name>`, and boards are `arcadeboard:<vendor>:<board>`.
+- **Say what was dropped.** Record each dropped value with `scraper.UnmappedValues.Note` and call `LogSummary` once at the end of a run. The summary is logged at info with counts and examples per tag type, so the mapping tables can be grown from what real sources contain.
+- **No labels on shared values.** A closed or format value is one row shared by every title that carries it, so it has no per-source display name. Only free-text tags keep the source's spelling as a label (`t-and-e-soft` labelled `T&E Soft`).
+- **Adding a value** means adding a `TagValue` constant to `tag_values.go` and listing it under its type in `CanonicalTagDefinitions`, then mapping to it. Tests assert that every listed value satisfies its type's rule and that every declared tag type has a rule.
+
+MediaDB enforces the rules on every write path — scrape writes, `UpsertMediaTags`/`UpsertMediaTitleTags`, the scanner's staging, user flags and deck membership, and the legacy `InsertTag`/`InsertTagType` — so a value that slips past a scraper is refused and logged at warn rather than stored. When the vocabulary changes between releases, the startup seeding pass removes stored types and values the new rules refuse, together with every link to them (`sqlPruneOffVocabularyTags`).
+
+Each scraper's tests call `scrapertest.RequireValidWrite` on every write they build, and the MiSTer arcade catalog tests fail when the pinned catalog snapshot holds a category, platform or series that nothing maps, so refreshing the snapshot forces the new values to be curated.
 
 Property rows are keyed by entity and property type tag. Re-scraping the same property type updates the row in place and preserves row DBID.
 
@@ -147,16 +170,16 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 | ES field | Destination | Notes |
 |---|---|---|
-| `lang` | `MediaTags: lang` | CSV split, trimmed, lowercased, additive |
-| `region` | `MediaTags: region` | CSV split, trimmed, lowercased, additive |
+| `lang` | `MediaTags: lang` | CSV split; each code or name mapped with `tags.LookupLanguageWord`, additive |
+| `region` | `MediaTags: region` | CSV split; ScreenScraper codes (`wor`, `eur`, `jpn`, `asi`, `sp`) mapped locally, anything else with `tags.LookupRegionWord`; `ss` is not a region and is dropped. Additive |
 | `developer` | `MediaTitleTags: developer` | Exclusive |
 | `publisher` | `MediaTitleTags: publisher` | Exclusive |
 | `releasedate` | `MediaTitleTags: year` | First four characters when present |
 | `rating` | `MediaTitleTags: rating` | Normalized from `0..1` style ratings to `0..100` text |
-| `genre` | `MediaTitleTags: genre` | Additive |
-| `players` | `MediaTitleTags: players` | Highest player count from ranges/lists |
-| `arcadesystemname` | `MediaTitleTags: arcadeboard` | Exclusive |
-| `family` | `MediaTitleTags: gamefamily` | Additive |
+| `genre`, `genreid` | `MediaTitleTags: genre` | Additive. The text goes through the shared ScreenScraper genre table (`scraper/ssgenre`), compound values split and each part mapped, with the parent written beside a subgenre. Recalbox's numeric `genreid` (its `Genres.h` enum) is mapped first when present |
+| `players` | `MediaTitleTags: players` | Highest player count from ranges/lists, when it is a listed count |
+| `arcadesystemname` | `MediaTitleTags: arcadeboard` | Exclusive, through `tags.LookupArcadeBoard` |
+| `family` | `MediaTitleTags: search` | `franchise:<name>`, through `tags.LookupFranchise` |
 | `desc` | `MediaTitleProperties: property:description` | Plain text |
 | ScreenScraper game ID | `MediaTitleProperties: property:xml-game-id` | From XML attribute or element value |
 | `image` | `MediaProperties: property:image-image` | XML path or filesystem fallback |
@@ -306,9 +329,9 @@ CRC and size columns are not used because hashing every installed ROM would impo
 |---|---|
 | Artwork image | `property:image-boxart` at media scope for exact matches, title scope for unique slug fallback |
 | `gameinfo.tsv` year | title tag `year` |
-| `gameinfo.tsv` genre | title tag `genre` |
+| `gameinfo.tsv` genre | title tags `genre`, through the shared ScreenScraper genre table; a hierarchy such as `Shoot'em Up / Vertical` writes both `shmup:v` and `shmup` |
 | `gameinfo.tsv` developer | title tag `developer` |
-| `gameinfo.tsv` players | title tag `players` using highest numeric value |
+| `gameinfo.tsv` players | title tag `players` using highest numeric value, when it is a listed count |
 | `synopsis_<lang>.tsv` synopsis | title property `property:description` |
 | Manual PDF | title property `property:manual` |
 
@@ -445,12 +468,12 @@ romset go to the media row.
 |---|---|---|
 | `year` | `MediaTitleTags: year` | Exclusive; four digits only |
 | `manufacturer` | `MediaTitleTags: developer` | Exclusive, company-name normalized. `credit` is the union query type, so a value written to `developer` answers both `developer:` and `credit:` filters |
-| `category` | `MediaTitleTags: genre` | Additive; the full genre plus its `" - "` family, so broad and narrow filters both resolve |
-| `series`, `parent_title` | `MediaTitleTags: gamefamily` | Exclusive, so `series` wins and `parent_title` only fills in for a game filed under no series |
-| `platform` | `MediaTitleTags: arcadeboard` | Exclusive |
-| `players` | `MediaTitleTags: players` | Additive; a range writes every count in it, plus `simultaneous` or `alt` |
+| `category` | `MediaTitleTags: genre` | Additive; mapped by a table covering every category in the bundled catalog, with the parent beside a subgenre (`Shooter - Flying Vertical` → `shmup:v`, `shmup`) |
+| `series`, `parent_title` | `MediaTitleTags: search` | `franchise:<name>` through `tags.LookupFranchise`; `parent_title` is used only for a game with no series and only when it names a listed franchise |
+| `platform` | `MediaTitleTags: arcadeboard` | Exclusive, through `tags.LookupArcadeBoard` |
+| `players` | `MediaTitleTags: players` | Additive; a range writes every listed count in it, plus `simultaneous` or `alt` |
 | `move_inputs`, `special_controls` | `MediaTitleTags: input` | Additive; normalized through a fixed phrase table |
-| `num_buttons` | `MediaTitleTags: input` as `buttons:N` | Zero buttons writes nothing |
+| `num_buttons` | `MediaTitleTags: input` as `buttons:N` | Zero buttons writes nothing; a count the input list lacks is dropped |
 | `resolution` | `MediaTitleTags: video` as `15khz`/`31khz` | |
 | `rotation` | `MediaTitleTags: search` as `tate:cw`/`tate:ccw` | A horizontal monitor is the default and writes nothing |
 | `flip` | `MediaTitleTags: search` as `keyword:flip` | |
@@ -470,13 +493,14 @@ two separators; each phrase the catalog uses is listed explicitly. A phrase that
 detail its canonical value needs — a `2-way` joystick with no axis, a bare `stick`, `positional` with no position
 count — is logged at debug and dropped rather than resolved to the nearest guess.
 
-The catalog names far more hardware families than Core's canonical `arcadeboard` list does, and there is no alias
-table between them. Every board goes through the same mechanical rule — the first word becomes the vendor and the
-rest the board — so a catalog spelling that happens to agree with the canonical one lands on it, and everything
-else keeps the catalog's own spelling, normalized. Against the catalog current when this was written, 18 of its
-193 boards agreed. Where the two disagree the catalog wins: it yields `capcom:cps1` where the canonical value is
-`capcom:cps`. Reconciling that wants a curated alias table and an arcade-hardware judgement this scraper does not
-make; dropping the unmatched boards would leave most arcade games with no board at all.
+Every category, platform and series value in the catalog either maps onto the tag vocabulary or sits in an
+explicit, commented skip set in `misterarcade/vocabulary.go` (a BIOS entry, a CPU name rather than a board, a
+licence line rather than a series). The catalog itself is downloaded at build time from a moving upstream, so the
+coverage tests read a pinned snapshot of its distinct values, `misterarcade/testdata/arcade_catalog_values.tsv`,
+and fail on any value that is in neither, and on any skip entry that has since become mappable. When upstream adds
+values, devices drop them and name them in the scraper's unmapped-values log line; refreshing the snapshot from the
+new catalog makes the tests list exactly what needs curating. Board names map through `tags.LookupArcadeBoard`, which the
+`gamelist.xml` scraper shares, so both sources agree on `capcom:cps2` however they spell it.
 
 Writing media-level tags of scanner-owned types changes the `MediaIdentity` fingerprint for rows that lacked them,
 as `gamelist.xml`'s media-level `region`/`lang` writes already do. `property:mame-setname` is not scanner-owned and
@@ -502,8 +526,10 @@ The PinUP Popper launcher indexes tables as `popper://<GameID>/<name>` virtual p
 |---|---|---|
 | `GameYear` | `MediaTitleTags: year` | Exclusive, when greater than zero |
 | `Manufact` | `MediaTitleTags: developer` | Exclusive, company-name normalized |
-| `NumPlayers` | `MediaTitleTags: players` | Exclusive, when greater than zero |
-| `GameType`, `Category`, `GameTheme` | `MediaTitleTags: genre` | Additive, one tag per non-empty field |
+| `NumPlayers` | `MediaTitleTags: players` | When it is a listed count |
+| (every table) | `MediaTitleTags: genre` | `parlor:pinball` and `parlor`: every Popper table is a pinball table |
+| `GameTheme` | `MediaTitleTags: search` | `feature:<name>` only when a theme names a listed feature exactly; other themes are dropped |
+| `GameType`, `Category` | not imported | Table technology and Popper's own grouping, not genres |
 | `Notes` | `MediaTitleProperties: description` | Whitespace collapsed |
 | `Wheel` image | `MediaProperties: image-wheel` | |
 | `PlayField` image | `MediaProperties: image-screenshot` | |

@@ -234,6 +234,15 @@ func TestFindRevPattern(t *testing.T) {
 	assert.True(t, m.ok)
 	assert.Equal(t, "B", input[m.cap1s:m.cap1e])
 
+	// MRA filenames spell the word out; without this "(Revision B)" fell
+	// through to the company-credit fallback as credit:revision-b.
+	input = "1942 (Revision B)"
+	m = findRevPattern(input)
+	assert.True(t, m.ok)
+	assert.Equal(t, "B", input[m.cap1s:m.cap1e])
+	assert.False(t, findRevPattern("Game (Revision)").ok)
+	assert.False(t, findRevPattern("Game (RevisionB)").ok)
+
 	assert.False(t, findRevPattern("Game (Review)").ok)
 	assert.False(t, findRevPattern("Game (RevA)").ok)
 	assert.False(t, findRevPattern("Game (Rev )").ok)

@@ -91,9 +91,11 @@ func NewPlatformScraper() platforms.Scraper {
 }
 
 type scraperImpl struct {
-	sources   map[string][]sourceDir
-	fs        afero.Fs
-	db        database.MediaDBI
+	sources map[string][]sourceDir
+	fs      afero.Fs
+	db      database.MediaDBI
+	// unmapped collects the pack values this run had no tag mapping for.
+	unmapped  scraper.UnmappedValues
 	docsRoots []string
 	langs     []string
 }
@@ -105,6 +107,7 @@ func (s *scraperImpl) scrapeLoop(
 	ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
+	defer s.unmapped.LogSummary(scraperID)
 	bgpriority.Apply()
 
 	steps := s.eligibleTargets(targetSystems, opts.Force)
@@ -223,7 +226,7 @@ func (s *scraperImpl) scrapeLoop(
 		}
 		scanDuration := time.Since(scanStart)
 		matchStart := time.Now()
-		matched := buildPendingWrites(idx, records, opts.RunID)
+		matched := buildPendingWrites(idx, records, opts.RunID, &s.unmapped)
 		writeTargets, stats := matched.Targets, matched.Stats
 		matchDuration := time.Since(matchStart)
 		cleanupStart := time.Now()

@@ -39,7 +39,7 @@ const (
 //   - "~": OR - at least one OR tag must match
 //
 // Format: "type:value" or "+type:value" (AND), "-type:value" (NOT), "~type:value" (OR)
-// Example: []string{"region:usa", "-unfinished:demo", "~lang:en", "~lang:es"}
+// Example: []string{"region:us", "-unfinished:demo", "~lang:en", "~lang:es"}
 // Returns normalized, deduplicated filters.
 func ParseTagFilters(tagSlice []string) ([]zapscript.TagFilter, error) {
 	if len(tagSlice) > maxTagsCount {
