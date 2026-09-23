@@ -717,7 +717,7 @@ Available categories remain dynamic: derive them from `categories` on systems re
   "method": "media.search",
   "params": {
     "query": "mario",
-    "tags": ["platformer", "nintendo"],
+    "tags": ["genre:action:platformer", "publisher:nintendo"],
     "maxResults": 10
   }
 }
@@ -746,7 +746,7 @@ Available categories remain dynamic: derive them from `categories` on systems re
         },
         "tags": [
           {
-            "tag": "platformer",
+            "tag": "action:platformer",
             "type": "genre"
           },
           {
@@ -1110,9 +1110,12 @@ This method returns all available tags (with their types) for the specified syst
 
 **Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
 per type. Tags within each type are sorted by usage count (most popular first), then
-alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
-`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `gamegenre`, `gamefamily`)
-have finite vocabularies per system and are always returned in full without truncation.
+alphabetically. Every tag type is either a closed list of canonical values, a strict format,
+or one of the three free-text company types (`developer`, `publisher`, `credit`). Closed
+types such as `genre`, `region`, `lang` and `arcadeboard` have finite vocabularies and are
+returned in full, as are `year` and `rating`. The free-text types, the other format types
+(for example `extension`, `track`, `mameparent`, `builddate`) and `search`, whose franchise
+and feature values run long, are capped.
 
 ##### TagInfo object
 
@@ -1150,15 +1153,11 @@ have finite vocabularies per system and are always returned in full without trun
       },
       {
         "type": "genre",
-        "tag": "platformer"
+        "tag": "action:platformer"
       },
       {
-        "type": "gamefamily",
-        "tag": "Mario Bros"
-      },
-      {
-        "type": "gamefamily",
-        "tag": "Super Mario"
+        "type": "search",
+        "tag": "franchise:castlevania"
       }
     ]
   }
@@ -1642,7 +1641,7 @@ Optionally, an object:
         "playTime": 2730,
         "tags": [
           { "tag": "favorite", "type": "collection" },
-          { "tag": "platformer", "type": "genre" }
+          { "tag": "action:platformer", "type": "genre" }
         ]
       }
     ],
@@ -1728,7 +1727,7 @@ Optionally, an object:
         "lastPlayedAt": "2026-02-14T20:30:00Z",
         "tags": [
           { "tag": "favorite", "type": "collection" },
-          { "tag": "platformer", "type": "genre" }
+          { "tag": "action:platformer", "type": "genre" }
         ]
       }
     ]
@@ -1868,7 +1867,7 @@ An object:
       "zapScript": "@SNES/Super Mario World",
       "tags": [
         {
-          "tag": "platformer",
+          "tag": "action:platformer",
           "type": "genre"
         },
         {
@@ -2005,8 +2004,8 @@ Property keys are canonical type tags such as `property:description`, `property:
           "name": "Super Nintendo Entertainment System"
         },
         "tags": [
-          {"type": "developer", "tag": "Nintendo"},
-          {"type": "gamegenre", "tag": "platformer"}
+          {"type": "developer", "tag": "nintendo"},
+          {"type": "genre", "tag": "action:platformer"}
         ],
         "properties": {
           "property:description": {
