@@ -91,16 +91,17 @@ const (
 type sourceOpener func(context.Context, *FileRef) (io.ReadCloser, error)
 
 type Manager struct {
-	cfg           *config.Instance
-	pl            platforms.Platform
-	database      *database.Database
-	inbox         *inboxservice.Service
-	coordinator   *Coordinator
-	activeMedia   func() *models.ActiveMedia
-	restoreGate   func(context.Context) (func(bool), error)
-	directorySync func(string) error
-	sourceOpener  sourceOpener
-	pauser        *syncutil.Pauser
+	refusedSessions *RefusedSessions
+	cfg             *config.Instance
+	pl              platforms.Platform
+	database        *database.Database
+	inbox           *inboxservice.Service
+	coordinator     *Coordinator
+	activeMedia     func() *models.ActiveMedia
+	restoreGate     func(context.Context) (func(bool), error)
+	directorySync   func(string) error
+	sourceOpener    sourceOpener
+	pauser          *syncutil.Pauser
 	// rateLimitWaits overrides the 429 retry wait bounds; nil uses the
 	// defaults. Set only by tests to avoid multi-second waits.
 	rateLimitWaits *rateLimitWaits
@@ -215,6 +216,13 @@ func (m *Manager) WithInbox(inbox *inboxservice.Service) *Manager {
 
 func (m *Manager) WithActiveMedia(activeMedia func() *models.ActiveMedia) *Manager {
 	m.activeMedia = activeMedia
+	return m
+}
+
+// WithRefusedSessions shares a process-lifetime record of play sessions the
+// account refused, so a pass skips the ones already known.
+func (m *Manager) WithRefusedSessions(refused *RefusedSessions) *Manager {
+	m.refusedSessions = refused
 	return m
 }
 

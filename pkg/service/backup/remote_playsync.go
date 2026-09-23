@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
@@ -65,6 +66,62 @@ type PlaySyncInfo struct {
 	// around rather than retried forever, and reported so they can be
 	// repaired.
 	Refused int
+	// NewlyRefused counts the refusals this process had not seen before. Only
+	// these are worth telling the user about again.
+	NewlyRefused int
+}
+
+// RefusedSessions remembers the play sessions the account has refused, for as
+// long as the process runs.
+//
+// A refused session is never marked synced, so without this every pass sent it
+// again, was refused again, spent up to nine extra requests finding it again,
+// and raised the same inbox warning again. It is deliberately not persisted: a
+// restart retries each one once, which is how a session repaired locally or a
+// rule relaxed on the server gets through. A session edited since it was
+// refused has a new UpdatedAt, so it is retried straight away.
+//
+// The scheduler builds a fresh Manager for every pass, so this lives outside
+// it and is handed in.
+type RefusedSessions struct {
+	rows map[refusedSessionKey]struct{}
+	mu   syncutil.Mutex
+}
+
+type refusedSessionKey struct {
+	dbid      int64
+	updatedAt int64
+}
+
+// NewRefusedSessions returns an empty set.
+func NewRefusedSessions() *RefusedSessions {
+	return &RefusedSessions{rows: make(map[refusedSessionKey]struct{})}
+}
+
+func (r *RefusedSessions) has(dbid int64, updatedAt time.Time) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.rows[refusedSessionKey{dbid: dbid, updatedAt: updatedAt.UnixNano()}]
+	return ok
+}
+
+// add records a refusal and reports whether it had not been seen before. A nil
+// set remembers nothing, so every refusal is new.
+func (r *RefusedSessions) add(dbid int64, updatedAt time.Time) bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := refusedSessionKey{dbid: dbid, updatedAt: updatedAt.UnixNano()}
+	if _, ok := r.rows[key]; ok {
+		return false
+	}
+	r.rows[key] = struct{}{}
+	return true
 }
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
@@ -303,9 +360,17 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 			break
 		}
 
+		// Sessions this process has already seen refused are left out rather
+		// than sent to be refused again. They stay unsynced, so a restart gives
+		// each one more try, and one edited since then is sent again.
+		sent := make([]int, 0, len(batch))
 		items := make([]remotePlaySessionItem, 0, len(batch))
 		refs := make([]database.MediaHistorySyncRef, 0, len(batch))
 		for i := range batch {
+			if m.refusedSessions.has(batch[i].DBID, batch[i].UpdatedAt) {
+				continue
+			}
+			sent = append(sent, i)
 			items = append(items, mediaHistoryToRemote(&batch[i]))
 			refs = append(refs, database.MediaHistorySyncRef{
 				DBID: batch[i].DBID, UpdatedAt: batch[i].UpdatedAt,
@@ -315,15 +380,23 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 			return info, errPlaySyncDisabled
 		}
 		var refused []int
-		resp, uploadErr := client.uploadWithoutRefused(ctx, items, 0, &refused)
-		if uploadErr != nil {
-			return info, uploadErr
+		var resp remotePlaySessionResponse
+		if len(items) > 0 {
+			var uploadErr error
+			resp, uploadErr = client.uploadWithoutRefused(ctx, items, 0, &refused)
+			if uploadErr != nil {
+				return info, uploadErr
+			}
 		}
 		if len(refused) > 0 {
 			refusedSet := make(map[int]struct{}, len(refused))
 			for _, index := range refused {
 				refusedSet[index] = struct{}{}
-				entry := &batch[index]
+				entry := &batch[sent[index]]
+				if !m.refusedSessions.add(entry.DBID, entry.UpdatedAt) {
+					continue
+				}
+				info.NewlyRefused++
 				log.Warn().
 					Int64("dbid", entry.DBID).
 					Str("session", entry.ID).
@@ -365,7 +438,7 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 		}
 	}
 
-	m.notifyRefusedSessions(info.Refused)
+	m.notifyRefusedSessions(info.NewlyRefused)
 	if info.Uploaded > 0 || info.Refused > 0 {
 		log.Info().
 			Int("sessions", info.Uploaded).

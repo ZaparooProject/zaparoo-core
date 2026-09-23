@@ -30,8 +30,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/stretchr/testify/assert"
 	testifymock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -455,4 +457,70 @@ func TestSyncPlayHistory_RefusedSessionDoesNotStopThePass(t *testing.T) {
 			assert.Contains(t, delivered, later.ID)
 		})
 	}
+}
+
+// TestSyncPlayHistory_KnownRefusalIsNotSentAgain covers a refused session being
+// sent, refused and reported on every pass. A refused row is never marked
+// synced, so each pass picked it up again, spent requests isolating it again
+// and raised the same inbox warning again. Within one process it is now sent
+// once; an edited copy is new, so it is tried again.
+func TestSyncPlayHistory_KnownRefusalIsNotSentAgain(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
+
+	good := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
+	bad := playSyncTestEntry(2, "22222222-2222-4222-8222-222222222222", "", base.Add(time.Hour))
+	edited := bad
+	edited.UpdatedAt = bad.UpdatedAt.Add(time.Minute)
+
+	server, batches := refusingPlaySyncServer(t, bad.ID, true)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+	refused := NewRefusedSessions()
+	ns := make(chan models.Notification, 4)
+	env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns)).WithRefusedSessions(refused)
+
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Times(3)
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{good, bad}, nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{bad}, nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{edited}, nil).Once()
+	env.UserDB.On("MarkMediaHistorySynced", testifymock.Anything, testifymock.AnythingOfType("time.Time")).
+		Return(nil)
+	env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return msg.Category == inboxservice.CategoryPlayHistorySessionsRefused
+	})).Return(&database.InboxMessage{DBID: 1, Category: inboxservice.CategoryPlayHistorySessionsRefused}, nil)
+
+	sentBad := func() int {
+		n := 0
+		for _, batch := range *batches {
+			for i := range batch {
+				if batch[i].SessionUUID == bad.ID {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
+	first, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.NewlyRefused)
+	sentAfterFirst := sentBad()
+	require.Positive(t, sentAfterFirst)
+
+	second, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, sentAfterFirst, sentBad(), "a known refusal must not be sent again")
+	assert.Zero(t, second.NewlyRefused)
+
+	third, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Greater(t, sentBad(), sentAfterFirst, "an edited session is new and is tried again")
+	assert.Equal(t, 1, third.NewlyRefused)
+
+	env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 2)
 }

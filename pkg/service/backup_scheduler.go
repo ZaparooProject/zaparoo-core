@@ -252,11 +252,13 @@ func remoteBackupSchedulerLoop(
 	// and never bypass retry backoff.
 	playSyncState := intervalState{backoff: remoteHeartbeatInitialBackoff}
 	playSyncPending := false
+	refusedSessions := backupsvc.NewRefusedSessions()
 	var idlePlaySyncConfiguration playSyncConfiguration
 	tryPlaySync := func() {
 		now := time.Now()
 		mgr := backupsvc.NewManager(cfg, pl, db).
-			WithCoordinator(st.BackupCoordinator()).WithInbox(st.Inbox())
+			WithCoordinator(st.BackupCoordinator()).WithInbox(st.Inbox()).
+			WithRefusedSessions(refusedSessions)
 		configuration := currentPlaySyncConfiguration(cfg)
 		if !configuration.eligible() {
 			playSyncState.idle = true
