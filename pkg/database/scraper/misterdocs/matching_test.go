@@ -356,8 +356,8 @@ func TestBuildPendingWrites_GenreHierarchyKeepsBroadGenre(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "shootem-up", genre.Tag, "the tag value must be the broad genre alone")
-	assert.Equal(t, "Shoot'em Up / Vertical/Shoot'em Up", genre.Label,
-		"the label must keep the full hierarchy")
+	assert.Equal(t, "Shoot'em Up", genre.Label,
+		"the label names the shared tag, so it must not carry one title's hierarchy")
 }
 
 // TestBuildPendingWrites_GenreWithoutHierarchyUnchanged guards the split from

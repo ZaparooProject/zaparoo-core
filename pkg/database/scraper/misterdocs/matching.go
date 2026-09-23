@@ -377,11 +377,12 @@ func appendNormalizedTitleTag(write *pendingWrite, tagType tags.TagType, raw str
 	if raw == "" {
 		return
 	}
-	normalized := tags.NormalizeTagValue(string(tagType), tagValueSource(tagType, raw))
+	source := tagValueSource(tagType, raw)
+	normalized := tags.NormalizeTagValue(string(tagType), source)
 	if normalized == "" {
 		return
 	}
-	setTitleTag(write, database.TagInfo{Type: string(tagType), Tag: normalized, Label: raw})
+	setTitleTag(write, database.TagInfo{Type: string(tagType), Tag: normalized, Label: source})
 }
 
 // tagValueSource picks the part of a pack field that becomes the tag value.
@@ -395,7 +396,9 @@ func appendNormalizedTitleTag(write *pendingWrite, tagType tags.TagType, raw str
 //
 // Take the broad genre the hierarchy opens with. A title holds one tag per
 // type here, so the narrower components cannot be kept as tags of their own
-// without changing that; the full string is still recorded as the label.
+// without changing that. The label is the same segment: it names the shared
+// tag every title in the genre links to, so one title's hierarchy must not
+// become it.
 func tagValueSource(tagType tags.TagType, raw string) string {
 	if tagType != tags.TagTypeGenre {
 		return raw
