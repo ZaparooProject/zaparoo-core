@@ -687,12 +687,8 @@ Available categories remain dynamic: derive them from `categories` on systems re
         },
         "tags": [
           {
-            "tag": "test",
-            "type": "category"
-          },
-          {
             "tag": "homebrew",
-            "type": "category"
+            "type": "release"
           }
         ]
       }
@@ -1640,7 +1636,7 @@ Optionally, an object:
         "endedAt": "2025-01-22T15:15:30Z",
         "playTime": 2730,
         "tags": [
-          { "tag": "favorite", "type": "collection" },
+          { "tag": "favorite", "type": "user" },
           { "tag": "action:platformer", "type": "genre" }
         ]
       }
@@ -1726,7 +1722,7 @@ Optionally, an object:
         "sessionCount": 12,
         "lastPlayedAt": "2026-02-14T20:30:00Z",
         "tags": [
-          { "tag": "favorite", "type": "collection" },
+          { "tag": "favorite", "type": "user" },
           { "tag": "action:platformer", "type": "genre" }
         ]
       }
@@ -1985,7 +1981,7 @@ Property keys are canonical type tags such as `property:description`, `property:
       "parentDir": "/roms/snes",
       "isMissing": false,
       "tags": [
-        {"type": "region", "tag": "usa"}
+        {"type": "region", "tag": "us"}
       ],
       "properties": {
         "property:launcher-override": {
