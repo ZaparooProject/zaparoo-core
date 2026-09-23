@@ -55,6 +55,7 @@ const (
 	CategoryUpdateResult                     = "update_result"
 	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"
 	CategoryBackupRemoteQuotaExceeded        = "backup_remote_quota_exceeded"
+	CategoryBackupRemoteQuotaPartial         = "backup_remote_quota_partial"
 	CategoryBackupRemoteUnlinked             = "backup_remote_unlinked"
 	CategoryBackupRemoteFailed               = "backup_remote_failed"
 	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"

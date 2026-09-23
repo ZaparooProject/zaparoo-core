@@ -38,6 +38,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3228,11 +3229,12 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 	ns := make(chan models.Notification, 1)
 	env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
-		return msg.Title == "Remote backup storage full" &&
+		// One byte free is "this backup does not fit", not "storage is full".
+		return msg.Title == "Online backup did not fit" &&
 			msg.Category == inboxservice.CategoryBackupRemoteQuotaExceeded &&
 			msg.Severity == inboxservice.SeverityError
 	})).Return(&database.InboxMessage{
-		DBID: 1, Title: "Remote backup storage full", Category: inboxservice.CategoryBackupRemoteQuotaExceeded,
+		DBID: 1, Title: "Online backup did not fit", Category: inboxservice.CategoryBackupRemoteQuotaExceeded,
 	}, nil).Once()
 	env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
 
@@ -5120,4 +5122,112 @@ func TestNotifyRestoreCompletedDetached(t *testing.T) {
 
 		env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 0)
 	})
+}
+
+// buildQuotaPlan builds a pack plan from files of known size in each
+// category, which is all the trimming logic looks at.
+func buildQuotaPlan(t *testing.T, sizes map[string]int64) remotePackPlan {
+	t.Helper()
+	files := make([]FileRef, 0, len(sizes))
+	missing := make(map[string]struct{}, len(sizes))
+	for category, size := range sizes {
+		// Distinct per category: equal hashes deduplicate, and two categories
+		// sharing a first letter would silently collapse into one pack.
+		sum := sha256.Sum256([]byte(category))
+		hash := hex.EncodeToString(sum[:])
+		files = append(files, FileRef{
+			Category:    category,
+			RestorePath: category + "/file.bin",
+			SHA256:      hash,
+			Size:        size,
+		})
+		missing[hash] = struct{}{}
+	}
+	plan, err := planRemotePacks(files, missing)
+	require.NoError(t, err)
+	return plan
+}
+
+func planCategories(plan *remotePackPlan) []string {
+	categories := make([]string, 0, len(plan.packs))
+	for i := range plan.packs {
+		categories = append(categories, packCategory(&plan.packs[i]))
+	}
+	sort.Strings(categories)
+	return categories
+}
+
+// TestTrimRemotePlanToQuota covers the release-candidate bug where a backup
+// larger than the remaining quota failed wholesale, so a Steam Deck whose
+// settings category ran to 1.8 GB never uploaded its user database either.
+func TestTrimRemotePlanToQuota(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps the user's own state and drops settings first", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{
+			CategoryZaparoo:  1024,
+			CategorySaves:    1024,
+			CategorySettings: 4 << 20,
+		})
+		full := plan.uploadBytes
+
+		dropped, ok := trimRemotePlanToQuota(&plan, full/2)
+
+		require.True(t, ok)
+		assert.Equal(t, []string{CategorySaves, CategoryZaparoo}, planCategories(&plan))
+		require.Len(t, dropped, 1)
+		assert.Equal(t, CategorySettings, dropped[0].Category)
+		var kept int64
+		for i := range plan.packs {
+			kept += plan.packs[i].size
+		}
+		assert.Equal(t, kept, plan.uploadBytes, "kept bytes must be exact, not estimated")
+		assert.LessOrEqual(t, plan.uploadBytes, full/2)
+	})
+
+	t.Run("refuses when the zaparoo payload cannot fit", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{
+			CategoryZaparoo:  4 << 20,
+			CategorySettings: 1024,
+		})
+
+		// Room for settings but not for user.db. A snapshot without the
+		// user database fails manifest validation on restore, so there is no
+		// useful backup to make here.
+		_, ok := trimRemotePlanToQuota(&plan, 8192)
+
+		assert.False(t, ok)
+	})
+
+	t.Run("everything fits", func(t *testing.T) {
+		t.Parallel()
+		plan := buildQuotaPlan(t, map[string]int64{CategoryZaparoo: 512, CategorySaves: 512})
+		before := plan.uploadBytes
+
+		dropped, ok := trimRemotePlanToQuota(&plan, before*4)
+
+		require.True(t, ok)
+		assert.Empty(t, dropped)
+		assert.Equal(t, before, plan.uploadBytes)
+	})
+}
+
+// TestRemoteQuotaMessageDistinguishesFullFromTooLarge pins the wording split:
+// "your storage is full" and "this backup is bigger than the space left" need
+// different actions from the user, and neither is about the device's disk.
+func TestRemoteQuotaMessageDistinguishesFullFromTooLarge(t *testing.T) {
+	t.Parallel()
+
+	fullTitle, fullBody := remoteQuotaMessage(&remoteQuotaError{Used: 100, Quota: 100, Required: 10})
+	assert.Equal(t, "Online backup storage is full", fullTitle)
+	assert.Contains(t, fullBody, "Delete an older cloud backup")
+
+	fitTitle, fitBody := remoteQuotaMessage(&remoteQuotaError{
+		Used: 50, Quota: 100, Required: 4 << 20,
+	})
+	assert.Equal(t, "Online backup did not fit", fitTitle)
+	assert.Contains(t, fitBody, "4.0 MB")
+	assert.NotContains(t, fitBody, "is full")
 }

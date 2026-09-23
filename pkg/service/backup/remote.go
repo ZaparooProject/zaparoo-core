@@ -327,7 +327,12 @@ type packFooterEntry struct {
 // uploadResult summarizes one upload pass: how many packs and bytes went
 // over the wire, and which files were skipped as unstorable.
 type uploadResult struct {
+	// skipped could not be stored at all: a single file too large for one
+	// pack. quotaSkipped could have been stored but did not fit in what is
+	// left of the account's quota, so it is worth retrying on a later run.
 	skipped       []FileRef
+	quotaSkipped  []FileRef
+	quotaRemains  int64
 	packs         int
 	bytesUploaded int64
 }
@@ -1000,6 +1005,17 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		}
 		m.notifyRemoteSkipped(uploaded.skipped)
 	}
+	if len(uploaded.quotaSkipped) > 0 {
+		// Left out for space, not because they cannot be stored. They leave
+		// the manifest for the same reason: a snapshot must describe exactly
+		// what was uploaded, so a restore never looks for a file the server
+		// does not hold.
+		files = withoutSkippedFiles(files, uploaded.quotaSkipped)
+		for _, skipped := range uploaded.quotaSkipped {
+			delete(missingSet, skipped.SHA256)
+		}
+		m.notifyRemoteQuotaSkipped(uploaded.quotaSkipped, uploaded.quotaRemains)
+	}
 	request := remoteSnapshotRequest{
 		BackupType:    backupType,
 		SchemaVersion: remoteSchemaVersion,
@@ -1194,9 +1210,7 @@ func (m *Manager) notifyRemoteFailure(err error) {
 		body = "Remote backup is not available for this account. Local backups still work."
 		category = inboxservice.CategoryBackupRemoteNotAvailable
 	case errors.Is(err, errRemoteQuotaExceeded):
-		title = "Remote backup storage full"
-		body = "Remote backup could not run because storage quota was reached. " +
-			"Delete remote backups or reduce backup size."
+		title, body = remoteQuotaMessage(err)
 		category = inboxservice.CategoryBackupRemoteQuotaExceeded
 	case errors.Is(err, errRemoteUnlinked):
 		title = "Remote backup needs relinking"
@@ -1225,6 +1239,67 @@ func (m *Manager) notifyRemoteFailure(err error) {
 
 // notifyRemoteSkipped surfaces files dropped from a remote backup because
 // they cannot fit inside a single pack.
+// remoteQuotaMessage explains a quota refusal in terms the user can act on.
+// The old wording said storage was full whatever the numbers were, which sent
+// someone with plenty of space free hunting for backups to delete because one
+// oversized device could not fit. It also never said which storage it meant.
+func remoteQuotaMessage(err error) (title, body string) {
+	var quotaErr *remoteQuotaError
+	if !errors.As(err, &quotaErr) {
+		return "Online backup storage is full",
+			"This device's cloud backup could not run because your Zaparoo account's backup " +
+				"storage is full. Delete an older cloud backup to free space."
+	}
+	if quotaErr.storageFull() {
+		return "Online backup storage is full", fmt.Sprintf(
+			"This device's cloud backup could not run: your Zaparoo account's backup storage is "+
+				"full (%s of %s used). Delete an older cloud backup to free space.",
+			formatBackupBytes(quotaErr.Used), formatBackupBytes(quotaErr.Quota),
+		)
+	}
+	return "Online backup did not fit", fmt.Sprintf(
+		"This device's cloud backup needs %s but only %s is free in your Zaparoo account's backup "+
+			"storage (%s of %s used). Turn off a backup category or delete an older cloud backup, "+
+			"then try again.",
+		formatBackupBytes(quotaErr.Required), formatBackupBytes(quotaErr.remaining()),
+		formatBackupBytes(quotaErr.Used), formatBackupBytes(quotaErr.Quota),
+	)
+}
+
+// notifyRemoteQuotaSkipped reports a backup that ran but could not take
+// everything. It never claims the backup is complete: what reached the account
+// is whole and restorable, and what did not is named.
+func (m *Manager) notifyRemoteQuotaSkipped(skipped []FileRef, remaining int64) {
+	if m.inbox == nil || len(skipped) == 0 {
+		return
+	}
+	categories := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	for i := range skipped {
+		if _, ok := seen[skipped[i].Category]; ok {
+			continue
+		}
+		seen[skipped[i].Category] = struct{}{}
+		categories = append(categories, skipped[i].Category)
+	}
+	sort.Strings(categories)
+	body := fmt.Sprintf(
+		"Your Zaparoo account's backup storage only had %s free, so %d file(s) were left out of "+
+			"this device's cloud backup (%s). What was uploaded is complete and can be restored; "+
+			"the rest will be included once there is room. Delete an older cloud backup to free "+
+			"space.",
+		formatBackupBytes(remaining), len(skipped), strings.Join(categories, ", "),
+	)
+	if addErr := m.inbox.Add(
+		"Online backup could not include everything",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityWarning),
+		inboxservice.WithCategory(inboxservice.CategoryBackupRemoteQuotaPartial),
+	); addErr != nil {
+		log.Warn().Err(addErr).Msg("failed to add remote backup quota partial inbox message")
+	}
+}
+
 func (m *Manager) notifyRemoteSkipped(skipped []FileRef) {
 	if m.inbox == nil || len(skipped) == 0 {
 		return
@@ -1659,9 +1734,141 @@ func ensureRemoteUploadCapacity(used, quota, required int64) error {
 		return errors.New("remote backup capacity values must be nonnegative")
 	}
 	if used > quota || required > quota-used {
-		return errRemoteQuotaExceeded
+		return &remoteQuotaError{Used: used, Quota: quota, Required: required}
 	}
 	return nil
+}
+
+// remoteQuotaError carries the numbers behind a refusal. Without them every
+// quota failure read as "your storage is full", which is a different problem
+// from "this one backup is larger than the space left" and points the user at
+// a different fix. Neither has anything to do with disk space on the device.
+type remoteQuotaError struct {
+	Used     int64
+	Quota    int64
+	Required int64
+}
+
+func (e *remoteQuotaError) Error() string {
+	return fmt.Sprintf(
+		"%s: needs %s, %s free of %s",
+		errRemoteQuotaExceeded.Error(),
+		formatBackupBytes(e.Required), formatBackupBytes(e.remaining()), formatBackupBytes(e.Quota),
+	)
+}
+
+// Is keeps errors.Is(err, errRemoteQuotaExceeded) true for every caller that
+// only needs to know the run hit the quota.
+func (*remoteQuotaError) Is(target error) bool {
+	return errors.Is(target, errRemoteQuotaExceeded)
+}
+
+func (e *remoteQuotaError) remaining() int64 {
+	if e.Quota <= e.Used {
+		return 0
+	}
+	return e.Quota - e.Used
+}
+
+// storageFull separates "there is no room at all" from "there is room, but
+// not enough for this backup". The first needs old snapshots deleted; the
+// second can be helped by backing up less.
+func (e *remoteQuotaError) storageFull() bool {
+	return e.remaining() == 0
+}
+
+// remoteQuotaPriority orders categories by how much of the user's own state
+// is lost if they are missing, for deciding what to leave out when a backup
+// does not fit. It is deliberately not remoteCategoryRank, which orders packs
+// for transfer and puts settings early because grouping them packs better.
+func remoteQuotaPriority(category string) int {
+	switch category {
+	case CategoryZaparoo:
+		return 0
+	case CategorySaves:
+		return 1
+	case CategorySavestates:
+		return 2
+	case CategoryInputs:
+		return 3
+	case CategorySettings:
+		return 4
+	default:
+		return 100
+	}
+}
+
+func packCategory(pack *plannedRemotePack) string {
+	if len(pack.files) == 0 {
+		return ""
+	}
+	return pack.files[0].Category
+}
+
+// trimRemotePlanToQuota keeps as much of the plan as the remaining quota
+// allows, most valuable first, and returns the files it had to leave out.
+//
+// Whole packs are kept or dropped because a pack is the unit the server
+// stores, so the kept bytes stay exact rather than estimated. Zaparoo is
+// mandatory: a snapshot without its user.db payload fails manifest
+// validation on restore, so if that will not fit there is no useful backup to
+// make and the caller is told the run cannot proceed.
+func trimRemotePlanToQuota(plan *remotePackPlan, remaining int64) (dropped []FileRef, ok bool) {
+	order := make([]int, len(plan.packs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		left, right := &plan.packs[order[a]], &plan.packs[order[b]]
+		leftRank := remoteQuotaPriority(packCategory(left))
+		rightRank := remoteQuotaPriority(packCategory(right))
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		// Smaller packs first inside a category: more of the user's files
+		// survive the same number of bytes.
+		return left.size < right.size
+	})
+
+	keep := make(map[int]struct{}, len(plan.packs))
+	var kept int64
+	for _, idx := range order {
+		pack := &plan.packs[idx]
+		mandatory := remoteQuotaPriority(packCategory(pack)) == 0
+		if kept+pack.size > remaining {
+			if mandatory {
+				return nil, false
+			}
+			continue
+		}
+		keep[idx] = struct{}{}
+		kept += pack.size
+	}
+
+	packs := make([]plannedRemotePack, 0, len(keep))
+	for i := range plan.packs {
+		if _, ok := keep[i]; ok {
+			packs = append(packs, plan.packs[i])
+			continue
+		}
+		dropped = append(dropped, plan.packs[i].files...)
+	}
+	plan.packs = packs
+	plan.uploadBytes = kept
+	return dropped, true
+}
+
+func formatBackupBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit && exp < 3; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGT"[exp])
 }
 
 func (m *Manager) uploadMissingWithQuotaPreflight(
@@ -1674,16 +1881,38 @@ func (m *Manager) uploadMissingWithQuotaPreflight(
 	if err != nil {
 		return uploadResult{}, err
 	}
+	var quotaSkipped []FileRef
+	var quotaRemaining int64
 	if plan.uploadBytes > 0 {
 		used, quota, usageErr := client.backupStorageUsage(ctx)
 		if usageErr != nil {
 			return uploadResult{}, usageErr
 		}
+		quotaErr := &remoteQuotaError{Used: used, Quota: quota, Required: plan.uploadBytes}
+		quotaRemaining = quotaErr.remaining()
 		if capacityErr := ensureRemoteUploadCapacity(used, quota, plan.uploadBytes); capacityErr != nil {
-			return uploadResult{}, capacityErr
+			// A backup that does not fit is not a backup that cannot be made.
+			// Keep what the quota allows, most valuable first, and report the
+			// rest as skipped rather than losing the run entirely.
+			dropped, ok := trimRemotePlanToQuota(&plan, quotaRemaining)
+			if !ok || len(plan.packs) == 0 {
+				return uploadResult{}, capacityErr
+			}
+			quotaSkipped = dropped
+			log.Warn().
+				Int("skipped_files", len(dropped)).
+				Int64("upload_bytes", plan.uploadBytes).
+				Int64("quota_remaining", quotaRemaining).
+				Msg("remote backup trimmed to fit remaining quota")
 		}
 	}
-	return client.uploadPackPlan(ctx, &plan, m.pauser)
+	result, err := client.uploadPackPlan(ctx, &plan, m.pauser)
+	if err != nil {
+		return result, err
+	}
+	result.quotaSkipped = quotaSkipped
+	result.quotaRemains = quotaRemaining
+	return result, nil
 }
 
 func planRemotePacks(files []FileRef, missing map[string]struct{}) (remotePackPlan, error) {
