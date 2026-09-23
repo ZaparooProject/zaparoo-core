@@ -329,3 +329,56 @@ func TestBuildPendingWrites_FirstRecordWinsTitleMetadata(t *testing.T) {
 	require.Len(t, targets[0].Write.TitleProps, 1)
 	assert.Equal(t, "Full release.", targets[0].Write.TitleProps[0].Text)
 }
+
+// TestBuildPendingWrites_GenreHierarchyKeepsBroadGenre covers the pack's
+// "/"-separated genre hierarchy. Normalizing the whole field produced one
+// run-together value that matched no other title and added a dead entry to the
+// system's tag vocabulary; most genres in the published packs carry a
+// separator, so it was the common case. The tag keeps the broad genre and the
+// label keeps the full string.
+func TestBuildPendingWrites_GenreHierarchyKeepsBroadGenre(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{
+		Artwork: []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
+		GameInfo: map[string]gameInfoRecord{
+			"Game": {Genre: "Shoot'em Up / Vertical/Shoot'em Up"},
+		},
+	}}
+
+	matched := buildPendingWrites(testSystemIndex(), records, "")
+	require.Len(t, matched.Targets, 1)
+
+	var genre database.TagInfo
+	for _, tag := range matched.Targets[0].Write.TitleTags {
+		if tag.Type == string(tags.TagTypeGenre) {
+			genre = tag
+		}
+	}
+	assert.Equal(t, "shootem-up", genre.Tag, "the tag value must be the broad genre alone")
+	assert.Equal(t, "Shoot'em Up / Vertical/Shoot'em Up", genre.Label,
+		"the label must keep the full hierarchy")
+}
+
+// TestBuildPendingWrites_GenreWithoutHierarchyUnchanged guards the split from
+// altering a genre that carries no separator.
+func TestBuildPendingWrites_GenreWithoutHierarchyUnchanged(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{
+		Artwork:  []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
+		GameInfo: map[string]gameInfoRecord{"Game": {Genre: "Platform"}},
+	}}
+
+	matched := buildPendingWrites(testSystemIndex(), records, "")
+	require.Len(t, matched.Targets, 1)
+
+	var genre database.TagInfo
+	for _, tag := range matched.Targets[0].Write.TitleTags {
+		if tag.Type == string(tags.TagTypeGenre) {
+			genre = tag
+		}
+	}
+	assert.Equal(t, "platform", genre.Tag)
+	assert.Equal(t, "Platform", genre.Label)
+}
