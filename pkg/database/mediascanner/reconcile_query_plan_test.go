@@ -190,7 +190,7 @@ func TestReconcileQueryPlansAtScale(t *testing.T) {
 		JOIN Tags t ON t.DBID = mt.TagDBID
 		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 		WHERE m.SystemDBID = ?
-		  AND tt.Type NOT IN (?, ?, ?, ?, ?)
+		  AND tt.Type NOT IN (?, ?, ?, ?)
 		  AND tt.Type NOT LIKE ?
 		  AND tt.Type NOT LIKE ?
 		  AND NOT EXISTS (
@@ -203,7 +203,6 @@ func TestReconcileQueryPlansAtScale(t *testing.T) {
 		string(tags.TagTypeProperty),
 		string(tags.TagTypeRating),
 		string(tags.TagTypeGenre),
-		string(tags.TagTypeGameFamily),
 		string(tags.ScraperType("")) + "%",
 		string(tags.ScraperRunType("")) + "%",
 	}

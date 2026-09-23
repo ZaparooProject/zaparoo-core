@@ -50,7 +50,7 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 	utilityTagsBefore, err := resolveUtilityTagDBIDs(ctx, rawDB)
 	require.NoError(t, err)
 	require.Empty(t, utilityTagsBefore)
-	genreCountBefore := cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "platform")
+	genreCountBefore := cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "action:platformer")
 	require.Positive(t, genreCountBefore)
 
 	_, err = rawDB.ExecContext(ctx, `
@@ -80,12 +80,12 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 		Type: string(tags.TagTypeUser),
 		Tag:  string(tags.TagUserFavorite),
 	}
-	customGenreRef := database.MediaTagRef{Type: string(tags.TagTypeGenre), Tag: "custom"}
+	customGenreRef := database.MediaTagRef{Type: string(tags.TagTypeGenre), Tag: "puzzle"}
 	refs := []database.MediaTagRef{favoriteRef, customGenreRef}
 	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, refs))
 	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", favoriteRef.Type, favoriteRef.Tag))
 	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", customGenreRef.Type, customGenreRef.Tag))
-	assert.Equal(t, genreCountBefore, cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "platform"))
+	assert.Equal(t, genreCountBefore, cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "action:platformer"))
 	assertMediaHasTag(t, mediaDB, mediaDBID, favoriteRef, true)
 	assertMediaHasTag(t, mediaDB, mediaDBID, customGenreRef, true)
 	utilityTagsAfter, utilityErr := resolveUtilityTagDBIDs(ctx, rawDB)
@@ -112,7 +112,7 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, refs, nil))
 	assert.Zero(t, cachedTagCount(t, rawDB, "NES", favoriteRef.Type, favoriteRef.Tag))
 	assert.Zero(t, cachedTagCount(t, rawDB, "NES", customGenreRef.Type, customGenreRef.Tag))
-	assert.Equal(t, genreCountBefore, cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "platform"))
+	assert.Equal(t, genreCountBefore, cachedTagCount(t, rawDB, "NES", string(tags.TagTypeGenre), "action:platformer"))
 	assertMediaHasTag(t, mediaDB, mediaDBID, favoriteRef, false)
 	assertMediaHasTag(t, mediaDB, mediaDBID, customGenreRef, false)
 }
@@ -129,14 +129,14 @@ func TestUpdateMediaTagsReplacesExclusiveType(t *testing.T) {
 	mediaDBID := mediaRows[0].DBID
 	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
 
-	const exclusiveType = "custom-exclusive"
+	exclusiveType := string(tags.TagTypeDeveloper)
 	rawDB := mediaDB.UnsafeGetSQLDb()
 	_, err = rawDB.ExecContext(ctx,
 		"INSERT INTO TagTypes (Type, IsExclusive) VALUES (?, 1)", exclusiveType,
 	)
 	require.NoError(t, err)
-	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first"}
-	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second"}
+	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first-studio"}
+	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second-studio"}
 
 	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{firstRef}))
 	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{secondRef}))
@@ -158,14 +158,14 @@ func TestUpdateMediaTagsRollsBackExclusiveReplacementFailure(t *testing.T) {
 	mediaDBID := mediaRows[0].DBID
 	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
 
-	const exclusiveType = "failing-exclusive"
+	exclusiveType := string(tags.TagTypeDeveloper)
 	rawDB := mediaDB.UnsafeGetSQLDb()
 	_, err = rawDB.ExecContext(ctx,
 		"INSERT INTO TagTypes (Type, IsExclusive) VALUES (?, 1)", exclusiveType,
 	)
 	require.NoError(t, err)
-	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first"}
-	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second"}
+	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first-studio"}
+	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second-studio"}
 	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{firstRef}))
 	_, err = rawDB.ExecContext(ctx, `
 		CREATE TRIGGER fail_exclusive_media_tag_delete
@@ -514,14 +514,18 @@ func TestListMediaTagValues(t *testing.T) {
 		{path: browseTestPath("roms", "nes", "b.nes"), tags: map[string]string{"region": "eu"}},
 	})
 	user := string(tags.TagTypeUser)
-	for _, value := range []string{"deck:bbbbbbbbbbbb", "deck:aaaaaaaaaaaa", "deckx", "favorite"} {
+	for _, value := range []string{"deck:bbbbbbbbbbbb", "deck:aaaaaaaaaaaa", "favorite"} {
 		_, err := mediaDB.SetMediaTagMembership(ctx, database.MediaTagRef{Type: user, Tag: value}, mediaIDs[:1])
 		require.NoError(t, err)
 	}
+	// A user value that only looks like a deck is refused by the vocabulary,
+	// so it can never be listed under the deck prefix.
+	_, err := mediaDB.SetMediaTagMembership(ctx, database.MediaTagRef{Type: user, Tag: "deckx"}, mediaIDs[:1])
+	require.ErrorIs(t, err, tags.ErrTagNotInVocabulary)
 	// A deck tag whose files all lost it is no longer listed, though its tag
 	// row stays.
 	cleared := database.MediaTagRef{Type: user, Tag: "deck:cccccccccccc"}
-	_, err := mediaDB.SetMediaTagMembership(ctx, cleared, mediaIDs[1:])
+	_, err = mediaDB.SetMediaTagMembership(ctx, cleared, mediaIDs[1:])
 	require.NoError(t, err)
 	_, err = mediaDB.SetMediaTagMembership(ctx, cleared, nil)
 	require.NoError(t, err)

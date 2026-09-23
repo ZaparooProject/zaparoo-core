@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/ssgenre"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -92,10 +93,12 @@ type slugMediaSelection struct {
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
 // Use [NewPlatformScraper] to obtain a configured [platforms.Scraper].
 type GamelistXMLScraper struct {
-	db                 database.MediaDBI
-	fs                 afero.Fs
-	cfg                *config.Instance
-	scope              *database.ScrapeScope
+	db    database.MediaDBI
+	fs    afero.Fs
+	cfg   *config.Instance
+	scope *database.ScrapeScope
+	// unmapped collects the source values this run had no tag mapping for.
+	unmapped           scraper.UnmappedValues
 	externalAssetRoots []string
 	maxGamelistBytes   int64
 	matchArcadeSets    bool
@@ -966,6 +969,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
+	defer g.unmapped.LogSummary(unmappedScraperID)
 
 	// Lowest CPU/IO priority for the whole scrape run; the locked thread
 	// dies with this goroutine so the change never leaks.
@@ -1485,44 +1489,38 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 	// --- MediaTags: ROM-level variant metadata ---
 
-	mediaTags = appendCSVTags(mediaTags, string(tags.TagTypeRegion), game.Region)
-	mediaTags = appendCSVTags(mediaTags, string(tags.TagTypeLang), game.Lang)
+	mediaTags = g.appendRegionTags(mediaTags, game.Region)
+	mediaTags = g.appendLangTags(mediaTags, game.Lang)
 
 	// --- MediaTitleTags: title-level, shared across all ROMs ---
 
-	if game.Developer != "" {
-		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeDeveloper), game.Developer, game.Developer)
-	}
-	if game.Publisher != "" {
-		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypePublisher), game.Publisher, game.Publisher)
-	}
-	if game.ReleaseDate != "" {
-		if year := extractYear(game.ReleaseDate); year != "" {
-			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: year})
-		}
-	}
-	if game.Rating != "" {
-		if r := normalizeRating(game.Rating); r != "" {
-			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: r})
-		}
-	}
-	if game.Genre != "" {
-		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeGenre), game.Genre, game.Genre)
-	}
-	// Players: title-level because it describes the game, not a per-ROM variant.
-	// Exclusive type: only the highest player count is kept per title.
-	if game.Players != "" {
-		if p := normalizePlayers(game.Players); p != "" {
+	titleTags = appendCompanyTag(titleTags, tags.TagTypeDeveloper, game.Developer)
+	titleTags = appendCompanyTag(titleTags, tags.TagTypePublisher, game.Publisher)
+	titleTags = appendFormatTag(titleTags, tags.TagTypeYear, extractYear(game.ReleaseDate))
+	titleTags = appendFormatTag(titleTags, tags.TagTypeRating, normalizeRating(game.Rating))
+	titleTags = g.appendGenreTags(titleTags, game.Genre, game.GenreID)
+	// Players: title-level because it describes the game, not a per-ROM
+	// variant. Only the highest count in the field is kept.
+	if p := normalizePlayers(game.Players); p != "" {
+		if tags.IsCanonicalValue(tags.TagTypePlayers, tags.TagValue(p)) {
 			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: p})
+		} else {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypePlayers, game.Players)
 		}
 	}
 	if game.ArcadeSystemName != "" {
-		titleTags = appendNormalizedTag(
-			titleTags, string(tags.TagTypeArcadeBoard), game.ArcadeSystemName, game.ArcadeSystemName,
-		)
+		if board, ok := tags.LookupArcadeBoard(game.ArcadeSystemName); ok {
+			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeArcadeBoard), Tag: string(board)})
+		} else {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypeArcadeBoard, game.ArcadeSystemName)
+		}
 	}
 	if game.Family != "" {
-		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeGameFamily), game.Family, game.Family)
+		if franchise, ok := tags.LookupFranchise(game.Family); ok {
+			titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeSearch), Tag: string(franchise)})
+		} else {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypeSearch, game.Family)
+		}
 	}
 
 	// --- MediaTitleProperties: title-level shared static content ---
@@ -1725,19 +1723,88 @@ func splitCSV(s string) []string {
 	return result
 }
 
-func appendCSVTags(tagInfos []database.TagInfo, tagType, raw string) []database.TagInfo {
-	for _, value := range splitCSV(raw) {
-		tagInfos = appendNormalizedTag(tagInfos, tagType, value, "")
+// appendCompanyTag adds a developer or publisher. Company names are free
+// text, so the source spelling is kept as the label.
+func appendCompanyTag(tagInfos []database.TagInfo, tagType tags.TagType, raw string) []database.TagInfo {
+	if raw == "" {
+		return tagInfos
+	}
+	normalized := tags.NormalizeCompanyName(raw)
+	if !tags.IsValidTagValue(tagType, string(normalized)) {
+		return tagInfos
+	}
+	return append(tagInfos, database.TagInfo{Type: string(tagType), Tag: string(normalized), Label: raw})
+}
+
+// appendFormatTag adds a value its type's format rule accepts and drops any
+// other: a year outside the rule's range, a rating above 100.
+func appendFormatTag(tagInfos []database.TagInfo, tagType tags.TagType, value string) []database.TagInfo {
+	if value == "" || !tags.IsValidTagValue(tagType, value) {
+		return tagInfos
+	}
+	return append(tagInfos, database.TagInfo{Type: string(tagType), Tag: value})
+}
+
+// appendRegionTags maps a comma-separated region field. ScreenScraper's
+// region codes come first, then the region words filenames use.
+func (g *GamelistXMLScraper) appendRegionTags(tagInfos []database.TagInfo, raw string) []database.TagInfo {
+	for _, word := range splitCSV(raw) {
+		value, ok := screenScraperRegions[strings.ToLower(word)]
+		if !ok {
+			value, ok = tags.LookupRegionWord(word)
+		}
+		if !ok {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypeRegion, word)
+			continue
+		}
+		tagInfos = appendUniqueTag(tagInfos, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: string(value)})
 	}
 	return tagInfos
 }
 
-func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string) []database.TagInfo {
-	normalized := tags.NormalizeTagValue(tagType, raw)
-	if normalized == "" {
-		return tagInfos
+// appendLangTags maps a comma-separated language field.
+func (g *GamelistXMLScraper) appendLangTags(tagInfos []database.TagInfo, raw string) []database.TagInfo {
+	for _, word := range splitCSV(raw) {
+		value, ok := tags.LookupLanguageWord(word)
+		if !ok {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypeLang, word)
+			continue
+		}
+		tagInfos = appendUniqueTag(tagInfos, database.TagInfo{Type: string(tags.TagTypeLang), Tag: string(value)})
 	}
-	return append(tagInfos, database.TagInfo{Type: tagType, Tag: normalized, Label: label})
+	return tagInfos
+}
+
+// appendGenreTags maps the genre text and, when present, the numeric genre
+// id Recalbox writes. Both are used: the text is often in the scraping
+// language, which the table does not cover, while the id is not.
+func (g *GamelistXMLScraper) appendGenreTags(
+	tagInfos []database.TagInfo, genre, genreID string,
+) []database.TagInfo {
+	values, unmapped := ssgenre.Lookup(genre)
+	for _, piece := range unmapped {
+		g.unmapped.Note(unmappedScraperID, tags.TagTypeGenre, piece)
+	}
+	if genreID = strings.TrimSpace(genreID); genreID != "" && genreID != "0" {
+		if byID, ok := recalboxGenreIDs[genreID]; ok {
+			values = append(values, byID...)
+		} else {
+			g.unmapped.Note(unmappedScraperID, tags.TagTypeGenre, "genreid:"+genreID)
+		}
+	}
+	for _, value := range values {
+		tagInfos = appendUniqueTag(tagInfos, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: string(value)})
+	}
+	return tagInfos
+}
+
+func appendUniqueTag(tagInfos []database.TagInfo, tag database.TagInfo) []database.TagInfo {
+	for _, existing := range tagInfos {
+		if existing.Type == tag.Type && existing.Tag == tag.Tag {
+			return tagInfos
+		}
+	}
+	return append(tagInfos, tag)
 }
 
 // resolveGamelistROMPath allows a gamelist to refer to another configured ROM
@@ -2699,7 +2766,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 				TitleProps: meta.TitleProps,
 			}
 			if matched.MediaLevelWriteSafe {
-				write.MediaTags = companionChildTags(c)
+				write.MediaTags = g.companionChildTags(c)
 			}
 			appendRunMarker("gamelist.xml", opts, write)
 			titlePayloadKey := companionTitlePayloadKey(write)
@@ -2929,10 +2996,10 @@ func removeMediaByDBID(rows []database.Media, dbid int64) []database.Media {
 	return rows
 }
 
-func companionChildTags(c companionChild) []database.TagInfo {
+func (g *GamelistXMLScraper) companionChildTags(c companionChild) []database.TagInfo {
 	var childTags []database.TagInfo
-	childTags = appendCSVTags(childTags, string(tags.TagTypeRegion), c.Region)
-	childTags = appendCSVTags(childTags, string(tags.TagTypeLang), c.Lang)
+	childTags = g.appendRegionTags(childTags, c.Region)
+	childTags = g.appendLangTags(childTags, c.Lang)
 	return childTags
 }
 

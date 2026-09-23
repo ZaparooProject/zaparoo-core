@@ -739,7 +739,7 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
-	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "genre", Tag: "platform"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "genre", Tag: "action:platformer"}}))
 
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
@@ -1252,7 +1252,7 @@ func TestApplyScrapeResults_ExclusiveTitleTagReplaceKeepsOtherTypes(t *testing.T
 			Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
 			TitleTags: []database.TagInfo{
 				{Type: "developer", Tag: "nintendo"},
-				{Type: "genre", Tag: "platformer"},
+				{Type: "genre", Tag: "action:platformer"},
 			},
 		},
 	}
@@ -1267,7 +1267,7 @@ func TestApplyScrapeResults_ExclusiveTitleTagReplaceKeepsOtherTypes(t *testing.T
 	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{second}))
 
 	assert.Equal(t, []string{"capcom"}, getTitleTagValuesForType(ctx, t, mediaDB, "developer"))
-	assert.Equal(t, []string{"platformer"}, getTitleTagValuesForType(ctx, t, mediaDB, "genre"))
+	assert.Equal(t, []string{"action:platformer"}, getTitleTagValuesForType(ctx, t, mediaDB, "genre"))
 }
 
 func getTitleTagValuesForType(ctx context.Context, t *testing.T, mediaDB *MediaDB, typeName string) []string {
@@ -1445,7 +1445,7 @@ func TestApplyScrapeResults_BulkAdditiveTitleTagsAccumulate(t *testing.T) {
 			MediaDBID: 1, MediaTitleDBID: 1,
 			Write: &database.ScrapeWrite{
 				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
-				TitleTags: []database.TagInfo{{Type: "genre", Tag: "platformer"}},
+				TitleTags: []database.TagInfo{{Type: "genre", Tag: "action:platformer"}},
 			},
 		},
 	}))
@@ -1471,7 +1471,7 @@ func TestApplyScrapeResults_BulkAdditiveTitleTagsAccumulate(t *testing.T) {
 		genreTags = append(genreTags, tag)
 	}
 	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"action", "platformer"}, genreTags)
+	assert.Equal(t, []string{"action", "action:platformer"}, genreTags)
 }
 
 func TestApplyScrapeResults_BulkTitlePropertyLaterTargetWins(t *testing.T) {
@@ -1540,13 +1540,13 @@ func TestUpsertMediaTags_AdditiveType_AccumulatesTags(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// "scraper.test" is additive (IsExclusive=0).
-	tags1 := []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}
+	// "genre" is additive (IsExclusive=0).
+	tags1 := []database.TagInfo{{Type: "genre", Tag: "action"}}
 	err := mediaDB.UpsertMediaTags(ctx, 1, tags1)
 	require.NoError(t, err)
 
 	// Insert a second different tag of the same type.
-	tags2 := []database.TagInfo{{Type: "scraper.test", Tag: "extra"}}
+	tags2 := []database.TagInfo{{Type: "genre", Tag: "puzzle"}}
 	err = mediaDB.UpsertMediaTags(ctx, 1, tags2)
 	require.NoError(t, err)
 
@@ -2111,7 +2111,7 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 	for range goroutines {
 		go func() {
 			errs <- mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
-				{Type: "scraper.test", Tag: "concurrent"},
+				{Type: "developer", Tag: "concurrent-games"},
 			})
 		}()
 	}
@@ -2124,7 +2124,7 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM Tags t
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&tagCount))
+		 WHERE tt.Type = 'developer' AND t.Tag = 'concurrent-games'`).Scan(&tagCount))
 	assert.Equal(t, 1, tagCount, "concurrent writes must produce exactly one Tags row")
 
 	var mediaTagCount int
@@ -2132,7 +2132,7 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 		`SELECT COUNT(*) FROM MediaTags mt
 		 JOIN Tags t ON mt.TagDBID = t.DBID
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&mediaTagCount))
+		 WHERE tt.Type = 'developer' AND t.Tag = 'concurrent-games'`).Scan(&mediaTagCount))
 	assert.Equal(t, 1, mediaTagCount, "concurrent writes must produce exactly one MediaTags link")
 }
 
@@ -2527,9 +2527,9 @@ func TestResolveSingletonContainerAliases_TagsAttachedOnAlias(t *testing.T) {
 
 // TestResolveSingletonContainerAliases_DisambiguatingTagsAttached verifies that a
 // singleton container alias whose title has sibling variants gets its disambiguating
-// ZapScriptTags populated. The aliased USA disc lives in its own directory while the
-// Japan variant of the same title lives elsewhere; the title therefore disambiguates
-// on "release" and the alias must surface release=USA.
+// ZapScriptTags populated. The aliased reissue disc lives in its own directory while the
+// kiosk variant of the same title lives elsewhere; the title therefore disambiguates
+// on "release" and the alias must surface release=reissue.
 func TestResolveSingletonContainerAliases_DisambiguatingTagsAttached(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
@@ -2539,8 +2539,8 @@ func TestResolveSingletonContainerAliases_DisambiguatingTagsAttached(t *testing.
 	usaPath := filepath.ToSlash(filepath.Join("roms", "PSX", "USA Disc", "game.chd"))
 	jpnPath := filepath.ToSlash(filepath.Join("roms", "PSX", "Game (Japan).chd"))
 	systemDBID, _, mediaIDs := setupDisambTitle(t, mediaDB, "PSX", "Game", []disambTitleMedia{
-		{path: usaPath, tags: map[string]string{"release": "USA"}},
-		{path: jpnPath, tags: map[string]string{"release": "Japan"}},
+		{path: usaPath, tags: map[string]string{"release": "reissue"}},
+		{path: jpnPath, tags: map[string]string{"release": "kiosk"}},
 	})
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
 
@@ -2552,7 +2552,7 @@ func TestResolveSingletonContainerAliases_DisambiguatingTagsAttached(t *testing.
 	require.Len(t, aliases, 1)
 	assert.Equal(t, mediaIDs[0], aliases[0].Row.DBID)
 	require.Len(t, aliases[0].ZapScriptTags, 1)
-	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, aliases[0].ZapScriptTags[0])
+	assert.Equal(t, database.TagInfo{Type: "release", Tag: "reissue"}, aliases[0].ZapScriptTags[0])
 }
 
 func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
@@ -2795,10 +2795,10 @@ func seedMediaRefTagFixture(t *testing.T, mediaDB *MediaDB) {
 
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
 		{Type: "developer", Tag: "nintendo", Label: "Nintendo"},
-		{Type: "scraper.test", Tag: "alpha", Label: "Alpha"},
+		{Type: "publisher", Tag: "hal-laboratory", Label: "HAL Laboratory"},
 	}))
 	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{
-		{Type: "scraper.test", Tag: "alpha", Label: "Alpha"},
+		{Type: "publisher", Tag: "hal-laboratory", Label: "HAL Laboratory"},
 	}))
 }
 
@@ -2819,10 +2819,10 @@ func TestGetMediaTagsByMediaRefs_MergesFileAndTitleTags(t *testing.T) {
 
 	assert.Equal(t, []database.TagInfo{
 		{Tag: "nintendo", Type: "developer", Label: "Nintendo"},
-		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+		{Tag: "hal-laboratory", Type: "publisher", Label: "HAL Laboratory"},
 	}, got[1], "file and title tags merge, duplicates collapse, sorted by type then tag")
 	assert.Equal(t, []database.TagInfo{
-		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+		{Tag: "hal-laboratory", Type: "publisher", Label: "HAL Laboratory"},
 	}, got[3], "title tags fan out to sibling media without its file tags")
 	assert.NotContains(t, got, int64(2), "untagged media has no entry")
 	assert.NotContains(t, got, int64(999))
@@ -2871,10 +2871,10 @@ func TestGetMediaTagsByMediaRefs_ChunksBeyondSQLiteParamLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []database.TagInfo{
 		{Tag: "nintendo", Type: "developer", Label: "Nintendo"},
-		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+		{Tag: "hal-laboratory", Type: "publisher", Label: "HAL Laboratory"},
 	}, got[1])
 	assert.Equal(t, []database.TagInfo{
-		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+		{Tag: "hal-laboratory", Type: "publisher", Label: "HAL Laboratory"},
 	}, got[3])
 	assert.Len(t, got, 2)
 }

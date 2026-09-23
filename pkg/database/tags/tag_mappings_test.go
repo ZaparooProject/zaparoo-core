@@ -235,9 +235,10 @@ func TestGetTagsFromFileName(t *testing.T) {
 			expected: []string{"credit:unknown-tag"},
 		},
 		{
-			name:     "Pure-digit paren group stays unknown",
+			// A token that matches no convention is not a tag.
+			name:     "Pure-digit paren group is not a tag",
 			filename: "Game (12345)",
-			expected: []string{"unknown:12345"},
+			expected: []string{},
 		},
 		{
 			name:     "No tags",

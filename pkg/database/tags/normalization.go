@@ -21,6 +21,7 @@ package tags
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -70,12 +71,20 @@ func NormalizeCompanyName(raw string) TagValue {
 	return v
 }
 
+// computeCompanyName splits each slug word on anything that is not a letter,
+// digit or combining mark ("hajime_hirasawa" → "hajime-hirasawa"), so the
+// result is always the free-text shape the tag rules accept (see
+// isFreeTextValue). A name with no letters or digits normalises to "".
 func computeCompanyName(raw string) TagValue {
-	words := slugs.NormalizeToWords(raw)
-	if len(words) == 0 {
-		return TagValue(NormalizeTag(raw))
+	var kept []string
+	for _, word := range slugs.NormalizeToWords(raw) {
+		for _, part := range strings.FieldsFunc(word, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)
+		}) {
+			kept = append(kept, strings.ToLower(part))
+		}
 	}
-	return TagValue(strings.Join(words, "-"))
+	return TagValue(strings.Join(kept, "-"))
 }
 
 // NormalizeTagValue normalizes a raw tag value for canonical storage and lookup.

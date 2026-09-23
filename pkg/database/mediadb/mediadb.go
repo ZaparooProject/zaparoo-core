@@ -2001,6 +2001,14 @@ func (db *MediaDB) MigrateUp() error {
 		return err
 	}
 	db.applySchemaReadyFixups()
+	// Seeding is a single stamp read when the tag vocabulary is unchanged.
+	// When a release changes it, this is also what removes stored values it no
+	// longer accepts, and that has to happen at startup rather than at the
+	// next index run, because scrapes write tags without one. A brand-new
+	// database has nothing to remove and is seeded by its first index.
+	if err := sqlSeedCanonicalTags(db.ctx, db.sql.Load()); err != nil {
+		log.Warn().Err(err).Msg("failed to seed the tag vocabulary")
+	}
 	// Best-effort: stamp the disambiguation version on a database with no
 	// titles before the first index writes any. The pending check performs the
 	// stamp as a side effect; without this, the check first runs during
@@ -2426,6 +2434,10 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 		return fmt.Errorf("failed to stage scanned media %s: %w", media.Path, err)
 	}
 	for _, tag := range media.Tags {
+		if err := tags.ValidateTagValue(tags.TagType(tag.Type), tag.Value); err != nil {
+			warnRefusedTag("scanner", tag.Type, tag.Value, err)
+			continue
+		}
 		if err := db.batchInsertScanTag.Add(
 			media.Path, tag.Type, tags.PadTagValue(tag.Value),
 		); err != nil {
@@ -4580,6 +4592,9 @@ func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
 
 // InsertTagType inserts a new TagType into the database.
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
+	if !tags.IsKnownType(tags.TagType(row.Type)) {
+		return row, fmt.Errorf("insert tag type: %w: %q", tags.ErrUnknownTagType, row.Type)
+	}
 	var result database.TagType
 	var err error
 
@@ -4628,6 +4643,9 @@ func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
+	if err := db.validateTagRow(row); err != nil {
+		return row, err
+	}
 	var result database.Tag
 	var err error
 
@@ -4657,6 +4675,25 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 	}
 
 	return result, err
+}
+
+// validateTagRow checks a tag row against the vocabulary, looking its type
+// up by DBID because the row carries only that.
+func (db *MediaDB) validateTagRow(row database.Tag) error {
+	var tagType string
+	var q sqlQueryable = db.sql.Load()
+	if db.tx != nil {
+		q = db.tx
+	}
+	if err := q.QueryRowContext(db.ctx,
+		"SELECT Type FROM TagTypes WHERE DBID = ?", row.TypeDBID,
+	).Scan(&tagType); err != nil {
+		return fmt.Errorf("insert tag: find its type: %w", err)
+	}
+	if err := tags.ValidateTagValue(tags.TagType(tagType), row.Tag); err != nil {
+		return fmt.Errorf("insert tag: %w", err)
+	}
+	return nil
 }
 
 func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {

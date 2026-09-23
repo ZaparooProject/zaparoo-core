@@ -71,20 +71,6 @@ const (
 // so long-tail categories like credit: don't flood the response.
 const tagsPerCategoryLimit = 100
 
-// cappedTagTypes is the set of tag types that are long-tail (have many values
-// per system) and should be capped when returning tag lists. Taxonomy tags
-// like region, year, and lang have a finite set of values per system and are
-// returned in full without truncation. Set-like types with closed vocabularies
-// (e.g., dump, edition, rerelease) are also not capped since they rarely exceed
-// 100 distinct values even in large collections.
-var cappedTagTypes = map[string]bool{
-	"credit":     true,
-	"publisher":  true,
-	"developer":  true,
-	"mameparent": true,
-	"search":     true,
-}
-
 type indexingNotificationState struct {
 	lastTime     time.Time
 	lastPhase    string
@@ -116,7 +102,7 @@ func capTagsByCategory(tagList []database.TagInfo, limit int) []database.TagInfo
 			}
 			return cmp.Compare(a.Tag, b.Tag)
 		})
-		if cappedTagTypes[typ] && len(group) > limit {
+		if isCappedTagType(typ) && len(group) > limit {
 			group = group[:limit]
 		}
 		result = append(result, group...)

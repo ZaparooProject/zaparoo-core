@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/ssgenre"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
@@ -49,6 +50,8 @@ type systemIndex struct {
 
 type pendingWrite struct {
 	mediaTags map[string]database.TagInfo
+	// titleTags is keyed by type for exclusive types and by type and value
+	// for the rest, so a genre hierarchy can land as parent and child.
 	titleTags map[string]database.TagInfo
 	mediaProp map[string]database.MediaProperty
 	titleProp map[string]database.MediaProperty
@@ -111,11 +114,13 @@ type matchResult struct {
 	Stats            matchStats
 }
 
-// buildPendingWrites resolves every record to a write target.
+// buildPendingWrites resolves every record to a write target. Metadata values
+// with no tag mapping are dropped and noted in unmapped.
 func buildPendingWrites(
 	idx systemIndex,
 	records []sourceRecords,
 	runID string,
+	unmapped *scraper.UnmappedValues,
 ) matchResult {
 	pending := make(map[int64]*pendingWrite)
 	foundPaths := make(map[string]struct{})
@@ -126,7 +131,7 @@ func buildPendingWrites(
 			if record.ImagePath != "" {
 				foundPaths[filepath.Clean(record.ImagePath)] = struct{}{}
 			}
-			if applyArtworkRecord(idx, pending, source, record) {
+			if applyArtworkRecord(idx, pending, source, record, unmapped) {
 				stats.Matched++
 			} else {
 				stats.Skipped++
@@ -197,6 +202,7 @@ func applyArtworkRecord(
 	pending map[int64]*pendingWrite,
 	source sourceRecords,
 	record artworkRecord,
+	unmapped *scraper.UnmappedValues,
 ) bool {
 	media, title, exact := matchArtwork(idx, record)
 	if media == nil || title == nil {
@@ -217,7 +223,7 @@ func applyArtworkRecord(
 		}
 		props[prop.TypeTag] = prop
 	}
-	applyGameMetadata(write, source, record.Key)
+	applyGameMetadata(write, source, record.Key, unmapped)
 	write.records++
 	return true
 }
@@ -344,16 +350,39 @@ func matchManualTitle(idx systemIndex, path string) *database.TitleWithSystem {
 // synthesised from images and gameinfo, so the representative dump's details
 // are not replaced by a demo or regional variant that resolves to the same
 // title later.
-func applyGameMetadata(write *pendingWrite, source sourceRecords, key string) {
+func applyGameMetadata(write *pendingWrite, source sourceRecords, key string, unmapped *scraper.UnmappedValues) {
 	info, ok := source.GameInfo[key]
 	if ok {
-		if year := normalizedYear(info.Year); year != "" {
-			setTitleTag(write, database.TagInfo{Type: string(tags.TagTypeYear), Tag: year})
+		if year := normalizedYear(info.Year); year != "" && tags.IsValidTagValue(tags.TagTypeYear, year) {
+			setTitleTags(write, tags.TagTypeYear, database.TagInfo{Type: string(tags.TagTypeYear), Tag: year})
 		}
-		appendNormalizedTitleTag(write, tags.TagTypeGenre, info.Genre)
-		appendNormalizedTitleTag(write, tags.TagTypeDeveloper, info.Developer)
+		if genre := cleanText(info.Genre); genre != "" {
+			values, dropped := ssgenre.Lookup(genre)
+			for _, piece := range dropped {
+				unmapped.Note(scraperID, tags.TagTypeGenre, piece)
+			}
+			genreTags := make([]database.TagInfo, 0, len(values))
+			for _, value := range values {
+				genreTags = append(genreTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: string(value)})
+			}
+			setTitleTags(write, tags.TagTypeGenre, genreTags...)
+		}
+		if developer := cleanText(info.Developer); developer != "" {
+			normalized := string(tags.NormalizeCompanyName(developer))
+			if tags.IsValidTagValue(tags.TagTypeDeveloper, normalized) {
+				setTitleTags(write, tags.TagTypeDeveloper, database.TagInfo{
+					Type: string(tags.TagTypeDeveloper), Tag: normalized, Label: developer,
+				})
+			}
+		}
 		if players := normalizePlayers(info.Players); players != "" {
-			setTitleTag(write, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: players})
+			if tags.IsCanonicalValue(tags.TagTypePlayers, tags.TagValue(players)) {
+				setTitleTags(write, tags.TagTypePlayers, database.TagInfo{
+					Type: string(tags.TagTypePlayers), Tag: players,
+				})
+			} else {
+				unmapped.Note(scraperID, tags.TagTypePlayers, info.Players)
+			}
 		}
 	}
 	synopsis := cleanText(source.Synopsis[key])
@@ -366,51 +395,25 @@ func applyGameMetadata(write *pendingWrite, source sourceRecords, key string) {
 	}
 }
 
-func setTitleTag(write *pendingWrite, tag database.TagInfo) {
-	if _, exists := write.titleTags[tag.Type]; !exists {
-		write.titleTags[tag.Type] = tag
-	}
-}
-
-func appendNormalizedTitleTag(write *pendingWrite, tagType tags.TagType, raw string) {
-	raw = cleanText(raw)
-	if raw == "" {
+// setTitleTags stages a field's tags unless an earlier record already set
+// that field. An exclusive type keeps only its first value.
+func setTitleTags(write *pendingWrite, tagType tags.TagType, values ...database.TagInfo) {
+	if len(values) == 0 {
 		return
 	}
-	source := tagValueSource(tagType, raw)
-	normalized := tags.NormalizeTagValue(string(tagType), source)
-	if normalized == "" {
+	prefix := string(tagType) + ":"
+	for key := range write.titleTags {
+		if key == string(tagType) || strings.HasPrefix(key, prefix) {
+			return
+		}
+	}
+	if tags.IsExclusiveType(tagType) {
+		write.titleTags[string(tagType)] = values[0]
 		return
 	}
-	setTitleTag(write, database.TagInfo{Type: string(tagType), Tag: normalized, Label: source})
-}
-
-// tagValueSource picks the part of a pack field that becomes the tag value.
-//
-// The pack writes a genre as a "/"-separated hierarchy, so the whole field
-// normalizes into one run-together value: "Shoot'em Up / Vertical/Shoot'em Up"
-// becomes "shootem-up-verticalshootem-up", which nothing can filter on and
-// which adds an entry to the system's tag vocabulary that matches no other
-// title. Most genres in the published packs carry a separator, so this is the
-// common case rather than an edge one.
-//
-// Take the broad genre the hierarchy opens with. A title holds one tag per
-// type here, so the narrower components cannot be kept as tags of their own
-// without changing that. The label is the same segment: it names the shared
-// tag every title in the genre links to, so one title's hierarchy must not
-// become it.
-func tagValueSource(tagType tags.TagType, raw string) string {
-	if tagType != tags.TagTypeGenre {
-		return raw
+	for _, value := range values {
+		write.titleTags[prefix+value.Tag] = value
 	}
-	primary, _, found := strings.Cut(raw, "/")
-	if !found {
-		return raw
-	}
-	if trimmed := strings.TrimSpace(primary); trimmed != "" {
-		return trimmed
-	}
-	return raw
 }
 
 func normalizedYear(value string) string {

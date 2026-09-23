@@ -192,6 +192,7 @@ type Game struct {
 	MultiDisk           string   `xml:"multidisk,omitempty"`
 	CheevosHash         string   `xml:"cheevosHash,omitempty"`
 	Genres              string   `xml:"genres,omitempty"`
+	GenreID             string   `xml:"genreid,omitempty"`
 	SourceAttr          string   `xml:"source,attr,omitempty"` //nolint:revive // attr and el
 	ParentIDAttr        string   `xml:"parentid,attr,omitempty"`
 	Screenshot          string   `xml:"screenshot,omitempty"`

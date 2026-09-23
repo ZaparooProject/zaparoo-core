@@ -118,7 +118,7 @@ func TestGameboySiblingGamelistPaths(t *testing.T) {
 				require.Len(t, records, 1)
 				assert.Equal(t, int64(2), records[0].MatchedMediaDBID)
 				assert.True(t, records[0].MediaLevelWriteSafe)
-				mapped := s.MapToDB(records[0])
+				mapped := mapToDBValid(t, s, records[0])
 				for property, filename := range map[tags.TagValue]string{
 					tags.TagPropertyImageImage: "image.png", tags.TagPropertyImageBoxart: "box.png",
 				} {
@@ -151,7 +151,7 @@ func TestGameboySiblingArtworkFallback(t *testing.T) {
 	}, mediaByPath(database.Media{DBID: 2, MediaTitleDBID: 1, Path: rom}))
 	require.NoError(t, err)
 	require.Len(t, records, 1)
-	mapped := s.MapToDB(records[0])
+	mapped := mapToDBValid(t, s, records[0])
 	box, ok := propertyByType(mapped.MediaProps, tags.PropertyTypeTag(tags.TagPropertyImageBoxart))
 	require.True(t, ok)
 	assert.Equal(t, filepath.ToSlash(art), box.Text)

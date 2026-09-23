@@ -125,10 +125,12 @@ func NewPlatformScraper(locate Locate) platforms.Scraper {
 }
 
 type scraperImpl struct {
-	fs      afero.Fs
-	db      database.MediaDBI
-	install pinup.Install
-	lib     pinup.Library
+	fs afero.Fs
+	db database.MediaDBI
+	// unmapped collects the table values this run had no tag mapping for.
+	unmapped scraper.UnmappedValues
+	install  pinup.Install
+	lib      pinup.Library
 }
 
 type matchStats struct {
@@ -139,6 +141,7 @@ type matchStats struct {
 
 func (s *scraperImpl) scrapeLoop(ctx context.Context, opts scraper.ScrapeOptions, ch chan<- scraper.ScrapeUpdate) {
 	defer close(ch)
+	defer s.unmapped.LogSummary(scraperID)
 	bgpriority.Apply()
 
 	done := func(processed, matched, skipped int) {
@@ -284,27 +287,34 @@ func (s *scraperImpl) buildWrite(table *pinup.Table, emu *pinup.Emulator, runID 
 		seen[key] = struct{}{}
 		write.TitleTags = append(write.TitleTags, tag)
 	}
-	addNormalized := func(tagType tags.TagType, raw string) {
-		raw = cleanText(raw)
-		if raw == "" {
-			return
-		}
-		normalized := tags.NormalizeTagValue(string(tagType), raw)
-		if normalized == "" {
-			return
-		}
-		addTitleTag(database.TagInfo{Type: string(tagType), Tag: normalized, Label: raw})
-	}
 
-	if table.Year > 0 {
-		addTitleTag(database.TagInfo{Type: string(tags.TagTypeYear), Tag: strconv.Itoa(table.Year)})
+	if year := strconv.Itoa(table.Year); table.Year > 0 && tags.IsValidTagValue(tags.TagTypeYear, year) {
+		addTitleTag(database.TagInfo{Type: string(tags.TagTypeYear), Tag: year})
 	}
-	addNormalized(tags.TagTypeDeveloper, table.Manufacturer)
+	if manufacturer := cleanText(table.Manufacturer); manufacturer != "" {
+		normalized := string(tags.NormalizeCompanyName(manufacturer))
+		if tags.IsValidTagValue(tags.TagTypeDeveloper, normalized) {
+			addTitleTag(database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: normalized, Label: manufacturer})
+		}
+	}
 	if table.Players > 0 {
-		addTitleTag(database.TagInfo{Type: string(tags.TagTypePlayers), Tag: strconv.Itoa(table.Players)})
+		players := strconv.Itoa(table.Players)
+		if tags.IsCanonicalValue(tags.TagTypePlayers, tags.TagValue(players)) {
+			addTitleTag(database.TagInfo{Type: string(tags.TagTypePlayers), Tag: players})
+		} else {
+			s.unmapped.Note(scraperID, tags.TagTypePlayers, players)
+		}
 	}
-	for _, genre := range []string{table.GameType, table.Category, table.Theme} {
-		addNormalized(tags.TagTypeGenre, genre)
+	// Every Popper table is a pinball table. GameType (SS, EM, PM, ...) is
+	// the table's hardware era and Category is Popper's own filing, so
+	// neither is a genre; a theme is kept only when it names one of the
+	// vocabulary's features outright.
+	addTitleTag(database.TagInfo{Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenreParlorPinball)})
+	addTitleTag(database.TagInfo{Type: string(tags.TagTypeGenre), Tag: string(tags.TagGameGenreParlor)})
+	for _, theme := range strings.FieldsFunc(table.Theme, isThemeSeparator) {
+		if feature, ok := featureByTheme[lookupKey(theme)]; ok {
+			addTitleTag(database.TagInfo{Type: string(tags.TagTypeSearch), Tag: string(feature)})
+		}
 	}
 	if notes := cleanText(table.Notes); notes != "" {
 		write.TitleProps = append(write.TitleProps, database.MediaProperty{
@@ -425,6 +435,37 @@ func wantsSystem(systems []string, systemID string) bool {
 }
 
 // cleanText collapses whitespace and drops control characters from a field.
+// featurePrefix marks the search values that name a recurring character or
+// licence.
+const featurePrefix = "feature:"
+
+// featureByTheme indexes the vocabulary's search features by their bare name,
+// so a Popper theme of "Spider-Man" finds feature:spiderman.
+var featureByTheme = func() map[string]tags.TagValue {
+	byName := make(map[string]tags.TagValue)
+	for _, value := range tags.CanonicalTagDefinitions[tags.TagTypeSearch] {
+		if name, ok := strings.CutPrefix(string(value), featurePrefix); ok {
+			byName[lookupKey(name)] = value
+		}
+	}
+	return byName
+}()
+
+func isThemeSeparator(r rune) bool {
+	return r == ',' || r == ';' || r == '/'
+}
+
+// lookupKey folds case, spacing and punctuation out of a name.
+func lookupKey(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r > 0x7f {
+			_, _ = b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func cleanText(value string) string {
 	fields := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f

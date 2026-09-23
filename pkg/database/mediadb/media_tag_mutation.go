@@ -299,6 +299,11 @@ func findOrCreateMediaTag(
 	if ref.Type == "" || ref.Tag == "" {
 		return resolvedMediaTag{}, false, errors.New("media tag type and value are required")
 	}
+	if create {
+		if err := tags.ValidateTagValue(tags.TagType(ref.Type), ref.Tag); err != nil {
+			return resolvedMediaTag{}, false, fmt.Errorf("resolve media tag: %w", err)
+		}
+	}
 
 	var resolved resolvedMediaTag
 	err := tx.QueryRowContext(ctx,

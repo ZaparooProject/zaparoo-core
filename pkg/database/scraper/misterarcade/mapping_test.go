@@ -20,10 +20,12 @@
 package misterarcade
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +42,15 @@ func cps1Entry() Entry {
 		Players: "2 (simultaneous)", MoveInputs: "8-way", SpecialControls: "", NumButtons: "2",
 		Flip: "yes",
 	}
+}
+
+// validWrite builds a write and fails the test for any tag in it the
+// vocabulary would refuse.
+func validWrite(t *testing.T, entry *Entry, runID string, unmapped *scraper.UnmappedValues) *database.ScrapeWrite {
+	t.Helper()
+	write := buildWrite(entry, runID, unmapped)
+	scrapertest.RequireValidWrite(t, write)
+	return write
 }
 
 func tagValues(list []database.TagInfo, tagType tags.TagType) []string {
@@ -64,19 +75,21 @@ func propText(props []database.MediaProperty, value tags.TagValue) string {
 func TestBuildWriteMapsEveryReadColumn(t *testing.T) {
 	t.Parallel()
 	entry := cps1Entry()
-	write := buildWrite(&entry, "")
+	unmapped := &scraper.UnmappedValues{}
+	write := validWrite(t, &entry, "", unmapped)
 
 	assert.Equal(t, scraper.SentinelTagInfo(scraperID), write.Sentinel)
 	assert.Equal(t, []string{"1990"}, tagValues(write.TitleTags, tags.TagTypeYear))
 	assert.Equal(t, []string{"capcom"}, tagValues(write.TitleTags, tags.TagTypeDeveloper))
-	assert.Equal(t, []string{"shooter-flying-vertical", "shooter"},
-		tagValues(write.TitleTags, tags.TagTypeGenre), "the family is written beside the full genre")
-	assert.Equal(t, []string{"19xx"}, tagValues(write.TitleTags, tags.TagTypeGameFamily))
-	assert.Equal(t, []string{"capcom:cps1"}, tagValues(write.TitleTags, tags.TagTypeArcadeBoard))
+	assert.Equal(t, []string{"shmup:v", "shmup"},
+		tagValues(write.TitleTags, tags.TagTypeGenre), "the canonical genre is written with its parent")
+	assert.Equal(t, []string{"capcom:cps"}, tagValues(write.TitleTags, tags.TagTypeArcadeBoard),
+		"the catalog's CPS-1 is the canonical capcom:cps")
 	assert.Equal(t, []string{"2", "simultaneous"}, tagValues(write.TitleTags, tags.TagTypePlayers))
 	assert.Equal(t, []string{"joystick:8", "buttons:2"}, tagValues(write.TitleTags, tags.TagTypeInput))
 	assert.Equal(t, []string{"15khz"}, tagValues(write.TitleTags, tags.TagTypeVideo))
-	assert.Equal(t, []string{"tate:ccw", "keyword:flip"}, tagValues(write.TitleTags, tags.TagTypeSearch))
+	assert.Equal(t, []string{"franchise:19xx", "tate:ccw", "keyword:flip"},
+		tagValues(write.TitleTags, tags.TagTypeSearch), "the series is written as a franchise")
 	assert.Empty(t, tagValues(write.TitleTags, tags.TagTypeRelease), "this set is not homebrew")
 
 	assert.Equal(t, []string{"world"}, tagValues(write.MediaTags, tags.TagTypeRegion))
@@ -85,16 +98,36 @@ func TestBuildWriteMapsEveryReadColumn(t *testing.T) {
 	assert.Equal(t, []string{"alt"}, tagValues(write.MediaTags, tags.TagTypeAlt))
 	assert.Empty(t, tagValues(write.MediaTags, tags.TagTypeUnlicensed))
 	assert.Equal(t, "1941", propText(write.MediaProps, tags.TagPropertyMAMESetName))
+
+	for _, tagType := range []tags.TagType{
+		tags.TagTypeGenre, tags.TagTypeSearch, tags.TagTypeArcadeBoard, tags.TagTypePlayers,
+		tags.TagTypeInput, tags.TagTypeRegion, tags.TagTypeYear, tags.TagTypeVideo,
+	} {
+		assert.Zero(t, unmapped.Count(tagType), "a fully catalogued row drops nothing from %s", tagType)
+	}
+}
+
+func TestBuildWriteLabelsOnlyCompanyNames(t *testing.T) {
+	t.Parallel()
+	entry := cps1Entry()
+	write := validWrite(t, &entry, "", nil)
+	for _, tag := range append(append([]database.TagInfo{}, write.TitleTags...), write.MediaTags...) {
+		if tag.Type == string(tags.TagTypeDeveloper) {
+			assert.Equal(t, "Capcom", tag.Label, "a company name keeps the catalog's spelling")
+			continue
+		}
+		assert.Empty(t, tag.Label, "%s:%s is a closed or format tag and carries no label", tag.Type, tag.Tag)
+	}
 }
 
 func TestBuildWriteWritesRunMarkerOnlyForARun(t *testing.T) {
 	t.Parallel()
 	entry := cps1Entry()
 
-	write := buildWrite(&entry, "")
+	write := validWrite(t, &entry, "", nil)
 	assert.Empty(t, tagValues(write.MediaTags, tags.ScraperRunType(scraperID)))
 
-	write = buildWrite(&entry, "run-7")
+	write = validWrite(t, &entry, "run-7", nil)
 	assert.Equal(t, []string{"run-7"}, tagValues(write.MediaTags, tags.ScraperRunType(scraperID)))
 }
 
@@ -109,7 +142,7 @@ func TestBuildWriteSkipsSentinelAndDirtyValues(t *testing.T) {
 		Players: "n-a", MoveInputs: "n-a", SpecialControls: "n-a", NumButtons: "0",
 		Flip: "n-a",
 	}
-	write := buildWrite(&entry, "")
+	write := validWrite(t, &entry, "", nil)
 
 	assert.Empty(t, write.TitleTags, "a row of sentinels writes no title metadata")
 	assert.Equal(t, []string{"bootleg"}, tagValues(write.MediaTags, tags.TagTypeUnlicensed),
@@ -121,22 +154,128 @@ func TestBuildWriteSkipsSentinelAndDirtyValues(t *testing.T) {
 func TestBuildWriteUnescapesCatalogText(t *testing.T) {
 	t.Parallel()
 	entry := Entry{SetName: "arkanoid", Category: "Ball &amp; Paddle - Breakout"}
-	write := buildWrite(&entry, "")
-	assert.Equal(t, []string{"ball-paddle-breakout", "ball-paddle"},
+	write := validWrite(t, &entry, "", nil)
+	assert.Equal(t, []string{"action:blockbreaker", "action"},
 		tagValues(write.TitleTags, tags.TagTypeGenre))
 }
 
-func TestBuildWritePrefersSeriesOverParentTitleForFamily(t *testing.T) {
+func TestBuildWriteWritesTheSeriesAsAFranchise(t *testing.T) {
 	t.Parallel()
-	// gamefamily holds one value, so the two candidate columns cannot both win.
+	franchises := func(entry *Entry, unmapped *scraper.UnmappedValues) []string {
+		write := validWrite(t, entry, "", unmapped)
+		values := make([]string, 0, 1)
+		for _, value := range tagValues(write.TitleTags, tags.TagTypeSearch) {
+			if strings.HasPrefix(value, "franchise:") {
+				values = append(values, value)
+			}
+		}
+		return values
+	}
+
 	withSeries := Entry{SetName: "a", Series: "19XX", ParentTitle: "1941- Counter Attack"}
-	assert.Equal(t, []string{"19xx"}, tagValues(buildWrite(&withSeries, "").TitleTags, tags.TagTypeGameFamily))
+	assert.Equal(t, []string{"franchise:19xx"}, franchises(&withSeries, nil))
 
-	withoutSeries := Entry{SetName: "b", ParentTitle: "Dokaben"}
-	assert.Equal(t, []string{"dokaben"}, tagValues(buildWrite(&withoutSeries, "").TitleTags, tags.TagTypeGameFamily))
+	spelled := Entry{SetName: "b", Series: "Ghosts 'n"}
+	assert.Equal(t, []string{"franchise:ghostsngoblins"}, franchises(&spelled, nil),
+		"the catalog's truncated spelling reaches the franchise")
 
-	neither := Entry{SetName: "c"}
-	assert.Empty(t, tagValues(buildWrite(&neither, "").TitleTags, tags.TagTypeGameFamily))
+	// A parent title is not a series; it is used only when the catalog names
+	// no series and the title is itself a listed franchise.
+	parentIsFranchise := Entry{SetName: "c", ParentTitle: "Galaga"}
+	assert.Equal(t, []string{"franchise:galaga"}, franchises(&parentIsFranchise, nil))
+	parentIsATitle := Entry{SetName: "d", ParentTitle: "1941- Counter Attack"}
+	unmapped := &scraper.UnmappedValues{}
+	assert.Empty(t, franchises(&parentIsATitle, unmapped))
+	assert.Zero(t, unmapped.Count(tags.TagTypeSearch), "a parent title that is not a franchise is not a drop")
+
+	notAFranchise := Entry{SetName: "e", Series: "Marvel - Capcom"}
+	unmapped = &scraper.UnmappedValues{}
+	assert.Empty(t, franchises(&notAFranchise, unmapped))
+	assert.Zero(t, unmapped.Count(tags.TagTypeSearch), "a curated non-franchise is dropped silently")
+
+	unknown := Entry{SetName: "f", Series: "Some New Saga", ParentTitle: "Galaga"}
+	unmapped = &scraper.UnmappedValues{}
+	assert.Empty(t, franchises(&unknown, unmapped), "an unknown series is not replaced by the parent title")
+	assert.Equal(t, 1, unmapped.Count(tags.TagTypeSearch))
+}
+
+func TestBuildWriteMapsTheBoardOntoTheCanonicalList(t *testing.T) {
+	t.Parallel()
+	board := func(platform string, unmapped *scraper.UnmappedValues) []string {
+		entry := Entry{SetName: "x", Platform: platform}
+		write := validWrite(t, &entry, "", unmapped)
+		return tagValues(write.TitleTags, tags.TagTypeArcadeBoard)
+	}
+	assert.Equal(t, []string{string(tags.TagArcadeBoardCapcomCPS)}, board("Capcom CPS-1", nil))
+	assert.Equal(t, []string{string(tags.TagArcadeBoardCapcomCPS2)}, board("Capcom CPS-2", nil))
+	assert.Equal(t, []string{string(tags.TagArcadeBoardNamcoPacMan)}, board("Namco Pac-Man hardware", nil))
+	assert.Equal(t, []string{string(tags.TagArcadeBoardToaplanVersion1)}, board("Toaplan 1", nil))
+
+	unmapped := &scraper.UnmappedValues{}
+	assert.Empty(t, board("Konami Unique", unmapped), "a catch-all names no board")
+	assert.Zero(t, unmapped.Count(tags.TagTypeArcadeBoard), "a curated skip is dropped silently")
+
+	assert.Empty(t, board("Mystery Board 9000", unmapped))
+	assert.Equal(t, 1, unmapped.Count(tags.TagTypeArcadeBoard), "an unknown board is reported")
+}
+
+func TestBuildWriteNotesEveryDroppedValue(t *testing.T) {
+	t.Parallel()
+	entry := Entry{
+		SetName: "odd", Category: "Unheard Of - Genre", Platform: "Mystery Board",
+		Series: "Some New Saga", Region: "Hispanic", Players: "many", NumButtons: "9",
+		MoveInputs: "hovercraft yoke", Year: "19xx", Resolution: "25kHz",
+	}
+	unmapped := &scraper.UnmappedValues{}
+	write := validWrite(t, &entry, "", unmapped)
+
+	for _, tagType := range []tags.TagType{
+		tags.TagTypeGenre, tags.TagTypeArcadeBoard, tags.TagTypeSearch, tags.TagTypeRegion,
+		tags.TagTypePlayers, tags.TagTypeYear, tags.TagTypeVideo,
+	} {
+		assert.Equal(t, 1, unmapped.Count(tagType), "%s", tagType)
+	}
+	assert.Equal(t, 2, unmapped.Count(tags.TagTypeInput), "the unlisted button count and the control phrase")
+	assert.Empty(t, write.TitleTags)
+}
+
+func TestGenreTags(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		category string
+		want     []string
+		unknown  bool
+	}{
+		{category: "Shooter - Flying Vertical", want: []string{"shmup:v", "shmup"}},
+		{category: "Shooter - Flying Horizontal", want: []string{"shmup:h", "shmup"}},
+		{category: "Shooter - Flying Diagonal", want: []string{"shmup:i", "shmup"}},
+		{category: "Shooter - Gallery", want: []string{"shooting:gallery", "shooting"}},
+		{category: "Fighter - Versus", want: []string{"fighting"}},
+		{category: "Fighter - 2.5D", want: []string{"brawler"}},
+		{category: "Platform - Shooter Scrolling", want: []string{"action:runandgun", "action"}},
+		{category: "Sports - Soccer", want: []string{"sports:soccer", "sports"}},
+		{category: "Tabletop - Mahjong", want: []string{"board:mahjong", "board"}},
+		{category: "Driving - Race", want: []string{"racing"}},
+		{category: "Quiz - Questions in Japanese", want: []string{"quiz"}},
+		{category: "Platform - Run Jump [Mature]", want: []string{"action:platformer", "action"}},
+		{category: "SHOOTER - FLYING VERTICAL", want: []string{"shmup:v", "shmup"}},
+		{category: "System - BIOS"},
+		{category: "n-a"},
+		{category: "Unheard Of - Genre", unknown: true},
+	} {
+		values, known := genreTags(tc.category)
+		got := make([]string, 0, len(values))
+		for _, value := range values {
+			got = append(got, string(value))
+			require.NoError(t, tags.ValidateTagValue(tags.TagTypeGenre, string(value)))
+		}
+		assert.Equal(t, !tc.unknown, known, "%q", tc.category)
+		if tc.want == nil {
+			assert.Empty(t, got, "%q", tc.category)
+			continue
+		}
+		assert.Equal(t, tc.want, got, "%q", tc.category)
+	}
 }
 
 func TestBuildWriteReadsBootlegFromTheRegionColumn(t *testing.T) {
@@ -144,7 +283,7 @@ func TestBuildWriteReadsBootlegFromTheRegionColumn(t *testing.T) {
 	// The catalog files some unlicensed sets under region; that states a
 	// provenance, not a territory.
 	entry := Entry{SetName: "bl", Region: "bootleg"}
-	write := buildWrite(&entry, "")
+	write := validWrite(t, &entry, "", nil)
 	assert.Empty(t, tagValues(write.MediaTags, tags.TagTypeRegion))
 	assert.Equal(t, []string{"bootleg"}, tagValues(write.MediaTags, tags.TagTypeUnlicensed))
 }
@@ -152,25 +291,26 @@ func TestBuildWriteReadsBootlegFromTheRegionColumn(t *testing.T) {
 func TestBuildWriteSplitsMultiRegionAndDropsUnknownTerritories(t *testing.T) {
 	t.Parallel()
 	entry := Entry{SetName: "multi", Region: "USA - Asia"}
-	assert.Equal(t, []string{"us", "asia"}, tagValues(buildWrite(&entry, "").MediaTags, tags.TagTypeRegion))
+	assert.Equal(t, []string{"us", "asia"}, tagValues(validWrite(t, &entry, "", nil).MediaTags, tags.TagTypeRegion))
 
 	unknown := Entry{SetName: "hisp", Region: "Hispanic"}
-	assert.Empty(t, tagValues(buildWrite(&unknown, "").MediaTags, tags.TagTypeRegion),
+	assert.Empty(t, tagValues(validWrite(t, &unknown, "", nil).MediaTags, tags.TagTypeRegion),
 		"a word with no canonical region is dropped, not invented")
 }
 
 func TestBuildWriteDeduplicatesBootlegAcrossColumns(t *testing.T) {
 	t.Parallel()
 	entry := Entry{SetName: "dupe", Region: "bootleg", Bootleg: "yes", Version: "bootleg"}
-	assert.Equal(t, []string{"bootleg"}, tagValues(buildWrite(&entry, "").MediaTags, tags.TagTypeUnlicensed))
+	assert.Equal(t, []string{"bootleg"}, tagValues(validWrite(t, &entry, "", nil).MediaTags, tags.TagTypeUnlicensed))
 }
 
 func TestPlayerTags(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name   string
-		column string
-		want   []string
+		name    string
+		column  string
+		want    []string
+		dropped bool
 	}{
 		{name: "single player", column: "1", want: []string{"1"}},
 		{name: "two simultaneous", column: "2 (simultaneous)", want: []string{"2", "simultaneous"}},
@@ -180,14 +320,21 @@ func TestPlayerTags(t *testing.T) {
 			want: []string{"2", "3", "4", "simultaneous"},
 		},
 		{name: "sentinel", column: "n-a", want: nil},
-		{name: "unparseable", column: "many", want: nil},
-		{name: "beyond the vocabulary", column: "40", want: nil},
-		{name: "reversed range", column: "4-2", want: nil},
+		{name: "unparseable", column: "many", want: nil, dropped: true},
+		{name: "beyond the vocabulary", column: "40", want: nil, dropped: true},
+		{name: "reversed range", column: "4-2", want: nil, dropped: true},
+		{
+			name: "an unlisted count in a range is dropped", column: "10-12",
+			want: []string{"10", "12"}, dropped: true,
+		},
+		{name: "an unknown mode is dropped", column: "2 (linked)", want: []string{"2"}, dropped: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			values, ok := playerTags(tc.column)
+			assert.Equal(t, !tc.dropped, ok)
 			got := make([]string, 0, len(tc.want))
-			for _, value := range playerTags(tc.column) {
+			for _, value := range values {
 				got = append(got, string(value))
 			}
 			if tc.want == nil {
@@ -212,7 +359,7 @@ func TestControlTagsMapsEveryPhraseTheCatalogUses(t *testing.T) {
 		{name: "case is ignored", move: "Trackball", want: []string{"trackball"}},
 		{
 			name: "a spaced hyphen separates phrases", move: "Stick - Pedal",
-			want: []string{"pedals:1"}, unknown: []string{"stick"},
+			want: []string{"pedals:1"},
 		},
 		{
 			name: "a bare hyphen does not", move: "8-way - Pedal",
@@ -220,7 +367,7 @@ func TestControlTagsMapsEveryPhraseTheCatalogUses(t *testing.T) {
 		},
 		{
 			name: "commas separate", move: "8-way,Positional",
-			want: []string{"joystick:8"}, unknown: []string{"positional"},
+			want: []string{"joystick:8"},
 		},
 		{
 			name: "both columns contribute", move: "8-way", special: "twin stick",
@@ -233,9 +380,11 @@ func TestControlTagsMapsEveryPhraseTheCatalogUses(t *testing.T) {
 		{name: "double joystick spellings agree", special: "Double Joysticks", want: []string{"joystick:double"}},
 		{name: "eight way double states both", move: "8-way double", want: []string{"joystick:8", "joystick:double"}},
 		{name: "sentinels say nothing", move: "n-a", special: ""},
+		{name: "an ambiguous phrase is dropped, not guessed", move: "2-way"},
+		{name: "a bare count is dropped", move: "2", special: "Buttons Only"},
 		{
-			name: "an ambiguous phrase is reported, not guessed", move: "2-way",
-			unknown: []string{"2-way"},
+			name: "an unlisted phrase is reported", move: "8-way", special: "hovercraft yoke",
+			want: []string{"joystick:8"}, unknown: []string{"hovercraft yoke"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,6 +416,10 @@ func TestButtonTag(t *testing.T) {
 	}{
 		{column: "2", want: "buttons:2"},
 		{column: "20", want: "buttons:20"},
+		{column: "12", want: "buttons:12"},
+		// Counts the vocabulary does not list are not written.
+		{column: "9", want: ""},
+		{column: "32", want: ""},
 		{column: "0", want: ""},
 		{column: "", want: ""},
 		{column: "many", want: ""},
@@ -315,24 +468,6 @@ func TestVersionTagRoutesOnlyModelledForms(t *testing.T) {
 			assert.Equal(t, tc.value, string(value))
 		})
 	}
-}
-
-func TestArcadeBoardValueSplitsVendorFromBoard(t *testing.T) {
-	t.Parallel()
-	// Where the catalog's own spelling already agrees with the canonical one,
-	// the mechanical split lands on it.
-	assert.Equal(t, string(tags.TagArcadeBoardCapcomCPS2), string(arcadeBoardValue("Capcom CPS-2")))
-	assert.Equal(t, string(tags.TagArcadeBoardIremM72), string(arcadeBoardValue("Irem M72")))
-	assert.Equal(t, string(tags.TagArcadeBoardSegaSystem16), string(arcadeBoardValue("Sega System 16")))
-	// There is no alias table, so where the two disagree the catalog wins. The
-	// canonical value here is capcom:cps, and this is the disagreement the
-	// scraper documents rather than resolves.
-	assert.Equal(t, "capcom:cps1", string(arcadeBoardValue("Capcom CPS-1")))
-	assert.NotEqual(t, string(tags.TagArcadeBoardCapcomCPS), string(arcadeBoardValue("Capcom CPS-1")))
-	// The catalog names far more boards than the canonical list does; keeping
-	// its own spelling is better than leaving most arcade games with none.
-	assert.Equal(t, "namco:pacmanhardware", string(arcadeBoardValue("Namco Pac-Man hardware")))
-	assert.Equal(t, "toaplan", string(arcadeBoardValue("Toaplan")))
 }
 
 func TestScanRateAndRotation(t *testing.T) {

@@ -884,6 +884,9 @@ func (c *scrapeWriteTxContext) resolveTagType(
 	if cached, ok := c.tagTypes[tagType]; ok {
 		return cached.dbid, cached.isExclusive, nil
 	}
+	if !tags.IsKnownType(tags.TagType(tagType)) {
+		return 0, false, fmt.Errorf("%w: %q", tags.ErrUnknownTagType, tagType)
+	}
 
 	err = c.tx.QueryRowContext(ctx,
 		`SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ? LIMIT 1`,
@@ -913,6 +916,9 @@ func (c *scrapeWriteTxContext) resolveTagType(
 func (c *scrapeWriteTxContext) resolveTag(
 	ctx context.Context, typeDBID int64, typeName, tagValue, displayName string,
 ) (int64, error) {
+	if err := tags.ValidateTagValue(tags.TagType(typeName), tagValue); err != nil {
+		return 0, fmt.Errorf("resolve tag: %w", err)
+	}
 	key := tagCacheKey{typeDBID: typeDBID, tag: tagValue}
 	if cached, ok := c.tags[key]; ok {
 		if err := c.setTagDisplayName(ctx, cached, displayName); err != nil {
@@ -1031,6 +1037,9 @@ func preloadTagTypes(ctx context.Context, writeCtx *scrapeWriteTxContext, tagTyp
 		if _, ok := writeCtx.tagTypes[tagType]; ok {
 			continue
 		}
+		if !tags.IsKnownType(tags.TagType(tagType)) {
+			return fmt.Errorf("%w: %q", tags.ErrUnknownTagType, tagType)
+		}
 		if _, err := writeCtx.tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO TagTypes (Type, IsExclusive) VALUES (?, 0)`, tagType,
 		); err != nil {
@@ -1095,6 +1104,9 @@ func preloadWriteTags(ctx context.Context, writeCtx *scrapeWriteTxContext, targe
 	addTag := func(tag database.TagInfo) error {
 		if tag.Type == "" {
 			return nil
+		}
+		if err := tags.ValidateTagValue(tags.TagType(tag.Type), tag.Tag); err != nil {
+			return fmt.Errorf("preload tag: %w", err)
 		}
 		typeEntry, ok := writeCtx.tagTypes[tag.Type]
 		if !ok {
@@ -1381,6 +1393,7 @@ func upsertTagsWithContext(
 	insertFn func(tx *sql.Tx, tagDBID int64) error,
 ) error {
 	tx := writeCtx.tx
+	tagInfos = acceptTagInfos("tag write", tagInfos)
 	typeOrder := make([]string, 0, len(tagInfos)) // preserve insertion order
 	byType := make(map[string]*tagTypeGroup, len(tagInfos))
 
@@ -1755,6 +1768,11 @@ func (db *MediaDB) ApplyScrapeResult(
 	if err := validateScrapeWriteTarget("ApplyScrapeResult", target); err != nil {
 		return err
 	}
+	accepted, err := acceptScrapeTargets("ApplyScrapeResult", []database.ScrapeWriteTarget{target})
+	if err != nil {
+		return err
+	}
+	target = accepted[0]
 
 	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
@@ -1798,6 +1816,10 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		if err := validateScrapeWriteTarget("ApplyScrapeResults", target); err != nil {
 			return err
 		}
+	}
+	targets, err := acceptScrapeTargets("ApplyScrapeResults", targets)
+	if err != nil {
+		return err
 	}
 	if len(targets) == 0 {
 		return nil

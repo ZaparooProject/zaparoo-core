@@ -301,10 +301,10 @@ func TestProjectDeckIgnoresCachedWeakMatch(t *testing.T) {
 		{Type: "publisher", Tag: "b"},
 		{Type: "year", Tag: "1986"},
 		{Type: "video", Tag: "ntsc"},
-		{Type: "edition", Tag: "x"},
+		{Type: "edition", Tag: "remaster"},
 		{Type: "region", Tag: "us"},
 	}))
-	game := "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:x) (region:eu)"
+	game := "Metroid (developer:a) (publisher:b) (year:1986) (video:ntsc) (edition:remaster) (region:eu)"
 	nes, err := systemdefs.GetSystem("NES")
 	require.NoError(t, err)
 	launched, err := titles.ResolveTitle(f.ctx, &titles.ResolveParams{

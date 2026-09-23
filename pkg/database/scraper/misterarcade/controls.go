@@ -32,10 +32,9 @@ import (
 // case and no fixed separator, so every phrase it actually uses is listed
 // rather than pattern-matched.
 //
-// Phrases deliberately absent — "2-way" with no axis, a bare "stick",
-// "positional" with no position count, "buttons", "tilt" — name a control
-// family whose canonical value requires a detail the catalog did not give.
-// They are dropped rather than resolved to the nearest guess.
+// Phrases in ignoredControls name a control family whose canonical value
+// requires a detail the catalog did not give; they are dropped rather than
+// resolved to the nearest guess.
 var controlValues = map[string][]tags.TagValue{ //nolint:gochecknoglobals // Static mapping table.
 	"8-way":            {tags.TagInputJoystick8},
 	"8-way double":     {tags.TagInputJoystick8, tags.TagInputJoystickDouble},
@@ -60,15 +59,29 @@ var controlValues = map[string][]tags.TagValue{ //nolint:gochecknoglobals // Sta
 	"pedals":           {tags.TagInputPedals1},
 }
 
+// ignoredControls are the catalog's control phrases that deliberately write
+// nothing: a throw count with no axis ("2", "2-way"), a bare "stick",
+// "positional" with no position count, "buttons" (the button count column
+// says how many) and "tilt". They are not reported as unmapped.
+var ignoredControls = map[string]struct{}{ //nolint:gochecknoglobals // Static lookup set.
+	"2":            {},
+	"2-way":        {},
+	"stick":        {},
+	"positional":   {},
+	"buttons":      {},
+	"buttons only": {},
+	"tilt":         {},
+}
+
 // controlSeparators splits a control column into phrases. A comma always
 // separates, and so does a spaced hyphen — but only a spaced one, because the
 // joystick phrases spell their throw count with a bare hyphen ("8-way").
 var controlSeparators = regexp.MustCompile(`\s*,\s*|\s+-\s+|\s*/\s*`) //nolint:gochecknoglobals // Compiled once.
 
 // controlTags resolves the two control columns to canonical input values,
-// preserving first-seen order and dropping duplicates. Unrecognized phrases are
-// returned separately so the caller can log what the catalog said without
-// writing a guess.
+// preserving first-seen order and dropping duplicates. Unrecognized phrases,
+// other than the deliberately ignored ones, are returned separately so the
+// caller can report what the catalog said without writing a guess.
 func controlTags(columns ...string) (values []tags.TagValue, unknown []string) {
 	seen := make(map[tags.TagValue]struct{})
 	for _, column := range columns {
@@ -79,7 +92,9 @@ func controlTags(columns ...string) (values []tags.TagValue, unknown []string) {
 			}
 			mapped, known := controlValues[phrase]
 			if !known {
-				unknown = append(unknown, phrase)
+				if _, ignored := ignoredControls[phrase]; !ignored {
+					unknown = append(unknown, phrase)
+				}
 				continue
 			}
 			for _, value := range mapped {
@@ -94,24 +109,25 @@ func controlTags(columns ...string) (values []tags.TagValue, unknown []string) {
 	return values, unknown
 }
 
-// maxButtons bounds the button count taken from the catalog. The highest real
-// value is 20; anything beyond this is a corrupt cell, not a control panel.
-const maxButtons = 32
-
-// buttonTag resolves the button-count column. Zero buttons is a real answer
-// ("this game has none") but not a control the vocabulary names, so it writes
-// nothing.
+// buttonTag resolves the button-count column to a canonical buttons value.
+// Zero buttons is a real answer ("this game has none") but not a control the
+// vocabulary names, so it writes nothing; a count the vocabulary does not list
+// is not written either, and ok=false lets the caller report it.
 func buttonTag(numButtons string) (value tags.TagValue, ok bool) {
 	count, err := strconv.Atoi(field(numButtons))
-	if err != nil || count <= 0 || count > maxButtons {
+	if err != nil || count <= 0 {
 		return "", false
 	}
-	return tags.TagValue("buttons:" + strconv.Itoa(count)), true
+	value = tags.TagValue("buttons:" + strconv.Itoa(count))
+	if !tags.IsCanonicalValue(tags.TagTypeInput, value) {
+		return "", false
+	}
+	return value, true
 }
 
-// maxPlayers bounds the player counts taken from the catalog, matching the
-// highest canonical players value.
-const maxPlayers = 12
+// maxPlayers bounds the player counts parsed from the catalog. Counts inside
+// it that the vocabulary does not list (11, say) are still dropped.
+const maxPlayers = 16
 
 // playerPattern reads the catalog's player column: a count or a range, then an
 // optional parenthesised mode. Examples: "1", "2 (simultaneous)",
@@ -123,32 +139,47 @@ var playerPattern = regexp.MustCompile(`^(\d+)(?:\s*-\s*(\d+))?(?:\s*\(([^)]*)\)
 // playerTags resolves the player column to every supported count plus the play
 // mode. A range writes each count in it, because players is an additive type
 // and a game that seats two through four genuinely supports all three — a
-// search for two-player games should find it.
-func playerTags(players string) []tags.TagValue {
-	match := playerPattern.FindStringSubmatch(field(players))
+// search for two-player games should find it. ok is false when the column
+// said something that could not be written in full: an unparseable value, a
+// count the vocabulary does not list, or an unknown mode.
+func playerTags(players string) (values []tags.TagValue, ok bool) {
+	raw := field(players)
+	if raw == "" {
+		return nil, true
+	}
+	match := playerPattern.FindStringSubmatch(raw)
 	if match == nil {
-		return nil
+		return nil, false
 	}
 	low, err := strconv.Atoi(match[1])
 	if err != nil || low <= 0 || low > maxPlayers {
-		return nil
+		return nil, false
 	}
 	high := low
 	if match[2] != "" {
 		high, err = strconv.Atoi(match[2])
 		if err != nil || high < low || high > maxPlayers {
-			return nil
+			return nil, false
 		}
 	}
-	values := make([]tags.TagValue, 0, high-low+2)
+	ok = true
+	values = make([]tags.TagValue, 0, high-low+2)
 	for count := low; count <= high; count++ {
-		values = append(values, tags.TagValue(strconv.Itoa(count)))
+		value := tags.TagValue(strconv.Itoa(count))
+		if !tags.IsCanonicalValue(tags.TagTypePlayers, value) {
+			ok = false
+			continue
+		}
+		values = append(values, value)
 	}
 	switch strings.ToLower(strings.TrimSpace(match[3])) {
+	case "":
 	case "simultaneous":
 		values = append(values, tags.TagPlayersSimultaneous)
 	case "alternating":
 		values = append(values, tags.TagPlayersAlt)
+	default:
+		ok = false
 	}
-	return values
+	return values, ok
 }

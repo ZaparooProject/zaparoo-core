@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,27 @@ func testSystemIndex() systemIndex {
 	)
 }
 
+// buildValidWrites builds the writes for records against testSystemIndex and
+// checks every one against the tag vocabulary.
+func buildValidWrites(t testing.TB, records []sourceRecords, runID string) matchResult {
+	t.Helper()
+	matched := buildPendingWrites(testSystemIndex(), records, runID, &scraper.UnmappedValues{})
+	for _, target := range matched.Targets {
+		scrapertest.RequireValidWrite(t, target.Write)
+	}
+	return matched
+}
+
+func titleTagValues(write *database.ScrapeWrite, tagType tags.TagType) []string {
+	var values []string
+	for _, tag := range write.TitleTags {
+		if tag.Type == string(tagType) {
+			values = append(values, tag.Tag)
+		}
+	}
+	return values
+}
+
 func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 	t.Parallel()
 
@@ -57,7 +79,7 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 		Manuals:  []string{manualPath},
 	}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "run-1")
+	matched := buildValidWrites(t, records, "run-1")
 	targets, stats, found := matched.Targets, matched.Stats, matched.Found
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 2, Matched: 2}, stats)
@@ -82,8 +104,11 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 	}
 	assert.Equal(t, "1994", tagValues[string(tags.TagTypeYear)])
 	assert.Equal(t, "4", tagValues[string(tags.TagTypePlayers)])
-	assert.Equal(t, "platform", tagValues[string(tags.TagTypeGenre)])
+	assert.Equal(t, []string{"action", "action:platformer"}, titleTagValues(write, tags.TagTypeGenre))
 	assert.Equal(t, "studio", tagValues[string(tags.TagTypeDeveloper)])
+	assert.Contains(t, write.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypeDeveloper), Tag: "studio", Label: "Studio",
+	})
 	assert.Contains(t, write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
 }
 
@@ -97,7 +122,7 @@ func TestBuildPendingWrites_SkipsDuplicateArtworkForMedia(t *testing.T) {
 		{Name: "Game (USA)", Key: "Game", ImagePath: secondPath},
 	}}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "")
+	matched := buildValidWrites(t, records, "")
 	targets, stats := matched.Targets, matched.Stats
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 2, Matched: 1, Skipped: 1}, stats)
@@ -275,7 +300,7 @@ func TestBuildPendingWrites_WritesMetadataWithoutImage(t *testing.T) {
 		Synopsis: map[string]string{"Game (USA)": "Details without a box."},
 	}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "")
+	matched := buildValidWrites(t, records, "")
 	targets, stats, found := matched.Targets, matched.Stats, matched.Found
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 1, Matched: 1}, stats)
@@ -316,7 +341,7 @@ func TestBuildPendingWrites_FirstRecordWinsTitleMetadata(t *testing.T) {
 		Synopsis: map[string]string{"Game": "Full release.", "Game (USA) (Demo)": "Demo disc."},
 	}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "")
+	matched := buildValidWrites(t, records, "")
 	targets, stats := matched.Targets, matched.Stats
 	require.Len(t, targets, 1)
 	assert.Equal(t, matchStats{Processed: 2, Matched: 2}, stats)
@@ -325,60 +350,85 @@ func TestBuildPendingWrites_FirstRecordWinsTitleMetadata(t *testing.T) {
 		tagValues[tag.Type] = tag.Tag
 	}
 	assert.Equal(t, "1994", tagValues[string(tags.TagTypeYear)])
-	assert.Equal(t, "platform", tagValues[string(tags.TagTypeGenre)])
+	assert.Equal(t, []string{"action", "action:platformer"}, titleTagValues(targets[0].Write, tags.TagTypeGenre),
+		"a later record must not add its genre to the title")
 	require.Len(t, targets[0].Write.TitleProps, 1)
 	assert.Equal(t, "Full release.", targets[0].Write.TitleProps[0].Text)
 }
 
-// TestBuildPendingWrites_GenreHierarchyKeepsBroadGenre covers the pack's
-// "/"-separated genre hierarchy. Normalizing the whole field produced one
-// run-together value that matched no other title and added a dead entry to the
-// system's tag vocabulary; most genres in the published packs carry a
-// separator, so it was the common case. The tag keeps the broad genre and the
-// label keeps the full string.
-func TestBuildPendingWrites_GenreHierarchyKeepsBroadGenre(t *testing.T) {
+// TestBuildPendingWrites_GenreHierarchyMapsBothLevels covers the pack's
+// "/"-separated genre hierarchy: each level maps onto the vocabulary, so a
+// vertical shoot'em up is both shmup:v and shmup, with no label on either.
+func TestBuildPendingWrites_GenreHierarchyMapsBothLevels(t *testing.T) {
 	t.Parallel()
 
 	records := []sourceRecords{{
 		Artwork: []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
 		GameInfo: map[string]gameInfoRecord{
-			"Game": {Genre: "Shoot'em Up / Vertical/Shoot'em Up"},
+			"Game": {Genre: "Shoot'em Up / Vertical/Shoot'em Up", Year: "1991"},
 		},
 	}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "")
+	matched := buildValidWrites(t, records, "")
 	require.Len(t, matched.Targets, 1)
-
-	var genre database.TagInfo
-	for _, tag := range matched.Targets[0].Write.TitleTags {
-		if tag.Type == string(tags.TagTypeGenre) {
-			genre = tag
-		}
+	write := matched.Targets[0].Write
+	assert.Equal(t, []string{"shmup", "shmup:v"}, titleTagValues(write, tags.TagTypeGenre))
+	for _, tag := range write.TitleTags {
+		assert.Emptyf(t, tag.Label, "closed-type tag %s:%s carries a label", tag.Type, tag.Tag)
 	}
-	assert.Equal(t, "shootem-up", genre.Tag, "the tag value must be the broad genre alone")
-	assert.Equal(t, "Shoot'em Up", genre.Label,
-		"the label names the shared tag, so it must not carry one title's hierarchy")
 }
 
-// TestBuildPendingWrites_GenreWithoutHierarchyUnchanged guards the split from
-// altering a genre that carries no separator.
-func TestBuildPendingWrites_GenreWithoutHierarchyUnchanged(t *testing.T) {
+func TestBuildPendingWrites_GenreTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		genre string
+		want  []string
+	}{
+		{genre: "Platform", want: []string{"action", "action:platformer"}},
+		{genre: "Sports / Football (Soccer)/Sports", want: []string{"sports", "sports:soccer"}},
+		{genre: "Mahjong/Asiatic board game", want: []string{"board", "board:mahjong"}},
+		{genre: "Racing, Driving/Racing TPV", want: []string{"racing"}},
+		{genre: "Action/Platform / Run & Jump/Platform", want: []string{"action", "action:platformer"}},
+		{genre: "Casino/Casino / Slot machine", want: []string{"parlor", "parlor:jackpot"}},
+		{genre: "Educational", want: []string{"notagame", "notagame:educational"}},
+		{genre: "Demo"},
+		{genre: "Various/Compilation"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.genre, func(t *testing.T) {
+			t.Parallel()
+			records := []sourceRecords{{
+				Artwork:  []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
+				GameInfo: map[string]gameInfoRecord{"Game": {Genre: tt.genre, Year: "1990"}},
+			}}
+			matched := buildValidWrites(t, records, "")
+			require.Len(t, matched.Targets, 1)
+			assert.Equal(t, tt.want, titleTagValues(matched.Targets[0].Write, tags.TagTypeGenre))
+		})
+	}
+}
+
+// A pack value with no mapping is dropped rather than written, since the
+// write path would refuse it, and noted so the table can grow.
+func TestBuildPendingWrites_UnmappedValuesDroppedAndNoted(t *testing.T) {
 	t.Parallel()
 
 	records := []sourceRecords{{
-		Artwork:  []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
-		GameInfo: map[string]gameInfoRecord{"Game": {Genre: "Platform"}},
+		Artwork: []artworkRecord{{Name: "Game (USA)", Key: "Game"}},
+		GameInfo: map[string]gameInfoRecord{
+			"Game": {Genre: "Gardening/Platform", Players: "1-32", Year: "1850", Developer: "Studio"},
+		},
 	}}
 
-	matched := buildPendingWrites(testSystemIndex(), records, "")
+	unmapped := &scraper.UnmappedValues{}
+	matched := buildPendingWrites(testSystemIndex(), records, "", unmapped)
 	require.Len(t, matched.Targets, 1)
-
-	var genre database.TagInfo
-	for _, tag := range matched.Targets[0].Write.TitleTags {
-		if tag.Type == string(tags.TagTypeGenre) {
-			genre = tag
-		}
-	}
-	assert.Equal(t, "platform", genre.Tag)
-	assert.Equal(t, "Platform", genre.Label)
+	write := matched.Targets[0].Write
+	scrapertest.RequireValidWrite(t, write)
+	assert.Equal(t, []string{"action", "action:platformer"}, titleTagValues(write, tags.TagTypeGenre))
+	assert.Empty(t, titleTagValues(write, tags.TagTypePlayers))
+	assert.Empty(t, titleTagValues(write, tags.TagTypeYear))
+	assert.Equal(t, 1, unmapped.Count(tags.TagTypeGenre))
+	assert.Equal(t, 1, unmapped.Count(tags.TagTypePlayers))
 }

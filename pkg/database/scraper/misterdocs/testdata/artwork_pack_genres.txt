@@ -1,0 +1,1048 @@
+Action
+Action / Adventure/Action
+Action / Adventure/Action / Labyrinth/Action
+Action / Adventure/Action/Platform / Run & Jump/Platform
+Action / Adventure/Compilation/Action
+Action / Adventure/Educational/Action
+Action / Adventure/Platform / Fighter Scrolling/Platform/Action
+Action / Breakout games/Action
+Action / Breakout games/Puzzle/Various/Action
+Action / Climbing/Action
+Action / Labyrinth/Action
+Action / Labyrinth/Action/Thinking/Puzzle
+Action / Labyrinth/Compilation/Action
+Action / Labyrinth/Fighting/Action
+Action / Labyrinth/Puzzle/Action
+Action / Labyrinth/Racing, Driving/Action
+Action / Labyrinth/Shooter Small/Action
+Action RPG/Adventure/Role Playing Game
+Action RPG/Adventure/Sports/Role Playing Game
+Action RPG/Platform/Platform / Fighter Scrolling/Role Playing Game
+Action RPG/Role Playing Game
+Action RPG/Role Playing Game/Adventure / Graphic/Adventure
+Action RPG/Shooter/Adventure/Role Playing Game
+Action RPG/Strategy/Role Playing Game
+Action/Action / Adventure
+Action/Action / Breakout games
+Action/Action / Breakout games/Sports / Tennis/Sports
+Action/Action / Labyrinth
+Action/Action / Labyrinth/Action/Action/Action
+Action/Action / Labyrinth/Shooter Small
+Action/Action/Action / Adventure
+Action/Action/Action / Labyrinth/Action
+Action/Adventure/Action / Adventure
+Action/Casino
+Action/Compilation/Shooter / Space Invaders Like/Shooter
+Action/Platform / Run & Jump/Platform
+Action/Sports / Multisports/Sports
+Action/Sports / Multisports/Sports/Sports / Running trails
+Action/Sports/Sports / Running trails
+Adults
+Adults/Action / Breakout games/Action
+Adults/Action / Labyrinth/Action
+Adults/Action/Action / Breakout games
+Adults/Adventure
+Adults/Adventure / Visual Novel/Adventure
+Adults/Adventure/Simulation
+Adults/Asiatic board game/Hanafuda
+Adults/Asiatic board game/Mahjong
+Adults/Asiatic board game/Various
+Adults/Casino / Cards/Casino
+Adults/Casino/Pachinko
+Adults/Mahjong/Asiatic board game
+Adults/Mahjong/Asiatic board game/Puzzle / Equalize/Puzzle
+Adults/Mahjong/Asiatic board game/Puzzle/Puzzle / Equalize
+Adults/Pinball
+Adults/Platform / Run & Jump/Platform
+Adults/Platform/Platform / Run & Jump
+Adults/Puzzle
+Adults/Puzzle/Casino / Cards/Casino
+Adults/Puzzle/Puzzle / Equalize
+Adults/Puzzle/Puzzle / Fall
+Adults/Puzzle/Puzzle / Glide
+Adults/Puzzle/Puzzle / Throw
+Adults/Role Playing Game
+Adults/Shoot'em Up / Vertical/Shoot'em Up
+Adults/Shooter
+Adults/Shooter/Shooter / Space Invaders Like
+Adults/Simulation
+Adults/Sports / Pool/Sports
+Adults/Sports/Sports / Volleyball
+Adults/Various
+Adventure
+Adventure / Graphic/Adventure
+Adventure / Graphic/Adventure/Adventure / Visual Novel
+Adventure / Graphic/Role Playing Game/Adventure
+Adventure / Interactive Movie/Adults/Adventure
+Adventure / Interactive Movie/Adventure
+Adventure / Interactive Movie/Adventure / Survival Horror/Adventure
+Adventure / Interactive Movie/Adventure/Adventure / Point and Click
+Adventure / Point and Click/Adventure
+Adventure / Point and Click/Thinking/Adventure
+Adventure / Survival Horror/Adventure
+Adventure / Text/Adventure
+Adventure / Text/Adventure / Graphic/Adventure
+Adventure / Text/Compilation/Adventure
+Adventure / Visual Novel/Adults/Adventure
+Adventure / Visual Novel/Adventure
+Adventure / Visual Novel/Adventure/Simulation
+Adventure / Visual Novel/Compilation/Adventure
+Adventure / Visual Novel/Educational/Adventure
+Adventure / Visual Novel/Fighting / 2D/Fighting/Adventure
+Adventure / Visual Novel/Playing cards/Adventure
+Adventure / Visual Novel/Racing, Driving/Adventure
+Adventure / Visual Novel/Role Playing Game/Adventure
+Adventure / Visual Novel/Simulation/Adventure
+Adventure / Visual Novel/Tactical RPG/Role Playing Game/Adventure
+Adventure/Action
+Adventure/Action / Adventure/Action
+Adventure/Action / Labyrinth/Action
+Adventure/Adults
+Adventure/Adventure
+Adventure/Adventure / Point and Click
+Adventure/Board game
+Adventure/Board game/Simulation/Role Playing Game
+Adventure/Casino
+Adventure/Casual Game
+Adventure/Casual Game/Puzzle
+Adventure/Casual Game/Role Playing Game
+Adventure/Educational
+Adventure/Fighting
+Adventure/Lightgun Shooter/Shooter
+Adventure/Mahjong/Compilation/Asiatic board game
+Adventure/Platform
+Adventure/Platform / Fighter Scrolling/Platform
+Adventure/Platform / Run & Jump Scrolling/Platform
+Adventure/Platform/Casual Game
+Adventure/Playing cards
+Adventure/Puzzle
+Adventure/Puzzle/Casual Game
+Adventure/Quiz
+Adventure/Racing, Driving
+Adventure/Racing, Driving/Simulation
+Adventure/Role Playing Game
+Adventure/Role Playing Game/Simulation
+Adventure/Role Playing Game/Strategy
+Adventure/Shooter
+Adventure/Simulation
+Adventure/Simulation / Life/Simulation
+Adventure/Simulation/Casual Game
+Adventure/Simulation/Quiz
+Adventure/Simulation/Role Playing Game
+Adventure/Simulation/Strategy
+Adventure/Sports
+Adventure/Strategy
+Adventure/Strategy/Simulation
+Adventure/Various
+Asiatic board game
+Asiatic board game/Board game
+Asiatic board game/Casino / Cards/Casino
+Asiatic board game/Go
+Asiatic board game/Go/Board game
+Asiatic board game/Hanafuda
+Asiatic board game/Mahjong
+Asiatic board game/Othello
+Asiatic board game/Puzzle
+Asiatic board game/Puzzle/Puzzle / Equalize/Mahjong
+Asiatic board game/Renju
+Asiatic board game/Shougi
+Asiatic board game/Shougi/Strategy
+Asiatic board game/Strategy
+Asiatic board game/Various
+Beat'em Up
+Beat'em Up/Action / Adventure/Action
+Beat'em Up/Adventure
+Beat'em Up/Adventure/Fighting/Fighting / 3D
+Beat'em Up/Beat'em Up
+Beat'em Up/Compilation
+Beat'em Up/Fighting
+Beat'em Up/Fighting / 2.5D/Fighting
+Beat'em Up/Fighting / 2D/Fighting
+Beat'em Up/Fighting/Fighting / 2.5D
+Beat'em Up/Fighting/Fighting / 2D
+Beat'em Up/Fighting/Fighting / 3D
+Beat'em Up/Fighting/Fighting / Vertical
+Beat'em Up/Fighting/Fighting / Vs Co-op
+Beat'em Up/Fighting/Shooter
+Beat'em Up/Platform / Fighter Scrolling/Platform
+Beat'em Up/Platform/Platform / Fighter Scrolling
+Beat'em Up/Role Playing Game
+Beat'em Up/Sports / Golf/Sports
+Board game
+Board game/Adults
+Board game/Asiatic board game
+Board game/Casual Game
+Board game/Compilation
+Board game/Mahjong/Asiatic board game
+Board game/Platform
+Board game/Playing cards
+Board game/Puzzle
+Board game/Quiz
+Board game/Role Playing Game
+Board game/Role Playing Game/Playing cards
+Board game/Role Playing Game/Simulation / Life/Simulation
+Board game/Simulation
+Board game/Simulation/Casual Game
+Board game/Strategy
+Board game/Various
+Build And Management/Casino / Slot machine/Casino/Simulation
+Build And Management/Puzzle/Simulation
+Build And Management/Simulation
+Build And Management/Simulation/Strategy
+Build And Management/Sports / Football (Soccer)/Sports/Simulation
+Build And Management/Strategy/Simulation
+Casino
+Casino / Cards/Casino
+Casino / Cards/Simulation/Casino
+Casino / Cards/Strategy/Casino
+Casino / Lottery/Casino
+Casino / Roulette/Casino
+Casino / Roulette/Role Playing Game/Casino
+Casino / Roulette/Simulation/Casino
+Casino / Slot machine/Casino
+Casino / Slot machine/Simulation/Casino
+Casino / Slot machine/Strategy/Casino
+Casino/Asiatic board game
+Casino/Board game
+Casino/Casino
+Casino/Casino / Cards
+Casino/Casino / Lottery
+Casino/Casino / Race
+Casino/Casino / Roulette
+Casino/Casino / Slot machine
+Casino/Casual Game
+Casino/Compilation
+Casino/Compilation/Compilation
+Casino/Pachinko
+Casino/Playing cards
+Casino/Puzzle
+Casino/Shooter / FPV/Shooter
+Casino/Simulation
+Casino/Simulation/Various
+Casino/Sports / Football (Soccer)/Sports
+Casino/Strategy
+Casual Game
+Casual Game/Adventure
+Casual Game/Adventure/Puzzle
+Casual Game/Adventure/Role Playing Game
+Casual Game/Educational
+Casual Game/Music and Dancing
+Casual Game/Platform
+Casual Game/Platform/Adventure
+Casual Game/Puzzle
+Casual Game/Quiz
+Casual Game/Role Playing Game/Simulation
+Casual Game/Simulation
+Casual Game/Sports
+Casual Game/Sports / Darts/Sports / Pool/Sports
+Casual Game/Strategy
+Compilation
+Compilation/Adults/Mahjong/Asiatic board game
+Compilation/Adventure
+Compilation/Adventure / Survival Horror/Adventure
+Compilation/Adventure / Visual Novel/Adventure/Educational
+Compilation/Adventure/Role Playing Game/Sports
+Compilation/Adventure/Sports
+Compilation/Asiatic board game
+Compilation/Beat'em Up
+Compilation/Board game
+Compilation/Board game/Strategy
+Compilation/Casino
+Compilation/Compilation
+Compilation/Fighting
+Compilation/Fighting / 2D/Fighting
+Compilation/Fishing/Hunting and Fishing
+Compilation/Lightgun Shooter
+Compilation/Pinball
+Compilation/Platform
+Compilation/Platform/Platform / Run & Jump Scrolling
+Compilation/Playing cards
+Compilation/Puzzle
+Compilation/Puzzle / Fall/Puzzle
+Compilation/Racing, Driving
+Compilation/Racing, Driving/Sports
+Compilation/Role Playing Game
+Compilation/Role Playing Game/Strategy
+Compilation/Shoot'em Up
+Compilation/Shooter
+Compilation/Shooter / FPV/Shooter
+Compilation/Shooter / Space Invaders Like/Shooter
+Compilation/Shooter / Space Invaders Like/Shooter/Shoot'em Up
+Compilation/Shooter/Shooter / Space Invaders Like
+Compilation/Simulation
+Compilation/Sports
+Compilation/Sports / Skateboard/Sports
+Compilation/Strategy
+Compilation/Strategy/Various
+Compilation/Various
+Compilation/Various/Role Playing Game
+Dancing/Music and Dancing
+Dancing/Rhythm/Music and Dancing
+Demo
+Dungeon Crawler RPG/Role Playing Game
+Educational
+Educational/Adventure
+Educational/Casual Game
+Educational/Platform
+Educational/Puzzle
+Educational/Quiz
+Educational/Role Playing Game
+Educational/Shooter / FPV/Shooter
+Educational/Simulation / Life/Simulation
+Educational/Sports / Football (Soccer)/Sports
+Educational/Strategy
+Educational/Various
+Fighting
+Fighting / 2.5D/Fighting
+Fighting / 2.5D/Fighting / Versus/Fighting
+Fighting / 2.5D/Fighting/Beat'em Up
+Fighting / 2.5D/Fighting/Fighting / Versus
+Fighting / 2D/Fighting
+Fighting / 2D/Fighting / Versus/Fighting
+Fighting / 2D/Fighting/Fighting / Versus
+Fighting / 2D/Role Playing Game/Fighting
+Fighting / 3D/Fighting
+Fighting / 3D/Fighting/Adventure/Beat'em Up
+Fighting / Versus/Fighting
+Fighting / Versus/Fighting / 2D/Fighting
+Fighting / Versus/Fighting / 3D/Fighting
+Fighting / Versus/Fighting/Casual Game
+Fighting / Versus/Fighting/Fighting / 3D
+Fighting / Versus/Fighting/Fighting / 3D/Fighting
+Fighting / Vs Co-op/Fighting
+Fighting/Action
+Fighting/Adventure
+Fighting/Beat'em Up
+Fighting/Beat'em Up/Fighting / Versus
+Fighting/Casual Game
+Fighting/Fighting / 2.5D
+Fighting/Fighting / 2.5D/Beat'em Up
+Fighting/Fighting / 2D
+Fighting/Fighting / 2D/Beat'em Up
+Fighting/Fighting / 2D/Fighting
+Fighting/Fighting / 3D
+Fighting/Fighting / Versus
+Fighting/Fighting / Versus/Beat'em Up
+Fighting/Fighting / Versus/Fighting
+Fighting/Fighting / Versus/Shooter
+Fighting/Fighting / Vertical
+Fighting/Fighting / Vertical/Sports
+Fighting/Fighting / Vs Co-op
+Fighting/Playing cards
+Fighting/Racing, Driving
+Fighting/Role Playing Game
+Fighting/Shooter
+Fighting/Simulation
+Fighting/Sports
+Fighting/Sports / Boxing/Sports
+Fighting/Sports / Sumo/Sports
+Fighting/Sports / Wrestling/Sports
+Fighting/Strategy
+Fighting/Strategy/Adventure
+Fighting/Various
+Fishing/Hunting and Fishing
+Fishing/Hunting and Fishing/Simulation
+Fishing/Hunting and Fishing/Sports
+Fishing/Role Playing Game/Hunting and Fishing
+Fishing/Shooter/Sports/Hunting and Fishing
+Fishing/Simulation/Sports/Hunting and Fishing
+Fishing/Sports/Hunting and Fishing
+Go/Asiatic board game
+Go/Board game/Asiatic board game
+Go/Puzzle/Board game/Asiatic board game
+Go/Various/Asiatic board game
+Hanafuda/Asiatic board game
+Hanafuda/Asiatic board game/Playing cards
+Hanafuda/Asiatic board game/Various
+Hanafuda/Mahjong/Asiatic board game
+Hanafuda/Mahjong/Compilation/Asiatic board game
+Horse racing/Adventure/Sports with animals
+Horse racing/Casino / Race/Casino/Sports with animals
+Horse racing/Simulation/Sports with animals
+Horse racing/Sports with animals
+Horse racing/Sports with animals/Sports
+Horse racing/Sports/Platform/Sports with animals
+Horse racing/Sports/Sports with animals
+Hunting and Fishing
+Hunting and Fishing/Fishing
+Hunting and Fishing/Fishing/Hunting and Fishing
+Hunting and Fishing/Lightgun Shooter
+Hunting/Hunting and Fishing
+Hunting/Lightgun Shooter/Hunting and Fishing
+Hunting/Shooter/Lightgun Shooter/Hunting and Fishing
+Japanese RPG/Adventure/Role Playing Game
+Japanese RPG/Role Playing Game
+Lightgun Shooter
+Lightgun Shooter/Adventure
+Lightgun Shooter/Compilation
+Lightgun Shooter/Platform/Platform / Shooter Scrolling
+Lightgun Shooter/Racing, Driving/Racing FPV
+Lightgun Shooter/Shoot'em Up
+Lightgun Shooter/Shooter
+Lightgun Shooter/Shooter / FPV/Shooter
+Lightgun Shooter/Shooter / Vehicle, FPV/Shooter
+Lightgun Shooter/Shooter/Racing, Driving
+Lightgun Shooter/Various
+MMORPG/Role Playing Game
+Mahjong/Action/Action / Breakout games/Asiatic board game
+Mahjong/Adults/Asiatic board game
+Mahjong/Adults/Compilation/Asiatic board game
+Mahjong/Asiatic board game
+Mahjong/Asiatic board game/Asiatic board game
+Mahjong/Asiatic board game/Asiatic board game/Asiatic board game/Asiatic board game/Asiatic board game
+Mahjong/Asiatic board game/Compilation
+Mahjong/Asiatic board game/Puzzle/Puzzle / Equalize
+Mahjong/Asiatic board game/Sports/Strategy
+Mahjong/Board game/Asiatic board game
+Mahjong/Casino/Asiatic board game
+Mahjong/Hanafuda/Asiatic board game
+Mahjong/Mahjong/Asiatic board game
+Mahjong/Playing cards/Asiatic board game
+Mahjong/Puzzle/Asiatic board game
+Mahjong/Puzzle/Puzzle / Equalize/Asiatic board game
+Mahjong/Role Playing Game/Thinking/Asiatic board game
+Mahjong/Shougi/Go/Board game/Asiatic board game
+Mahjong/Various/Asiatic board game
+Mahjong/Various/Strategy/Asiatic board game
+Motorcycle race FPV/Motorcycle race TPV/Racing, Driving
+Motorcycle race FPV/Racing, Driving
+Motorcycle race TPV/Racing, Driving
+Motorcycle race TPV/Racing, Driving/Motorcycle race FPV
+Motorcycle race TPV/Racing, Driving/Simulation/Sports
+Motorcycle race TPV/Sports/Racing, Driving
+Music and Dancing
+Music and Dancing/Educational
+Music and Dancing/Rhythm
+Music and Dancing/Simulation
+Music and Dancing/Sports
+Music and Dancing/Various
+Music/Music and Dancing/Strategy
+Music/Rhythm/Music and Dancing
+Othello/Asiatic board game
+Othello/Board game/Asiatic board game
+Othello/Board game/Playing cards/Asiatic board game
+Othello/Board game/Strategy/Asiatic board game
+Pachinko
+Party-Based RPG/Role Playing Game
+Pinball
+Pinball/Role Playing Game
+Pinball/Various
+Platform
+Platform / Fighter Scrolling/Action / Adventure/Platform/Fighting/Fighting / 2D/Action
+Platform / Fighter Scrolling/Beat'em Up/Platform
+Platform / Fighter Scrolling/Fighting / 2D/Fighting/Platform
+Platform / Fighter Scrolling/Fighting/Fighting / 2D/Platform
+Platform / Fighter Scrolling/Fighting/Platform
+Platform / Fighter Scrolling/Platform
+Platform / Fighter Scrolling/Platform/Shooter
+Platform / Fighter Scrolling/Role Playing Game/Platform
+Platform / Run & Jump Scrolling/Platform
+Platform / Run & Jump Scrolling/Platform/Adventure
+Platform / Run & Jump/Platform
+Platform / Shooter Scrolling/Compilation/Platform
+Platform / Shooter Scrolling/Platform
+Platform / Shooter Scrolling/Platform/Platform / Run & Jump Scrolling
+Platform / Shooter Scrolling/Platform/Shooter
+Platform/Action / Adventure/Action
+Platform/Adventure
+Platform/Adventure/Puzzle
+Platform/Casual Game
+Platform/Compilation
+Platform/Educational
+Platform/Educational/Puzzle
+Platform/Fighting
+Platform/Fighting / 2D/Fighting
+Platform/Fighting/Beat'em Up
+Platform/Fighting/Fighting / 2D
+Platform/Fighting/Racing, Driving
+Platform/Platform
+Platform/Platform / Fighter Scrolling
+Platform/Platform / Fighter Scrolling/Action/Action / Adventure
+Platform/Platform / Fighter Scrolling/Platform/Platform / Fighter Scrolling
+Platform/Platform / Run & Jump
+Platform/Platform / Run & Jump Scrolling
+Platform/Platform / Run & Jump Scrolling/Platform / Run & Jump
+Platform/Platform / Run & Jump/Action
+Platform/Platform / Run & Jump/Puzzle
+Platform/Platform / Shooter Scrolling
+Platform/Platform / Shooter Scrolling/Beat'em Up
+Platform/Platform / Shooter Scrolling/Platform
+Platform/Puzzle
+Platform/Racing, Driving
+Platform/Role Playing Game
+Platform/Shoot'em Up
+Platform/Shooter
+Platform/Shooter / Run and Gun/Shooter
+Platform/Sports
+Platform/Strategy
+Platform/Various
+Playing cards
+Playing cards/Casino
+Playing cards/Casino / Cards/Casino
+Playing cards/Casino/Asiatic board game
+Playing cards/Casual Game/Simulation
+Playing cards/Role Playing Game
+Playing cards/Sports/Sports / Baseball
+Playing cards/Strategy
+Playing cards/Various
+Puzzle
+Puzzle / Equalize/Puzzle
+Puzzle / Equalize/Puzzle/Puzzle / Glide
+Puzzle / Fall/Compilation/Puzzle
+Puzzle / Fall/Puzzle
+Puzzle / Fall/Puzzle/Compilation
+Puzzle / Fall/Puzzle/Role Playing Game
+Puzzle / Fall/Puzzle/Strategy
+Puzzle / Fall/Puzzle/Various
+Puzzle / Fall/Thinking/Puzzle
+Puzzle / Glide/Puzzle
+Puzzle / Throw/Puzzle
+Puzzle / Throw/Puzzle/Strategy
+Puzzle / Throw/Thinking/Adventure/Puzzle
+Puzzle/Action
+Puzzle/Action / Labyrinth/Action
+Puzzle/Action/Puzzle / Throw/Action / Breakout games
+Puzzle/Adults
+Puzzle/Adventure
+Puzzle/Board game
+Puzzle/Casino / Cards/Casino
+Puzzle/Compilation
+Puzzle/Educational
+Puzzle/Music and Dancing
+Puzzle/Platform
+Puzzle/Platform / Run & Jump/Platform
+Puzzle/Platform/Shoot'em Up/Compilation
+Puzzle/Puzzle / Equalize
+Puzzle/Puzzle / Fall
+Puzzle/Puzzle / Glide
+Puzzle/Puzzle / Throw
+Puzzle/Puzzle / Throw/Action / Labyrinth/Action
+Puzzle/Racing, Driving
+Puzzle/Racing, Driving/Strategy
+Puzzle/Role Playing Game
+Puzzle/Shoot'em Up
+Puzzle/Simulation
+Puzzle/Sports / Wrestling/Sports
+Puzzle/Strategy
+Puzzle/Thinking
+Puzzle/Various
+Puzzle/Various/Adults
+Puzzle/Various/Strategy
+Quiz
+Quiz / English/Educational/Quiz
+Quiz / English/Quiz
+Quiz / English/Strategy/Quiz
+Quiz / German/Quiz
+Quiz / German/Quiz/Adventure
+Quiz / Japanese/Quiz
+Quiz / Japanese/Quiz/Quiz
+Quiz / Japanese/Quiz/Quiz/Quiz
+Quiz / Music English/Quiz
+Quiz / Spanish/Casual Game/Quiz/Quiz / English
+Quiz / Spanish/Quiz
+Quiz/Adventure
+Quiz/Casual Game
+Quiz/Educational
+Quiz/Music and Dancing
+Quiz/Puzzle
+Quiz/Puzzle/Board game
+Quiz/Quiz / English
+Quiz/Quiz / French
+Quiz/Quiz / German
+Quiz/Quiz / Italian
+Quiz/Quiz / Japanese
+Quiz/Quiz / Japanese/Casual Game
+Quiz/Quiz / Japanese/Educational
+Quiz/Quiz / Korean
+Quiz/Quiz / Music English
+Quiz/Quiz / Music Japanese
+Quiz/Quiz / Spanish
+Quiz/Simulation
+Quiz/Strategy
+Racing FPV/Compilation/Shooter / FPV/Shooter/Racing, Driving
+Racing FPV/Racing TPV/Racing, Driving
+Racing FPV/Racing, Driving
+Racing TPV/Racing, Driving
+Racing, Driving
+Racing, Driving / Boat/Racing, Driving
+Racing, Driving / Motorcycle/Racing, Driving
+Racing, Driving / Motorcycle/Racing, Driving/Compilation
+Racing, Driving / Motorcycle/Racing, Driving/Racing, Driving
+Racing, Driving / Motorcycle/Racing, Driving/Sports
+Racing, Driving / Motorcycle/Simulation/Racing, Driving
+Racing, Driving / Motorcycle/Sports/Racing, Driving
+Racing, Driving / Plane/Racing, Driving
+Racing, Driving / Racing/Racing, Driving
+Racing, Driving/Adventure
+Racing, Driving/Compilation
+Racing, Driving/Motorcycle race FPV
+Racing, Driving/Motorcycle race TPV
+Racing, Driving/Motorcycle race TPV/Sports
+Racing, Driving/Platform / Run & Jump/Platform
+Racing, Driving/Puzzle
+Racing, Driving/Racing FPV
+Racing, Driving/Racing TPV
+Racing, Driving/Racing TPV/Various / Electro- Mechanical/Casino / Slot machine/Various/Casino
+Racing, Driving/Racing, Driving
+Racing, Driving/Racing, Driving / Boat
+Racing, Driving/Racing, Driving / Motorcycle
+Racing, Driving/Racing, Driving / Plane
+Racing, Driving/Racing, Driving / Racing
+Racing, Driving/Racing, Driving / Racing/Sports/Sports / Wrestling
+Racing, Driving/Role Playing Game
+Racing, Driving/Shoot'em Up/Shoot'em Up / Vertical
+Racing, Driving/Shooter
+Racing, Driving/Shooter / Run and Gun/Shooter
+Racing, Driving/Shooter / Vehicle, TPV/Shooter
+Racing, Driving/Shooter/Simulation
+Racing, Driving/Simulation
+Racing, Driving/Simulation/Adventure
+Racing, Driving/Sports
+Racing, Driving/Sports / Football (American)/Beat'em Up/Compilation/Sports
+Racing, Driving/Strategy/Simulation
+Renju/Asiatic board game
+Rhythm/Music and Dancing
+Rhythm/Various/Music and Dancing
+Role Playing Game
+Role Playing Game/Action RPG
+Role Playing Game/Adventure
+Role Playing Game/Adventure/Fighting
+Role Playing Game/Adventure/Simulation
+Role Playing Game/Beat'em Up
+Role Playing Game/Board game
+Role Playing Game/Casino
+Role Playing Game/Casual Game
+Role Playing Game/Compilation
+Role Playing Game/Dungeon Crawler RPG
+Role Playing Game/Fighting
+Role Playing Game/Fighting/Fighting / 2.5D
+Role Playing Game/Hunting and Fishing
+Role Playing Game/Japanese RPG
+Role Playing Game/Platform
+Role Playing Game/Playing cards
+Role Playing Game/Puzzle
+Role Playing Game/Racing, Driving
+Role Playing Game/Shooter
+Role Playing Game/Simulation
+Role Playing Game/Simulation/Adventure
+Role Playing Game/Strategy
+Role Playing Game/Strategy/Adventure
+Role Playing Game/Strategy/Compilation/Music and Dancing
+Role Playing Game/Strategy/Music and Dancing
+Role Playing Game/Tactical RPG
+Role Playing Game/Various
+Shoot'em Up
+Shoot'em Up / Diagonal/Action / Labyrinth/Shooter Small/Action/Shoot'em Up
+Shoot'em Up / Diagonal/Shoot'em Up
+Shoot'em Up / Horizontal/Compilation/Shoot'em Up
+Shoot'em Up / Horizontal/Platform/Platform / Shooter Scrolling/Shoot'em Up
+Shoot'em Up / Horizontal/Platform/Shoot'em Up/Platform / Shooter Scrolling
+Shoot'em Up / Horizontal/Shoot'em Up
+Shoot'em Up / Horizontal/Shoot'em Up/Compilation
+Shoot'em Up / Horizontal/Shoot'em Up/Shoot'em Up
+Shoot'em Up / Horizontal/Shoot'em Up/Shooter / Plane/Shooter
+Shoot'em Up / Horizontal/Shoot'em Up/Shooter/Shooter / Run and Gun
+Shoot'em Up / Horizontal/Shooter/Shoot'em Up
+Shoot'em Up / Horizontal/Shooter/Shooter / Horizontal/Shoot'em Up
+Shoot'em Up / Horizontal/Shooter/Shooter / Plane/Shoot'em Up
+Shoot'em Up / Vertical/Action/Shoot'em Up
+Shoot'em Up / Vertical/Adults/Lightgun Shooter/Shoot'em Up
+Shoot'em Up / Vertical/Compilation/Shoot'em Up
+Shoot'em Up / Vertical/Shoot'em Up
+Shoot'em Up / Vertical/Shoot'em Up/Compilation
+Shoot'em Up / Vertical/Shoot'em Up/Shooter
+Shoot'em Up / Vertical/Shoot'em Up/Shooter / Plane/Shooter
+Shoot'em Up / Vertical/Shoot'em Up/Shooter / Run and Gun/Shooter
+Shoot'em Up / Vertical/Shoot'em Up/Shooter / Vehicle, Vertical/Shooter
+Shoot'em Up / Vertical/Shoot'em Up/Shooter/Shooter / Space Invaders Like
+Shoot'em Up / Vertical/Shooter / Space Invaders Like/Shooter/Shoot'em Up
+Shoot'em Up / Vertical/Shooter/Shoot'em Up
+Shoot'em Up / Vertical/Shooter/Shooter / Space Invaders Like/Shoot'em Up
+Shoot'em Up / Vertical/Simulation/Shoot'em Up
+Shoot'em Up/Action / Adventure/Action
+Shoot'em Up/Action / Labyrinth/Shooter Small/Action
+Shoot'em Up/Compilation
+Shoot'em Up/Platform
+Shoot'em Up/Racing, Driving
+Shoot'em Up/Shoot'em Up / Horizontal
+Shoot'em Up/Shoot'em Up / Vertical
+Shoot'em Up/Shooter
+Shoot'em Up/Shooter / FPV/Shooter
+Shoot'em Up/Shooter / Run and Gun/Shooter
+Shoot'em Up/Shooter / Space Invaders Like/Shooter
+Shoot'em Up/Shooter/Shooter / Plane
+Shoot'em Up/Shooter/Shooter / Plane, FPV
+Shoot'em Up/Shooter/Shooter / Plane, TPV
+Shoot'em Up/Shooter/Shooter / Vehicle, FPV
+Shoot'em Up/Shooter/Shooter / Vehicle, TPV
+Shoot'em Up/Simulation
+Shoot'em Up/Sports
+Shooter
+Shooter / FPV/Lightgun Shooter/Shooter
+Shooter / FPV/Role Playing Game/Adventure/Shooter
+Shooter / FPV/Role Playing Game/Shooter
+Shooter / FPV/Shoot'em Up/Shooter
+Shooter / FPV/Shooter
+Shooter / FPV/Shooter/Lightgun Shooter
+Shooter / FPV/Shooter/Shooter / TPV
+Shooter / FPV/Shooter/Sports
+Shooter / FPV/Shooter/Strategy
+Shooter / FPV/Strategy/Shooter
+Shooter / Horizontal/Shooter
+Shooter / Missile Command Like/Shoot'em Up/Shooter
+Shooter / Missile Command Like/Shooter
+Shooter / Plane, FPV/Shoot'em Up/Shooter
+Shooter / Plane, FPV/Shoot'em Up/Simulation/Shooter
+Shooter / Plane, FPV/Shooter
+Shooter / Plane, FPV/Simulation/Shooter
+Shooter / Plane, FPV/Sports/Simulation/Shooter
+Shooter / Plane, TPV/Shoot'em Up/Shooter
+Shooter / Plane, TPV/Shooter
+Shooter / Plane, TPV/Simulation / Vehicle/Simulation/Shooter
+Shooter / Plane, TPV/Simulation/Shooter
+Shooter / Plane/Shoot'em Up / Horizontal/Shoot'em Up/Shooter
+Shooter / Plane/Shooter
+Shooter / Plane/Shooter/Shoot'em Up
+Shooter / Plane/Simulation/Shooter
+Shooter / Plane/Sports/Shooter
+Shooter / Plane/Various/Shoot'em Up / Horizontal/Shoot'em Up/Shooter
+Shooter / Run and Gun/Beat'em Up/Shooter
+Shooter / Run and Gun/Compilation/Shooter
+Shooter / Run and Gun/Platform/Platform / Shooter Scrolling/Shooter
+Shooter / Run and Gun/Platform/Shooter/Platform / Shooter Scrolling
+Shooter / Run and Gun/Shoot'em Up/Shooter
+Shooter / Run and Gun/Shooter
+Shooter / Run and Gun/Shooter/Action/Action / Labyrinth
+Shooter / Run and Gun/Shooter/Platform
+Shooter / Run and Gun/Shooter/Platform/Platform / Shooter Scrolling
+Shooter / Run and Gun/Shooter/Shoot'em Up
+Shooter / Run and Gun/Shooter/Shoot'em Up / Vertical/Shoot'em Up
+Shooter / Run and Gun/Shooter/Shoot'em Up/Shoot'em Up / Horizontal/Platform/Platform / Shooter Scrolling
+Shooter / Run and Gun/Shooter/Shooter / Horizontal/Platform/Platform / Shooter Scrolling
+Shooter / Run and Gun/Shooter/Shooter / Space Invaders Like
+Shooter / Space Invaders Like/Shoot'em Up / Vertical/Shoot'em Up/Shooter
+Shooter / Space Invaders Like/Shoot'em Up/Shoot'em Up / Vertical/Shooter
+Shooter / Space Invaders Like/Shooter
+Shooter / Space Invaders Like/Shooter / Vertical/Shooter
+Shooter / Space Invaders Like/Shooter/Shoot'em Up
+Shooter / TPV/Action / Labyrinth/Action/Shooter
+Shooter / TPV/Adventure / Survival Horror/Shooter/Adventure
+Shooter / TPV/Adventure/Shooter
+Shooter / TPV/Platform/Shooter
+Shooter / TPV/Shooter
+Shooter / TPV/Shooter / FPV/Shooter
+Shooter / TPV/Shooter / Horizontal/Shooter/Shooter / Run and Gun
+Shooter / TPV/Shooter/Shoot'em Up
+Shooter / TPV/Shooter/Shooter / Plane, TPV
+Shooter / TPV/Shooter/Various/Beat'em Up
+Shooter / TPV/Strategy/Shooter
+Shooter / Top view/Shooter
+Shooter / Vehicle, Diagonal/Shooter
+Shooter / Vehicle, FPV/Racing FPV/Racing, Driving/Shooter
+Shooter / Vehicle, FPV/Shooter
+Shooter / Vehicle, FPV/Shooter / FPV/Shooter
+Shooter / Vehicle, Horizontal/Shoot'em Up/Shooter
+Shooter / Vehicle, Horizontal/Shooter
+Shooter / Vehicle, TPV/Racing, Driving/Shooter
+Shooter / Vehicle, TPV/Shooter
+Shooter / Vehicle, TPV/Shooter/Fighting/Racing, Driving
+Shooter / Vehicle, TPV/Shooter/Racing, Driving
+Shooter / Vehicle, Vertical/Shooter
+Shooter / Vertical/Fighting/Strategy/Shooter
+Shooter / Vertical/Shooter
+Shooter / Vertical/Shooter/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Action
+Shooter/Action / Labyrinth/Action
+Shooter/Action / Labyrinth/Shooter Small/Action
+Shooter/Adventure
+Shooter/Adventure / Survival Horror/Adventure/Shooter / TPV
+Shooter/Compilation
+Shooter/Fighting
+Shooter/Fighting / 3D/Fighting
+Shooter/Fighting / Versus/Fighting
+Shooter/Fighting/Fighting / 2.5D
+Shooter/Lightgun Shooter
+Shooter/Lightgun Shooter/Racing, Driving
+Shooter/Lightgun Shooter/Shooter / FPV
+Shooter/Platform
+Shooter/Platform / Run & Jump/Platform
+Shooter/Platform/Platform / Shooter Scrolling
+Shooter/Puzzle
+Shooter/Racing, Driving
+Shooter/Shoot'em Up
+Shooter/Shoot'em Up / Horizontal/Shoot'em Up
+Shooter/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Shoot'em Up/Compilation
+Shooter/Shoot'em Up/Simulation
+Shooter/Shooter / FPV
+Shooter/Shooter / Horizontal
+Shooter/Shooter / Horizontal/Shoot'em Up / Horizontal/Shoot'em Up
+Shooter/Shooter / Missile Command Like
+Shooter/Shooter / Plane
+Shooter/Shooter / Plane, FPV
+Shooter/Shooter / Plane, TPV
+Shooter/Shooter / Plane/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Shooter / Run and Gun
+Shooter/Shooter / Space Invaders Like
+Shooter/Shooter / Space Invaders Like/Shoot'em Up
+Shooter/Shooter / Space Invaders Like/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Shooter / TPV
+Shooter/Shooter / Vehicle, Diagonal
+Shooter/Shooter / Vehicle, FPV
+Shooter/Shooter / Vehicle, Horizontal
+Shooter/Shooter / Vehicle, TPV
+Shooter/Shooter / Vehicle, Vertical
+Shooter/Shooter / Vehicle, Vertical/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Shooter / Vertical
+Shooter/Shooter / Vertical/Shoot'em Up / Vertical/Shoot'em Up
+Shooter/Simulation
+Shooter/Sports / Football (Soccer)/Sports
+Shooter/Strategy
+Shooter/Various
+Shooter/Various/Casino/Casino / Slot machine
+Shougi/Asiatic board game
+Shougi/Asiatic board game/Board game
+Shougi/Board game/Asiatic board game
+Shougi/Renju/Go/Mahjong/Board game/Asiatic board game
+Shougi/Strategy/Asiatic board game
+Shougi/Thinking/Asiatic board game
+Shougi/Various/Asiatic board game
+Simulation
+Simulation / Life/Adults/Simulation
+Simulation / Life/Adventure / Visual Novel/Adventure/Simulation
+Simulation / Life/Adventure / Visual Novel/Simulation/Adventure
+Simulation / Life/Adventure/Simulation
+Simulation / Life/Role Playing Game/Board game/Simulation
+Simulation / Life/Role Playing Game/Simulation
+Simulation / Life/Simulation
+Simulation / Life/Simulation/Adventure
+Simulation / Life/Simulation/Strategy
+Simulation / SciFi/Lightgun Shooter/Simulation
+Simulation / SciFi/Shooter / Vehicle, FPV/Shooter/Simulation
+Simulation / SciFi/Shooter/Simulation
+Simulation / SciFi/Simulation
+Simulation / Vehicle/Shooter / Plane/Shooter/Simulation
+Simulation / Vehicle/Simulation
+Simulation / Vehicle/Simulation/Strategy
+Simulation/Adventure
+Simulation/Adventure/Casual Game
+Simulation/Adventure/Role Playing Game
+Simulation/Board game
+Simulation/Casual Game
+Simulation/Casual Game/Quiz
+Simulation/Educational
+Simulation/Fighting
+Simulation/Fighting/Sports
+Simulation/Horse racing/Sports with animals
+Simulation/Music and Dancing
+Simulation/Puzzle
+Simulation/Puzzle/Adventure
+Simulation/Role Playing Game
+Simulation/Role Playing Game/Adventure
+Simulation/Role Playing Game/Strategy
+Simulation/Shoot'em Up
+Simulation/Shooter
+Simulation/Shooter/Shooter / Plane, FPV
+Simulation/Simulation / SciFi
+Simulation/Sports
+Simulation/Sports / Baseball/Sports
+Simulation/Sports / Football (Soccer)/Sports
+Simulation/Strategy
+Simulation/Strategy/Adventure
+Simulation/Strategy/Role Playing Game
+Simulation/Various
+Singing/Music and Dancing
+Sports
+Sports / Baseball/Casual Game/Sports
+Sports / Baseball/Simulation/Sports
+Sports / Baseball/Sports
+Sports / Baseball/Sports / Football (American)/Sports
+Sports / Baseball/Sports/Sports
+Sports / Baseball/Sports/Sports/Sports / Baseball
+Sports / Basketball/Sports
+Sports / Basketball/Sports / Baseball/Sports
+Sports / Basketball/Sports / Football (American)/Sports
+Sports / Bowling/Sports
+Sports / Boxing/Fighting/Sports
+Sports / Boxing/Simulation/Sports
+Sports / Boxing/Sports
+Sports / Boxing/Sports/Fighting
+Sports / Boxing/Sports/Sports
+Sports / Boxing/Sports/Various
+Sports / Cycling/Racing, Driving/Sports
+Sports / Cycling/Sports
+Sports / Darts/Sports
+Sports / Dodgeball/Playing cards/Sports
+Sports / Dodgeball/Sports
+Sports / Dodgeball/Sports/Various
+Sports / Extreme/Sports
+Sports / Extreme/Sports / Multisports/Sports
+Sports / Extreme/Sports / Multisports/Sports/Various
+Sports / Extreme/Sports/Racing, Driving
+Sports / Fighting/Fighting/Sports
+Sports / Fighting/Puzzle/Sports
+Sports / Fighting/Sports
+Sports / Fitness/Sports
+Sports / Football (American)/Sports
+Sports / Football (American)/Sports / Baseball/Sports
+Sports / Football (Soccer)/Adventure / Interactive Movie/Adventure/Sports
+Sports / Football (Soccer)/Simulation/Sports
+Sports / Football (Soccer)/Simulation/Strategy/Sports
+Sports / Football (Soccer)/Sports
+Sports / Football (Soccer)/Sports/Role Playing Game
+Sports / Football (Soccer)/Sports/Sports
+Sports / Football (Soccer)/Strategy/Simulation/Sports
+Sports / Golf/Puzzle/Sports
+Sports / Golf/Sports
+Sports / Golf/Sports/Compilation
+Sports / Golf/Sports/Racing, Driving
+Sports / Golf/Thinking/Sports
+Sports / Handball/Sports
+Sports / Hockey/Sports
+Sports / Hockey/Sports / Football (American)/Sports
+Sports / Multisports/Compilation/Sports
+Sports / Multisports/Role Playing Game/Sports
+Sports / Multisports/Sports
+Sports / Multisports/Sports / Skiing/Sports
+Sports / Multisports/Sports / Swimming/Sports
+Sports / Multisports/Sports / Water/Sports
+Sports / Multisports/Sports/Compilation
+Sports / Multisports/Sports/Puzzle
+Sports / Pool/Board game/Playing cards/Sports
+Sports / Pool/Board game/Sports
+Sports / Pool/Simulation/Sports
+Sports / Pool/Sports
+Sports / Pool/Sports/Simulation
+Sports / Pool/Sports/Sports / Pool/Sports
+Sports / Pool/Sports/Sports / Swimming
+Sports / Pool/Various/Sports
+Sports / Rugby/Sports
+Sports / Running trails/Sports
+Sports / Shuffleboard/Sports
+Sports / Skateboard/Sports
+Sports / Skateboard/Sports / Football (American)/Compilation/Sports
+Sports / Skiing/Simulation/Sports
+Sports / Skiing/Sports
+Sports / Skiing/Sports / Skateboard/Sports
+Sports / Skiing/Sports / Skydiving/Sports
+Sports / Skiing/Sports/Racing, Driving
+Sports / Skydiving/Simulation/Sports
+Sports / Skydiving/Sports
+Sports / Sumo/Simulation/Sports
+Sports / Sumo/Sports
+Sports / Sumo/Sports/Fighting
+Sports / Swimming/Sports
+Sports / Table tennis/Sports
+Sports / Tennis/Shooter/Sports
+Sports / Tennis/Simulation/Sports
+Sports / Tennis/Sports
+Sports / Volleyball/Sports
+Sports / Volleyball/Sports/Sports
+Sports / Volleyball/Sports/Strategy
+Sports / Water/Racing, Driving/Sports
+Sports / Water/Sports
+Sports / Water/Sports/Sports / Skiing
+Sports / Wrestling/Adventure/Sports
+Sports / Wrestling/Fighting / 2D/Sports/Fighting
+Sports / Wrestling/Fighting/Sports
+Sports / Wrestling/Simulation/Sports
+Sports / Wrestling/Sports
+Sports / Wrestling/Sports / Fighting/Fighting/Sports
+Sports / Wrestling/Sports / Fighting/Sports
+Sports / Wrestling/Sports / Fighting/Sports/Fighting
+Sports / Wrestling/Sports/Fighting
+Sports with animals
+Sports with animals/Adventure
+Sports with animals/Horse racing
+Sports with animals/Horse racing/Casino
+Sports with animals/Sports
+Sports/Action / Breakout games/Action
+Sports/Compilation
+Sports/Fighting
+Sports/Fishing/Hunting and Fishing
+Sports/Horse racing/Sports with animals
+Sports/Puzzle
+Sports/Quiz / Japanese/Quiz
+Sports/Racing, Driving
+Sports/Racing, Driving / Hang Gliding/Racing, Driving
+Sports/Racing, Driving/Racing, Driving / Boat
+Sports/Simulation
+Sports/Sports / Arm wrestling
+Sports/Sports / Baseball
+Sports/Sports / Basketball
+Sports/Sports / Bowling
+Sports/Sports / Boxing
+Sports/Sports / Boxing/Fighting
+Sports/Sports / Darts
+Sports/Sports / Dodgeball
+Sports/Sports / Football (American)
+Sports/Sports / Football (American)/Sports / Baseball
+Sports/Sports / Football (Soccer)
+Sports/Sports / Golf
+Sports/Sports / Handball
+Sports/Sports / Hockey
+Sports/Sports / Pool
+Sports/Sports / Rugby
+Sports/Sports / Running trails
+Sports/Sports / Shuffleboard
+Sports/Sports / Skateboard
+Sports/Sports / Skiing
+Sports/Sports / Skydiving
+Sports/Sports / Sumo
+Sports/Sports / Swimming
+Sports/Sports / Table tennis
+Sports/Sports / Tennis
+Sports/Sports / Tennis/Sports
+Sports/Sports / Volleyball
+Sports/Sports / Volleyball/Sports / Dodgeball
+Sports/Sports / Wrestling
+Sports/Strategy
+Sports/Strategy/Compilation
+Sports/Various
+Strategy
+Strategy/Action / Labyrinth/Action
+Strategy/Adventure
+Strategy/Adventure/Role Playing Game
+Strategy/Adventure/Simulation
+Strategy/Board game
+Strategy/Build And Management/Simulation
+Strategy/Educational
+Strategy/Fighting
+Strategy/Fighting/Various
+Strategy/Music and Dancing
+Strategy/Puzzle
+Strategy/Quiz / Japanese/Quiz/Quiz
+Strategy/Racing, Driving
+Strategy/Role Playing Game
+Strategy/Role Playing Game/Simulation
+Strategy/Simulation
+Strategy/Simulation/Music and Dancing
+Strategy/Sports
+Strategy/Tactical RPG/Role Playing Game
+Strategy/Various
+Tactical RPG/Adventure/Role Playing Game
+Tactical RPG/Role Playing Game
+Tactical RPG/Role Playing Game/Strategy
+Tactical RPG/Simulation / Life/Simulation/Role Playing Game
+Tactical RPG/Strategy/Role Playing Game
+Tactical RPG/Strategy/Simulation/Role Playing Game
+Thinking
+Thinking/Adventure
+Thinking/Puzzle
+Thinking/Shougi/Asiatic board game
+Thinking/Strategy
+Various
+Various / Electro- Mechanical/Casino / Slot machine/Casino/Various
+Various / Electro- Mechanical/Various
+Various / Print Club/Various
+Various / Utilities/Various
+Various/Adventure
+Various/Compilation
+Various/Educational
+Various/Fighting/Adventure/Beat'em Up
+Various/Role Playing Game
+Various/Shoot'em Up
+Various/Shoot'em Up / Horizontal/Shoot'em Up
+Various/Shoot'em Up / Vertical/Shoot'em Up
+Various/Shooter / Vehicle, TPV/Shooter
+Various/Strategy

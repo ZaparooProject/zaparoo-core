@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 )
@@ -34,18 +36,25 @@ const maxFuzzInput = 512
 
 // FuzzBuildWrite treats the catalog as the untrusted download it is. Whatever a
 // column says, the mapping must produce tags that can be stored and matched:
-// no panic, no empty tag type or value, and no value carrying the separator the
-// tag vocabulary reserves for its own structure.
+// no panic, no empty tag type or value, no value carrying the separator the
+// tag vocabulary reserves for its own structure, and no value the vocabulary
+// would refuse at write time.
 func FuzzBuildWrite(f *testing.F) {
-	f.Add("1941", "World", "900227", "Capcom CPS-1", "2 (simultaneous)", "8-way", "2", "15kHz")
-	f.Add("pacman", "bootleg", "Set 1", "Namco Pac-Man hardware", "1", "4-way", "1", "31kHz")
-	f.Add("", "n-a", "n-a", "", "n-a", "n-a", "", "n-a")
-	f.Add("x", "USA - Asia", "FD1094 317-0154", "Sega System 16", "2-4 (alternating)", "Stick - Pedal", "20", "")
+	f.Add("1941", "World", "900227", "Capcom CPS-1", "2 (simultaneous)", "8-way", "2", "15kHz",
+		"Shooter - Flying Vertical", "19XX")
+	f.Add("pacman", "bootleg", "Set 1", "Namco Pac-Man hardware", "1", "4-way", "1", "31kHz",
+		"Maze - Collect", "Pac-Man")
+	f.Add("", "n-a", "n-a", "", "n-a", "n-a", "", "n-a", "n-a", "n-a")
+	f.Add("x", "USA - Asia", "FD1094 317-0154", "Sega System 16", "2-4 (alternating)", "Stick - Pedal", "20", "",
+		"System - BIOS", "Marvel - Capcom")
+	f.Add("y", "Japan", "Rev A", "Konami Unique", "11", "trackball", "9", "31 kHz",
+		"Platform - Run Jump [Mature]", "Ghosts 'n")
 	f.Fuzz(func(
-		t *testing.T, setName, region, version, platform, players, moveInputs, numButtons, resolution string,
+		t *testing.T,
+		setName, region, version, platform, players, moveInputs, numButtons, resolution, category, series string,
 	) {
 		for _, column := range []string{
-			setName, region, version, platform, players, moveInputs, numButtons, resolution,
+			setName, region, version, platform, players, moveInputs, numButtons, resolution, category, series,
 		} {
 			if len(column) > maxFuzzInput {
 				t.Skip()
@@ -54,13 +63,16 @@ func FuzzBuildWrite(f *testing.F) {
 		entry := Entry{
 			SetName: setName, Region: region, Version: version, Platform: platform,
 			Players: players, MoveInputs: moveInputs, NumButtons: numButtons,
-			Resolution: resolution,
+			Resolution: resolution, Category: category, Series: series,
 			// Fixed columns keep the fuzzed ones in a realistic row.
-			Year: "1990", Manufacturer: "Capcom", Category: "Shooter - Flying Vertical",
+			Year: "1990", Manufacturer: "Capcom",
 			Rotation: "vertical (ccw)", Flip: "yes", Alternative: "yes", Homebrew: "no",
-			Bootleg: "no", Series: "19XX",
+			Bootleg: "no",
 		}
-		write := buildWrite(&entry, "")
+		write := buildWrite(&entry, "", &scraper.UnmappedValues{})
+		// Whatever the columns say, only values the vocabulary accepts are
+		// written: the write path would refuse anything else.
+		scrapertest.RequireValidWrite(t, write)
 
 		for _, list := range [][]database.TagInfo{write.TitleTags, write.MediaTags} {
 			for _, tag := range list {
@@ -68,6 +80,9 @@ func FuzzBuildWrite(f *testing.F) {
 				assert.NotEmpty(t, tag.Tag, "a tag with no value cannot be matched")
 				assert.Equal(t, strings.ToLower(tag.Tag), tag.Tag, "stored values are lower-cased")
 				assert.NotContains(t, tag.Tag, " ", "a stored value never carries whitespace")
+				if tag.Type != string(tags.TagTypeDeveloper) {
+					assert.Empty(t, tag.Label, "only a company name carries a label")
+				}
 			}
 		}
 		// Player counts stay inside the vocabulary's range, whatever the column

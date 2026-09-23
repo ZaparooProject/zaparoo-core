@@ -1904,10 +1904,9 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 	case "hi":
 		// In brackets, "hi" is "hacked intro"
 		if ctx.CurrentBracketType == BracketTypeSquare {
-			// Note: "hacked:intro" doesn't have a constant yet, keeping as raw string
 			return []CanonicalTag{
 				{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed},
-				{Type: TagTypeDump, Value: "hacked:intro", Source: TagSourceBracketed},
+				{Type: TagTypeDump, Value: TagDumpHackedIntro, Source: TagSourceBracketed},
 			}
 		}
 		// In parentheses, "hi" is Hindi language
@@ -2107,7 +2106,21 @@ func ParseFilenameToCanonicalTagsForMedia(filename string, mediaType slugs.Media
 		ctx.ProcessedTags = allTags
 	}
 
-	return allTags
+	return acceptedTags(allTags)
+}
+
+// acceptedTags drops, in place, any tag the vocabulary would refuse: an empty
+// value, a bracket token that matched no rule, a version too long to be one.
+// The parser's job is to recognise filename conventions, and a token it
+// cannot place is not a tag.
+func acceptedTags(parsed []CanonicalTag) []CanonicalTag {
+	out := parsed[:0]
+	for _, tag := range parsed {
+		if IsValidTagValue(tag.Type, string(tag.Value)) {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 // stripSceneArtifacts removes common scene release artifacts from filenames.

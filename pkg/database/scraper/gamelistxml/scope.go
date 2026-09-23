@@ -168,7 +168,7 @@ func (g *GamelistXMLScraper) scopedCompanionTargets(
 				TitleTags: meta.TitleTags, TitleProps: meta.TitleProps,
 			}
 			if matched.MediaLevelWriteSafe {
-				write.MediaTags = companionChildTags(child)
+				write.MediaTags = g.companionChildTags(child)
 			}
 			appendRunMarker("gamelist.xml", opts, write)
 			targets = append(targets, database.ScrapeWriteTarget{

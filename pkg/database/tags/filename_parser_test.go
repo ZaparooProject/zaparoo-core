@@ -2115,12 +2115,16 @@ func TestParseFilenameToCanonicalTags_Patches(t *testing.T) {
 			name: "generic explicit hack and patch labels",
 			filename: "Game [Hack by Author v1.2] [Alt Font & Controls Hack by Team v2.0] " +
 				"[Optional patch by Group v3.0].sfc",
+			// Patch labels are a closed list: a label the list does not
+			// name is not stored as a patch, though the hack itself is.
 			wantContains: []string{
+				"unlicensed:hack",
 				"patch:hack:1-2",
-				"patch:alt-font-controls:2-0",
-				"patch:optional:3-0",
 			},
-			wantNotContains: []string{"rev:1-2", "rev:2-0", "rev:3-0"},
+			wantNotContains: []string{
+				"rev:1-2", "rev:2-0", "rev:3-0",
+				"patch:alt-font-controls:2-0", "patch:optional:3-0",
+			},
 		},
 		{
 			name: "hardware and enhancement patch labels",

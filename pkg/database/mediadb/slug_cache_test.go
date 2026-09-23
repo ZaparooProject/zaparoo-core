@@ -94,7 +94,7 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 			systemID: "SNES",
 			slug:     "zelda",
 			tagFilters: []zapscript.TagFilter{
-				{Type: "region", Value: "usa"},
+				{Type: "region", Value: "us"},
 			},
 		},
 		{
@@ -102,8 +102,8 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 			systemID: "Genesis",
 			slug:     "sonic",
 			tagFilters: []zapscript.TagFilter{
-				{Type: "region", Value: "usa"},
-				{Type: "genre", Value: "platform"},
+				{Type: "region", Value: "us"},
+				{Type: "genre", Value: "action:platformer"},
 			},
 		},
 	}
@@ -128,15 +128,15 @@ func TestGenerateSlugCacheKey_TagOrderIndependence(t *testing.T) {
 	t.Parallel()
 
 	tags1 := []zapscript.TagFilter{
-		{Type: "region", Value: "usa"},
-		{Type: "genre", Value: "platform"},
+		{Type: "region", Value: "us"},
+		{Type: "genre", Value: "action:platformer"},
 		{Type: "lang", Value: "en"},
 	}
 
 	tags2 := []zapscript.TagFilter{
 		{Type: "lang", Value: "en"},
-		{Type: "region", Value: "usa"},
-		{Type: "genre", Value: "platform"},
+		{Type: "region", Value: "us"},
+		{Type: "genre", Value: "action:platformer"},
 	}
 
 	key1, err1 := generateSlugCacheKey("NES", "mario", tags1)
@@ -356,15 +356,15 @@ func TestSlugCache_WithTagFilters_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set entry with USA region tag
-	usaTags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	usaTags := []zapscript.TagFilter{{Type: "region", Value: "us"}}
 	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, usaTags,
 		database.SlugResolution{MediaDBID: media2DBID, Strategy: "usa_region", Confidence: 1.0})
 	require.NoError(t, err)
 
 	// Set entry with multiple tags
 	multiTags := []zapscript.TagFilter{
-		{Type: "region", Value: "usa"},
-		{Type: "genre", Value: "platform"},
+		{Type: "region", Value: "us"},
+		{Type: "genre", Value: "action:platformer"},
 	}
 	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, multiTags,
 		database.SlugResolution{MediaDBID: media3DBID, Strategy: "multi_tag", Confidence: 1.0})
@@ -634,14 +634,14 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 	// Add tags
 	usaTag := database.Tag{
 		TypeDBID: regionTagType.DBID,
-		Tag:      "usa",
+		Tag:      "us",
 	}
 	insertedUSATag, err := mediaDB.FindOrInsertTag(usaTag)
 	require.NoError(t, err)
 
 	platformTag := database.Tag{
 		TypeDBID: genreTagType.DBID,
-		Tag:      "platform",
+		Tag:      "action:platformer",
 	}
 	insertedPlatformTag, err := mediaDB.FindOrInsertTag(platformTag)
 	require.NoError(t, err)
@@ -676,8 +676,8 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 	for _, tag := range result.Tags {
 		tagMap[tag.Type] = tag.Tag
 	}
-	assert.Equal(t, "usa", tagMap["region"])
-	assert.Equal(t, "platform", tagMap["genre"])
+	assert.Equal(t, "us", tagMap["region"])
+	assert.Equal(t, "action:platformer", tagMap["genre"])
 }
 
 func TestGetMediaByDBID_UnpadsNumericTags_Integration(t *testing.T) {

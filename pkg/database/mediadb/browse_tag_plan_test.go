@@ -62,9 +62,9 @@ func setupTagPlanFixture(t *testing.T) (fixture *tagPlanFixture, cleanup func())
 	require.NoError(t, mediaDB.BeginTransaction(false))
 	regionType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
 	require.NoError(t, err)
-	common, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "common"})
+	common, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "us"})
 	require.NoError(t, err)
-	rare, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "rare"})
+	rare, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "jp"})
 	require.NoError(t, err)
 
 	insert := func(dir, name, file string, tagDBIDs ...int64) {
@@ -118,8 +118,8 @@ func TestBrowseTagPlan_PicksTheSmallerSide(t *testing.T) {
 	defer cleanup()
 	db := f.mediaDB.sql.Load()
 	systems := []systemdefs.System{f.system}
-	rare := []zapscript.TagFilter{{Type: "region", Value: "rare"}}
-	common := []zapscript.TagFilter{{Type: "region", Value: "common"}}
+	rare := []zapscript.TagFilter{{Type: "region", Value: "jp"}}
+	common := []zapscript.TagFilter{{Type: "region", Value: "us"}}
 
 	bigScope, known, err := sqlBrowseScopeRows(ctx, db, []string{f.bigDir}, systems)
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestBrowseTagPlan_PicksTheSmallerSide(t *testing.T) {
 
 	plan := sqlBrowseTagPlan(ctx, db, rare, bigScope, true)
 	require.NotNil(t, plan.driveFromTag, "3 rows against a 200-file directory must drive from the tag")
-	assert.Equal(t, "rare", plan.driveFromTag.Value)
+	assert.Equal(t, "jp", plan.driveFromTag.Value)
 
 	plan = sqlBrowseTagPlan(ctx, db, common, bigScope, true)
 	assert.Nil(t, plan.driveFromTag,
@@ -165,14 +165,14 @@ func TestBrowseTagPlan_ShapesAgree(t *testing.T) {
 		tags []zapscript.TagFilter
 		want int
 	}{
-		{name: "rare", tags: []zapscript.TagFilter{{Type: "region", Value: "rare"}}, want: tagPlanRareFiles},
-		{name: "common", tags: []zapscript.TagFilter{{Type: "region", Value: "common"}}, want: tagPlanBigFiles},
+		{name: "rare", tags: []zapscript.TagFilter{{Type: "region", Value: "jp"}}, want: tagPlanRareFiles},
+		{name: "common", tags: []zapscript.TagFilter{{Type: "region", Value: "us"}}, want: tagPlanBigFiles},
 		{name: "absent", tags: []zapscript.TagFilter{{Type: "region", Value: "nosuch"}}, want: 0},
 		{name: "both", tags: []zapscript.TagFilter{
-			{Type: "region", Value: "rare"}, {Type: "region", Value: "common"},
+			{Type: "region", Value: "jp"}, {Type: "region", Value: "us"},
 		}, want: tagPlanRareFiles},
 		{name: "not", tags: []zapscript.TagFilter{
-			{Type: "region", Value: "rare", Operator: zapscript.TagOperatorNOT},
+			{Type: "region", Value: "jp", Operator: zapscript.TagOperatorNOT},
 		}, want: tagPlanBigFiles - tagPlanRareFiles},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

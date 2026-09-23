@@ -94,7 +94,7 @@ func TestNestedRootArtworkFallback(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Equal(t, inner, records[0].ROMRootPath)
 
-	mapped := s.MapToDB(records[0])
+	mapped := mapToDBValid(t, s, records[0])
 	box, ok := propertyByType(mapped.MediaProps, tags.PropertyTypeTag(tags.TagPropertyImageBoxart))
 	require.True(t, ok)
 	assert.Equal(t, filepath.ToSlash(wanted), box.Text)

@@ -101,7 +101,7 @@ func ScraperRunTypeTag(scraperID, runID string) string {
 const (
 	TagTypeInput         TagType = "input"         // Input devices and controls
 	TagTypePlayers       TagType = "players"       // Player count and modes
-	TagTypeGameGenre     TagType = "gamegenre"     // Game genre and subgenres
+	TagTypeGenre         TagType = "genre"         // Game genre and subgenres
 	TagTypeAddon         TagType = "addon"         // External peripherals and add-ons
 	TagTypeEmbedded      TagType = "embedded"      // Embedded chips and internal hardware
 	TagTypeSave          TagType = "save"          // Save mechanism
@@ -151,8 +151,6 @@ const (
 	TagTypeRelease       TagType = "release"       // Distribution/release status (homebrew, unreleased, reissue, etc.)
 	TagTypeProperty      TagType = "property"      // Static content property (description, artwork paths, video paths)
 	TagTypeRating        TagType = "rating"        // Numeric rating (scraped, stored as integer 0-100)
-	TagTypeGenre         TagType = "genre"         // Game genre (scraped from external sources; additive)
-	TagTypeGameFamily    TagType = "gamefamily"    // Game family/series (scraped from EmulationStation family field)
 	TagTypeUser          TagType = "user"
 )
 
@@ -283,7 +281,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypePlayers: {
 		// Player counts
 		TagPlayers1, TagPlayers2, TagPlayers3, TagPlayers4, TagPlayers5, TagPlayers6,
-		TagPlayers7, TagPlayers8, TagPlayers9, TagPlayers10, TagPlayers12,
+		TagPlayers7, TagPlayers8, TagPlayers9, TagPlayers10, TagPlayers12, TagPlayers16,
 
 		// Player modes
 		TagPlayersMMO,          // Massively multiplayer online
@@ -293,7 +291,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPlayersSimultaneous, // Simultaneous play
 	},
 
-	TagTypeGameGenre: {
+	TagTypeGenre: {
 		// Genre hierarchy uses 1-2 levels: "genre" or "genre:subgenre"
 		// Examples: "action", "action:platformer", "sports:wrestling"
 		// Action
@@ -570,6 +568,104 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagArcadeBoardTourvision,
 		// Nintendo
 		TagArcadeBoardNintendoVS, TagArcadeBoardNintendoNSS,
+		// Hardware families named by arcade catalogs
+		// Alpha Denshi
+		TagArcadeBoardAlphaDenshiChampionBaseBall,
+		// Atari
+		TagArcadeBoardAtariBattleZone, TagArcadeBoardAtariCentipede, TagArcadeBoardAtariGauntlet,
+		TagArcadeBoardAtariKlax, TagArcadeBoardAtariMissileCommand, TagArcadeBoardAtariSystem1,
+		TagArcadeBoardAtariSystem2,
+		// Blue Print
+		TagArcadeBoardBluePrint,
+		// Capcom
+		TagArcadeBoardCapcomMitchell,
+		// Cave
+		TagArcadeBoardCave68000,
+		// Cinematronics
+		TagArcadeBoardCinematronicsJackTheGiantkiller, TagArcadeBoardCinematronicsLaserdisc,
+		// Data East
+		TagArcadeBoardDataEastActFancer, TagArcadeBoardDataEastBurgerTime, TagArcadeBoardDataEastCavemanNinja,
+		TagArcadeBoardDataEastCrudeBuster, TagArcadeBoardDataEastDarkSeal, TagArcadeBoardDataEastDE0359,
+		TagArcadeBoardDataEastDE0379, TagArcadeBoardDataEastDE0397, TagArcadeBoardDataEastDEC8,
+		TagArcadeBoardDataEastDECOCassette, TagArcadeBoardDataEastDietGoGo, TagArcadeBoardDataEastDoubleWings,
+		TagArcadeBoardDataEastKarnov, TagArcadeBoardDataEastMECM1, TagArcadeBoardDataEastPocketGal,
+		TagArcadeBoardDataEastRohga, TagArcadeBoardDataEastSuperBurgerTime, TagArcadeBoardDataEastThunderZone,
+		TagArcadeBoardDataEastTumblePop, TagArcadeBoardDataEastVaporTrail,
+		// Exidy
+		TagArcadeBoardExidyUniversalGameBoard2,
+		// Gaelco
+		TagArcadeBoardGaelcoBigKarnak,
+		// Game Plan
+		TagArcadeBoardGamePlan,
+		// IGS
+		TagArcadeBoardIGSPGM,
+		// Jaleco
+		TagArcadeBoardJalecoExerion, TagArcadeBoardJalecoGingaNinkyouden, TagArcadeBoardJalecoNaughtyBoy,
+		TagArcadeBoardJalecoPsychic5,
+		// Kaneko
+		TagArcadeBoardKanekoGalsPanic,
+		// Kiwako
+		TagArcadeBoardKiwakoMrJong,
+		// Konami
+		TagArcadeBoardKonamiAjax, TagArcadeBoardKonamiAliens, TagArcadeBoardKonamiAsterix,
+		TagArcadeBoardKonamiContra, TagArcadeBoardKonamiDoubleDribble, TagArcadeBoardKonamiGIJoe,
+		TagArcadeBoardKonamiGradius3, TagArcadeBoardKonamiGreenBeret, TagArcadeBoardKonamiGX400,
+		TagArcadeBoardKonamiJunoFirst, TagArcadeBoardKonamiRunAndGun, TagArcadeBoardKonamiScramble,
+		TagArcadeBoardKonamiSimpsons, TagArcadeBoardKonamiSurpriseAttack, TagArcadeBoardKonamiThunderX,
+		TagArcadeBoardKonamiTMNT, TagArcadeBoardKonamiTMNT2, TagArcadeBoardKonamiTutankham,
+		TagArcadeBoardKonamiTwin16, TagArcadeBoardKonamiVendetta, TagArcadeBoardKonamiXMen,
+		// Kyugo
+		TagArcadeBoardKyugo,
+		// Midway
+		TagArcadeBoardMidway8080, TagArcadeBoardMidwayAstrocade, TagArcadeBoardMidwayMCR,
+		TagArcadeBoardMidwayMCR1, TagArcadeBoardMidwayMCR2, TagArcadeBoardMidwayMCR3, TagArcadeBoardMidwayYUnit,
+		// Namco
+		TagArcadeBoardNamcoBaraduke, TagArcadeBoardNamcoGalaga, TagArcadeBoardNamcoGalaxian,
+		TagArcadeBoardNamcoPacMan, TagArcadeBoardNamcoSuperPacMan, TagArcadeBoardNamcoSystem1,
+		TagArcadeBoardNamcoSystem86,
+		// Nichibutsu
+		TagArcadeBoardNichibutsuArmedF, TagArcadeBoardNichibutsuGalivan, TagArcadeBoardNichibutsuTerraCresta,
+		// Nintendo
+		TagArcadeBoardNintendoAleck64, TagArcadeBoardNintendoDonkeyKong, TagArcadeBoardNintendoMarioBros,
+		// Orca
+		TagArcadeBoardOrcaVastar,
+		// VEB Polytechnik
+		TagArcadeBoardPolyPlay,
+		// Psikyo
+		TagArcadeBoardPsikyoSH2,
+		// Sega
+		TagArcadeBoardSegaBlockade, TagArcadeBoardSegaDottoriKun, TagArcadeBoardSegaOutRun,
+		TagArcadeBoardSegaZaxxon,
+		// Seibu Kaihatsu
+		TagArcadeBoardSeibuBloodBros, TagArcadeBoardSeibuCabal, TagArcadeBoardSeibuDCon,
+		TagArcadeBoardSeibuLegionnaire, TagArcadeBoardSeibuRaiden, TagArcadeBoardSeibuRaiden2,
+		TagArcadeBoardSeibuToki,
+		// SNK
+		TagArcadeBoardSNK6502, TagArcadeBoardSNK68000, TagArcadeBoardSNKAlpha68K, TagArcadeBoardSNKTripleZ80,
+		// Stern
+		TagArcadeBoardSternBerzerk,
+		// Sun Electronics
+		TagArcadeBoardSunElectronicsArabian, TagArcadeBoardSunElectronicsKangaroo,
+		// Taito
+		TagArcadeBoardTaito8080, TagArcadeBoardTaitoArkanoid, TagArcadeBoardTaitoBubbleBobble,
+		TagArcadeBoardTaitoDarius, TagArcadeBoardTaitoFairylandStory, TagArcadeBoardTaitoKickAndRun,
+		TagArcadeBoardTaitoNewZealandStory, TagArcadeBoardTaitoNinjaWarriors, TagArcadeBoardTaitoNYCaptor,
+		TagArcadeBoardTaitoQix, TagArcadeBoardTaitoSJSystem, TagArcadeBoardTaitoVolfied,
+		TagArcadeBoardTaitoWarriorBlade,
+		// Technos
+		TagArcadeBoardTechnosBlockOut, TagArcadeBoardTechnosMatMania, TagArcadeBoardTechnosXaindSleena,
+		// Tecmo
+		TagArcadeBoardTecmoNinjaGaiden, TagArcadeBoardTecmoRygar, TagArcadeBoardTecmoSenjyo,
+		TagArcadeBoardTecmoSolomonsKey, TagArcadeBoardTecmoTehkanWorldCup, TagArcadeBoardTehkanBombJack,
+		// TIA-MC-1
+		TagArcadeBoardTIAMC1,
+		// Toaplan
+		TagArcadeBoardToaplanSlapFight, TagArcadeBoardToaplanSnowBros, TagArcadeBoardToaplanTwinCobra,
+		// Universal
+		TagArcadeBoardUniversalCosmic, TagArcadeBoardUniversalCosmicGuerilla, TagArcadeBoardUniversalLadyBug,
+		TagArcadeBoardUniversalMrDo,
+		// Williams
+		TagArcadeBoardWilliamsGen1, TagArcadeBoardWilliamsGen2,
 	},
 
 	TagTypeCompatibility: {
@@ -673,6 +769,114 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 		// Franchises - game series
 		TagSearchFranchiseCastlevania, TagSearchFranchiseDragonslayer, TagSearchFranchiseWonderboy,
+		TagSearchFranchise19XX, TagSearchFranchiseAirDuel, TagSearchFranchiseAlien,
+		TagSearchFranchiseAllJapanProWrestling, TagSearchFranchiseAlpineSki, TagSearchFranchiseArkanoid,
+		TagSearchFranchiseAsteroids, TagSearchFranchiseBankPanic, TagSearchFranchiseBaraduke,
+		TagSearchFranchiseBattlezone, TagSearchFranchiseBattletoads, TagSearchFranchiseBioAttack,
+		TagSearchFranchiseBladeMaster, TagSearchFranchiseBlockBlock, TagSearchFranchiseBlockBuster,
+		TagSearchFranchiseBomberman, TagSearchFranchiseBosconian, TagSearchFranchiseBoulderDash,
+		TagSearchFranchiseBreakout, TagSearchFranchiseBubbleBobble, TagSearchFranchiseCentipede,
+		TagSearchFranchiseChelnov, TagSearchFranchiseChukaTaisen, TagSearchFranchiseColumns,
+		TagSearchFranchiseCombatHawk, TagSearchFranchiseCommando, TagSearchFranchiseCongoBongo,
+		TagSearchFranchiseContra, TagSearchFranchiseCosmicGuerilla, TagSearchFranchiseCotton,
+		TagSearchFranchiseCrayonShinChan, TagSearchFranchiseCrazyBlocks, TagSearchFranchiseCrazyClimber,
+		TagSearchFranchiseCrimeFighters, TagSearchFranchiseCrystalCastles, TagSearchFranchiseDarkstalkers,
+		TagSearchFranchiseDemonsWorld, TagSearchFranchiseDigDug, TagSearchFranchiseDokaben,
+		TagSearchFranchiseDonkeyKong, TagSearchFranchiseDonPachi, TagSearchFranchiseDrToppel,
+		TagSearchFranchiseDragonSpirit, TagSearchFranchiseDreamSoccer, TagSearchFranchiseDriftOut,
+		TagSearchFranchiseDungeonsDragons, TagSearchFranchiseDynamiteDeka, TagSearchFranchiseDynastyWars,
+		TagSearchFranchiseElevatorAction, TagSearchFranchiseEnigma, TagSearchFranchiseExerion,
+		TagSearchFranchiseExpressRaider, TagSearchFranchiseExtermination, TagSearchFranchiseFantasyZone,
+		TagSearchFranchiseFinalFight, TagSearchFranchiseFootballChamp, TagSearchFranchiseFreeze,
+		TagSearchFranchiseGalaga, TagSearchFranchiseGalaxian, TagSearchFranchiseGalivan,
+		TagSearchFranchiseGangWars, TagSearchFranchiseGauntlet, TagSearchFranchiseGeminiWing,
+		TagSearchFranchiseGetStar, TagSearchFranchiseGhostsNGoblins, TagSearchFranchiseGingaNinkyouden,
+		TagSearchFranchiseGoldMedalist, TagSearchFranchiseGoldenAxe, TagSearchFranchiseGolfingGreats,
+		TagSearchFranchiseGradius, TagSearchFranchiseGreenBeret, TagSearchFranchiseGunFrontier,
+		TagSearchFranchiseGunForce, TagSearchFranchiseHangOn, TagSearchFranchiseHayaoshiQuiz,
+		TagSearchFranchiseHelloKitty, TagSearchFranchiseHighImpactFootball, TagSearchFranchiseHighWayRace,
+		TagSearchFranchiseHook, TagSearchFranchiseIkariWarriors, TagSearchFranchiseInTheHunt,
+		TagSearchFranchiseIndianaJones, TagSearchFranchiseInferno, TagSearchFranchiseInsectorX,
+		TagSearchFranchiseJackTheGiantkiller, TagSearchFranchiseJoust, TagSearchFranchiseJungleKing,
+		TagSearchFranchiseJunoFirst, TagSearchFranchiseKageki, TagSearchFranchiseKarateChamp,
+		TagSearchFranchiseKarnov, TagSearchFranchiseKickAndRun, TagSearchFranchiseKiKiKaiKai,
+		TagSearchFranchiseLethalThunder, TagSearchFranchiseLodeRunner, TagSearchFranchiseMajorLeague,
+		TagSearchFranchiseMajorTitle, TagSearchFranchiseMappy, TagSearchFranchiseMarbleMadness,
+		TagSearchFranchiseMario, TagSearchFranchiseMazingerZ, TagSearchFranchiseMegaMan,
+		TagSearchFranchiseMegaTwins, TagSearchFranchiseMoonQuasar, TagSearchFranchiseMortalKombat,
+		TagSearchFranchiseMrDo, TagSearchFranchiseMrJong, TagSearchFranchiseMysticRiders,
+		TagSearchFranchiseNinjaBaseballBatMan, TagSearchFranchiseNinjaKid, TagSearchFranchiseNova2001,
+		TagSearchFranchiseOutRun, TagSearchFranchiseOutZone, TagSearchFranchiseP47, TagSearchFranchisePOW,
+		TagSearchFranchisePacMan, TagSearchFranchisePaddleMania, TagSearchFranchisePang,
+		TagSearchFranchiseParodius, TagSearchFranchisePerforman, TagSearchFranchisePeterPackRat,
+		TagSearchFranchisePipiBibis, TagSearchFranchisePiratePete, TagSearchFranchisePitfall,
+		TagSearchFranchisePlumpPop, TagSearchFranchisePortMan, TagSearchFranchisePowerInstinct,
+		TagSearchFranchisePrehistoricIsle, TagSearchFranchiseProMahjongKiwame, TagSearchFranchisePuyoPuyo,
+		TagSearchFranchisePuzzLoop, TagSearchFranchisePuzzleAction, TagSearchFranchiseQBert,
+		TagSearchFranchiseQuartet, TagSearchFranchiseRType, TagSearchFranchiseRadiantSilvergun,
+		TagSearchFranchiseRaiders5, TagSearchFranchiseRallyX, TagSearchFranchiseRedBaron,
+		TagSearchFranchiseRoadBlasters, TagSearchFranchiseRoadRunner, TagSearchFranchiseRoboCop,
+		TagSearchFranchiseRobotron, TagSearchFranchiseRodLand, TagSearchFranchiseRollingThunder,
+		TagSearchFranchiseRunAndGun, TagSearchFranchiseRygar, TagSearchFranchiseSAR, TagSearchFranchiseScramble,
+		TagSearchFranchiseSeaWolf, TagSearchFranchiseShanghai, TagSearchFranchiseShinobi,
+		TagSearchFranchiseSilkworm, TagSearchFranchiseSkyAdventure, TagSearchFranchiseSkyKid,
+		TagSearchFranchiseSkySoldiers, TagSearchFranchiseSlamMasters, TagSearchFranchiseSlapFight,
+		TagSearchFranchiseSnowBros, TagSearchFranchiseSoldam, TagSearchFranchiseSonSon,
+		TagSearchFranchiseSpaceCruiser, TagSearchFranchiseSpaceInvaders, TagSearchFranchiseSpaceSeeker,
+		TagSearchFranchiseSpelunker, TagSearchFranchiseSprint, TagSearchFranchiseStarForce,
+		TagSearchFranchiseStreetFighter, TagSearchFranchiseStreetSmart, TagSearchFranchiseStrider,
+		TagSearchFranchiseSubs, TagSearchFranchiseSunsetRiders, TagSearchFranchiseSuperCasino,
+		TagSearchFranchiseSuperChampionBaseball, TagSearchFranchiseSuperiorSoldiers,
+		TagSearchFranchiseTankBattalion, TagSearchFranchiseTarg, TagSearchFranchiseTecmoWorldCup,
+		TagSearchFranchiseTeenageMutantNinjaTurtles, TagSearchFranchiseTetris,
+		TagSearchFranchiseTheNewZealandStory, TagSearchFranchiseTheNextSpace, TagSearchFranchiseThunderCross,
+		TagSearchFranchiseTigerHeli, TagSearchFranchiseTimePilot, TagSearchFranchiseTimeSoldiers,
+		TagSearchFranchiseTimeTunnel, TagSearchFranchiseTheTowerOfDruaga, TagSearchFranchiseTriPool,
+		TagSearchFranchiseTron, TagSearchFranchiseTropicalAngel, TagSearchFranchiseTruxton,
+		TagSearchFranchiseTwinBee, TagSearchFranchiseTwinCobra, TagSearchFranchiseUNSquadron,
+		TagSearchFranchiseUFORoboDangar, TagSearchFranchiseUltraman, TagSearchFranchiseUndercoverCops,
+		TagSearchFranchiseVindicators, TagSearchFranchiseViolenceFight, TagSearchFranchiseVirtuaFighter,
+		TagSearchFranchiseVirtualMahjong, TagSearchFranchiseWaterSki, TagSearchFranchiseWildWestern,
+		TagSearchFranchiseWonderPlanet, TagSearchFranchiseWorldCourt, TagSearchFranchiseWorldStadium,
+		TagSearchFranchiseWWF, TagSearchFranchiseXMen, TagSearchFranchiseXaindSleena, TagSearchFranchiseZaxxon,
+		TagSearchFranchiseZzyzzyxx,
+		TagSearchFranchiseAdventureCanoe, TagSearchFranchiseDarius, TagSearchFranchiseDragonWorld,
+		TagSearchFranchiseFrontLine, TagSearchFranchiseFunkyFish, TagSearchFranchiseKangaroo,
+		TagSearchFranchiseKnightsOfValour, TagSearchFranchiseOrientalLegend, TagSearchFranchiseQix,
+		TagSearchFranchiseSeaFighterPoseidon, TagSearchFranchiseTheTinStar,
+		TagSearchFranchiseAceCombat, TagSearchFranchiseAfterBurner, TagSearchFranchiseAnimalCrossing,
+		TagSearchFranchiseApeEscape, TagSearchFranchiseArmyMen, TagSearchFranchiseAsphalt,
+		TagSearchFranchiseAstroBoy, TagSearchFranchiseBaldursGate, TagSearchFranchiseBatman,
+		TagSearchFranchiseBen10, TagSearchFranchiseBreathOfFire, TagSearchFranchiseBurnout, TagSearchFranchiseBuzz,
+		TagSearchFranchiseCabelas, TagSearchFranchiseCallOfDuty, TagSearchFranchiseCapcomVsSNK,
+		TagSearchFranchiseCrashBandicoot, TagSearchFranchiseDaisenryaku, TagSearchFranchiseDaveMirra,
+		TagSearchFranchiseDefJam, TagSearchFranchiseDigimon, TagSearchFranchiseDungeonExplorer,
+		TagSearchFranchiseEccoTheDolphin, TagSearchFranchiseEverybodysGolf, TagSearchFranchiseFZero,
+		TagSearchFranchiseFIFA, TagSearchFranchiseFatalFury, TagSearchFranchiseFinalFantasy,
+		TagSearchFranchiseGrandTheftAuto, TagSearchFranchiseSegaBassFishing, TagSearchFranchiseGodOfWar,
+		TagSearchFranchiseHakuoki, TagSearchFranchiseHarvestMoon, TagSearchFranchiseHeroesOfMightAndMagic,
+		TagSearchFranchiseHouseOfTheDead, TagSearchFranchiseJakAndDaxter, TagSearchFranchiseJamesBond,
+		TagSearchFranchiseKingdomHearts, TagSearchFranchiseLemmings, TagSearchFranchiseLittleBigPlanet,
+		TagSearchFranchiseLooneyTunes, TagSearchFranchiseLordOfTheRings, TagSearchFranchiseMacross,
+		TagSearchFranchiseMaddenNFL, TagSearchFranchiseMarvelVsCapcom, TagSearchFranchiseMetalGear,
+		TagSearchFranchiseMetalSlug, TagSearchFranchiseMicroMachines, TagSearchFranchiseGundam,
+		TagSearchFranchiseMonacoGP, TagSearchFranchiseMonkeyIsland, TagSearchFranchiseNASCAR,
+		TagSearchFranchiseNCAAFootball, TagSearchFranchiseNFLBlitz, TagSearchFranchiseNFLQuarterbackClub,
+		TagSearchFranchiseNHL, TagSearchFranchiseNaruto, TagSearchFranchiseNeedForSpeed, TagSearchFranchisePGATour,
+		TagSearchFranchiseParasiteEve, TagSearchFranchisePikmin, TagSearchFranchisePokemon,
+		TagSearchFranchisePowerStone, TagSearchFranchisePrinceOfPersia, TagSearchFranchiseProjectDiva,
+		TagSearchFranchiseQuake, TagSearchFranchiseRayman, TagSearchFranchiseReady2Rumble,
+		TagSearchFranchiseResidentEvil, TagSearchFranchiseSSX, TagSearchFranchiseSaintsRow,
+		TagSearchFranchiseSambaDeAmigo, TagSearchFranchiseScoobyDoo, TagSearchFranchiseSegaRally,
+		TagSearchFranchiseSegaWorldwideSoccer, TagSearchFranchiseSonic, TagSearchFranchiseSouthPark,
+		TagSearchFranchiseSpectralSouls, TagSearchFranchiseSpiderMan, TagSearchFranchiseStarWars,
+		TagSearchFranchiseSuperSmashBros, TagSearchFranchiseTekken, TagSearchFranchiseTenchu,
+		TagSearchFranchiseTestDrive, TagSearchFranchiseKingOfFighters, TagSearchFranchiseZelda,
+		TagSearchFranchiseSimpsons, TagSearchFranchiseSims, TagSearchFranchiseTombRaider,
+		TagSearchFranchiseTonyHawk, TagSearchFranchiseValhallaKnights, TagSearchFranchiseValkyriaChronicles,
+		TagSearchFranchiseViewtifulJoe, TagSearchFranchiseVirtuaTennis, TagSearchFranchiseWarhammer,
+		TagSearchFranchiseWipeout, TagSearchFranchiseWorms, TagSearchFranchiseXyanide, TagSearchFranchiseYs,
+		TagSearchFranchiseYuGiOh,
 
 		// Featured characters - notable characters appearing in the game
 		TagSearchFeatureAlien, TagSearchFeatureAsterix, TagSearchFeatureBatman, TagSearchFeatureCompatihero,
@@ -835,28 +1039,34 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	},
 
 	TagTypePatch: {
-		// Dynamic values identify applied patches and optional versions, such as
-		// patch:fastrom:1-1 or patch:uncensored:2-1.
+		// Patch labels. A stored value may carry a version (patch:fastrom:1-1),
+		// and font patches name their language (patch:font:en); see isPatch.
+		TagPatchBugfix, TagPatchColor, TagPatchFastROM, TagPatchFix, TagPatchScriptPort,
+		TagPatchHack, TagPatchMSU1, TagPatchMusic, TagPatchNoSRAM, TagPatchOverhaul,
+		TagPatchPerformance, TagPatchQoL, TagPatchRedux, TagPatchRelocalized,
+		TagPatchRestoration, TagPatchRetouch, TagPatchSA1, TagPatchSlowROM,
+		TagPatchSplashScreenRemoved, TagPatchSRAM, TagPatchTweak, TagPatchUncensored,
+		TagPatchWidescreen,
 	},
 
 	TagTypeMameParent: {
-		// MAME parent ROM relationship (empty - values are dynamic ROM names)
+		// MAME parent setnames; format rule, no list.
 	},
 
 	TagTypeDeveloper: {
-		// Dynamic values - populated during indexing from TOSEC filenames and external metadata
+		// Free text: company names, normalised by NormalizeCompanyName.
 	},
 
 	TagTypePublisher: {
-		// Dynamic values - populated during indexing from TOSEC filenames and external metadata
+		// Free text: company names, normalised by NormalizeCompanyName.
 	},
 
 	TagTypeCredit: {
-		// Dynamic values - company credits where developer/publisher role is unspecified
+		// Free text: company credits where the developer/publisher role is unspecified.
 	},
 
 	TagTypeBuildDate: {
-		// Dynamic values - romset/build dates normalized to YYYY-MM-DD by the parser.
+		// Format rule: romset/build dates as YYYY-MM-DD.
 	},
 
 	TagTypeRelease: {
@@ -946,7 +1156,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagDumpVerified,   // Verified good dump
 		// Dump variants
 		TagDumpPending, TagDumpChecksumBad, TagDumpChecksumUnknown, TagDumpBIOS,
-		TagDumpHackedFFE, TagDumpHackedIntroRemov, TagDumpNoBoot,
+		TagDumpHackedFFE, TagDumpHackedIntro, TagDumpHackedIntroRemov, TagDumpNoBoot,
 	},
 
 	TagTypeMedia: {
@@ -967,13 +1177,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	},
 
 	TagTypeTrack: {
-		// Music track numbers — values are open-ended (track:1, track:2, …) and created
-		// dynamically at index time, so no fixed values are enumerated here.
+		// Format rule: track numbers.
 	},
 
 	TagTypeExtension: {
-		// File extensions - dynamically populated based on system configurations
-		// Note: Actual values come from platform-specific supported extensions
+		// Format rule: file extensions, from the systems' supported extensions.
 	},
 
 	TagTypeEdition: {
@@ -1051,9 +1259,13 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyMAMESetName,
 	},
 
-	// Rating, genre, and game-family are scraped from external sources; seeded here
-	// so the types exist after SeedCanonicalTags even before any scraper runs.
-	TagTypeRating:     {},
-	TagTypeGenre:      {},
-	TagTypeGameFamily: {}, // Dynamic values — populated from EmulationStation "family" field
+	// Types with a format rule and no list. Listed so seeding creates them.
+	TagTypeRating:  {},
+	TagTypeSeason:  {},
+	TagTypeEpisode: {},
+	TagTypeIssue:   {},
+	TagTypeVolume:  {},
+	TagTypeUser:    {},
+
+	TagTypeUnknown: {TagUnknown},
 }

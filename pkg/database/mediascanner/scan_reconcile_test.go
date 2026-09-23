@@ -270,16 +270,16 @@ func TestReconcile_NonScannerTagsSurviveStaleScannerTagDeleted(t *testing.T) {
 	// Plant a user tag and a scraper-owned genre tag (non-scanner types), plus
 	// a scanner-owned region tag the filename does not carry (stale).
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, row.DBID, []database.TagInfo{
-		{Type: "user", Tag: "favourite-shelf"},
-		{Type: "genre", Tag: "platformer"},
+		{Type: "user", Tag: "favorite"},
+		{Type: "genre", Tag: "action:platformer"},
 		{Type: "region", Tag: "eu"},
 	}))
 
 	stats := indexMediaPaths(t, mediaDB, "SNES", gamePath)
 
 	got := mediaTagStrings(t, mediaDB, row.DBID)
-	assert.Contains(t, got, "user:favourite-shelf", "user tags must survive re-index")
-	assert.Contains(t, got, "genre:platformer", "scraper-owned tags must survive re-index")
+	assert.Contains(t, got, "user:favorite", "user tags must survive re-index")
+	assert.Contains(t, got, "genre:action:platformer", "scraper-owned tags must survive re-index")
 	assert.Contains(t, got, "region:us")
 	assert.NotContains(t, got, "region:eu", "stale scanner-owned tag must be deleted")
 	assert.Equal(t, int64(1), stats.TagLinksDeleted)
