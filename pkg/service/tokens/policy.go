@@ -58,9 +58,28 @@ func NewCommandPolicy(names ...string) CommandPolicy {
 	return CommandPolicy{allowed: allowed}
 }
 
-// Unrestricted reports whether the policy bounds nothing.
+// Unrestricted reports whether the policy bounds nothing. A bound that permits
+// no command at all is still a bound.
 func (p CommandPolicy) Unrestricted() bool {
-	return len(p.allowed) == 0
+	return p.allowed == nil
+}
+
+// Intersect returns the policy permitting only what both p and o permit, so
+// combining two bounds can narrow a token but never widen it.
+func (p CommandPolicy) Intersect(o CommandPolicy) CommandPolicy {
+	if p.Unrestricted() {
+		return o
+	}
+	if o.Unrestricted() {
+		return p
+	}
+	allowed := make(map[string]bool, len(p.allowed))
+	for name := range p.allowed {
+		if o.allowed[name] {
+			allowed[name] = true
+		}
+	}
+	return CommandPolicy{allowed: allowed}
 }
 
 // Allows reports whether name may run under this policy. Command names are
