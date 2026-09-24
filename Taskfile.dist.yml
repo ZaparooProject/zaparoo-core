@@ -52,6 +52,7 @@ tasks:
       CXX: "{{.CXX}}"
     cmds:
       - task: expr:check-profile
+      - task: credits:check
       - task: app:compress
       - >-
         go build -trimpath
@@ -72,6 +73,24 @@ tasks:
       CGO_ENABLED: 0
     cmds:
       - go run ./scripts/expr-method-profile
+
+  credits:
+    desc: Regenerate the embedded contributor list and third-party software notices
+    env:
+      GOOS: '{{OS}}'
+      GOARCH: '{{ARCH}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go run ./scripts/credits -check=false
+
+  credits:check:
+    desc: Verify the embedded third-party software notices match the dependencies
+    env:
+      GOOS: '{{OS}}'
+      GOARCH: '{{ARCH}}'
+      CGO_ENABLED: 0
+    cmds:
+      - go run ./scripts/credits
 
   app:compress:
     desc: Prepare compressed embedded app assets
@@ -193,6 +212,7 @@ tasks:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
       - task: expr:check-profile
+      - task: credits:check
       - go test -race -tags=validator_novalidatefn,expr_static_methods {{.TEST_ARGS}}
       - |
         if [ '{{.TEST_ARGS}}' = './...' ]; then

@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets/credits"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/spf13/afero"
 )
@@ -288,6 +289,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	noticesPath := filepath.Join(buildDir, noticesFileName)
+	if err := writeNotices(noticesPath); err != nil {
+		_, _ = fmt.Printf("Error writing third-party notices: %v\n", err)
+		os.Exit(1)
+	}
+
 	archivePath := filepath.Join(buildDir, archiveName)
 	_ = os.Remove(archivePath) //nolint:gosec // G703: build script
 
@@ -299,13 +306,15 @@ func main() {
 		}
 	}
 
+	docPaths := []string{licensePath, noticesPath, readmePath}
+
 	// Determine format based on file extension
 	fs := afero.NewOsFs()
 	var err error
 	if strings.HasSuffix(archiveName, ".tar.gz") {
-		err = createTarGzFile(fs, archivePath, appPath, licensePath, readmePath, platform, buildDir)
+		err = createTarGzFile(fs, archivePath, appPath, docPaths, platform, buildDir)
 	} else {
-		err = createZipFile(fs, archivePath, appPath, licensePath, readmePath, platform, buildDir)
+		err = createZipFile(fs, archivePath, appPath, docPaths, platform, buildDir)
 	}
 
 	if err != nil {
@@ -314,7 +323,7 @@ func main() {
 	}
 }
 
-func createZipFile(fs afero.Fs, zipPath, appPath, licensePath, readmePath, platform, _ string) error {
+func createZipFile(fs afero.Fs, zipPath, appPath string, docPaths []string, platform, _ string) error {
 	//nolint:gosec // Safe: creates zip files in build script with controlled paths
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -331,17 +340,8 @@ func createZipFile(fs afero.Fs, zipPath, appPath, licensePath, readmePath, platf
 		}
 	}(zipWriter)
 
-	filesToAdd := []struct {
-		path    string
-		arcname string
-	}{
-		{appPath, filepath.Base(appPath)},
-		{licensePath, filepath.Base(licensePath)},
-		{readmePath, filepath.Base(readmePath)},
-	}
-
-	for _, file := range filesToAdd {
-		err := addFileToZip(fs, zipWriter, file.path, file.arcname)
+	for _, path := range append([]string{appPath}, docPaths...) {
+		err := addFileToZip(fs, zipWriter, path, filepath.Base(path))
 		if err != nil {
 			return fmt.Errorf("error adding file to zip: %w", err)
 		}
@@ -438,6 +438,24 @@ func addFileToZipMode(fs afero.Fs, zipWriter *zip.Writer, filePath, arcname stri
 	return nil
 }
 
+// noticesFileName is the third-party software notices file shipped next to
+// LICENSE.txt.
+const noticesFileName = "THIRD_PARTY_NOTICES.txt"
+
+// writeNotices writes the third-party software notices embedded in Core, so
+// releases without the TUI's Credits page still carry them.
+func writeNotices(path string) error {
+	bundle, err := credits.Components()
+	if err != nil {
+		return fmt.Errorf("loading third-party notices: %w", err)
+	}
+	//nolint:gosec // G703: build script
+	if err := os.WriteFile(path, []byte(bundle.Notices()), 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
 func copyFile(src, dst string) error {
 	//nolint:gosec // Safe: reads files in build script with controlled paths
 	input, err := os.ReadFile(src)
@@ -450,7 +468,7 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-func createTarGzFile(fs afero.Fs, tarGzPath, appPath, licensePath, readmePath, platform, _ string) error {
+func createTarGzFile(fs afero.Fs, tarGzPath, appPath string, docPaths []string, platform, _ string) error {
 	//nolint:gosec // Safe: creates tar.gz files in build script with controlled paths
 	tarGzFile, err := os.Create(tarGzPath)
 	if err != nil {
@@ -474,17 +492,8 @@ func createTarGzFile(fs afero.Fs, tarGzPath, appPath, licensePath, readmePath, p
 		}
 	}(tarWriter)
 
-	filesToAdd := []struct {
-		path    string
-		arcname string
-	}{
-		{appPath, filepath.Base(appPath)},
-		{licensePath, filepath.Base(licensePath)},
-		{readmePath, filepath.Base(readmePath)},
-	}
-
-	for _, file := range filesToAdd {
-		err := addFileToTar(fs, tarWriter, file.path, file.arcname)
+	for _, path := range append([]string{appPath}, docPaths...) {
+		err := addFileToTar(fs, tarWriter, path, filepath.Base(path))
 		if err != nil {
 			return fmt.Errorf("error adding file to tar: %w", err)
 		}

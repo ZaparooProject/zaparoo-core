@@ -57,6 +57,7 @@ Root: HKA; Subkey: "Software\Zaparoo"; Flags: dontcreatekey uninsdeletekeyifempt
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
 {{if .ViGEmMsi}}Source: "ViGEmBusSetup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: vigembus
 {{end}}

@@ -61,6 +61,8 @@ const (
 	PageSettingsTUI            = "settings_tui"
 	PageSettingsProfiles       = "settings_profiles"
 	PageSettingsAbout          = "settings_about"
+	PageSettingsCredits        = "settings_credits"
+	PageSettingsCreditsViewer  = "settings_credits_viewer"
 	PageSearchMedia            = "search_media"
 	PageExportLog              = "export_log"
 	PageGenerateDB             = "generate_db"

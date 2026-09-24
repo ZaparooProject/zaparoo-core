@@ -135,6 +135,8 @@ func TestBuildSettingsMainMenu_TwoColumnLayout_Integration(t *testing.T) {
 		assert.Equal(t, row("Readers"), row("Advanced"), "size %v", size)
 		assert.Less(t, row("TUI"), row("Data & connections"), "size %v", size)
 		assert.Less(t, row("Data & connections"), row("Backup"), "size %v", size)
+		assert.Equal(t, row("Logs")+1, row("Credits"), "size %v", size)
+		assert.Equal(t, row("Credits")+1, row("About"), "size %v: Credits sits above About", size)
 		for _, text := range []string{"Audio", "Profiles", "Clients", "Online", "Logs", "About"} {
 			assert.NotEqual(t, -1, row(text), "size %v missing %q", size, text)
 		}
@@ -144,6 +146,28 @@ func TestBuildSettingsMainMenu_TwoColumnLayout_Integration(t *testing.T) {
 			"size %v: Online is in the left column", size)
 		runner.Stop()
 	}
+}
+
+func TestBuildSettingsMainMenu_CreditsOpensCreditsPage_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		BuildSettingsMainMenuWithService(
+			&config.Instance{}, NewMockSettingsService(), pages, runner.App(), nil, nil, "", "")
+	})
+	require.True(t, runner.WaitForText("Reader connections and scanning", uiSettleTimeout))
+
+	// Right column: Advanced, Logs, then Credits.
+	runner.SimulateArrowRight()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	require.True(t, runner.WaitForText("Contributors and third-party software", uiSettleTimeout))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("── Contributors ──", uiSettleTimeout))
 }
 
 func TestBuildSettingsMainMenu_LeftRightSwitchColumns_Integration(t *testing.T) {

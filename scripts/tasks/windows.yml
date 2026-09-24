@@ -40,6 +40,7 @@ tasks:
       - docker cp "_build/windows_{{.BUILD_ARCH}}/setup.iss" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/Zaparoo.exe" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/LICENSE.txt" zaparoo-innosetup:/work/
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/THIRD_PARTY_NOTICES.txt" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/README.txt" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/icon.ico" zaparoo-innosetup:/work/
       # Only the architectures the driver ships for fetch it, and the generated

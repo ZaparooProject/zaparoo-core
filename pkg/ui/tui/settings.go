@@ -155,7 +155,10 @@ func BuildSettingsMainMenuWithService(
 				pages.SwitchToPage(PageSettingsMain)
 			})
 		}).
-		AddNavAction("About", "Version, license, and credits", func() {
+		AddNavAction("Credits", "Contributors and third-party software", func() {
+			buildCreditsPage(pages, app)
+		}).
+		AddNavAction("About", "Version and license", func() {
 			buildAboutPage(pages, app)
 		})
 
@@ -2367,7 +2370,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	pages.AddAndSwitchToPage(PageSettingsIgnoreSystems, frame, true)
 }
 
-// buildAboutPage creates the About page with version, license, and credits.
+// buildAboutPage creates the About page with version and license.
 func buildAboutPage(pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
 		SetTitle("About")
