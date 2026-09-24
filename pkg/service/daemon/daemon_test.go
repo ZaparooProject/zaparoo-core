@@ -1082,24 +1082,27 @@ func TestAPIPortHeldTreatsAProbeTimeoutAsHeld(t *testing.T) {
 	assert.True(t, apiPortHeld(addr, time.Second), "a listening port is held")
 	assert.True(t, apiPortHeld(addr, -1), "a probe that cannot complete must not report the port free")
 
-	assert.False(t, apiPortHeld(boundUnlistenedTCPAddr(t), time.Second), "a refused port has been released")
+	require.NoError(t, listener.Close())
+	assert.True(t, releasedPortReportsFree(t, addr), "a refused port has been released")
 }
 
-// boundUnlistenedTCPAddr returns a loopback address whose port is bound to a
-// socket that never listens, so every dial to it is refused. A port freed by
-// closing a listener can be taken by a test running alongside before the dial
-// reaches it; this one stays reserved until the test ends.
-func boundUnlistenedTCPAddr(t *testing.T) string {
+// releasedPortReportsFree reports whether apiPortHeld sees a closed listener's
+// port as free. A test running alongside can bind the freed port before the
+// probe reaches it, so a port found held is retried with a fresh one; an
+// apiPortHeld that never reports a port free still fails every attempt.
+func releasedPortReportsFree(t *testing.T, addr string) bool {
 	t.Helper()
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = syscall.Close(fd) })
-	require.NoError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}))
-	sa, err := syscall.Getsockname(fd)
-	require.NoError(t, err)
-	inet4, ok := sa.(*syscall.SockaddrInet4)
-	require.True(t, ok, "bound address is %T", sa)
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(inet4.Port))
+	const attempts = 5
+	for range attempts {
+		if !apiPortHeld(addr, time.Second) {
+			return true
+		}
+		listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addr = listener.Addr().String()
+		require.NoError(t, listener.Close())
+	}
+	return false
 }
 
 // Waiting for an answer must not outlast the release timeout it belongs to: each
