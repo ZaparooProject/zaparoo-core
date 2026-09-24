@@ -794,6 +794,26 @@ func TestParseFilenameToCanonicalTags_RedumpRingcodeVersion(t *testing.T) {
 			wantTags: []string{"region:us", "lang:en", "rev:re12"},
 		},
 		{
+			name:     "three-digit RE is kept",
+			filename: "Sonic CD (USA) (RE125).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re125"},
+		},
+		{
+			name:     "four-digit RE is not a ringcode",
+			filename: "Dragon's Lair (USA) (RE1234).cue",
+			wantTags: []string{"region:us", "lang:en"},
+		},
+		{
+			name:     "RE in square brackets is a rev, not dump info",
+			filename: "Dragon's Lair (USA) [RE1].cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re1"},
+		},
+		{
+			name:     "RE as a comma-part is kept",
+			filename: "Dragon's Lair (USA, RE1).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re1"},
+		},
+		{
 			name:     "RE alongside Rev keeps both",
 			filename: "Foo (Japan) (Rev 1) (RE1).cue",
 			wantTags: []string{"rev:1", "region:jp", "lang:ja", "rev:re1"},
