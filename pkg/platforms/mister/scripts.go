@@ -97,7 +97,10 @@ func runScriptContext(
 	if hidden {
 		// Hidden scripts run synchronously, so the caller's execution lease
 		// bounds both process lifetime and any side effects after expiry.
-		cmd := exec.CommandContext(ctx, bin, args) //nolint:gosec // G204: script runner's purpose
+		// args is already shell-quoted, so bash splits it into words exactly
+		// as the visible launcher's command line does.
+		//nolint:gosec // G204: script runner's purpose
+		cmd := exec.CommandContext(ctx, "bash", "-c", `exec "$0" `+args, bin)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error {
 			if cmd.Process == nil {
