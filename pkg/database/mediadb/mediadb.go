@@ -3909,8 +3909,15 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 			return sqlGetTags(ctx, db.sql.Load(), systems)
 		}
 
-		// Rebuild in-memory cache so subsequent requests are instant
+		// Rebuild in-memory cache so subsequent requests are instant. It answers
+		// for every system and is persisted, so it is built only from a full
+		// table: after a full invalidation (a startup vocabulary prune, orphan
+		// cleanup) the table holds just the systems populated above.
 		go func() {
+			if populateErr := db.PopulateSystemTagsCache(db.ctx); populateErr != nil {
+				log.Debug().Err(populateErr).Msg("skipped tag cache rebuild after self-healing")
+				return
+			}
 			if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 				log.Warn().Err(cacheErr).Msg("failed to rebuild tag cache after self-healing")
 			}
