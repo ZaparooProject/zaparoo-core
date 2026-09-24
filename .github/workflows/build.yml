@@ -301,6 +301,7 @@ jobs:
           # Imports keeps this in step with what the tool actually imports.
           sparse-checkout: |
             scripts/
+            pkg/assets/credits/
             pkg/platforms/batocera/payload/
             pkg/platforms/updatepayload/
             go.mod

@@ -46,10 +46,23 @@ type SettingsTextEditOptions struct {
 	MaskCharacter  rune
 }
 
+// TriState is the combined state of a group of on/off settings.
+type TriState int
+
+const (
+	// TriStateOff means every setting in the group is off.
+	TriStateOff TriState = iota
+	// TriStateMixed means some settings in the group are on and some off.
+	TriStateMixed
+	// TriStateOn means every setting in the group is on.
+	TriStateOn
+)
+
 // settingsItem stores data for a single list item.
 type settingsItem struct {
 	toggleValue    *bool
 	toggleOnChange func(bool)
+	triState       func() TriState
 	textValue      *string
 	textDisplay    func(string) string
 	valueDisplay   func() string
@@ -59,6 +72,7 @@ type settingsItem struct {
 	label          string
 	description    string
 	cycleOptions   []string
+	disabled       bool
 }
 
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
@@ -148,6 +162,43 @@ func formatToggle(value bool, label string, selected bool) string {
 		t.TextColorName, t.BgColorName, label)
 }
 
+// formatTriState renders a group toggle: [*] all on, [-] mixed, [ ] all off.
+func formatTriState(state TriState, label string, selected bool) string {
+	switch state {
+	case TriStateOn:
+		return formatToggle(true, label, selected)
+	case TriStateMixed:
+		// "[-[]" is the escaped form of "[-]", which tview would otherwise
+		// read as a color reset tag.
+		t := CurrentTheme()
+		if selected {
+			return fmt.Sprintf("[%s:%s]- [-[] [%s:%s]%s[-:%s]",
+				t.AccentColorName, t.BgColorName,
+				t.HighlightFgName, t.HighlightBgName, label, t.BgColorName)
+		}
+		return fmt.Sprintf("[%s:%s]- [-[] [%s:%s]%s[-:-]",
+			t.AccentColorName, t.BgColorName,
+			t.TextColorName, t.BgColorName, label)
+	default:
+		return formatToggle(false, label, selected)
+	}
+}
+
+// formatDisabled renders an item that can be selected but not changed. The
+// whole line is dimmed; the label keeps its highlight background when
+// selected so the cursor stays visible.
+func formatDisabled(marker, text string, selected bool) string {
+	t := CurrentTheme()
+	escapedMarker := tview.Escape(marker)
+	escapedText := tview.Escape(text)
+	if selected {
+		return fmt.Sprintf("[%s:%s]%s[%s:%s]%s[-:%s]",
+			t.SecondaryColor, t.BgColorName, escapedMarker,
+			t.SecondaryColor, t.HighlightBgName, escapedText, t.BgColorName)
+	}
+	return fmt.Sprintf("[%s:%s]%s%s[-:-]", t.SecondaryColor, t.BgColorName, escapedMarker, escapedText)
+}
+
 // formatCycle renders a cycle value. When selected, label and value are highlighted.
 func formatTextValue(label, value string, selected bool) string {
 	t := CurrentTheme()
@@ -218,6 +269,8 @@ type SettingsList struct {
 	rebuildPrevious func()
 	helpCallback    func(string)
 	onNavigateOut   func()
+	onEdge          func(dir int) bool
+	onHorizontal    func(dir int)
 	previousPage    string
 	items           []settingsItem
 	dynamicHelpMode bool
@@ -284,34 +337,29 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 			}
 			return nil
 		case tcell.KeyLeft, tcell.KeyRight:
-			index := sl.GetCurrentItem()
-			if index < 0 || index >= len(sl.items) {
-				return event
+			// Only cycles, which draw their own < > arrows, use Left/Right.
+			// On any other item the keys belong to the surrounding layout
+			// (switching columns), and are swallowed otherwise so tview's
+			// horizontal scroll never shifts the menu text.
+			delta := 1
+			if event.Key() == tcell.KeyLeft {
+				delta = -1
 			}
-			item := &sl.items[index]
-			switch item.itemType {
-			case "toggle":
-				value := event.Key() == tcell.KeyRight
-				if *item.toggleValue != value {
-					*item.toggleValue = value
-					if item.toggleOnChange != nil {
-						item.toggleOnChange(value)
-					}
-				}
-			case "cycle":
-				delta := 1
-				if event.Key() == tcell.KeyLeft {
-					delta = -1
-				}
+			index := sl.GetCurrentItem()
+			if index >= 0 && index < len(sl.items) &&
+				sl.items[index].itemType == "cycle" && !sl.items[index].disabled {
+				item := &sl.items[index]
 				count := len(item.cycleOptions)
 				*item.cycleIndex = (*item.cycleIndex + delta + count) % count
 				if item.cycleOnChange != nil {
 					item.cycleOnChange(item.cycleOptions[*item.cycleIndex], *item.cycleIndex)
 				}
-			default:
-				return event
+				sl.refreshAllItems(index)
+				return nil
 			}
-			sl.refreshAllItems(index)
+			if sl.onHorizontal != nil {
+				sl.onHorizontal(delta)
+			}
 			return nil
 		default:
 			return event
@@ -342,12 +390,30 @@ func (sl *SettingsList) scanSelectable(from, dir int) int {
 	return -1
 }
 
+// nearestSelectable returns the selectable index closest to target, or -1
+// when the list has none. Ties go to the item below.
+func (sl *SettingsList) nearestSelectable(target int) int {
+	target = max(0, min(target, len(sl.items)-1))
+	for distance := range len(sl.items) {
+		if sl.isSelectable(target + distance) {
+			return target + distance
+		}
+		if sl.isSelectable(target - distance) {
+			return target - distance
+		}
+	}
+	return -1
+}
+
 // moveSelection moves the selection one selectable item in direction dir,
 // skipping headers and spacers. At the list edge it hands focus to the
 // navigate-out callback (usually the page's button bar), or wraps around.
 func (sl *SettingsList) moveSelection(dir int) {
 	next := sl.scanSelectable(sl.GetCurrentItem()+dir, dir)
 	if next == -1 {
+		if sl.onEdge != nil && sl.onEdge(dir) {
+			return
+		}
 		if sl.onNavigateOut != nil {
 			sl.onNavigateOut()
 			return
@@ -437,8 +503,26 @@ func (sl *SettingsList) goBack() {
 	}
 }
 
-// refreshAllItems updates all items to reflect current selection state.
+// refreshAllItems updates all items to reflect current selection state and
+// reports the selected item's description to the help callback.
 func (sl *SettingsList) refreshAllItems(selectedIndex int) {
+	sl.redrawItems(selectedIndex)
+
+	// Call help callback with selected item's description
+	if sl.helpCallback != nil && selectedIndex >= 0 && selectedIndex < len(sl.items) {
+		sl.helpCallback(sl.items[selectedIndex].description)
+	}
+}
+
+// Redraw re-renders every item from its current value without touching the
+// help text. Use it when another list changes values this list displays.
+func (sl *SettingsList) Redraw() {
+	sl.redrawItems(sl.GetCurrentItem())
+}
+
+// redrawItems re-renders every item, highlighting selectedIndex when the
+// list has focus.
+func (sl *SettingsList) redrawItems(selectedIndex int) {
 	for i := range sl.items {
 		item := &sl.items[i]
 		// Only show highlight when the list has focus
@@ -449,6 +533,8 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 		switch item.itemType {
 		case "toggle":
 			mainText = formatToggle(*item.toggleValue, item.label, selected)
+		case "tristate":
+			mainText = formatTriState(item.triState(), item.label, selected)
 		case "cycle":
 			mainText = formatCycle(item.label, item.cycleOptions[*item.cycleIndex], selected)
 		case "text":
@@ -464,14 +550,97 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 		case "spacer":
 			mainText = ""
 		}
+		if item.disabled {
+			mainText = formatDisabledItem(item, selected)
+		}
 
 		sl.SetItemText(i, mainText, desc)
 	}
+}
 
-	// Call help callback with selected item's description
-	if sl.helpCallback != nil && selectedIndex >= 0 && selectedIndex < len(sl.items) {
-		sl.helpCallback(sl.items[selectedIndex].description)
+// formatDisabledItem renders a disabled item with the same markers its
+// enabled form uses, so a disabled toggle still shows its checkbox.
+func formatDisabledItem(item *settingsItem, selected bool) string {
+	switch item.itemType {
+	case "toggle":
+		checkbox := "[ ] "
+		if *item.toggleValue {
+			checkbox = "[*] "
+		}
+		return formatDisabled("- "+checkbox, item.label, selected)
+	case "tristate":
+		checkbox := "[ ] "
+		switch item.triState() {
+		case TriStateOn:
+			checkbox = "[*] "
+		case TriStateMixed:
+			checkbox = "[-] "
+		case TriStateOff:
+		}
+		return formatDisabled("- "+checkbox, item.label, selected)
+	case "cycle":
+		return formatDisabled("- ", item.label+": < "+item.cycleOptions[*item.cycleIndex]+" >", selected)
+	case "text":
+		return formatDisabled("- ", item.label+": "+item.textDisplay(*item.textValue), selected)
+	case "value":
+		return formatDisabled("- ", item.label+": "+item.valueDisplay(), selected)
+	case "nav":
+		return formatDisabled("→ ", item.label, selected)
+	default:
+		return formatDisabled("- ", item.label, selected)
 	}
+}
+
+// addRow appends a list row whose action is skipped while the item is
+// disabled, however it is activated (Enter, Space or mouse).
+func (sl *SettingsList) addRow(mainText, description string, action func()) {
+	index := len(sl.items) - 1
+	var selected func()
+	if action != nil {
+		selected = func() {
+			if index >= 0 && index < len(sl.items) && sl.items[index].disabled {
+				return
+			}
+			action()
+		}
+	}
+	sl.AddItem(mainText, formatDesc(description), 0, selected)
+}
+
+// SetLastItemDisabled marks the most recently added item as disabled: it
+// stays selectable so its description can say why, but it cannot be
+// changed or activated.
+func (sl *SettingsList) SetLastItemDisabled(disabled bool) *SettingsList {
+	index := len(sl.items) - 1
+	if index < 0 {
+		return sl
+	}
+	sl.items[index].disabled = disabled
+	sl.refreshAllItems(sl.GetCurrentItem())
+	return sl
+}
+
+// AddTriState adds a group toggle that shows whether every setting in a
+// group is on, off, or a mix. Activating it calls onSet(true) unless the
+// group is already all on, in which case it calls onSet(false).
+func (sl *SettingsList) AddTriState(
+	label string,
+	description string,
+	state func() TriState,
+	onSet func(bool),
+) *SettingsList {
+	selected := sl.GetItemCount() == 0
+	sl.items = append(sl.items, settingsItem{
+		itemType:    "tristate",
+		label:       label,
+		description: description,
+		triState:    state,
+	})
+	sl.addRow(formatTriState(state(), label, selected), description, func() {
+		onSet(state() != TriStateOn)
+		sl.refreshAllItems(sl.GetCurrentItem())
+	})
+	return sl
 }
 
 // AddToggle adds a boolean toggle item to the list.
@@ -492,7 +661,7 @@ func (sl *SettingsList) AddToggle(
 		toggleOnChange: onChange,
 	})
 
-	sl.AddItem(formatToggle(*value, label, selected), formatDesc(description), 0, func() {
+	sl.addRow(formatToggle(*value, label, selected), description, func() {
 		*value = !*value
 		onChange(*value)
 		sl.refreshAllItems(sl.GetCurrentItem())
@@ -521,7 +690,7 @@ func (sl *SettingsList) AddCycle(
 		cycleOnChange: onChange,
 	})
 
-	sl.AddItem(formatCycle(label, options[*currentIndex], selected), formatDesc(description), 0, func() {
+	sl.addRow(formatCycle(label, options[*currentIndex], selected), description, func() {
 		*currentIndex = (*currentIndex + 1) % len(options)
 		if onChange != nil {
 			onChange(options[*currentIndex], *currentIndex)
@@ -548,7 +717,7 @@ func (sl *SettingsList) AddValueAction(
 		description:  description,
 		valueDisplay: display,
 	})
-	sl.AddItem(formatTextValue(label, display(), selected), formatDesc(description), 0, action)
+	sl.addRow(formatTextValue(label, display(), selected), description, action)
 	return sl
 }
 
@@ -589,7 +758,7 @@ func (sl *SettingsList) AddTextEdit(
 		textDisplay: display,
 	}
 	sl.items = append(sl.items, item)
-	sl.AddItem(formatTextValue(label, display(*value), selected), formatDesc(description), 0, func() {
+	sl.addRow(formatTextValue(label, display(*value), selected), description, func() {
 		sl.showTextEditModal(label, value, options, onChange)
 	})
 	return sl
@@ -694,7 +863,7 @@ func (sl *SettingsList) AddAction(
 		description: description,
 	})
 
-	sl.AddItem(formatAction(label, selected), formatDesc(description), 0, action)
+	sl.addRow(formatAction(label, selected), description, action)
 	return sl
 }
 
@@ -714,7 +883,7 @@ func (sl *SettingsList) AddNavAction(
 		description: description,
 	})
 
-	sl.AddItem(formatNavAction(label, selected), formatDesc(description), 0, action)
+	sl.addRow(formatNavAction(label, selected), description, action)
 	return sl
 }
 

@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -94,9 +95,187 @@ func buildOnlineSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 	)
 }
 
-// renderOnlineSettingsMenu shows the Zaparoo Online page: an Account section
-// with link status shown directly on the menu lines, and a Features section
-// pointing at the cloud features an account unlocks.
+// Warp availability values reported in the remote backup status.
+const (
+	warpAvailable   = "available"
+	warpUnavailable = "unavailable"
+)
+
+// warpCheckAttempts and warpCheckInterval bound how long turning every
+// feature on waits for an unknown Warp status to resolve. Core refreshes
+// it in the background with a single request, so this is normally one
+// round trip.
+const (
+	warpCheckAttempts = 5
+	warpCheckInterval = time.Second
+)
+
+const onlineLinkFirstDesc = "Link your Zaparoo Online account first"
+
+// onlineFeatures holds the per-feature consent settings grouped by the
+// "All online features" row.
+type onlineFeatures struct {
+	remoteControl bool
+	playHistory   bool
+	library       bool
+	cloudBackup   bool
+}
+
+// onlineFeaturesFromSettings reads the current consent settings. Cloud
+// backup falls back to the backup status when settings omit it.
+func onlineFeaturesFromSettings(
+	settings *models.SettingsResponse, status *models.BackupStatusResponse,
+) onlineFeatures {
+	var features onlineFeatures
+	if status != nil {
+		features.cloudBackup = status.Remote.Enabled
+	}
+	if settings == nil {
+		return features
+	}
+	if settings.RemoteControlEnabled != nil {
+		features.remoteControl = *settings.RemoteControlEnabled
+	}
+	if settings.PlaytimeSyncEnabled != nil {
+		features.playHistory = *settings.PlaytimeSyncEnabled
+	}
+	if settings.LibrarySyncEnabled != nil {
+		features.library = *settings.LibrarySyncEnabled
+	}
+	if settings.BackupRemoteEnabled != nil {
+		features.cloudBackup = *settings.BackupRemoteEnabled
+	}
+	return features
+}
+
+// triState summarizes the features this device can use. Cloud backup only
+// counts when the account has Warp, so an account without it reads as all
+// on once everything else is.
+func (f onlineFeatures) triState(warp string) TriState {
+	values := []bool{f.remoteControl, f.playHistory, f.library}
+	if warp == warpAvailable {
+		values = append(values, f.cloudBackup)
+	}
+	on := 0
+	for _, value := range values {
+		if value {
+			on++
+		}
+	}
+	switch on {
+	case 0:
+		return TriStateOff
+	case len(values):
+		return TriStateOn
+	default:
+		return TriStateMixed
+	}
+}
+
+// allOnlineFeaturesUpdate builds the single settings update that turns every
+// feature on or off. Turning off covers all four. Turning on includes cloud
+// backup only when Warp is confirmed active, since scheduled backups without
+// it fail; otherwise cloud backup is left as it is.
+func allOnlineFeaturesUpdate(
+	current onlineFeatures, on bool, warp string,
+) (onlineFeatures, *models.UpdateSettingsParams) {
+	value := on
+	params := &models.UpdateSettingsParams{
+		RemoteControlEnabled: &value,
+		PlaytimeSyncEnabled:  &value,
+		LibrarySyncEnabled:   &value,
+	}
+	next := current
+	next.remoteControl, next.playHistory, next.library = on, on, on
+	if !on || warp == warpAvailable {
+		params.BackupRemoteEnabled = &value
+		next.cloudBackup = on
+	}
+	return next, params
+}
+
+// resolveWarpAvailability re-reads the backup status while Warp
+// availability is unknown, giving Core's background check time to finish.
+// It returns the last availability seen, which is still unknown if the
+// check did not complete in time.
+func resolveWarpAvailability(
+	ctx context.Context, svc SettingsService, current string, attempts int, interval time.Duration,
+) string {
+	for range attempts {
+		if current == warpAvailable || current == warpUnavailable {
+			return current
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return current
+		case <-timer.C:
+		}
+		status, err := svc.GetBackupStatus(ctx)
+		if err != nil {
+			log.Debug().Err(err).Msg("error re-reading backup status for Warp availability")
+			continue
+		}
+		current = status.Remote.Availability
+	}
+	return current
+}
+
+// setAllOnlineFeatures turns every online feature on or off in one settings
+// update and calls onDone on the UI thread with the resulting features. When
+// turning on with Warp availability still unknown, it first waits for the
+// check behind a cancellable "checking" modal; cancelling makes no change.
+func setAllOnlineFeatures(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	current onlineFeatures,
+	on bool,
+	warp string,
+	onDone func(onlineFeatures, error),
+) {
+	apply := func(warp string) {
+		next, params := allOnlineFeaturesUpdate(current, on, warp)
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.UpdateSettings(ctx, params); err != nil {
+			log.Warn().Err(err).Bool("on", on).Msg("error updating all online features")
+			onDone(current, err)
+			return
+		}
+		onDone(next, nil)
+	}
+	if !on || warp == warpAvailable || warp == warpUnavailable {
+		apply(warp)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), warpCheckAttempts*warpCheckInterval+TUIRequestTimeout)
+	cancelled := false
+	closeWaiting := ShowWaitingModal(pages, app, "Checking Zaparoo Warp...", func() {
+		cancelled = true
+		cancel()
+		onDone(current, nil)
+	})
+	go func() {
+		defer cancel()
+		resolved := resolveWarpAvailability(ctx, svc, warp, warpCheckAttempts, warpCheckInterval)
+		app.QueueUpdateDraw(func() {
+			if cancelled {
+				return
+			}
+			closeWaiting()
+			apply(resolved)
+		})
+	}()
+}
+
+// renderOnlineSettingsMenu shows the Zaparoo Online page in two columns.
+// The left column holds what most people need: the account, the switch for
+// every online feature, and cloud backup scheduling. The right column holds
+// the individual features and remote control status. Features stay disabled
+// until an account is linked, because linking resets every one of them.
 func renderOnlineSettingsMenu(
 	svc SettingsService,
 	pages *tview.Pages,
@@ -109,12 +288,19 @@ func renderOnlineSettingsMenu(
 	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	menu := NewSettingsList(pages, PageSettingsMain).SetRebuildPrevious(goBack)
-	menu.SetDynamicHelpMode(true).SetHelpCallback(func(desc string) { frame.SetHelpText(desc) })
-	menu.SetOnNavigateOut(frame.FocusButtonBar)
+	newColumn := func() *SettingsList {
+		column := NewSettingsList(pages, PageSettingsMain).SetRebuildPrevious(goBack)
+		column.SetDynamicHelpMode(true).SetHelpCallback(func(desc string) { frame.SetHelpText(desc) })
+		return column
+	}
+	left := newColumn()
+	right := newColumn()
+	var columns *SettingsColumns
+	refocus := func() { app.SetFocus(columns) }
 
 	rebuild := func() { buildOnlineSettingsMenu(svc, pages, app, goBack) }
 	status := data.status
+	linked := status.Remote.Linked
 	serverHost := onlineServerHost(data.settings)
 	if serverHost != "" {
 		frame.SetInfoText(fmt.Sprintf(
@@ -122,129 +308,153 @@ func renderOnlineSettingsMenu(
 			CurrentTheme().WarningColorName, serverHost,
 		))
 	}
+	features := onlineFeaturesFromSettings(data.settings, status)
+	warp := status.Remote.Availability
 
-	menu.AddHeader("Account")
-	if status.Remote.Linked {
-		addOnlineAccountItems(svc, pages, app, menu, status, serverHost, rebuild)
+	left.AddHeader("Account")
+	if linked {
+		addOnlineAccountItems(pages, app, left, status, serverHost, refocus)
 	} else {
-		menu.AddValueAction("Account",
-			"Link a Zaparoo Online account to unlock cloud features",
+		left.AddValueAction("Status",
+			"Link a Zaparoo Online account to use online features",
 			func() string { return "Not linked" }, nil)
 		linkDesc := "Connect this device to your Zaparoo Online account"
 		if serverHost != "" {
 			linkDesc = "Connect this device to " + serverHost
 		}
-		menu.AddNavAction("Link account", linkDesc, func() {
+		left.AddNavAction("Link account", linkDesc, func() {
 			startAuthLinkFlow(svc, pages, app, rebuild)
 		})
 	}
+	allDesc := "Turn every online feature on or off. Each can still be changed on its own"
+	if !linked {
+		allDesc = onlineLinkFirstDesc
+	}
+	left.AddTriState("All online features", allDesc,
+		func() TriState { return features.triState(warp) },
+		func(on bool) {
+			setAllOnlineFeatures(svc, pages, app, features, on, warp, func(next onlineFeatures, err error) {
+				features = next
+				left.Redraw()
+				right.Redraw()
+				if err != nil {
+					ShowErrorModal(pages, app, "Failed to save online features", refocus)
+					return
+				}
+				refocus()
+			})
+		}).SetLastItemDisabled(!linked)
+	if linked {
+		addOnlineUnlinkItem(svc, pages, app, left, rebuild, refocus)
+	}
 
-	menu.AddHeader("Features")
-	remoteControlEnabled := false
-	if data.settings != nil && data.settings.RemoteControlEnabled != nil {
-		remoteControlEnabled = *data.settings.RemoteControlEnabled
+	left.AddHeader("Backup")
+	scheduleOptions := []string{"daily", "weekly", "manual"}
+	scheduleIndex := max(slices.Index(scheduleOptions, status.Remote.Schedule), 0)
+	savedScheduleIndex := scheduleIndex
+	scheduleDesc := "How often automatic cloud backup runs"
+	if !linked {
+		scheduleDesc = onlineLinkFirstDesc
 	}
-	remoteControlDesc := "Allow your linked Zaparoo Online account to send approved commands to this device"
-	if !status.Remote.Linked {
-		remoteControlDesc = "Allow approved remote commands after this device is linked to Zaparoo Online"
-	}
-	menu.AddToggle("Remote control", remoteControlDesc, &remoteControlEnabled, func(value bool) {
+	left.AddCycle("Schedule", scheduleDesc, scheduleOptions, &scheduleIndex, func(value string, index int) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{RemoteControlEnabled: &value}); err != nil {
-			remoteControlEnabled = !value
-			menu.refreshAllItems(menu.GetCurrentItem())
-			log.Warn().Err(err).Msg("error updating remote control setting")
-			ShowErrorModal(pages, app, "Failed to save remote control setting", func() {
-				app.SetFocus(menu.List)
-			})
+		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteSchedule: &value}); err != nil {
+			scheduleIndex = savedScheduleIndex
+			left.Redraw()
+			log.Warn().Err(err).Msg("error updating cloud backup schedule")
+			ShowErrorModal(pages, app, "Failed to save cloud backup schedule", refocus)
+			return
 		}
+		savedScheduleIndex = index
+	}).SetLastItemDisabled(!linked)
+	left.AddNavAction("Manage backups", "Back up now, view and restore local and cloud backups", func() {
+		buildBackupSettingsMenu(svc, pages, app, rebuild)
 	})
-	menu.AddValueAction("Remote status",
+
+	featureToggle := func(
+		label, description, logName string,
+		value *bool,
+		params func(*bool) *models.UpdateSettingsParams,
+	) {
+		if !linked {
+			description = onlineLinkFirstDesc
+		}
+		right.AddToggle(label, description, value, func(next bool) {
+			ctx, cancel := tuiContext()
+			defer cancel()
+			if err := svc.UpdateSettings(ctx, params(&next)); err != nil {
+				*value = !next
+				right.Redraw()
+				log.Warn().Err(err).Msgf("error updating %s setting", logName)
+				ShowErrorModal(pages, app, "Failed to save "+logName+" setting", refocus)
+			}
+			left.Redraw()
+		}).SetLastItemDisabled(!linked)
+	}
+
+	right.AddHeader("Features")
+	featureToggle("Remote control",
+		"Allow your linked Zaparoo Online account to send approved commands to this device",
+		"remote control", &features.remoteControl,
+		func(v *bool) *models.UpdateSettingsParams {
+			return &models.UpdateSettingsParams{RemoteControlEnabled: v}
+		})
+	featureToggle("Play history sync",
+		"Upload play history to your linked Zaparoo Online account",
+		"play history sync", &features.playHistory,
+		func(v *bool) *models.UpdateSettingsParams {
+			return &models.UpdateSettingsParams{PlaytimeSyncEnabled: v}
+		})
+	featureToggle("Library sync",
+		"Sync your game list, favorites, likes and decks with your linked Zaparoo Online account",
+		"library sync", &features.library,
+		func(v *bool) *models.UpdateSettingsParams { return &models.UpdateSettingsParams{LibrarySyncEnabled: v} })
+	cloudBackupDesc := "Back up this device to the cloud on a schedule"
+	if warp == warpUnavailable {
+		cloudBackupDesc = "Back up this device to the cloud on a schedule. Requires Zaparoo Warp"
+	}
+	featureToggle("Cloud backup", cloudBackupDesc,
+		"cloud backup", &features.cloudBackup,
+		func(v *bool) *models.UpdateSettingsParams {
+			return &models.UpdateSettingsParams{BackupRemoteEnabled: v}
+		})
+
+	right.AddHeader("Remote")
+	right.AddValueAction("Status",
 		"Whether Zaparoo Online can currently send commands to this device",
 		func() string { return remoteStatusValue(data.activity) },
 		func() {
-			ShowInfoModal(pages, app, "Remote control", remoteStatusDetail(data.activity), func() {
-				app.SetFocus(menu.List)
-			})
+			ShowInfoModal(pages, app, "Remote control", remoteStatusDetail(data.activity), refocus)
 		})
-	menu.AddNavAction("Remote control activity",
+	right.AddNavAction("Activity",
 		"See what a linked account's remote commands have done on this device", func() {
 			buildRemoteActivityPage(svc, pages, app, rebuild)
 		})
 
-	playtimeSyncEnabled := false
-	if data.settings != nil && data.settings.PlaytimeSyncEnabled != nil {
-		playtimeSyncEnabled = *data.settings.PlaytimeSyncEnabled
-	}
-	playtimeSyncDesc := "Upload play history to your linked Zaparoo Online account"
-	if !status.Remote.Linked {
-		playtimeSyncDesc = "Upload play history when this device is linked to Zaparoo Online"
-	}
-	menu.AddToggle("Play history sync", playtimeSyncDesc, &playtimeSyncEnabled, func(value bool) {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{PlaytimeSyncEnabled: &value}); err != nil {
-			playtimeSyncEnabled = !value
-			menu.refreshAllItems(menu.GetCurrentItem())
-			log.Warn().Err(err).Msg("error updating play history sync setting")
-			ShowErrorModal(pages, app, "Failed to save play history sync setting", func() {
-				app.SetFocus(menu.List)
-			})
-		}
-	})
-	librarySyncEnabled := false
-	if data.settings != nil && data.settings.LibrarySyncEnabled != nil {
-		librarySyncEnabled = *data.settings.LibrarySyncEnabled
-	}
-	librarySyncDesc := "Sync your game list, favorites, likes and decks with your linked Zaparoo Online account"
-	if !status.Remote.Linked {
-		librarySyncDesc = "Sync your game list, favorites, likes and decks when this device is linked to Zaparoo Online"
-	}
-	menu.AddToggle("Library sync", librarySyncDesc, &librarySyncEnabled, func(value bool) {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{LibrarySyncEnabled: &value}); err != nil {
-			librarySyncEnabled = !value
-			menu.refreshAllItems(menu.GetCurrentItem())
-			log.Warn().Err(err).Msg("error updating library sync setting")
-			ShowErrorModal(pages, app, "Failed to save library sync setting", func() {
-				app.SetFocus(menu.List)
-			})
-		}
-	})
-	cloudDesc := "Create, restore, and schedule cloud backups of this device"
-	if !status.Remote.Linked {
-		cloudDesc = "Keep this device backed up to the cloud, included with Zaparoo Warp"
-	}
-	menu.AddNavAction("Cloud backup", cloudDesc, func() {
-		buildBackupSettingsMenu(svc, pages, app, rebuild)
-	})
-
-	frame.SetContent(menu.List)
-	menu.TriggerInitialHelp()
+	columns = NewSettingsColumns(app, left, right)
+	frame.SetContent(columns)
 	frame.SetupContentToButtonNavigation()
 	pages.AddAndSwitchToPage(PageSettingsOnline, frame, true)
 }
 
-// addOnlineAccountItems adds the Account section items available while an
-// account is linked: link status, Warp subscription state, and unlink.
+// addOnlineAccountItems adds the Account section status items shown while an
+// account is linked: link status and Warp subscription state.
 func addOnlineAccountItems(
-	svc SettingsService,
 	pages *tview.Pages,
 	app *tview.Application,
 	menu *SettingsList,
 	status *models.BackupStatusResponse,
 	serverHost string,
-	rebuild func(),
+	refocus func(),
 ) {
 	deviceName := ""
 	if status.Remote.DeviceName != nil {
 		deviceName = *status.Remote.DeviceName
 	}
-	accountValue := "Linked"
+	accountLabel, accountValue := "Status", "Linked"
 	if deviceName != "" {
-		accountValue = "Linked as " + deviceName
+		accountLabel, accountValue = "Linked as", deviceName
 	}
 	accountDesc := "This device is linked to Zaparoo Online"
 	if serverHost != "" {
@@ -257,19 +467,17 @@ func addOnlineAccountItems(
 	if since := formatLinkedSince(status.Remote.LinkedAt); since != "" {
 		accountDetail += "\nLinked since: " + since
 	}
-	menu.AddValueAction("Account", accountDesc, func() string { return accountValue }, func() {
-		ShowInfoModal(pages, app, "Zaparoo Online", accountDetail, func() {
-			app.SetFocus(menu.List)
-		})
+	menu.AddValueAction(accountLabel, accountDesc, func() string { return accountValue }, func() {
+		ShowInfoModal(pages, app, "Zaparoo Online", accountDetail, refocus)
 	})
 
 	var warpValue, warpDetail string
 	switch status.Remote.Availability {
-	case "available":
+	case warpAvailable:
 		warpValue = "Active"
 		warpDetail = "Your Zaparoo Warp subscription is active.\n\n" +
 			"Cloud backup and other premium features are enabled."
-	case "unavailable":
+	case warpUnavailable:
 		warpValue = "Not active"
 		warpDetail = "Cloud backup uploads require an active\nZaparoo Warp subscription.\n\n" +
 			"Existing cloud backups can still be restored."
@@ -280,29 +488,36 @@ func addOnlineAccountItems(
 	}
 	menu.AddValueAction("Warp", "Premium subscription powering cloud features",
 		func() string { return warpValue }, func() {
-			ShowInfoModal(pages, app, "Zaparoo Warp", warpDetail, func() {
-				app.SetFocus(menu.List)
-			})
+			ShowInfoModal(pages, app, "Zaparoo Warp", warpDetail, refocus)
 		})
+}
 
+// addOnlineUnlinkItem adds the Unlink account action and its confirmation.
+func addOnlineUnlinkItem(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	menu *SettingsList,
+	rebuild func(),
+	refocus func(),
+) {
 	menu.AddNavAction("Unlink account", "Remove this device's Zaparoo Online credentials", func() {
 		ShowConfirmModal(pages, app,
-			"Unlink from Zaparoo Online?\n\nAutomatic cloud backups will stop\nuntil you link this device again.",
+			"Unlink from Zaparoo Online?\n\nThis turns off remote control, play history\n"+
+				"sync, library sync and cloud backup on this device.\nTurn them back on after linking again.",
 			func() {
 				ctx, cancel := tuiContext()
 				err := svc.Unlink(ctx)
 				cancel()
 				if err != nil {
 					log.Warn().Err(err).Msg("error unlinking from Zaparoo Online")
-					ShowErrorModal(pages, app, "Failed to unlink", func() {
-						app.SetFocus(menu.List)
-					})
+					ShowErrorModal(pages, app, "Failed to unlink", refocus)
 					return
 				}
 				ShowInfoModal(pages, app, "Unlinked",
 					"This device's Zaparoo Online\ncredentials were removed.", rebuild)
 			},
-			func() { app.SetFocus(menu.List) },
+			refocus,
 		)
 	})
 }
@@ -323,7 +538,7 @@ func remoteStatusValue(activity *models.RemoteActivityResponse) string {
 	case state.RemoteStateWaiting:
 		return "Waiting for commands"
 	case state.RemoteStateNotRemoteDevice:
-		return "Not this account's remote device"
+		return "Not the remote device"
 	case state.RemoteStateUnavailable:
 		return "Not available"
 	case state.RemoteStateCredentialRejected:

@@ -204,6 +204,8 @@ var pagesToClearOnThemeChange = []string{
 	PageSettingsReadersMenu,
 	PageSettingsTUI,
 	PageSettingsAbout,
+	PageSettingsCredits,
+	PageSettingsCreditsViewer,
 	PageSearchMedia,
 	PageGenerateDB,
 }

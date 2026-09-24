@@ -356,6 +356,10 @@ func (pf *PageFrame) FocusContentFirst() {
 	if pf.content == nil || pf.app == nil {
 		return
 	}
+	if columns, ok := pf.content.(*SettingsColumns); ok {
+		columns.FocusFirst()
+		return
+	}
 	if list, ok := pf.content.(*tview.List); ok {
 		list.SetCurrentItem(0)
 	}
@@ -365,6 +369,10 @@ func (pf *PageFrame) FocusContentFirst() {
 // FocusContentLast sets focus to the content and selects the last item (for wrap from top).
 func (pf *PageFrame) FocusContentLast() {
 	if pf.content == nil || pf.app == nil {
+		return
+	}
+	if columns, ok := pf.content.(*SettingsColumns); ok {
+		columns.FocusLast()
 		return
 	}
 	if list, ok := pf.content.(*tview.List); ok {
@@ -385,6 +393,10 @@ func (pf *PageFrame) FocusButtonBar() {
 func (pf *PageFrame) SetupContentToButtonNavigation() {
 	if pf.content == nil || pf.buttonBar == nil || pf.app == nil {
 		return
+	}
+
+	if columns, ok := pf.content.(*SettingsColumns); ok {
+		columns.SetOnNavigateOut(pf.FocusButtonBar)
 	}
 
 	// Get the last focusable item in content if it's a list

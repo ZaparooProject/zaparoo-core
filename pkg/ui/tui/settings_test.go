@@ -22,6 +22,7 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,6 +104,101 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("About"), "About menu item should be visible")
 	assert.True(t, runner.ContainsText("Online"),
 		"the Online settings entry is always available")
+}
+
+func TestBuildSettingsMainMenu_TwoColumnLayout_Integration(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range [][2]int{{80, 25}, {75, 15}} {
+		runner := NewTestAppRunner(t, size[0], size[1])
+		pages := tview.NewPages()
+		mockSvc := NewMockSettingsService()
+		runner.Start(pages)
+		runner.QueueUpdateDraw(func() {
+			BuildSettingsMainMenuWithService(&config.Instance{}, mockSvc, pages, runner.App(), nil, nil, "", "")
+		})
+		require.True(t, runner.WaitForText("Readers", uiSettleTimeout))
+
+		screen := runner.GetScreenText()
+		lines := strings.Split(screen, "\n")
+		row := func(text string) int {
+			for i, line := range lines {
+				if strings.Contains(line, text) {
+					return i
+				}
+			}
+			return -1
+		}
+		// Device, data and connection pages on the left, system pages on the
+		// right, sharing rows.
+		assert.Equal(t, row("Device"), row("System"), "size %v", size)
+		assert.Equal(t, row("Readers"), row("Advanced"), "size %v", size)
+		assert.Less(t, row("TUI"), row("Data & connections"), "size %v", size)
+		assert.Less(t, row("Data & connections"), row("Backup"), "size %v", size)
+		assert.Equal(t, row("Logs")+1, row("Credits"), "size %v", size)
+		assert.Equal(t, row("Credits")+1, row("About"), "size %v: Credits sits above About", size)
+		for _, text := range []string{"Audio", "Profiles", "Clients", "Online", "Logs", "About"} {
+			assert.NotEqual(t, -1, row(text), "size %v missing %q", size, text)
+		}
+		assert.Less(t, strings.Index(lines[row("Readers")], "Readers"),
+			strings.Index(lines[row("Readers")], "Advanced"))
+		assert.Less(t, strings.Index(lines[row("Online")], "Online"), len(lines[row("Online")])/2,
+			"size %v: Online is in the left column", size)
+		runner.Stop()
+	}
+}
+
+func TestBuildSettingsMainMenu_CreditsOpensCreditsPage_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		BuildSettingsMainMenuWithService(
+			&config.Instance{}, NewMockSettingsService(), pages, runner.App(), nil, nil, "", "")
+	})
+	require.True(t, runner.WaitForText("Reader connections and scanning", uiSettleTimeout))
+
+	// Right column: Advanced, Logs, then Credits.
+	runner.SimulateArrowRight()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	require.True(t, runner.WaitForText("Contributors and third-party software", uiSettleTimeout))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("── Contributors ──", uiSettleTimeout))
+}
+
+func TestBuildSettingsMainMenu_LeftRightSwitchColumns_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultOnlineBaseURL))
+	mockSvc.SetupGetRemoteActivity(onlineTestActivity("unlinked"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		BuildSettingsMainMenuWithService(&config.Instance{}, mockSvc, pages, runner.App(), nil, nil, "", "")
+	})
+	require.True(t, runner.WaitForText("Reader connections and scanning", uiSettleTimeout))
+
+	// Readers → Right → Advanced → Left → Readers, then down the left
+	// column to Online.
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Debug and system options", uiSettleTimeout))
+	runner.SimulateArrowLeft()
+	require.True(t, runner.WaitForText("Reader connections and scanning", uiSettleTimeout))
+	for range 6 {
+		runner.SimulateArrowDown()
+	}
+	require.True(t, runner.WaitForText("Zaparoo Online account and cloud features", uiSettleTimeout))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("All online features", uiSettleTimeout))
 }
 
 func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
@@ -901,6 +997,54 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 		}
 		return false
 	}, uiSettleTimeout), "toggle should write BackupRemoteEnabled")
+}
+
+func TestBuildBackupSettingsMenu_ScheduleRevertsOnFailure_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsError(errors.New("save failed"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Schedule: < daily >", uiSettleTimeout))
+
+	// Local: Back up now, View backups; Cloud: Automatic backup, then Schedule.
+	for range 3 {
+		runner.SimulateArrowDown()
+	}
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Failed to save cloud backup schedule", uiSettleTimeout))
+	assert.True(t, runner.ContainsText("Schedule: < daily >"), "a failed save puts the schedule back")
+}
+
+func TestBuildBackupSettingsMenu_ToggleRevertsOnFailure_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsError(errors.New("save failed"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("- [ ] Automatic backup", uiSettleTimeout))
+
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Failed to save cloud backup setting", uiSettleTimeout))
+	assert.True(t, runner.ContainsText("- [ ] Automatic backup"), "a failed save puts the toggle back")
 }
 
 func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(t *testing.T) {
@@ -1706,13 +1850,13 @@ func TestLogAuthLinkStatusPollResult(t *testing.T) {
 	assert.Contains(t, string(logs), `"message":"device link status polling recovered"`)
 }
 
-func TestStartAuthLinkFlow_SuccessMentionsCloudBackups_Integration(t *testing.T) {
-	t.Parallel()
-
-	runner := NewTestAppRunner(t, 100, 30)
-	defer runner.Stop()
+// startApprovedLinkFlow runs the link flow against a server that approves
+// straight away, and waits for the "Device linked" dialog.
+func startApprovedLinkFlow(
+	t *testing.T, runner *TestAppRunner, mockSvc *MockSettingsService, onDone func(),
+) {
+	t.Helper()
 	pages := tview.NewPages()
-	mockSvc := NewMockSettingsService()
 	mockSvc.On("StartAuthLink", mock.Anything).Return(&models.AuthLinkStatusResponse{
 		Status:          models.AuthLinkStatusPending,
 		UserCode:        "ABCD-1234",
@@ -1724,12 +1868,48 @@ func TestStartAuthLinkFlow_SuccessMentionsCloudBackups_Integration(t *testing.T)
 
 	runner.Start(pages)
 	runner.QueueUpdateDraw(func() {
-		startAuthLinkFlow(mockSvc, pages, runner.App(), func() {})
+		startAuthLinkFlow(mockSvc, pages, runner.App(), onDone)
 	})
 	require.True(t, runner.WaitForText("ABCD-1234", uiSettleTimeout))
 
 	// The poll loop ticks every 2 seconds before observing approval.
 	require.True(t, runner.WaitForText("Device linked", 5*time.Second))
-	assert.True(t, runner.ContainsText("Existing backups from your account are under"))
-	assert.True(t, runner.ContainsText("Cloud backup > View backups."))
+}
+
+func TestStartAuthLinkFlow_LetMeChooseChangesNothing_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	mockSvc := NewMockSettingsService()
+	done := make(chan struct{})
+	startApprovedLinkFlow(t, runner, mockSvc, func() { close(done) })
+
+	assert.True(t, runner.ContainsText("Turn on every online feature now?"))
+	assert.True(t, runner.ContainsText("Existing cloud backups are under Settings > Backup."))
+	runner.SimulateArrowRight()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(done, uiSettleTimeout))
+	mockSvc.AssertNotCalled(t, "UpdateSettings", mock.Anything, mock.Anything)
+}
+
+func TestStartAuthLinkFlow_TurnOnEverything_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	mockSvc := NewMockSettingsService()
+	status := backupTestStatus(true)
+	status.Remote.Availability = warpAvailable
+	mockSvc.SetupGetBackupStatus(status)
+	updates := recordUpdateSettings(mockSvc, nil)
+	done := make(chan struct{})
+	startApprovedLinkFlow(t, runner, mockSvc, func() { close(done) })
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(done, uiSettleTimeout))
+	assert.True(t, updates.seen(func(p *models.UpdateSettingsParams) bool {
+		return boolIs(p.RemoteControlEnabled, true) && boolIs(p.PlaytimeSyncEnabled, true) &&
+			boolIs(p.LibrarySyncEnabled, true) && boolIs(p.BackupRemoteEnabled, true)
+	}))
 }

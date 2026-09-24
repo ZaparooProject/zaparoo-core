@@ -59,7 +59,8 @@ var (
 	}
 )
 
-// BuildSettingsMainMenu creates the top-level settings menu with Audio, Readers, and Advanced options.
+// BuildSettingsMainMenu creates the top-level settings menu: device, data and
+// connection pages in the left column, system pages in the right.
 func BuildSettingsMainMenu(
 	cfg *config.Instance,
 	pages *tview.Pages,
@@ -103,44 +104,49 @@ func BuildSettingsMainMenuWithService(
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Create settings list
-	mainMenu := NewSettingsList(pages, PageMain)
-	if rebuildMainPage != nil {
-		mainMenu.SetRebuildPrevious(rebuildMainPage)
+	newColumn := func() *SettingsList {
+		column := NewSettingsList(pages, PageMain)
+		if rebuildMainPage != nil {
+			column.SetRebuildPrevious(rebuildMainPage)
+		}
+		column.SetDynamicHelpMode(true).
+			SetHelpCallback(func(desc string) {
+				frame.SetHelpText(desc)
+			})
+		return column
 	}
-
-	// Enable dynamic help mode
-	mainMenu.SetDynamicHelpMode(true).
-		SetHelpCallback(func(desc string) {
-			frame.SetHelpText(desc)
-		})
+	left := newColumn()
+	right := newColumn()
 
 	rebuildSettingsMain := func() {
 		BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 	}
 
-	mainMenu.
+	left.AddHeader("Device").
 		AddNavAction("Readers", "Reader connections and scanning", func() {
 			buildReadersSettingsMenu(cfg, svc, pages, app, pl)
 		}).
 		AddNavAction("Audio", "Sound and feedback settings", func() {
 			buildAudioSettingsMenu(svc, pages, app)
 		}).
+		AddNavAction("Profiles", "Profile-wide launch behavior", func() {
+			buildProfilesSettingsMenu(svc, pages, app)
+		}).
 		AddNavAction("TUI", "Theme and display preferences", func() {
 			buildTUISettingsMenu(pages, app, pl, rebuildSettingsMain)
 		}).
-		AddNavAction("Profiles", "Profile-wide launch behavior", func() {
-			buildProfilesSettingsMenu(svc, pages, app)
+		AddHeader("Data & connections").
+		AddNavAction("Backup", "Back up and restore this device", func() {
+			buildBackupSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
 		}).
 		AddNavAction("Clients", "Pair and revoke client devices", func() {
 			BuildClientsPage(svc, pages, app)
 		}).
-		AddNavAction("Backup", "Back up and restore this device", func() {
-			buildBackupSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
-		}).
 		AddNavAction("Online", "Zaparoo Online account and cloud features", func() {
 			buildOnlineSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
-		}).
+		})
+
+	right.AddHeader("System").
 		AddNavAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
 		}).
@@ -149,13 +155,14 @@ func BuildSettingsMainMenuWithService(
 				pages.SwitchToPage(PageSettingsMain)
 			})
 		}).
-		AddNavAction("About", "Version, license, and credits", func() {
+		AddNavAction("Credits", "Contributors and third-party software", func() {
+			buildCreditsPage(pages, app)
+		}).
+		AddNavAction("About", "Version and license", func() {
 			buildAboutPage(pages, app)
 		})
 
-	// Set content and trigger initial help
-	frame.SetContent(mainMenu.List)
-	mainMenu.TriggerInitialHelp()
+	frame.SetContent(NewSettingsColumns(app, left, right))
 	frame.SetupContentToButtonNavigation()
 
 	pages.AddAndSwitchToPage(PageSettingsMain, frame, true)
@@ -572,6 +579,8 @@ func addCloudBackupItems(
 			defer cancel()
 			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteEnabled: &value})
 			if err != nil {
+				enabled = !value
+				menu.refreshAllItems(menu.GetCurrentItem())
 				log.Warn().Err(err).Msg("error updating cloud backup setting")
 				ShowErrorModal(
 					pages, app, "Failed to save cloud backup setting", func() { app.SetFocus(menu.List) },
@@ -587,21 +596,26 @@ func addCloudBackupItems(
 			break
 		}
 	}
+	savedScheduleIndex := scheduleIndex
 	menu.AddCycle(
 		"Schedule",
 		"How often automatic cloud backup runs",
 		scheduleOptions,
 		&scheduleIndex,
-		func(value string, _ int) {
+		func(value string, index int) {
 			ctx, cancel := tuiContext()
 			defer cancel()
 			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteSchedule: &value})
 			if err != nil {
+				scheduleIndex = savedScheduleIndex
+				menu.Redraw()
 				log.Warn().Err(err).Msg("error updating cloud backup schedule")
 				ShowErrorModal(pages, app, "Failed to save cloud backup schedule", func() {
 					app.SetFocus(menu.List)
 				})
+				return
 			}
+			savedScheduleIndex = index
 		},
 	)
 	cloudUploadDescription := "Upload a backup of this device to the cloud"
@@ -841,10 +855,7 @@ func pollAuthLinkStatus(
 		case models.AuthLinkStatusApproved:
 			app.QueueUpdateDraw(func() {
 				closeModal()
-				ShowInfoModal(pages, app, "Device linked",
-					"This device is now linked to Zaparoo Online.\n\n"+
-						"Existing backups from your account are under\n"+
-						"Cloud backup > View backups.", onDone)
+				showLinkedDialog(svc, pages, app, onDone)
 			})
 			return
 		default:
@@ -859,6 +870,48 @@ func pollAuthLinkStatus(
 			return
 		}
 	}
+}
+
+const linkedModalPage = "linked_modal"
+
+// showLinkedDialog confirms a completed link and offers to turn every online
+// feature on at once. Linking resets them all, so this is the point where
+// people choose. "Let me choose" (or Escape) changes nothing.
+func showLinkedDialog(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func()) {
+	dialog := NewDialog().
+		SetText("This device is now linked to Zaparoo Online.\n\n" +
+			"Turn on every online feature now? Each one can be\n" +
+			"switched off on its own from the Online page.\n\n" +
+			"Existing cloud backups are under Settings > Backup.").
+		SetTitle("Device linked").
+		AddButtons([]string{"Turn on everything", "Let me choose"}).
+		SetDoneFunc(func(buttonIndex int) {
+			pages.HidePage(linkedModalPage)
+			pages.RemovePage(linkedModalPage)
+			if buttonIndex != 0 {
+				onDone()
+				return
+			}
+			var warp string
+			ctx, cancel := tuiContext()
+			status, err := svc.GetBackupStatus(ctx)
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Msg("error reading backup status after linking")
+			} else {
+				warp = status.Remote.Availability
+			}
+			setAllOnlineFeatures(svc, pages, app, onlineFeatures{}, true, warp,
+				func(_ onlineFeatures, err error) {
+					if err != nil {
+						ShowErrorModal(pages, app, "Failed to turn on online features", onDone)
+						return
+					}
+					onDone()
+				})
+		})
+	pages.AddPage(linkedModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 }
 
 func logAuthLinkStatusPollResult(err error, consecutiveFailures int) int {
@@ -2317,7 +2370,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	pages.AddAndSwitchToPage(PageSettingsIgnoreSystems, frame, true)
 }
 
-// buildAboutPage creates the About page with version, license, and credits.
+// buildAboutPage creates the About page with version and license.
 func buildAboutPage(pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
 		SetTitle("About")
