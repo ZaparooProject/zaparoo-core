@@ -571,7 +571,53 @@ func (db *MediaDB) ClearScrapeRunMarkers(ctx context.Context, scraperID, runID s
 	if err != nil {
 		return fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
 	}
-	return clearMediaTagsForTagDBIDs(ctx, db.sql.Load(), tagDBIDs)
+	if len(tagDBIDs) == 0 {
+		return nil
+	}
+	// The markers are counted in SystemTagsCache like any other tag, so the
+	// systems holding them need a tag cache refresh once they are gone.
+	systemIDs, err := systemIDsForMediaTagDBIDs(ctx, db.sql.Load(), tagDBIDs)
+	if err != nil {
+		return fmt.Errorf("failed to find systems for scraper %q run %q markers: %w", scraperID, runID, err)
+	}
+	if err := clearMediaTagsForTagDBIDs(ctx, db.sql.Load(), tagDBIDs); err != nil {
+		return err
+	}
+	db.addScrapeTagSystems(systemIDs)
+	return nil
+}
+
+func systemIDsForMediaTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64) ([]string, error) {
+	args := make([]any, 0, len(tagDBIDs))
+	for _, tagDBID := range tagDBIDs {
+		args = append(args, tagDBID)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	rows, err := db.QueryContext(ctx, `
+		SELECT SystemID FROM Systems
+		WHERE DBID IN (
+			SELECT m.SystemDBID
+			FROM MediaTags mt
+			JOIN Media m ON m.DBID = mt.MediaDBID
+			WHERE mt.TagDBID IN (`+prepareVariadic("?", ",", len(tagDBIDs))+`)
+		)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query systems for tag DBIDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	systemIDs := make([]string, 0)
+	for rows.Next() {
+		var systemID string
+		if err := rows.Scan(&systemID); err != nil {
+			return nil, fmt.Errorf("failed to scan system for tag DBIDs: %w", err)
+		}
+		systemIDs = append(systemIDs, systemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate systems for tag DBIDs: %w", err)
+	}
+	return systemIDs, nil
 }
 
 func getMediaIDsForTagDBIDs(
@@ -1681,48 +1727,10 @@ func (db *MediaDB) recordScrapeImageChanges(ctx context.Context, writeCtx *scrap
 	// artwork that has just been scraped, until a restart rebuilds the index.
 	clearCoverAvailabilityCacheFor(db.sql.Load())
 
-	conditions := make([]string, 0, 2)
-	args := make([]any, 0, len(writeCtx.changedImageMediaIDs)+len(writeCtx.changedImageMediaTitleIDs))
-	if len(writeCtx.changedImageMediaIDs) > 0 {
-		conditions = append(conditions, "m.DBID IN ("+prepareVariadic("?", ",", len(writeCtx.changedImageMediaIDs))+")")
-		for id := range writeCtx.changedImageMediaIDs {
-			args = append(args, id)
-		}
-	}
-	if len(writeCtx.changedImageMediaTitleIDs) > 0 {
-		conditions = append(conditions,
-			"m.MediaTitleDBID IN ("+prepareVariadic("?", ",", len(writeCtx.changedImageMediaTitleIDs))+")")
-		for id := range writeCtx.changedImageMediaTitleIDs {
-			args = append(args, id)
-		}
-	}
-
-	//nolint:gosec // conditions contain only generated placeholders
-	rows, err := db.sql.Load().QueryContext(ctx, `
-SELECT DISTINCT s.SystemID
-FROM Media m
-JOIN Systems s ON s.DBID = m.SystemDBID
-WHERE `+strings.Join(conditions, " OR "), args...)
+	changed, err := db.systemIDsForMediaOrTitles(ctx, writeCtx.changedImageMediaIDs, writeCtx.changedImageMediaTitleIDs)
 	if err != nil {
 		db.requireFullScrapeImageInvalidation(
 			err, "failed to resolve systems with changed scrape images; full invalidation required")
-		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	changed := make([]string, 0)
-	for rows.Next() {
-		var systemID string
-		if err := rows.Scan(&systemID); err != nil {
-			db.requireFullScrapeImageInvalidation(
-				err, "failed to read system with changed scrape images; full invalidation required")
-			return
-		}
-		changed = append(changed, systemID)
-	}
-	if err := rows.Err(); err != nil {
-		db.requireFullScrapeImageInvalidation(
-			err, "failed to iterate systems with changed scrape images; full invalidation required")
 		return
 	}
 
@@ -1734,6 +1742,122 @@ WHERE `+strings.Join(conditions, " OR "), args...)
 		db.scrapeImageSystems[systemID] = struct{}{}
 	}
 	db.scrapeImageChangesMu.Unlock()
+}
+
+// systemIDsForMediaOrTitles returns the distinct system IDs owning any of the
+// given Media or MediaTitle rows.
+func (db *MediaDB) systemIDsForMediaOrTitles(
+	ctx context.Context, mediaIDs, titleIDs map[int64]struct{},
+) ([]string, error) {
+	subqueries := make([]string, 0, 2)
+	args := make([]any, 0, len(mediaIDs)+len(titleIDs))
+	if len(mediaIDs) > 0 {
+		subqueries = append(subqueries,
+			"SELECT SystemDBID FROM Media WHERE DBID IN ("+prepareVariadic("?", ",", len(mediaIDs))+")")
+		for id := range mediaIDs {
+			args = append(args, id)
+		}
+	}
+	if len(titleIDs) > 0 {
+		subqueries = append(subqueries,
+			"SELECT SystemDBID FROM MediaTitles WHERE DBID IN ("+prepareVariadic("?", ",", len(titleIDs))+")")
+		for id := range titleIDs {
+			args = append(args, id)
+		}
+	}
+	if len(subqueries) == 0 {
+		return nil, nil
+	}
+
+	//nolint:gosec // subqueries contain only generated placeholders
+	rows, err := db.sql.Load().QueryContext(ctx,
+		"SELECT SystemID FROM Systems WHERE DBID IN ("+strings.Join(subqueries, " UNION ")+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("query systems for scraped rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	systemIDs := make([]string, 0)
+	for rows.Next() {
+		var systemID string
+		if err := rows.Scan(&systemID); err != nil {
+			return nil, fmt.Errorf("scan system for scraped rows: %w", err)
+		}
+		systemIDs = append(systemIDs, systemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate systems for scraped rows: %w", err)
+	}
+	return systemIDs, nil
+}
+
+// recordScrapeTagChanges marks the systems of committed scrape targets as
+// needing a SystemTagsCache refresh. Every target rewrites tags (its sentinel at
+// least), so the tag cache for its system is stale once the write commits.
+func (db *MediaDB) recordScrapeTagChanges(ctx context.Context, targets []database.ScrapeWriteTarget) {
+	mediaIDs := make(map[int64]struct{}, len(targets))
+	titleIDs := make(map[int64]struct{}, len(targets))
+	for i := range targets {
+		if targets[i].MediaDBID != 0 {
+			mediaIDs[targets[i].MediaDBID] = struct{}{}
+		}
+		if targets[i].MediaTitleDBID != 0 {
+			titleIDs[targets[i].MediaTitleDBID] = struct{}{}
+		}
+	}
+	systemIDs, err := db.systemIDsForMediaOrTitles(ctx, mediaIDs, titleIDs)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to resolve systems with changed scrape tags; full tag cache refresh required")
+		db.scrapeTagChangesMu.Lock()
+		db.scrapeTagChangesAll = true
+		db.scrapeTagChangesMu.Unlock()
+		return
+	}
+	db.addScrapeTagSystems(systemIDs)
+}
+
+func (db *MediaDB) addScrapeTagSystems(systemIDs []string) {
+	if len(systemIDs) == 0 {
+		return
+	}
+	db.scrapeTagChangesMu.Lock()
+	defer db.scrapeTagChangesMu.Unlock()
+	if db.scrapeTagSystems == nil {
+		db.scrapeTagSystems = make(map[string]struct{}, len(systemIDs))
+	}
+	for _, systemID := range systemIDs {
+		db.scrapeTagSystems[systemID] = struct{}{}
+	}
+}
+
+// MarkScrapeTagCacheStale records systems whose tags changed in scrape writes
+// this process did not track, such as a run interrupted by a restart. An empty
+// list marks every system.
+func (db *MediaDB) MarkScrapeTagCacheStale(systemIDs []string) {
+	if len(systemIDs) == 0 {
+		db.scrapeTagChangesMu.Lock()
+		db.scrapeTagChangesAll = true
+		db.scrapeTagChangesMu.Unlock()
+		return
+	}
+	db.addScrapeTagSystems(systemIDs)
+}
+
+// consumeScrapeTagChanges returns and clears systems whose tags changed in
+// committed scrape writes. all is true when a targeted set could not be
+// resolved and the whole cache must be rebuilt.
+func (db *MediaDB) consumeScrapeTagChanges() (systemIDs []string, all bool) {
+	db.scrapeTagChangesMu.Lock()
+	defer db.scrapeTagChangesMu.Unlock()
+	systemIDs = make([]string, 0, len(db.scrapeTagSystems))
+	for systemID := range db.scrapeTagSystems {
+		systemIDs = append(systemIDs, systemID)
+	}
+	sort.Strings(systemIDs)
+	all = db.scrapeTagChangesAll
+	db.scrapeTagSystems = nil
+	db.scrapeTagChangesAll = false
+	return systemIDs, all
 }
 
 // ConsumeScrapeImageChanges returns and clears systems whose image properties
@@ -1795,6 +1919,7 @@ func (db *MediaDB) ApplyScrapeResult(
 	}
 	committed = true
 	db.recordScrapeImageChanges(ctx, writeCtx)
+	db.recordScrapeTagChanges(ctx, []database.ScrapeWriteTarget{target})
 	// Scraped tags can change which tags distinguish a title's variants. Refresh
 	// after commit (the scrape ran on its own tx, not db.tx). Non-fatal.
 	if disErr := db.RecomputeTitleDisambiguation(ctx, []int64{mediaTitleDBID}); disErr != nil {
@@ -1847,6 +1972,7 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 	}
 	committed = true
 	db.recordScrapeImageChanges(ctx, writeCtx)
+	db.recordScrapeTagChanges(ctx, targets)
 	// Scraped tags can change which tags distinguish a title's variants. Refresh
 	// the affected titles after commit (the batch ran on its own tx). Non-fatal.
 	titleIDs := make([]int64, 0, len(targets))

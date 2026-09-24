@@ -3574,6 +3574,20 @@ func (m *MockMediaDBI) ConsumeScrapeImageChanges() ([]string, bool) {
 	return systems, all
 }
 
+func (m *MockMediaDBI) MarkScrapeTagCacheStale(systemIDs []string) {
+	if m.hasExpectedCall("MarkScrapeTagCacheStale") {
+		m.Called(systemIDs)
+	}
+}
+
+func (m *MockMediaDBI) RefreshScrapeTagCache(ctx context.Context) error {
+	if !m.hasExpectedCall("RefreshScrapeTagCache") {
+		return nil
+	}
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
 	ctx context.Context, systemDBID int64, sentinelTag string,
 ) ([]database.MediaTitle, error) {

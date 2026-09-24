@@ -304,6 +304,98 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestHandleMediaScrape_PublishesDoneAfterTagRefresh covers clients that
+// re-read media.tags when a scrape reports completion. The terminal status has
+// to wait for the tag cache refresh, or that read returns the pre-scrape tags.
+func TestHandleMediaScrape_PublishesDoneAfterTagRefresh(t *testing.T) {
+	tests := []struct {
+		name    string
+		scraper platforms.Scraper
+	}{
+		{name: "done update", scraper: doneUpdatePlatformScraper("test-scraper", "Test Scraper")},
+		{name: "synthesized completion", scraper: emptyPlatformScraper("test-scraper", "Test Scraper")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Not parallel — manipulates shared scrapingStatusInstance.
+			ClearScrapingStatus()
+			statusInstance.clear()
+
+			pl := mocks.NewMockPlatform()
+			pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+				"test-scraper": tt.scraper,
+			})
+			pl.SetupBasicMock()
+			st, ns := state.NewState(pl, "test")
+			t.Cleanup(st.StopService)
+
+			terminalSeen := func(n models.Notification) bool {
+				if n.Method != models.NotificationMediaScraping {
+					return false
+				}
+				var payload models.ScrapingStatusResponse
+				require.NoError(t, json.Unmarshal(n.Params, &payload))
+				return payload.Done || !payload.Scraping
+			}
+			doneBeforeRefresh := make(chan bool, 1)
+			mockDB := testhelpers.NewMockMediaDBI()
+			mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+				ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+			}).Return(nil).Once()
+			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+			mockDB.On("ClearScrapingOperation").Return(nil).Once()
+			mockDB.On("WALCheckpoint").Return(nil).Once()
+			mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Run(func(assertmock.Arguments) {
+				seen := false
+				for {
+					select {
+					case n := <-ns:
+						seen = seen || terminalSeen(n)
+						continue
+					default:
+					}
+					break
+				}
+				doneBeforeRefresh <- seen
+			}).Return(nil).Once()
+			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("BackgroundOperationDone").Return()
+			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
+
+			_, err := HandleMediaScrape(requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: pl,
+				State:    st,
+				Database: &database.Database{MediaDB: mockDB},
+				Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+			})
+			require.NoError(t, err)
+
+			select {
+			case seen := <-doneBeforeRefresh:
+				assert.False(t, seen, "completion must not be published before the tag cache refresh")
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for the tag cache refresh")
+			}
+			timeout := time.After(2 * time.Second)
+			for {
+				select {
+				case n := <-ns:
+					if terminalSeen(n) {
+						require.Eventually(t, func() bool { return !IsScrapingRunning() },
+							2*time.Second, 10*time.Millisecond)
+						mockDB.AssertExpectations(t)
+						return
+					}
+				case <-timeout:
+					t.Fatal("timed out waiting for the completion notification")
+				}
+			}
+		})
+	}
+}
+
 // doneUpdatePlatformScraper returns a scraper that emits a single Done=true
 // update then closes the channel.
 func doneUpdatePlatformScraper(id, name string) platforms.Scraper {
@@ -628,6 +720,8 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
+	// Writes before the failure committed, so their tags must still be refreshed.
+	mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
@@ -1257,15 +1351,25 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	// queue worker. Killing that goroutine hangs the queue instead of failing
 	// the test, so record what was seen and assert it after the queue finishes.
 	storedWhenRetiring := -1
+	var events []string
 	db.On("ClearScrapeRunMarkers", assertmock.Anything, "first", "one").Run(func(assertmock.Arguments) {
 		storedWhenRetiring = len(stored)
+		events = append(events, "clear:first")
 	}).Return(nil).Once()
-	db.On("ClearScrapeRunMarkers", assertmock.Anything, "second", "two").Return(nil).Once()
+	db.On("ClearScrapeRunMarkers", assertmock.Anything, "second", "two").Run(func(assertmock.Arguments) {
+		events = append(events, "clear:second")
+	}).Return(nil).Once()
+	db.On("RefreshScrapeTagCache", assertmock.Anything).Run(func(assertmock.Arguments) {
+		events = append(events, "refresh")
+	}).Return(nil).Twice()
 	db.On("WALCheckpoint").Return(nil).Twice()
 	tracked := false
 	db.On("TrackBackgroundOperation").Run(func(assertmock.Arguments) { tracked = true }).Return().Once()
 	finished := make(chan struct{})
-	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(finished) }).Return().Once()
+	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		events = append(events, "done")
+		close(finished)
+	}).Return().Once()
 	db.On("GetScrapedMediaCount", assertmock.Anything, assertmock.Anything).Return(0, nil)
 	var calls []string
 	var observed []scrapeObservation
@@ -1304,6 +1408,8 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	require.Equal(t, []string{"first", "second"}, calls)
 	require.Equal(t, 2, storedWhenRetiring,
 		"next job must be durable before retiring previous markers")
+	require.Equal(t, []string{"clear:first", "refresh", "clear:second", "refresh", "done"}, events,
+		"each job must refresh the tag cache after its markers are cleared and before the database is released")
 	require.Len(t, observed, 2)
 	for i := range observed {
 		require.True(t, observed[i].tracked,

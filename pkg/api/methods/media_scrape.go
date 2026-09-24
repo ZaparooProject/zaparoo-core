@@ -314,6 +314,14 @@ func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	WipeMediaThumbCacheSystems(systems)
 }
 
+// refreshScrapedTags makes tags written by a scrape visible to media.tags.
+// Scrape writes commit incrementally, so this runs on every terminal outcome.
+func refreshScrapedTags(ctx context.Context, mediaDB database.MediaDBI) {
+	if err := mediaDB.RefreshScrapeTagCache(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to refresh tag cache after scrape")
+	}
+}
+
 func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) (int, bool) {
 	if db == nil || db.MediaDB == nil {
 		return 0, false
@@ -736,6 +744,19 @@ func startMediaScrapeOperation(
 		defer func() { scrapingStatusInstance.clearIfOwner(scraperID) }()
 		defer cancelFunc()
 		defer db.MediaDB.BackgroundOperationDone()
+		// The terminal status is held until the tag cache refresh has run, so
+		// clients that re-read media.tags on completion see the scraped tags.
+		var terminal *models.ScrapingStatusResponse
+		publishTerminal := func() {
+			if terminal != nil {
+				publishScrapingStatus(ns, terminal)
+				terminal = nil
+			}
+		}
+		defer publishTerminal()
+		// Runs first on every exit: after any run marker cleanup, while the
+		// indexing exclusion lease is held and before Close can proceed.
+		defer refreshScrapedTags(env.State.GetContext(), db.MediaDB)
 
 		for {
 			finalStatus := mediadb.IndexingStatusCompleted
@@ -757,9 +778,10 @@ func startMediaScrapeOperation(
 				}
 				if update.Done {
 					populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
-				} else {
-					populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
+					terminal = &status
+					continue
 				}
+				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
 				publishScrapingStatus(ns, &status)
 			}
 
@@ -788,7 +810,7 @@ func startMediaScrapeOperation(
 				terminalStatus.Paused = false
 				terminalStatus.State = scrapeStateCompleted
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
-				publishScrapingStatus(ns, &terminalStatus)
+				terminal = &terminalStatus
 			}
 			persistedStatus := finalStatus
 			if len(operation.Pending) > 0 && scrapeCtx.Err() == nil {
@@ -834,6 +856,8 @@ func startMediaScrapeOperation(
 					log.Warn().Err(cleanupErr).Msg("failed to clear completed scrape markers")
 				}
 			}
+			refreshScrapedTags(env.State.GetContext(), db.MediaDB)
+			publishTerminal()
 			operation = next
 			scraperID, runID = operation.ScraperID, operation.RunID
 			params.Force = operation.Force

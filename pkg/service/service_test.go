@@ -1513,10 +1513,15 @@ func TestCheckAndResumeScraping_MissingOperationMarksFailed(t *testing.T) {
 	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
 	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, nil).Once()
 	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	// The lost operation's scope is unknown, so every system's tags are stale.
+	mockMediaDB.On("MarkScrapeTagCacheStale", []string(nil)).Return().Once()
+	mockMediaDB.On("RefreshScrapeTagCache", mock.Anything).Return(nil).Once()
 
-	checkAndResumeScraping(
-		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
-	)
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, st, nil)
 
 	mockMediaDB.AssertExpectations(t)
 }
@@ -1524,16 +1529,22 @@ func TestCheckAndResumeScraping_MissingOperationMarksFailed(t *testing.T) {
 func TestCheckAndResumeScraping_UnavailableScraperMarksFailed(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	methods.ClearScrapingStatus()
-	operation := database.ScrapingOperation{ScraperID: "missing-scraper"}
+	operation := database.ScrapingOperation{ScraperID: "missing-scraper", Systems: []string{"SNES"}}
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
 	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
 	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	// The run will not resume, so tags it wrote before the restart are
+	// refreshed now rather than at the end of a run.
+	mockMediaDB.On("MarkScrapeTagCacheStale", []string{"SNES"}).Return().Once()
+	mockMediaDB.On("RefreshScrapeTagCache", mock.Anything).Return(nil).Once()
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Scrapers", (*config.Instance)(nil)).Return(map[string]platforms.Scraper{}).Once()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
 
-	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, st, nil)
 
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
@@ -1585,6 +1596,10 @@ func TestCheckAndResumeScrapingVersionedQueueWaitsForOptimization(t *testing.T) 
 	mdb.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mdb.On("ClearScrapingOperation").Return(nil).Once()
 	mdb.On("ClearScrapeRunMarkers", mock.Anything, "local", "durable").Return(nil).Once()
+	// Writes before the restart were not tracked, so the resumed run marks its
+	// scope stale on each attempt and refreshes it once when it ends.
+	mdb.On("MarkScrapeTagCacheStale", []string{"SNES"}).Return().Once()
+	mdb.On("RefreshScrapeTagCache", mock.Anything).Return(nil).Once()
 	mdb.On("GetScrapedMediaCount", mock.Anything, "local").Return(0, nil)
 	mdb.On("WALCheckpoint").Return(nil).Once()
 	mdb.On("TrackBackgroundOperation").Return().Once()
@@ -1640,6 +1655,9 @@ func TestCheckAndResumeScraping_PersistenceFailurePreservesJob(t *testing.T) {
 	upgraded.Version, upgraded.Status = 1, mediadb.IndexingStatusRunning
 	mockMediaDB.On("SetScrapingOperation", upgraded).Return(assert.AnError).Once()
 	mockMediaDB.On("ClearScrapingOperation").Return(nil).Maybe()
+	// No run starts, so the resume path refreshes the stale scope itself.
+	mockMediaDB.On("MarkScrapeTagCacheStale", []string(nil)).Return().Once()
+	mockMediaDB.On("RefreshScrapeTagCache", mock.Anything).Return(nil).Once()
 	t.Cleanup(func() {
 		mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
 		mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)

@@ -1606,6 +1606,15 @@ type MediaDBI interface {
 	// set and callers must conservatively invalidate the full cache.
 	ConsumeScrapeImageChanges() (systems []string, all bool)
 
+	// RefreshScrapeTagCache rebuilds the tag caches for systems whose tags
+	// changed in committed scrape writes. It is a no-op when nothing changed.
+	RefreshScrapeTagCache(ctx context.Context) error
+
+	// MarkScrapeTagCacheStale records systems whose tags changed in scrape
+	// writes that were not tracked, so the next RefreshScrapeTagCache rebuilds
+	// them. An empty list marks every system.
+	MarkScrapeTagCacheStale(systemIDs []string)
+
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 	// that have no Media row with the given sentinel tag value.
 	FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]MediaTitle, error)

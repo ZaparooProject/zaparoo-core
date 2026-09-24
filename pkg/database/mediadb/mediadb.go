@@ -172,6 +172,7 @@ type MediaDB struct {
 	ctx                     context.Context
 	pl                      platforms.Platform
 	scrapeImageSystems      map[string]struct{}
+	scrapeTagSystems        map[string]struct{}
 	batchInsertTagType      *BatchInserter
 	stmtInsertMedia         *sql.Stmt
 	tx                      *sql.Tx
@@ -211,6 +212,7 @@ type MediaDB struct {
 	mediaSearchBoundsMu     syncutil.RWMutex
 	sqlMu                   syncutil.RWMutex
 	scrapeImageChangesMu    syncutil.Mutex
+	scrapeTagChangesMu      syncutil.Mutex
 	recreating              atomic.Bool
 	browseCacheRebuilding   atomic.Bool
 	needsIndexRebuild       atomic.Bool
@@ -222,6 +224,7 @@ type MediaDB struct {
 	utilityTagCacheDirty    bool
 	mediaSearchBoundsDirty  bool
 	scrapeImageChangesAll   bool
+	scrapeTagChangesAll     bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
