@@ -835,7 +835,8 @@ func TestRunScript_HiddenSplitsQuotedArgs(t *testing.T) {
 			tmpDir := t.TempDir()
 			scriptPath := filepath.Join(tmpDir, "script.sh")
 			script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > args\n"
-			require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
+			//nolint:gosec // test script must be executable
+			require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
 
 			require.NoError(t, runScriptContext(context.Background(), nil, scriptPath, tt.args, true, ""))
 
