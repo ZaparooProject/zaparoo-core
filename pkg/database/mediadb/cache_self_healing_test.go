@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -518,4 +519,66 @@ func TestPopulateSystemTagsCache_FailsFastDuringActiveTransaction(t *testing.T) 
 
 	err = mediaDB.PopulateSystemTagsCacheForSystems(ctx, []systemdefs.System{{ID: "NES"}})
 	require.ErrorIs(t, err, ErrTransactionActive)
+}
+
+// A full invalidation, such as orphan cleanup, empties SystemTagsCache for
+// every system. Self-healing a request for one system must
+// not then build the in-memory cache, which answers for every system and is
+// persisted, from a table holding only that one.
+func TestGetSystemTagsCached_SelfHealKeepsOtherSystems_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	systemsByID := make(map[string]systemdefs.System)
+	for _, fixture := range []struct{ system, title, path, genre string }{
+		{"NES", "Super Mario Bros", "/roms/mario.nes", "action:platformer"},
+		{"SNES", "F-Zero", "/roms/fzero.sfc", "racing"},
+	} {
+		sysDef, sysErr := systemdefs.GetSystem(fixture.system)
+		require.NoError(t, sysErr)
+		systemsByID[fixture.system] = *sysDef
+		insertedSystem, insertErr := mediaDB.InsertSystem(database.System{SystemID: sysDef.ID, Name: fixture.system})
+		require.NoError(t, insertErr)
+		insertedTitle, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, fixture.title),
+			Name:       fixture.title,
+		})
+		require.NoError(t, insertErr)
+		insertedMedia, insertErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID: insertedSystem.DBID, MediaTitleDBID: insertedTitle.DBID, Path: fixture.path,
+		})
+		require.NoError(t, insertErr)
+		insertedTag, insertErr := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: fixture.genre})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMediaTag(database.MediaTag{
+			MediaDBID: insertedMedia.DBID, TagDBID: insertedTag.DBID,
+		})
+		require.NoError(t, insertErr)
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.Nil(t, mediaDB.inMemoryTagCache.Load(), "the cache must start empty")
+
+	nesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{systemsByID["NES"]})
+	require.NoError(t, err)
+	require.Len(t, nesTags, 1)
+
+	require.Eventually(t, func() bool { return mediaDB.inMemoryTagCache.Load() != nil },
+		5*time.Second, 10*time.Millisecond, "self-healing rebuilds the in-memory cache")
+
+	snesTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{systemsByID["SNES"]})
+	require.NoError(t, err)
+	require.Len(t, snesTags, 1, "a system the request did not name must keep its tags")
+	assert.Equal(t, "racing", snesTags[0].Tag)
+
+	allTags, err := mediaDB.GetAllUsedTags(ctx)
+	require.NoError(t, err)
+	assert.Len(t, allTags, 2, "the all-systems list must cover every system")
 }

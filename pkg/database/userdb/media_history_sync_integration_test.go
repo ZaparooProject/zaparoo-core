@@ -20,6 +20,7 @@
 package userdb
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -236,6 +237,46 @@ func TestMediaHistoryIdentityMutation_RequeuesAfterStaleSyncAcknowledgement(t *t
 	updated, err = userDB.UpdateMediaHistoryIdentity(dbid, identity)
 	require.NoError(t, err)
 	assert.False(t, updated, "same-policy live/backfill races must be idempotent")
+}
+
+// A media database indexed before titles fell back to the unstripped name
+// still holds empty titles, so the identity snapshot can carry an empty
+// display name. It must not blank the name the row was written with: the
+// account refuses a session without one.
+func TestMediaHistoryIdentityMutation_KeepsNameWhenIndexedTitleIsEmpty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	for i, displayName := range []string{"", "   "} {
+		dbid := addIdentitySyncTestEntry(
+			t, userDB, fmt.Sprintf("5555555%d-5555-4555-8555-555555555555", i), "1942", base, nil,
+		)
+		identity := mediaHistoryIdentityFixture(displayName, database.CurrentMediaIdentityPolicyVersion)
+		updated, err := userDB.UpdateMediaHistoryIdentity(dbid, identity)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		dbid = addIdentitySyncTestEntry(
+			t, userDB, fmt.Sprintf("6666666%d-6666-4666-8666-666666666666", i), "1942", base, nil,
+		)
+		updated, err = userDB.UpdateMediaHistoryIdentityAndPath(
+			dbid, filepath.Join("_Arcade", "1942 (W, Rev B).mra"), identity,
+		)
+		require.NoError(t, err)
+		require.True(t, updated)
+	}
+
+	batch, err := userDB.GetMediaHistorySyncBatch(time.Time{}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, batch, 4)
+	for i := range batch {
+		assert.Equal(t, "1942", batch[i].MediaName, "session %s", batch[i].ID)
+		assert.Equal(t, database.CurrentMediaIdentityPolicyVersion, batch[i].MediaIdentity.PolicyVersion)
+	}
 }
 
 // A backfilled arcade set-name row (recorded under a bare set name like

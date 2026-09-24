@@ -2004,26 +2004,6 @@ func (db *MediaDB) MigrateUp() error {
 		return err
 	}
 	db.applySchemaReadyFixups()
-	// Seeding is a single stamp read when the tag vocabulary is unchanged.
-	// When a release changes it, this is also what removes stored values it no
-	// longer accepts, and that has to happen at startup rather than at the
-	// next index run, because scrapes write tags without one. A brand-new
-	// database has nothing to remove and is seeded by its first index.
-	pruned, err := sqlSeedCanonicalTags(db.ctx, db.sql.Load())
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to seed the tag vocabulary")
-	}
-	if pruned {
-		// The tag lists cached in memory, in SQL and on disk still hold what
-		// was just removed, and the persisted snapshot carries the same index
-		// generation, so startup would load it back.
-		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
-		if path := db.tagCachePath(); path != "" {
-			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				log.Warn().Err(rmErr).Msg("failed to remove the persisted tag cache after pruning")
-			}
-		}
-	}
 	// Best-effort: stamp the disambiguation version on a database with no
 	// titles before the first index writes any. The pending check performs the
 	// stamp as a side effect; without this, the check first runs during
@@ -2524,8 +2504,9 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	// Seeding here opens an index run, which rebuilds every tag cache when it
-	// finishes; startup, where a prune matters, goes through MigrateUp.
+	// Seeding opens every index run. When the vocabulary has changed it also
+	// removes stored values it no longer accepts, and the index run rebuilds
+	// every tag cache when it finishes.
 	_, err := sqlSeedCanonicalTags(ctx, db.conn())
 	return err
 }
@@ -3909,8 +3890,15 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 			return sqlGetTags(ctx, db.sql.Load(), systems)
 		}
 
-		// Rebuild in-memory cache so subsequent requests are instant
+		// Rebuild in-memory cache so subsequent requests are instant. It answers
+		// for every system and is persisted, so it is built only from a full
+		// table: after a full invalidation, such as orphan cleanup, the table
+		// holds just the systems populated above.
 		go func() {
+			if populateErr := db.PopulateSystemTagsCache(db.ctx); populateErr != nil {
+				log.Debug().Err(populateErr).Msg("skipped tag cache rebuild after self-healing")
+				return
+			}
 			if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 				log.Warn().Err(cacheErr).Msg("failed to rebuild tag cache after self-healing")
 			}

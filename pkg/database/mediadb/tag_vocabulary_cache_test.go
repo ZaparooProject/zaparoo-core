@@ -21,7 +21,6 @@ package mediadb
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,11 +28,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigrateUpPruneDropsCachedTagLists covers a startup prune: the tag lists
-// cached in memory and on disk still name what was removed, and the persisted
-// snapshot carries the same index generation, so without invalidation the
-// next load would serve the removed tags again.
-func TestMigrateUpPruneDropsCachedTagLists(t *testing.T) {
+// MigrateUp leaves stored tags and their cached lists alone when the tag
+// vocabulary has changed; the next index run's seeding removes them.
+func TestMigrateUpLeavesTagsForTheNextIndex(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	t.Cleanup(cleanup)
@@ -46,24 +43,32 @@ func TestMigrateUpPruneDropsCachedTagLists(t *testing.T) {
 		INSERT INTO TagTypes (Type, IsExclusive) VALUES ('gamefamily', 1);
 		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'mario' FROM TagTypes WHERE Type = 'gamefamily';
 		INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID)
-			SELECT (SELECT DBID FROM MediaTitles LIMIT 1), DBID FROM Tags WHERE Tag = 'mario';`)
+			SELECT (SELECT DBID FROM MediaTitles LIMIT 1), DBID FROM Tags WHERE Tag = 'mario';
+		INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('`+DBConfigCanonicalTagVocabHash+`', 'older-build');`)
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
 	require.NoError(t, mediaDB.RebuildTagCache())
 	require.NoError(t, mediaDB.PersistTagCache())
 	path := mediaDB.tagCachePath()
 	require.FileExists(t, path)
-	_, err = conn.ExecContext(ctx, "UPDATE DBConfig SET Value = 'older-build' WHERE Name = ?",
-		DBConfigCanonicalTagVocabHash)
-	require.NoError(t, err)
 
 	require.NoError(t, mediaDB.MigrateUp())
 
-	_, statErr := os.Stat(path)
-	require.ErrorIs(t, statErr, os.ErrNotExist, "the persisted tag list must not survive a prune")
-	all, err := mediaDB.GetAllUsedTags(ctx)
-	require.NoError(t, err)
-	for _, tag := range all {
-		assert.NotEqual(t, "gamefamily", tag.Type, "a pruned type must not be listed")
+	count := func(query string) int {
+		var n int
+		require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&n))
+		return n
 	}
+	assert.Equal(t, 1, count("SELECT COUNT(*) FROM TagTypes WHERE Type = 'gamefamily'"))
+	assert.Equal(t, 1, count(`SELECT COUNT(*) FROM MediaTitleTags l JOIN Tags t ON t.DBID = l.TagDBID
+		WHERE t.Tag = 'mario'`))
+	var stamp string
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigCanonicalTagVocabHash).Scan(&stamp))
+	assert.Equal(t, "older-build", stamp, "startup must not seed, so the next index still prunes")
+	assert.FileExists(t, path)
+
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	assert.Zero(t, count("SELECT COUNT(*) FROM TagTypes WHERE Type = 'gamefamily'"),
+		"the index run's seeding removes what the vocabulary refuses")
 }
