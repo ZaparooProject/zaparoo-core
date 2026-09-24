@@ -78,9 +78,12 @@ type Platform struct {
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
 	systemToCustomPlatforms map[string][]string
+	hqSystemKeyToSystem     map[string]string
+	systemToHqSystems       map[string][]hqSystemQueryTarget
 	trackedProcess          *os.Process
 	completedTrackedProcess *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
+	hyperHqPipe             *HyperHqPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
 	popper                  *pinup.Integration
 	launcherManager         platforms.LauncherContextManager
@@ -91,7 +94,9 @@ type Platform struct {
 	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
 	platformMappingsMu      syncutil.RWMutex
+	hqMappingsMu            syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
+	hyperHqPipeLock         syncutil.Mutex
 	launchBoxActiveMu       syncutil.Mutex
 	popperMu                syncutil.Mutex
 }
@@ -176,6 +181,9 @@ func (p *Platform) StartPost(
 	// Initialize LaunchBox pipe server if LaunchBox is installed
 	p.initLaunchBoxPipe(cfg)
 
+	// Initialize HyperHQ pipe server if HyperHQ is installed
+	p.initHyperHqPipe(cfg)
+
 	// Start Steam tracker for external Steam game detection. The tracker needs
 	// the same Steam root the scanner resolves from the registry, otherwise it
 	// cannot read app manifests to name games or locate their processes. It is
@@ -223,6 +231,14 @@ func (p *Platform) Stop() error {
 		p.launchBoxPipe = nil
 	}
 	p.launchBoxPipeLock.Unlock()
+
+	// Stop HyperHQ named pipe server
+	p.hyperHqPipeLock.Lock()
+	if p.hyperHqPipe != nil {
+		p.hyperHqPipe.Stop()
+		p.hyperHqPipe = nil
+	}
+	p.hyperHqPipeLock.Unlock()
 
 	return nil
 }
@@ -636,7 +652,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 15
+	const staticLauncherCount = 16
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -740,6 +756,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.NewLaunchBoxLauncher(),
+		p.NewHyperHqLauncher(),
 		pinup.NewLauncher(p.popperIntegration()),
 	)
 
