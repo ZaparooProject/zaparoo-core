@@ -14,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -100,7 +103,7 @@ func TestRunScriptContext_RejectsBusyRunnerBeforeSideEffects(t *testing.T) {
 				t.Fatal("busy refusal must not start a hidden script")
 				return nil
 			}
-			err := runScriptContext(t.Context(), nil, newTestScript(t, "busy.sh"), "", hidden)
+			err := runScriptContext(t.Context(), nil, newTestScript(t, "busy.sh"), "", hidden, "")
 			require.ErrorIs(t, err, platforms.ErrScriptAlreadyRunning)
 			require.EqualError(t, err, "a script is already running")
 		})
@@ -130,7 +133,7 @@ func TestRunScriptContext_CancelsHiddenScriptWithExecutionContext(t *testing.T) 
 	script := newTestScript(t, "slow.sh")
 	result := make(chan error, 1)
 	go func() {
-		result <- runScriptContext(ctx, nil, script, "", true)
+		result <- runScriptContext(ctx, nil, script, "", true, "")
 	}()
 
 	select {
@@ -201,7 +204,7 @@ func TestRunScript_DoesNotCloseWhenOpenFails(t *testing.T) {
 	assert.False(t, cm.closeCalled)
 }
 
-func captureScriptLauncher(t *testing.T, bin, args string) string {
+func captureScriptLauncher(t *testing.T, bin, args, launchOrigin string) string {
 	t.Helper()
 	restoreScriptTestHooks(t)
 
@@ -215,25 +218,15 @@ func captureScriptLauncher(t *testing.T, bin, args string) string {
 	}
 	startScriptCommand = func(*exec.Cmd) error { return assert.AnError }
 
-	err := runScript(newTestScriptPlatform(), bin, args, false)
+	err := runScriptContext(t.Context(), newTestScriptPlatform(), bin, args, false, launchOrigin)
 	require.ErrorIs(t, err, assert.AnError)
+	require.NotEmpty(t, launcher)
 	return launcher
 }
 
-func TestRunScript_VisibleUserScriptSetsLaunchOrigin(t *testing.T) {
-	launcher := captureScriptLauncher(t, newTestScript(t, "update_all.sh"), "")
-	assert.Contains(t, launcher, "\nexport LAUNCH_ORIGIN_ID=zaparoo\n")
-}
-
-func TestRunScript_WidgetDoesNotSetLaunchOrigin(t *testing.T) {
-	launcher := captureScriptLauncher(t, newTestScript(t, "zaparoo.sh"), "'-show-picker' 'args.json'")
-	require.NotEmpty(t, launcher)
-	assert.NotContains(t, launcher, "LAUNCH_ORIGIN_ID")
-}
-
-func TestRunScript_HiddenLaunchOriginOverridesInherited(t *testing.T) {
+func captureHiddenScriptEnv(t *testing.T, launchOrigin string) []string {
+	t.Helper()
 	restoreScriptTestHooks(t)
-	t.Setenv("LAUNCH_ORIGIN_ID", "degauss")
 
 	var env []string
 	checkScriptActive = func(context.Context) bool { return false }
@@ -242,14 +235,96 @@ func TestRunScript_HiddenLaunchOriginOverridesInherited(t *testing.T) {
 		return nil
 	}
 
-	require.NoError(t, runScript(nil, newTestScript(t, "update_all.sh"), "", true))
+	require.NoError(t, runScriptContext(
+		t.Context(), nil, newTestScript(t, "update_all.sh"), "", true, launchOrigin))
+	return env
+}
 
-	// exec keeps the last value of a duplicated key.
-	var origin string
+func launchOriginValues(env []string) []string {
+	var values []string
 	for _, kv := range env {
-		if value, ok := strings.CutPrefix(kv, "LAUNCH_ORIGIN_ID="); ok {
-			origin = value
+		if value, ok := strings.CutPrefix(kv, launchOriginEnv+"="); ok {
+			values = append(values, value)
 		}
 	}
-	assert.Equal(t, launchOriginID, origin)
+	return values
+}
+
+func TestRunScript_VisibleExportsLaunchOrigin(t *testing.T) {
+	launcher := captureScriptLauncher(t, newTestScript(t, "update_all.sh"), "", "zaparoo_frontend")
+	assert.Contains(t, launcher, "\nexport LAUNCH_ORIGIN_ID='zaparoo_frontend'\n")
+}
+
+func TestRunScript_VisibleOmitsUnsetLaunchOrigin(t *testing.T) {
+	launcher := captureScriptLauncher(t, newTestScript(t, "update_all.sh"), "", "")
+	assert.NotContains(t, launcher, launchOriginEnv)
+}
+
+func TestRunScript_VisibleLaunchOriginIsLiteral(t *testing.T) {
+	origin := `x'; touch pwned; '$(touch pwned2)` + "\n`touch pwned3`"
+	launcher := captureScriptLauncher(t, newTestScript(t, "update_all.sh"), "", origin)
+
+	// Everything from the export up to the cd line is the launch origin.
+	start := strings.Index(launcher, "export "+launchOriginEnv+"=")
+	end := strings.Index(launcher, "\ncd $(dirname")
+	require.NotEqual(t, -1, start)
+	require.Greater(t, end, start)
+	export := launcher[start:end]
+	require.NotEmpty(t, export)
+
+	dir := t.TempDir()
+	script := export + "\nprintf '%s' \"$" + launchOriginEnv + "\""
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script) //nolint:gosec // runs the launcher line under test
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, origin, string(out))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "launch origin must not execute")
+}
+
+func TestRunScript_HiddenLaunchOriginOverridesInherited(t *testing.T) {
+	t.Setenv(launchOriginEnv, "degauss")
+
+	values := launchOriginValues(captureHiddenScriptEnv(t, "zaparoo_frontend"))
+
+	// exec keeps the last value of a duplicated key.
+	require.NotEmpty(t, values)
+	assert.Equal(t, "zaparoo_frontend", values[len(values)-1])
+}
+
+func TestRunScript_HiddenOmitsUnsetLaunchOrigin(t *testing.T) {
+	t.Setenv(launchOriginEnv, "degauss")
+
+	values := launchOriginValues(captureHiddenScriptEnv(t, ""))
+
+	assert.Equal(t, []string{"degauss"}, values)
+}
+
+func TestCmdMisterScript_AcceptsLaunchOriginAdvarg(t *testing.T) {
+	t.Parallel()
+
+	run := func(advArgs map[string]string) error {
+		env := &platforms.CmdEnv{
+			Cmd: gozapscript.Command{
+				Name:    gozapscript.ZapScriptCmdMisterScript,
+				Args:    []string{"zaparoo-core-missing-test-script.sh"},
+				AdvArgs: gozapscript.NewAdvArgs(advArgs),
+			},
+			Cfg: &config.Instance{},
+		}
+		pl := mocks.NewMockPlatform()
+		pl.SetupBasicMock()
+		_, err := cmdMisterScript(nil)(pl, env)
+		return err
+	}
+
+	// Parsing succeeds, so the command gets as far as looking for the script.
+	err := run(map[string]string{"launch_origin_id": "zaparoo_frontend"})
+	require.ErrorIs(t, err, zapscript.ErrFileNotFound)
+
+	err = run(map[string]string{"launch_origin": "zaparoo_frontend"})
+	require.ErrorContains(t, err, "invalid advanced arguments")
 }

@@ -795,7 +795,7 @@ func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 		"printf '%s' \"$1\" > arg\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
 
-	err := runScript(nil, scriptPath, "hello", true)
+	err := runScriptContext(context.Background(), nil, scriptPath, "hello", true, "zaparoo_frontend")
 	require.NoError(t, err)
 
 	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
@@ -804,7 +804,7 @@ func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 
 	origin, err := os.ReadFile(originPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)
-	assert.Equal(t, launchOriginID, string(origin))
+	assert.Equal(t, "zaparoo_frontend", string(origin))
 
 	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)

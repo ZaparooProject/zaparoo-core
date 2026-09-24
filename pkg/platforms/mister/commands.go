@@ -128,7 +128,8 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 
 		args = args[1:]
 		if len(args) == 0 {
-			return platforms.CmdResult{}, runScriptContext(env.ServiceCtx, plm, script, "", hidden)
+			return platforms.CmdResult{}, runScriptContext(
+				env.ServiceCtx, plm, script, "", hidden, advArgs.LaunchOriginID)
 		}
 
 		var cleaned strings.Builder
@@ -154,7 +155,8 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 		_ = cleaned.WriteByte('\'')
 
 		log.Info().Msgf("running script: %s", script+" "+cleaned.String())
-		return platforms.CmdResult{}, runScriptContext(env.ServiceCtx, plm, script, cleaned.String(), hidden)
+		return platforms.CmdResult{}, runScriptContext(
+			env.ServiceCtx, plm, script, cleaned.String(), hidden, advArgs.LaunchOriginID)
 	}
 }
 

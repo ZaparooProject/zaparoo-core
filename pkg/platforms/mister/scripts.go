@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
@@ -27,9 +28,9 @@ const (
 	misterWidgetRunFlag     = "2"
 
 	// launchOriginEnv tells scripts which frontend launched them. Update All
-	// reads it to decide how to hand the console back after a core load.
+	// reads it to decide how to hand the console back after a core load. The
+	// value comes from the caller's launch_origin_id advarg.
 	launchOriginEnv = "LAUNCH_ORIGIN_ID"
-	launchOriginID  = "zaparoo"
 )
 
 var (
@@ -66,10 +67,18 @@ func scriptRunMode(bin, args string) (runScript string, widget bool) {
 }
 
 func runScript(pl *Platform, bin, args string, hidden bool) error {
-	return runScriptContext(context.Background(), pl, bin, args, hidden)
+	return runScriptContext(context.Background(), pl, bin, args, hidden, "")
 }
 
-func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidden bool) error {
+// runScriptContext exports a non-empty launchOrigin to the script as
+// LAUNCH_ORIGIN_ID.
+func runScriptContext(
+	ctx context.Context,
+	pl *Platform,
+	bin, args string,
+	hidden bool,
+	launchOrigin string,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -104,8 +113,11 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		}
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
-			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag,
-			launchOriginEnv+"="+launchOriginID)
+			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag)
+		if launchOrigin != "" {
+			// Appended last so it overrides an inherited value.
+			cmd.Env = append(cmd.Env, launchOriginEnv+"="+launchOrigin)
+		}
 		cmd.Dir = filepath.Dir(bin)
 		err := runHiddenScriptCommand(cmd)
 		if err != nil {
@@ -185,10 +197,9 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
 	}
 
-	// Core's own widgets are not user scripts launched by a frontend.
-	launchOrigin := ""
-	if !widgetScript {
-		launchOrigin = "export " + launchOriginEnv + "=" + launchOriginID + "\n"
+	launchOriginExport := ""
+	if launchOrigin != "" {
+		launchOriginExport = "export " + launchOriginEnv + "=" + command.ShellQuote(launchOrigin) + "\n"
 	}
 
 	// this is how mister launches scripts itself
@@ -199,7 +210,7 @@ export LESSKEY=/media/fat/linux/lesskey
 export ZAPAROO_RUN_SCRIPT=%s
 %scd $(dirname "%s")
 %s
-`, runScript, launchOrigin, bin, bin+" "+args)
+`, runScript, launchOriginExport, bin, bin+" "+args)
 
 	err = writeScriptLauncher(scriptPath, []byte(launcher), 0o750)
 	if err != nil {
