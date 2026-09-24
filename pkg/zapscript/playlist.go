@@ -502,21 +502,34 @@ func samePlaylistItem(moved, active *playlists.Playlist) bool {
 	return len(moved.Items) > 0 && moved.Current() == current.Current()
 }
 
+// narrowToCaller limits a playlist that a command moves onto an item to the
+// trust and command bound of that command. The item launches with the
+// playlist's trust, so without this a caller could pick an item of a playlist
+// more trusted than itself and have it run with rights the caller lacks. The
+// narrowing sticks to the open playlist: trust only narrows, and owning the
+// playlist does not restore what the caller had already lost.
+func narrowToCaller(env *platforms.CmdEnv, pls *playlists.Playlist) {
+	pls.Unsafe = pls.Unsafe || env.Unsafe
+	pls.AllowedCommands = pls.AllowedCommands.Intersect(env.AllowedCommands)
+}
+
 // advancePlaylist moves a playlist on to its next item. The queue drops an
 // update whose current item and playing state are unchanged, so a move that
 // lands where it started has to say outright that it relaunches, or the
 // playlist never moves at all.
-func advancePlaylist(active *playlists.Playlist) *playlists.Playlist {
+func advancePlaylist(env *platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
 	pls := playlists.Next(*active)
 	pls.ForceRelaunch = samePlaylistItem(pls, active)
+	narrowToCaller(env, pls)
 	return pls
 }
 
 // rewindPlaylist moves a playlist back to the item before it, relaunching for
 // the same reason advancePlaylist does.
-func rewindPlaylist(active *playlists.Playlist) *playlists.Playlist {
+func rewindPlaylist(env *platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
 	pls := playlists.Previous(*active)
 	pls.ForceRelaunch = samePlaylistItem(pls, active)
+	narrowToCaller(env, pls)
 	return pls
 }
 
@@ -541,11 +554,12 @@ func resumeOrAdvanceActivePlaylist(
 ) (platforms.CmdResult, error) {
 	var pls *playlists.Playlist
 	if active.Playing {
-		pls = advancePlaylist(active)
+		pls = advancePlaylist(env, active)
 		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
 			Msg("advancing active playlist")
 	} else {
 		pls = playlists.Play(*active)
+		narrowToCaller(env, pls)
 		log.Info().Str("playlist", active.ID).Int("index", pls.Index).
 			Msg("resuming active playlist")
 	}
@@ -574,6 +588,7 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	if active != nil && !hasPlaylistArg {
 		log.Info().Msg("starting paused playlist")
 		pls := playlists.Play(*active)
+		narrowToCaller(&env, pls)
 		if queueErr := queuePlaylistUpdate(&env, pls); queueErr != nil {
 			return platforms.CmdResult{}, queueErr
 		}
@@ -759,7 +774,7 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
-	pls := advancePlaylist(active)
+	pls := advancePlaylist(&env, active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -786,7 +801,7 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 		return platforms.CmdResult{}, nil
 	}
 
-	pls := rewindPlaylist(active)
+	pls := rewindPlaylist(&env, active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -825,6 +840,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}
 
 	pls := playlists.Goto(*active, newIndex)
+	narrowToCaller(&env, pls)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}

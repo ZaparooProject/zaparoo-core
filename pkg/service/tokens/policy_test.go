@@ -80,3 +80,35 @@ func TestCommandPolicyNamesAreSortedForLogs(t *testing.T) {
 	policy := tokens.NewCommandPolicy("stop", "launch", "playlist.open", "launch")
 	assert.Equal(t, []string{"launch", "playlist.open", "stop"}, policy.Names())
 }
+
+// TestCommandPolicyIntersectNeverWidens pins that combining two bounds keeps
+// only what both permit, and that the unrestricted zero value adds nothing.
+func TestCommandPolicyIntersectNeverWidens(t *testing.T) {
+	t.Parallel()
+
+	var unrestricted tokens.CommandPolicy
+	bounded := tokens.NewCommandPolicy("launch", "stop")
+
+	assert.True(t, unrestricted.Intersect(unrestricted).Unrestricted())
+	assert.Equal(t, []string{"launch", "stop"}, unrestricted.Intersect(bounded).Names())
+	assert.Equal(t, []string{"launch", "stop"}, bounded.Intersect(unrestricted).Names())
+
+	overlap := bounded.Intersect(tokens.NewCommandPolicy("stop", "playlist.open"))
+	assert.Equal(t, []string{"stop"}, overlap.Names())
+	assert.False(t, overlap.Allows("launch"))
+	assert.False(t, overlap.Allows("playlist.open"))
+}
+
+// TestCommandPolicyDisjointIntersectForbidsEverything pins the trap in
+// intersecting: two bounds with nothing in common permit nothing. Reading the
+// empty result as unrestricted would turn the narrowest bound into none.
+func TestCommandPolicyDisjointIntersectForbidsEverything(t *testing.T) {
+	t.Parallel()
+
+	policy := tokens.NewCommandPolicy("launch").Intersect(tokens.NewCommandPolicy("stop"))
+	assert.False(t, policy.Unrestricted())
+	assert.False(t, policy.Allows("launch"))
+	assert.False(t, policy.Allows("stop"))
+	assert.False(t, policy.Allows("execute"))
+	assert.Empty(t, policy.Names())
+}

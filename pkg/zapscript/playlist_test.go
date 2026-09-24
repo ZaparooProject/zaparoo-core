@@ -1020,6 +1020,165 @@ func TestCmdPlaylistGoto_NoActivePlaylist(t *testing.T) {
 	require.Error(t, err)
 }
 
+// playlistMoveRoutes are the commands that move the open playlist onto an item
+// and launch it. Each one runs against a copy of active and returns the update
+// it queued.
+type playlistMove func(t *testing.T, env platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist
+
+//nolint:gochecknoglobals // shared table of routes for the narrowing tests
+var playlistMoveRoutes = map[string]playlistMove{
+	"next": func(t *testing.T, env platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
+		return runPlaylistMove(t, cmdPlaylistNext, env, active)
+	},
+	"previous": func(t *testing.T, env platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
+		return runPlaylistMove(t, cmdPlaylistPrevious, env, active)
+	},
+	"goto": func(t *testing.T, env platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
+		env.Cmd.Args = []string{"3"}
+		return runPlaylistMove(t, cmdPlaylistGoto, env, active)
+	},
+	"play resumes paused": func(t *testing.T, env platforms.CmdEnv, active *playlists.Playlist) *playlists.Playlist {
+		active.Playing = false
+		return runPlaylistMove(t, cmdPlaylistPlay, env, active)
+	},
+	"play naming paused active": func(
+		t *testing.T, env platforms.CmdEnv, active *playlists.Playlist,
+	) *playlists.Playlist {
+		active.Playing = false
+		env.Cmd.Args = []string{activePlaylistJSON}
+		return runPlaylistMove(t, cmdPlaylistPlay, env, active)
+	},
+	"play naming playing active": func(
+		t *testing.T, env platforms.CmdEnv, active *playlists.Playlist,
+	) *playlists.Playlist {
+		active.Playing = true
+		env.Cmd.Args = []string{activePlaylistJSON}
+		return runPlaylistMove(t, cmdPlaylistPlay, env, active)
+	},
+}
+
+// activePlaylistJSON is an inline playlist with the ID makePlaylistEnv gives
+// the open one, so playlist.play acts on the playlist already open.
+const activePlaylistJSON = `{"id":"id","name":"name","items":[{"zapscript":"**test1"},{"zapscript":"**test2"}]}`
+
+func runPlaylistMove(
+	t *testing.T,
+	cmd func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error),
+	env platforms.CmdEnv, //nolint:gocritic // test helper mirrors the handler signature
+	active *playlists.Playlist,
+) *playlists.Playlist {
+	t.Helper()
+	queue := make(chan *playlists.Playlist, 1)
+	env.ServiceCtx = t.Context()
+	env.Cfg = &config.Instance{}
+	env.Playlist = playlists.PlaylistController{Active: active, Queue: queue}
+	result, err := cmd(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	require.True(t, result.PlaylistChanged)
+	queued := <-queue
+	require.NotNil(t, queued)
+	return queued
+}
+
+// TestPlaylistMove_UntrustedCallerNarrowsTrustedPlaylist pins #1536: a script
+// that lost trust can still move the open playlist, but the item it lands on
+// runs untrusted rather than with the playlist's trust.
+func TestPlaylistMove_UntrustedCallerNarrowsTrustedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	for name, move := range playlistMoveRoutes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			active, _ := makePlaylistEnv()
+			queued := move(t, platforms.CmdEnv{Unsafe: true}, active)
+			assert.True(t, queued.Unsafe, "the moved playlist must not run items trusted")
+			assert.False(t, active.Unsafe, "the open playlist value itself is not mutated")
+		})
+	}
+}
+
+// TestPlaylistMove_BoundedCallerNarrowsUnboundedPlaylist pins the command
+// bound side of #1536: a caller bounded to a few commands cannot make an item
+// run under the playlist's wider bound.
+func TestPlaylistMove_BoundedCallerNarrowsUnboundedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	policy := tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch, zapscript.ZapScriptCmdPlaylistPlay)
+	for name, move := range playlistMoveRoutes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			active, _ := makePlaylistEnv()
+			queued := move(t, platforms.CmdEnv{AllowedCommands: policy}, active)
+			assert.Equal(t, policy.Names(), queued.AllowedCommands.Names())
+			assert.False(t, queued.AllowedCommands.Allows("execute"))
+		})
+	}
+}
+
+// TestPlaylistMove_TrustedCallerNeverWidensPlaylist pins that narrowing only
+// goes one way: a trusted, unbounded caller moving an untrusted, bounded
+// playlist leaves its items exactly as restricted as they were.
+func TestPlaylistMove_TrustedCallerNeverWidensPlaylist(t *testing.T) {
+	t.Parallel()
+
+	policy := tokens.NewCommandPolicy(zapscript.ZapScriptCmdLaunch)
+	for name, move := range playlistMoveRoutes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			active, _ := makePlaylistEnv()
+			active.Unsafe = true
+			active.AllowedCommands = policy
+			queued := move(t, platforms.CmdEnv{}, active)
+			assert.True(t, queued.Unsafe)
+			assert.Equal(t, policy.Names(), queued.AllowedCommands.Names())
+		})
+	}
+}
+
+// TestPlaylistMove_UntrustedPlaylistDrivesItself pins the case the rule has
+// to keep: an item of an untrusted playlist moving its own playlist carries
+// the same trust as the playlist, so it moves as before.
+func TestPlaylistMove_UntrustedPlaylistDrivesItself(t *testing.T) {
+	t.Parallel()
+
+	for name, move := range playlistMoveRoutes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			active, _ := makePlaylistEnv()
+			active.Unsafe = true
+			queued := move(t, platforms.CmdEnv{Unsafe: true}, active)
+			assert.True(t, queued.Unsafe)
+			assert.True(t, queued.AllowedCommands.Unrestricted())
+		})
+	}
+}
+
+// TestRunCommand_UnsafeTokenGotoNarrowsTrustedPlaylist runs the #1536 path
+// end to end: an untrusted token running playlist.goto against a trusted open
+// playlist queues an update whose item launches untrusted.
+func TestRunCommand_UnsafeTokenGotoNarrowsTrustedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	active, queue := makePlaylistEnv()
+	_, err := RunCommand(
+		t.Context(),
+		newPlaylistTestPlatform(),
+		&config.Instance{},
+		playlists.PlaylistController{Active: active, Queue: queue},
+		tokens.Token{Unsafe: true},
+		zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistGoto, Args: []string{"3"}},
+		1,
+		0,
+		nil,
+		&RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	queued := <-queue
+	assert.Equal(t, 2, queued.Index)
+	assert.True(t, queued.Unsafe)
+}
+
 func TestCmdPlaylistStop_BackgroundSlot(t *testing.T) {
 	t.Parallel()
 
