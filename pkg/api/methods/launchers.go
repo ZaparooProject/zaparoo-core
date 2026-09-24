@@ -125,6 +125,7 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			Groups:             groups,
 			Available:          l.Available,
 			AvailabilityReason: l.AvailabilityReason,
+			Detected:           l.Detected,
 			Default:            isDefaultLauncher(env.Config, &l),
 		}
 		if l.SystemID != "" {

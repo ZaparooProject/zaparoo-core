@@ -27,6 +27,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/sourcepath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -305,6 +306,24 @@ func DecodeURIIfNeeded(uri string) string {
 	return uri
 }
 
+// SourceIdentityLeaf returns the decoded final component of a host media
+// identity, or "" when p is not one.
+//
+// A source identity percent-escapes every component, so the generic URI paths
+// would otherwise carry "My%20Game" into a display name. It cannot be decoded
+// as a whole: sourcepath.Parse only accepts the canonical escaping, so the
+// identity stays exactly as stored and just its leaf is decoded.
+func SourceIdentityLeaf(p string) string {
+	if !strings.HasPrefix(p, sourcepath.Scheme+"://") {
+		return ""
+	}
+	_, parts, err := sourcepath.Parse(p)
+	if err != nil || len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
 func FilenameFromPath(p string) string {
 	if p == "" || !utf8.ValidString(p) {
 		return ""
@@ -312,6 +331,13 @@ func FilenameFromPath(p string) string {
 
 	// Handle URIs with manual parsing
 	if strings.Contains(p, "://") {
+		// A host media identity names its own components, so the leaf is the
+		// filename. Reported without its extension, matching the name the
+		// indexer stores for the same row.
+		if leaf := SourceIdentityLeaf(p); leaf != "" {
+			return strings.TrimSuffix(leaf, path.Ext(leaf))
+		}
+
 		parsed := virtualpath.ParseURIComponents(p)
 
 		if parsed.Scheme != "" {

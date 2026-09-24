@@ -61,9 +61,49 @@ If execution fails, the response carries an [error](index.md#response-errors) wh
 | `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
 | `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
 | `unavailable`      | The service is shutting down.                                                                 |
+| `launch_repair`    | The launch needs the user to fix something first. See [launch repair errors](#launch-repair-errors). |
 | `execution_failed` | Any other execution failure.                                                                  |
 
 Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back. During shutdown the connection often closes before the `unavailable` response can be written, so treat a dropped connection with a request in flight the same way.
+
+##### Launch repair errors
+
+A `launch_repair` error means the launch stopped for something the user can act on, such as an uninstalled launcher or a missing permission. Its `data` carries two extra keys that let a client write and localize its own wording:
+
+| Key      | Type   | Required | Description                                                                          |
+| :------- | :----- | :------- | :----------------------------------------------------------------------------------- |
+| `reason` | string | Yes      | A machine readable reason from the closed set below.                                  |
+| `params` | object | No       | Display names for the reason's wording. Present only when the reason carries one.     |
+
+The reasons and the parameters each one can carry:
+
+| Reason                          | Meaning                                                                          | Parameters           |
+| :------------------------------ | :-------------------------------------------------------------------------------- | :------------------- |
+| `launcher_not_installed`        | The launcher application is not installed.                                        | `launcher`, `plugin` |
+| `launcher_component_missing`    | The launcher is installed, but the entry point it declares is gone or disabled.    | `launcher`, `plugin` |
+| `launcher_plugin_missing`       | The launcher is installed but its plugin or core for this system is absent.       | `launcher`, `plugin` |
+| `launcher_version_unsupported`  | The installed build of the launcher cannot be used for this media, for example because its storage model is unsupported. The user needs a different build of that launcher. | `launcher`, `plugin` |
+| `launcher_ambiguous`            | Several usable launchers and no reviewed default; the user must choose one. Reserved: see below. | `launcher`, `plugin` |
+| `launcher_unsupported_media`    | This launcher cannot play the selected media entry.                               | `launcher`, `plugin` |
+| `launcher_options_unsupported`  | The launch options requested are not supported by this launcher.                  | `launcher`, `plugin` |
+| `storage_permission_required`   | The launcher lacks the storage permission it needs.                               | `launcher`, `plugin` |
+| `storage_provider_unsupported`  | The media lives on a provider this launcher cannot read.                          | `launcher`, `plugin` |
+| `storage_unavailable`           | The storage holding the media is not present.                                     | `launcher`, `plugin` |
+| `media_unavailable`             | The media file cannot be resolved or opened.                                      | `launcher`, `plugin` |
+| `host_unavailable`              | The host's launch service is not answering.                                       | `launcher`, `plugin` |
+| `host_foreground_required`      | The launch needs the user to return to the app first.                             | `launcher`, `plugin` |
+| `cancelled`                     | The launch was cancelled before it started.                                       | `launcher`, `plugin` |
+| `outcome_unknown`               | The launch was dispatched, but the result could not be confirmed.                 | `launcher`, `plugin` |
+| `refused`                       | The operating system refused the request. This is not a catch-all.                | `launcher`, `plugin` |
+| `unspecified`                   | Core sent no structured reason. Show `message` verbatim.                          | `launcher`, `plugin` |
+
+`refused` means specifically that the operating system refused the launch. A failure Core cannot classify that far reports `unspecified` instead, so do not treat `refused` as "something else went wrong".
+
+`launcher_ambiguous` is reserved. No Core version emits it yet, because launcher selection resolves by catalog precedence rather than asking the user. It is published so that clients can handle it when a version does; do not wait for it.
+
+`params` has a closed key set: `launcher` is the launcher application's display name, such as `RetroArch` or `DuckStation`, and `plugin` is the name of its plugin or core for this system, such as `Mesen`. Both are short display names only, never identifiers, paths, URIs or text from the host. A key is absent when Core has no name for it, so treat both as optional for every reason.
+
+Clients must tolerate an unknown `reason`, and an absent one from an older Core, by falling back to the error's `message`, exactly as they do for `unspecified`. The message is a fixed English string that reads sensibly on its own, so it is always a usable last resort, but it is not a stable contract: branch on `reason` wherever the wording matters.
 
 Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 
@@ -113,6 +153,27 @@ Earlier Core versions returned `null` as soon as the token was accepted, before 
     "message": "media not found",
     "data": {
       "category": "media_not_found"
+    }
+  }
+}
+```
+
+##### Launch repair error response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "52f6242e-7a5a-11ef-bf93-020304050607",
+  "error": {
+    "code": 1,
+    "message": "this launcher's plugin for this system is not installed",
+    "data": {
+      "category": "launch_repair",
+      "reason": "launcher_plugin_missing",
+      "params": {
+        "launcher": "RetroArch",
+        "plugin": "Mesen"
+      }
     }
   }
 }
@@ -4983,6 +5044,7 @@ The unfiltered response can be large on platforms with many launchers (250+ on M
 | groups              | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
 | available           | boolean  | Yes      | Whether this launcher's runtime dependencies are currently satisfied.                                  |
 | availabilityReason  | string   | No       | Why the launcher is unavailable. Omitted when `available` is `true`.                                   |
+| detected            | boolean  | No       | Whether the platform looked for this launcher's player and found it installed. Omitted when the platform does not scan for players, which is every platform that reports nothing here; an omitted value means unknown, not missing. Distinct from `available`, which is about the launcher's runtime dependencies. |
 | default             | boolean  | No       | Whether this launcher is the configured default for its system (`systemDefaults.launcher`, matched by launcher ID or by any of `groups`). Omitted (implicitly `false`) otherwise.                                    |
 | backend             | string   | No       | What kind of thing this launcher runs. Currently only `mister_core` is emitted. Omitted when the platform has nothing to say about this launcher. Clients must ignore backend values they don't recognize. |
 | misterCore          | [MisterCoreInfo](#mistercoreinfo-object) | No | Present when `backend` is `mister_core` and the core is installed. Absent when the core isn't installed; `available` and `availabilityReason` say why. |
@@ -5796,7 +5858,7 @@ None.
 | latestVersion   | string  | No       | The latest available version (if the check succeeded).                                                                                                               |
 | releaseNotes    | string  | No       | Release notes for the latest version.                                                                                                                                |
 | channel         | string  | No       | The update channel the check used: `stable` or `beta`.                                                                                                               |
-| eligibility     | string  | No       | Whether this install can take OTA updates: `eligible`, `development`, `unsupported` (this install cannot be replaced in place, such as a Windows install under a directory Zaparoo cannot write to), or `managed` (a package manager owns the install, so it should do the installing). An install that cannot be replaced reports `unsupported` even when a package manager owns it, because that is the one an install is actually refused for. |
+| eligibility     | string  | No       | Whether this install can take OTA updates: `eligible`, `development`, `unsupported` (this install cannot be replaced in place, such as a Windows install under a directory Zaparoo cannot write to), or `managed` (a package manager owns the install, so it should do the installing). An install that cannot be replaced reports `unsupported` even when a package manager owns it, because that is the one an install is actually refused for. The exception is a Core embedded in a host application, which reports `managed` regardless: it never replaces its own executable, so replaceability does not apply. |
 | checkedAt       | string  | No       | RFC3339 timestamp of when the release metadata was last fetched.                                                                                                     |
 | rolloutHeld     | boolean | No       | The release is newer but has not reached this device's share of the fleet yet. Applying it by hand still works; automatic installs wait.                              |
 | blockedBy       | object  | No       | What is stopping an update being applied right now. Absent when nothing is.                                                                                          |

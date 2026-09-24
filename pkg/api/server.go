@@ -561,7 +561,7 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if apimiddleware.IsLoopbackAddr(r.RemoteAddr) ||
+			if apimiddleware.IsLocalRequest(r) ||
 				apimiddleware.APIKeyAuthenticated(r) || permissions.LegacyEnabled(platformID) {
 				next.ServeHTTP(w, r)
 				return
@@ -656,7 +656,8 @@ func handleRequest(
 		var catErr *models.CategorizedError
 		if errors.As(err, &catErr) {
 			// The producer already logged the cause at the right level; the
-			// wire only gets the safe message and the category.
+			// wire only gets the safe message, the category and whatever
+			// bounded detail that category documents.
 			if contextFailure {
 				logAPIContextFailure(env.Context, err, req.Method)
 			} else {
@@ -666,7 +667,11 @@ func handleRequest(
 			return nil, &models.ErrorObject{
 				Code:    1,
 				Message: catErr.Message,
-				Data:    models.ErrorData{Category: catErr.Category},
+				Data: models.ErrorData{
+					Category: catErr.Category,
+					Reason:   catErr.Reason,
+					Params:   catErr.Params,
+				},
 			}
 		}
 		var quietErr *models.QuietClientError
@@ -1437,7 +1442,7 @@ func handleWSMessage(
 		}
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
-		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
+		isLocal := apimiddleware.IsLocalRequest(session.Request)
 		platformID := ""
 		if !isLocal {
 			platformID = platform.ID()
@@ -1827,7 +1832,7 @@ func handlePostRequest(
 		reqCtx, diagnostics := beginAPIDiagnostics(reqCtx, methodMap, &diagnosticEnv, method, apidiag.HTTP, 0)
 		defer diagnostics.Finish()
 
-		isLocal := apimiddleware.IsLoopbackAddr(r.RemoteAddr)
+		isLocal := apimiddleware.IsLocalRequest(r)
 		platformID := ""
 		if !isLocal {
 			platformID = platform.ID()
@@ -1986,10 +1991,94 @@ func StartWithReady(
 	ready chan<- error,
 	startup *StartupServer,
 ) error {
+	return StartWithListener(
+		ListenerOptions{}, platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
+		notifBroker, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, ready, startup,
+	)
+}
+
+type servingListener struct {
+	net.Listener
+	accepting func()
+}
+
+func (l *servingListener) Accept() (net.Conn, error) {
+	l.accepting()
+	return l.Listener.Accept() //nolint:wrapcheck // Preserve net.Error behavior for http.Server.
+}
+
+// ListenerOptions supplies transport resources and an optional per-listener key provider.
+// APIKeys must be safe for concurrent calls. Nil preserves standalone configuration.
+//
+// Network additionally binds the configured TCP address and serves the same API
+// on it, exactly as a standalone server would: clients of that listener are
+// checked against the configured keys, pairing, encryption, IP filter, rate
+// limits and origins, and APIKeys authenticates nobody there. It is only valid
+// with a supplied Listener, because a standalone server already binds TCP. A
+// failed bind is logged and the supplied listener is served alone.
+//
+// One rule differs from standalone: no TCP client is local, loopback included.
+// An embedding app shares loopback with every other app on the device, so such
+// clients authenticate, pair and are filtered and rate limited like LAN clients.
+// Only Unix peers of the supplied listener are local.
+//
+// OnNetwork is called at most once, from the server goroutine, with the TCP port
+// actually bound. It is not called when Network is false or the bind failed, and
+// it must return promptly.
+type ListenerOptions struct {
+	Listener  net.Listener
+	APIKeys   apimiddleware.APIKeyProvider
+	OnNetwork func(port int)
+	Network   bool
+}
+
+// StartWithListener serves the existing API on a host-supplied listener. Ownership
+// transfers to this call; cancellation and server exit close it. A nil listener
+// retains standalone TCP behavior. Unix clients require keys even when standalone
+// key configuration is empty; TCP authentication and pairing behavior are unchanged.
+// A supplied listener and a startup server are mutually exclusive: the startup
+// server already owns the listener it bound.
+func StartWithListener(
+	opts ListenerOptions,
+	platform platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
+	db *database.Database,
+	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
+	notifBroker *broker.Broker,
+	player audio.Player,
+	playbackManager audio.PlaybackManager,
+	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
+	tracker RequestTracker,
+	ready chan<- error,
+	startup *StartupServer,
+) error {
+	listener := opts.Listener
+	var readyOnce sync.Once
 	notifyReady := func(err error) {
-		if ready != nil {
-			ready <- err
-		}
+		readyOnce.Do(func() {
+			if ready != nil {
+				ready <- err
+			}
+		})
+	}
+	if startup != nil && listener != nil {
+		_ = listener.Close()
+		err := errors.New("a supplied listener cannot be combined with a startup server")
+		notifyReady(err)
+		st.StopService()
+		return err
+	}
+	if opts.Network && listener == nil {
+		err := errors.New("the network listener option requires a supplied listener")
+		notifyReady(err)
+		st.StopService()
+		return err
 	}
 
 	methods.InitMediaThumbCache(platform)
@@ -2003,14 +2092,16 @@ func StartWithReady(
 		}
 	}
 
-	var listener net.Listener
-	if startup != nil {
+	switch {
+	case startup != nil:
 		// The listener was bound before the databases opened so startup had
 		// somewhere to report. Reuse it; binding again would fail.
 		listener = startup.Listener()
 		port = startup.Port()
 		log.Debug().Int("port", port).Msg("reusing startup listener for API server")
-	} else {
+	case listener != nil:
+		log.Info().Stringer("listen", listener.Addr()).Msg("starting HTTP server on supplied listener")
+	default:
 		log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
 		log.Debug().Msg("HTTP server attempting to bind")
 
@@ -2028,11 +2119,35 @@ func StartWithReady(
 			return bindErr
 		}
 		listener = bound
+	}
+
+	// The network listener is an addition to a working private listener, so a
+	// port that cannot be bound costs remote access and nothing else.
+	var networkListener net.Listener
+	if opts.Network {
+		lc := &net.ListenConfig{}
+		bound, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+		if err != nil {
+			log.Warn().Err(err).Str("listen", listenAddr).
+				Msg("failed to bind network API listener, serving the supplied listener only")
+		} else {
+			networkListener = bound
+			defer func() { _ = networkListener.Close() }()
+			log.Info().Stringer("listen", bound.Addr()).Msg("starting HTTP server on network listener")
+		}
+	}
+
+	if startup == nil {
+		defer func() { _ = listener.Close() }()
 
 		// If port 0 was requested, adopt the port actually bound so callers
 		// can discover it and every allowed origin carries the real port.
+		portListener := listener
+		if networkListener != nil {
+			portListener = networkListener
+		}
 		if port == 0 {
-			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			if addr, ok := portListener.Addr().(*net.TCPAddr); ok {
 				port = addr.Port
 				_ = cfg.SetAPIPort(port)
 			}
@@ -2085,13 +2200,24 @@ func StartWithReady(
 	pairingRateLimiter := apimiddleware.NewIPRateLimiterWithLimits(rate.Limit(1), 1)
 	pairingRateLimiter.StartCleanup(st.GetContext())
 
-	authConfig := apimiddleware.NewAuthConfig(config.GetAPIKeys)
+	keyProvider := opts.APIKeys
+	if keyProvider == nil {
+		keyProvider = config.GetAPIKeys
+	}
+	authConfig := apimiddleware.NewAuthConfig(keyProvider)
+	if opts.Network && opts.APIKeys != nil {
+		// Two listeners, two sets of credentials: the supplied provider is
+		// confined to the supplied listener, and network clients get the
+		// configured keys as they would from a standalone server.
+		authConfig = apimiddleware.NewListenerAuthConfig(config.GetAPIKeys, opts.APIKeys)
+	}
 
 	// Global middleware applied to all routes. IP filtering is applied
 	// per-group: non-WS transports use NonWSIPFilterMiddleware
 	// (deny-by-default for remote), while pairing, app, health, and
 	// WebSocket routes remain remote-accessible.
 	r.Use(middleware.Recoverer)
+	r.Use(apimiddleware.UnixAuthMiddleware(authConfig))
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: originValidator,
 		AllowedMethods:  []string{"GET", "POST", "OPTIONS"},
@@ -2233,7 +2359,7 @@ func StartWithReady(
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
-			if !apimiddleware.IsLoopbackAddr(r.RemoteAddr) &&
+			if !apimiddleware.IsLocalRequest(r) &&
 				!apimiddleware.APIKeyAuthenticated(r) && !permissions.LegacyEnabled(platform.ID()) {
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
@@ -2252,7 +2378,7 @@ func StartWithReady(
 		// they are queued instead until the first frame settles the mode or
 		// the settle grace runs out.
 		authState := webSocketAuthUnsettled
-		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
+		if cfg.EncryptionEnabled() && !apimiddleware.IsLocalRequest(r) {
 			authState = webSocketAuthPending
 		}
 		err := session.HandleRequestWithKeys(w, r, map[string]any{
@@ -2370,22 +2496,69 @@ func StartWithReady(
 		// the service ready in one step.
 		startup.SwapHandler(r)
 		serverDone = startup.Done()
+		log.Debug().Msg("HTTP server bound to port, ready to accept connections")
+		notifyReady(nil)
 	} else {
 		server = &http.Server{
 			Addr:              cfg.APIListen(),
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
+			ConnContext:       apimiddleware.PeerContext,
 			ReadTimeout:       config.APIRequestTimeout,
 		}
+		serving := &servingListener{Listener: listener, accepting: func() { notifyReady(nil) }}
+		if opts.Listener != nil {
+			// BaseContext runs once per Serve call with the listener being
+			// served, so the supplied key provider follows the listener that
+			// accepted a connection and cannot reach the network listener.
+			//
+			// An embedding host shares loopback with every other app on the
+			// device, so no TCP peer of this server is local: only Unix peers
+			// of the supplied listener are. The mark covers every listener so
+			// that locality never depends on telling them apart, and it is set
+			// for any supplied listener, not just when a network listener joins
+			// it: a host that supplies a loopback TCP listener instead of a
+			// socket gets the same rule rather than standalone's.
+			server.BaseContext = func(accepting net.Listener) context.Context {
+				ctx := apimiddleware.UntrustedLoopback(context.Background())
+				if accepting == net.Listener(serving) {
+					return apimiddleware.ListenerKeyScope(ctx)
+				}
+				return ctx
+			}
+		}
+		// Registered before the deferred Close so it runs after it: Close is what
+		// makes the network Serve call return.
+		networkDone := make(chan struct{})
+		defer func() { <-networkDone }()
+		defer func() { _ = server.Close() }()
 		done := make(chan error, 1)
 		serverDone = done
 
+		if networkListener == nil {
+			close(networkDone)
+		} else {
+			go func() {
+				defer close(networkDone)
+				// Losing the network listener later is handled like failing to
+				// bind it: the supplied listener keeps serving its host.
+				if err := server.Serve(networkListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Error().Err(err).Msg("network API listener stopped serving")
+				}
+			}()
+			if addr, ok := networkListener.Addr().(*net.TCPAddr); ok && opts.OnNetwork != nil {
+				opts.OnNetwork(addr.Port)
+			}
+		}
+
 		go func() {
-			// Start serving
-			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				notifyReady(err)
 				log.Error().Err(err).Msg("HTTP server error")
 				done <- err
 			} else {
+				// Shutdown can win before Serve reaches Accept; never strand a startup waiter.
+				notifyReady(context.Canceled)
 				log.Debug().Msg("HTTP server stopped normally")
 				done <- nil
 			}
@@ -2393,9 +2566,6 @@ func StartWithReady(
 
 		log.Debug().Msg("HTTP server goroutine launched")
 	}
-
-	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
-	notifyReady(nil)
 
 	select {
 	case <-st.GetContext().Done():

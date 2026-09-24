@@ -301,17 +301,25 @@ func (s *Service) InstanceName() string {
 // resolveInstanceName determines the instance name to advertise.
 // Priority: config value > hostname > fallback.
 func (s *Service) resolveInstanceName() (string, error) {
-	if name := s.cfg.DiscoveryInstanceName(); name != "" {
-		return name, nil
+	return ResolveInstanceName(s.cfg), nil
+}
+
+// ResolveInstanceName returns the instance name this service advertises under
+// ServiceType, for a host that has to publish the record itself because Core
+// cannot run its own responder there. Priority: config value > hostname >
+// fallback.
+func ResolveInstanceName(cfg *config.Instance) string {
+	if name := cfg.DiscoveryInstanceName(); name != "" {
+		return name
 	}
 
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get hostname, using fallback")
-		return fallbackInstanceName(s.cfg.DeviceID()), nil
+		return fallbackInstanceName(cfg.DeviceID())
 	}
 
-	return hostname, nil
+	return hostname
 }
 
 // fallbackInstanceName names the service when the machine will not say what it

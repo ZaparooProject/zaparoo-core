@@ -83,6 +83,9 @@ func startUpdaterScheduler(
 	idleSched *idle.Scheduler,
 	wg *sync.WaitGroup,
 ) {
+	if pl.Settings().DisableSelfUpdate {
+		return
+	}
 	scheduler := newUpdaterScheduler(cfg, pl, db, st, idleSched)
 	wg.Add(1)
 	go func() {

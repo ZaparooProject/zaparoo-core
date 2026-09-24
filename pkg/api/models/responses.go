@@ -721,6 +721,7 @@ type MisterCoreInfo struct {
 
 type Launcher struct {
 	LauncherRuntime
+	Detected           *bool    `json:"detected,omitempty"`
 	ID                 string   `json:"id"`
 	SystemID           string   `json:"systemId,omitempty"`
 	SystemName         string   `json:"systemName,omitempty"`

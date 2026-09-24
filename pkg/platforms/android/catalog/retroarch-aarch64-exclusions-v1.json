@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "profilesSourceRevision": "5a74858ab2f7a50cebb5a6330895bc38899531c0",
+  "cores": [
+    {
+      "core": "2048",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "3dengine",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "anarch",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "bbkemu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "bk",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "boom3",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "cannonball",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "chailove",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "craft",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "daphne",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "dice",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "dingooemu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "dinothawr",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "dirksimple",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "doukutsu_rs",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "easyrpg",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "ecwolf",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "fbalpha",
+      "reason": "missing core-info"
+    },
+    {
+      "core": "ffmpeg",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "galaksija",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "gam4980",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "gme",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "gong",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "jaxe",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "jumpnbump",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "lowresnx",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "lutro",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "m2000",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "mcsoftserve",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "mojozork",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "mrboom",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "mu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "native32emu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "nicaiemu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "nuance",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "numero",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "nxengine",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "oberon",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "openlara",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "pd777",
+      "reason": "no compatible canonical extensions"
+    },
+    {
+      "core": "pocketcdg",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "pokketstation",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "qemu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "radio",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "reminiscence",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "romcleaner",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "spmp8000emu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "superbroswar",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "tamalibretro",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "test",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "thepowdertoy",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "tyrquake",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "uw8",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vaporspec",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vemulator",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vice_x128",
+      "reason": "C128 core has misleading C64 database metadata and no canonical C128 system"
+    },
+    {
+      "core": "vice_xcbm2",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vice_xcbm5x0",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vircon32",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "virtualxt",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vitaquake2-rogue",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vitaquake2-xatrix",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vitaquake2-zaero",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "vitaquake2",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "wasm4",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "wqxemu",
+      "reason": "no supported canonical system database"
+    },
+    {
+      "core": "xrick",
+      "reason": "no supported canonical system database"
+    }
+  ]
+}

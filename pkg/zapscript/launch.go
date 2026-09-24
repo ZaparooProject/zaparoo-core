@@ -120,6 +120,12 @@ func applyMediaLauncherOverrideForPath(
 		return current
 	}
 	launcher, found := inferLauncherForPath(pl, env, path)
+	if !found {
+		// The override may name a launcher that cannot run right now. Its
+		// own availability error is the useful one, so the media row is
+		// still resolved when nothing that matches the path is available.
+		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
+	}
 	if !found || launcher.SystemID == "" {
 		return current
 	}
@@ -263,20 +269,34 @@ func applySystemDefaultLauncherForPath(pl platforms.Platform, env *platforms.Cmd
 }
 
 func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) (platforms.Launcher, bool) {
+	return inferLauncherForPathWithAvailability(pl, env, path, true)
+}
+
+func inferLauncherForPathWithAvailability(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	requireAvailable bool,
+) (platforms.Launcher, bool) {
 	launchers := pl.Launchers(env.Cfg)
 	best := -1
 	bestScore := -1
+	bestMissing := true
 	for i := range launchers {
 		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
 			continue
 		}
-		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
+		if requireAvailable && launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
+		// A launcher whose player is known to be missing only stands in when
+		// every other match is missing too.
+		missing := helpers.LauncherKnownMissing(&launchers[i])
 		score := launcherInferenceScore(&launchers[i])
-		if score > bestScore {
+		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
 			best = i
 			bestScore = score
+			bestMissing = missing
 		}
 	}
 	if best == -1 {
@@ -311,32 +331,31 @@ func inferLauncherForSystemPath(
 	}
 
 	launchers := pl.Launchers(env.Cfg)
-	match := -1
+	candidates := make([]platforms.Launcher, 0, len(launchers))
 	for i := range launchers {
-		if launchers[i].ScanOnly {
-			continue
-		}
-		if !strings.EqualFold(launchers[i].SystemID, systemID) {
+		if launchers[i].ScanOnly || !strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
 		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
 		for _, supported := range launchers[i].Extensions {
-			if !strings.EqualFold(ext, supported) {
-				continue
+			if strings.EqualFold(ext, supported) {
+				candidates = append(candidates, launchers[i])
+				break
 			}
-			if match != -1 {
-				return platforms.Launcher{}, false
-			}
-			match = i
-			break
 		}
 	}
-	if match == -1 {
+
+	if detected, result := helpers.SelectDetectedLauncher(candidates); result == helpers.LauncherDetectionUnique {
+		return detected, true
+	} else if result != helpers.LauncherDetectionUnscanned {
 		return platforms.Launcher{}, false
 	}
-	return launchers[match], true
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
+	}
+	return candidates[0], true
 }
 
 //nolint:gocritic // single-use parameter in command handler

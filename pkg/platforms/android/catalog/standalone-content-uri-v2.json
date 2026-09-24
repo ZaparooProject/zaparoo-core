@@ -1,0 +1,66 @@
+{
+  "catalogVersion": 1,
+  "reviewed": "2026-09-20",
+  "profiles": [
+    {
+      "version": 2,
+      "id": "DuckStation.PSX",
+      "system": "PSX",
+      "extensions": [".chd", ".pbp"],
+      "package": "com.github.stenzek.duckstation",
+      "activity": "com.github.stenzek.duckstation.EmulationActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable DuckStation and complete its first-run setup.",
+      "extras": [{"name": "bootPath", "type": "string", "source": "media"}],
+      "grantReadUri": true,
+      "clipData": true
+    },
+    {
+      "version": 2,
+      "id": "PPSSPP.PSP",
+      "system": "PSP",
+      "extensions": [".chd", ".cso", ".iso", ".pbp"],
+      "package": "org.ppsspp.ppsspp",
+      "activity": "org.ppsspp.ppsspp.PpssppActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable PPSSPP and complete its first-run setup.",
+      "dataSource": "media",
+      "grantReadUri": true,
+      "clipData": true
+    },
+    {
+      "version": 2,
+      "id": "Dolphin.GameCube",
+      "system": "GameCube",
+      "extensions": [".ciso", ".dol", ".elf", ".gcm", ".gcz", ".iso", ".rvz", ".wbfs"],
+      "package": "org.dolphinemu.dolphinemu",
+      "activity": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable Dolphin Emulator and complete its first-run setup.",
+      "dataSource": "media",
+      "grantReadUri": true,
+      "clipData": true
+    },
+    {
+      "version": 2,
+      "id": "Dolphin.Wii",
+      "system": "Wii",
+      "extensions": [".ciso", ".dol", ".elf", ".gcm", ".gcz", ".iso", ".rvz", ".wad", ".wbfs"],
+      "package": "org.dolphinemu.dolphinemu",
+      "activity": "org.dolphinemu.dolphinemu.ui.main.MainActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable Dolphin Emulator and complete its first-run setup.",
+      "dataSource": "media",
+      "grantReadUri": true,
+      "clipData": true
+    }
+  ]
+}

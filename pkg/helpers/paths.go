@@ -835,16 +835,7 @@ func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) 
 		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 	}
 
-	best := 0
-	bestScore := launcherSpecificity(&launchers[0])
-	for i := 1; i < len(launchers); i++ {
-		score := launcherSpecificity(&launchers[i])
-		if score > bestScore {
-			best = i
-			bestScore = score
-		}
-	}
-
+	best, bestScore := mostSpecificLauncher(launchers)
 	launcher := launchers[best]
 
 	log.Debug().
@@ -892,6 +883,15 @@ func GetPathInfo(path string) PathInfo {
 
 	// For URIs (containing ://), check if they need special handling
 	if strings.Contains(path, "://") {
+		// A host media identity escapes each of its components, so its leaf
+		// has to be decoded on its own rather than read off the raw path.
+		if leaf := SourceIdentityLeaf(path); leaf != "" {
+			info.Filename = leaf
+			info.Extension = getPathExt(leaf)
+			info.Name = strings.TrimSuffix(leaf, info.Extension)
+			return info
+		}
+
 		// Extract scheme manually to avoid url.Parse dependency
 		schemeEnd := strings.Index(path, "://")
 		if schemeEnd >= 0 {
@@ -1040,6 +1040,23 @@ func launcherSpecificity(l *platforms.Launcher) int {
 		score += 10
 	}
 	return score
+}
+
+// mostSpecificLauncher picks the launcher to infer for a path from a non-empty
+// list of matches. The highest specificity wins and registration order breaks
+// ties, but a launcher whose player is known to be missing is only chosen when
+// every match is: it still explains what to install.
+func mostSpecificLauncher(launchers []platforms.Launcher) (best, bestScore int) {
+	best, bestScore = -1, -1
+	bestMissing := true
+	for i := range launchers {
+		missing := LauncherKnownMissing(&launchers[i])
+		score := launcherSpecificity(&launchers[i])
+		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
+			best, bestScore, bestMissing = i, score, missing
+		}
+	}
+	return best, bestScore
 }
 
 func folderTrailSystem(path string) (string, bool) {
@@ -1192,16 +1209,7 @@ func FindLauncher(
 			return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 		}
 	} else {
-		best := 0
-		bestScore := launcherSpecificity(&launchers[0])
-		for i := 1; i < len(launchers); i++ {
-			score := launcherSpecificity(&launchers[i])
-			if score > bestScore {
-				best = i
-				bestScore = score
-			}
-		}
-
+		best, bestScore := mostSpecificLauncher(launchers)
 		launcher = launchers[best]
 		log.Debug().
 			Str("path", path).
@@ -1273,17 +1281,23 @@ func HasUserDir() (string, bool) {
 }
 
 func ConfigDir(pl platforms.Platform) string {
-	if v, ok := HasUserDir(); ok {
-		return v
-	}
-	return pl.Settings().ConfigDir
+	settings := pl.Settings()
+	return resolvePlatformDir(settings.HostManagedPaths, settings.ConfigDir, HasUserDir)
 }
 
 func DataDir(pl platforms.Platform) string {
-	if v, ok := HasUserDir(); ok {
-		return v
+	settings := pl.Settings()
+	return resolvePlatformDir(settings.HostManagedPaths, settings.DataDir, HasUserDir)
+}
+
+func resolvePlatformDir(hostManaged bool, configured string, portable func() (string, bool)) string {
+	if hostManaged {
+		return configured
 	}
-	return pl.Settings().DataDir
+	if path, ok := portable(); ok {
+		return path
+	}
+	return configured
 }
 
 var ReURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)

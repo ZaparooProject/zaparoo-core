@@ -80,8 +80,11 @@ const (
 // StartResult holds the return values from Start.
 type StartResult struct {
 	Stop             func() error
+	StopContext      func(context.Context) error
 	Done             <-chan struct{}
 	RestartRequested func() bool
+	// Err reports a terminal service error after Done closes; nil while running.
+	Err func() error
 }
 
 func resumeAndScheduleStartupMediaWork(
@@ -349,17 +352,22 @@ func startWith(
 	log.Info().Msgf("version: %s", config.AppVersion)
 	useragent.SetPlatform(pl.ID())
 
+	// A host that replaces the executable itself has no pending update to
+	// resolve or roll back. A failed start is still released or reported below.
+	selfUpdate := !pl.Settings().DisableSelfUpdate
 	dataDir := helpers.DataDir(pl)
 
 	// Deliberately before config, databases and network are touched: the
 	// failure this exists to catch is a binary that cannot reach any of them.
 	// It has its own context because st.GetContext does not exist yet.
-	if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
-		if errors.Is(watchdogErr, updater.ErrRolledBack) ||
-			errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
-			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+	if selfUpdate {
+		if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
+			if errors.Is(watchdogErr, updater.ErrRolledBack) ||
+				errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
+				return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+			}
+			log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
 		}
-		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
 	}
 
 	res, err = initialize(pl, cfg)
@@ -367,20 +375,22 @@ func startWith(
 		return res, nil
 	}
 
-	// The updater gets first refusal on a failed start. Check before rolling
-	// back, because a rollback restores the previous binary and this process
-	// then has to exit so that binary runs — staying up would leave Core
-	// serving in front of a binary that is no longer installed.
-	updatePending := updater.HasUnresolvedUpdate(dataDir, config.AppVersion)
+	if selfUpdate {
+		// The updater gets first refusal on a failed start. Check before rolling
+		// back, because a rollback restores the previous binary and this process
+		// then has to exit so that binary runs — staying up would leave Core
+		// serving in front of a binary that is no longer installed.
+		updatePending := updater.HasUnresolvedUpdate(dataDir, config.AppVersion)
 
-	// Only does anything when this boot is the first one after an update.
-	if rollbackErr := updater.RollBackFailedStart(
-		context.Background(), dataDir, config.AppVersion,
-	); rollbackErr != nil {
-		return nil, fmt.Errorf("%w: %w", rollbackErr, err)
-	}
-	if updatePending {
-		return nil, err
+		// Only does anything when this boot is the first one after an update.
+		if rollbackErr := updater.RollBackFailedStart(
+			context.Background(), dataDir, config.AppVersion,
+		); rollbackErr != nil {
+			return nil, fmt.Errorf("%w: %w", rollbackErr, err)
+		}
+		if updatePending {
+			return nil, err
+		}
 	}
 
 	// The listener is already bound, so Core can stay alive and explain
@@ -402,13 +412,22 @@ func startService(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (*StartResult, error) {
-	// CLI and widget processes never enter here, so they cannot rotate the
-	// running service's crash file. Capture must precede native initialization.
-	previousCrash, crashErr := crashdump.Start(helpers.DataDir(pl), config.AppVersion)
-	if crashErr != nil {
-		log.Warn().Err(crashErr).Msg("could not initialize persistent crash capture")
+	return startServiceWithOptions(pl, cfg, nil)
+}
+
+func startServiceWithOptions(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	opts *EmbeddedOptions,
+) (*StartResult, error) {
+	// Embedded hosts own process-wide crash output and telemetry.
+	if opts == nil {
+		previousCrash, crashErr := crashdump.Start(helpers.DataDir(pl), config.AppVersion)
+		if crashErr != nil {
+			log.Warn().Err(crashErr).Msg("could not initialize persistent crash capture")
+		}
+		telemetry.ReportCrash(previousCrash)
 	}
-	telemetry.ReportCrash(previousCrash)
 
 	// A config file created outside Core can lack a device ID. The service
 	// daemon owns device identity (TUI/CLI processes only read it), so
@@ -424,13 +443,25 @@ func startService(
 	bootUUID := uuid.New().String()
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
 
-	player := audio.NewMalgoPlayer()
+	var player audio.Player
+	if opts != nil {
+		player = opts.Audio
+	} else {
+		player = audio.NewMalgoPlayer()
+	}
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 	platformSettings := pl.Settings()
 	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
+	if opts != nil {
+		stopParentWatch := context.AfterFunc(opts.Context, st.StopService)
+		go func() {
+			<-st.GetContext().Done()
+			stopParentWatch()
+		}()
+	}
 
 	// Create and start notification broker to broadcast to all consumers.
 	// Coalesceable methods collapse bursts to latest state for slow consumers.
@@ -443,26 +474,58 @@ func startService(
 	notifBroker.Start()
 
 	var uiRenderer uievents.Renderer
-	if renderer, ok := pl.(uievents.Renderer); ok {
+	if opts != nil {
+		uiRenderer = opts.Renderer
+	} else if renderer, ok := pl.(uievents.Renderer); ok {
 		uiRenderer = renderer
 	}
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRenderer, func(payload models.UIStateResponse) {
 		notifications.UIChanged(notifBroker.Publish, payload)
 	})
 	st.SetUIEvents(uiEvents)
+	cleanupOwned := false
+	preStarted := false
+	defer func() {
+		if !cleanupOwned {
+			st.StopService()
+			if preStarted {
+				if stopErr := pl.Stop(); stopErr != nil {
+					log.Warn().Err(stopErr).Msg("platform cleanup after startup failure")
+				}
+			}
+			uiEvents.Shutdown()
+			notifBroker.Stop()
+		}
+	}()
 
 	// Bind the API listener before anything that can fail slowly or fatally.
 	// Every channel Core normally uses to reach a user sits behind the
 	// databases being open or the API listening, and database work happens
 	// before both, so without this a slow migration or a refused database has
 	// nowhere to be reported.
-	startupServer, startupErr := api.NewStartupServer(st.GetContext(), cfg)
-	if startupErr != nil {
-		// No listener means no page to explain anything on, so there is
-		// nothing to stay alive for.
-		log.Error().Err(startupErr).Msg("failed to bind to port")
-		st.StopService()
-		return nil, fmt.Errorf("api startup failed: %w", startupErr)
+	// An embedding host supplies its own listener and reports startup itself,
+	// so no startup server runs there; its methods accept a nil receiver.
+	var startupServer *api.StartupServer
+	if opts == nil {
+		var startupErr error
+		startupServer, startupErr = api.NewStartupServer(st.GetContext(), cfg)
+		if startupErr != nil {
+			// No listener means no page to explain anything on, so there is
+			// nothing to stay alive for.
+			log.Error().Err(startupErr).Msg("failed to bind to port")
+			st.StopService()
+			return nil, fmt.Errorf("api startup failed: %w", startupErr)
+		}
+	}
+	// A standalone startup failure carries the bound listener and the live
+	// service state to startWith, which releases them or stays up to report.
+	// An embedding host gets the plain error and the deferred cleanup instead.
+	startupFailure := func(stopPlatform bool, headline, detail string, cause error) error {
+		if opts != nil {
+			return cause
+		}
+		cleanupOwned = true
+		return newStartupFailure(pl, st, startupServer, stopPlatform, headline, detail, cause)
 	}
 
 	// TODO: convert this to a *token channel
@@ -478,8 +541,8 @@ func startService(
 	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
-		return nil, newStartupFailure(
-			pl, st, startupServer, false,
+		return nil, startupFailure(
+			false,
 			"Zaparoo could not start",
 			"Zaparoo could not set up its folders. Check that its storage is present and writable.",
 			err,
@@ -494,16 +557,20 @@ func startService(
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		// Not stopping the platform: StartPre failed partway, so its
-		// counterpart has nothing well-defined to undo.
-		return nil, newStartupFailure(
-			pl, st, startupServer, false,
+		// counterpart has nothing well-defined to undo. preStarted stays
+		// false for the same reason, so the cleanup deferred above leaves the
+		// platform alone too.
+		return nil, startupFailure(
+			false,
 			"Zaparoo could not start",
 			"Zaparoo could not start platform support for this device.",
 			fmt.Errorf("platform start pre failed: %w", err),
 		)
 	}
+	preStarted = true
 	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
+	opts.phase("migrating")
 	log.Info().Msg("opening databases")
 	databaseStarted := time.Now()
 	startupServer.SetStartingDetail("Opening databases.")
@@ -517,14 +584,14 @@ func startService(
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		headline, detail := describeDatabaseStartupFailure(pl, err)
-		return nil, newStartupFailure(pl, st, startupServer, true, headline, detail, err)
+		return nil, startupFailure(true, headline, detail, err)
 	}
 	log.Debug().Dur("duration", time.Since(databaseStarted)).Msg("databases opened")
 	backupManager := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 	if recoveryErr := backupManager.RecoverRestore(st.GetContext()); recoveryErr != nil {
 		closeDatabase(db)
-		return nil, newStartupFailure(
-			pl, st, startupServer, true,
+		return nil, startupFailure(
+			true,
 			"Zaparoo could not start",
 			"Zaparoo could not finish restoring a backup that was interrupted.",
 			fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr),
@@ -698,8 +765,19 @@ func startService(
 	apiReady := make(chan error, 1)
 	apiDone := make(chan error, 1)
 	go func() {
-		apiDone <- api.StartWithReady(
-			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
+		listenerOptions := api.ListenerOptions{}
+		if opts != nil {
+			listenerOptions.Listener = opts.Listener
+			listenerOptions.APIKeys = opts.APIKeys
+			listenerOptions.Network = opts.Network
+			if opts.OnNetwork != nil {
+				listenerOptions.OnNetwork = func(port int) {
+					opts.OnNetwork(port, discovery.ResolveInstanceName(cfg))
+				}
+			}
+		}
+		apiDone <- api.StartWithListener(
+			listenerOptions, pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, player, playbackManager, indexPauser, scrapePauser,
 			backupPauser, idleSched, apiReady, startupServer,
 		)
@@ -711,21 +789,22 @@ func startService(
 		if stopErr := pl.Stop(); stopErr != nil {
 			log.Warn().Msgf("error stopping platform after API startup failure: %s", stopErr)
 		}
+		preStarted = false
 		if apiDoneErr := <-apiDone; apiDoneErr != nil {
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
 		dataSwap.Stop()
-		uiEvents.Shutdown()
-		notifBroker.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
 	}
 	log.Debug().Dur("duration", time.Since(apiReadyStarted)).Msg("API service reported ready")
 
-	log.Info().Msg("starting mDNS discovery service")
-	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
-		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
+	if opts == nil {
+		log.Info().Msg("starting mDNS discovery service")
+		if discoveryErr := discoveryService.Start(); discoveryErr != nil {
+			log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
+		}
 	}
 
 	// Recover before resuming persisted media work. A running status may be stale after
@@ -942,11 +1021,17 @@ func startService(
 	}()
 
 	doneCh := make(chan struct{})
+	startupFinished := make(chan struct{})
+	var terminalErr error
+	cleanupOwned = true
 	go func() {
 		<-st.GetContext().Done()
+		<-startupFinished
 		log.Info().Msg("service context cancelled, running cleanup")
-		if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
-			log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+		if !platformSettings.DisableSelfUpdate {
+			if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
+				log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+			}
 		}
 		if backupErr := waitForBackupShutdown(
 			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
@@ -974,6 +1059,7 @@ func startService(
 			log.Warn().Msgf("error stopping platform: %s", stopErr)
 		}
 		if apiErr := <-apiDone; apiErr != nil {
+			terminalErr = fmt.Errorf("API service stopped: %w", apiErr)
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
@@ -1007,10 +1093,16 @@ func startService(
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(st.GetContext(), cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db, idleSched)
 	if err != nil {
+		close(startupFinished)
 		log.Error().Err(err).Msg("platform post start error")
 		st.StopService()
 		<-doneCh
 		return nil, fmt.Errorf("platform start post failed: %w", err)
+	}
+	if err = st.GetContext().Err(); err != nil {
+		close(startupFinished)
+		<-doneCh
+		return nil, fmt.Errorf("service stopped during startup: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
@@ -1046,13 +1138,15 @@ func startService(
 	// one. It is deliberately after StartPost: a boot that still fails after
 	// here rolls back and restores the database, which would take the message
 	// with it.
-	updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
+	if !platformSettings.DisableSelfUpdate {
+		updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
 
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		confirmPendingUpdate(st, helpers.DataDir(pl))
-	}()
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			confirmPendingUpdate(st, helpers.DataDir(pl))
+		}()
+	}
 
 	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
 		backgroundWG.Add(1)
@@ -1062,14 +1156,29 @@ func startService(
 		}()
 	}
 
-	return &StartResult{
-		Stop: func() error {
-			st.StopService()
-			<-doneCh
+	stopContext := func(ctx context.Context) error {
+		st.StopService()
+		select {
+		case <-doneCh:
 			return nil
-		},
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	close(startupFinished)
+	return &StartResult{
+		Stop:             func() error { return stopContext(context.Background()) },
+		StopContext:      stopContext,
 		Done:             doneCh,
 		RestartRequested: st.RestartRequested,
+		Err: func() error {
+			select {
+			case <-doneCh:
+				return terminalErr
+			default:
+				return nil
+			}
+		},
 	}, nil
 }
 

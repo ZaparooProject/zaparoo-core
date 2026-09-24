@@ -96,7 +96,7 @@ func RunIPFilterMiddleware(ipsProvider IPsProvider, hasAllowRun func() bool) fun
 	return func(next http.Handler) http.Handler {
 		filtered := ipFilter(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if IsLoopbackAddr(r.RemoteAddr) || hasAllowRun() {
+			if IsLocalRequest(r) || hasAllowRun() {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -109,7 +109,7 @@ func RunIPFilterMiddleware(ipsProvider IPsProvider, hasAllowRun func() bool) fun
 func NonWSIPFilterMiddleware(ipsProvider IPsProvider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if IsLoopbackAddr(r.RemoteAddr) {
+			if IsLocalRequest(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
