@@ -135,6 +135,8 @@ func TestBuildSettingsMainMenu_TwoColumnLayout_Integration(t *testing.T) {
 		assert.Equal(t, row("Readers"), row("Advanced"), "size %v", size)
 		assert.Less(t, row("TUI"), row("Data & connections"), "size %v", size)
 		assert.Less(t, row("Data & connections"), row("Backup"), "size %v", size)
+		assert.Equal(t, row("Logs")+1, row("Credits"), "size %v", size)
+		assert.Equal(t, row("Credits")+1, row("About"), "size %v: Credits sits above About", size)
 		for _, text := range []string{"Audio", "Profiles", "Clients", "Online", "Logs", "About"} {
 			assert.NotEqual(t, -1, row(text), "size %v missing %q", size, text)
 		}

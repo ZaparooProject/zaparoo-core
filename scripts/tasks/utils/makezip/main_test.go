@@ -23,6 +23,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -434,14 +435,30 @@ func TestCreateZipFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
-		err := createZipFile(afero.NewOsFs(), zipPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
+		noticesPath := filepath.Join(tmpDir, noticesFileName)
+		if err := writeNotices(noticesPath); err != nil {
+			t.Fatalf("writeNotices failed: %v", err)
+		}
+
+		err := createZipFile(afero.NewOsFs(), zipPath, appPath,
+			[]string{licensePath, noticesPath, readmePath}, "testplatform", tmpDir)
 		if err != nil {
 			t.Fatalf("createZipFile failed: %v", err)
 		}
 
-		// Verify zip file exists
-		if _, err := os.Stat(zipPath); os.IsNotExist(err) {
-			t.Error("zip file was not created")
+		zipReader, err := zip.OpenReader(zipPath)
+		if err != nil {
+			t.Fatalf("opening zip: %v", err)
+		}
+		defer func() { _ = zipReader.Close() }()
+		names := make(map[string]bool)
+		for _, file := range zipReader.File {
+			names[file.Name] = true
+		}
+		for _, want := range []string{"app", "LICENSE.txt", noticesFileName, "README.txt"} {
+			if !names[want] {
+				t.Errorf("zip is missing %s", want)
+			}
 		}
 	})
 }
@@ -474,16 +491,44 @@ func TestCreateTarGzFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
+		noticesPath := filepath.Join(tmpDir, noticesFileName)
+		if err := writeNotices(noticesPath); err != nil {
+			t.Fatalf("writeNotices failed: %v", err)
+		}
+
 		err := createTarGzFile(
-			afero.NewOsFs(), tarGzPath, appPath, licensePath, readmePath, "testplatform", tmpDir,
+			afero.NewOsFs(), tarGzPath, appPath, []string{licensePath, noticesPath, readmePath},
+			"testplatform", tmpDir,
 		)
 		if err != nil {
 			t.Fatalf("createTarGzFile failed: %v", err)
 		}
 
-		// Verify tar.gz file exists
-		if _, err := os.Stat(tarGzPath); os.IsNotExist(err) {
-			t.Error("tar.gz file was not created")
+		archive, err := os.Open(tarGzPath) //nolint:gosec // test temp path
+		if err != nil {
+			t.Fatalf("opening tar.gz: %v", err)
+		}
+		defer func() { _ = archive.Close() }()
+		gzipReader, err := gzip.NewReader(archive)
+		if err != nil {
+			t.Fatalf("opening gzip stream: %v", err)
+		}
+		names := make(map[string]bool)
+		tarReader := tar.NewReader(gzipReader)
+		for {
+			header, nextErr := tarReader.Next()
+			if nextErr == io.EOF {
+				break
+			}
+			if nextErr != nil {
+				t.Fatal(nextErr)
+			}
+			names[header.Name] = true
+		}
+		for _, want := range []string{"app", "LICENSE.txt", noticesFileName, "README.txt"} {
+			if !names[want] {
+				t.Errorf("tar.gz is missing %s", want)
+			}
 		}
 	})
 }
@@ -710,4 +755,29 @@ func TestCopyFile(t *testing.T) {
 			t.Error("expected error for nonexistent source, got nil")
 		}
 	})
+}
+
+func TestWriteNoticesIncludesThirdPartySoftware(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), noticesFileName)
+	if err := writeNotices(path); err != nil {
+		t.Fatalf("writeNotices failed: %v", err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := string(data)
+	for _, want := range []string{
+		"Zaparoo Core third-party software notices",
+		"libnfc",
+		"GNU LESSER GENERAL PUBLIC LICENSE",
+		"github.com/rivo/tview",
+		"Sounds by Tim Wilsie",
+	} {
+		if !strings.Contains(notices, want) {
+			t.Errorf("notices are missing %q", want)
+		}
+	}
 }
