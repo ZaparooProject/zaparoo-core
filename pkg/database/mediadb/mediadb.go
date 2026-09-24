@@ -2009,7 +2009,7 @@ func (db *MediaDB) MigrateUp() error {
 	// longer accepts, and that has to happen at startup rather than at the
 	// next index run, because scrapes write tags without one. A brand-new
 	// database has nothing to remove and is seeded by its first index.
-	pruned, err := db.seedCanonicalTagsAtStartup()
+	pruned, err := sqlSeedCanonicalTags(db.ctx, db.sql.Load())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to seed the tag vocabulary")
 	}
@@ -2520,29 +2520,6 @@ func (db *MediaDB) ClearScanStage() error {
 
 // SeedCanonicalTagDefinitions ensures every canonical tag type and value exists,
 // using set-based anti-joined inserts.
-// seedCanonicalTagsAtStartup seeds and prunes the tag vocabulary in one
-// transaction. After a vocabulary change that is dozens of statements, and
-// committing each one separately cost several seconds of startup on SD-card
-// storage. A failure rolls everything back and leaves the stamp unwritten,
-// so the next start tries again.
-func (db *MediaDB) seedCanonicalTagsAtStartup() (bool, error) {
-	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("failed to begin tag vocabulary seeding: %w", err)
-	}
-	pruned, err := sqlSeedCanonicalTags(db.ctx, tx)
-	if err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Warn().Err(rbErr).Msg("failed to roll back tag vocabulary seeding")
-		}
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("failed to commit tag vocabulary seeding: %w", err)
-	}
-	return pruned, nil
-}
-
 func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
