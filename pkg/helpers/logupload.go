@@ -63,10 +63,14 @@ const maxResponseBytes = 8 << 10
 // UploadLog sends the log bundle to the configured paste service and returns
 // the URL it was published at.
 func UploadLog(pl platforms.Platform) (string, error) {
-	return uploadLogTo(pl, config.LogUploadURL, &http.Client{
+	return uploadLogTo(pl, config.LogUploadURL, newUploadClient())
+}
+
+func newUploadClient() *http.Client {
+	return &http.Client{
 		Timeout:   uploadTimeout,
 		Transport: useragent.Transport(nil),
-	})
+	}
 }
 
 // uploadLogTo is UploadLog with the destination injected, so the read-and-post

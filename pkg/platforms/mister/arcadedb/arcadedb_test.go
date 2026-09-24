@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
+	config2 "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -581,4 +583,24 @@ func TestClient_Read_ParsesRotation(t *testing.T) {
 	assert.Equal(t, "yes", entries[0].Flip)
 	assert.Equal(t, "2 (simultaneous)", entries[0].Players)
 	assert.Equal(t, "2", entries[0].NumButtons)
+}
+
+func TestDefaultClient_SendsUserAgent(t *testing.T) {
+	t.Parallel()
+
+	userAgent := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent <- r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	c := defaultClient()
+	assert.Equal(t, config2.ArcadeDbURL, c.apiURL)
+	assert.Equal(t, config2.ArcadeDbFile, c.filename)
+
+	status, _, err := c.doRequest(t.Context(), server.URL)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, status)
+	assert.Equal(t, useragent.String(), <-userAgent)
 }
