@@ -60,7 +60,8 @@ func TestEveryHTTPClientSendsUserAgent(t *testing.T) {
 				return err
 			}
 			if d.IsDir() {
-				if d.Name() == "testdata" {
+				// pkg/testing is test infrastructure that never ships.
+				if d.Name() == "testdata" || path == filepath.Join(root, "pkg", "testing") {
 					return filepath.SkipDir
 				}
 				return nil
@@ -164,10 +165,20 @@ func checkFile(t *testing.T, path, rel string) []string {
 			}
 		case *ast.CallExpr:
 			s, ok := node.Fun.(*ast.SelectorExpr)
-			if !ok || (s.Sel.Name != "DialContext" && s.Sel.Name != "Dial") || len(node.Args) != 3 {
+			if !ok {
 				return true
 			}
-			if id, ok := node.Args[2].(*ast.Ident); ok && id.Name == "nil" {
+			// gorilla/websocket: Dial(url, header), DialContext(ctx, url, header).
+			var header ast.Expr
+			switch {
+			case s.Sel.Name == "Dial" && len(node.Args) == 2:
+				header = node.Args[1]
+			case s.Sel.Name == "DialContext" && len(node.Args) == 3:
+				header = node.Args[2]
+			default:
+				return true
+			}
+			if id, ok := header.(*ast.Ident); ok && id.Name == "nil" {
 				report(node, "WebSocket dials must pass useragent.Header()")
 			}
 		}
@@ -197,6 +208,8 @@ func f(d *websocket.Dialer) {
 	_, _ = http.DefaultClient.Do(nil)
 	_, _, _ = d.DialContext(nil, "ws://example.invalid", nil)
 	_, _, _ = d.DialContext(nil, "ws://example.invalid", ua.Header())
+	_, _, _ = websocket.DefaultDialer.Dial("ws://example.invalid", nil)
+	_, _, _ = d.Dial("ws://example.invalid", ua.Header())
 }
 `
 	path := filepath.Join(t.TempDir(), "x.go")
@@ -209,5 +222,6 @@ func f(d *websocket.Dialer) {
 		"x.go:15: use a client built with useragent.Transport instead of http.Get",
 		"x.go:16: use a client built with useragent.Transport instead of http.DefaultClient",
 		"x.go:17: WebSocket dials must pass useragent.Header()",
+		"x.go:19: WebSocket dials must pass useragent.Header()",
 	}, offenders)
 }
