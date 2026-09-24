@@ -157,3 +157,54 @@ func (db *MediaDB) RebuildTagCache() error {
 		Msg("tag cache built")
 	return nil
 }
+
+// RefreshScrapeTagCache brings the tag caches up to date with committed scrape
+// writes. Scrapes change tags outside indexing, which is otherwise the only
+// thing that refreshes SystemTagsCache, so without this media.tags keeps
+// serving the pre-scrape tag set until the next reindex. It rebuilds the
+// SystemTagsCache rows of the systems scrape writes touched, then the in-memory
+// cache and its persisted snapshot. On failure the systems stay recorded so a
+// later call retries them.
+func (db *MediaDB) RefreshScrapeTagCache(ctx context.Context) error {
+	systemIDs, all := db.consumeScrapeTagChanges()
+	if len(systemIDs) == 0 && !all {
+		return nil
+	}
+
+	var err error
+	if all {
+		err = db.PopulateSystemTagsCache(ctx)
+	} else {
+		systems := make([]systemdefs.System, 0, len(systemIDs))
+		for _, systemID := range systemIDs {
+			system, lookupErr := systemdefs.GetSystem(systemID)
+			if lookupErr != nil {
+				log.Debug().Err(lookupErr).Str("system", systemID).
+					Msg("skipping unknown system in scrape tag cache refresh")
+				continue
+			}
+			systems = append(systems, *system)
+		}
+		err = db.PopulateSystemTagsCacheForSystems(ctx, systems)
+	}
+	if err != nil {
+		db.addScrapeTagSystems(systemIDs)
+		if all {
+			db.scrapeTagChangesMu.Lock()
+			db.scrapeTagChangesAll = true
+			db.scrapeTagChangesMu.Unlock()
+		}
+		return fmt.Errorf("failed to refresh system tags cache after scrape: %w", err)
+	}
+
+	if err := db.RebuildTagCache(); err != nil {
+		// The in-memory cache would otherwise keep serving the pre-scrape
+		// set; without it, reads fall through to the refreshed table.
+		db.inMemoryTagCache.Store(nil)
+		if persistErr := db.PersistTagCache(); persistErr != nil {
+			log.Warn().Err(persistErr).Msg("failed to remove stale persisted tag cache after scrape")
+		}
+		return err
+	}
+	return db.PersistTagCache()
+}

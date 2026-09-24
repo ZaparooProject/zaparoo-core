@@ -628,6 +628,8 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
 	mockDB.On("WALCheckpoint").Return(nil).Once()
+	// Writes before the failure committed, so their tags must still be refreshed.
+	mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
@@ -1257,15 +1259,25 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	// queue worker. Killing that goroutine hangs the queue instead of failing
 	// the test, so record what was seen and assert it after the queue finishes.
 	storedWhenRetiring := -1
+	var events []string
 	db.On("ClearScrapeRunMarkers", assertmock.Anything, "first", "one").Run(func(assertmock.Arguments) {
 		storedWhenRetiring = len(stored)
+		events = append(events, "clear:first")
 	}).Return(nil).Once()
-	db.On("ClearScrapeRunMarkers", assertmock.Anything, "second", "two").Return(nil).Once()
+	db.On("ClearScrapeRunMarkers", assertmock.Anything, "second", "two").Run(func(assertmock.Arguments) {
+		events = append(events, "clear:second")
+	}).Return(nil).Once()
+	db.On("RefreshScrapeTagCache", assertmock.Anything).Run(func(assertmock.Arguments) {
+		events = append(events, "refresh")
+	}).Return(nil).Twice()
 	db.On("WALCheckpoint").Return(nil).Twice()
 	tracked := false
 	db.On("TrackBackgroundOperation").Run(func(assertmock.Arguments) { tracked = true }).Return().Once()
 	finished := make(chan struct{})
-	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) { close(finished) }).Return().Once()
+	db.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		events = append(events, "done")
+		close(finished)
+	}).Return().Once()
 	db.On("GetScrapedMediaCount", assertmock.Anything, assertmock.Anything).Return(0, nil)
 	var calls []string
 	var observed []scrapeObservation
@@ -1304,6 +1316,8 @@ func TestResumeMediaScrapeUsesOneOrdinaryQueue(t *testing.T) {
 	require.Equal(t, []string{"first", "second"}, calls)
 	require.Equal(t, 2, storedWhenRetiring,
 		"next job must be durable before retiring previous markers")
+	require.Equal(t, []string{"clear:first", "refresh", "clear:second", "refresh", "done"}, events,
+		"each job must refresh the tag cache after its markers are cleared and before the database is released")
 	require.Len(t, observed, 2)
 	for i := range observed {
 		require.True(t, observed[i].tracked,

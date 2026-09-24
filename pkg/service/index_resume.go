@@ -786,6 +786,20 @@ func invalidateInterruptedScrapeThumbnails(systems []string) {
 	methods.WipeMediaThumbCacheSystems(systems)
 }
 
+// markInterruptedScrapeTags flags the tag cache of an interrupted scrape's
+// systems as stale, since its writes committed before the restart lost track of
+// them. A resumed run refreshes them when it ends; refresh does it now for a run
+// that will not resume. An empty system list covers every system.
+func markInterruptedScrapeTags(ctx context.Context, mediaDB database.MediaDBI, systems []string, refresh bool) {
+	mediaDB.MarkScrapeTagCacheStale(systems)
+	if !refresh {
+		return
+	}
+	if err := mediaDB.RefreshScrapeTagCache(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to refresh tag cache after interrupted scrape")
+	}
+}
+
 func checkAndResumeScraping(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -814,6 +828,7 @@ func checkAndResumeScraping(
 		}
 		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
 		invalidateInterruptedScrapeThumbnails(nil)
+		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, nil, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark incomplete scraping as failed")
 		}
@@ -838,6 +853,7 @@ func checkAndResumeScraping(
 	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok && len(operation.Pending) == 0 && operation.Version == 0 {
 		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
 		invalidateInterruptedScrapeThumbnails(operation.Systems)
+		markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, true)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark unavailable scraper as failed")
 		}
@@ -847,6 +863,7 @@ func checkAndResumeScraping(
 	// Writes commit incrementally, so artwork may have changed before the
 	// interruption even though no terminal invalidation ran.
 	invalidateInterruptedScrapeThumbnails(operation.Systems)
+	markInterruptedScrapeTags(st.GetContext(), db.MediaDB, operation.Systems, false)
 	log.Info().Str("scraper", operation.ScraperID).Msg("detected interrupted media scraping, automatically resuming")
 	env := requests.RequestEnv{
 		Context:      st.GetContext(),
