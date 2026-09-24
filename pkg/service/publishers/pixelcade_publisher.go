@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -75,7 +76,7 @@ func NewPixelCadePublisher(host string, port int, mode string, filter []string) 
 			// sharing http.DefaultTransport: anything else in the process
 			// closing the shared pool's idle connections can break a request
 			// this publisher already has in flight on a reused connection.
-			Transport: defaultTransportClone(),
+			Transport: useragent.Transport(defaultTransportClone()),
 		},
 	}
 }

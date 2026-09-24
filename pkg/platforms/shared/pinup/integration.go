@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -147,7 +148,7 @@ func NewIntegration(deps *Deps) *Integration {
 		deps.Processes = NewProcessLister()
 	}
 	if deps.HTTP == nil {
-		deps.HTTP = &http.Client{Timeout: remoteRequestTimeout}
+		deps.HTTP = &http.Client{Timeout: remoteRequestTimeout, Transport: useragent.Transport(nil)}
 	}
 	if deps.Timeouts == (Timeouts{}) {
 		deps.Timeouts = DefaultTimeouts()

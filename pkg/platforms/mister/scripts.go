@@ -25,6 +25,11 @@ const (
 	misterWidgetScriptPath  = "/tmp/widget_script"
 	misterScriptRunFlag     = "1"
 	misterWidgetRunFlag     = "2"
+
+	// launchOriginEnv tells scripts which frontend launched them. Update All
+	// reads it to decide how to hand the console back after a core load.
+	launchOriginEnv = "LAUNCH_ORIGIN_ID"
+	launchOriginID  = "zaparoo"
 )
 
 var (
@@ -99,7 +104,8 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		}
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
-			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag)
+			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag,
+			launchOriginEnv+"="+launchOriginID)
 		cmd.Dir = filepath.Dir(bin)
 		err := runHiddenScriptCommand(cmd)
 		if err != nil {
@@ -179,15 +185,21 @@ func runScriptContext(ctx context.Context, pl *Platform, bin, args string, hidde
 		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
 	}
 
+	// Core's own widgets are not user scripts launched by a frontend.
+	launchOrigin := ""
+	if !widgetScript {
+		launchOrigin = "export " + launchOriginEnv + "=" + launchOriginID + "\n"
+	}
+
 	// this is how mister launches scripts itself
 	launcher := fmt.Sprintf(`#!/bin/bash
 export LC_ALL=en_US.UTF-8
 export HOME=/root
 export LESSKEY=/media/fat/linux/lesskey
 export ZAPAROO_RUN_SCRIPT=%s
-cd $(dirname "%s")
+%scd $(dirname "%s")
 %s
-`, runScript, bin, bin+" "+args)
+`, runScript, launchOrigin, bin, bin+" "+args)
 
 	err = writeScriptLauncher(scriptPath, []byte(launcher), 0o750)
 	if err != nil {

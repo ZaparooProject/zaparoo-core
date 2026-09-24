@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -198,4 +199,57 @@ func TestRunScript_DoesNotCloseWhenOpenFails(t *testing.T) {
 	err := runScript(newTestScriptPlatform(), newTestScript(t, "test.sh"), "", false)
 	require.Error(t, err)
 	assert.False(t, cm.closeCalled)
+}
+
+func captureScriptLauncher(t *testing.T, bin, args string) string {
+	t.Helper()
+	restoreScriptTestHooks(t)
+
+	var launcher string
+	checkScriptActive = func(context.Context) bool { return false }
+	getScriptConsoleManager = func(*Platform) platforms.ConsoleManager { return &testConsoleManager{} }
+	runScriptChvt = func(context.Context, string) error { return nil }
+	writeScriptLauncher = func(_ string, data []byte, _ os.FileMode) error {
+		launcher = string(data)
+		return nil
+	}
+	startScriptCommand = func(*exec.Cmd) error { return assert.AnError }
+
+	err := runScript(newTestScriptPlatform(), bin, args, false)
+	require.ErrorIs(t, err, assert.AnError)
+	return launcher
+}
+
+func TestRunScript_VisibleUserScriptSetsLaunchOrigin(t *testing.T) {
+	launcher := captureScriptLauncher(t, newTestScript(t, "update_all.sh"), "")
+	assert.Contains(t, launcher, "\nexport LAUNCH_ORIGIN_ID=zaparoo\n")
+}
+
+func TestRunScript_WidgetDoesNotSetLaunchOrigin(t *testing.T) {
+	launcher := captureScriptLauncher(t, newTestScript(t, "zaparoo.sh"), "'-show-picker' 'args.json'")
+	require.NotEmpty(t, launcher)
+	assert.NotContains(t, launcher, "LAUNCH_ORIGIN_ID")
+}
+
+func TestRunScript_HiddenLaunchOriginOverridesInherited(t *testing.T) {
+	restoreScriptTestHooks(t)
+	t.Setenv("LAUNCH_ORIGIN_ID", "degauss")
+
+	var env []string
+	checkScriptActive = func(context.Context) bool { return false }
+	runHiddenScriptCommand = func(cmd *exec.Cmd) error {
+		env = cmd.Env
+		return nil
+	}
+
+	require.NoError(t, runScript(nil, newTestScript(t, "update_all.sh"), "", true))
+
+	// exec keeps the last value of a duplicated key.
+	var origin string
+	for _, kv := range env {
+		if value, ok := strings.CutPrefix(kv, "LAUNCH_ORIGIN_ID="); ok {
+			origin = value
+		}
+	}
+	assert.Equal(t, launchOriginID, origin)
 }

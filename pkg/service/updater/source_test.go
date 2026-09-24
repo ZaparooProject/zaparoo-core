@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,7 @@ type manifestServer struct {
 	body         atomic.Pointer[[]byte]
 	etag         atomic.Pointer[string]
 	lastModified atomic.Pointer[string]
+	userAgent    atomic.Pointer[string]
 	priv         ed25519.PrivateKey
 	pub          ed25519.PublicKey
 	manifestGets atomic.Int64
@@ -68,6 +70,8 @@ func newManifestServer(t *testing.T, body string) *manifestServer {
 
 	ms.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data := *ms.body.Load()
+		userAgent := r.Header.Get("User-Agent")
+		ms.userAgent.Store(&userAgent)
 		switch r.URL.Path {
 		case testRepoPath + "/" + manifestSigFileName:
 			ms.sigGets.Add(1)
@@ -230,6 +234,7 @@ func TestVerifiedSource_SelectsTheNewestRelease(t *testing.T) {
 
 	require.NotNil(t, rel)
 	assert.Equal(t, "v2.16.1", rel.TagName)
+	assert.Equal(t, useragent.String(), *ms.userAgent.Load())
 	// The release is offered whole. Picking this device's archive out of it is
 	// the install's job, and it does that against the same signed manifest.
 	assert.Equal(t, []string{

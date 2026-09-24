@@ -786,10 +786,12 @@ func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	flagPath := filepath.Join(tmpDir, "run_flag")
+	originPath := filepath.Join(tmpDir, "origin")
 	argPath := filepath.Join(tmpDir, "arg")
 	scriptPath := filepath.Join(tmpDir, "script.sh")
 	script := "#!/bin/sh\n" +
 		"printf '%s' \"$ZAPAROO_RUN_SCRIPT\" > run_flag\n" +
+		"printf '%s' \"$LAUNCH_ORIGIN_ID\" > origin\n" +
 		"printf '%s' \"$1\" > arg\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
 
@@ -799,6 +801,10 @@ func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)
 	assert.Equal(t, misterScriptRunFlag, string(flag))
+
+	origin, err := os.ReadFile(originPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, launchOriginID, string(origin))
 
 	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)

@@ -40,6 +40,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/rs/zerolog/log"
@@ -774,7 +775,7 @@ func assetFetcherFor(transport *http.Transport) assetFetcher {
 		// No client deadline: the archive is the one response whose size is not
 		// bounded by a small constant, so total duration is the caller's context
 		// to bound and the stall guard is what tells slow apart from dead.
-		client := &http.Client{Transport: transport}
+		client := &http.Client{Transport: useragent.Transport(transport)}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 		if err != nil {
 			return nil, fmt.Errorf("creating the update archive request: %w", err)

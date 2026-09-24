@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -346,6 +347,7 @@ func startWith(
 	initialize func(platforms.Platform, *config.Instance) (*StartResult, error),
 ) (res *StartResult, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
+	useragent.SetPlatform(pl.ID())
 
 	dataDir := helpers.DataDir(pl)
 

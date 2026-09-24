@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,7 +45,7 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client := &http.Client{}
+	client := &http.Client{Transport: useragent.Transport(nil)}
 
 	var req *http.Request
 	var err error

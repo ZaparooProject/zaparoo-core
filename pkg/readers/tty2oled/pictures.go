@@ -34,6 +34,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -56,7 +57,8 @@ func NewPictureManager(cfg *config.Instance, pl platforms.Platform) *PictureMana
 		cfg:      cfg,
 		cacheDir: cacheDir,
 		httpClient: &http.Client{
-			Timeout: downloadTimeout,
+			Timeout:   downloadTimeout,
+			Transport: useragent.Transport(nil),
 		},
 	}
 }

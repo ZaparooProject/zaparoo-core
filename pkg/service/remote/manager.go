@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -156,7 +157,7 @@ type manager struct {
 func Start(ctx context.Context, deps *Deps, wg *sync.WaitGroup) {
 	m := &manager{
 		deps:          *deps,
-		httpClient:    &http.Client{},
+		httpClient:    &http.Client{Transport: useragent.Transport(nil)},
 		executionSlot: make(chan struct{}, 1),
 	}
 	wg.Add(1)

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -62,7 +63,10 @@ const maxResponseBytes = 8 << 10
 // UploadLog sends the log bundle to the configured paste service and returns
 // the URL it was published at.
 func UploadLog(pl platforms.Platform) (string, error) {
-	return uploadLogTo(pl, config.LogUploadURL, &http.Client{Timeout: uploadTimeout})
+	return uploadLogTo(pl, config.LogUploadURL, &http.Client{
+		Timeout:   uploadTimeout,
+		Transport: useragent.Transport(nil),
+	})
 }
 
 // uploadLogTo is UploadLog with the destination injected, so the read-and-post

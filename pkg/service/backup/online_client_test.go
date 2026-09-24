@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,7 @@ func TestOnlineClientRequests(t *testing.T) {
 	env := newBackupTestEnv(t, "mister")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer online-token", r.Header.Get("Authorization"))
+		assert.Equal(t, useragent.String(), r.Header.Get("User-Agent"))
 		switch r.URL.Path {
 		case "/v1/device/json":
 			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
