@@ -247,67 +247,13 @@ func TestSeedingPrunesTagsTheVocabularyNoLongerAccepts(t *testing.T) {
 
 	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
 
-	// What the removed values said moves onto the vocabulary, as a scrape of
-	// the same source would write it now.
-	assert.Equal(t, []string{
-		"developer:t-and-e-soft", "genre:action", "genre:action:platformer",
-		"genre:shmup", "genre:shmup:v", "search:franchise:mario",
-	}, storedTags(t, mediaDB, "MediaTitleTags", "MediaTitleDBID", titleID))
-	assert.Equal(t, []string{"region:us", "scraper.test:scraped"},
-		storedTags(t, mediaDB, "MediaTags", "MediaDBID", mediaID))
-	assert.Zero(t, countRows(t, mediaDB,
-		"SELECT COUNT(*) FROM Tags WHERE Tag = 'shmup:v' AND DisplayName != ''"))
+	requireOnlyAcceptedTagsStored(t, mediaDB, mediaID, titleID)
 	assert.Zero(t, countRows(t, mediaDB,
 		"SELECT COUNT(*) FROM TagTypes WHERE Type IN ('gamegenre', 'gamefamily')"))
 	assert.Zero(t, countRows(t, mediaDB,
 		"SELECT COUNT(*) FROM Tags WHERE Tag IN ('shootem-up-verticalshootem-up', 'usa', 'platform', 'mario')"))
 	assert.Positive(t, countRows(t, mediaDB, "SELECT COUNT(*) FROM Tags WHERE Tag = 'world'"),
 		"canonical values stay seeded")
-}
-
-// An upgrade must not cost a library its genres and series: scrapers skip
-// media they have already scraped, so a value dropped here only comes back
-// through a forced re-scrape. Each stored value is mapped the way a scrape
-// maps its source today, and one no lookup knows is dropped as a scrape
-// drops it.
-func TestSeedingMovesLegacyGenresAndSeriesOntoTheVocabulary(t *testing.T) {
-	t.Parallel()
-	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
-	t.Cleanup(cleanup)
-	ctx := context.Background()
-	_, titleID := vocabularyTestMedia(t, mediaDB)
-
-	conn := mediaDB.UnsafeGetSQLDb()
-	_, err := conn.ExecContext(ctx, `
-		INSERT INTO TagTypes (Type, IsExclusive) VALUES ('gamefamily', 1);
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'street-fighter' FROM TagTypes WHERE Type = 'gamefamily';
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'liquid-kids' FROM TagTypes WHERE Type = 'gamefamily';
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'race,-driving' FROM TagTypes WHERE Type = 'genre';
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'shooter-flying-vertical' FROM TagTypes WHERE Type = 'genre';
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'shooter' FROM TagTypes WHERE Type = 'genre';
-		INSERT INTO Tags (TypeDBID, Tag) SELECT DBID, 'various' FROM TagTypes WHERE Type = 'genre';`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `
-		INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID)
-		SELECT ?, t.DBID FROM Tags t JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-		WHERE tt.Type = 'gamefamily'
-		   OR t.Tag IN ('race,-driving', 'shooter-flying-vertical', 'shooter', 'various')`, titleID)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "UPDATE DBConfig SET Value = 'older-build' WHERE Name = ?",
-		mediadb.DBConfigCanonicalTagVocabHash)
-	require.NoError(t, err)
-
-	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
-
-	// race,-driving is a ScreenScraper genre; shooter-flying-vertical is a
-	// MiSTer arcade category; a bare "shooter" is a category the arcade table
-	// deliberately leaves unmapped; "various" and the liquid-kids series are
-	// in no table.
-	assert.Equal(t, []string{
-		"genre:racing", "genre:shmup", "genre:shmup:v", "search:franchise:streetfighter",
-	}, storedTags(t, mediaDB, "MediaTitleTags", "MediaTitleDBID", titleID))
-	assert.Zero(t, countRows(t, mediaDB,
-		"SELECT COUNT(*) FROM Tags WHERE Tag IN ('race,-driving', 'shooter', 'various', 'liquid-kids')"))
 }
 
 // TestInsertTagValidatesATypeQueuedInTheSameBatch covers batch mode, where

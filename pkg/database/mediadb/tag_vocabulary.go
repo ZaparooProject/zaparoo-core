@@ -21,14 +21,10 @@ package mediadb
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/arcadegenre"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/ssgenre"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
@@ -167,12 +163,7 @@ var scanCreatableTagTypes = func() []string {
 // values reachable through filters and tag lists. Property tags are excluded:
 // they are Core's own schema keys, checked when they are resolved.
 func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (bool, error) {
-	refused, err := readRefusedTags(ctx, db)
-	if err != nil {
-		return false, err
-	}
-
-	moved, err := moveRefusedTagLinks(ctx, db, refused)
+	refused, err := readRefusedTagIDs(ctx, db)
 	if err != nil {
 		return false, err
 	}
@@ -181,8 +172,8 @@ func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (bool, erro
 	for start := 0; start < len(refused); start += chunkSize {
 		chunk := refused[start:min(start+chunkSize, len(refused))]
 		args := make([]any, len(chunk))
-		for i := range chunk {
-			args[i] = chunk[i].id
+		for i, id := range chunk {
+			args[i] = id
 		}
 		holders := prepareVariadic("?", ",", len(chunk))
 		for _, table := range []string{"MediaTags", "MediaTitleTags", "Tags"} {
@@ -227,132 +218,14 @@ func sqlPruneOffVocabularyTags(ctx context.Context, db sqlQueryable) (bool, erro
 
 	if len(refused) > 0 || len(unknownTypes) > 0 || cleared > 0 {
 		log.Info().Int("tags", len(refused)).Int("types", len(unknownTypes)).Int64("labels", cleared).
-			Int64("moved_links", moved).
 			Msg("removed tags that are no longer in the tag vocabulary")
 	}
 	return len(refused) > 0 || len(unknownTypes) > 0 || cleared > 0, nil
 }
 
-type refusedTag struct {
-	tagType string
-	value   string
-	id      int64
-}
-
-// legacyTagReplacement is a vocabulary tag that carries what a refused one
-// said.
-type legacyTagReplacement struct {
-	tagType tags.TagType
-	value   tags.TagValue
-}
-
-// legacyTagReplacements maps a value an earlier Core stored under a type or
-// value the vocabulary no longer accepts onto the tags a scrape writes for
-// the same source value now: the free-form genre type held slugified
-// category and genre names, gamegenre held the canonical genre list, and
-// gamefamily held series names. Without this an upgrade removes a library's
-// genres and series outright, and scrapers skip media they have already
-// scraped, so only a forced re-scrape would bring them back. Values neither
-// lookup knows are dropped, as a scrape drops them.
-func legacyTagReplacements(tagType, value string) []legacyTagReplacement {
-	value = tags.UnpadTagValue(value)
-	var out []legacyTagReplacement
-	switch tagType {
-	case string(tags.TagTypeGenre), "gamegenre":
-		if tags.IsValidTagValue(tags.TagTypeGenre, value) {
-			return []legacyTagReplacement{{tagType: tags.TagTypeGenre, value: tags.TagValue(value)}}
-		}
-		// The arcade catalog's table goes first: it deliberately writes
-		// nothing for categories such as a bare "shooter", which a general
-		// genre table would guess at.
-		values, known := arcadegenre.LegacyGenre(value)
-		if !known {
-			values, _ = ssgenre.Lookup(value)
-		}
-		for _, v := range values {
-			out = append(out, legacyTagReplacement{tagType: tags.TagTypeGenre, value: v})
-		}
-	case "gamefamily":
-		if v, ok := tags.LookupFranchise(value); ok {
-			out = append(out, legacyTagReplacement{tagType: tags.TagTypeSearch, value: v})
-		}
-	}
-	return out
-}
-
-// moveRefusedTagLinks links every media and title carrying a refused tag to
-// the vocabulary tags that replace it, before the refused tag is removed. It
-// returns how many links it added. The pairs go to SQLite in a few batched
-// statements: one statement per pair costs a commit each, which on an SD card
-// added tens of seconds to the first start after an upgrade.
-func moveRefusedTagLinks(ctx context.Context, db sqlQueryable, refused []refusedTag) (int64, error) {
-	tagIDs := make(map[legacyTagReplacement]int64)
-	findTag := func(r legacyTagReplacement) (int64, error) {
-		if id, ok := tagIDs[r]; ok {
-			return id, nil
-		}
-		var id int64
-		err := db.QueryRowContext(ctx, `
-			SELECT t.DBID FROM Tags t JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-			WHERE tt.Type = ? AND t.Tag = ?`,
-			string(r.tagType), tags.PadTagValue(string(r.value)),
-		).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			// Canonical values are seeded before the prune runs, so a missing
-			// one is not in the vocabulary this binary carries.
-			id = 0
-			err = nil
-		}
-		if err != nil {
-			return 0, fmt.Errorf("failed to find replacement tag %s:%s: %w", r.tagType, r.value, err)
-		}
-		tagIDs[r] = id
-		return id, nil
-	}
-
-	var pairs []any
-	for i := range refused {
-		for _, replacement := range legacyTagReplacements(refused[i].tagType, refused[i].value) {
-			to, err := findTag(replacement)
-			if err != nil {
-				return 0, err
-			}
-			if to != 0 {
-				pairs = append(pairs, refused[i].id, to)
-			}
-		}
-	}
-
-	var moved int64
-	const pairsPerStatement = 400
-	for start := 0; start < len(pairs); start += pairsPerStatement * 2 {
-		chunk := pairs[start:min(start+pairsPerStatement*2, len(pairs))]
-		values := prepareVariadic("(?, ?)", ",", len(chunk)/2)
-		for _, link := range []struct{ table, column string }{
-			{"MediaTags", "MediaDBID"},
-			{"MediaTitleTags", "MediaTitleDBID"},
-		} {
-			//nolint:gosec // table and column are constants; values are "(?, ?)" placeholders.
-			query := fmt.Sprintf(`
-				WITH moves(FromDBID, ToDBID) AS (VALUES %s)
-				INSERT OR IGNORE INTO %s (%s, TagDBID)
-				SELECT l.%s, moves.ToDBID FROM moves JOIN %s l ON l.TagDBID = moves.FromDBID`,
-				values, link.table, link.column, link.column, link.table)
-			res, err := db.ExecContext(ctx, query, chunk...)
-			if err != nil {
-				return moved, fmt.Errorf("failed to move %s links: %w", link.table, err)
-			}
-			if n, countErr := res.RowsAffected(); countErr == nil {
-				moved += n
-			}
-		}
-	}
-	return moved, nil
-}
-
-// readRefusedTags returns every non-property tag whose value its type's rule
+// readRefusedTagIDs returns every non-property tag whose value its type's rule
 // refuses, including every tag of a type Core does not define.
-func readRefusedTags(ctx context.Context, db sqlQueryable) ([]refusedTag, error) {
+func readRefusedTagIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT t.DBID, tt.Type, t.Tag
 		FROM Tags t JOIN TagTypes tt ON tt.DBID = t.TypeDBID
@@ -365,14 +238,15 @@ func readRefusedTags(ctx context.Context, db sqlQueryable) ([]refusedTag, error)
 			log.Warn().Err(closeErr).Msg("failed to close tag rows")
 		}
 	}()
-	var refused []refusedTag
+	var refused []int64
 	for rows.Next() {
-		var tag refusedTag
-		if scanErr := rows.Scan(&tag.id, &tag.tagType, &tag.value); scanErr != nil {
+		var id int64
+		var tagType, value string
+		if scanErr := rows.Scan(&id, &tagType, &value); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan tag for vocabulary pruning: %w", scanErr)
 		}
-		if !tags.IsValidTagValue(tags.TagType(tag.tagType), tag.value) {
-			refused = append(refused, tag)
+		if !tags.IsValidTagValue(tags.TagType(tagType), value) {
+			refused = append(refused, id)
 		}
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {

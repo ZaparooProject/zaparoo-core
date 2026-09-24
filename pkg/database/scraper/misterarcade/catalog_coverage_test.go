@@ -27,7 +27,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/arcadegenre"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/scrapertest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
@@ -91,8 +90,8 @@ func TestEveryCatalogCategoryHasAGenreDecision(t *testing.T) {
 	values := catalogValues(t)
 	for _, category := range distinct(values, "category") {
 		values, known := genreTags(category)
-		skipped := arcadegenre.IsSkipped(categoryKey(category))
-		assert.True(t, known, "category %q is in neither arcadegenre table", category)
+		_, skipped := notGenres[categoryKey(category)]
+		assert.True(t, known, "category %q is in neither genreTable nor notGenres", category)
 		assert.True(t, len(values) > 0 || skipped, "category %q maps to no genre", category)
 		for _, value := range values {
 			assert.NoError(t, tags.ValidateTagValue(tags.TagTypeGenre, string(value)), "category %q", category)
@@ -103,10 +102,14 @@ func TestEveryCatalogCategoryHasAGenreDecision(t *testing.T) {
 func TestGenreSkipsAreNotStale(t *testing.T) {
 	t.Parallel()
 	inCatalog := catalogKeys(catalogValues(t), "category", categoryKey)
-	_, skipped := arcadegenre.Keys()
-	for _, key := range skipped {
+	for key := range notGenres {
+		_, mapped := genreTable[key]
+		assert.False(t, mapped, "%q is both mapped and skipped", key)
 		_, present := inCatalog[key]
 		assert.True(t, present, "%q is skipped but no longer in the catalog", key)
+	}
+	for key, values := range genreTable {
+		assert.NotEmpty(t, values, "%q maps to nothing; list it in notGenres instead", key)
 	}
 }
 
