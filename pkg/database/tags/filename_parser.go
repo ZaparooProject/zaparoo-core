@@ -267,6 +267,19 @@ func cachedNormalizeTag(s string) string {
 	return v
 }
 
+// isRingcodeVersion reports whether s is a Redump ringcode version marker: "re" plus 1-3 digits.
+func isRingcodeVersion(s string) bool {
+	if len(s) < 3 || len(s) > 5 || s[0] != 'r' || s[1] != 'e' {
+		return false
+	}
+	for i := 2; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // classifyUnmappedParen inspects a normalized paren group that allTagMappings did not match
 // and returns the appropriate CanonicalTag slice plus a classified flag.
 //   - classified=false: unrecognized — caller should try positional heuristics or emit unknown:.
@@ -285,6 +298,13 @@ func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 		if strings.Contains(normalized, sub) {
 			return nil, true
 		}
+	}
+
+	// Redump ringcode version: "(RE1)" is the disc's Version field, taken from the
+	// mastering code. Redump calls the reprint unconfirmed, so it is a rev, not a reissue.
+	// Checked before the catalog shape, which would otherwise swallow "re12".
+	if isRingcodeVersion(normalized) {
+		return []CanonicalTag{{Type: TagTypeRev, Value: TagValue(normalized), Source: TagSourceBracketed}}, true
 	}
 
 	// Catalog/part-number shape — drop, no tag

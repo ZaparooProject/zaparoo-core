@@ -770,6 +770,65 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 	}
 }
 
+func TestParseFilenameToCanonicalTags_RedumpRingcodeVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string
+	}{
+		{
+			name:     "RE1 is a rev, not a credit",
+			filename: "Dragon's Lair (USA) (RE1).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re1"},
+		},
+		{
+			name:     "RE2 keeps its number",
+			filename: "Dragon's Lair (USA) (RE2).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re2"},
+		},
+		{
+			name:     "two-digit RE is not dropped as a catalog number",
+			filename: "Dragon's Lair (USA) (RE12).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:re12"},
+		},
+		{
+			name:     "RE alongside Rev keeps both",
+			filename: "Foo (Japan) (Rev 1) (RE1).cue",
+			wantTags: []string{"rev:1", "region:jp", "lang:ja", "rev:re1"},
+		},
+		{
+			name:     "Rev 1 unchanged",
+			filename: "Foo (USA) (Rev 1).cue",
+			wantTags: []string{"region:us", "lang:en", "rev:1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			assert.ElementsMatch(t, tt.wantTags, gotStrings)
+		})
+	}
+}
+
+func TestIsRingcodeVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"re1", "re2", "re12", "re999"} {
+		assert.True(t, isRingcodeVersion(s), s)
+	}
+	for _, s := range []string{"re", "re1234", "rev1", "re-1", "re1a", "are1", "r1", ""} {
+		assert.False(t, isRingcodeVersion(s), s)
+	}
+}
+
 func TestParseFilenameToCanonicalTags_ArcadeRegionBuildDate(t *testing.T) {
 	tests := []struct {
 		name     string
