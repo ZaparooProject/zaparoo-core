@@ -304,6 +304,98 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestHandleMediaScrape_PublishesDoneAfterTagRefresh covers clients that
+// re-read media.tags when a scrape reports completion. The terminal status has
+// to wait for the tag cache refresh, or that read returns the pre-scrape tags.
+func TestHandleMediaScrape_PublishesDoneAfterTagRefresh(t *testing.T) {
+	tests := []struct {
+		name    string
+		scraper platforms.Scraper
+	}{
+		{name: "done update", scraper: doneUpdatePlatformScraper("test-scraper", "Test Scraper")},
+		{name: "synthesized completion", scraper: emptyPlatformScraper("test-scraper", "Test Scraper")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Not parallel — manipulates shared scrapingStatusInstance.
+			ClearScrapingStatus()
+			statusInstance.clear()
+
+			pl := mocks.NewMockPlatform()
+			pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+				"test-scraper": tt.scraper,
+			})
+			pl.SetupBasicMock()
+			st, ns := state.NewState(pl, "test")
+			t.Cleanup(st.StopService)
+
+			terminalSeen := func(n models.Notification) bool {
+				if n.Method != models.NotificationMediaScraping {
+					return false
+				}
+				var payload models.ScrapingStatusResponse
+				require.NoError(t, json.Unmarshal(n.Params, &payload))
+				return payload.Done || !payload.Scraping
+			}
+			doneBeforeRefresh := make(chan bool, 1)
+			mockDB := testhelpers.NewMockMediaDBI()
+			mockDB.On("SetScrapingOperation", database.ScrapingOperation{
+				ScraperID: "test-scraper", Version: 1, Status: mediadb.IndexingStatusRunning,
+			}).Return(nil).Once()
+			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+			mockDB.On("ClearScrapingOperation").Return(nil).Once()
+			mockDB.On("WALCheckpoint").Return(nil).Once()
+			mockDB.On("RefreshScrapeTagCache", assertmock.Anything).Run(func(assertmock.Arguments) {
+				seen := false
+				for {
+					select {
+					case n := <-ns:
+						seen = seen || terminalSeen(n)
+						continue
+					default:
+					}
+					break
+				}
+				doneBeforeRefresh <- seen
+			}).Return(nil).Once()
+			mockDB.On("TrackBackgroundOperation").Return()
+			mockDB.On("BackgroundOperationDone").Return()
+			mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
+
+			_, err := HandleMediaScrape(requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: pl,
+				State:    st,
+				Database: &database.Database{MediaDB: mockDB},
+				Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+			})
+			require.NoError(t, err)
+
+			select {
+			case seen := <-doneBeforeRefresh:
+				assert.False(t, seen, "completion must not be published before the tag cache refresh")
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for the tag cache refresh")
+			}
+			timeout := time.After(2 * time.Second)
+			for {
+				select {
+				case n := <-ns:
+					if terminalSeen(n) {
+						require.Eventually(t, func() bool { return !IsScrapingRunning() },
+							2*time.Second, 10*time.Millisecond)
+						mockDB.AssertExpectations(t)
+						return
+					}
+				case <-timeout:
+					t.Fatal("timed out waiting for the completion notification")
+				}
+			}
+		})
+	}
+}
+
 // doneUpdatePlatformScraper returns a scraper that emits a single Done=true
 // update then closes the channel.
 func doneUpdatePlatformScraper(id, name string) platforms.Scraper {

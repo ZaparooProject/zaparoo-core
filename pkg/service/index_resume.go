@@ -881,6 +881,11 @@ func checkAndResumeScraping(
 				Msg("media scraping auto-resume deferred; media database write operation active")
 			return
 		}
+		// No run started, so nothing else will refresh the scope marked stale
+		// above, and a failed operation is not resumed on the next boot.
+		if refreshErr := db.MediaDB.RefreshScrapeTagCache(st.GetContext()); refreshErr != nil {
+			log.Warn().Err(refreshErr).Msg("failed to refresh tag cache after failed scrape resume")
+		}
 		// The starter owns persistence while holding the write lease. A failed
 		// recovery attempt must not delete jobs accepted after that lease ended.
 		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")

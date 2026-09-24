@@ -1655,6 +1655,9 @@ func TestCheckAndResumeScraping_PersistenceFailurePreservesJob(t *testing.T) {
 	upgraded.Version, upgraded.Status = 1, mediadb.IndexingStatusRunning
 	mockMediaDB.On("SetScrapingOperation", upgraded).Return(assert.AnError).Once()
 	mockMediaDB.On("ClearScrapingOperation").Return(nil).Maybe()
+	// No run starts, so the resume path refreshes the stale scope itself.
+	mockMediaDB.On("MarkScrapeTagCacheStale", []string(nil)).Return().Once()
+	mockMediaDB.On("RefreshScrapeTagCache", mock.Anything).Return(nil).Once()
 	t.Cleanup(func() {
 		mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
 		mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)
