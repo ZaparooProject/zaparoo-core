@@ -267,6 +267,18 @@ func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, play
 	return nil
 }
 
+// historyIdentityName is the MediaName an identity snapshot writes, or nil to
+// keep the row's own. A media database indexed before empty titles fell back
+// to the unstripped name can still resolve a blank display name, and writing
+// it would undo the fallback the row was recorded with: the account refuses a
+// session without a name.
+func historyIdentityName(identity *database.MediaIdentity) any {
+	if strings.TrimSpace(identity.DisplayName) == "" {
+		return nil
+	}
+	return identity.DisplayName
+}
+
 func sqlUpdateMediaHistoryIdentity(
 	ctx context.Context, db *sql.DB, dbid int64, identity *database.MediaIdentity,
 ) (bool, error) {
@@ -275,7 +287,7 @@ func sqlUpdateMediaHistoryIdentity(
 	}
 	result, err := db.ExecContext(ctx, `
 		UPDATE MediaHistory
-		SET MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		SET MediaName = COALESCE(?, MediaName), Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
 		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
 		WHERE DBID = ?
 		  AND (
@@ -283,7 +295,7 @@ func sqlUpdateMediaHistoryIdentity(
 		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '')
 		  );
 	`,
-		identity.DisplayName,
+		historyIdentityName(identity),
 		database.EncodeTagStrings(identity.LegacyTags()),
 		database.EncodeMediaIdentity(identity),
 		identity.PolicyVersion,
@@ -316,7 +328,8 @@ func sqlUpdateMediaHistoryIdentityAndPath(
 	}
 	result, err := db.ExecContext(ctx, `
 		UPDATE MediaHistory
-		SET MediaPath = ?, MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		SET MediaPath = ?, MediaName = COALESCE(?, MediaName), Tags = ?, MediaIdentity = ?,
+		    MediaIdentityPolicyVersion = ?,
 		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
 		WHERE DBID = ?
 		  AND (
@@ -326,7 +339,7 @@ func sqlUpdateMediaHistoryIdentityAndPath(
 		  );
 	`,
 		path,
-		identity.DisplayName,
+		historyIdentityName(identity),
 		database.EncodeTagStrings(identity.LegacyTags()),
 		database.EncodeMediaIdentity(identity),
 		identity.PolicyVersion,

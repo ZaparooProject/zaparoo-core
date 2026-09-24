@@ -233,7 +233,7 @@ func TestSqlUpdateMediaHistoryIdentity(t *testing.T) {
 			defer func() { _ = db.Close() }()
 
 			expectation := mockDB.ExpectExec(
-				`UPDATE MediaHistory SET MediaName = \?, Tags = \?, MediaIdentity = \?, `+
+				`UPDATE MediaHistory SET MediaName = COALESCE\(\?, MediaName\), Tags = \?, MediaIdentity = \?, `+
 					`MediaIdentityPolicyVersion = \?, UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), `+
 					`SyncedAt = NULL WHERE DBID = \?.*MediaIdentityPolicyVersion < \?`,
 			).WithArgs(
@@ -335,8 +335,8 @@ func TestSqlUpdateMediaHistoryIdentityAndPath(t *testing.T) {
 			defer func() { _ = db.Close() }()
 
 			expectation := mockDB.ExpectExec(
-				`UPDATE MediaHistory SET MediaPath = \?, MediaName = \?, Tags = \?, MediaIdentity = \?, `+
-					`MediaIdentityPolicyVersion = \?, UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), `+
+				`UPDATE MediaHistory SET MediaPath = \?, MediaName = COALESCE\(\?, MediaName\), Tags = \?, `+
+					`MediaIdentity = \?, MediaIdentityPolicyVersion = \?, UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), `+
 					`SyncedAt = NULL WHERE DBID = \?.*MediaIdentityPolicyVersion < \?`,
 			).WithArgs(
 				canonicalPath,
