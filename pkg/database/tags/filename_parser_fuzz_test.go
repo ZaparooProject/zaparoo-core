@@ -37,6 +37,7 @@ func FuzzParseFilenameToCanonicalTags(f *testing.F) {
 	f.Add("Game (Japan) (Disc 1 of 2).bin")
 	f.Add("ROM (World) (T+Eng v1.0).rom")
 	f.Add("Game [T-Chi(Traditional)Big5_100_Kuyagi].sfc")
+	f.Add("Dragon's Lair (USA) (RE1).cue")
 
 	// Edge cases - deeply nested brackets
 	f.Add("Game (((((((((())))))))))")
