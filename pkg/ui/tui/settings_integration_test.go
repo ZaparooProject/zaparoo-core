@@ -136,7 +136,7 @@ func TestSettingsList_TextEditActivation_Integration(t *testing.T) {
 	assert.Equal(t, "Kid A", value)
 }
 
-func TestSettingsList_LeftRightAdjustValues_Integration(t *testing.T) {
+func TestSettingsList_LeftRightOnlyStepCycles_Integration(t *testing.T) {
 	t.Parallel()
 
 	runner := NewTestAppRunner(t, 80, 25)
@@ -151,10 +151,16 @@ func TestSettingsList_LeftRightAdjustValues_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
+	// Toggles only change on Enter; Left/Right leave them alone.
 	runner.SimulateArrowRight()
-	assert.True(t, toggle)
+	assert.False(t, toggle)
 	runner.SimulateArrowLeft()
 	assert.False(t, toggle)
+	runner.SimulateEnter()
+	assert.True(t, toggle)
+	assert.True(t, runner.ContainsText("- [*] Enabled"), "Left/Right must not scroll the menu text")
+
+	// Cycles, which draw < > arrows, step with Left/Right.
 	runner.SimulateArrowDown()
 	runner.SimulateArrowLeft()
 	assert.Equal(t, 0, cycle)

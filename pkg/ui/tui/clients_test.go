@@ -102,7 +102,7 @@ func TestBuildClientsPage_RequireEncryptionConfirmation_Integration(t *testing.T
 	})
 
 	require.True(t, runner.WaitForText("Require encryption", uiSettleTimeout))
-	runner.SimulateArrowRight()
+	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Require encrypted remote", uiSettleTimeout))
 	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
@@ -131,7 +131,7 @@ func TestBuildClientsPage_DisableEncryptionImmediately_Integration(t *testing.T)
 	})
 
 	require.True(t, runner.WaitForText("Require encryption", uiSettleTimeout))
-	runner.SimulateArrowLeft()
+	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
 }
 

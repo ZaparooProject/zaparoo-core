@@ -157,17 +157,15 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Remote control activity", uiSettleTimeout))
+	require.True(t, runner.WaitForText("Activity", uiSettleTimeout))
 
-	// Account, Warp, Unlink account, Remote control, Remote status, then
-	// Remote control activity.
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
-	runner.SimulateArrowDown()
+	// Right column: four feature toggles, remote Status, then Activity.
+	runner.SimulateArrowRight()
+	for range 5 {
+		runner.SimulateArrowDown()
+	}
 	runner.SimulateEnter()
 
 	require.True(t, runner.WaitForText("no remote activity yet", uiSettleTimeout),
-		"selecting Remote control activity should open the activity page")
+		"selecting Activity should open the activity page")
 }

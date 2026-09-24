@@ -47,6 +47,9 @@ func NewTestAppRunner(t *testing.T, width, height int) *TestAppRunner {
 	screen := NewTestScreen(t, width, height)
 	app := tview.NewApplication()
 	app.SetScreen(screen.SimulationScreen)
+	// SetScreen initializes the screen again, which resets a simulation
+	// screen to its default 80x25; restore the requested size.
+	screen.SetSize(width, height)
 
 	return &TestAppRunner{
 		app:    app,
