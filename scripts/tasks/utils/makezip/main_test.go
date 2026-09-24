@@ -781,3 +781,12 @@ func TestWriteNoticesIncludesThirdPartySoftware(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteNoticesReportsWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	err := writeNotices(filepath.Join(t.TempDir(), "missing", noticesFileName))
+	if err == nil {
+		t.Fatal("writing into a missing directory should fail")
+	}
+}

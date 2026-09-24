@@ -74,13 +74,21 @@ type target struct {
 func main() {
 	check := flag.Bool("check", true, "verify the third-party data without rewriting it")
 	flag.Parse()
-	if err := run(*check); err != nil {
+	root, err := os.Getwd()
+	if err != nil {
+		log.Fatal().Err(err).Msg("resolve Core root")
+	}
+	if err := run(root, filepath.Join(root, outputDir), *check); err != nil {
 		log.Fatal().Err(err).Msg("credits generation")
 	}
 }
 
-func run(check bool) error {
-	root, err := os.Getwd()
+// run generates the credits data for the Core checkout at root, then either
+// checks it against the files in outDir or writes it there.
+func run(root, outDir string, check bool) error {
+	// Module directories from go list are absolute; so must the root be for
+	// modules inside the checkout to be recognized.
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return fmt.Errorf("resolve Core root: %w", err)
 	}
@@ -102,7 +110,7 @@ func run(check bool) error {
 	if err != nil {
 		return fmt.Errorf("encoding credits: %w", err)
 	}
-	componentsPath := filepath.Join(root, outputDir, credits.ComponentsFile)
+	componentsPath := filepath.Join(outDir, credits.ComponentsFile)
 
 	if check {
 		return checkBundle(componentsPath, bundle)
@@ -119,7 +127,7 @@ func run(check bool) error {
 	if err := os.WriteFile(componentsPath, encoded, 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", componentsPath, err)
 	}
-	contributorsPath := filepath.Join(root, outputDir, credits.ContributorsFile)
+	contributorsPath := filepath.Join(outDir, credits.ContributorsFile)
 	if err := os.WriteFile(contributorsPath, append(contributorsJSON, '\n'), 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", contributorsPath, err)
 	}

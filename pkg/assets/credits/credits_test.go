@@ -20,6 +20,8 @@
 package credits
 
 import (
+	"bytes"
+	"compress/gzip"
 	"strings"
 	"testing"
 
@@ -133,4 +135,19 @@ func TestNoticesWriteSharedTextsOnce(t *testing.T) {
 	assert.Contains(t, text, "two\nLicense: GPL-3.0 AND MIT\n")
 	assert.Contains(t, text, "--- COPYING ---\n\ngpl text\n")
 	assert.Contains(t, text, "--- LICENSE.mit ---\n\nmit text\n")
+}
+
+func TestDecodeBundleRejectsBadContent(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, err := zw.Write([]byte("not json"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	_, err = DecodeBundle(buf.Bytes())
+	require.Error(t, err, "valid gzip holding invalid JSON")
+
+	_, err = DecodeBundle(buf.Bytes()[:buf.Len()-4])
+	require.Error(t, err, "truncated gzip stream")
 }
