@@ -41,6 +41,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -147,6 +148,7 @@ func WaitForInternet(maxTries int) bool {
 }
 
 func WaitForInternetContext(ctx context.Context, maxTries int) bool {
+	client := &http.Client{Transport: useragent.Transport(nil)}
 	for range maxTries {
 		if ctx.Err() != nil {
 			return false
@@ -160,7 +162,7 @@ func WaitForInternetContext(ctx context.Context, maxTries int) bool {
 			continue
 		}
 
-		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded URL https://api.github.com
+		resp, err := client.Do(req) //nolint:gosec // G704: hardcoded URL https://api.github.com
 		cancel()
 		if err == nil && resp != nil {
 			if err := resp.Body.Close(); err != nil {

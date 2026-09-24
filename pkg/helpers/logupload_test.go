@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -419,4 +420,25 @@ func TestUploadLog_ReportsAMissingLog(t *testing.T) {
 	require.ErrorIs(t, err, ErrUploadReadLog)
 	assert.Equal(t, "Unable to read log file.", DescribeUploadFailure(err),
 		"telling this user the upload failed sends them looking at the network")
+}
+
+func TestNewUploadClient_SendsUserAgent(t *testing.T) {
+	t.Parallel()
+
+	userAgent := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent <- r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := newUploadClient()
+	assert.Equal(t, uploadTimeout, client.Timeout)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, useragent.String(), <-userAgent)
 }

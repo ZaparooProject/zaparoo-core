@@ -786,23 +786,66 @@ func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	flagPath := filepath.Join(tmpDir, "run_flag")
+	originPath := filepath.Join(tmpDir, "origin")
 	argPath := filepath.Join(tmpDir, "arg")
 	scriptPath := filepath.Join(tmpDir, "script.sh")
 	script := "#!/bin/sh\n" +
 		"printf '%s' \"$ZAPAROO_RUN_SCRIPT\" > run_flag\n" +
+		"printf '%s' \"$LAUNCH_ORIGIN_ID\" > origin\n" +
 		"printf '%s' \"$1\" > arg\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
 
-	err := runScript(nil, scriptPath, "hello", true)
+	err := runScriptContext(context.Background(), nil, scriptPath, "hello", true, "zaparoo_frontend")
 	require.NoError(t, err)
 
 	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)
 	assert.Equal(t, misterScriptRunFlag, string(flag))
 
+	origin, err := os.ReadFile(originPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, "zaparoo_frontend", string(origin))
+
 	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(arg))
+}
+
+func TestRunScript_HiddenSplitsQuotedArgs(t *testing.T) {
+	t.Parallel()
+
+	if scriptIsActive(context.Background()) {
+		t.Skip("MiSTer script already active")
+	}
+
+	tests := []struct {
+		name string
+		args string
+		want []string
+	}{
+		{name: "none", args: "", want: []string{}},
+		{
+			name: "quoted words",
+			args: `'hello world' 'it'\''s' '$HOME' '"x"'`,
+			want: []string{"hello world", "it's", "$HOME", `"x"`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			scriptPath := filepath.Join(tmpDir, "script.sh")
+			script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > args\n"
+			//nolint:gosec // test script must be executable
+			require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
+
+			require.NoError(t, runScriptContext(context.Background(), nil, scriptPath, tt.args, true, ""))
+
+			out, err := os.ReadFile(filepath.Join(tmpDir, "args")) //nolint:gosec // test reads from its temp dir
+			require.NoError(t, err)
+			got := strings.Split(string(out), "\n")
+			assert.Equal(t, tt.want, got[:len(got)-1])
+		})
+	}
 }
 
 func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {

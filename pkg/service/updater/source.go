@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/rs/zerolog/log"
 )
@@ -342,7 +343,7 @@ func (s *verifiedSource) installableVersion(rel *otameta.Release, channel string
 func (s *verifiedSource) get(
 	ctx context.Context, target string, validators cacheValidators, limit int64,
 ) (*httpResult, error) {
-	client := &http.Client{Timeout: manifestFetchTimeout, Transport: s.transport}
+	client := &http.Client{Timeout: manifestFetchTimeout, Transport: useragent.Transport(s.transport)}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 	if err != nil {

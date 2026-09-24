@@ -31,6 +31,7 @@ import (
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +128,7 @@ func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
 	select {
 	case headers := <-received:
 		assert.Equal(t, "Bearer test-bearer-token", headers.Get("Authorization"))
+		assert.Equal(t, useragent.String(), headers.Get("User-Agent"))
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for HTTP request")
 	}

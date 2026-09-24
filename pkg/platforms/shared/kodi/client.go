@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
@@ -572,7 +573,7 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 		}
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Transport: useragent.Transport(nil)}
 	resp, err := client.Do(kodiReq) //nolint:gosec // G704: URL from user config, Kodi client's purpose
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)

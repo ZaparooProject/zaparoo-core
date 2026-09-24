@@ -23,7 +23,14 @@ package command
 import (
 	"context"
 	"os/exec"
+	"strings"
 )
+
+// ShellQuote wraps a value in POSIX single quotes so a shell reads it as one
+// literal word. Double quotes would leave $, ` and \ active.
+func ShellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
 
 // StartOptions configures command startup behavior.
 type StartOptions struct {

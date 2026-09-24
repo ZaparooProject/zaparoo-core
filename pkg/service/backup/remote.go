@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
@@ -1173,7 +1174,7 @@ func (m *Manager) newAuthenticatedRemoteClient(
 		// Timeouts are applied per request (scaled to transfer size for
 		// uploads/downloads), not on the client, so a large pack on a slow
 		// uplink is not killed at the base timeout.
-		httpClient:     &http.Client{},
+		httpClient:     &http.Client{Transport: useragent.Transport(nil)},
 		onUnauthorized: unauthorizedCallback,
 		baseURL:        baseURL,
 		bearer:         bearer,

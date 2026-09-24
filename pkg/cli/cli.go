@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -168,6 +169,8 @@ func isFlagPassed(name string) bool {
 // Pre runs flag parsing and actions any immediate flags that don't
 // require environment setup. Add any custom flags before running this.
 func (f *Flags) Pre(pl platforms.Platform) {
+	useragent.SetPlatform(pl.ID())
+
 	// Before flag.Parse, so that its own usage errors land somewhere a user can
 	// read them too. No-op everywhere but Windows.
 	attachConsole()

@@ -32,6 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jonboulle/clockwork"
@@ -158,7 +159,7 @@ func LocalClient(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
+	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), useragent.Header())
 	if err != nil {
 		return "", websocketDialError(err, response)
 	}
@@ -289,7 +290,7 @@ func WaitNotification(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, response, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), useragent.Header())
 	if err != nil {
 		return "", websocketDialError(err, response)
 	}
@@ -430,7 +431,7 @@ func ServiceState(cfg *config.Instance) (state string, ok bool) {
 		return "", false
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Transport: useragent.Transport(nil)}).Do(req)
 	if err != nil {
 		log.Debug().Err(err).Int("port", cfg.APIPort()).Msg("nothing answered on the health route")
 		return "", false
@@ -533,7 +534,7 @@ func waitNotificationsWithClock(
 		},
 	}
 	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, response, err := dialer.DialContext(ctx, u.String(), nil)
+	c, response, err := dialer.DialContext(ctx, u.String(), useragent.Header())
 	if err != nil {
 		return "", "", websocketDialError(err, response)
 	}

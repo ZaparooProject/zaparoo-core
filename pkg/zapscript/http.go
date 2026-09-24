@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
@@ -48,7 +49,7 @@ func redactURL(rawURL string) string {
 var ErrHTTPNotAllowed = errors.New("HTTP URL not allowed")
 
 var httpCmdClient = &http.Client{
-	Transport: &installer.AuthTransport{},
+	Transport: useragent.Transport(&installer.AuthTransport{}),
 }
 
 //nolint:gocritic // single-use parameter in command handler

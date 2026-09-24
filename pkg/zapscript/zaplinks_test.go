@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -818,6 +819,7 @@ func TestCheckZapLinkFetchesSupportedRemoteScript(t *testing.T) {
 
 	expected := "**launch.system:snes"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, useragent.String(), r.Header.Get("User-Agent"))
 		switch r.URL.Path {
 		case WellKnownPath:
 			w.Header().Set("Content-Type", "application/json")

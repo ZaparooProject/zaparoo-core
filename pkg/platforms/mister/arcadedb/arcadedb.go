@@ -17,6 +17,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	config2 "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/gocarina/gocsv"
@@ -41,7 +42,12 @@ func NewClient(httpClient *http.Client, fs afero.Fs, apiURL, filename string) *C
 }
 
 func defaultClient() *Client {
-	return NewClient(http.DefaultClient, afero.NewOsFs(), config2.ArcadeDbURL, config2.ArcadeDbFile)
+	return NewClient(
+		&http.Client{Transport: useragent.Transport(nil)},
+		afero.NewOsFs(),
+		config2.ArcadeDbURL,
+		config2.ArcadeDbFile,
+	)
 }
 
 type GithubLinks struct {

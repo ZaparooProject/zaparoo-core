@@ -118,3 +118,20 @@ func TestExecutor_Interface(t *testing.T) {
 	// Verify that RealExecutor implements Executor
 	var _ Executor = (*RealExecutor)(nil)
 }
+
+func TestShellQuote(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "''"},
+		{value: "zaparoo_frontend", want: "'zaparoo_frontend'"},
+		{value: "it's", want: `'it'\''s'`},
+		{value: "$HOME `id` \\", want: "'$HOME `id` \\'"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, ShellQuote(tt.value), tt.value)
+	}
+}

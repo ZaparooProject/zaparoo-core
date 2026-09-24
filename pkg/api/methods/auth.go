@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -49,7 +50,8 @@ import (
 // claimClient is the HTTP client used for claim token redemption.
 // It has an explicit timeout to prevent hanging on slow/malicious servers.
 var claimClient = &http.Client{
-	Timeout: 10 * time.Second,
+	Timeout:   10 * time.Second,
+	Transport: useragent.Transport(nil),
 }
 
 var revokeRemoteDevice = func(ctx context.Context, manager *backupsvc.Manager) error {

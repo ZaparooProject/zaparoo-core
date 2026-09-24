@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/useragent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -72,9 +73,9 @@ var timeoutTr = &http.Transport{
 }
 
 var httpClient = &http.Client{
-	Transport: &AuthTransport{
+	Transport: useragent.Transport(&AuthTransport{
 		Base: timeoutTr,
-	},
+	}),
 }
 
 // ConfigureHTTPTransport applies the process TLS root configuration to the
@@ -82,9 +83,9 @@ var httpClient = &http.Client{
 func ConfigureHTTPTransport() {
 	transport := tlsroots.Transport(timeoutTr)
 	httpClient = &http.Client{
-		Transport: &AuthTransport{
+		Transport: useragent.Transport(&AuthTransport{
 			Base: transport,
-		},
+		}),
 	}
 }
 

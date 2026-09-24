@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 )
 
@@ -37,12 +38,6 @@ func (*Platform) PrepareBackupRestore() (func(bool) error, error) {
 			rewriteRetroDECKPaths(home, retroPaths),
 		)
 	}, nil
-}
-
-// shellQuote wraps a value in POSIX single quotes so a sourced settings.sh
-// stores the path verbatim. Double quotes would leave $, ` and \ active.
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func rewriteEmuDeckPaths(home string, paths *linuxemu.EmuDeckPaths) error {
@@ -80,7 +75,7 @@ func rewriteEmuDeckPaths(home string, paths *linuxemu.EmuDeckPaths) error {
 			prefix = "export "
 		}
 		key = strings.TrimSpace(key)
-		lines[i] = prefix + key + "=" + shellQuote(value)
+		lines[i] = prefix + key + "=" + command.ShellQuote(value)
 		seen[key] = struct{}{}
 	}
 	missing := make([]string, 0, len(assignments))
@@ -91,7 +86,7 @@ func rewriteEmuDeckPaths(home string, paths *linuxemu.EmuDeckPaths) error {
 	}
 	sort.Strings(missing)
 	for _, key := range missing {
-		lines = append(lines, key+"="+shellQuote(assignments[key]))
+		lines = append(lines, key+"="+command.ShellQuote(assignments[key]))
 	}
 	return writeRestoreConfig(path, []byte(strings.Join(lines, "\n")), mode)
 }
