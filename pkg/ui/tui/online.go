@@ -351,17 +351,22 @@ func renderOnlineSettingsMenu(
 	left.AddHeader("Backup")
 	scheduleOptions := []string{"daily", "weekly", "manual"}
 	scheduleIndex := max(slices.Index(scheduleOptions, status.Remote.Schedule), 0)
+	savedScheduleIndex := scheduleIndex
 	scheduleDesc := "How often automatic cloud backup runs"
 	if !linked {
 		scheduleDesc = onlineLinkFirstDesc
 	}
-	left.AddCycle("Schedule", scheduleDesc, scheduleOptions, &scheduleIndex, func(value string, _ int) {
+	left.AddCycle("Schedule", scheduleDesc, scheduleOptions, &scheduleIndex, func(value string, index int) {
 		ctx, cancel := tuiContext()
 		defer cancel()
 		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteSchedule: &value}); err != nil {
+			scheduleIndex = savedScheduleIndex
+			left.Redraw()
 			log.Warn().Err(err).Msg("error updating cloud backup schedule")
 			ShowErrorModal(pages, app, "Failed to save cloud backup schedule", refocus)
+			return
 		}
+		savedScheduleIndex = index
 	}).SetLastItemDisabled(!linked)
 	left.AddNavAction("Manage backups", "Back up now, view and restore local and cloud backups", func() {
 		buildBackupSettingsMenu(svc, pages, app, rebuild)

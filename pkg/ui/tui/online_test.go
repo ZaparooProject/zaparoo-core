@@ -677,3 +677,31 @@ func TestResolveWarpAvailability(t *testing.T) {
 		mockSvc.AssertNotCalled(t, "GetBackupStatus", mock.Anything)
 	})
 }
+
+// TestBuildOnlineSettingsMenu_ScheduleRevertsOnFailure_Integration pins that
+// a failed save puts the Schedule row back on the last saved value, not the
+// original one, after an earlier change succeeded.
+func TestBuildOnlineSettingsMenu_ScheduleRevertsOnFailure_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	mockSvc := linkedOnlineMock(warpAvailable, onlineTestSettings(config.DefaultOnlineBaseURL))
+	mockSvc.On("UpdateSettings", mock.Anything, mock.Anything).Return(nil).Once()
+	mockSvc.On("UpdateSettings", mock.Anything, mock.Anything).Return(errors.New("save failed"))
+	startOnlinePage(t, runner, mockSvc)
+
+	// Left column: Status, Warp, All online features, Unlink account, then
+	// Schedule.
+	for range 4 {
+		runner.SimulateArrowDown()
+	}
+	require.True(t, runner.ContainsText("Schedule: < daily >"))
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Schedule: < weekly >", uiSettleTimeout))
+
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Failed to save cloud backup schedule", uiSettleTimeout))
+	assert.True(t, runner.ContainsText("Schedule: < weekly >"), "the row shows the saved schedule")
+	assert.False(t, runner.ContainsText("Schedule: < manual >"))
+}

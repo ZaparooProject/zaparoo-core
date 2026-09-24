@@ -593,21 +593,26 @@ func addCloudBackupItems(
 			break
 		}
 	}
+	savedScheduleIndex := scheduleIndex
 	menu.AddCycle(
 		"Schedule",
 		"How often automatic cloud backup runs",
 		scheduleOptions,
 		&scheduleIndex,
-		func(value string, _ int) {
+		func(value string, index int) {
 			ctx, cancel := tuiContext()
 			defer cancel()
 			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteSchedule: &value})
 			if err != nil {
+				scheduleIndex = savedScheduleIndex
+				menu.Redraw()
 				log.Warn().Err(err).Msg("error updating cloud backup schedule")
 				ShowErrorModal(pages, app, "Failed to save cloud backup schedule", func() {
 					app.SetFocus(menu.List)
 				})
+				return
 			}
+			savedScheduleIndex = index
 		},
 	)
 	cloudUploadDescription := "Upload a backup of this device to the cloud"

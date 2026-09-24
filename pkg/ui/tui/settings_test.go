@@ -975,6 +975,31 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 	}, uiSettleTimeout), "toggle should write BackupRemoteEnabled")
 }
 
+func TestBuildBackupSettingsMenu_ScheduleRevertsOnFailure_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsError(errors.New("save failed"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Schedule: < daily >", uiSettleTimeout))
+
+	// Local: Back up now, View backups; Cloud: Automatic backup, then Schedule.
+	for range 3 {
+		runner.SimulateArrowDown()
+	}
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Failed to save cloud backup schedule", uiSettleTimeout))
+	assert.True(t, runner.ContainsText("Schedule: < daily >"), "a failed save puts the schedule back")
+}
+
 func TestBuildBackupSettingsMenu_ToggleRevertsOnFailure_Integration(t *testing.T) {
 	t.Parallel()
 
