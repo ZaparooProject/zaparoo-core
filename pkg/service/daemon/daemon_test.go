@@ -759,12 +759,22 @@ func TestRunningForAutoStartToleratesStalePIDFile(t *testing.T) {
 	assert.True(t, pidRunning(process.Process.Pid), "the unrelated process must be untouched")
 	assert.FileExists(t, pidFile, "and its PID file is Start's to clear, not this call's")
 
-	// Only the recoverable conflict is tolerated. A PID file that cannot be
-	// read at all is a real fault, and reporting it as "not running" would
-	// start a second service on top of whatever the unreadable file described.
-	require.NoError(t, os.WriteFile(pidFile, []byte("not a pid"), 0o600))
+	// A PID file with no PID in it names no process, so Start clears it too.
+	// Refusing here would leave that recovery unreachable from the wrappers.
+	require.NoError(t, os.WriteFile(pidFile, []byte("not a pid\n"), 0o600))
+	_, runningErr = svc.Running()
+	require.ErrorIs(t, runningErr, ErrUnreadablePIDFile)
 	running, err = svc.RunningForAutoStart()
-	require.Error(t, err, "an unreadable PID file must not be reported as not running")
+	require.NoError(t, err, "an unreadable PID file must not stop the wrapper auto-starting")
+	assert.False(t, running)
+	assert.FileExists(t, pidFile, "the unreadable file is Start's to clear, not this call's")
+
+	// Any other PID file fault still stands.
+	require.NoError(t, os.Remove(pidFile))
+	require.NoError(t, os.WriteFile(pidFile, []byte("1"), 0o600))
+	require.NoError(t, os.Chmod(pidFile, 0o666)) //nolint:gosec // testing the writable-file refusal
+	running, err = svc.RunningForAutoStart()
+	require.Error(t, err, "a world-writable PID file must not be reported as not running")
 	assert.False(t, running)
 	assert.False(t, IsStalePIDConflict(err))
 }
@@ -1339,6 +1349,32 @@ func TestStart_UnreadablePIDFileDoesNotBlockStart(t *testing.T) {
 	})
 
 	require.NoError(t, svc.Start())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
+}
+
+// Restart is the other command a user reaches for when the service will not
+// start, so it must not stop at the file Start knows how to clear.
+func TestRestart_UnreadablePIDFileDoesNotBlockRestart(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	require.NoError(t, os.WriteFile(pidFile, []byte("junk\n"), 0o600))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Restart())
 
 	pid, err := svc.Pid()
 	require.NoError(t, err)

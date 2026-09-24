@@ -251,21 +251,22 @@ func servicePIDConflictError(pid int) error {
 	return &servicePIDMismatchError{pid: pid}
 }
 
-// IsStalePIDConflict reports whether err is the PID-file conflict that Start
-// clears under the start gate. Callers that auto-start the service must treat
-// it as "not running" and let Start recover it, otherwise a reused PID leaves
-// the service unstartable from the wrapper.
+// IsStalePIDConflict reports whether err is a PID-file fault that Start
+// clears under the start gate: a reused PID, or a file that names no process
+// at all. Callers that auto-start the service must treat it as "not running"
+// and let Start recover it, otherwise the service is unstartable from the
+// wrapper.
 func IsStalePIDConflict(err error) bool {
 	var conflict *servicePIDMismatchError
-	return errors.As(err, &conflict)
+	return errors.As(err, &conflict) || errors.Is(err, ErrUnreadablePIDFile)
 }
 
 // RunningForAutoStart reports whether the service is already running, for a
 // caller that will start it if not.
 //
-// It differs from Running in one way: a stale PID file left by a reused PID is
-// reported as not running rather than as an error, because Start clears that
-// under the start gate. Every platform wrapper checks this before auto-starting,
+// It differs from Running in one way: a stale PID file, left by a reused PID or
+// holding no PID at all, is reported as not running rather than as an error,
+// because Start clears it under the start gate. Every platform wrapper checks this before auto-starting,
 // and returning the error there left the service unstartable from the only
 // entry point most users have. Any other error still stands.
 func (s *Service) RunningForAutoStart() (bool, error) {
@@ -1545,6 +1546,11 @@ func apiDialAddresses(cfg *config.Instance) []string {
 func (s *Service) Restart() error {
 	oldPID := 0
 	running, err := s.Running()
+	if errors.Is(err, ErrUnreadablePIDFile) {
+		// The file names no process, so there is nothing to stop; Start
+		// clears it under the start gate.
+		running, err = false, nil
+	}
 	if err != nil {
 		return err
 	}
