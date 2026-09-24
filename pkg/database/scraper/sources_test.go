@@ -103,6 +103,42 @@ func TestSourceIndexUnderParent(t *testing.T) {
 	assert.Empty(t, nilIndex.UnderParent(game))
 }
 
+func TestSourceIndexGroups(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	game := filepath.Join(root, "kyra3")
+	grouped := func(id int64, target, dir string) database.MediaSource {
+		source := testSource(id, "scummvm://"+target+"/Title", dir, false)
+		source.SourceRoot, source.SharedGame = root, true
+		return source
+	}
+	english, french := grouped(1, "en", game), grouped(2, "fr", game)
+	nested := grouped(3, "mac", filepath.Join(root, "kyra2", "cd"))
+	mixed := testSource(4, "scummvm://comp-a/Title", filepath.Join(root, "comp"), false)
+	mixedTwo := testSource(5, "scummvm://comp-b/Title", filepath.Join(root, "comp"), false)
+	markerOne := grouped(6, "m1", filepath.Join(root, "launch.scummvm"))
+	markerTwo := grouped(7, "m2", filepath.Join(root, "launch.scummvm"))
+	markerOne.SourceKind, markerTwo.SourceKind = "file", "file"
+	index := NewSourceIndex([]database.MediaSource{english, french, nested, mixed, mixedTwo, markerOne, markerTwo})
+
+	_, ok := index.ForPath(game)
+	assert.False(t, ok, "a group is never one source")
+	assert.Equal(t, []database.MediaSource{english, french}, index.Group(game+string(filepath.Separator)))
+	assert.True(t, index.Grouped(&english))
+	assert.False(t, index.Grouped(&mixed))
+	assert.Empty(t, index.Group(mixed.SourcePath), "different games on one directory stay ambiguous")
+	assert.Empty(t, index.Group(markerOne.SourcePath), "only directories group")
+	assert.Equal(t, []database.MediaSource{nested}, index.UnderParent(filepath.Join(root, "kyra2")),
+		"a group inside a game folder inherits from it")
+	got, ok := index.ForMedia(french.MediaPath)
+	require.True(t, ok)
+	assert.Equal(t, french, got)
+
+	var nilIndex *SourceIndex
+	assert.Empty(t, nilIndex.Group(game))
+	assert.False(t, nilIndex.Grouped(&english))
+}
+
 func TestSourceIndexIgnoresIncompleteRows(t *testing.T) {
 	t.Parallel()
 	index := NewSourceIndex([]database.MediaSource{

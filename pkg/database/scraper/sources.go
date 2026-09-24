@@ -21,6 +21,7 @@ package scraper
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -32,15 +33,23 @@ import (
 type SourceIndex struct {
 	byMedia  map[string]database.MediaSource
 	byPath   map[string]database.MediaSource
+	byGroup  map[string][]database.MediaSource
 	byParent map[string][]database.MediaSource
 }
 
+// NewSourceIndex indexes sources for lookup. A directory shared by variants of
+// one game, such as ScummVM's one target per language of a multilingual disc,
+// is a group: metadata for the directory applies to every target on it. Any
+// other shared source is ambiguous and matches nothing by path.
 func NewSourceIndex(sources []database.MediaSource) *SourceIndex {
 	index := &SourceIndex{
 		byMedia:  make(map[string]database.MediaSource, len(sources)),
 		byPath:   make(map[string]database.MediaSource, len(sources)),
+		byGroup:  make(map[string][]database.MediaSource),
 		byParent: make(map[string][]database.MediaSource),
 	}
+	var keys []string
+	byKey := make(map[string][]database.MediaSource, len(sources))
 	for _, source := range sources {
 		mediaKey := VirtualMediaKey(source.MediaPath)
 		if mediaKey == "" || source.SourceKey == "" {
@@ -51,18 +60,44 @@ func NewSourceIndex(sources []database.MediaSource) *SourceIndex {
 		} else if !exists {
 			index.byMedia[mediaKey] = source
 		}
-		if !source.Unique {
-			index.byPath[source.SourceKey] = database.MediaSource{}
+		existing, seen := byKey[source.SourceKey]
+		if !seen {
+			keys = append(keys, source.SourceKey)
+		}
+		duplicate := func(s database.MediaSource) bool { return s.MediaDBID == source.MediaDBID }
+		if !slices.ContainsFunc(existing, duplicate) {
+			byKey[source.SourceKey] = append(existing, source)
+		}
+	}
+	for _, key := range keys {
+		group := byKey[key]
+		if len(group) == 1 && group[0].Unique {
+			index.byPath[key] = group[0]
+			index.addParent(&group[0])
 			continue
 		}
-		if previous, exists := index.byPath[source.SourceKey]; exists && previous.MediaDBID != source.MediaDBID {
-			index.byPath[source.SourceKey] = database.MediaSource{}
-		} else if !exists {
-			index.byPath[source.SourceKey] = source
-			index.addParent(&source)
+		index.byPath[key] = database.MediaSource{}
+		if !groupable(group) {
+			continue
+		}
+		index.byGroup[key] = group
+		for i := range group {
+			index.addParent(&group[i])
 		}
 	}
 	return index
+}
+
+// groupable reports whether every source is a directory the database found to
+// hold one game. A scoped run can select a single member of a group, which is
+// still a group because the database compared it with the others.
+func groupable(group []database.MediaSource) bool {
+	for i := range group {
+		if group[i].SourceKind != "directory" || !group[i].SharedGame {
+			return false
+		}
+	}
+	return true
 }
 
 // addParent records a directory source under the folder that holds it. A
@@ -116,20 +151,32 @@ func (s *SourceIndex) ForPath(path string) (database.MediaSource, bool) {
 	return source, source.MediaDBID != 0
 }
 
-// UnderParent returns the unambiguous directory sources held directly inside
-// path, so metadata describing a game folder can reach the variants in it.
+// Group returns every target configured on a directory shared by variants of
+// one game, or nil when path is not such a directory.
+func (s *SourceIndex) Group(path string) []database.MediaSource {
+	if s == nil {
+		return nil
+	}
+	return slices.Clone(s.byGroup[sourcePathKey(path)])
+}
+
+// Grouped reports whether source is one of the targets sharing a directory
+// that Group returns.
+func (s *SourceIndex) Grouped(source *database.MediaSource) bool {
+	if s == nil {
+		return false
+	}
+	return slices.ContainsFunc(s.byGroup[source.SourceKey], func(member database.MediaSource) bool {
+		return member.MediaDBID == source.MediaDBID
+	})
+}
+
+// UnderParent returns the directory sources held directly inside path, unique
+// or grouped, so metadata describing a game folder can reach the variants in
+// it.
 func (s *SourceIndex) UnderParent(path string) []database.MediaSource {
 	if s == nil {
 		return nil
 	}
-	children := s.byParent[sourcePathKey(path)]
-	result := make([]database.MediaSource, 0, len(children))
-	for _, child := range children {
-		// A directory that turned out to be shared after it was recorded is
-		// blanked in byPath and must not inherit either.
-		if current := s.byPath[child.SourceKey]; current.MediaDBID == child.MediaDBID {
-			result = append(result, child)
-		}
-	}
-	return result
+	return slices.Clone(s.byParent[sourcePathKey(path)])
 }

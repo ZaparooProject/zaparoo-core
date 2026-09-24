@@ -120,10 +120,10 @@ func TestInheritGivesFolderEntriesToUnnamedChildren(t *testing.T) {
 	file := &parsedGamelistFile{RootPath: root}
 	folder := esapi.Game{Path: "./kyra3", Image: "./kyra3.png"}
 
-	got := records.inherit(indexes, []parentEntry{
+	got := records.claimFolders(indexes, []folderEntry{
 		{file: file, directory: gameFolder, game: folder},
 		{file: file, directory: gameFolder, game: esapi.Game{Path: "./kyra3", Image: "./later.png"}},
-	})
+	}, records.sources.UnderParent)
 
 	require.Len(t, got, 2, "a second entry for the same folder finds every child already claimed")
 	for i, want := range []database.MediaSource{english, french} {
@@ -138,9 +138,9 @@ func TestInheritGivesFolderEntriesToUnnamedChildren(t *testing.T) {
 	require.NotContains(t, indexes.MediaByPathFold, pathFoldKey(english.MediaPath),
 		"a claimed row leaves the path index so no later fallback guesses at it")
 	require.Contains(t, indexes.MediaByPathFold, pathFoldKey(macOne.MediaPath),
-		"targets sharing a directory are never claimed by the folder holding them")
+		"targets sharing a directory of another scheme are never claimed by the folder holding them")
 	require.Contains(t, indexes.MediaByPathFold, pathFoldKey(macTwo.MediaPath))
 
-	require.Empty(t, records.inherit(indexes, []parentEntry{{file: file, directory: root, game: folder}}),
-		"the collection root is not a game folder")
+	require.Empty(t, records.claimFolders(indexes, []folderEntry{{file: file, directory: root, game: folder}},
+		records.sources.UnderParent), "the collection root is not a game folder")
 }

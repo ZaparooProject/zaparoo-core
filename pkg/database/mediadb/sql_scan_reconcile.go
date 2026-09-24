@@ -158,7 +158,8 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			SourcePath TEXT NOT NULL,
 			SourceKey  TEXT NOT NULL,
 			SourceRoot TEXT NOT NULL,
-			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory'))
+			SourceKind TEXT NOT NULL CHECK (SourceKind IN ('file', 'directory')),
+			SourceGroup TEXT NOT NULL DEFAULT ''
 		) WITHOUT ROWID`,
 		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
@@ -770,19 +771,21 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	}
 
 	if _, err = execStep("upsert media sources", `
-		INSERT INTO MediaSources (MediaDBID, SourcePath, SourceKey, SourceRoot, SourceKind)
-		SELECT m.DBID, ss.SourcePath, ss.SourceKey, ss.SourceRoot, ss.SourceKind
+		INSERT INTO MediaSources (MediaDBID, SourcePath, SourceKey, SourceRoot, SourceKind, SourceGroup)
+		SELECT m.DBID, ss.SourcePath, ss.SourceKey, ss.SourceRoot, ss.SourceKind, ss.SourceGroup
 		FROM ScanStageSources ss
 		JOIN Media m ON m.SystemDBID = ? AND m.Path = ss.Path
 		ON CONFLICT(MediaDBID) DO UPDATE SET
 			SourcePath = excluded.SourcePath,
 			SourceKey = excluded.SourceKey,
 			SourceRoot = excluded.SourceRoot,
-			SourceKind = excluded.SourceKind
+			SourceKind = excluded.SourceKind,
+			SourceGroup = excluded.SourceGroup
 		WHERE MediaSources.SourcePath IS NOT excluded.SourcePath
 		   OR MediaSources.SourceKey IS NOT excluded.SourceKey
 		   OR MediaSources.SourceRoot IS NOT excluded.SourceRoot
-		   OR MediaSources.SourceKind IS NOT excluded.SourceKind`, systemDBID); err != nil {
+		   OR MediaSources.SourceKind IS NOT excluded.SourceKind
+		   OR MediaSources.SourceGroup IS NOT excluded.SourceGroup`, systemDBID); err != nil {
 		return stats, err
 	}
 	if !opts.IncompleteScan {

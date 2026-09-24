@@ -368,6 +368,20 @@ func TestContainerArtworkFallbackNames_StripsFolderExtension(t *testing.T) {
 		"the folder's own name must be tried before the stripped stem")
 }
 
+// EmulationStation names a ScummVM game folder with a .scummvm extension and
+// stores its art under the extensionless stem.
+func TestDirectoryArtworkFallbackNames_StripsScummVMExtension(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	names := DirectoryArtworkFallbackNames(filepath.Join(root, "Day of the Tentacle (CD).scummvm"), root)
+
+	require.Contains(t, names, "Day of the Tentacle (CD).png")
+	assert.Less(t, slices.Index(names, "Day of the Tentacle (CD).scummvm.png"),
+		slices.Index(names, "Day of the Tentacle (CD).png"),
+		"the folder's own name must be tried before the stripped stem")
+}
+
 // A dot in a folder name is usually part of the name, not an extension. Only a
 // disc extension is stripped, or "Sonic 3.0" collects "Sonic 3"'s artwork.
 func TestContainerArtworkFallbackNames_KeepsNonDiscFolderSuffixes(t *testing.T) {

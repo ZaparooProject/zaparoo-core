@@ -2466,6 +2466,7 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 	if media.Source != nil {
 		if err := db.batchInsertScanSource.Add(
 			media.Path, media.Source.Path, media.Source.Key, media.Source.Root, media.Source.Kind,
+			media.Source.Group,
 		); err != nil {
 			return fmt.Errorf("failed to stage scanned media source %s: %w", media.Path, err)
 		}
@@ -2691,7 +2692,8 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 			return fmt.Errorf("failed to create batch inserter for scan stage properties: %w", err)
 		}
 		if db.batchInsertScanSource, err = NewBatchInserterWithOptions(db.ctx, tx, "ScanStageSources",
-			[]string{"Path", "SourcePath", "SourceKey", "SourceRoot", "SourceKind"}, db.batchSize, true); err != nil {
+			[]string{"Path", "SourcePath", "SourceKey", "SourceRoot", "SourceKind", "SourceGroup"},
+			db.batchSize, true); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for scan stage sources: %w", err)
 		}

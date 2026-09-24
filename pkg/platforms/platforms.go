@@ -310,11 +310,15 @@ const (
 
 // MediaSource is optional local metadata provenance for virtual media. Path is
 // a file or directory anchor beneath Root; Kind makes lookup independent of
-// whether the configured target currently exists.
+// whether the configured target currently exists. Group names the game the
+// media belongs to when several media can share one directory: media on the
+// same directory with the same non-empty Group are variants of one game, and
+// metadata for the directory describes all of them.
 type MediaSource struct {
-	Path string
-	Root string
-	Kind MediaSourceKind
+	Path  string
+	Root  string
+	Kind  MediaSourceKind
+	Group string
 }
 
 // ScanResult is a result generated from a media database indexing files or

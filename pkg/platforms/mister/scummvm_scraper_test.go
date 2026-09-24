@@ -389,6 +389,143 @@ func TestScummVMVariantFoldersStopAtTheirScope(t *testing.T) {
 	}
 }
 
+// ScummVM adds one target per language or platform it detects on a disc, all
+// configured on the same folder. Metadata for that folder belongs to every one
+// of them, while a folder holding different games stays ambiguous.
+func TestScummVMTargetsSharingAGameFolder(t *testing.T) {
+	t.Parallel()
+	const kyra3 = "The Legend of Kyrandia 3 Malcolm's Revenge (CD DOS, Multilanguage)"
+	const tentacle = "Day Of The Tentacle (CD Dos)"
+	kyraEntry := `<game><path>./` + kyra3 + `.scummvm</path><image>./folder.png</image></game>`
+	macEntry := `<game><path>scummvm://kyra3-mac/Mac</path><image>./own.png</image></game>`
+	kyraTargets := []string{"kyra3", "kyra3-1", "kyra3-2", "kyra3-mac", "kyra3-mac-1", "kyra3-mac-2"}
+	for _, tc := range []struct {
+		want     map[string]string
+		name     string
+		scraper  string
+		gamelist string
+		artwork  []string
+		scoped   bool
+	}{
+		{
+			name: "gamelist entry for the folder", scraper: "gamelist.xml", gamelist: kyraEntry,
+			want: map[string]string{"*kyra3": "folder.png"},
+		},
+		{
+			name: "target entry after the folder entry", scraper: "gamelist.xml", gamelist: kyraEntry + macEntry,
+			want: map[string]string{"*kyra3": "folder.png", "kyra3-mac": "own.png"},
+		},
+		{
+			name: "target entry before the folder entry", scraper: "gamelist.xml", gamelist: macEntry + kyraEntry,
+			want: map[string]string{"*kyra3": "folder.png", "kyra3-mac": "own.png"},
+		},
+		{
+			name: "scoped to one target", scraper: "gamelist.xml", gamelist: kyraEntry, scoped: true,
+			want: map[string]string{"kyra3-1": "folder.png"},
+		},
+		{
+			name: "artwork named for the folder without its extension", scraper: "media-folder",
+			artwork: []string{kyra3 + ".png", tentacle + ".png"},
+			want: map[string]string{
+				"*kyra3":   filepath.Join("media", "boxart", kyra3+".png"),
+				"tentacle": filepath.Join("media", "boxart", tentacle+".png"),
+			},
+		},
+		{
+			name: "folder holding different games", scraper: "gamelist.xml",
+			gamelist: `<game><path>./compilation</path><image>./folder.png</image></game>` +
+				`<game><path>scummvm://comp-b/B</path><image>./own.png</image></game>`,
+			want: map[string]string{"comp-b": "own.png"},
+		},
+		{
+			name: "artwork for a folder holding different games", scraper: "media-folder",
+			artwork: []string{"compilation.png"}, want: map[string]string{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			root := filepath.Join(t.TempDir(), "ScummVM")
+			ini := filepath.Join(root, "scummvm.ini")
+			var b strings.Builder
+			b.WriteString("[scummvm]\nlastselectedgame=kyra3-1\n")
+			target := func(id, gameID, dir string) {
+				fmt.Fprintf(&b, "\n[%s]\ndescription=%s\npath=%s\nengineid=kyra\ngameid=%s\n",
+					id, id, filepath.Join(root, dir), gameID)
+			}
+			for _, id := range kyraTargets {
+				target(id, "kyra3", kyra3+".scummvm")
+			}
+			target("tentacle", "tentacle", tentacle+".scummvm")
+			target("comp-a", "a", "compilation")
+			target("comp-b", "b", "compilation")
+			writeScummVMScrapeFile(t, fs, ini, b.String())
+			for _, name := range []string{"folder.png", "own.png"} {
+				writeScummVMScrapeFile(t, fs, filepath.Join(root, name), "image")
+			}
+			for _, name := range tc.artwork {
+				writeScummVMScrapeFile(t, fs, filepath.Join(root, "media", "boxart", name), "image")
+			}
+			if tc.gamelist != "" {
+				writeScummVMScrapeFile(t, fs, filepath.Join(root, "gamelist.xml"),
+					"<gameList>"+tc.gamelist+"</gameList>")
+			}
+			games, err := parseScummVMIniFS(context.Background(), fs, ini)
+			require.NoError(t, err)
+			require.Len(t, games, len(kyraTargets)+3)
+
+			db, cleanup := helpers.NewInMemoryMediaDB(t)
+			t.Cleanup(cleanup)
+			indexScummVMResults(t, db, games...)
+			rows, err := db.GetMediaBySystemID(systemdefs.SystemScummVM)
+			require.NoError(t, err)
+			require.Len(t, rows, len(games))
+			opts := scraper.ScrapeOptions{Force: true}
+			if tc.scoped {
+				for _, row := range rows {
+					if row.Path == virtualpath.CreateVirtualPath("scummvm", "kyra3-1", "kyra3-1") {
+						opts.Scope = &database.ScrapeScope{
+							SystemID: systemdefs.SystemScummVM, Path: row.Path, MediaID: row.DBID,
+						}
+					}
+				}
+				require.NotNil(t, opts.Scope)
+			}
+			runScummVMScraper(t, fs, db, tc.scraper, opts)
+
+			want := make(map[string]string, len(games))
+			for id, image := range tc.want {
+				if id == "*kyra3" {
+					for _, kyra := range kyraTargets {
+						if _, own := want[kyra]; !own {
+							want[kyra] = image
+						}
+					}
+					continue
+				}
+				want[id] = image
+			}
+			for _, row := range rows {
+				props, err := db.GetMediaPropertyMetadata(context.Background(), row.DBID)
+				require.NoError(t, err)
+				var got []string
+				for _, prop := range props {
+					if strings.HasPrefix(prop.TypeTag, "property:image-") {
+						got = append(got, prop.Text)
+					}
+				}
+				id, err := virtualpath.ExtractSchemeID(row.Path, "scummvm")
+				require.NoError(t, err)
+				if want[id] == "" {
+					assert.Empty(t, got, "target %s", id)
+					continue
+				}
+				assert.Equal(t, []string{filepath.ToSlash(filepath.Join(root, want[id]))}, got, "target %s", id)
+			}
+		})
+	}
+}
+
 func TestScummVMLocalArtworkForceCleanup(t *testing.T) {
 	t.Parallel()
 	fs := afero.NewMemMapFs()

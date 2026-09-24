@@ -56,6 +56,12 @@ func scummVMGameDirectory(game ScummVMGame) string {
 // whose own parent is another game's root is folded into it. Folding stops at a
 // folder a game is configured on: that folder holds one game's data, so it is
 // not a collection its neighbours share.
+//
+// ScummVM adds one target per detected variant of a game, such as each
+// language on a multilingual disc, all configured on the same directory. Each
+// source is grouped by the target's game ID, so metadata for that directory
+// reaches every variant while a directory holding different games stays
+// ambiguous.
 func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
 	directories := make([]string, len(games))
 	configured := make(map[string]struct{}, len(games))
@@ -71,7 +77,8 @@ func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
 		roots[helpers.NormalizePathForComparison(filepath.Dir(directories[i]))] = struct{}{}
 	}
 	sources := make([]*platforms.MediaSource, len(games))
-	for i, directory := range directories {
+	for i, game := range games {
+		directory := directories[i]
 		if directory == "" {
 			continue
 		}
@@ -87,7 +94,9 @@ func scummVMMetadataSources(games []ScummVMGame) []*platforms.MediaSource {
 			}
 			root = parent
 		}
-		sources[i] = &platforms.MediaSource{Path: directory, Root: root, Kind: platforms.MediaSourceDirectory}
+		sources[i] = &platforms.MediaSource{
+			Path: directory, Root: root, Kind: platforms.MediaSourceDirectory, Group: game.GameID,
+		}
 	}
 	return sources
 }

@@ -351,8 +351,10 @@ type MediaFullRow struct {
 }
 
 // MediaSource is scanner-owned local metadata provenance for an indexed
-// virtual Media row. Unique is computed across all present rows in the system
-// before any scrape scope is applied.
+// virtual Media row. Unique and SharedGame are computed across all present
+// rows in the system before any scrape scope is applied. SharedGame reports
+// that every row on this source carries the same non-empty group, so they are
+// variants of one game rather than different games.
 type MediaSource struct {
 	MediaPath  string
 	SourcePath string
@@ -362,6 +364,7 @@ type MediaSource struct {
 	MediaDBID  int64
 	SystemDBID int64
 	Unique     bool
+	SharedGame bool
 }
 
 // MediaUserFlag names one boolean preference a user can set on a media path.
@@ -1046,10 +1049,11 @@ type ScanStagedProperty struct {
 // ScanStagedSource is optional local metadata provenance for a virtual media
 // row, normalized before it reaches database staging.
 type ScanStagedSource struct {
-	Path string
-	Key  string
-	Root string
-	Kind string
+	Path  string
+	Key   string
+	Root  string
+	Kind  string
+	Group string
 }
 
 // ScanStagedMedia is one scanned file's parsed fragments, staged into the

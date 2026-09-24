@@ -124,6 +124,10 @@ func StageMediaPath(params *StageMediaPathParams) error {
 	return nil
 }
 
+// maxSourceGroupLength bounds a scanner-supplied source group, which comes from
+// launcher configuration such as a ScummVM game ID.
+const maxSourceGroupLength = 256
+
 func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*database.ScanStagedSource, error) {
 	if !strings.Contains(mediaPath, "://") {
 		return nil, errors.New("source provenance requires a virtual media path")
@@ -133,6 +137,9 @@ func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*data
 	}
 	if virtualpath.ContainsControlChar(source.Path) || virtualpath.ContainsControlChar(source.Root) {
 		return nil, errors.New("source path contains control character")
+	}
+	if len(source.Group) > maxSourceGroupLength || virtualpath.ContainsControlChar(source.Group) {
+		return nil, errors.New("invalid source group")
 	}
 	path := filepath.Clean(source.Path)
 	root := filepath.Clean(source.Root)
@@ -147,6 +154,7 @@ func normalizeScanSource(mediaPath string, source *platforms.MediaSource) (*data
 	}
 	return &database.ScanStagedSource{
 		Path: path, Key: helpers.NormalizePathForComparison(path), Root: root, Kind: string(source.Kind),
+		Group: source.Group,
 	}, nil
 }
 

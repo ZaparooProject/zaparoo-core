@@ -123,10 +123,10 @@ func (r *sourceRecordIndex) claim(
 	}
 }
 
-// parentEntry is a gamelist entry describing a folder that holds source
-// directories rather than being one, such as a game folder with one configured
-// target per language or platform subfolder.
-type parentEntry struct {
+// folderEntry is a gamelist entry naming a folder that carries sources without
+// being one: a game folder with one configured target per language or platform
+// subfolder, or a folder several variants of one game are configured on.
+type folderEntry struct {
 	file      *parsedGamelistFile
 	directory string
 	game      esapi.Game
@@ -136,14 +136,20 @@ func (r *sourceRecordIndex) hasChildren(resolved string) bool {
 	return r != nil && resolved != "" && len(r.sources.UnderParent(resolved)) > 0
 }
 
-// inherit gives each folder entry to the sources inside it that no entry named
-// directly. It runs after every file is matched so a variant's own entry wins
-// whatever the XML order.
-func (r *sourceRecordIndex) inherit(indexes loadRecordIndexes, entries []parentEntry) []*GamelistRecord {
+func (r *sourceRecordIndex) isGroup(resolved string) bool {
+	return r != nil && resolved != "" && len(r.sources.Group(resolved)) > 0
+}
+
+// claimFolders gives each folder entry to the sources lookup finds for its
+// folder that no entry named directly. It runs after every file is matched so
+// a target's own entry wins whatever the XML order.
+func (r *sourceRecordIndex) claimFolders(
+	indexes loadRecordIndexes, entries []folderEntry, lookup func(string) []database.MediaSource,
+) []*GamelistRecord {
 	var records []*GamelistRecord
 	for i := range entries {
 		entry := &entries[i]
-		for _, source := range r.sources.UnderParent(entry.directory) {
+		for _, source := range lookup(entry.directory) {
 			if record := r.claim(indexes, entry.file, &entry.game, &source, entry.directory); record != nil {
 				records = append(records, record)
 			}

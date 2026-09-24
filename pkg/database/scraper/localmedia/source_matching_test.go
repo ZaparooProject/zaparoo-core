@@ -39,12 +39,18 @@ func TestMediaArtworkNamesUsesIndexedSourceKind(t *testing.T) {
 		kind       string
 		sourcePath string
 		unique     bool
+		sharedGame bool
 		missing    bool
 		wantNames  bool
 	}{
 		{name: "directory", kind: "directory", sourcePath: filepath.Join(root, "Game"), unique: true, wantNames: true},
 		{name: "file", kind: "file", sourcePath: filepath.Join(root, "Game.rom"), unique: true, wantNames: true},
 		{name: "ambiguous", kind: "directory", sourcePath: filepath.Join(root, "Shared"), unique: false},
+		{
+			name: "shared by one game", kind: "directory", sourcePath: filepath.Join(root, "Shared"),
+			sharedGame: true, wantNames: true,
+		},
+		{name: "shared marker file", kind: "file", sourcePath: filepath.Join(root, "Shared.rom"), sharedGame: true},
 		{
 			name: "missing media", kind: "directory", sourcePath: filepath.Join(root, "Missing"),
 			unique: true, missing: true,
@@ -55,7 +61,7 @@ func TestMediaArtworkNamesUsesIndexedSourceKind(t *testing.T) {
 			source := database.MediaSource{
 				MediaDBID: 1, MediaPath: mediaPath, SourcePath: tc.sourcePath,
 				SourceKey: helpers.NormalizePathForComparison(tc.sourcePath), SourceRoot: root,
-				SourceKind: tc.kind, Unique: tc.unique,
+				SourceKind: tc.kind, Unique: tc.unique, SharedGame: tc.sharedGame,
 			}
 			lookupRoots, names, cleanupNames := mediaArtworkNames(
 				&database.MediaWithFullPath{Path: mediaPath, IsMissing: tc.missing}, nil, nil,
