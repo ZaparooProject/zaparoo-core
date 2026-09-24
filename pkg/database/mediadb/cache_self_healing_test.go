@@ -521,8 +521,8 @@ func TestPopulateSystemTagsCache_FailsFastDuringActiveTransaction(t *testing.T) 
 	require.ErrorIs(t, err, ErrTransactionActive)
 }
 
-// A full invalidation (a vocabulary prune at startup, orphan cleanup) empties
-// SystemTagsCache for every system. Self-healing a request for one system must
+// A full invalidation, such as orphan cleanup, empties SystemTagsCache for
+// every system. Self-healing a request for one system must
 // not then build the in-memory cache, which answers for every system and is
 // persisted, from a table holding only that one.
 func TestGetSystemTagsCached_SelfHealKeepsOtherSystems_Integration(t *testing.T) {
