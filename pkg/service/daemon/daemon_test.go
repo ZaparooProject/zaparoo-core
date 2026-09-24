@@ -1082,8 +1082,24 @@ func TestAPIPortHeldTreatsAProbeTimeoutAsHeld(t *testing.T) {
 	assert.True(t, apiPortHeld(addr, time.Second), "a listening port is held")
 	assert.True(t, apiPortHeld(addr, -1), "a probe that cannot complete must not report the port free")
 
-	require.NoError(t, listener.Close())
-	assert.False(t, apiPortHeld(addr, time.Second), "a refused port has been released")
+	assert.False(t, apiPortHeld(boundUnlistenedTCPAddr(t), time.Second), "a refused port has been released")
+}
+
+// boundUnlistenedTCPAddr returns a loopback address whose port is bound to a
+// socket that never listens, so every dial to it is refused. A port freed by
+// closing a listener can be taken by a test running alongside before the dial
+// reaches it; this one stays reserved until the test ends.
+func boundUnlistenedTCPAddr(t *testing.T) string {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	require.NoError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}))
+	sa, err := syscall.Getsockname(fd)
+	require.NoError(t, err)
+	inet4, ok := sa.(*syscall.SockaddrInet4)
+	require.True(t, ok, "bound address is %T", sa)
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(inet4.Port))
 }
 
 // Waiting for an answer must not outlast the release timeout it belongs to: each
