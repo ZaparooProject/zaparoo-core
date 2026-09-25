@@ -58,20 +58,22 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 	keepPath := filepath.Join(c64Root, "keep.d64")
 	otherPath := filepath.Join(romsRoot, "other", "other.d64")
 
-	for i := range scanFlagMissingBatchSize + 1 {
-		_, err = sqlDB.ExecContext(ctx,
-			"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)",
-			filepath.Join(c64Root, "old", fmt.Sprintf("%05d.d64", i)))
+	seedInTx(t, sqlDB, func(tx *sql.Tx) {
+		for i := range scanFlagMissingBatchSize + 1 {
+			_, err = tx.ExecContext(ctx,
+				"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)",
+				filepath.Join(c64Root, "old", fmt.Sprintf("%05d.d64", i)))
+			require.NoError(t, err)
+		}
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)", keepPath)
 		require.NoError(t, err)
-	}
-	_, err = sqlDB.ExecContext(ctx,
-		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)", keepPath)
-	require.NoError(t, err)
-	_, err = sqlDB.ExecContext(ctx,
-		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 2, ?, 0)", otherPath)
-	require.NoError(t, err)
-	_, err = sqlDB.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES (?)", keepPath)
-	require.NoError(t, err)
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 2, ?, 0)", otherPath)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES (?)", keepPath)
+		require.NoError(t, err)
+	})
 
 	affected, _, err := sqlFlagMissingMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", 1, nil)
 	require.NoError(t, err)
@@ -236,17 +238,31 @@ func newUpsertStagedMediaTestDB(t *testing.T) *sql.DB {
 func stageSyntheticMedia(t *testing.T, sqlDB *sql.DB, systemDBID int64, n int) {
 	t.Helper()
 	ctx := context.Background()
-	for i := range n {
-		slug := fmt.Sprintf("game-%06d", i)
-		path := fmt.Sprintf("/roms/c64/%06d.d64", i)
-		_, err := sqlDB.ExecContext(ctx,
-			"INSERT INTO MediaTitles (SystemDBID, Slug) VALUES (?, ?)", systemDBID, slug)
-		require.NoError(t, err)
-		_, err = sqlDB.ExecContext(ctx,
-			"INSERT INTO ScanStage (Path, ParentDir, Slug, SortName) VALUES (?, ?, ?, ?)",
-			path, "/roms/c64", slug, slug)
-		require.NoError(t, err)
-	}
+	seedInTx(t, sqlDB, func(tx *sql.Tx) {
+		for i := range n {
+			slug := fmt.Sprintf("game-%06d", i)
+			path := fmt.Sprintf("/roms/c64/%06d.d64", i)
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO MediaTitles (SystemDBID, Slug) VALUES (?, ?)", systemDBID, slug)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx,
+				"INSERT INTO ScanStage (Path, ParentDir, Slug, SortName) VALUES (?, ?, ?, ?)",
+				path, "/roms/c64", slug, slug)
+			require.NoError(t, err)
+		}
+	})
+}
+
+// seedInTx runs a test's fixture inserts in one transaction. Thousands of
+// autocommit inserts into a file database each wait for a disk sync, which
+// cost minutes on Windows CI runners and pushed the package past its timeout.
+func seedInTx(t *testing.T, sqlDB *sql.DB, seed func(tx *sql.Tx)) {
+	t.Helper()
+	tx, err := sqlDB.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	seed(tx)
+	require.NoError(t, tx.Commit())
 }
 
 // readMediaRowsOrderedByPath reads every tracked Media column except DBID,
@@ -386,26 +402,28 @@ func TestUpsertStagedMedia_UpdatesChangedRowsAcrossChunks(t *testing.T) {
 	// stage would produce, and must NOT be reported as changed.
 	const changedFrom = scanUpsertMediaBatchSize - 5
 	const changedTo = scanUpsertMediaBatchSize + 5
-	for i := range n {
-		slug := fmt.Sprintf("game-%06d", i)
-		path := fmt.Sprintf("/roms/c64/%06d.d64", i)
-		var titleDBID int64
-		require.NoError(t, sqlDB.QueryRowContext(ctx,
-			"SELECT DBID FROM MediaTitles WHERE SystemDBID = ? AND Slug = ?", systemDBID, slug).
-			Scan(&titleDBID))
+	seedInTx(t, sqlDB, func(tx *sql.Tx) {
+		for i := range n {
+			slug := fmt.Sprintf("game-%06d", i)
+			path := fmt.Sprintf("/roms/c64/%06d.d64", i)
+			var titleDBID int64
+			require.NoError(t, tx.QueryRowContext(ctx,
+				"SELECT DBID FROM MediaTitles WHERE SystemDBID = ? AND Slug = ?", systemDBID, slug).
+				Scan(&titleDBID))
 
-		if i >= changedFrom && i < changedTo {
-			_, err := sqlDB.ExecContext(ctx, `
-				INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName, IsMissing)
-				VALUES (?, ?, ?, 'wrong', 'wrong', 1)`, titleDBID, systemDBID, path)
-			require.NoError(t, err)
-		} else {
-			_, err := sqlDB.ExecContext(ctx, `
-				INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName, IsMissing)
-				VALUES (?, ?, ?, '/roms/c64', ?, 0)`, titleDBID, systemDBID, path, slug)
-			require.NoError(t, err)
+			if i >= changedFrom && i < changedTo {
+				_, err := tx.ExecContext(ctx, `
+					INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName, IsMissing)
+					VALUES (?, ?, ?, 'wrong', 'wrong', 1)`, titleDBID, systemDBID, path)
+				require.NoError(t, err)
+			} else {
+				_, err := tx.ExecContext(ctx, `
+					INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName, IsMissing)
+					VALUES (?, ?, ?, '/roms/c64', ?, 0)`, titleDBID, systemDBID, path, slug)
+				require.NoError(t, err)
+			}
 		}
-	}
+	})
 
 	affected, _, err := sqlUpsertStagedMedia(ctx, sqlDB, clockwork.NewRealClock(), "C64", systemDBID, nil)
 	require.NoError(t, err)
