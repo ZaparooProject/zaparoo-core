@@ -28,8 +28,12 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -517,4 +521,68 @@ func TestCmdEcho(t *testing.T) {
 
 	require.NoError(t, err, "echo should succeed")
 	assert.Equal(t, platforms.CmdResult{}, result)
+}
+
+func stopEnv(slot string) (env platforms.CmdEnv, queue chan *playlists.Playlist) {
+	queue = make(chan *playlists.Playlist, 1)
+	cmd := zapscript.Command{Name: zapscript.ZapScriptCmdStop}
+	if slot != "" {
+		cmd.AdvArgs = zapscript.NewAdvArgs(map[string]string{string(zapscript.KeySlot): slot})
+	}
+	env = platforms.CmdEnv{Cmd: cmd, Playlist: playlists.PlaylistController{Queue: queue}}
+	return env, queue
+}
+
+// A background stop closes the background slot and nothing else. It must never
+// reach the platform's stop: on MiSTer returning to the menu reloads the menu
+// core and ends whatever game is running in the primary slot.
+func TestCmdStop_BackgroundSlotLeavesPrimaryAlone(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	env, queue := stopEnv("background")
+
+	result, err := cmdStop(pl, env)
+
+	require.NoError(t, err)
+	assert.False(t, result.MediaChanged, "the primary media is unchanged")
+	pl.AssertNotCalled(t, "ReturnToMenu")
+	pl.AssertNotCalled(t, "StopActiveLauncher", mock.Anything)
+	require.Len(t, queue, 1)
+	update := <-queue
+	require.NotNil(t, update)
+	assert.True(t, update.Clear)
+	assert.Equal(t, mediaslot.Background, update.Slot)
+}
+
+// Plain stop, and an explicit primary slot, still return to the menu.
+func TestCmdStop_PrimaryReturnsToMenu(t *testing.T) {
+	t.Parallel()
+
+	for _, slot := range []string{"", "primary"} {
+		pl := mocks.NewMockPlatform()
+		pl.On("ReturnToMenu").Return(nil).Once()
+		env, queue := stopEnv(slot)
+
+		result, err := cmdStop(pl, env)
+
+		require.NoError(t, err, "slot %q", slot)
+		assert.True(t, result.MediaChanged)
+		assert.Empty(t, queue, "a primary stop does not close the background slot")
+		pl.AssertExpectations(t)
+	}
+}
+
+// An unknown slot is an error, not a silent primary stop.
+func TestCmdStop_UnknownSlotStopsNothing(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	env, queue := stopEnv("sideways")
+
+	_, err := cmdStop(pl, env)
+
+	require.ErrorIs(t, err, ErrInvalidArguments)
+	pl.AssertNotCalled(t, "ReturnToMenu")
+	assert.Empty(t, queue)
 }

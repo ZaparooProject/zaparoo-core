@@ -39,9 +39,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
@@ -98,6 +100,8 @@ func playlistForLog(pls *playlists.Playlist) any {
 // token carries.
 func isExpectedLaunchError(err error) bool {
 	return errors.Is(err, zapscript.ErrFileNotFound) ||
+		errors.Is(err, titles.ErrNoMatch) ||
+		errors.Is(err, titles.ErrLowConfidence) ||
 		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
 		errors.Is(err, zapscript.ErrInvalidScript) ||
 		errors.Is(err, zapscript.ErrInvalidArguments) ||
@@ -117,6 +121,17 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
 
+// reportRunFailure tells every client that a run ended in failure. pls is the
+// playlist the run was an item of, or nil. A disabled setting is the silent
+// no-op it has always been, not a failure, and a run cut short by shutdown
+// failed only because the service is going away, so neither is reported.
+func reportRunFailure(svc *ServiceContext, t *tokens.Token, err error, pls *playlists.Playlist) {
+	if err == nil || errors.Is(err, state.ErrRunZapScriptDisabled) || svc.State.GetContext().Err() != nil {
+		return
+	}
+	runfailure.Notify(svc.State.Notifications, t, err, pls)
+}
+
 func runTokenZapScript(
 	svc *ServiceContext,
 	token tokens.Token, //nolint:gocritic // single-use parameter in service function
@@ -134,7 +149,33 @@ func runTokenZapScript(
 	)
 }
 
+// runTokenZapScriptWithContext runs a token's ZapScript and reports a failed
+// run to clients. Every top-level run passes through here — queued tokens,
+// playlist items, service hooks and remote operations — so this is the one
+// place run.failed is sent for them. A script run inside another one, such as
+// before_media_start, is not reported: its failure fails the run around it,
+// which is. Neither is a run its caller stopped by cancelling its context.
 func runTokenZapScriptWithContext(
+	runCtx context.Context,
+	svc *ServiceContext,
+	token tokens.Token, //nolint:gocritic // single-use parameter in service function
+	plsc playlists.PlaylistController,
+	exprEnv *gozapscript.ArgExprEnv,
+	inHookContext bool,
+) error {
+	err := executeTokenZapScript(runCtx, svc, token, plsc, exprEnv, inHookContext)
+	// A run whose own context ended was stopped by its caller, not failed.
+	if err != nil && !inHookContext && runCtx.Err() == nil {
+		var pls *playlists.Playlist
+		if token.Source == tokens.SourcePlaylist {
+			pls = plsc.Current
+		}
+		reportRunFailure(svc, &token, err, pls)
+	}
+	return err
+}
+
+func executeTokenZapScript(
 	runCtx context.Context,
 	svc *ServiceContext,
 	token tokens.Token, //nolint:gocritic // single-use parameter in service function
@@ -345,7 +386,7 @@ func runTokenZapScriptWithContext(
 			&cmdEnv,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to run zapscript command: %w", err)
+			return &runfailure.CommandError{Name: cmd.Name, Err: err}
 		}
 
 		// Background slot commands don't disturb primary media, so they must not
@@ -661,6 +702,8 @@ func launchPlaylistMedia(
 		plsc.Active = pls
 	}
 
+	mediaGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+	backgroundBefore := svc.State.BackgroundMedia()
 	err := runTokenZapScript(svc, t, plsc, nil, false)
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior silent-no-op
@@ -675,6 +718,14 @@ func launchPlaylistMedia(
 		}
 		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+		// The playlist was stored as playing before this item was tried.
+		// Nothing is playing, so leave it paused: clients read the truth,
+		// playing it again retries this item, and next still moves on.
+		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) &&
+			svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
+			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+				Msg("playlist item failed to launch, playlist paused")
+		}
 	}
 
 	if pls.Slot == mediaslot.Background {
@@ -709,6 +760,47 @@ func launchPlaylistMedia(
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
 	}
+}
+
+// reservePlaylistLaunch reserves the launch an update is about to start, and
+// refuses the update when another launch is already under way. A refused
+// update is not installed: the playlist would otherwise move to an item whose
+// launch the guard then refuses, and claim it while the earlier media plays.
+// The command that queued it normally refused it already; this is the one
+// place the check and the reservation cannot race another launch.
+func reservePlaylistLaunch(svc *ServiceContext, pls *playlists.Playlist) bool {
+	if svc.State.LauncherManager().TryBeginPlaylistLaunch(pls.FromPlaylistItem) {
+		return true
+	}
+	log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+		Msg("another launch is in progress, playlist update refused")
+	return false
+}
+
+// pausesAfterFailedItem reports whether a playlist item that ended in err left
+// nothing playing, so the playlist should be paused. A busy refusal means
+// another launch, often of this same item, is still in flight and owns the
+// outcome. An item whose media started before a later command in it failed
+// did launch: pausing would leave the playlist paused over its own game, and
+// playing it again would relaunch what is already running.
+func pausesAfterFailedItem(
+	svc *ServiceContext, pls *playlists.Playlist, err error,
+	mediaGen uint64, hadMedia bool, backgroundBefore *models.ActiveMedia,
+) bool {
+	if category, _ := runfailure.Classify(err); category == models.ErrorCategoryBusy {
+		return false
+	}
+	if pls.Slot == mediaslot.Background {
+		// Each background start publishes new media, so a value that is
+		// still active and not the one from before the item ran is audio the
+		// item started. A relaunch of the very track already playing keeps
+		// the stored value and so still pauses; that needs an item that
+		// restarts its own track and then fails a later command.
+		after := svc.State.BackgroundMedia()
+		return after == nil || after == backgroundBefore
+	}
+	gen, hasMedia := svc.State.ActiveMediaReadyGeneration()
+	return !hasMedia || (hadMedia && gen == mediaGen)
 }
 
 // clearPlaylistSlot closes the playlist in one slot, stopping background
@@ -790,6 +882,9 @@ func handlePlaylist(
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
+		if pls.Playing && !reservePlaylistLaunch(svc, pls) {
+			return
+		}
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
@@ -810,6 +905,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
+				defer svc.State.LauncherManager().EndPlaylistLaunch()
 				launchPlaylistMedia(svc, pls, player)
 			}()
 		} else {
@@ -840,6 +936,15 @@ func handlePlaylist(
 			return
 		}
 
+		// A playlist paused by a failed launch never loaded its current item,
+		// so whatever the playback manager holds is an earlier track; playing
+		// it again retries the item instead.
+		resumesPlayback := pls.Playing && !activePlaylist.Playing && !activePlaylist.PausedByFailure &&
+			pls.Current() == activePlaylist.Current() &&
+			svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != ""
+		if pls.Playing && !resumesPlayback && !reservePlaylistLaunch(svc, pls) {
+			return
+		}
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
@@ -849,8 +954,7 @@ func handlePlaylist(
 			svc.State.SetActivePlaylist(pls)
 		}
 		if pls.Playing {
-			if !activePlaylist.Playing && pls.Current() == activePlaylist.Current() &&
-				svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {
+			if resumesPlayback {
 				log.Info().Any("pls", playlistForLog(pls)).Str("slot", slot).Msg("resuming playlist playback")
 				if slot == mediaslot.Background {
 					svc.State.SetBackgroundAutoPaused(false)
@@ -871,6 +975,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
+				defer svc.State.LauncherManager().EndPlaylistLaunch()
 				launchPlaylistMedia(svc, pls, player)
 			}()
 		} else {
@@ -898,12 +1003,13 @@ var (
 // the token is logged, redacted or stored, because each of those parses the
 // text. Nothing is written to history: an over-long script is rejected, not
 // recorded, matching the empty-token case above it.
-func rejectOversizedToken(t *tokens.Token, err error) {
+func rejectOversizedToken(svc *ServiceContext, t *tokens.Token, err error) {
 	log.Warn().Err(err).
 		Str("source", t.Source).
 		Int("length", len(t.Text)).
 		Msg("rejecting token, script exceeds maximum length")
 	t.Completion.Complete(err)
+	reportRunFailure(svc, t, err, nil)
 }
 
 func processTokenQueue(
@@ -941,7 +1047,7 @@ func handleQueuedToken(
 	}
 
 	if lenErr := zapscript.ValidateScriptLength(t.Text); lenErr != nil {
-		rejectOversizedToken(&t, lenErr)
+		rejectOversizedToken(svc, &t, lenErr)
 		return
 	}
 
@@ -983,7 +1089,7 @@ func handleQueuedToken(
 		// API's check. Reject before the parse below, and before history is
 		// written, exactly as an over-long token is.
 		if lenErr := zapscript.ValidateScriptLength(mappedValue); lenErr != nil {
-			rejectOversizedToken(&t, lenErr)
+			rejectOversizedToken(svc, &t, lenErr)
 			return
 		}
 		scriptText = mappedValue
@@ -1007,7 +1113,13 @@ func handleQueuedToken(
 		}
 	}
 
-	if parseErr != nil || shouldPlayScanSuccessSound(&script) {
+	// A physical scan gets its feedback the instant the tag is read, before
+	// the launch, so a tap feels immediate; a fail sound cuts it short if the
+	// run fails quickly. A run request has no tag to acknowledge and its
+	// caller is waiting on the result, so its success sound is held until the
+	// script has actually succeeded.
+	successSound := parseErr != nil || shouldPlayScanSuccessSound(&script)
+	if successSound && t.Source != tokens.SourceAPI {
 		path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 	}
@@ -1019,8 +1131,13 @@ func handleQueuedToken(
 			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
 				log.Error().Err(histErr).Msgf("error adding history")
 			}
-			// Arming the next action is this token's whole job.
+			// Arming the next action is this token's whole job, so it has
+			// succeeded and a run request gets the sound it was held for.
 			t.Completion.Complete(nil)
+			if successSound && t.Source == tokens.SourceAPI {
+				path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
+			}
 			return
 		case nextActionInvalid, nextActionBlocked:
 			he.Success = false
@@ -1029,11 +1146,12 @@ func handleQueuedToken(
 			}
 			path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+			preflightErr := state.ErrInvalidNextAction
 			if preflight == nextActionBlocked {
-				t.Completion.Complete(fmt.Errorf("%w: %s", zapscript.ErrCommandBlocked, script.Cmds[0].Name))
-			} else {
-				t.Completion.Complete(state.ErrInvalidNextAction)
+				preflightErr = fmt.Errorf("%w: %s", zapscript.ErrCommandBlocked, script.Cmds[0].Name)
 			}
+			t.Completion.Complete(preflightErr)
+			reportRunFailure(svc, &t, preflightErr, nil)
 			return
 		case nextActionNone:
 		}
@@ -1074,6 +1192,7 @@ func handleQueuedToken(
 			}
 
 			t.Completion.Complete(admitErr)
+			reportRunFailure(svc, &t, admitErr, nil)
 			return
 		}
 	} else {
@@ -1084,7 +1203,7 @@ func handleQueuedToken(
 	if svc.BackgroundWG != nil {
 		svc.BackgroundWG.Add(1)
 	}
-	go launchQueuedToken(svc, t, &he, player)
+	go launchQueuedToken(svc, t, &he, player, successSound && t.Source == tokens.SourceAPI)
 }
 
 // launchQueuedToken executes a token's ZapScript and records the outcome. The
@@ -1095,6 +1214,7 @@ func launchQueuedToken(
 	t tokens.Token, //nolint:gocritic // single-use parameter in service function
 	he *database.HistoryEntry,
 	player audio.Player,
+	successSoundOnCompletion bool,
 ) {
 	if svc.BackgroundWG != nil {
 		defer svc.BackgroundWG.Done()
@@ -1140,9 +1260,18 @@ func launchQueuedToken(
 	// fail sound follows, so the caller never waits on audio.
 	t.Completion.Complete(err)
 
-	if failed {
+	switch {
+	case failed:
 		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+		// Every other failure was reported where the script ran; a panic
+		// never got back there.
+		if errors.Is(err, errLaunchPanicked) {
+			reportRunFailure(svc, &t, err, nil)
+		}
+	case err == nil && successSoundOnCompletion:
+		path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 	}
 }
 

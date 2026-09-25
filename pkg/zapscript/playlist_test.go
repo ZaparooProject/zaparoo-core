@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	servicestate "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
@@ -2034,4 +2035,129 @@ func TestCmdPlaylistPrevious_RelaunchesWhenThePreviousItemRepeatsTheCurrent(t *t
 			assert.True(t, queued.ForceRelaunch, "a step back onto the same item must still relaunch it")
 		})
 	}
+}
+
+func launching() bool { return true }
+
+// While a launch holds the launch lock, a playlist update that would start
+// another launch is refused and the playlist stays where it is. Moving it
+// anyway leaves it claiming an item that never launched while the earlier
+// item's media plays.
+func TestPlaylistMovesRefusedWhileLaunching(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]func(env platforms.CmdEnv) (platforms.CmdResult, error){
+		"next":     func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdPlaylistNext(nil, env) },
+		"previous": func(env platforms.CmdEnv) (platforms.CmdResult, error) { return cmdPlaylistPrevious(nil, env) },
+		"goto": func(env platforms.CmdEnv) (platforms.CmdResult, error) {
+			env.Cmd = zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistGoto, Args: []string{"3"}}
+			return cmdPlaylistGoto(nil, env)
+		},
+	}
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pls, queue := makePlaylistEnv()
+			pls.Playing = true
+
+			_, err := run(platforms.CmdEnv{
+				Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+				LaunchInProgress: launching,
+			})
+
+			require.ErrorIs(t, err, servicestate.ErrLaunchInProgress)
+			assert.Empty(t, queue, "a refused move queues nothing")
+			assert.Equal(t, 0, pls.Index)
+		})
+	}
+}
+
+// Starting a paused playlist, or replacing the open one with a new playing
+// playlist, starts a launch too.
+func TestPlaylistPlayRefusedWhileLaunching(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paused playlist", func(t *testing.T) {
+		t.Parallel()
+		pls, queue := makePlaylistEnv()
+		_, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+			Cmd:              zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistPlay},
+			Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+			LaunchInProgress: launching,
+		})
+		require.ErrorIs(t, err, servicestate.ErrLaunchInProgress)
+		assert.Empty(t, queue)
+	})
+	t.Run("new playlist", func(t *testing.T) {
+		t.Parallel()
+		queue := make(chan *playlists.Playlist, 1)
+		pl := mocks.NewMockPlatform()
+		pl.SetupBasicMock()
+		_, err := cmdPlaylistPlay(pl, platforms.CmdEnv{
+			Cfg: &config.Instance{},
+			Cmd: zapscript.Command{
+				Name: zapscript.ZapScriptCmdPlaylistPlay,
+				Args: []string{`{"id":"new","items":[{"zapscript":"**echo:a"}]}`},
+			},
+			Playlist:         playlists.PlaylistController{Queue: queue},
+			LaunchInProgress: launching,
+		})
+		require.ErrorIs(t, err, servicestate.ErrLaunchInProgress)
+		assert.Empty(t, queue)
+	})
+}
+
+// Updates that start no launch still go through while one is in progress: the
+// play the picker sends after its goto started the item, pausing, and moving
+// the cursor of a paused playlist.
+func TestPlaylistUpdatesThatLaunchNothingPassWhileLaunching(t *testing.T) {
+	t.Parallel()
+
+	t.Run("play on a playlist already playing that item", func(t *testing.T) {
+		t.Parallel()
+		pls, queue := makePlaylistEnv()
+		pls.Playing = true
+		_, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+			Cmd:              zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistPlay},
+			Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+			LaunchInProgress: launching,
+		})
+		require.NoError(t, err)
+		assert.Len(t, queue, 1)
+	})
+	t.Run("pause", func(t *testing.T) {
+		t.Parallel()
+		pls, queue := makePlaylistEnv()
+		pls.Playing = true
+		pl := mocks.NewMockPlatform()
+		pl.On("StopActiveLauncher", mock.Anything).Return(nil)
+		_, err := cmdPlaylistPause(pl, platforms.CmdEnv{
+			Cmd:              zapscript.Command{Name: zapscript.ZapScriptCmdPlaylistPause},
+			Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+			LaunchInProgress: launching,
+		})
+		require.NoError(t, err)
+		assert.Len(t, queue, 1)
+	})
+	t.Run("next on a paused playlist", func(t *testing.T) {
+		t.Parallel()
+		pls, queue := makePlaylistEnv()
+		result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+			Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+			LaunchInProgress: launching,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Playlist.Index)
+	})
+	t.Run("next with no launch in progress", func(t *testing.T) {
+		t.Parallel()
+		pls, queue := makePlaylistEnv()
+		pls.Playing = true
+		result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+			Playlist:         playlists.PlaylistController{Active: pls, Queue: queue},
+			LaunchInProgress: func() bool { return false },
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Playlist.Index)
+	})
 }

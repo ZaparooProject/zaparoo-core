@@ -968,6 +968,7 @@ preprocessing:
 					Int("length", len(scan.Text)).
 					Msg("ignoring scan, script exceeds maximum length")
 				playFail()
+				reportRunFailure(svc, scan, lenErr, nil)
 				continue preprocessing
 			}
 

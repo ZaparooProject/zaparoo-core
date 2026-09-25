@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
@@ -302,6 +304,54 @@ func TestHandleMediaControl_ScriptExecution(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	pl.AssertCalled(t, "KeyboardPress", "{f2}")
+}
+
+// A control script is ZapScript run on the caller's behalf; its failure is
+// reported to every client, not only returned to the caller.
+func TestHandleMediaControl_ScriptFailureNotifiesRunFailed(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("ID").Return("test")
+	pl.On("KeyboardPress", "{f2}").Return(errors.New("no keyboard"))
+
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{
+		ID:       "test-launcher",
+		SystemID: "NES",
+		Controls: map[string]platforms.Control{"quick_save": {Script: "**input.keyboard:{f2}"}},
+	}})
+
+	_, err := HandleMediaControl(requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		Platform:      pl,
+		Config:        &config.Instance{},
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action": "quick_save"}`),
+	})
+	require.Error(t, err)
+
+	var got *models.RunFailedParams
+	for got == nil {
+		select {
+		case n := <-ns:
+			if n.Method == models.NotificationRunFailed {
+				got = &models.RunFailedParams{}
+				require.NoError(t, json.Unmarshal(n.Params, got))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no run.failed notification")
+		}
+	}
+	assert.Equal(t, tokens.SourceControl, got.Source)
+	assert.Equal(t, "**input.keyboard:{f2}", got.Script)
+	assert.Equal(t, models.ErrorCategoryExecutionFailed, got.Category)
 }
 
 func TestHandleMediaControl_BackgroundSlot(t *testing.T) {

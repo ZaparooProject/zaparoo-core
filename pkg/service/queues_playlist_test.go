@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -214,6 +215,7 @@ func TestRunTokenZapScript_ReturnsWhenPlaylistClearBlockedByExecutionContext(t *
 	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
 	require.True(t, ok)
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	launchStarted := make(chan struct{})
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Run(func(mock.Arguments) { close(launchStarted) }).Return(nil).Once()
@@ -256,6 +258,7 @@ func TestRunTokenZapScript_ReturnsWhenSoftwareTokenBlockedByExecutionContext(t *
 	svc.LaunchSoftwareQueue = make(chan softwareTokenUpdate)
 
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -731,6 +734,7 @@ func TestRunTokenZapScript_BackgroundLaunchPreservesPrimaryPlaylist(t *testing.T
 	require.True(t, ok)
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
 			return opts != nil && opts.Slot == mediaslot.Background
@@ -800,6 +804,7 @@ func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 	svc.State.SetReader(mockReader)
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 
@@ -877,6 +882,7 @@ func TestRunTokenZapScript_PrimaryPlaylistLaunchPublishesPhysicalOwner(t *testin
 	active.HoldToken = owner
 
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 
@@ -1012,6 +1018,7 @@ func TestRunTokenZapScript_PlaylistLaunchCarriesCardScanMode(t *testing.T) {
 	active.HoldToken = owner
 
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 
@@ -1063,6 +1070,7 @@ func TestRunTokenZapScript_PlaylistItemTraitDoesNotOverrideCardScanMode(t *testi
 	active.HoldToken = owner
 
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 
@@ -1196,4 +1204,46 @@ func TestHandlePlaylist_DifferentPlaylistOpeningOnTheSameItemTakesOver(t *testin
 	assert.Equal(t, "second", got.ID, "the playlist that was opened takes the slot")
 	assert.Equal(t, 0, got.Index)
 	assert.Empty(t, recorder.played, "the item already playing is not relaunched")
+}
+
+// TestRunTokenZapScript_BackgroundStopLeavesPrimaryGameRunning pins that a
+// background stop ends the background audio and nothing else: the game in the
+// primary slot keeps running and the platform is never asked to return to the
+// menu, which on MiSTer would reload the menu core over it.
+func TestRunTokenZapScript_BackgroundStopLeavesPrimaryGameRunning(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.State.SetRunZapScript(true)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+	recorder := &servicePlaybackRecorder{states: map[string]audio.PlaybackState{
+		mediaslot.Background: {Path: "song.mp3", Playing: true},
+	}}
+	svc.PlaybackManager = recorder
+	game := models.NewActiveMedia("Genesis", "Genesis", "/games/gunstar.md", "Gunstar Heroes", "genesis")
+	svc.State.SetActiveMedia(game)
+	svc.State.SetBackgroundMedia(models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song",
+		platforms.NativeAudioLauncherID))
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	background.Playing = true
+	svc.State.SetBackgroundPlaylist(background)
+
+	err := runTokenZapScript(svc, tokens.Token{Text: "**stop?slot=background", ScanTime: time.Now()},
+		playlists.PlaylistController{Background: background, Queue: svc.PlaylistQueue}, nil, false)
+	require.NoError(t, err)
+	select {
+	case update := <-svc.PlaylistQueue:
+		handlePlaylist(svc, update, nil)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a background stop must close the background slot")
+	}
+
+	assert.Equal(t, []string{mediaslot.Background}, recorder.stopped)
+	assert.Nil(t, svc.State.BackgroundMedia())
+	assert.Nil(t, svc.State.GetBackgroundPlaylist())
+	assert.Same(t, game, svc.State.ActiveMedia(), "the primary game keeps running")
+	mockPlatform.AssertNotCalled(t, "ReturnToMenu")
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", mock.Anything)
 }

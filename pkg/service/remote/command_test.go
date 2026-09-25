@@ -27,6 +27,7 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -538,4 +539,45 @@ func TestCommandPolicyContents(t *testing.T) {
 	} {
 		assert.False(t, commandPolicy.Allows(name), "a card link must not reach %s", name)
 	}
+}
+
+// TestCommandAdmissionRejectNotifiesRunFailed pins that a remote launch
+// refused by the device's launch policies is reported like any other failed
+// run, not only back to the remote caller.
+func TestCommandAdmissionRejectNotifiesRunFailed(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "boot")
+	t.Cleanup(st.StopService)
+	m := &manager{deps: Deps{
+		State:           st,
+		LaunchAdmission: func() error { return state.ErrLaunchRequiresProfile },
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController, *gozapscript.ArgExprEnv, bool,
+		) error {
+			t.Fatal("a refused launch must not run")
+			return nil
+		},
+	}}
+
+	m.executeCommand(context.Background(), "launch.system", json.RawMessage(`{"value":"SNES"}`))
+
+	var got *models.RunFailedParams
+	for got == nil {
+		select {
+		case n := <-ns:
+			if n.Method == models.NotificationRunFailed {
+				got = &models.RunFailedParams{}
+				require.NoError(t, json.Unmarshal(n.Params, got))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no run.failed notification")
+		}
+	}
+	assert.Equal(t, tokens.SourceRemote, got.Source)
+	assert.Equal(t, models.ErrorCategoryBlocked, got.Category)
+	assert.Equal(t, "**launch.system:SNES", got.Script)
+	assert.Empty(t, got.Command, "the run was refused before any command ran")
 }

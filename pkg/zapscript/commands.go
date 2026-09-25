@@ -592,6 +592,10 @@ func RunCommand(
 
 	if opts.LauncherManager != nil {
 		env.LauncherCtx = opts.LauncherManager.GetContext()
+		env.LaunchInProgress = opts.LauncherManager.Launching
+		if token.Source == tokens.SourcePlaylist {
+			env.LaunchInProgress = opts.LauncherManager.LockHeld
+		}
 	}
 
 	cmdFn, ok := lookupCmd(cmd.Name)
@@ -677,6 +681,9 @@ func RunCommand(
 		case errors.Is(err, ErrFileNotFound),
 			errors.Is(err, ErrInvalidArguments),
 			errors.Is(err, platforms.ErrScriptAlreadyRunning),
+			// A playlist move refused while another launch runs is busy, the
+			// same as a launch the guard refuses.
+			errors.Is(err, state.ErrLaunchInProgress),
 			errors.Is(err, systemdefs.ErrUnknownSystem),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),

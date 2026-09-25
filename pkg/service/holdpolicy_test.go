@@ -20,6 +20,7 @@
 package service
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -415,6 +416,7 @@ func TestRunTokenZapScriptDoesNotResolveTraits(t *testing.T) {
 	svc.State.SetReader(mockReader)
 
 	path := filepath.Join(t.TempDir(), "game.rom")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
 		mock.Anything).Return(nil).Once()
 

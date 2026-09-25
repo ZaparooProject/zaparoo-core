@@ -382,6 +382,55 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 }
 ```
 
+## Runs
+
+### run.failed
+
+A ZapScript run ended in failure. It is sent once for every run, whatever started it:
+a reader scan, the `run` method, a playlist item, a hook, a launcher control, or a
+remote operation. That includes a run refused before it started, such as one over the
+length limit, one blocked by a profile or playtime limit, or an invalid next action.
+A `run` call that fails gets the same category and message in its error response too.
+A run refused because ZapScript execution is disabled is not a failure and sends
+nothing, and neither does a run cut short by the service shutting down.
+
+When a playlist item fails, the playlist is paused on that item unless another launch
+was already in progress or the item started its media before failing. Playing the
+playlist again retries the item, and next, previous or goto move on and play. A playlist
+command that would start a launch while another launch is still in progress is refused
+as `busy` and leaves the playlist where it is.
+
+#### Response
+
+| Key           | Type   | Required | Description                                                                                          |
+| :------------ | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
+| source        | string | Yes      | What started the run: `Reader`, `API`, `Playlist`, `Hook`, `Control`, `Remote` or `GMC`.             |
+| readerId      | string | No       | ID of the reader the token was scanned on.                                                           |
+| script        | string | No       | The token's own ZapScript with credentials redacted, as token history stores it. It can hold a media path. Absent when the token had no text, such as a tag known only by its UID, or when it was over the length limit. |
+| command       | string | No       | Name of the command that failed, when one command's failure ended the run.                           |
+| category      | string | Yes      | Error category, the same values the `run` method reports.                                            |
+| message       | string | Yes      | Short description; never contains a path or token contents.                                          |
+| playlistId    | string | No       | ID of the playlist the run was an item of.                                                           |
+| playlistIndex | number | No       | Zero-based index of that item in the playlist.                                                       |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "run.failed",
+  "params": {
+    "source": "Playlist",
+    "script": "@Arcade/Metal Slug X (year:1999)",
+    "command": "launch.title",
+    "category": "media_not_found",
+    "message": "media not found",
+    "playlistId": "deck://lhm6n9t8",
+    "playlistIndex": 0
+  }
+}
+```
+
 ## Playtime
 
 ### playtime.limit.reached

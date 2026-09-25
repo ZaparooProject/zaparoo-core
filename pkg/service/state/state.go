@@ -655,6 +655,31 @@ func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
+// PausePlaylistIfCurrent stores the playlist in slot as paused, but only while
+// the stored playlist is still exactly launched: the same value, not merely
+// the same ID, since two unnamed playlists share an empty one. Every update
+// stores a new value, so a launch that fails after the playlist moved, was
+// refreshed, or was replaced changes nothing. The check and the write share
+// one critical section. It reports whether the playlist was paused. The
+// playlist is marked as paused by a failure, so moving to another item plays
+// it again.
+func (s *State) PausePlaylistIfCurrent(slot string, launched *playlists.Playlist) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	target := &s.activePlaylist
+	if slot == mediaslot.Background {
+		target = &s.backgroundPlaylist
+	}
+	current := *target
+	if current == nil || current != launched || !current.Playing {
+		return false
+	}
+	paused := playlists.Pause(*current)
+	paused.PausedByFailure = true
+	*target = paused
+	return true
+}
+
 var (
 	ErrNoActiveMedia          = errors.New("no active media")
 	ErrActiveMediaChanged     = errors.New("active media changed")

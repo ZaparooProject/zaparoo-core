@@ -172,3 +172,85 @@ func TestTransitions_PreserveHoldToken(t *testing.T) {
 	assert.Same(t, owner, playlists.Play(*p).HoldToken)
 	assert.Same(t, owner, playlists.Pause(*p).HoldToken)
 }
+
+func failurePaused() playlists.Playlist {
+	return playlists.Playlist{
+		ID:              "id",
+		Items:           []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}, {ZapScript: "c"}},
+		Index:           1,
+		PausedByFailure: true,
+	}
+}
+
+// A playlist that stopped because its item failed to launch plays again from
+// whichever item it moves to; nobody asked for it to stop.
+func TestMoves_ResumeAPlaylistPausedByFailure(t *testing.T) {
+	t.Parallel()
+
+	for name, move := range map[string]func(playlists.Playlist) *playlists.Playlist{
+		"next":     playlists.Next,
+		"previous": playlists.Previous,
+		"goto":     func(p playlists.Playlist) *playlists.Playlist { return playlists.Goto(p, 2) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := move(failurePaused())
+			assert.True(t, got.Playing)
+			assert.False(t, got.PausedByFailure, "the marker describes the stop, not the new item")
+			assert.NotEqual(t, 1, got.Index)
+		})
+	}
+}
+
+// A playlist someone paused keeps its cursor-only moves.
+func TestMoves_KeepAPausedPlaylistPaused(t *testing.T) {
+	t.Parallel()
+
+	p := failurePaused()
+	p.PausedByFailure = false
+	assert.False(t, playlists.Next(p).Playing)
+	assert.False(t, playlists.Previous(p).Playing)
+	assert.False(t, playlists.Goto(p, 2).Playing)
+}
+
+// Playing again, or pausing on purpose, ends the failure state.
+func TestPlayAndPause_ClearPausedByFailure(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, playlists.Play(failurePaused()).PausedByFailure)
+	paused := playlists.Pause(failurePaused())
+	assert.False(t, paused.PausedByFailure)
+	assert.False(t, playlists.Next(*paused).Playing, "a playlist paused on purpose stays paused")
+}
+
+// Moving to the item it already holds is still a move: a retry of the failed
+// item through goto plays it.
+func TestGoto_SameIndexResumesAPlaylistPausedByFailure(t *testing.T) {
+	t.Parallel()
+
+	got := playlists.Goto(failurePaused(), 1)
+	assert.True(t, got.Playing)
+	assert.Equal(t, 1, got.Index)
+}
+
+// Current reads the clamped item without repairing the index: the stored
+// playlist is shared between goroutines, so writing it from a read would race.
+func TestCurrent_ClampsWithoutMutating(t *testing.T) {
+	t.Parallel()
+
+	items := []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}}
+	for _, tt := range []struct {
+		want  string
+		index int
+	}{
+		{index: -3, want: "a"},
+		{index: 0, want: "a"},
+		{index: 1, want: "b"},
+		{index: 9, want: "b"},
+	} {
+		p := playlists.Playlist{Items: items, Index: tt.index}
+		assert.Equal(t, tt.want, p.Current().ZapScript, "index %d", tt.index)
+		assert.Equal(t, tt.index, p.Index, "Current must not write the index")
+	}
+	assert.Equal(t, playlists.PlaylistItem{}, (&playlists.Playlist{Index: 4}).Current())
+}

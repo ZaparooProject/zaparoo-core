@@ -1042,12 +1042,20 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		}
 	}
 
-	// if it's an absolute path, just try launch it
+	// An absolute path must exist before anything is launched: a launcher
+	// handed a missing file stops what is running, loads its core, and
+	// reports success with nothing playing. findFile checks a path inside a
+	// zip or virtual list by the archive itself, and resolves case the way a
+	// relative lookup does.
 	if filepath.IsAbs(path) {
-		log.Debug().Msgf("launching absolute path: %s", path)
+		found, findErr := findFile(fs, pl, env.Cfg, path, env.PathRoot)
+		if findErr != nil {
+			return platforms.CmdResult{}, findErr
+		}
+		log.Debug().Msgf("launching absolute path: %s", found)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(requestedPathTarget(path))
+		}, launch(requestedPathTarget(found))
 	}
 
 	// match for uri style launch syntax

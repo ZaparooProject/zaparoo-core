@@ -257,6 +257,9 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 	cfg := &config.Instance{}
 	root := t.TempDir()
 	absPath := filepath.Join(root, "game.nes")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 	launchers := []platforms.Launcher{
 		{ID: "Default", SystemID: "NES", Folders: []string{root}, Extensions: []string{".nes"}},
 		{ID: "Override", SystemID: "NES"},
@@ -291,7 +294,7 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 		Database: db,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -308,6 +311,9 @@ func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing
 	cfg := &config.Instance{}
 	root := t.TempDir()
 	absPath := filepath.Join(root, "game.nes")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 	explicit := platforms.Launcher{ID: "Explicit", SystemID: "NES", Folders: []string{root}}
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicit})
@@ -330,7 +336,7 @@ func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing
 		Database: db,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -360,6 +366,9 @@ launcher = "genesis-retroarch"
 
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{genesisLauncher})
 	mockPlatform.On("LaunchMedia", cfg, absPath,
@@ -380,7 +389,7 @@ launcher = "genesis-retroarch"
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err, "cmdLaunch should not return error with valid system arg")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
@@ -410,6 +419,9 @@ launcher = "genesis-default"
 
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicitLauncher})
 	mockPlatform.On("LaunchMedia", cfg, absPath,
@@ -431,7 +443,7 @@ launcher = "genesis-default"
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err, "cmdLaunch should not return error")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
@@ -444,6 +456,9 @@ func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	absPath := filepath.Join(t.TempDir(), "song.mp3")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 	mockPlatform.On("LaunchMedia", cfg, absPath,
@@ -465,7 +480,7 @@ func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
 		},
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -478,6 +493,9 @@ func TestCmdLaunch_AbsolutePathAppliesInferredSystemDefault(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	rootDir := t.TempDir()
 	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, romPath, []byte("rom"), 0o600))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -518,7 +536,7 @@ launcher = "genesis-alt"
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -531,6 +549,9 @@ func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesInferredDefault(t *testi
 	mockPlatform := mocks.NewMockPlatform()
 	rootDir := t.TempDir()
 	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, romPath, []byte("rom"), 0o600))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -572,7 +593,7 @@ launcher = "genesis-alt"
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -585,6 +606,9 @@ func TestCmdLaunch_SystemDefaultGroupResolvesWithinTargetSystem(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	rootDir := t.TempDir()
 	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, romPath, []byte("rom"), 0o600))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(`
@@ -621,7 +645,7 @@ launcher = "RA"
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -992,6 +1016,9 @@ func TestCmdLaunch_SetNameArgsPassedThrough(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	absPath := filepath.Join(t.TempDir(), "game.nes")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 	mockPlatform.On("LaunchMedia", cfg, absPath,
@@ -1015,7 +1042,7 @@ func TestCmdLaunch_SetNameArgsPassedThrough(t *testing.T) {
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -1064,6 +1091,9 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, absPath, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", cfg, absPath,
 		(*platforms.Launcher)(nil), (*database.Database)(nil),
 		(*platforms.LaunchOptions)(nil)).Return(nil)
@@ -1079,7 +1109,7 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err, "cmdLaunch should work with valid system but no defaults")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
@@ -1378,6 +1408,9 @@ func TestCmdLaunch_ExplicitScanOnlyLauncherDelegates(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()
 	mediaPath := filepath.Join(tmpDir, "Rockman 4.nes")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, mediaPath, []byte("rom"), 0o600))
 	require.NoError(t, os.WriteFile(mediaPath, []byte("test"), 0o600))
 
 	cfg := &config.Instance{}
@@ -1417,7 +1450,7 @@ func TestCmdLaunch_ExplicitScanOnlyLauncherDelegates(t *testing.T) {
 	require.Len(t, script.Cmds, 1)
 
 	env := platforms.CmdEnv{Cmd: script.Cmds[0], Cfg: cfg}
-	result, err := cmdLaunchWithFS(afero.NewMemMapFs(), mockPlatform, env)
+	result, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
@@ -1434,6 +1467,9 @@ system = "genesis"
 launcher = "genesis-restricted"
 `))
 	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, path, []byte("rom"), 0o600))
 	launcher := platforms.Launcher{
 		ID:            "genesis-restricted",
 		SystemID:      systemdefs.SystemGenesis,
@@ -1453,7 +1489,7 @@ launcher = "genesis-restricted"
 		},
 		Cfg: cfg,
 	}
-	_, err := cmdLaunch(mockPlatform, env)
+	_, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.ErrorContains(t, err, "file not allowed")
 	mockPlatform.AssertNotCalled(
@@ -1473,6 +1509,9 @@ func TestCmdLaunch_SystemArgDoesNotBypassLauncherAllowlist(t *testing.T) {
 
 	cfg := &config.Instance{}
 	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	// The launch checks an absolute path exists before launching it.
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, path, []byte("rom"), 0o600))
 	launcher := platforms.Launcher{
 		ID:            systemdefs.SystemGenesis,
 		SystemID:      systemdefs.SystemGenesis,
@@ -1492,7 +1531,7 @@ func TestCmdLaunch_SystemArgDoesNotBypassLauncherAllowlist(t *testing.T) {
 		},
 		Cfg: cfg,
 	}
-	_, err := cmdLaunch(mockPlatform, env)
+	_, err := cmdLaunchWithFS(fs, mockPlatform, env)
 
 	require.ErrorContains(t, err, "file not allowed")
 	mockPlatform.AssertExpectations(t)
@@ -2845,4 +2884,86 @@ func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection lost")
+}
+
+// An absolute path is checked before anything is launched. A launcher handed a
+// missing file stops what is running, loads its core, and reports success with
+// nothing playing; the check turns that into file not found instead. A path
+// inside a zip or virtual list is checked by the archive, as a relative one is.
+func TestCmdLaunch_AbsolutePathMustExist(t *testing.T) {
+	t.Parallel()
+
+	root := launchTestAbsPath("games", "NES")
+	zipPath := filepath.Join(root, "@NES - EverDrive.zip")
+	listPath := filepath.Join(root, "favourites.txt")
+	realGame := filepath.Join(root, "Lode Runner (USA).nes")
+
+	tests := []struct {
+		wantErr    error
+		name       string
+		path       string
+		launched   string
+		wantLaunch bool
+	}{
+		{name: "existing file", path: realGame, launched: realGame, wantLaunch: true},
+		{name: "missing file", path: filepath.Join(root, "does-not-exist.nes"), wantErr: ErrFileNotFound},
+		{
+			name: "entry inside an existing zip", wantLaunch: true,
+			path:     filepath.Join(zipPath, "1 US - G-Q", "Lode Runner (USA).nes"),
+			launched: filepath.Join(zipPath, "1 US - G-Q", "Lode Runner (USA).nes"),
+		},
+		{
+			name:    "entry inside a missing zip",
+			path:    filepath.Join(root, "@Gone.zip", "Lode Runner (USA).nes"),
+			wantErr: ErrFileNotFound,
+		},
+		{
+			name: "entry in an existing virtual list", wantLaunch: true,
+			path:     filepath.Join(listPath, "Lode Runner (USA).nes"),
+			launched: filepath.Join(listPath, "Lode Runner (USA).nes"),
+		},
+		{
+			// A wrong-case path finds its file, the way a relative lookup does,
+			// so a card written on a case-insensitive filesystem still launches.
+			name: "wrong case resolves to the file", wantLaunch: true,
+			path:     filepath.Join(root, "lode runner (usa).NES"),
+			launched: realGame,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			require.NoError(t, afero.WriteFile(fs, realGame, []byte("rom"), 0o600))
+			require.NoError(t, afero.WriteFile(fs, zipPath, []byte("zip"), 0o600))
+			require.NoError(t, afero.WriteFile(fs, listPath, []byte("list"), 0o600))
+
+			cfg := &config.Instance{}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Maybe()
+			mockPlatform.On("RootDirs", cfg).Return([]string{}).Maybe()
+			if tt.wantLaunch {
+				mockPlatform.On("LaunchMedia", cfg, tt.launched,
+					(*platforms.Launcher)(nil), (*database.Database)(nil), mock.Anything).Return(nil).Once()
+			}
+
+			result, err := cmdLaunchWithFS(fs, mockPlatform, platforms.CmdEnv{
+				Cmd: zapscript.Command{Name: "launch", Args: []string{tt.path}},
+				Cfg: cfg,
+			})
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.False(t, result.MediaChanged)
+				mockPlatform.AssertNotCalled(t, "LaunchMedia",
+					mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
