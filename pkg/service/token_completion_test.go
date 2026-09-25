@@ -20,11 +20,13 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -385,6 +387,24 @@ func TestScanBehavior_OversizedReaderScanIsIgnored(t *testing.T) {
 
 	env.sendCommandScan("big", "**echo:"+strings.Repeat("A", zapscript.MaxScriptLength))
 	env.expectNoLaunch(t)
+
+	// Refused before it ran, but a failed run all the same: clients are told,
+	// without the oversized text itself.
+	var failed *models.RunFailedParams
+	for failed == nil {
+		select {
+		case n := <-env.notifCh:
+			if n.Method == models.NotificationRunFailed {
+				failed = &models.RunFailedParams{}
+				require.NoError(t, json.Unmarshal(n.Params, failed))
+			}
+		case <-time.After(behaviorTimeout):
+			t.Fatal("an oversized scan must be reported as a failed run")
+		}
+	}
+	assert.Equal(t, tokens.SourceReader, failed.Source)
+	assert.Equal(t, models.ErrorCategoryInvalidScript, failed.Category)
+	assert.Empty(t, failed.Script)
 
 	select {
 	case he := <-env.historyCh:

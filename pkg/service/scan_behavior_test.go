@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -73,6 +74,7 @@ type scanBehaviorEnv struct {
 	keyboardCh  chan string
 	historyCh   chan database.HistoryEntry
 	uiCh        chan models.UIStateResponse
+	notifCh     <-chan models.Notification
 	romsDir     string
 }
 
@@ -310,6 +312,7 @@ mode = "unrestricted"`))
 	})
 
 	return &scanBehaviorEnv{
+		notifCh:     notifCh,
 		st:          st,
 		cfg:         cfg,
 		userDB:      mockUserDB,
@@ -332,9 +335,17 @@ mode = "unrestricted"`))
 
 // --- Scan helpers ---
 
-// gamePath returns a platform-appropriate absolute path for a game file.
+// gamePath returns a platform-appropriate absolute path for a game file and
+// creates the file, because launching an absolute path checks it exists.
 func (env *scanBehaviorEnv) gamePath(name string) string {
-	return filepath.Join(env.romsDir, name)
+	path := filepath.Join(env.romsDir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(path, []byte("rom"), 0o600); err != nil {
+		panic(err)
+	}
+	return path
 }
 
 func (env *scanBehaviorEnv) sendGameScan(uid, path string) {

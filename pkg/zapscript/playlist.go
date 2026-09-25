@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	servicestate "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -175,12 +176,33 @@ func restartCurrentPlaylistTrack(env *platforms.CmdEnv, slot string) (bool, erro
 	return true, nil
 }
 
+// updateWouldLaunch reports whether queueing pls for slot starts a launch:
+// a playing playlist that replaces the open one, moves to another item,
+// starts playing from pause, or relaunches its item. An update that leaves
+// a playing playlist where it is, such as the play the picker sends after its
+// goto has already started the item, launches nothing.
+func updateWouldLaunch(env *platforms.CmdEnv, slot string, pls *playlists.Playlist) bool {
+	if pls == nil || !pls.Playing || pls.Clear || pls.Refresh {
+		return false
+	}
+	active := activePlaylistForSlot(env, slot)
+	return active == nil || active.ID != pls.ID || !active.Playing ||
+		active.Index != pls.Index || pls.ForceRelaunch
+}
+
 func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 	slot := mediaslot.Primary
 	if pls != nil && pls.Slot != "" {
 		slot = pls.Slot
 	} else if cmdSlot, err := commandSlot(env); err == nil {
 		slot = cmdSlot
+	}
+	if updateWouldLaunch(env, slot, pls) && env.LaunchInProgress != nil && env.LaunchInProgress() {
+		// The launch this update starts would be refused, but the playlist
+		// would move anyway and end up claiming an item that never
+		// launched while another item's media plays. Refuse the update
+		// instead, so the playlist moves only when its item can launch.
+		return fmt.Errorf("playlist %s: %w", slot, servicestate.ErrLaunchInProgress)
 	}
 	if pls != nil {
 		pls.Slot = slot
@@ -835,7 +857,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	newIndex := indexArg - 1
 
 	if active.Index == newIndex {
-		log.Warn().Msgf("playlist is already at index %d, not changing", indexArg)
+		log.Debug().Msgf("playlist is already at index %d, not changing", indexArg)
 		return platforms.CmdResult{}, nil
 	}
 

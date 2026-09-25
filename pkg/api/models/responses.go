@@ -257,6 +257,24 @@ type PlaytimeLimitReachedParams struct {
 	Reason string `json:"reason"`
 }
 
+// RunFailedParams is the payload of the run.failed notification, sent once
+// for every ZapScript run that ends in failure whatever started it. Script is
+// the token's own text with credentials redacted, exactly as token history
+// stores it, so it can hold a media path the way history does; Message is the
+// same safe text the run method returns and never carries a path or token
+// contents. PlaylistID and PlaylistIndex are set when the run was a playlist
+// item.
+type RunFailedParams struct {
+	PlaylistIndex *int   `json:"playlistIndex,omitempty"`
+	Source        string `json:"source"`
+	ReaderID      string `json:"readerId,omitempty"`
+	Script        string `json:"script,omitempty"`
+	Command       string `json:"command,omitempty"`
+	Category      string `json:"category"`
+	Message       string `json:"message"`
+	PlaylistID    string `json:"playlistId,omitempty"`
+}
+
 type PlaytimeLimitWarningParams struct {
 	Interval  string `json:"interval"`
 	Remaining string `json:"remaining"`

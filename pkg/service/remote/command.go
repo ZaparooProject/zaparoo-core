@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -82,6 +83,11 @@ func (m *manager) executeCommand(
 	// for here or it does not happen at all.
 	if zapscript.IsMediaLaunchingCommand(command.Name) && m.deps.LaunchAdmission != nil {
 		if admitErr := m.deps.LaunchAdmission(); admitErr != nil {
+			if m.deps.State != nil {
+				runfailure.Notify(m.deps.State.Notifications, &tokens.Token{
+					Source: tokens.SourceRemote, Commands: []gozapscript.Command{command},
+				}, admitErr, nil)
+			}
 			switch {
 			case errors.Is(admitErr, state.ErrLaunchRequiresProfile):
 				return failResult("profile_required")

@@ -212,6 +212,9 @@ type CmdEnv struct {
 	SkipMediaLaunch    func(ResolvedLaunch) bool
 	PrepareMediaLaunch func(ResolvedLaunch) (bool, error)
 	AcquireLaunch      func() (func(), error)
+	// LaunchInProgress reports whether another launch holds the exclusive
+	// launch lock. Nil when there is no launcher manager to ask.
+	LaunchInProgress func() bool
 	// BeforeExit runs the outgoing media's before_exit script. The launch path
 	// calls it once the replacement has been resolved but before it takes the
 	// media launch gate, so a launch that never happens cannot fire it and the

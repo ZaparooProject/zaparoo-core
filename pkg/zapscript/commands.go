@@ -592,6 +592,7 @@ func RunCommand(
 
 	if opts.LauncherManager != nil {
 		env.LauncherCtx = opts.LauncherManager.GetContext()
+		env.LaunchInProgress = opts.LauncherManager.Launching
 	}
 
 	cmdFn, ok := lookupCmd(cmd.Name)

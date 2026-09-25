@@ -49,6 +49,10 @@ type Playlist struct {
 	Items   []PlaylistItem
 	Index   int
 	Playing bool
+	// PausedByFailure marks a playlist that stopped because its current item
+	// failed to launch, not because anyone paused it. Moving to another item
+	// resumes such a playlist, where a paused one only moves its cursor.
+	PausedByFailure bool `json:"-"`
 	// Clear signals the queue handler to remove the active playlist for this slot.
 	Clear bool
 	// Loop and LoopOne control end-of-playlist behavior set at load time.
@@ -97,14 +101,25 @@ func transition(p *Playlist) *Playlist {
 	return &out
 }
 
+// moveTo is transition for a move to another item. A playlist that stopped
+// only because an item failed to launch plays again from the new item; one
+// that was paused on purpose stays paused and only its cursor moves.
+func moveTo(p *Playlist, idx int) *Playlist {
+	out := transition(p)
+	out.Index = idx
+	if out.PausedByFailure {
+		out.Playing = true
+		out.PausedByFailure = false
+	}
+	return out
+}
+
 func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index + 1
 	if idx >= len(p.Items) {
 		idx = 0
 	}
-	out := transition(&p)
-	out.Index = idx
-	return out
+	return moveTo(&p, idx)
 }
 
 func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
@@ -112,9 +127,7 @@ func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves 
 	if idx < 0 {
 		idx = len(p.Items) - 1
 	}
-	out := transition(&p)
-	out.Index = idx
-	return out
+	return moveTo(&p, idx)
 }
 
 func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
@@ -127,37 +140,31 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 	case idx < 0:
 		idx = 0
 	}
-	out := transition(&p)
-	out.Index = idx
-	return out
+	return moveTo(&p, idx)
 }
 
 func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	out := transition(&p)
 	out.Playing = true
+	out.PausedByFailure = false
 	return out
 }
 
 func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	out := transition(&p)
 	out.Playing = false
+	out.PausedByFailure = false
 	return out
 }
 
+// Current returns the item at the playlist's index, clamped into range. It
+// only reads: the stored playlist is shared between goroutines, so a read
+// that repaired an out-of-range index in place would be a data race.
 func (p *Playlist) Current() PlaylistItem {
-	// Add bounds checking to prevent panic
 	if len(p.Items) == 0 {
 		return PlaylistItem{}
 	}
-	if p.Index < 0 || p.Index >= len(p.Items) {
-		// Clamp to valid range
-		if p.Index < 0 {
-			p.Index = 0
-		} else {
-			p.Index = len(p.Items) - 1
-		}
-	}
-	return p.Items[p.Index]
+	return p.Items[min(max(p.Index, 0), len(p.Items)-1)]
 }
 
 type PlaylistController struct {

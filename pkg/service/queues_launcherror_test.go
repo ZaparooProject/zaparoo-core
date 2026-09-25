@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,6 +44,11 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		expected bool
 	}{
 		{name: "file not found", err: zapscript.ErrFileNotFound, expected: true},
+		{
+			name: "wrapped no title match",
+			err:  fmt.Errorf("error resolving title SNES/Zelda: %w", titles.ErrNoMatch), expected: true,
+		},
+		{name: "low confidence title match", err: titles.ErrLowConfidence, expected: true},
 		{name: "no playlist active", err: zapscript.ErrNoPlaylistActive, expected: true},
 		{name: "launch in progress", err: state.ErrLaunchInProgress, expected: true},
 		{name: "script busy", err: platforms.ErrScriptAlreadyRunning, expected: true},

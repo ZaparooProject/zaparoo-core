@@ -133,6 +133,10 @@ func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.Playtime
 	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
 }
 
+func RunFailed(ns chan<- models.Notification, payload *models.RunFailedParams) {
+	sendNotification(ns, models.NotificationRunFailed, payload)
+}
+
 func PlaytimeExtended(ns chan<- models.Notification, payload *models.PlaytimeExtendedParams) {
 	sendNotification(ns, models.NotificationPlaytimeExtended, payload)
 }

@@ -49,6 +49,7 @@ const (
 	NotificationAuthLinkStatus       = "auth.link.status"
 	NotificationBackupState          = "backup.state"
 	NotificationUpdateState          = "update.state"
+	NotificationRunFailed            = "run.failed"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.

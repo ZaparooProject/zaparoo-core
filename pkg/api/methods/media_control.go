@@ -28,6 +28,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
@@ -86,6 +88,13 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	case control.Script != "":
 		exprEnv := zapscript.GetExprEnv(env.Platform, env.Config, env.State, nil, nil)
 		err = zapscript.RunControlScript(env.Context, env.Platform, env.Config, env.Database, control.Script, &exprEnv)
+		// A control script is ZapScript run on the caller's behalf, so its
+		// failure is reported like any other run, not only to the caller.
+		if err != nil && env.Context.Err() == nil && env.State.GetContext().Err() == nil {
+			runfailure.Notify(env.State.Notifications, &tokens.Token{
+				Text: control.Script, Source: tokens.SourceControl,
+			}, err, nil)
+		}
 	default:
 		err = fmt.Errorf("control %q has no implementation", params.Action)
 	}

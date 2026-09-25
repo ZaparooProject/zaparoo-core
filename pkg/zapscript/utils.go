@@ -34,6 +34,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -48,7 +50,25 @@ func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 }
 
 //nolint:gocritic // unused parameter required by interface
-func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	slot, _, err := explicitCommandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	if slot == mediaslot.Background {
+		// Background audio plays alongside the primary slot and has no core,
+		// window or process of its own. Stopping it must never go near the
+		// platform's stop or return-to-menu: on MiSTer that reloads the menu
+		// core and ends whatever game is running, tracked or not. Closing the
+		// background slot stops its playback and any playlist driving it.
+		log.Info().Msg("stopping background media")
+		clearUpdate := &playlists.Playlist{Slot: mediaslot.Background, Clear: true}
+		if err := queuePlaylistUpdate(&env, clearUpdate); err != nil {
+			return platforms.CmdResult{}, err
+		}
+		return platforms.CmdResult{PlaylistChanged: true}, nil
+	}
+
 	log.Info().Msg("stopping media")
 	if err := pl.ReturnToMenu(); err != nil {
 		return platforms.CmdResult{

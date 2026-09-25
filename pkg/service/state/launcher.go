@@ -106,6 +106,13 @@ func (lm *LauncherManager) TryStartLaunch() error {
 	return nil
 }
 
+// Launching reports whether a launch holds the launch lock right now.
+func (lm *LauncherManager) Launching() bool {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
+	return lm.launching
+}
+
 // EndLaunch releases the launch lock.
 func (lm *LauncherManager) EndLaunch() {
 	lm.launchMu.Lock()

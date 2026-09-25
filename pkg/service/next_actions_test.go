@@ -20,6 +20,7 @@
 package service
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -193,6 +194,7 @@ func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
 
 	path := filepath.Join(t.TempDir(), "game.chd")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", cfg, path,
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "3do-dualram"
@@ -224,6 +226,7 @@ func TestRunTokenZapScript_DiscardsExpiredPendingLaunchOverride(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	path := filepath.Join(t.TempDir(), "game.chd")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("LaunchMedia", cfg, path,
 		(*platforms.Launcher)(nil),
 		svc.DB,
@@ -251,6 +254,7 @@ func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 
 	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
 	path := filepath.Join(t.TempDir(), "playlist-game.chd")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 	mockPlatform.On("LaunchMedia", cfg, path,
 		(*platforms.Launcher)(nil),

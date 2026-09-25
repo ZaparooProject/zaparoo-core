@@ -35,13 +35,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/runfailure"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/text/unicode/norm"
@@ -233,48 +231,8 @@ func scriptTooLongErr(err error) error {
 // message that carries no filesystem paths or token contents. The cause is
 // kept for logging and errors.Is.
 func runError(err error) error {
-	switch {
-	case errors.Is(err, platforms.ErrScriptAlreadyRunning):
-		return models.CategorizedErr(models.ErrorCategoryBusy,
-			"a script is already running", err)
-	case errors.Is(err, state.ErrLaunchInProgress),
-		errors.Is(err, state.ErrMediaLaunchInProgress):
-		return models.CategorizedErr(models.ErrorCategoryBusy,
-			"another launch is in progress", err)
-	case errors.Is(err, zapscript.ErrFileNotFound),
-		errors.Is(err, titles.ErrNoMatch),
-		errors.Is(err, titles.ErrLowConfidence):
-		return models.CategorizedErr(models.ErrorCategoryMediaNotFound,
-			"media not found", err)
-	case errors.Is(err, state.ErrRunZapScriptDisabled):
-		return models.CategorizedErr(models.ErrorCategoryDisabled,
-			"ZapScript execution is disabled", err)
-	case errors.Is(err, zapscript.ErrScriptTooLong):
-		// The queue's backstop rejects a token the API bound never saw, such
-		// as one whose mapping override replaced its text.
-		return scriptTooLongErr(err)
-	case errors.Is(err, zapscript.ErrInvalidScript),
-		errors.Is(err, zapscript.ErrUnknownCommand),
-		errors.Is(err, zapscript.ErrUnsupportedControlAction),
-		errors.Is(err, systemdefs.ErrUnknownSystem),
-		errors.Is(err, state.ErrInvalidNextAction):
-		return models.CategorizedErr(models.ErrorCategoryInvalidScript,
-			"ZapScript is invalid", err)
-	case errors.Is(err, zapscript.ErrCommandBlocked),
-		errors.Is(err, zapscript.ErrExecuteNotAllowed),
-		errors.Is(err, zapscript.ErrHTTPNotAllowed),
-		errors.Is(err, zapscript.ErrRemoteSource),
-		errors.Is(err, state.ErrLaunchBlockedByHook),
-		errors.Is(err, state.ErrLaunchRequiresProfile):
-		return models.CategorizedErr(models.ErrorCategoryBlocked,
-			"ZapScript execution was blocked", err)
-	case errors.Is(err, playtime.ErrLimitReached):
-		return models.CategorizedErr(models.ErrorCategoryPlaytimeLimit,
-			"playtime limit reached", err)
-	default:
-		return models.CategorizedErr(models.ErrorCategoryExecutionFailed,
-			"ZapScript execution failed", err)
-	}
+	category, message := runfailure.Classify(err)
+	return models.CategorizedErr(category, message, err)
 }
 
 func isLocalRequest(r *http.Request) bool {

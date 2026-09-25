@@ -69,7 +69,16 @@ func runHookWithContext(
 	}
 
 	hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, scanned, launching)
-	return runTokenZapScriptWithContext(ctx, svc, t, plsc, &hookEnv, true)
+	err := runTokenZapScriptWithContext(ctx, svc, t, plsc, &hookEnv, true)
+	// A hook runs in hook context so its commands behave as a hook's, which
+	// also keeps the runner from reporting it; it is still a run of its own,
+	// since no hook's failure fails a run around it. One cancelled by its
+	// caller, such as an on_remove abandoned when the tag comes back, did not
+	// fail.
+	if err != nil && ctx.Err() == nil {
+		reportRunFailure(svc, &t, err, nil)
+	}
+	return err
 }
 
 // beforeExitHookTimeout bounds a before_exit script so a hook containing a
