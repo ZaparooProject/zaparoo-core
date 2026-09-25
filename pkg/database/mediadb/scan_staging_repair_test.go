@@ -260,6 +260,7 @@ func seedInTx(t *testing.T, sqlDB *sql.DB, seed func(tx *sql.Tx)) {
 	t.Helper()
 	tx, err := sqlDB.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
 	seed(tx)
 	require.NoError(t, tx.Commit())
 }
