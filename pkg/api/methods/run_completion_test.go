@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,8 +48,9 @@ const runTestTimeout = 2 * time.Second
 // queue so a test can receive the token run queued and complete it however
 // the case requires.
 type runTestEnv struct {
-	st    *state.State
-	queue chan tokens.Token
+	st      *state.State
+	queue   chan tokens.Token
+	notifCh <-chan models.Notification
 }
 
 func newRunTestEnv(t *testing.T) *runTestEnv {
@@ -68,7 +70,7 @@ func newRunTestEnv(t *testing.T) *runTestEnv {
 		}
 	})
 
-	return &runTestEnv{st: st, queue: make(chan tokens.Token)}
+	return &runTestEnv{st: st, queue: make(chan tokens.Token), notifCh: notifCh}
 }
 
 func (e *runTestEnv) requestEnv(ctx context.Context, text string) requests.RequestEnv {
@@ -77,6 +79,31 @@ func (e *runTestEnv) requestEnv(ctx context.Context, text string) requests.Reque
 		State:      e.st,
 		TokenQueue: e.queue,
 		Params:     []byte(fmt.Sprintf(`{"text":%q}`, text)),
+	}
+}
+
+// runFailed returns the next run.failed notification.
+func (e *runTestEnv) runFailed(t *testing.T) models.RunFailedParams {
+	t.Helper()
+	return nextRunFailed(t, e.notifCh)
+}
+
+func nextRunFailed(t *testing.T, ns <-chan models.Notification) models.RunFailedParams {
+	t.Helper()
+	deadline := time.After(runTestTimeout)
+	for {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationRunFailed {
+				continue
+			}
+			var params models.RunFailedParams
+			require.NoError(t, json.Unmarshal(n.Params, &params))
+			return params
+		case <-deadline:
+			t.Fatal("no run.failed notification")
+			return models.RunFailedParams{}
+		}
 	}
 }
 
@@ -167,6 +194,12 @@ func TestHandleRunRejectsOversizedScript(t *testing.T) {
 			t.Fatalf("run queued an over-long token: %d bytes", len(tok.Text))
 		default:
 		}
+		// Refused before the queue, but still a failed run: clients are told,
+		// without the oversized text.
+		failed := env.runFailed(t)
+		assert.Equal(t, tokens.SourceAPI, failed.Source)
+		assert.Equal(t, models.ErrorCategoryInvalidScript, failed.Category)
+		assert.Empty(t, failed.Script)
 	})
 
 	t.Run("bare string params", func(t *testing.T) {
@@ -183,6 +216,12 @@ func TestHandleRunRejectsOversizedScript(t *testing.T) {
 			t.Fatalf("run queued an over-long token: %d bytes", len(tok.Text))
 		default:
 		}
+		// Refused before the queue, but still a failed run: clients are told,
+		// without the oversized text.
+		failed := env.runFailed(t)
+		assert.Equal(t, tokens.SourceAPI, failed.Source)
+		assert.Equal(t, models.ErrorCategoryInvalidScript, failed.Category)
+		assert.Empty(t, failed.Script)
 	})
 }
 

@@ -111,12 +111,14 @@ func Classify(err error) (category, message string) {
 		// is safe and tells the caller which bound was exceeded.
 		return models.ErrorCategoryInvalidScript, err.Error()
 	case errors.Is(err, zapscript.ErrInvalidScript),
+		errors.Is(err, zapscript.ErrInvalidArguments),
 		errors.Is(err, zapscript.ErrUnknownCommand),
 		errors.Is(err, zapscript.ErrUnsupportedControlAction),
 		errors.Is(err, systemdefs.ErrUnknownSystem),
 		errors.Is(err, state.ErrInvalidNextAction):
 		return models.ErrorCategoryInvalidScript, "ZapScript is invalid"
 	case errors.Is(err, zapscript.ErrCommandBlocked),
+		errors.Is(err, zapscript.ErrCommandNotPermitted),
 		errors.Is(err, zapscript.ErrExecuteNotAllowed),
 		errors.Is(err, zapscript.ErrHTTPNotAllowed),
 		errors.Is(err, zapscript.ErrRemoteSource),

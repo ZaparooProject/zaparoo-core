@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/decks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	servicestate "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -206,6 +207,7 @@ func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 	}
 	if pls != nil {
 		pls.Slot = slot
+		pls.FromPlaylistItem = env.Source == tokens.SourcePlaylist
 		if slot == mediaslot.Primary && env.Playlist.HoldToken != nil {
 			holdToken := *env.Playlist.HoldToken
 			pls.HoldToken = &holdToken

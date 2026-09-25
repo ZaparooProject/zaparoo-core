@@ -164,3 +164,32 @@ func TestLauncherManager_LaunchGuardConcurrent(t *testing.T) {
 
 	assert.GreaterOrEqual(t, successCount.Load(), int32(1))
 }
+
+// A playlist launch reservation counts as a launch in progress until it ends,
+// but it is not the launch lock: the reserved item still takes the lock
+// itself when it launches.
+func TestLauncherManager_PlaylistLaunchReservation(t *testing.T) {
+	t.Parallel()
+
+	lm := NewLauncherManager()
+	require.True(t, lm.TryBeginPlaylistLaunch(false))
+	assert.True(t, lm.Launching(), "a queued playlist launch is a launch in progress")
+	assert.False(t, lm.LockHeld(), "reserving is not taking the lock")
+	require.NoError(t, lm.TryStartLaunch(), "the reserved item can still take the lock")
+	lm.EndLaunch()
+
+	assert.False(t, lm.TryBeginPlaylistLaunch(false), "a second playlist launch waits for the first")
+	assert.True(t, lm.TryBeginPlaylistLaunch(true), "the item's own nested launch is part of it")
+	lm.EndPlaylistLaunch()
+	lm.EndPlaylistLaunch()
+	assert.False(t, lm.Launching())
+
+	require.NoError(t, lm.TryStartLaunch())
+	assert.False(t, lm.TryBeginPlaylistLaunch(false), "no playlist launch while the lock is held")
+	assert.False(t, lm.TryBeginPlaylistLaunch(true), "nor a nested one")
+	lm.EndLaunch()
+
+	lm.EndPlaylistLaunch()
+	assert.False(t, lm.Launching(), "an extra end never goes negative")
+	assert.True(t, lm.TryBeginPlaylistLaunch(false))
+}

@@ -396,7 +396,9 @@ nothing, and neither does a run cut short by the service shutting down.
 
 When a playlist item fails, the playlist is paused on that item unless another launch
 was already in progress or the item started its media before failing. Playing the
-playlist again retries the item, and next, previous or goto move on and play.
+playlist again retries the item, and next, previous or goto move on and play. A playlist
+command that would start a launch while another launch is still in progress is refused
+as `busy` and leaves the playlist where it is.
 
 #### Response
 

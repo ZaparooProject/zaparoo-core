@@ -99,7 +99,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		// below.
 		if params.Text != nil {
 			if lenErr := zapscript.ValidateScriptLength(*params.Text); lenErr != nil {
-				return nil, scriptTooLongErr(lenErr)
+				return nil, rejectOversizedRun(env.State, lenErr)
 			}
 		}
 
@@ -149,7 +149,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		}
 
 		if lenErr := zapscript.ValidateScriptLength(text); lenErr != nil {
-			return nil, scriptTooLongErr(lenErr)
+			return nil, rejectOversizedRun(env.State, lenErr)
 		}
 
 		t.Text = norm.NFC.String(text)
@@ -219,6 +219,23 @@ func runContextError(env *requests.RequestEnv, ctxErr error) error {
 	}
 }
 
+// notifyOversizedRun reports a run request refused for its length. It never
+// reached the queue, so nothing downstream reports it, and the script itself
+// is left out: redacting it would mean parsing it.
+func notifyOversizedRun(st *state.State, err error) {
+	if st == nil {
+		return
+	}
+	runfailure.Notify(st.Notifications, &tokens.Token{Source: tokens.SourceAPI}, err, nil)
+}
+
+// rejectOversizedRun reports the refused run and returns the error the
+// caller gets.
+func rejectOversizedRun(st *state.State, err error) error {
+	notifyOversizedRun(st, err)
+	return scriptTooLongErr(err)
+}
+
 // scriptTooLongErr categorizes the length rejection as an invalid script.
 // Every other reason a script will not run reports that category, and reusing
 // it means a client already branching on the category handles this without a
@@ -270,6 +287,7 @@ func HandleRunRest(
 		// IsRunAllowed parses the text, so bound it first.
 		if err := zapscript.ValidateScriptLength(text); err != nil {
 			log.Warn().Err(err).Msg("rejecting over-long REST run request")
+			notifyOversizedRun(st, err)
 			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			return
 		}

@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -572,6 +573,9 @@ func TestPausesAfterFailedItem(t *testing.T) {
 	game := func(name string) *models.ActiveMedia {
 		return models.NewActiveMedia("NES", "NES", "/games/"+name+".nes", name, "nes")
 	}
+	track := func(name string) *models.ActiveMedia {
+		return models.NewActiveMedia("Audio", "Audio", "/music/"+name+".mp3", name, platforms.NativeAudioLauncherID)
+	}
 	notFound := zapscript.ErrFileNotFound
 
 	tests := []struct {
@@ -603,7 +607,22 @@ func TestPausesAfterFailedItem(t *testing.T) {
 			during: func(s *state.State) { s.SetActiveMedia(nil) },
 		},
 		{name: "busy refusal", pls: primary, err: state.ErrLaunchInProgress, want: false},
-		{name: "background item", pls: background, err: notFound, want: true},
+		{name: "background item that started nothing", pls: background, err: notFound, want: true},
+		{
+			name: "background item whose earlier track still plays", pls: background, err: notFound, want: true,
+			before: func(s *state.State) { s.SetBackgroundMedia(track("earlier")) },
+		},
+		{
+			name: "background item started its track, a later command failed", pls: background, err: notFound,
+			want:   false,
+			during: func(s *state.State) { s.SetBackgroundMedia(track("new")) },
+		},
+		{
+			name: "background item replaced the playing track, a later command failed", pls: background,
+			err: notFound, want: false,
+			before: func(s *state.State) { s.SetBackgroundMedia(track("earlier")) },
+			during: func(s *state.State) { s.SetBackgroundMedia(track("new")) },
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -613,10 +632,11 @@ func TestPausesAfterFailedItem(t *testing.T) {
 				tt.before(env.svc.State)
 			}
 			gen, had := env.svc.State.ActiveMediaReadyGeneration()
+			backgroundBefore := env.svc.State.BackgroundMedia()
 			if tt.during != nil {
 				tt.during(env.svc.State)
 			}
-			assert.Equal(t, tt.want, pausesAfterFailedItem(env.svc, tt.pls, tt.err, gen, had))
+			assert.Equal(t, tt.want, pausesAfterFailedItem(env.svc, tt.pls, tt.err, gen, had, backgroundBefore))
 		})
 	}
 }
@@ -685,4 +705,90 @@ func TestHandlePlaylist_PlayAfterFailureRetriesInsteadOfResumingOldTrack(t *test
 	failed := env.runFailed(t)
 	require.NotNil(t, failed.PlaylistIndex)
 	assert.Equal(t, 1, *failed.PlaylistIndex, "the failed item was retried")
+}
+
+// While another playlist launch is pending, an update that would launch is
+// refused by the queue worker and not installed, so the playlist cannot move
+// to an item whose launch the guard would then refuse. The command normally
+// refuses it first; this is the check that cannot race.
+func TestHandlePlaylist_RefusesLaunchingUpdateWhileLaunchPending(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	lm := env.svc.State.LauncherManager()
+	require.True(t, lm.TryBeginPlaylistLaunch(false), "another item's launch is pending")
+	t.Cleanup(lm.EndPlaylistLaunch)
+
+	stored := failingPlaylist("deck://abc", 0)
+	env.svc.State.SetActivePlaylist(stored)
+
+	handlePlaylist(env.svc, playlists.Next(*stored), env.player)
+	env.svc.BackgroundWG.Wait()
+
+	assert.Same(t, stored, env.svc.State.GetActivePlaylist(), "the refused update is not installed")
+	env.expectNoRunFailed(t)
+	env.userDB.AssertNotCalled(t, "AddHistory", mock.Anything)
+}
+
+// An update that launches nothing is not a competing launch.
+func TestHandlePlaylist_PauseGoesThroughWhileLaunchPending(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	lm := env.svc.State.LauncherManager()
+	require.True(t, lm.TryBeginPlaylistLaunch(false))
+	t.Cleanup(lm.EndPlaylistLaunch)
+
+	stored := failingPlaylist("deck://abc", 0)
+	env.svc.State.SetActivePlaylist(stored)
+
+	handlePlaylist(env.svc, playlists.Pause(*stored), env.player)
+
+	assert.False(t, env.svc.State.GetActivePlaylist().Playing)
+}
+
+// The reservation lasts exactly as long as the item's run: once it returns,
+// the next playlist move can launch.
+func TestHandlePlaylist_ReleasesReservationWhenItemFinishes(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
+
+	handlePlaylist(env.svc, failingPlaylist("deck://abc", 0), env.player)
+	env.svc.BackgroundWG.Wait()
+
+	assert.False(t, env.svc.State.LauncherManager().Launching())
+	first := env.runFailed(t)
+	require.NotNil(t, first.PlaylistIndex)
+	assert.Equal(t, 0, *first.PlaylistIndex)
+}
+
+// A playlist item may itself open and play another playlist, as a card with
+// several scripts does. That update comes from the item's own run, so the
+// item's own reservation must not refuse it.
+func TestLaunchPlaylistMedia_NestedPlaylistIsNotRefusedByItsOwnLaunch(t *testing.T) {
+	t.Parallel()
+	env := setupRunFailedEnv(t)
+	env.player.On("PlayBytes", mock.Anything).Return(nil).Maybe()
+	lm := env.svc.State.LauncherManager()
+	require.True(t, lm.TryBeginPlaylistLaunch(false), "the outer item's reservation")
+	t.Cleanup(lm.EndPlaylistLaunch)
+
+	nested := `**playlist.play:{"id":"inner","name":"Inner","items":[{"name":"A","zapscript":"**nonexistent.inner"}]}`
+	outer := playlists.NewPlaylist("outer", "Outer", []playlists.PlaylistItem{{ZapScript: nested}})
+	outer.Playing = true
+	env.svc.State.SetActivePlaylist(outer)
+
+	launchPlaylistMedia(env.svc, outer, env.player)
+	var update *playlists.Playlist
+	select {
+	case update = <-env.svc.PlaylistQueue:
+	case <-time.After(runFailedTimeout):
+		t.Fatal("the nested play was refused before it reached the queue")
+	}
+	require.True(t, update.FromPlaylistItem)
+	handlePlaylist(env.svc, update, env.player)
+	env.svc.BackgroundWG.Wait()
+
+	assert.Equal(t, "inner", env.svc.State.GetActivePlaylist().ID, "the nested playlist took the slot")
+	failed := env.runFailed(t)
+	assert.Equal(t, "inner", failed.PlaylistID, "and its item was launched")
 }

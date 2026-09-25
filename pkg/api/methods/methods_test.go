@@ -193,7 +193,7 @@ func TestHandleRunRestRejectsOversizedScript(t *testing.T) {
 
 	platform := mocks.NewMockPlatform()
 	platform.SetupBasicMock()
-	st, _ := state.NewState(platform, "test-boot-uuid")
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
 	t.Cleanup(st.StopService)
 
 	tokenQueue := make(chan tokens.Token, 1)
@@ -215,6 +215,9 @@ func TestHandleRunRestRejectsOversizedScript(t *testing.T) {
 		t.Fatalf("REST run handler queued an over-long token: %d bytes", len(token.Text))
 	default:
 	}
+	failed := nextRunFailed(t, notifCh)
+	assert.Equal(t, models.ErrorCategoryInvalidScript, failed.Category)
+	assert.Empty(t, failed.Script)
 }
 
 func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {

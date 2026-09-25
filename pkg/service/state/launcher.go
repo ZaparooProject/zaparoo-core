@@ -58,6 +58,11 @@ type LauncherManager struct {
 
 	launchMu  syncutil.Mutex
 	launching bool
+	// pendingPlaylistLaunches counts playlist items whose launch has been
+	// queued but not finished. An item takes the launch lock only once it
+	// has resolved its media, which can take seconds, so the count is what
+	// stops a second playlist move from slipping into that gap.
+	pendingPlaylistLaunches int
 }
 
 func NewLauncherManager() *LauncherManager {
@@ -106,11 +111,46 @@ func (lm *LauncherManager) TryStartLaunch() error {
 	return nil
 }
 
-// Launching reports whether a launch holds the launch lock right now.
+// Launching reports whether a launch holds the launch lock or a playlist item
+// has a launch queued that has not finished.
 func (lm *LauncherManager) Launching() bool {
 	lm.launchMu.Lock()
 	defer lm.launchMu.Unlock()
+	return lm.launching || lm.pendingPlaylistLaunches > 0
+}
+
+// LockHeld reports whether a launch holds the launch lock right now, leaving
+// out queued playlist launches. A playlist item's own commands use it, since
+// the pending launch they would otherwise see is their own.
+func (lm *LauncherManager) LockHeld() bool {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
 	return lm.launching
+}
+
+// TryBeginPlaylistLaunch reserves a playlist item launch, refusing while
+// another launch holds the lock or another playlist launch is pending. The
+// check and the reservation are one step. A launch requested from inside a
+// playlist item's own run is part of that item's launch, so it ignores the
+// pending count. Every successful call must be paired with
+// EndPlaylistLaunch.
+func (lm *LauncherManager) TryBeginPlaylistLaunch(fromPlaylistItem bool) bool {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
+	if lm.launching || (!fromPlaylistItem && lm.pendingPlaylistLaunches > 0) {
+		return false
+	}
+	lm.pendingPlaylistLaunches++
+	return true
+}
+
+// EndPlaylistLaunch releases a reservation taken by TryBeginPlaylistLaunch.
+func (lm *LauncherManager) EndPlaylistLaunch() {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
+	if lm.pendingPlaylistLaunches > 0 {
+		lm.pendingPlaylistLaunches--
+	}
 }
 
 // EndLaunch releases the launch lock.

@@ -62,6 +62,10 @@ type Playlist struct {
 	// ForceRelaunch bypasses playlistNeedsUpdate dedup so the same track can be
 	// relaunched for LoopOne and single-item Loop.
 	ForceRelaunch bool
+	// FromPlaylistItem marks an update requested by a playlist item's own
+	// run, such as a card that plays another playlist. It is part of that
+	// item's launch rather than a second one competing with it.
+	FromPlaylistItem bool `json:"-"`
 	// Refresh replaces the items and name of the active playlist with the
 	// same ID in place, keeping its position and playback state and never
 	// launching anything. It is ignored when no such playlist is active.
@@ -90,14 +94,16 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 // transition copies a playlist for a move to a new position or playback
 // state. Every field carries across, so one added later — Unsafe above, which
 // decides whether items run with input and program rights — cannot be dropped
-// by a copy that forgot to list it. Clear, ForceRelaunch and Refresh are the
-// exception: they describe the single update that delivered them to the queue
-// handler, not the playlist, so they never outlive it.
+// by a copy that forgot to list it. Clear, ForceRelaunch, Refresh and
+// FromPlaylistItem are the exception: they describe the single update that
+// delivered them to the queue handler, not the playlist, so they never
+// outlive it.
 func transition(p *Playlist) *Playlist {
 	out := *p
 	out.Clear = false
 	out.ForceRelaunch = false
 	out.Refresh = false
+	out.FromPlaylistItem = false
 	return &out
 }
 

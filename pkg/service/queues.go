@@ -703,6 +703,7 @@ func launchPlaylistMedia(
 	}
 
 	mediaGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
+	backgroundBefore := svc.State.BackgroundMedia()
 	err := runTokenZapScript(svc, t, plsc, nil, false)
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior silent-no-op
@@ -720,7 +721,7 @@ func launchPlaylistMedia(
 		// The playlist was stored as playing before this item was tried.
 		// Nothing is playing, so leave it paused: clients read the truth,
 		// playing it again retries this item, and next still moves on.
-		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia) &&
+		if pausesAfterFailedItem(svc, pls, err, mediaGen, hadMedia, backgroundBefore) &&
 			svc.State.PausePlaylistIfCurrent(pls.Slot, pls) {
 			log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
 				Msg("playlist item failed to launch, playlist paused")
@@ -761,6 +762,21 @@ func launchPlaylistMedia(
 	}
 }
 
+// reservePlaylistLaunch reserves the launch an update is about to start, and
+// refuses the update when another launch is already under way. A refused
+// update is not installed: the playlist would otherwise move to an item whose
+// launch the guard then refuses, and claim it while the earlier media plays.
+// The command that queued it normally refused it already; this is the one
+// place the check and the reservation cannot race another launch.
+func reservePlaylistLaunch(svc *ServiceContext, pls *playlists.Playlist) bool {
+	if svc.State.LauncherManager().TryBeginPlaylistLaunch(pls.FromPlaylistItem) {
+		return true
+	}
+	log.Info().Str("playlist", pls.ID).Int("index", pls.Index).
+		Msg("another launch is in progress, playlist update refused")
+	return false
+}
+
 // pausesAfterFailedItem reports whether a playlist item that ended in err left
 // nothing playing, so the playlist should be paused. A busy refusal means
 // another launch, often of this same item, is still in flight and owns the
@@ -768,13 +784,20 @@ func launchPlaylistMedia(
 // did launch: pausing would leave the playlist paused over its own game, and
 // playing it again would relaunch what is already running.
 func pausesAfterFailedItem(
-	svc *ServiceContext, pls *playlists.Playlist, err error, mediaGen uint64, hadMedia bool,
+	svc *ServiceContext, pls *playlists.Playlist, err error,
+	mediaGen uint64, hadMedia bool, backgroundBefore *models.ActiveMedia,
 ) bool {
 	if category, _ := runfailure.Classify(err); category == models.ErrorCategoryBusy {
 		return false
 	}
 	if pls.Slot == mediaslot.Background {
-		return true
+		// Each background start publishes new media, so a value that is
+		// still active and not the one from before the item ran is audio the
+		// item started. A relaunch of the very track already playing keeps
+		// the stored value and so still pauses; that needs an item that
+		// restarts its own track and then fails a later command.
+		after := svc.State.BackgroundMedia()
+		return after == nil || after == backgroundBefore
 	}
 	gen, hasMedia := svc.State.ActiveMediaReadyGeneration()
 	return !hasMedia || (hadMedia && gen == mediaGen)
@@ -859,6 +882,9 @@ func handlePlaylist(
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
+		if pls.Playing && !reservePlaylistLaunch(svc, pls) {
+			return
+		}
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
@@ -879,6 +905,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
+				defer svc.State.LauncherManager().EndPlaylistLaunch()
 				launchPlaylistMedia(svc, pls, player)
 			}()
 		} else {
@@ -909,6 +936,15 @@ func handlePlaylist(
 			return
 		}
 
+		// A playlist paused by a failed launch never loaded its current item,
+		// so whatever the playback manager holds is an earlier track; playing
+		// it again retries the item instead.
+		resumesPlayback := pls.Playing && !activePlaylist.Playing && !activePlaylist.PausedByFailure &&
+			pls.Current() == activePlaylist.Current() &&
+			svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != ""
+		if pls.Playing && !resumesPlayback && !reservePlaylistLaunch(svc, pls) {
+			return
+		}
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
@@ -918,12 +954,7 @@ func handlePlaylist(
 			svc.State.SetActivePlaylist(pls)
 		}
 		if pls.Playing {
-			// A playlist paused by a failed launch never loaded its current
-			// item, so whatever the playback manager holds is an earlier
-			// track; playing it again retries the item instead.
-			if !activePlaylist.Playing && !activePlaylist.PausedByFailure &&
-				pls.Current() == activePlaylist.Current() &&
-				svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {
+			if resumesPlayback {
 				log.Info().Any("pls", playlistForLog(pls)).Str("slot", slot).Msg("resuming playlist playback")
 				if slot == mediaslot.Background {
 					svc.State.SetBackgroundAutoPaused(false)
@@ -944,6 +975,7 @@ func handlePlaylist(
 				if svc.BackgroundWG != nil {
 					defer svc.BackgroundWG.Done()
 				}
+				defer svc.State.LauncherManager().EndPlaylistLaunch()
 				launchPlaylistMedia(svc, pls, player)
 			}()
 		} else {

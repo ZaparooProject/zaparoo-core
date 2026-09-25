@@ -66,6 +66,14 @@ func TestClassify(t *testing.T) {
 				zapscript.MaxScriptLength+1, zapscript.MaxScriptLength),
 		},
 		{name: "unknown command", err: zapscript.ErrUnknownCommand, category: models.ErrorCategoryInvalidScript},
+		{
+			name: "invalid advanced arguments", category: models.ErrorCategoryInvalidScript,
+			err: fmt.Errorf("%w: slot", zapscript.ErrInvalidArguments),
+		},
+		{
+			name: "command outside the token's bound", category: models.ErrorCategoryBlocked,
+			err: fmt.Errorf("%w: execute", zapscript.ErrCommandNotPermitted),
+		},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, category: models.ErrorCategoryInvalidScript},
 		{name: "blocked", err: zapscript.ErrCommandBlocked, category: models.ErrorCategoryBlocked},
 		{name: "requires profile", err: state.ErrLaunchRequiresProfile, category: models.ErrorCategoryBlocked},
