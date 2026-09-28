@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -643,7 +644,10 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 
 	pauser := syncutil.NewPauser()
 	pauser.Pause()
-	var scraperSawPaused bool
+	// The scraper's own Scrape function now runs on the background goroutine
+	// media.scrape starts once the job is admitted, so this is read only after
+	// synchronizing on the initial "scraping" notification below.
+	var scraperSawPaused atomic.Bool
 	testScraper := platforms.Scraper{
 		ID:   "test-scraper",
 		Name: "Test Scraper",
@@ -652,7 +656,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
-			scraperSawPaused = opts.Pauser != nil && opts.Pauser.IsPaused()
+			scraperSawPaused.Store(opts.Pauser != nil && opts.Pauser.IsPaused())
 			go func() {
 				ch <- scraper.ScrapeUpdate{Done: true}
 				close(ch)
@@ -681,7 +685,6 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, result)
-	assert.False(t, scraperSawPaused)
 	assert.False(t, pauser.IsPaused())
 
 	var gotStart bool
@@ -696,6 +699,10 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 			require.NoError(t, json.Unmarshal(n.Params, &payload))
 			if payload.Scraping && !payload.Done {
 				assert.False(t, payload.Paused)
+				// The initial notification is published after the scraper's own
+				// Scrape function has already run on the background goroutine, so
+				// scraperSawPaused is safe to read from here on.
+				assert.False(t, scraperSawPaused.Load())
 				gotStart = true
 			}
 		case <-timeout:
