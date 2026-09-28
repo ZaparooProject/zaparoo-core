@@ -32,7 +32,6 @@ package mediascanner
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -49,34 +48,6 @@ import (
 // maxSourceWalkDepth bounds how far below a system folder a source walk goes,
 // matching the limit on multi-segment virtual paths.
 const maxSourceWalkDepth = 64
-
-var errNotSourcePath = errors.New("not a source root path")
-
-// isSourcePath reports whether path is in a source root.
-func isSourcePath(path string) bool {
-	prefix := platforms.SourceScheme + "://"
-	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
-}
-
-// sourceLocation splits a source root or a path below one into the root's ID
-// and the decoded segments below it.
-func sourceLocation(path string) (id string, segments []string, err error) {
-	if !isSourcePath(path) {
-		return "", nil, errNotSourcePath
-	}
-	rest := path[len(platforms.SourceScheme)+3:]
-	if !strings.Contains(rest, "/") {
-		if rest == "" {
-			return "", nil, errNotSourcePath
-		}
-		return rest, nil, nil
-	}
-	parsed, err := virtualpath.ParseVirtualPathSegments(path)
-	if err != nil {
-		return "", nil, fmt.Errorf("parse source path %s: %w", path, err)
-	}
-	return parsed.ID, parsed.Segments, nil
-}
 
 // sourcePath builds the canonical path of segments below the source root id.
 func sourcePath(id string, segments []string) (string, error) {
@@ -178,7 +149,7 @@ func getSourceSystemPaths(
 	var matches []PathResult
 	seen := make(map[string]bool)
 	for _, root := range roots {
-		id, segments, err := sourceLocation(root)
+		id, segments, err := platforms.SourceLocation(root)
 		if err != nil || len(segments) > 0 {
 			log.Warn().Str("root", root).Msg("skipping malformed source root")
 			continue
@@ -233,9 +204,9 @@ func getSourceFiles(
 	path string,
 	pauser *syncutil.Pauser,
 ) ([]string, error) {
-	id, base, err := sourceLocation(path)
+	id, base, err := platforms.SourceLocation(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("walk source folder: %w", err)
 	}
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
 
