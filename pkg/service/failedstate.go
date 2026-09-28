@@ -165,14 +165,21 @@ func (f *startupFailureError) enter() (*StartResult, error) {
 		log.Info().Msg("failed state stopped")
 	}()
 
-	return &StartResult{
-		Stop: func() error {
-			f.state.StopService()
-			<-done
+	stopContext := func(ctx context.Context) error {
+		f.state.StopService()
+		select {
+		case <-done:
 			return nil
-		},
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return &StartResult{
+		Stop:             func() error { return stopContext(context.Background()) },
+		StopContext:      stopContext,
 		Done:             done,
 		RestartRequested: func() bool { return false },
+		Err:              func() error { return nil },
 	}, nil
 }
 
