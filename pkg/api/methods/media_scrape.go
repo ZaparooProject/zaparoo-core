@@ -837,7 +837,7 @@ func startMediaScrapeOperation(
 			if checkpointScrapingWAL(db.MediaDB, scraperID) {
 				// Wake the corruption-recovery watcher, which only observes media-indexing
 				// notifications. Scraping status is already terminal here, so recovery won't defer.
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{Exists: true, Indexing: false})
+				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{Exists: true, Indexing: false})
 				return
 			}
 			log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")

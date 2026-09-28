@@ -26,12 +26,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
@@ -100,6 +102,19 @@ type scraperImpl struct {
 	langs     []string
 }
 
+// cleanupBatchSize bounds how many rows' properties a forced run's cleanup
+// holds at once.
+const cleanupBatchSize = 500
+
+// runTotals accumulates the counters of every finished step.
+type runTotals struct {
+	processed, matched, skipped int
+}
+
+func (t runTotals) done() scraper.ScrapeUpdate {
+	return scraper.ScrapeUpdate{Done: true, Processed: t.processed, Matched: t.matched, Skipped: t.skipped}
+}
+
 func (s *scraperImpl) scrapeLoop(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
@@ -114,204 +129,445 @@ func (s *scraperImpl) scrapeLoop(
 	if opts.Scope != nil {
 		steps = opts.SystemIDs()
 	}
-	totalProcessed, totalMatched, totalSkipped := 0, 0, 0
-	for step, targetID := range steps {
-		if err := waitForScrape(ctx, opts); err != nil {
-			ch <- scraper.ScrapeUpdate{
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-			}
+	var totals runTotals
+	for step := range steps {
+		if !s.scrapeStep(ctx, opts, steps, step, &totals, ch) {
 			return
 		}
-		var selection scraper.ScopedSelection
-		var titles []database.TitleWithSystem
-		var media []database.MediaWithFullPath
-		var err error
-		if opts.Scope != nil {
-			selection, err = scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
-			media, titles = selection.Pending()
-		} else {
-			titles, err = s.db.GetTitlesBySystemID(targetID)
+	}
+	final := totals.done()
+	final.TotalSteps, final.CurrentStep = len(steps), len(steps)
+	ch <- final
+}
+
+// stepSources is what one step loaded from the installed packs.
+type stepSources struct {
+	err          error
+	records      []sourceRecords
+	cleanupRoots []string
+	arcade       bool
+}
+
+// loadStepSources reads every pack serving targetID. It returns false when
+// the scrape was stopped while loading.
+func (s *scraperImpl) loadStepSources(
+	ctx context.Context, opts scraper.ScrapeOptions, targetID string,
+) (stepSources, bool) {
+	var result stepSources
+	successfulRoots := make(map[string]struct{})
+	for _, sourceID := range sourceIDsForTarget(targetID) {
+		for _, source := range s.sources[sourceID] {
+			if err := waitForScrape(ctx, opts); err != nil {
+				return result, false
+			}
+			loaded, loadErr := loadSourceRecords(ctx, s.fs, source, s.langs)
+			if loadErr != nil {
+				result.err = errors.Join(
+					result.err,
+					fmt.Errorf("misterdocs: load %q: %w", source.Path, loadErr),
+				)
+				continue
+			}
+			result.records = append(result.records, loaded)
+			if source.Kind == sourceArtwork && sourceID == systemdefs.SystemArcade {
+				result.arcade = true
+			}
+			if root := s.docsRootForSource(source.Path); root != "" {
+				successfulRoots[root] = struct{}{}
+			}
 		}
+	}
+	result.cleanupRoots = make([]string, 0, len(successfulRoots))
+	for _, root := range s.docsRoots {
+		if _, ok := successfulRoots[root]; ok {
+			result.cleanupRoots = append(result.cleanupRoots, root)
+		}
+	}
+	return result, true
+}
+
+// scrapeStep scrapes one target system. It returns false when the run has
+// ended, having already sent the final update.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen // one step's load, match, cleanup and write sequence
+func (s *scraperImpl) scrapeStep(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	steps []string,
+	step int,
+	totals *runTotals,
+	ch chan<- scraper.ScrapeUpdate,
+) bool {
+	targetID := steps[step]
+	if err := waitForScrape(ctx, opts); err != nil {
+		ch <- totals.done()
+		return false
+	}
+	loadedData := false
+	defer func() {
+		// Hand the step's working set back to the OS before the next one, so
+		// a run's peak is one system rather than the sum of them.
+		if loadedData {
+			debug.FreeOSMemory()
+		}
+	}()
+
+	var selection scraper.ScopedSelection
+	var titles []database.TitleWithSystem
+	var media []database.MediaWithFullPath
+	if opts.Scope != nil {
+		var err error
+		selection, err = scraper.LoadScopedSelection(ctx, s.db, opts, scraperID)
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{
 				FatalErr: fmt.Errorf("misterdocs: load titles for %s: %w", targetID, err), Done: true,
 			}
-			return
+			return false
 		}
-		if opts.Scope == nil {
-			media, err = s.db.GetMediaBySystemID(targetID)
-		}
-		if err != nil {
-			ch <- scraper.ScrapeUpdate{
-				FatalErr: fmt.Errorf("misterdocs: load media for %s: %w", targetID, err), Done: true,
-			}
-			return
-		}
-
-		if opts.Scope != nil && len(media) == 0 {
+		loadedData = true
+		media, titles = selection.Pending()
+		if len(media) == 0 {
 			scraper.ApplyScopedTargets(ctx, s.db, opts, selection, nil, ch)
-			return
+			return false
 		}
+	}
 
-		stepStart := time.Now()
-		report := func(processed, total, matched, skipped int) {
-			if opts.Scope != nil {
-				processed, total, matched, skipped = 0, len(selection.Media), 0, 0
-			}
-			select {
-			case ch <- scraper.ScrapeUpdate{
-				SystemID: targetID, Processed: processed, Total: total, Matched: matched, Skipped: skipped,
-				TotalSteps: len(steps), CurrentStep: step + 1,
-			}:
-			case <-ctx.Done():
-			}
-		}
-
-		var records []sourceRecords
-		var sourceError error
-		arcadeSource := false
-		successfulRoots := make(map[string]struct{})
-		for _, sourceID := range sourceIDsForTarget(targetID) {
-			for _, source := range s.sources[sourceID] {
-				if err := waitForScrape(ctx, opts); err != nil {
-					ch <- scraper.ScrapeUpdate{
-						Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-					}
-					return
-				}
-				loaded, loadErr := loadSourceRecords(ctx, s.fs, source, s.langs)
-				if loadErr != nil {
-					sourceError = errors.Join(
-						sourceError,
-						fmt.Errorf("misterdocs: load %q: %w", source.Path, loadErr),
-					)
-					continue
-				}
-				records = append(records, loaded)
-				if source.Kind == sourceArtwork && sourceID == systemdefs.SystemArcade {
-					arcadeSource = true
-				}
-				if root := s.docsRootForSource(source.Path); root != "" {
-					successfulRoots[root] = struct{}{}
-				}
-			}
-		}
-
-		loadDuration := time.Since(stepStart)
-		totalRecords := 0
-		for i := range records {
-			totalRecords += len(records[i].Artwork) + len(records[i].Manuals) + records[i].RowErrors
-		}
-		// A large pack takes minutes to match and write, so tell the API how
-		// big the step is before any of that starts.
-		if totalRecords > 0 {
-			report(0, totalRecords, 0, 0)
-		}
-
-		cleanupRoots := make([]string, 0, len(successfulRoots))
-		for _, root := range s.docsRoots {
-			if _, ok := successfulRoots[root]; ok {
-				cleanupRoots = append(cleanupRoots, root)
-			}
-		}
-		scanStart := time.Now()
-		idx := newSystemIndex(titles, media)
-		if arcadeSource {
-			if err := s.indexArcadeSetNames(ctx, opts, &idx, media); err != nil {
-				ch <- scraper.ScrapeUpdate{
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-				}
-				return
-			}
-		}
-		scanDuration := time.Since(scanStart)
-		matchStart := time.Now()
-		matched := buildPendingWrites(idx, records, opts.RunID, &s.unmapped)
-		writeTargets, stats := matched.Targets, matched.Stats
-		matchDuration := time.Since(matchStart)
-		cleanupStart := time.Now()
-		if opts.Force && sourceError == nil && len(cleanupRoots) > 0 {
-			if _, cleanupErr := s.deleteStaleProperties(
-				ctx, opts, media, titles, matched.Found, cleanupRoots,
-			); cleanupErr != nil {
-				sourceError = cleanupErr
-			}
-		}
-		cleanupDuration := time.Since(cleanupStart)
+	stepStart := time.Now()
+	report := func(processed, total, matched, skipped int) {
 		if opts.Scope != nil {
-			if sourceError != nil {
-				ch <- scraper.ScrapeUpdate{FatalErr: sourceError, Done: true}
-				return
-			}
-			scraper.ApplyScopedTargets(ctx, s.db, opts, selection, writeTargets, ch)
-			return
+			processed, total, matched, skipped = 0, len(selection.Media), 0, 0
 		}
+		select {
+		case ch <- scraper.ScrapeUpdate{
+			SystemID: targetID, Processed: processed, Total: total, Matched: matched, Skipped: skipped,
+			TotalSteps: len(steps), CurrentStep: step + 1,
+		}:
+		case <-ctx.Done():
+		}
+	}
 
-		// Skipped records are finished once matching is; matched ones finish
-		// as their rows commit, so progress advances with each write batch.
-		if len(writeTargets) > 0 && stats.Skipped > 0 {
-			report(stats.Skipped, stats.Processed, 0, stats.Skipped)
+	sources, ok := s.loadStepSources(ctx, opts, targetID)
+	if !ok {
+		ch <- totals.done()
+		return false
+	}
+	records := sources.records
+	sourceError := sources.err
+	loadDuration := time.Since(stepStart)
+	totalRecords := 0
+	for i := range records {
+		totalRecords += len(records[i].Artwork) + len(records[i].Manuals) + records[i].RowErrors
+	}
+	// A large pack takes minutes to match and write, so tell the API how
+	// big the step is before any of that starts.
+	if totalRecords > 0 {
+		report(0, totalRecords, 0, 0)
+	}
+
+	cleanup := opts.Force && sourceError == nil && len(sources.cleanupRoots) > 0
+	keys := newMatchKeys(records)
+	scanStart := time.Now()
+	var load systemLoad
+	var loadErr error
+	switch {
+	case opts.Scope != nil:
+		load, loadErr = s.scopedSystemLoad(ctx, opts, titles, media, keys, sources.arcade, cleanup)
+	case keys.any || cleanup:
+		loadedData = true
+		load, loadErr = s.loadSystem(ctx, opts, targetID, keys, sources.arcade, cleanup)
+	default:
+		// No record can match anything and nothing needs cleaning, so the
+		// system's rows are never read.
+		load.idx = newSystemIndex(nil, nil)
+	}
+	if loadErr != nil {
+		if ctx.Err() != nil {
+			ch <- totals.done()
+		} else {
+			ch <- scraper.ScrapeUpdate{FatalErr: loadErr, Done: true}
 		}
-		writeStart := time.Now()
-		matchedWritten := 0
-		stepError := sourceError
-		if err := s.applyTargets(ctx, opts, writeTargets, func(from, to int) {
-			for i := from; i < to; i++ {
-				matchedWritten += matched.RecordsPerTarget[i]
-			}
-			if to < len(writeTargets) {
-				report(stats.Skipped+matchedWritten, stats.Processed, matchedWritten, stats.Skipped)
-			}
-		}); err != nil {
-			stepError = errors.Join(stepError, err)
-			stats.Skipped++
-		}
-		writeDuration := time.Since(writeStart)
-		log.Debug().
-			Str("system", targetID).
-			Int("records", stats.Processed).
-			Int("matched", stats.Matched).
-			Int("skipped", stats.Skipped).
-			Int("targets", len(writeTargets)).
-			Dur("load", loadDuration).
-			Dur("scan", scanDuration).
-			Dur("match", matchDuration).
-			Dur("cleanup", cleanupDuration).
-			Dur("write", writeDuration).
-			Dur("total", time.Since(stepStart)).
-			Msg("misterdocs: step complete")
-		totalProcessed += stats.Processed
-		totalMatched += stats.Matched
-		totalSkipped += stats.Skipped
-		ch <- scraper.ScrapeUpdate{
-			Err: stepError, SystemID: targetID, Processed: stats.Processed, Total: stats.Processed,
-			Matched: stats.Matched, Skipped: stats.Skipped, TotalSteps: len(steps), CurrentStep: step + 1,
+		return false
+	}
+	scanDuration := time.Since(scanStart)
+	matchStart := time.Now()
+	matched := buildPendingWrites(load.idx, records, opts.RunID, &s.unmapped)
+	load.idx = systemIndex{}
+	writeTargets, stats := matched.Targets, matched.Stats
+	matchDuration := time.Since(matchStart)
+	cleanupStart := time.Now()
+	if cleanup {
+		if _, cleanupErr := s.deleteStaleProperties(
+			ctx, opts, load.mediaIDs, load.titleIDs, matched.Found, sources.cleanupRoots,
+		); cleanupErr != nil {
+			sourceError = cleanupErr
 		}
 	}
+	cleanupDuration := time.Since(cleanupStart)
+	if opts.Scope != nil {
+		if sourceError != nil {
+			ch <- scraper.ScrapeUpdate{FatalErr: sourceError, Done: true}
+			return false
+		}
+		scraper.ApplyScopedTargets(ctx, s.db, opts, selection, writeTargets, ch)
+		return false
+	}
+
+	// Skipped records are finished once matching is; matched ones finish
+	// as their rows commit, so progress advances with each write batch.
+	if len(writeTargets) > 0 && stats.Skipped > 0 {
+		report(stats.Skipped, stats.Processed, 0, stats.Skipped)
+	}
+	writeStart := time.Now()
+	matchedWritten := 0
+	stepError := sourceError
+	if err := s.applyTargets(ctx, opts, writeTargets, func(from, to int) {
+		for i := from; i < to; i++ {
+			matchedWritten += matched.RecordsPerTarget[i]
+		}
+		if to < len(writeTargets) {
+			report(stats.Skipped+matchedWritten, stats.Processed, matchedWritten, stats.Skipped)
+		}
+	}); err != nil {
+		stepError = errors.Join(stepError, err)
+		stats.Skipped++
+	}
+	writeDuration := time.Since(writeStart)
+	log.Debug().
+		Str("system", targetID).
+		Int("records", stats.Processed).
+		Int("matched", stats.Matched).
+		Int("skipped", stats.Skipped).
+		Int("targets", len(writeTargets)).
+		Dur("load", loadDuration).
+		Dur("scan", scanDuration).
+		Dur("match", matchDuration).
+		Dur("cleanup", cleanupDuration).
+		Dur("write", writeDuration).
+		Dur("total", time.Since(stepStart)).
+		Msg("misterdocs: step complete")
+	totals.processed += stats.Processed
+	totals.matched += stats.Matched
+	totals.skipped += stats.Skipped
 	ch <- scraper.ScrapeUpdate{
-		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-		TotalSteps: len(steps), CurrentStep: len(steps),
+		Err: stepError, SystemID: targetID, Processed: stats.Processed, Total: stats.Processed,
+		Matched: stats.Matched, Skipped: stats.Skipped, TotalSteps: len(steps), CurrentStep: step + 1,
 	}
+	return true
 }
 
-// indexArcadeSetNames resolves installed MRAs to the setname they declare.
-// Arcade artwork is filed under the MAME parent setname, which lives inside the
-// MRA and never in its filename, so without this pass an arcade pack matches
-// nothing. It runs only for systems that actually have an arcade source.
-func (s *scraperImpl) indexArcadeSetNames(
+// matchKeys are the values a step's records can look installed rows up by.
+// Matching only ever reads the index under these keys, so rows that answer to
+// none of them can be left out of it without changing a single match.
+type matchKeys struct {
+	// names are record names, which match a media filename or MRA setname.
+	names map[string]struct{}
+	// tags are record keys, which match the trailing tag of a media filename.
+	tags map[string]struct{}
+	// slugs are the title slugs slug-unique records and manuals fall back to.
+	slugs map[string]struct{}
+	any   bool
+}
+
+func newMatchKeys(records []sourceRecords) matchKeys {
+	keys := matchKeys{
+		names: make(map[string]struct{}),
+		tags:  make(map[string]struct{}),
+		slugs: make(map[string]struct{}),
+	}
+	for _, source := range records {
+		for _, record := range source.Artwork {
+			keys.any = true
+			keys.names[strings.ToLower(strings.TrimSpace(record.Name))] = struct{}{}
+			keys.tags[strings.ToLower(strings.TrimSpace(record.Key))] = struct{}{}
+			if record.SlugUnique {
+				keys.slugs[slugs.Slugify(slugs.MediaTypeGame, record.Name)] = struct{}{}
+			}
+		}
+		for _, manualPath := range source.Manuals {
+			keys.any = true
+			name := strings.TrimSuffix(filepath.Base(manualPath), filepath.Ext(manualPath))
+			if slug := slugs.Slugify(slugs.MediaTypeGame, name); slug != "" {
+				keys.slugs[slug] = struct{}{}
+			}
+		}
+	}
+	return keys
+}
+
+// wantsMedia reports whether matching can read row: by its filename, by its
+// filename's trailing tag, or as a media row of a title a slug can reach.
+func (k *matchKeys) wantsMedia(row *database.MediaWithFullPath, slugTitles map[int64]struct{}) bool {
+	if base := normalizedMediaBase(row.Path); base != "" {
+		if _, ok := k.names[base]; ok {
+			return true
+		}
+		if tag := trailingParenTag(base); tag != "" {
+			if _, ok := k.tags[tag]; ok {
+				return true
+			}
+		}
+	}
+	_, ok := slugTitles[row.MediaTitleDBID]
+	return ok
+}
+
+// systemLoad is what a step read from the database: the index its records
+// match against and, for a forced run's cleanup, the IDs of every row.
+type systemLoad struct {
+	idx      systemIndex
+	mediaIDs []int64
+	titleIDs []int64
+}
+
+// loadSystem builds a system's match index from streamed rows, keeping only
+// the rows matchKeys can reach. Titles are read before media, so a title a
+// slug matches keeps every one of its media rows, and again afterwards when a
+// kept media row belongs to a title not yet held.
+//
+//nolint:gocognit // three streamed passes, each with its own filter
+func (s *scraperImpl) loadSystem(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
-	idx *systemIndex,
+	systemID string,
+	keys matchKeys,
+	arcade, cleanup bool,
+) (systemLoad, error) {
+	var load systemLoad
+	var titles []database.TitleWithSystem
+	heldTitles := make(map[int64]struct{})
+	if len(keys.slugs) > 0 || cleanup {
+		err := s.db.ForEachTitleBySystemID(ctx, systemID, func(title *database.TitleWithSystem) error {
+			if cleanup {
+				load.titleIDs = append(load.titleIDs, title.DBID)
+			}
+			if _, ok := keys.slugs[title.Slug]; ok {
+				titles = append(titles, *title)
+				heldTitles[title.DBID] = struct{}{}
+			}
+			return nil
+		})
+		if err != nil {
+			return load, fmt.Errorf("misterdocs: load titles for %s: %w", systemID, err)
+		}
+	}
+
+	var media, mraRows []database.MediaWithFullPath
+	err := s.db.ForEachMediaBySystemID(ctx, systemID, func(row *database.MediaWithFullPath) error {
+		if cleanup {
+			load.mediaIDs = append(load.mediaIDs, row.DBID)
+		}
+		isMRA := arcade && strings.EqualFold(filepath.Ext(row.Path), mraExt)
+		wanted := keys.wantsMedia(row, heldTitles)
+		if !isMRA && !wanted {
+			return nil
+		}
+		kept := *row
+		// Matching never reads these, so the index does not hold them.
+		kept.TitleSlug, kept.SortName = "", ""
+		if isMRA {
+			mraRows = append(mraRows, kept)
+		}
+		if wanted {
+			media = append(media, kept)
+		}
+		return nil
+	})
+	if err != nil {
+		return load, fmt.Errorf("misterdocs: load media for %s: %w", systemID, err)
+	}
+
+	var bySetName map[string][]database.MediaWithFullPath
+	if arcade {
+		bySetName, err = s.resolveArcadeSetNames(ctx, opts, mraRows, keys.names)
+		if err != nil {
+			return load, err
+		}
+	}
+
+	needed := make(map[int64]struct{})
+	noteTitle := func(id int64) {
+		if _, held := heldTitles[id]; !held {
+			needed[id] = struct{}{}
+		}
+	}
+	for i := range media {
+		noteTitle(media[i].MediaTitleDBID)
+	}
+	for _, rows := range bySetName {
+		for i := range rows {
+			noteTitle(rows[i].MediaTitleDBID)
+		}
+	}
+	if len(needed) > 0 {
+		err := s.db.ForEachTitleBySystemID(ctx, systemID, func(title *database.TitleWithSystem) error {
+			if _, ok := needed[title.DBID]; ok {
+				titles = append(titles, *title)
+			}
+			return nil
+		})
+		if err != nil {
+			return load, fmt.Errorf("misterdocs: load titles for %s: %w", systemID, err)
+		}
+	}
+
+	load.idx = newSystemIndex(titles, media)
+	if bySetName != nil {
+		load.idx.mediaBySetName = bySetName
+	}
+	return load, nil
+}
+
+// scopedSystemLoad indexes a scoped run's selection, which is already bounded
+// by its scope.
+func (s *scraperImpl) scopedSystemLoad(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	titles []database.TitleWithSystem,
 	media []database.MediaWithFullPath,
-) error {
+	keys matchKeys,
+	arcade, cleanup bool,
+) (systemLoad, error) {
+	load := systemLoad{idx: newSystemIndex(titles, media)}
+	if arcade {
+		bySetName, err := s.resolveArcadeSetNames(ctx, opts, media, keys.names)
+		if err != nil {
+			return load, err
+		}
+		load.idx.mediaBySetName = bySetName
+	}
+	if cleanup {
+		load.mediaIDs = make([]int64, len(media))
+		for i := range media {
+			load.mediaIDs[i] = media[i].DBID
+		}
+		load.titleIDs = make([]int64, len(titles))
+		for i := range titles {
+			load.titleIDs[i] = titles[i].DBID
+		}
+	}
+	return load, nil
+}
+
+// resolveArcadeSetNames resolves installed MRAs to the setname they declare,
+// keeping those a record name can look up. Arcade artwork is filed under the
+// MAME parent setname, which lives inside the MRA and never in its filename,
+// so without this pass an arcade pack matches nothing. It runs only for
+// systems that actually have an arcade source.
+func (s *scraperImpl) resolveArcadeSetNames(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	media []database.MediaWithFullPath,
+	names map[string]struct{},
+) (map[string][]database.MediaWithFullPath, error) {
 	started := time.Now()
+	bySetName := make(map[string][]database.MediaWithFullPath)
 	scanned, resolved := 0, 0
 	for i := range media {
 		if !strings.EqualFold(filepath.Ext(media[i].Path), mraExt) {
 			continue
 		}
 		if err := waitForScrape(ctx, opts); err != nil {
-			return err
+			return nil, err
 		}
 		scanned++
 		setName, ok := readMRASetName(s.fs, media[i].Path)
@@ -320,7 +576,10 @@ func (s *scraperImpl) indexArcadeSetNames(
 		}
 		resolved++
 		key := strings.ToLower(setName)
-		idx.mediaBySetName[key] = append(idx.mediaBySetName[key], media[i])
+		if _, wanted := names[key]; !wanted {
+			continue
+		}
+		bySetName[key] = append(bySetName[key], media[i])
 	}
 	if scanned > 0 {
 		log.Debug().
@@ -329,7 +588,7 @@ func (s *scraperImpl) indexArcadeSetNames(
 			Dur("elapsed", time.Since(started)).
 			Msg("misterdocs: resolved arcade setnames")
 	}
-	return nil
+	return bySetName, nil
 }
 
 func (s *scraperImpl) eligibleTargets(targets []string, force bool) []string {
@@ -409,77 +668,67 @@ func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
 	return nil
 }
 
+// deleteStaleProperties drops the docs artwork and manual properties a forced
+// run no longer finds, reading the rows' properties a batch at a time.
 func (s *scraperImpl) deleteStaleProperties(
 	ctx context.Context,
 	opts scraper.ScrapeOptions,
-	media []database.MediaWithFullPath,
-	titles []database.TitleWithSystem,
+	mediaIDs []int64,
+	titleIDs []int64,
 	found map[string]struct{},
 	cleanupRoots []string,
 ) (int, error) {
-	mediaProps := make(map[int64][]database.MediaProperty, len(media))
-	if len(media) > 0 {
-		if err := waitForScrape(ctx, opts); err != nil {
-			return 0, err
-		}
-		mediaIDs := make([]int64, len(media))
-		for i := range media {
-			mediaIDs[i] = media[i].DBID
-		}
-		var err error
-		mediaProps, err = s.db.GetMediaPropertyMetadataByMediaDBIDs(ctx, mediaIDs)
-		if err != nil {
-			return 0, fmt.Errorf("misterdocs: load media properties for cleanup: %w", err)
-		}
-	}
-
-	titleProps := make(map[int64][]database.MediaProperty, len(titles))
-	if len(titles) > 0 {
-		if err := waitForScrape(ctx, opts); err != nil {
-			return 0, err
-		}
-		titleIDs := make([]int64, len(titles))
-		for i := range titles {
-			titleIDs[i] = titles[i].DBID
-		}
-		var err error
-		titleProps, err = s.db.GetMediaTitlePropertyMetadataByMediaTitleDBIDs(ctx, titleIDs)
-		if err != nil {
-			return 0, fmt.Errorf("misterdocs: load title properties for cleanup: %w", err)
-		}
-	}
-
 	deleted := 0
-	for i := range media {
+	for start := 0; start < len(mediaIDs); start += cleanupBatchSize {
+		batch := mediaIDs[start:min(start+cleanupBatchSize, len(mediaIDs))]
 		if err := waitForScrape(ctx, opts); err != nil {
 			return deleted, err
 		}
-		props := mediaProps[media[i].DBID]
-		for propIdx := range props {
-			prop := &props[propIdx]
-			if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
-				continue
+		mediaProps, err := s.db.GetMediaPropertyMetadataByMediaDBIDs(ctx, batch)
+		if err != nil {
+			return deleted, fmt.Errorf("misterdocs: load media properties for cleanup: %w", err)
+		}
+		for _, mediaID := range batch {
+			if err := waitForScrape(ctx, opts); err != nil {
+				return deleted, err
 			}
-			if err := s.db.DeleteMediaProperty(ctx, media[i].DBID, prop.TypeTagDBID); err != nil {
-				return deleted, fmt.Errorf("misterdocs: delete stale media property: %w", err)
+			props := mediaProps[mediaID]
+			for propIdx := range props {
+				prop := &props[propIdx]
+				if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
+					continue
+				}
+				if err := s.db.DeleteMediaProperty(ctx, mediaID, prop.TypeTagDBID); err != nil {
+					return deleted, fmt.Errorf("misterdocs: delete stale media property: %w", err)
+				}
+				deleted++
 			}
-			deleted++
 		}
 	}
-	for i := range titles {
+	for start := 0; start < len(titleIDs); start += cleanupBatchSize {
+		batch := titleIDs[start:min(start+cleanupBatchSize, len(titleIDs))]
 		if err := waitForScrape(ctx, opts); err != nil {
 			return deleted, err
 		}
-		props := titleProps[titles[i].DBID]
-		for propIdx := range props {
-			prop := &props[propIdx]
-			if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
-				continue
+		titleProps, err := s.db.GetMediaTitlePropertyMetadataByMediaTitleDBIDs(ctx, batch)
+		if err != nil {
+			return deleted, fmt.Errorf("misterdocs: load title properties for cleanup: %w", err)
+		}
+		for _, titleID := range batch {
+			if err := waitForScrape(ctx, opts); err != nil {
+				return deleted, err
 			}
-			if err := s.db.DeleteMediaTitleProperty(ctx, titles[i].DBID, prop.TypeTagDBID); err != nil {
-				return deleted, fmt.Errorf("misterdocs: delete stale title property: %w", err)
+			props := titleProps[titleID]
+			for propIdx := range props {
+				prop := &props[propIdx]
+				if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
+					continue
+				}
+				if err := s.db.DeleteMediaTitleProperty(ctx, titleID, prop.TypeTagDBID); err != nil {
+					return deleted, fmt.Errorf("misterdocs: delete stale title property: %w", err)
+				}
+				deleted++
 			}
-			deleted++
 		}
 	}
 	return deleted, nil

@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
@@ -624,6 +625,7 @@ func startServiceWithOptions(
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+	methods.SetIndexingInbox(st.Inbox())
 
 	if mediaDBReset != nil {
 		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost, mediaDBReset.corrupt)

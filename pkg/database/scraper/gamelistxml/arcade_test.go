@@ -154,7 +154,7 @@ func TestArcadeMatching(t *testing.T) {
 			}
 			records, err := s.loadRecordsFromParsed(t.Context(), scraper.ScrapeSystem{
 				ID: systemdefs.SystemArcade, ROMPaths: []string{root},
-			}, indexes, parsed)
+			}, indexes, parsed, nil)
 			require.NoError(t, err)
 			require.Len(t, records, tc.want)
 			if tc.want == 0 {
@@ -181,7 +181,7 @@ func TestArcadeUnknownSetPreservesSlugMatch(t *testing.T) {
 		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes,
 		parsedGamelistSystem{Files: []parsedGamelistFile{{RootPath: root, Games: []esapi.Game{{
 			Path: "unknown.zip", Name: "Pac-Man",
-		}}}}})
+		}}}}}, nil)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
@@ -470,7 +470,7 @@ func TestArcadeSetNameWinsOverCompetingSlug(t *testing.T) {
 	}, parsed)
 	require.NoError(t, err)
 	records, err := s.loadRecordsFromParsed(t.Context(),
-		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed, nil)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, japan.DBID, records[0].MatchedMediaDBID,
@@ -516,7 +516,7 @@ func TestArcadeSetNameOutranksTitleGuess(t *testing.T) {
 			}}, parsed)
 			require.NoError(t, err)
 			records, err := s.loadRecordsFromParsed(t.Context(),
-				scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+				scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed, nil)
 			require.NoError(t, err)
 			require.Len(t, records, 1)
 			assert.Equal(t, media.DBID, records[0].MatchedMediaDBID)
@@ -552,7 +552,7 @@ func TestArcadeSetNameYieldsToPathMatch(t *testing.T) {
 	}}, parsed)
 	require.NoError(t, err)
 	records, err := s.loadRecordsFromParsed(t.Context(),
-		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed)
+		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}}, indexes, parsed, nil)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, "PATH", records[0].Game.Desc)

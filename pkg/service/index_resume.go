@@ -25,6 +25,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -49,6 +52,13 @@ import (
 // background index can resume forever as long as each completed system advances
 // the checkpoint.
 const maxIndexNoProgressResumeAttempts = 5
+
+// indexResumeSkipAfterAttempts is how many resumes in a row may leave the
+// checkpoint where it was before auto-resume skips the system the run keeps
+// stopping in. A system that cannot finish within one power-on otherwise holds
+// back every system after it until maxIndexNoProgressResumeAttempts pauses
+// indexing altogether.
+const indexResumeSkipAfterAttempts = 2
 
 const indexResumeCheckpointPrefix = "last_indexed_system="
 
@@ -136,6 +146,67 @@ func recordIndexResumeCheckpoint(mediaDB database.MediaDBI) (attempts int, stall
 	return attempts, attempts >= maxIndexNoProgressResumeAttempts, nil
 }
 
+// skipStuckIndexSystem adds the system the interrupted run was working on to
+// the systems resumed runs leave out, and tells the user which it was. It
+// reports false, changing nothing, when there is no such system or it was
+// already skipped, so the stall limit still applies.
+func skipStuckIndexSystem(mediaDB database.MediaDBI, st *state.State) bool {
+	current, err := mediaDB.GetIndexingCurrentSystem()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read the system indexing stopped in")
+		return false
+	}
+	if current == "" {
+		return false
+	}
+	skipped, err := mediaDB.GetIndexingSkippedSystems()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read systems skipped by indexing resume")
+		return false
+	}
+	if slices.Contains(skipped, current) {
+		return false
+	}
+	skipped = append(skipped, current)
+	if err := mediaDB.SetIndexingSkippedSystems(skipped); err != nil {
+		log.Warn().Err(err).Str("system", current).Msg("failed to skip the system indexing keeps stopping in")
+		return false
+	}
+	if err := mediaDB.ResetIndexResumeAttempts(); err != nil {
+		log.Warn().Err(err).Msg("failed to reset index resume attempts after skipping a system")
+	}
+	log.Warn().Str("system", current).Strs("skipped", skipped).
+		Msg("media indexing kept stopping in the same system; skipping it so the rest can finish")
+
+	if inbox := st.Inbox(); inbox != nil {
+		names := make([]string, 0, len(skipped))
+		for _, id := range skipped {
+			names = append(names, systemDisplayName(id))
+		}
+		if inboxErr := inbox.Add("Media indexing skipped a system",
+			inboxservice.WithBody("Media indexing restarted several times without getting past these "+
+				"systems, so they were skipped to let the rest of your library finish:\n"+
+				strings.Join(names, "\n")+"\n\n"+
+				"Their games stay as they were before. To index them again, start indexing from "+
+				"Settings while the device can stay on until it finishes. If a folder should not be "+
+				"indexed, put an empty file named .zaparooignore in it."),
+			inboxservice.WithSeverity(inboxservice.SeverityWarning),
+			inboxservice.WithCategory(inboxservice.CategoryMediaIndexSystemSkipped),
+		); inboxErr != nil {
+			log.Warn().Err(inboxErr).Msg("failed to add inbox message about a skipped system")
+		}
+	}
+	return true
+}
+
+// systemDisplayName returns a system's name as users see it, or its ID.
+func systemDisplayName(systemID string) string {
+	if md, err := assets.GetSystemMetadata(systemID); err == nil && md.Name != "" {
+		return md.Name
+	}
+	return systemID
+}
+
 func indexingStatusNeedsResume(status string, mediaDB database.MediaDBI) (bool, error) {
 	switch status {
 	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
@@ -205,6 +276,9 @@ func checkAndResumeIndexing(
 		// library data browsable rather than risk an unbounded resume loop.
 		log.Warn().Err(err).Msg("failed to record index resume checkpoint; skipping auto-resume")
 		return false
+	}
+	if noProgressAttempts >= indexResumeSkipAfterAttempts && skipStuckIndexSystem(db.MediaDB, st) {
+		noProgressAttempts, stalled = 0, false
 	}
 	if stalled {
 		log.Warn().Int("noProgressAttempts", noProgressAttempts).
@@ -419,7 +493,7 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 		Msg("media database is corrupt; rebuilding from scratch")
 	if st != nil {
 		display := "Recovering media database"
-		notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+		notifications.MediaIndexing(st.Notifications, &models.IndexingStatusResponse{
 			Exists:             false,
 			Indexing:           true,
 			CurrentStepDisplay: &display,
@@ -499,7 +573,7 @@ func finishMediaDBRecoveryNotification(st *state.State, mediaDB database.MediaDB
 			exists = hasMedia
 		}
 	}
-	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+	notifications.MediaIndexing(st.Notifications, &models.IndexingStatusResponse{
 		Exists:   exists,
 		Indexing: false,
 	})
@@ -756,14 +830,14 @@ func checkAndHealBrowseCache(
 		// queryable IsOptimizing flag lets a client that connects mid-rebuild see it
 		// too via the media status query. Both cleared on completion or failure below.
 		db.MediaDB.BeginBrowseCacheRebuild()
-		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			Optimizing: true,
 		})
 		defer func() {
 			db.MediaDB.EndBrowseCacheRebuild()
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: false,
@@ -947,7 +1021,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
 		runErr := coordinator.RunBackgroundOptimizationWithLease(func(optimizing bool) {
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,

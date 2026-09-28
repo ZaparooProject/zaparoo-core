@@ -45,32 +45,63 @@ func readArcadeSetName(fs afero.Fs, filename string) string { return mra.ReadSet
 func (g *GamelistXMLScraper) indexArcadeSets(
 	ctx context.Context, rows []database.MediaWithFullPath, parsed parsedGamelistSystem,
 ) (map[string][]database.Media, error) {
-	bySet := make(map[string][]database.Media)
-	if !g.matchArcadeSets {
-		return bySet, nil
+	if !g.matchArcadeSets || len(arcadeWantedSets(&parsed)) == 0 {
+		return make(map[string][]database.Media), nil
 	}
+	candidates := make([]arcadeCandidate, 0, len(rows))
+	for i := range rows {
+		if rows[i].IsMissing || !strings.EqualFold(filepath.Ext(rows[i].Path), ".mra") {
+			continue
+		}
+		candidates = append(candidates, arcadeCandidate{media: database.Media{
+			DBID: rows[i].DBID, MediaTitleDBID: rows[i].MediaTitleDBID, Path: rows[i].Path,
+		}})
+	}
+	bySet, _, err := g.indexArcadeCandidates(ctx, candidates, &parsed)
+	return bySet, err
+}
+
+// arcadeWantedSets returns the lowercased set names the gamelist's entries
+// could name, from every game's raw path.
+func arcadeWantedSets(parsed *parsedGamelistSystem) map[string]struct{} {
 	wanted := make(map[string]struct{})
-	for _, file := range parsed.Files {
+	for fi := range parsed.Files {
+		file := &parsed.Files[fi]
 		for i := range file.Games {
 			if stem := arcadeSetStem(file.Games[i].Path); stem != "" {
 				wanted[strings.ToLower(stem)] = struct{}{}
 			}
 		}
 	}
+	return wanted
+}
+
+// indexArcadeCandidates builds the set-name index from present .mra rows. It
+// also returns the unscraped candidates a load pass did not keep that share a
+// folded path with an indexed descriptor, because arcadeMediaForSet looks the
+// descriptor up in MediaByPathFold.
+func (g *GamelistXMLScraper) indexArcadeCandidates(
+	ctx context.Context, candidates []arcadeCandidate, parsed *parsedGamelistSystem,
+) (map[string][]database.Media, []retainedRow, error) {
+	bySet := make(map[string][]database.Media)
+	if !g.matchArcadeSets {
+		return bySet, nil, nil
+	}
+	wanted := arcadeWantedSets(parsed)
 	if len(wanted) == 0 {
-		return bySet, nil
+		return bySet, nil, nil
 	}
 	start := time.Now()
 	var descriptors, unreadable int
+	indexedKeys := make(map[string]struct{})
 	// Include already-scraped rows: a previous write cannot turn an ambiguous
-	// set into a unique match on the next run. Missing rows are not launch targets.
-	for _, row := range rows {
+	// set into a unique match on the next run. Missing rows are not launch
+	// targets and never reach here.
+	for i := range candidates {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if row.IsMissing || !strings.EqualFold(filepath.Ext(row.Path), ".mra") {
-			continue
-		}
+		row := &candidates[i].media
 		descriptors++
 		setName := readArcadeSetName(g.filesystem(), row.Path)
 		if setName == "" {
@@ -83,6 +114,17 @@ func (g *GamelistXMLScraper) indexArcadeSets(
 		bySet[setName] = append(bySet[setName], database.Media{
 			DBID: row.DBID, MediaTitleDBID: row.MediaTitleDBID, Path: row.Path,
 		})
+		indexedKeys[pathFoldKey(row.Path)] = struct{}{}
+	}
+	var retain []retainedRow
+	for i := range candidates {
+		c := &candidates[i]
+		if c.scraped || c.retained {
+			continue
+		}
+		if _, ok := indexedKeys[pathFoldKey(c.media.Path)]; ok {
+			retain = append(retain, retainedRow{key: pathFoldKey(c.media.Path), media: c.media, seq: c.seq})
+		}
 	}
 	// A silent zero here is indistinguishable from the feature being off, so
 	// the read cost and the unusable descriptor count are always reported.
@@ -93,7 +135,7 @@ func (g *GamelistXMLScraper) indexArcadeSets(
 		Int("indexed_sets", len(bySet)).
 		Dur("duration", time.Since(start)).
 		Msg("gamelistxml: indexed arcade set names")
-	return bySet, nil
+	return bySet, retain, nil
 }
 
 // arcadeMediaForSet reports known even for ambiguous or already-scraped sets so

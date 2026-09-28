@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -74,6 +75,44 @@ func PathHasPrefix(path, root string) bool {
 	return strings.HasPrefix(normPath, normRoot)
 }
 
+// sourceRelativePath returns the path of a source:// path below its source
+// root, decoded and normalized for comparison ("nes/sub/game.nes"), and
+// whether path is a canonical source path. A source root is matched like a
+// directory from RootDirs: its launcher folders are relative to the root.
+func sourceRelativePath(path string) (string, bool) {
+	prefix := platforms.SourceScheme + "://"
+	if len(path) <= len(prefix) || !strings.EqualFold(path[:len(prefix)], prefix) {
+		return "", false
+	}
+	parsed, err := virtualpath.ParseVirtualPathSegments(path)
+	if err != nil || !strings.EqualFold(parsed.Scheme, platforms.SourceScheme) {
+		return "", false
+	}
+	return strings.ToLower(strings.Join(parsed.Segments, "/")), true
+}
+
+// normalizedRelativeFolders returns a launcher's relative folders normalized
+// for comparison, which is how they apply inside a source root.
+func normalizedRelativeFolders(folders []string, normFolder func(string) string) []string {
+	var normalized []string
+	for _, folder := range folders {
+		if !filepath.IsAbs(folder) {
+			normalized = append(normalized, normFolder(folder))
+		}
+	}
+	return normalized
+}
+
+// inAnyFolder reports whether normPath lies in one of the normalized folders.
+func inAnyFolder(normPath string, folders []string) bool {
+	for _, folder := range folders {
+		if pathHasPrefixNormalized(normPath, folder) {
+			return true
+		}
+	}
+	return false
+}
+
 // PathIsLauncher returns true if a given path matches against any of the
 // criteria defined in a launcher.
 func PathIsLauncher(
@@ -107,9 +146,22 @@ func PathIsLauncher(
 		}
 	}
 
+	// A source root is matched like a root directory: the path below it must
+	// sit in one of the launcher's relative folders.
+	sourceRel, isSource := sourceRelativePath(path)
+	if isSource && len(l.Folders) > 0 &&
+		!inAnyFolder(sourceRel, normalizedRelativeFolders(l.Folders, NormalizePathForComparison)) {
+		log.Trace().
+			Str("launcher", l.ID).
+			Str("path", path).
+			Strs("folders", l.Folders).
+			Msg("source path not in any launcher folder")
+		return false
+	}
+
 	// check for data dir media folder
 	inDataDir := false
-	if l.SystemID != "" {
+	if l.SystemID != "" && !isSource {
 		// Cache DataDir result
 		dataDir := DataDir(pl)
 		zaparooMedia := filepath.Join(dataDir, config.MediaDir, l.SystemID)
@@ -119,7 +171,7 @@ func PathIsLauncher(
 	}
 
 	// check root folder if it's not a generic launcher
-	if !inDataDir && len(l.Folders) > 0 {
+	if !isSource && !inDataDir && len(l.Folders) > 0 {
 		inRoot := false
 		isAbs := false
 
@@ -234,6 +286,7 @@ func pathHasPrefixNormalized(normPath, normRoot string) bool {
 type launcherPrecomp struct {
 	normMediaPath         string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
 	rootPairs             []string // normRoot + "/" + normFolder for every root × relative-folder combination
+	relFolders            []string // normalized relative folders, as they apply inside a source root
 	absFolders            []string // normalized absolute folder paths (already normalized from folderCache)
 	extensions            []string // pre-lowercased extensions
 	scanExcludes          []string // pre-normalized scan-only file exclude patterns
@@ -311,6 +364,7 @@ func newLauncherPrecomp(
 			lp.absFolders = append(lp.absFolders, normFolder(folder))
 		}
 	}
+	lp.relFolders = normalizedRelativeFolders(l.Folders, normFolder)
 
 	for _, e := range l.Extensions {
 		lp.extensions = append(lp.extensions, strings.ToLower(e))
@@ -462,7 +516,18 @@ func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
 // system scan when identifying one launcher's indexed contribution.
 func (m *LauncherMatcher) MatchLauncherFileForScan(l *platforms.Launcher, path string) bool {
 	normalized := NormalizePathForComparison(path)
-	return m.pathIsLauncher(l, path, strings.ToLower(path), normalized) && !m.pathIsExcludedFromScan(l, normalized)
+	return m.pathIsLauncher(l, path, strings.ToLower(path), normalized) &&
+		!m.pathIsExcludedFromScan(l, scanExcludeSubject(path, normalized))
+}
+
+// scanExcludeSubject is the path scan exclude patterns are matched against: the
+// normalized path, or for a source path its decoded path below the source root,
+// so patterns see real names rather than escaped ones.
+func scanExcludeSubject(path, normPath string) string {
+	if rel, ok := sourceRelativePath(path); ok {
+		return rel
+	}
+	return normPath
 }
 
 // MatchSystemFileForScan returns true if path matches a launcher for the given
@@ -471,6 +536,8 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 	lowerPath := strings.ToLower(path)
 	normPath := NormalizePathForComparison(path)
 
+	excludeSubject := scanExcludeSubject(path, normPath)
+
 	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
 	matchedExcluded := false
 	for i := range launchers {
@@ -478,7 +545,7 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 		if !m.pathIsLauncher(launcher, path, lowerPath, normPath) {
 			continue
 		}
-		if m.pathIsExcludedFromScan(launcher, normPath) {
+		if m.pathIsExcludedFromScan(launcher, excludeSubject) {
 			matchedExcluded = true
 			continue
 		}
@@ -507,6 +574,10 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 // needed by another launcher that shares the same scan root.
 func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
 	normPath := NormalizePathForComparison(path)
+	sourceRel, isSource := sourceRelativePath(path)
+	if isSource {
+		normPath = sourceRel
+	}
 	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
 	matched := false
 
@@ -517,7 +588,11 @@ func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
 		}
 		lc := m.launcherPaths(launcher)
 
-		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+		scanRoots := [][]string{lc.rootPairs, lc.absFolders}
+		if isSource {
+			scanRoots = [][]string{lc.relFolders}
+		}
+		for _, roots := range scanRoots {
 			for _, root := range roots {
 				if !pathHasPrefixNormalized(normPath, root) {
 					continue
@@ -740,9 +815,19 @@ func (m *LauncherMatcher) pathIsLauncher(
 
 	lc := m.launcherPaths(l)
 
-	inDataDir := lc.normMediaPath != "" && pathHasPrefixNormalized(normPath, lc.normMediaPath)
+	sourceRel, isSource := sourceRelativePath(path)
+	if isSource && len(l.Folders) > 0 && !inAnyFolder(sourceRel, lc.relFolders) {
+		log.Trace().
+			Str("launcher", l.ID).
+			Str("path", path).
+			Strs("folders", l.Folders).
+			Msg("source path not in any launcher folder")
+		return false
+	}
 
-	if !inDataDir && len(l.Folders) > 0 {
+	inDataDir := !isSource && lc.normMediaPath != "" && pathHasPrefixNormalized(normPath, lc.normMediaPath)
+
+	if !isSource && !inDataDir && len(l.Folders) > 0 {
 		inRoot := false
 		isAbs := false
 
@@ -893,7 +978,8 @@ func GetPathInfo(path string) PathInfo {
 			if platformsshared.ShouldDecodeURIScheme(scheme) {
 				decodedFilename := FilenameFromPath(path) // URL-decoded filename
 
-				if platformsshared.IsStandardSchemeForDecoding(scheme) {
+				switch {
+				case platformsshared.IsStandardSchemeForDecoding(scheme):
 					// For http/https, only parse extension if there's a path component
 					// (URLs without paths like "https://example.com" shouldn't have .com treated as extension)
 					info.Filename = decodedFilename
@@ -907,7 +993,13 @@ func GetPathInfo(path string) PathInfo {
 						info.Extension = ""
 						info.Name = decodedFilename
 					}
-				} else {
+				case platformsshared.IsFileBackedScheme(scheme):
+					// A file-backed scheme names a file: split its decoded last
+					// segment exactly as a filesystem path's base name.
+					info.Filename = virtualPathLeaf(path)
+					info.Extension = getPathExt(info.Filename)
+					info.Name = strings.TrimSuffix(info.Filename, info.Extension)
+				default:
 					// For custom Zaparoo schemes (steam://, kodi-*://, etc.), no extension
 					info.Filename = decodedFilename
 					info.Extension = ""

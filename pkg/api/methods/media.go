@@ -31,6 +31,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -52,6 +53,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/rs/zerolog/log"
 )
 
@@ -260,25 +262,29 @@ func decodeMediaSearchCursor(
 }
 
 type indexingStatusVals struct {
-	currentDesc string
-	totalSteps  int
-	currentStep int
-	totalFiles  int
-	indexing    bool
+	currentDesc    string
+	scanPath       string
+	totalSteps     int
+	currentStep    int
+	totalFiles     int
+	scannedEntries int
+	indexing       bool
 }
 
 type indexingStatus struct {
-	cancelFunc  context.CancelFunc
-	currentDesc string
-	totalSteps  int
-	currentStep int
-	totalFiles  int
-	mu          syncutil.RWMutex
-	indexing    bool
+	cancelFunc     context.CancelFunc
+	currentDesc    string
+	scanPath       string
+	totalSteps     int
+	currentStep    int
+	totalFiles     int
+	scannedEntries int
+	mu             syncutil.RWMutex
+	indexing       bool
 }
 
 func (s *indexingNotificationState) shouldSend(
-	status mediascanner.IndexStatus,
+	status *mediascanner.IndexStatus,
 	now time.Time,
 	interval time.Duration,
 ) bool {
@@ -304,11 +310,13 @@ func (s *indexingStatus) get() indexingStatusVals {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return indexingStatusVals{
-		indexing:    s.indexing,
-		totalSteps:  s.totalSteps,
-		currentStep: s.currentStep,
-		currentDesc: s.currentDesc,
-		totalFiles:  s.totalFiles,
+		indexing:       s.indexing,
+		totalSteps:     s.totalSteps,
+		currentStep:    s.currentStep,
+		currentDesc:    s.currentDesc,
+		totalFiles:     s.totalFiles,
+		scannedEntries: s.scannedEntries,
+		scanPath:       s.scanPath,
 	}
 }
 
@@ -323,6 +331,8 @@ func (s *indexingStatus) startIfNotRunning() bool {
 	s.currentStep = 0
 	s.currentDesc = ""
 	s.totalFiles = 0
+	s.scannedEntries = 0
+	s.scanPath = ""
 	return true
 }
 
@@ -334,6 +344,8 @@ func (s *indexingStatus) clear() {
 	s.currentStep = 0
 	s.currentDesc = ""
 	s.totalFiles = 0
+	s.scannedEntries = 0
+	s.scanPath = ""
 	s.cancelFunc = nil
 }
 
@@ -365,6 +377,8 @@ func (s *indexingStatus) set(vals indexingStatusVals) {
 	s.currentStep = vals.currentStep
 	s.currentDesc = vals.currentDesc
 	s.totalFiles = vals.totalFiles
+	s.scannedEntries = vals.scannedEntries
+	s.scanPath = vals.scanPath
 }
 
 func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
@@ -407,6 +421,44 @@ func newIndexingStatus() *indexingStatus {
 }
 
 var statusInstance = newIndexingStatus()
+
+// setScanProgress reports the folder scan while one is reading.
+func setScanProgress(resp *models.IndexingStatusResponse, entries int, path string) {
+	if entries <= 0 {
+		return
+	}
+	resp.Scan = &models.IndexingScanResponse{Entries: entries, Path: path}
+}
+
+// indexingInbox receives messages about indexing that the user should act on.
+// The service sets it once the inbox exists; indexing runs without it in tests.
+var indexingInbox atomic.Pointer[inboxservice.Service]
+
+// SetIndexingInbox sets the inbox indexing reports to.
+func SetIndexingInbox(inbox *inboxservice.Service) {
+	indexingInbox.Store(inbox)
+}
+
+// reportStalledScan tells the user a system's folder scan has slowed to a
+// crawl, naming the folder so it can be excluded. Without it a stalled scan
+// looks like the whole device misbehaving.
+func reportStalledScan(system, folder string, entries int) {
+	inbox := indexingInbox.Load()
+	if inbox == nil {
+		return
+	}
+	body := fmt.Sprintf("Indexing %s has read only %d files and folders in over five minutes. "+
+		"The folder being read when this was noticed is:\n%s\n\n"+
+		"Indexing is still running. If this folder should not be indexed, put an empty file named "+
+		".zaparooignore in it and index again.", system, entries, folder)
+	if err := inbox.Add("Media indexing is running very slowly",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityWarning),
+		inboxservice.WithCategory(inboxservice.CategoryMediaIndexScanStalled),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about a stalled media scan")
+	}
+}
 
 func activeMediaPausesMediaWork(media *models.ActiveMedia) bool {
 	if media == nil {
@@ -467,7 +519,7 @@ func mediaDBHasUsableData(mediaDB database.MediaDBI) bool {
 }
 
 func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.MediaDBI) {
-	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+	notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 		Exists:   mediaDBHasUsableData(mediaDB),
 		Indexing: false,
 	})
@@ -609,7 +661,7 @@ func startMediaDBGeneration(
 		}
 	}()
 
-	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+	notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 		Exists:             mediaDBHasUsableData(db.MediaDB),
 		Indexing:           true,
 		Paused:             pauser != nil && pauser.IsPaused(),
@@ -766,18 +818,23 @@ func startMediaDBGeneration(
 
 				// Always update in-memory status for polling clients.
 				statusInstance.set(indexingStatusVals{
-					indexing:    true,
-					totalSteps:  status.Total,
-					currentStep: status.Step,
-					currentDesc: desc,
-					totalFiles:  status.Files,
+					indexing:       true,
+					totalSteps:     status.Total,
+					currentStep:    status.Step,
+					currentDesc:    desc,
+					totalFiles:     status.Files,
+					scannedEntries: status.WalkEntries,
+					scanPath:       status.WalkPath,
 				})
+				if status.WalkStalled {
+					reportStalledScan(desc, status.WalkPath, status.WalkEntries)
+				}
 
 				// Throttle duplicate WebSocket push notifications to prevent
 				// channel overflow, but always send visible progress changes so
 				// notification-only clients don't show the previous system while
 				// the next system is doing long-running work.
-				if !notifState.shouldSend(status, time.Now(), notifThrottleInterval) {
+				if !notifState.shouldSend(&status, time.Now(), notifThrottleInterval) {
 					return
 				}
 
@@ -788,7 +845,7 @@ func startMediaDBGeneration(
 				// committed; Total includes the final "Writing database" step.
 				systemsCompleted := max(status.Step-1, 0)
 				systemsTotal := max(status.Total-1, 0)
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				resp := models.IndexingStatusResponse{
 					Exists:             dbHasData,
 					Indexing:           true,
 					Paused:             pauser != nil && pauser.IsPaused(),
@@ -799,7 +856,9 @@ func startMediaDBGeneration(
 					TotalFiles:         &status.Files,
 					SystemsCompleted:   &systemsCompleted,
 					SystemsTotal:       &systemsTotal,
-				})
+				}
+				setScanProgress(&resp, status.WalkEntries, status.WalkPath)
+				notifications.MediaIndexing(ns, &resp)
 
 				log.Debug().Msgf("indexing status: %v", indexingStatusVals{
 					indexing:    true,
@@ -815,7 +874,7 @@ func startMediaDBGeneration(
 			switch {
 			case database.IsCorruptionError(err):
 				log.Error().Err(err).Msg("media database corruption detected during indexing; awaiting recovery")
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 					Exists:             false,
 					Indexing:           true,
 					CurrentStepDisplay: ptrString(recoveringMediaDatabaseDisplay),
@@ -823,7 +882,7 @@ func startMediaDBGeneration(
 				})
 			case errors.Is(err, context.Canceled):
 				log.Info().Msg("media indexing was cancelled")
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
@@ -831,7 +890,7 @@ func startMediaDBGeneration(
 			default:
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
@@ -858,7 +917,7 @@ func startMediaDBGeneration(
 		}
 		mediaImageNoImages.clear()
 		invalidateIndexedThumbnails(systems, rebuild)
-		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			TotalFiles: &total,
@@ -885,7 +944,7 @@ func startMediaDBGeneration(
 		// Atomically hand indexing ownership to optimization so scraping cannot
 		// enter between completed indexing and post-index maintenance.
 		if handoffErr := startPostIndexOptimization(db.MediaDB, lease, func(optimizing bool) {
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
@@ -962,6 +1021,15 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	// paused status. This clears stale pauses left by non-primary media events.
 	if env.State != nil {
 		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.IndexPauser)
+	}
+
+	// An index the user starts covers every system it names again, including
+	// any auto-resume skipped. A request made while indexing runs is refused
+	// below, so the running index keeps its list.
+	if !statusInstance.isRunning() {
+		if clearErr := env.Database.MediaDB.SetIndexingSkippedSystems(nil); clearErr != nil {
+			log.Warn().Err(clearErr).Msg("failed to clear systems skipped by indexing resume")
+		}
 	}
 
 	// Use app-scoped context — indexing outlives the API request
@@ -1453,6 +1521,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		systemsTotal := max(status.totalSteps-1, 0)
 		resp.Database.SystemsCompleted = &systemsCompleted
 		resp.Database.SystemsTotal = &systemsTotal
+		setScanProgress(&resp.Database, status.scannedEntries, status.scanPath)
 	case persistedIndexingStatus == mediadb.IndexingStatusCorrupt || env.Database.MediaDB.IsMarkedCorrupt():
 		resp.Database.Optimizing = false
 		resp.Database.Paused = paused
