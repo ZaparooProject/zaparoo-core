@@ -688,62 +688,61 @@ func startMediaScrapeOperation(
 	// Scraper startup can read/write the database before it returns a channel
 	// producer. Register that work before shutdown can begin draining it.
 	db.MediaDB.TrackBackgroundOperation()
-	startupOwned := true
-	defer func() {
-		if startupOwned {
-			db.MediaDB.BackgroundOperationDone()
-		}
-	}()
-	if startErr == nil {
-		startErr = s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch)
-	}
-	if startErr != nil && len(operation.Pending) > 0 {
-		ch <- scraper.ScrapeUpdate{FatalErr: startErr, Done: true}
-		close(ch)
-	} else if startErr != nil {
-		cancelFunc()
-		scrapingStatusInstance.clear()
-		failureStatus := mediadb.IndexingStatusFailed
-		if env.State.GetContext().Err() != nil && !scrapingStatusInstance.userCancelled() {
-			failureStatus = mediadb.IndexingStatusPending
-		}
-		statusErr := scrapingStatusInstance.persistTerminal(env.Database.MediaDB, &operation, failureStatus)
-		if statusErr != nil {
-			log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
-		}
-		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
-			ScraperID: params.ScraperID,
-			State:     scrapeStateFailed,
-			Force:     params.Force,
-			Done:      true,
-			Error:     "failed to start media scrape",
-		})
-		return nil, fmt.Errorf("failed to start scraper: %w", startErr)
-	}
 
-	initialState := scrapeStateRunning
-	if paused {
-		initialState = scrapeStatePaused
-	}
-	initialStatus := models.ScrapingStatusResponse{
-		ScraperID: params.ScraperID,
-		State:     initialState,
-		Scraping:  true,
-		Paused:    paused,
-		Throttled: throttled,
-		Force:     params.Force,
-	}
-	populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
-	publishScrapingStatus(ns, &initialStatus)
-
+	// The request is answered once the job is admitted. Scraper startup, such
+	// as finding installed packs, and the initial count read the SD card and
+	// the database, which on a MiSTer took longer than a client waits.
 	scraperID := params.ScraperID
-	startupOwned = false
 	leaseOwned = false
 	go func() {
 		defer lease.Release()
 		defer func() { scrapingStatusInstance.clearIfOwner(scraperID) }()
 		defer cancelFunc()
 		defer db.MediaDB.BackgroundOperationDone()
+
+		if startErr == nil {
+			startErr = s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch)
+		}
+		if startErr != nil && len(operation.Pending) > 0 {
+			ch <- scraper.ScrapeUpdate{FatalErr: startErr, Done: true}
+			close(ch)
+		} else if startErr != nil {
+			log.Error().Err(startErr).Str("scraper", scraperID).Msg("failed to start scraper")
+			cancelFunc()
+			scrapingStatusInstance.clear()
+			failureStatus := mediadb.IndexingStatusFailed
+			if env.State.GetContext().Err() != nil && !scrapingStatusInstance.userCancelled() {
+				failureStatus = mediadb.IndexingStatusPending
+			}
+			statusErr := scrapingStatusInstance.persistTerminal(env.Database.MediaDB, &operation, failureStatus)
+			if statusErr != nil {
+				log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
+			}
+			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+				ScraperID: scraperID,
+				State:     scrapeStateFailed,
+				Force:     params.Force,
+				Done:      true,
+				Error:     "failed to start media scrape",
+			})
+			return
+		}
+
+		initialState := scrapeStateRunning
+		if paused {
+			initialState = scrapeStatePaused
+		}
+		initialStatus := models.ScrapingStatusResponse{
+			ScraperID: scraperID,
+			State:     initialState,
+			Scraping:  true,
+			Paused:    paused,
+			Throttled: throttled,
+			Force:     params.Force,
+		}
+		populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
+		publishScrapingStatus(ns, &initialStatus)
+
 		// The terminal status is held until the tag cache refresh has run, so
 		// clients that re-read media.tags on completion see the scraped tags.
 		var terminal *models.ScrapingStatusResponse
