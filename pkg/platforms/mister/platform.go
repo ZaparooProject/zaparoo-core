@@ -20,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/misterdocs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -1907,8 +1908,9 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	media := localmedia.NewPlatformScraper()
 	docs := misterdocs.NewPlatformScraper()
 	arcade := NewArcadeScraper(p, ArcadeSystemIDs())
+	thumbnails := libretrothumbs.NewPlatformScraper()
 	return map[string]platforms.Scraper{
-		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade,
+		gamelist.ID: gamelist, media.ID: media, docs.ID: docs, arcade.ID: arcade, thumbnails.ID: thumbnails,
 	}
 }
 

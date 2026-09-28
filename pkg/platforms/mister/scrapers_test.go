@@ -17,7 +17,9 @@ func TestScrapers_RegisterMiSTerScrapers(t *testing.T) {
 	require.Contains(t, scrapers, "gamelist.xml")
 	require.Contains(t, scrapers, "media-folder")
 	require.Contains(t, scrapers, "mister-docs")
+	require.Contains(t, scrapers, "libretro-thumbnails")
 	assert.NotNil(t, scrapers["gamelist.xml"].Scrape)
 	assert.NotNil(t, scrapers["media-folder"].Scrape)
 	assert.NotNil(t, scrapers["mister-docs"].Scrape)
+	assert.NotNil(t, scrapers["libretro-thumbnails"].Scrape)
 }

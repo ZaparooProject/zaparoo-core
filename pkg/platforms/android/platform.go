@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -176,7 +177,14 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager { return platforms.No
 // ManagedByPackageManager is true: the host's package is the only update path.
 func (*Platform) ManagedByPackageManager() bool { return true }
 
-func (*Platform) Scrapers(*config.Instance) map[string]platforms.Scraper { return nil }
+// Scrapers offers the libretro thumbnail scraper: box art, screenshots and
+// title screens for indexed media, matched by libretro's own sanitised
+// name. It never runs automatically after indexing, since it is the only
+// scraper that downloads.
+func (*Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
+	thumbnails := libretrothumbs.NewPlatformScraper()
+	return map[string]platforms.Scraper{thumbnails.ID: thumbnails}
+}
 
 // SourceRoots lists the media folders the user granted to the host.
 func (p *Platform) SourceRoots(ctx context.Context) ([]string, error) {

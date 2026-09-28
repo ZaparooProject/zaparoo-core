@@ -14,6 +14,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -400,7 +401,10 @@ func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	// MiSTeX reuses MiSTer's launchers but not its granular arcade
 	// classification, so every descriptor it indexes is an Arcade row.
 	arcade := mister.NewArcadeScraper(p, []string{systemdefs.SystemArcade})
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, arcade.ID: arcade}
+	thumbnails := libretrothumbs.NewPlatformScraper()
+	return map[string]platforms.Scraper{
+		gamelist.ID: gamelist, media.ID: media, arcade.ID: arcade, thumbnails.ID: thumbnails,
+	}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

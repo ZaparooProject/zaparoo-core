@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/pinuppopper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -771,7 +772,8 @@ func (*Platform) ManagedByPackageManager() bool {
 func (p *Platform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
-	scrapers := map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
+	thumbnails := libretrothumbs.NewPlatformScraper()
+	scrapers := map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
 	integration := p.popperIntegration()
 	if integration.Available(cfg) == nil {
 		popper := pinuppopper.NewPlatformScraper(integration.Locate)
