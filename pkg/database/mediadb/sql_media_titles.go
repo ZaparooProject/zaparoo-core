@@ -198,19 +198,40 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row *database.MediaTit
 
 // sqlGetTitlesBySystemID retrieves all media titles for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL titles upfront.
+func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.TitleWithSystem, error) {
+	titles := make([]database.TitleWithSystem, 0)
+	err := sqlForEachTitleBySystemID(ctx, ctx, db, systemID, func(title *database.TitleWithSystem) error {
+		titles = append(titles, *title)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return titles, nil
+}
+
+// sqlForEachTitleBySystemID calls fn for every media title of a system, in the
+// order sqlGetTitlesBySystemID returns them. The row passed to fn is reused
+// between calls; see sqlForEachMediaBySystemID for the two contexts.
+//
 // SystemID is filled from the argument rather than joined from Systems: every row's
 // SystemID equals the filter argument, so the join only added a per-row probe and a
 // redundant string crossing (the top reindex allocator). SystemDBID is still selected
 // because other callers read it.
-func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.TitleWithSystem, error) {
+func sqlForEachTitleBySystemID(
+	queryCtx, cancelCtx context.Context,
+	db *sql.DB,
+	systemID string,
+	fn func(*database.TitleWithSystem) error,
+) error {
 	query := `
 		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID
 		FROM MediaTitles t
 		WHERE t.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 	`
-	rows, err := db.QueryContext(ctx, query, systemID)
+	rows, err := db.QueryContext(queryCtx, query, systemID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query titles for system %s: %w", systemID, err)
+		return fmt.Errorf("failed to query titles for system %s: %w", systemID, err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -218,16 +239,25 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 		}
 	}()
 
-	titles := make([]database.TitleWithSystem, 0)
-	for rows.Next() {
-		var title database.TitleWithSystem
+	var title database.TitleWithSystem
+	for n := 1; rows.Next(); n++ {
+		if n%streamCancelCheckInterval == 0 {
+			if err := cancelCtx.Err(); err != nil {
+				return err //nolint:wrapcheck // callers match context errors directly
+			}
+		}
 		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID); err != nil {
-			return nil, fmt.Errorf("failed to scan title for system %s: %w", systemID, err)
+			return fmt.Errorf("failed to scan title for system %s: %w", systemID, err)
 		}
 		title.SystemID = systemID
-		titles = append(titles, title)
+		if err := fn(&title); err != nil {
+			return err
+		}
 	}
-	return titles, rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate titles for system %s: %w", systemID, err)
+	}
+	return nil
 }
 
 // sqlRecomputeTitleDisambiguation recomputes MediaTitles.DisambiguationTypes for

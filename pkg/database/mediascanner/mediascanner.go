@@ -61,8 +61,9 @@ const (
 	mediaDatabaseCorruptMessage     = "media database is corrupt; manual repair or rebuild required; " +
 		"original database left untouched"
 	// walkEntryWaitInterval is how often (in scanned filesystem entries) the
-	// parallel directory walk checks the pauser. Short enough that a throttled
-	// walk still yields promptly even on a directory with few matched files.
+	// parallel directory walk checks the pauser, besides walkWaitInterval.
+	// Short enough that a throttled walk still yields promptly even on a
+	// directory with few matched files.
 	walkEntryWaitInterval = 200
 	// rootValidationConcurrency bounds the goroutines probing root folders in
 	// parallel. Probes are independent metadata reads; running a few at once
@@ -841,9 +842,31 @@ func GetFiles(
 	path string,
 	pauser *syncutil.Pauser,
 ) ([]string, error) {
+	return getFilesReporting(ctx, cfg, platform, systemID, path, pauser, nil)
+}
+
+// getFilesReporting is GetFiles reporting the walk as it runs through onWalk,
+// which may be called from several walk workers at once.
+func getFilesReporting(
+	ctx context.Context,
+	cfg *config.Instance,
+	platform platforms.Platform,
+	systemID string,
+	path string,
+	pauser *syncutil.Pauser,
+	onWalk func(walkUpdate),
+) ([]string, error) {
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
+	}
+
+	if platforms.IsSourcePath(path) {
+		reader, ok := platform.(platforms.SourceRootReader)
+		if !ok {
+			return nil, fmt.Errorf("platform cannot read source root path %s", path)
+		}
+		return getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
 	}
 
 	var entriesScanned atomic.Int64
@@ -852,6 +875,7 @@ func GetFiles(
 	var symlinkAliasesSkipped atomic.Int64
 	var brokenAliasesSkipped atomic.Int64
 	walkStartTime := time.Now()
+	progress := newWalkProgress(systemID, path, walkStartTime, onWalk)
 
 	var mu syncutil.Mutex
 	var results []string
@@ -892,6 +916,8 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
+		now := time.Now()
+		progress.observe(now, n, p)
 		isSymlink := entryIsSymlink(d, direntSymlinkTypes, func() (os.FileInfo, error) {
 			return os.Lstat(p)
 		})
@@ -962,10 +988,11 @@ func GetFiles(
 				Msg("directory walk progress")
 		}
 
-		if n%walkEntryWaitInterval == 0 {
+		if progress.waitDue(now, n) {
 			if waitErr := pauser.Wait(ctx); waitErr != nil {
 				return fmt.Errorf("directory walk cancelled while throttled: %w", waitErr)
 			}
+			progress.waited(now, time.Now())
 		}
 
 		if d.IsDir() {
@@ -1045,6 +1072,9 @@ func GetFiles(
 
 	scanned := entriesScanned.Load()
 	walkElapsed := time.Since(walkStartTime)
+	if onWalk != nil {
+		onWalk(walkUpdate{dir: path, entries: scanned})
+	}
 
 	log.Debug().
 		Str("system", systemID).
@@ -1067,16 +1097,10 @@ func GetFiles(
 	}
 
 	// Warn when the walk rate is slow rather than when absolute elapsed
-	// time is high. A 33K-entry directory legitimately takes ~19s on
-	// MiSTer ARM + USB 2.0; only warn when the filesystem is genuinely
-	// sluggish (< 500 entries/sec sustained over at least 5 seconds).
-	const (
-		minSlowWalkElapsed = 5 * time.Second
-		minEntriesPerSec   = 500.0
-	)
-	if walkElapsed > minSlowWalkElapsed && scanned > 0 {
+	// time is high, unless the walk already said so while it ran.
+	if walkElapsed > minSlowWalkElapsed && scanned > 0 && !progress.warnedSlow.Load() {
 		rate := float64(scanned) / walkElapsed.Seconds()
-		if rate < minEntriesPerSec {
+		if rate < minWalkEntriesPerSec {
 			log.Warn().
 				Str("system", systemID).
 				Str("path", path).
@@ -1175,9 +1199,17 @@ const (
 type IndexStatus struct {
 	SystemID string
 	Phase    string // PhaseDiscovering, PhaseInitializing, or empty during indexing
+	// WalkPath is the folder a running folder scan is reading, empty outside
+	// a scan.
+	WalkPath string
 	Total    int
 	Step     int
 	Files    int
+	// WalkEntries counts the filesystem entries this system's folder scan has
+	// read so far, zero outside a scan.
+	WalkEntries int
+	// WalkStalled is set on the one update that finds the scan stalled.
+	WalkStalled bool
 }
 
 // NewNamesIndex takes a list of systems, indexes all valid game files on disk
@@ -1376,6 +1408,21 @@ func NewNamesIndexWithSources(
 	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
+	if reader, ok := platform.(platforms.SourceRootReader); ok {
+		// A host that cannot list or read its roots fails the run rather than
+		// leaving their media to be marked missing; see source_roots.go.
+		roots, rootsErr := reader.SourceRoots(ctx)
+		if rootsErr != nil {
+			return 0, fmt.Errorf("list source roots: %w", rootsErr)
+		}
+		sourcePaths, sourceErr := getSourceSystemPaths(ctx, reader, roots, systems, launcherCache)
+		if sourceErr != nil {
+			return 0, fmt.Errorf("discover source root systems: %w", sourceErr)
+		}
+		for _, v := range sourcePaths {
+			systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
+		}
+	}
 	logPhaseMetrics("path_discovery")
 	update(IndexStatus{Phase: PhaseInitializing})
 
@@ -1479,6 +1526,19 @@ func NewNamesIndexWithSources(
 		); setErr != nil {
 			return 0, setErr
 		}
+	}
+
+	// Leave out the systems auto-resume found repeatedly stopping the run.
+	// The list survives until a run completes or the user starts indexing,
+	// because a system stuck before the first commit restarts the run fresh
+	// rather than resuming it.
+	skippedSystems := make(map[string]bool)
+	skippedIDs, skipErr := db.GetIndexingSkippedSystems()
+	if skipErr != nil {
+		log.Warn().Err(skipErr).Msg("failed to read systems skipped by indexing resume")
+	}
+	for _, id := range skippedIDs {
+		skippedSystems[id] = true
 	}
 
 	// Mark the run before it commits anything. MediaDB picks its cache
@@ -1650,6 +1710,16 @@ func NewNamesIndexWithSources(
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
 			continue
 		}
+		if skippedSystems[systemID] {
+			// Its media stays as the last completed index left it.
+			log.Warn().Str("system", systemID).
+				Msg("skipping system that repeatedly stopped indexing from progressing")
+			completedSystems[systemID] = true
+			continue
+		}
+		if setErr := db.SetIndexingCurrentSystem(systemID); setErr != nil {
+			log.Warn().Err(setErr).Str("system", systemID).Msg("failed to record indexing current system")
+		}
 
 		// The slug search cache deliberately keeps this system's previous
 		// entries while it is rescanned; refreshMidScanCaches replaces them
@@ -1699,9 +1769,25 @@ func NewNamesIndexWithSources(
 			Int("paths", len(systemPaths[systemID])).
 			Msg("indexing system")
 
-		// 1. Filesystem scan (no-op if this system has no configured paths)
+		// 1. Filesystem scan (no-op if this system has no configured paths).
+		// Walk workers report concurrently; walkMu keeps status updates in
+		// order and walkBase carries the count across this system's paths.
+		var walkMu syncutil.Mutex
+		walkBase := 0
+		onWalk := func(u walkUpdate) {
+			walkMu.Lock()
+			defer walkMu.Unlock()
+			status.WalkEntries = walkBase + int(u.entries)
+			status.WalkPath = u.dir
+			status.WalkStalled = u.stalled
+			update(status)
+			status.WalkStalled = false
+		}
 		for _, systemPath := range systemPaths[systemID] {
-			pathFiles, pathErr := GetFiles(ctx, cfg, platform, systemID, systemPath, pauser)
+			pathFiles, pathErr := getFilesReporting(ctx, cfg, platform, systemID, systemPath, pauser, onWalk)
+			walkMu.Lock()
+			walkBase = status.WalkEntries
+			walkMu.Unlock()
 			if pathErr != nil {
 				if errors.Is(pathErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
@@ -1714,6 +1800,11 @@ func NewNamesIndexWithSources(
 			for _, f := range pathFiles {
 				files = append(files, platforms.ScanResult{Path: f})
 			}
+		}
+		if status.WalkEntries > 0 {
+			status.WalkEntries = 0
+			status.WalkPath = ""
+			update(status)
 		}
 
 		// 2. Per-system launcher scanners.
@@ -2406,6 +2497,16 @@ func NewNamesIndexWithSources(
 		); setErr != nil {
 			return 0, setErr
 		}
+	}
+	if setErr := bestEffortMaintenanceError(
+		db.SetIndexingCurrentSystem(""), "failed to clear indexing current system on completion",
+	); setErr != nil {
+		return 0, setErr
+	}
+	if setErr := bestEffortMaintenanceError(
+		db.SetIndexingSkippedSystems(nil), "failed to clear systems skipped by indexing resume on completion",
+	); setErr != nil {
+		return 0, setErr
 	}
 	if cacheErr := bestEffortMaintenanceError(
 		db.InvalidateCountCache(), "failed to invalidate media count cache after indexing",

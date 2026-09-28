@@ -285,7 +285,7 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	}
 }
 
-func formatDBMenuLabel(db models.IndexingStatusResponse) string {
+func formatDBMenuLabel(db *models.IndexingStatusResponse) string {
 	if db.Indexing {
 		if db.Paused {
 			return "Update index: paused"
@@ -764,7 +764,7 @@ func BuildGenerateDBPage(
 
 		dbLabel := "Update index: unavailable"
 		if state.mediaErr == nil {
-			dbLabel = formatDBMenuLabel(state.media.Database)
+			dbLabel = formatDBMenuLabel(&state.media.Database)
 		}
 		scrapeLabel := "Scrape metadata: unavailable"
 		if state.scrapeErr == nil {

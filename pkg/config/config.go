@@ -256,7 +256,27 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 //
 //nolint:gocritic // config struct copied for immutability
 func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance, error) {
-	cfgPath := os.Getenv(CfgEnv)
+	return constructConfig(configDir, defaults, fs, true)
+}
+
+// NewHostConfig honors the supplied absolute directory without environment overrides.
+// The host, not a desktop executable path, owns the frontend application lifecycle.
+//
+//nolint:gocritic // Config defaults are copied for immutability.
+func NewHostConfig(configDir string, defaults Values) (*Instance, error) {
+	if !filepath.IsAbs(configDir) {
+		return nil, errors.New("host config directory must be absolute")
+	}
+	return constructConfig(configDir, defaults, afero.NewOsFs(), false)
+}
+
+//nolint:gocritic // Config defaults are copied for immutability.
+func constructConfig(configDir string, defaults Values, fs afero.Fs, allowEnvironment bool) (*Instance, error) {
+	var cfgPath, appPath string
+	if allowEnvironment {
+		cfgPath = os.Getenv(CfgEnv)
+		appPath = os.Getenv(AppEnv)
+	}
 	if cfgPath != "" {
 		log.Debug().Str("path", cfgPath).Msg("using config path from environment")
 	} else {
@@ -267,7 +287,7 @@ func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance,
 		fs:       fs,
 		updateMu: syncutil.Mutex{},
 		mu:       syncutil.RWMutex{},
-		appPath:  os.Getenv(AppEnv),
+		appPath:  appPath,
 		cfgPath:  cfgPath,
 		vals:     cloneEncryptionValue(defaults),
 		defaults: cloneEncryptionValue(defaults),

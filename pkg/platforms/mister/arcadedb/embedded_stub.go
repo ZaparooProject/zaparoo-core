@@ -1,4 +1,4 @@
-//go:build linux && !embed_arcadedb
+//go:build linux && !embed_arcadedb && !android
 
 package arcadedb
 

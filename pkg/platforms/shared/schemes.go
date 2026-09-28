@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
 // Custom URI scheme constants for Zaparoo virtual paths.
@@ -41,6 +42,10 @@ const (
 	SchemeGOG        = "gog"
 	SchemePopper     = "popper"
 )
+
+// SchemeSource is media in a folder a host application granted to Core. Its
+// paths are multi-segment virtual paths; see platforms.SourceScheme.
+const SchemeSource = platforms.SourceScheme
 
 // Kodi URI scheme constants for Kodi media library items.
 const (
@@ -76,6 +81,14 @@ var customSchemes = []string{
 	SchemeKodiAlbum,
 	SchemeKodiArtist,
 	SchemeKodiShow,
+	SchemeSource,
+}
+
+// fileBackedSchemes are the custom schemes whose virtual path names a file:
+// its last segment carries the file's extension, as a filesystem path does.
+// Every other custom scheme names a title, which has no extension.
+var fileBackedSchemes = []string{
+	SchemeSource,
 }
 
 // standardSchemesForDecoding lists standard URI schemes that should have URL decoding applied
@@ -98,6 +111,18 @@ func StandardSchemesForDecoding() []string {
 func IsCustomScheme(scheme string) bool {
 	scheme = strings.ToLower(scheme)
 	for _, s := range customSchemes {
+		if s == scheme {
+			return true
+		}
+	}
+	return false
+}
+
+// IsFileBackedScheme reports whether a custom scheme's paths end in a file
+// name with an extension rather than a title.
+func IsFileBackedScheme(scheme string) bool {
+	scheme = strings.ToLower(scheme)
+	for _, s := range fileBackedSchemes {
 		if s == scheme {
 			return true
 		}

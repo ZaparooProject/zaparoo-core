@@ -632,7 +632,7 @@ func TestParsedGamelistFeedsCompanionAndRegularRecords(t *testing.T) {
 		context.Background(),
 		system,
 		mediaByPath(database.Media{DBID: 12, MediaTitleDBID: 23, Path: filepath.Join(root, "regular.nes")}),
-		parsed,
+		parsed, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -4445,8 +4445,9 @@ func TestScrapeLoop_CompanionSkipsAlreadyScrapedMedia(t *testing.T) {
 	)
 
 	mockDB := newMockMediaDB(t)
+	// No entry names a title slug, so no title needs loading.
 	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
-		Return([]database.MediaTitle{}, nil)
+		Return([]database.MediaTitle{}, nil).Maybe()
 	mockDB.On("GetMediaBySystemID", "nes").
 		Return([]database.MediaWithFullPath{{
 			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "child.rom"),
