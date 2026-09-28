@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const genericRepairMessage = "player request could not be completed"
+const genericRepairMessage = "launch request could not be completed"
 
 func repairErrorOf(t *testing.T, err error) *platforms.LaunchRepairError {
 	t.Helper()

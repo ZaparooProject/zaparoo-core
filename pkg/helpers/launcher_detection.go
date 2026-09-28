@@ -30,8 +30,9 @@ const (
 	LauncherDetectionAmbiguous
 )
 
-// LauncherKnownMissing reports a launcher whose platform looked for its player
-// and did not find it. An unscanned launcher is not known to be missing.
+// LauncherKnownMissing reports a launcher the platform looked for and did not
+// find installed. A launcher the platform never checked is not known to be
+// missing.
 func LauncherKnownMissing(launcher *platforms.Launcher) bool {
 	return launcher.Detected != nil && !*launcher.Detected
 }

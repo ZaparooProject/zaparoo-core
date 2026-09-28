@@ -353,7 +353,7 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			message:  "playtime limit reached",
 		},
 		{
-			name: "coded player repair carries its reason and names",
+			name: "coded launcher repair carries its reason and names",
 			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
 				platforms.NewLaunchRepairErrorWithReason(platforms.LaunchRepairLauncherPluginMissing,
 					map[string]string{"launcher": "RetroArch", "plugin": "Mesen"},
@@ -366,16 +366,16 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 		{
 			name: "a repair error with no code is unspecified",
 			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
-				platforms.NewLaunchRepairError("allow player storage access in system settings")),
+				platforms.NewLaunchRepairError("allow storage access in system settings")),
 			category: models.ErrorCategoryLaunchRepair,
-			message:  "allow player storage access in system settings",
+			message:  "allow storage access in system settings",
 			reason:   "unspecified",
 		},
 		{
 			name:     "invalid repair message stays generic",
 			cause:    platforms.NewLaunchRepairError("invalid\nmessage"),
 			category: models.ErrorCategoryLaunchRepair,
-			message:  "player request could not be completed",
+			message:  "launch request could not be completed",
 			reason:   "unspecified",
 		},
 		{

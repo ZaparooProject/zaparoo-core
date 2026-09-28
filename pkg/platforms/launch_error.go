@@ -104,7 +104,7 @@ const (
 	// repairParamPunctuation is every non-alphanumeric character a display name
 	// may contain. It admits no path, URI, script, query or assignment syntax.
 	repairParamPunctuation = " !()+-._"
-	defaultRepairMessage   = "player request could not be completed"
+	defaultRepairMessage   = "launch request could not be completed"
 )
 
 // launchRepairReasons is the closed set, in documentation order.

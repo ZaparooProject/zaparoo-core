@@ -1035,7 +1035,7 @@ func launcherSpecificity(l *platforms.Launcher) int {
 
 // mostSpecificLauncher picks the launcher to infer for a path from a non-empty
 // list of matches. The highest specificity wins and registration order breaks
-// ties, but a launcher whose player is known to be missing is only chosen when
+// ties, but a launcher known to be missing is only chosen when
 // every match is: it still explains what to install.
 func mostSpecificLauncher(launchers []platforms.Launcher) (best, bestScore int) {
 	best, bestScore = -1, -1

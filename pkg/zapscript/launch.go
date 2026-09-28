@@ -289,7 +289,7 @@ func inferLauncherForPathWithAvailability(
 		if requireAvailable && launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
-		// A launcher whose player is known to be missing only stands in when
+		// A launcher known to be missing only stands in when
 		// every other match is missing too.
 		missing := helpers.LauncherKnownMissing(&launchers[i])
 		score := launcherInferenceScore(&launchers[i])

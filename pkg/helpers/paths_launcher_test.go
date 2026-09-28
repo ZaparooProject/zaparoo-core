@@ -770,10 +770,10 @@ func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
 	assert.Equal(t, "First", launcher.ID, "on tie, first match should win")
 }
 
-// TestFindLauncher_SkipsKnownMissingPlayer covers several launchers serving one
-// path where the platform scanned for their players. Registration order breaks
-// the tie, but never in favour of a player known to be absent.
-func TestFindLauncher_SkipsKnownMissingPlayer(t *testing.T) {
+// TestFindLauncher_SkipsKnownMissingLauncher covers several launchers serving
+// one path where the platform checked which are installed. Registration order
+// breaks the tie, but never in favour of a launcher known to be missing.
+func TestFindLauncher_SkipsKnownMissingLauncher(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	found, missing := true, false
 	tests := []struct {
