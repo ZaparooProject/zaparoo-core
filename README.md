@@ -157,6 +157,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/kragent66-glitch">
+                    <img src="https://avatars.githubusercontent.com/u/314170412?v=4" width="100;" alt="kragent66-glitch"/>
+                    <br />
+                    <sub><b>Utkarsh Bhangale</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/jmf866">
                     <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>
                     <br />

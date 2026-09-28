@@ -25,12 +25,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -249,21 +249,18 @@ func scriptTooLongErr(err error) error {
 // kept for logging and errors.Is.
 func runError(err error) error {
 	category, message := runfailure.Classify(err)
+	var repair *platforms.LaunchRepairError
+	if category == models.ErrorCategoryLaunchRepair && errors.As(err, &repair) {
+		// The reason and its bounded display names are the contract; the
+		// message is the fallback for a client that only reads it.
+		return models.CategorizedDetailErr(category, message,
+			string(repair.Reason()), repair.Params(), err)
+	}
 	return models.CategorizedErr(category, message, err)
 }
 
 func isLocalRequest(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-
-	return ip.IsLoopback()
+	return middleware.IsLocalRequest(r)
 }
 
 func HandleRunRest(

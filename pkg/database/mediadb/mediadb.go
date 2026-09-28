@@ -1938,6 +1938,45 @@ func (db *MediaDB) GetIndexingPlanSystems() ([]string, error) {
 	return sqlGetIndexingPlanSystems(db.ctx, sqlDB)
 }
 
+// SetIndexingCurrentSystem records the system an index run is working on, so
+// a run interrupted inside it can be traced back to it on the next boot.
+func (db *MediaDB) SetIndexingCurrentSystem(systemID string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexingCurrentSystem(db.ctx, db.conn(), systemID)
+}
+
+// GetIndexingCurrentSystem returns the system an index run was last working on.
+func (db *MediaDB) GetIndexingCurrentSystem() (string, error) {
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
+	}
+	return sqlGetIndexingCurrentSystem(db.ctx, sqlDB)
+}
+
+// SetIndexingSkippedSystems stores the systems a resumed index run leaves out.
+func (db *MediaDB) SetIndexingSkippedSystems(systemIDs []string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexingSkippedSystems(db.ctx, db.conn(), systemIDs)
+}
+
+// GetIndexingSkippedSystems returns the systems a resumed index run leaves out.
+func (db *MediaDB) GetIndexingSkippedSystems() ([]string, error) {
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return nil, err
+	}
+	return sqlGetIndexingSkippedSystems(db.ctx, sqlDB)
+}
+
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql.Load()
 }
@@ -4782,6 +4821,35 @@ func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSys
 // Non-cancellable context: see GetTitlesBySystemID.
 func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
 	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID)
+}
+
+// ForEachTitleBySystemID calls fn for every row GetTitlesBySystemID would
+// return, in the same order, without holding them all. The row passed to fn is
+// reused between calls. The query runs without cancellation, as in
+// GetTitlesBySystemID, and ctx is checked between rows instead.
+func (db *MediaDB) ForEachTitleBySystemID(
+	ctx context.Context, systemID string, fn func(*database.TitleWithSystem) error,
+) error {
+	return sqlForEachTitleBySystemID(context.WithoutCancel(ctx), ctx, db.sql.Load(), systemID, fn)
+}
+
+// GetMediaPageBySystemID returns up to limit of GetMediaBySystemID's rows
+// whose Path sorts after afterPath, in the same order. An empty afterPath
+// starts from the first row.
+func (db *MediaDB) GetMediaPageBySystemID(
+	ctx context.Context, systemID, afterPath string, limit int,
+) ([]database.MediaWithFullPath, error) {
+	return sqlGetMediaPageBySystemID(ctx, db.sql.Load(), systemID, afterPath, limit)
+}
+
+// ForEachMediaBySystemID calls fn for every row GetMediaBySystemID would
+// return, in the same order, without holding them all. The row passed to fn is
+// reused between calls. The query runs without cancellation, as in
+// GetMediaBySystemID, and ctx is checked between rows instead.
+func (db *MediaDB) ForEachMediaBySystemID(
+	ctx context.Context, systemID string, fn func(*database.MediaWithFullPath) error,
+) error {
+	return sqlForEachMediaBySystemID(context.WithoutCancel(ctx), ctx, db.sql.Load(), systemID, fn)
 }
 
 func logOptimizationFailure(err error, message string) {

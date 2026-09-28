@@ -195,21 +195,48 @@ func sqlGetMissingMediaCount(ctx context.Context, db *sql.DB) (int, error) {
 
 // sqlGetMediaBySystemID retrieves all media for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
+func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
+	media := make([]database.MediaWithFullPath, 0)
+	err := sqlForEachMediaBySystemID(ctx, ctx, db, systemID, func(m *database.MediaWithFullPath) error {
+		media = append(media, *m)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return media, nil
+}
+
+// streamCancelCheckInterval is how many rows a streaming read handles between
+// cancellation checks. The query itself runs without cancellation, see
+// MediaDB.GetTitlesBySystemID.
+const streamCancelCheckInterval = 1024
+
+// sqlForEachMediaBySystemID calls fn for every media row of a system, in the
+// order sqlGetMediaBySystemID returns them. The row passed to fn is reused
+// between calls. queryCtx runs the query and cancelCtx is checked between
+// rows, so a caller can stop a long read without a cancellable query.
+//
 // Single-table query on Media: this runs once per system over every media row,
 // and no caller reads TitleSlug, so the MediaTitles join would only add a
 // per-row B-tree probe. SystemID is filled from the argument. Ordering by Path
 // lets SQLite stream from the UNIQUE(SystemDBID, Path) index instead of
 // filtering by system and then building a temp sort by DBID for large systems.
-func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
+func sqlForEachMediaBySystemID(
+	queryCtx, cancelCtx context.Context,
+	db *sql.DB,
+	systemID string,
+	fn func(*database.MediaWithFullPath) error,
+) error {
 	query := `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
 		FROM Media m INDEXED BY sqlite_autoindex_Media_1
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 		ORDER BY m.Path
 	`
-	rows, err := db.QueryContext(ctx, query, systemID)
+	rows, err := db.QueryContext(queryCtx, query, systemID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query media for system %s: %w", systemID, err)
+		return fmt.Errorf("failed to query media for system %s: %w", systemID, err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -217,18 +244,69 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 		}
 	}()
 
-	media := make([]database.MediaWithFullPath, 0)
+	var m database.MediaWithFullPath
+	for n := 1; rows.Next(); n++ {
+		if n%streamCancelCheckInterval == 0 {
+			if err := cancelCtx.Err(); err != nil {
+				return err //nolint:wrapcheck // callers match context errors directly
+			}
+		}
+		if err := rows.Scan(
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &m.IsMissing,
+		); err != nil {
+			return fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
+		}
+		m.SystemID = systemID
+		if err := fn(&m); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate media for system %s: %w", systemID, err)
+	}
+	return nil
+}
+
+// sqlGetMediaPageBySystemID returns up to limit media rows of a system whose
+// Path sorts after afterPath, in sqlForEachMediaBySystemID's order. Seeking on
+// the UNIQUE(SystemDBID, Path) index makes each page cost its own rows, so
+// paging through a system reads it once in total.
+func sqlGetMediaPageBySystemID(
+	ctx context.Context, db *sql.DB, systemID, afterPath string, limit int,
+) ([]database.MediaWithFullPath, error) {
+	query := `
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
+		FROM Media m INDEXED BY sqlite_autoindex_Media_1
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		  AND m.Path > ?
+		ORDER BY m.Path
+		LIMIT ?
+	`
+	rows, err := db.QueryContext(ctx, query, systemID, afterPath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media page for system %s: %w", systemID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.MediaWithFullPath, 0, limit)
 	for rows.Next() {
 		var m database.MediaWithFullPath
 		if err := rows.Scan(
 			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &m.IsMissing,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
+			return nil, fmt.Errorf("failed to scan media page for system %s: %w", systemID, err)
 		}
 		m.SystemID = systemID
 		media = append(media, m)
 	}
-	return media, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate media page for system %s: %w", systemID, err)
+	}
+	return media, nil
 }
 
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.

@@ -189,6 +189,34 @@ func TestPathToMGLDefArcadeMRANeedsNoMGL(t *testing.T) {
 	}
 }
 
+func TestAtari800Definition(t *testing.T) {
+	t.Parallel()
+
+	// Atari800 core CONF_STR: S6=Boot D1, F8=Load Cart, S0-S3=Mount D1-D4 (no reboot)
+	core, err := catalog.Get("Atari800")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Disk boot: method="s" index=6 matches core's "S6 Boot D1" token
+	params, err := catalog.PathToMGLDef(core, "Bandits.atr")
+	if err != nil {
+		t.Fatalf("PathToMGLDef(%s, \"Bandits.atr\") failed: %v", core.ID, err)
+	}
+	if params.Method != "s" || params.Index != 6 {
+		t.Fatalf("expected Disk D1 boot: method=\"s\" index=6, got %+v", params)
+	}
+
+	// Cartridge load: method="f" index=8 matches core's "F8 Load Cart" token
+	params, err = catalog.PathToMGLDef(core, "atariblast.car")
+	if err != nil {
+		t.Fatalf("PathToMGLDef(%s, \"atariblast.car\") failed: %v", core.ID, err)
+	}
+	if params.Method != "f" || params.Index != 8 {
+		t.Fatalf("expected Cartridge load: method=\"f\" index=8, got %+v", params)
+	}
+}
+
 func TestGroupsIsSafeForConcurrentUse(t *testing.T) {
 	t.Parallel()
 

@@ -128,6 +128,10 @@ func Classify(err error) (category, message string) {
 	case errors.Is(err, playtime.ErrLimitReached):
 		return models.ErrorCategoryPlaytimeLimit, "playtime limit reached"
 	default:
+		var repair *platforms.LaunchRepairError
+		if errors.As(err, &repair) {
+			return models.ErrorCategoryLaunchRepair, repair.Error()
+		}
 		return models.ErrorCategoryExecutionFailed, "ZapScript execution failed"
 	}
 }

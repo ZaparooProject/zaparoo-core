@@ -120,29 +120,69 @@ func applyMediaLauncherOverrideForPath(
 		return current
 	}
 	launcher, found := inferLauncherForPath(pl, env, path)
-	if !found || launcher.SystemID == "" {
-		return current
+	if !found {
+		// The override may name a launcher that cannot run right now. Its
+		// own availability error is the useful one, so the media row is
+		// still resolved when nothing that matches the path is available.
+		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
 	}
 
 	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
-	system, err := env.Database.MediaDB.FindSystemBySystemID(launcher.SystemID)
-	if err != nil {
-		log.Debug().Err(err).Str("system", launcher.SystemID).Msg("failed to resolve launch path system")
+	if found && launcher.SystemID != "" {
+		if mediaDBID, ok := findMediaInSystem(ctx, env, launcher.SystemID, path); ok {
+			return applyMediaLauncherOverrideWithReplace(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
+		}
+	}
+	// The launcher inferred from the path can belong to another system than
+	// the media row, when a launcher of that system also accepts the path.
+	// Look the path up across systems, and use it only when one row has it.
+	row, ok := findUniqueMediaByPath(ctx, env, path)
+	if !ok {
 		return current
+	}
+	return applyMediaLauncherOverrideWithReplace(pl, env, row.DBID, row.SystemID, replaceCurrent)
+}
+
+// findMediaInSystem returns the DBID of the media row for path in systemID.
+func findMediaInSystem(ctx context.Context, env *platforms.CmdEnv, systemID, path string) (int64, bool) {
+	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemID).Msg("failed to resolve launch path system")
+		return 0, false
 	}
 	media, err := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, path)
-	if errors.Is(err, sql.ErrNoRows) {
-		return current
-	}
 	if err != nil {
-		log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media")
-		return current
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media")
+		}
+		return 0, false
 	}
 	if media == nil {
-		return current
+		return 0, false
 	}
-	return applyMediaLauncherOverrideWithReplace(pl, env, media.DBID, launcher.SystemID, replaceCurrent)
+	return media.DBID, true
+}
+
+// findUniqueMediaByPath returns the one media row, in any system, whose path
+// is exactly path. It reports false when there is none, or when several
+// systems index the same path and nothing says which one is meant.
+func findUniqueMediaByPath(ctx context.Context, env *platforms.CmdEnv, path string) (database.MediaPathID, bool) {
+	rows, err := env.Database.MediaDB.FindMediaIDsByPaths(ctx, []string{path})
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media across systems")
+		return database.MediaPathID{}, false
+	}
+	var match database.MediaPathID
+	matches := 0
+	for i := range rows {
+		if rows[i].Path != path {
+			continue
+		}
+		match = rows[i]
+		matches++
+	}
+	return match, matches == 1
 }
 
 func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
@@ -263,20 +303,34 @@ func applySystemDefaultLauncherForPath(pl platforms.Platform, env *platforms.Cmd
 }
 
 func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path string) (platforms.Launcher, bool) {
+	return inferLauncherForPathWithAvailability(pl, env, path, true)
+}
+
+func inferLauncherForPathWithAvailability(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	requireAvailable bool,
+) (platforms.Launcher, bool) {
 	launchers := pl.Launchers(env.Cfg)
 	best := -1
 	bestScore := -1
+	bestMissing := true
 	for i := range launchers {
 		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
 			continue
 		}
-		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
+		if requireAvailable && launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
+		// A launcher known to be missing only stands in when
+		// every other match is missing too.
+		missing := helpers.LauncherKnownMissing(&launchers[i])
 		score := launcherInferenceScore(&launchers[i])
-		if score > bestScore {
+		if best == -1 || (bestMissing && !missing) || (bestMissing == missing && score > bestScore) {
 			best = i
 			bestScore = score
+			bestMissing = missing
 		}
 	}
 	if best == -1 {
@@ -311,32 +365,31 @@ func inferLauncherForSystemPath(
 	}
 
 	launchers := pl.Launchers(env.Cfg)
-	match := -1
+	candidates := make([]platforms.Launcher, 0, len(launchers))
 	for i := range launchers {
-		if launchers[i].ScanOnly {
-			continue
-		}
-		if !strings.EqualFold(launchers[i].SystemID, systemID) {
+		if launchers[i].ScanOnly || !strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
 		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
 		for _, supported := range launchers[i].Extensions {
-			if !strings.EqualFold(ext, supported) {
-				continue
+			if strings.EqualFold(ext, supported) {
+				candidates = append(candidates, launchers[i])
+				break
 			}
-			if match != -1 {
-				return platforms.Launcher{}, false
-			}
-			match = i
-			break
 		}
 	}
-	if match == -1 {
+
+	if detected, result := helpers.SelectDetectedLauncher(candidates); result == helpers.LauncherDetectionUnique {
+		return detected, true
+	} else if result != helpers.LauncherDetectionUnscanned {
 		return platforms.Launcher{}, false
 	}
-	return launchers[match], true
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
+	}
+	return candidates[0], true
 }
 
 //nolint:gocritic // single-use parameter in command handler
