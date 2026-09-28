@@ -22,6 +22,7 @@
 package ids
 
 const (
+	Android   = "android"
 	Batocera  = "batocera"
 	Bazzite   = "bazzite"
 	ChimeraOS = "chimeraos"

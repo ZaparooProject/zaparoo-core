@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -67,7 +66,7 @@ func folder(name string) platforms.SourceEntry {
 
 func mustSourcePath(t *testing.T, root string, segments ...string) string {
 	t.Helper()
-	id, _, err := sourceLocation(root)
+	id, _, err := platforms.SourceLocation(root)
 	require.NoError(t, err)
 	path, err := sourcePath(id, segments)
 	require.NoError(t, err)
@@ -219,26 +218,4 @@ func TestSourceRootFailuresNeverMarkMediaMissing(t *testing.T) {
 	_, err = index()
 	require.ErrorIs(t, err, unavailable)
 	assert.Equal(t, indexed, present())
-}
-
-func TestSourceLocation(t *testing.T) {
-	t.Parallel()
-	root := platforms.SourceRootPath("tree")
-	id, segments, err := sourceLocation(root)
-	require.NoError(t, err)
-	assert.Equal(t, strings.TrimPrefix(root, "source://"), id)
-	assert.Empty(t, segments)
-
-	path := mustSourcePath(t, root, "NES", "Game (USA).nes")
-	gotID, gotSegments, err := sourceLocation(path)
-	require.NoError(t, err)
-	assert.Equal(t, id, gotID)
-	assert.Equal(t, []string{"NES", "Game (USA).nes"}, gotSegments)
-
-	_, _, err = sourceLocation("/roms/nes/game.nes")
-	require.ErrorIs(t, err, errNotSourcePath)
-	_, _, err = sourceLocation("source://")
-	require.ErrorIs(t, err, errNotSourcePath)
-	_, _, err = sourceLocation(root + "/NES/Game (USA).nes")
-	require.Error(t, err, "a non-canonical spelling is rejected")
 }

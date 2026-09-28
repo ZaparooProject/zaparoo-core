@@ -23,6 +23,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 )
 
 // SourceScheme is the virtual path scheme of media in a source root: a media
@@ -38,6 +43,33 @@ const SourceScheme = "source"
 func SourceRootPath(reference string) string {
 	sum := sha256.Sum256([]byte("zaparoo-host-source-v1\x00" + reference))
 	return SourceScheme + "://" + hex.EncodeToString(sum[:])
+}
+
+// ErrNotSourcePath reports a path that is not a source root or a path below one.
+var ErrNotSourcePath = errors.New("not a source root path")
+
+// IsSourcePath reports whether path is a source root or a path below one.
+func IsSourcePath(path string) bool {
+	prefix := SourceScheme + "://"
+	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
+}
+
+// SourceLocation splits a source root, or a path below one, into the root's
+// ID and the decoded segments below it. A root has no segments. A path below
+// a root must be in its canonical form.
+func SourceLocation(path string) (id string, segments []string, err error) {
+	if !IsSourcePath(path) {
+		return "", nil, ErrNotSourcePath
+	}
+	rest := path[len(SourceScheme)+3:]
+	if !strings.Contains(rest, "/") {
+		return rest, nil, nil
+	}
+	parsed, err := virtualpath.ParseVirtualPathSegments(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("parse source path %s: %w", path, err)
+	}
+	return parsed.ID, parsed.Segments, nil
 }
 
 // SourceEntry is one entry of a source root directory.

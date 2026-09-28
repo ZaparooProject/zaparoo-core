@@ -846,7 +846,7 @@ func GetFiles(
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
-	if isSourcePath(path) {
+	if platforms.IsSourcePath(path) {
 		reader, ok := platform.(platforms.SourceRootReader)
 		if !ok {
 			return nil, fmt.Errorf("platform cannot read source root path %s", path)
