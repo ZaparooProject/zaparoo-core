@@ -87,6 +87,19 @@ type StartResult struct {
 	Err func() error
 }
 
+// uiRendererFor picks who draws global UI events. An embedded start uses only
+// the host's renderer, never one the platform happens to implement: the host
+// owns the screen, and a nil host renderer leaves drawing to API clients.
+func uiRendererFor(pl platforms.Platform, opts *EmbeddedOptions) uievents.Renderer {
+	if opts != nil {
+		return opts.Renderer
+	}
+	if renderer, ok := pl.(uievents.Renderer); ok {
+		return renderer
+	}
+	return nil
+}
+
 func resumeAndScheduleStartupMediaWork(
 	ctx context.Context,
 	scheduler *idle.Scheduler,
@@ -473,13 +486,7 @@ func startServiceWithOptions(
 	)
 	notifBroker.Start()
 
-	var uiRenderer uievents.Renderer
-	if opts != nil {
-		uiRenderer = opts.Renderer
-	} else if renderer, ok := pl.(uievents.Renderer); ok {
-		uiRenderer = renderer
-	}
-	uiEvents := uievents.New(clockwork.NewRealClock(), uiRenderer, func(payload models.UIStateResponse) {
+	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
 		notifications.UIChanged(notifBroker.Publish, payload)
 	})
 	st.SetUIEvents(uiEvents)

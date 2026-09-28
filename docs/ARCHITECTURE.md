@@ -31,6 +31,17 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime, global UI). See `docs/api/notifications.md`.
 - **Full docs**: `docs/api/`
 
+## Embedding
+
+A host application can run Core in its own process instead of as a service binary. Every existing platform keeps its standalone behaviour; each seam below is opt-in.
+
+- **Host-managed paths**: `platforms.Settings.HostManagedPaths` makes the configured data, config, cache and log directories authoritative, with no portable-directory probing next to the executable. `config.NewHostConfig` loads the config from an absolute host directory and ignores the process environment overrides.
+- **No self-update**: `platforms.Settings.DisableSelfUpdate` turns off the updater, its watchdog and rollback. `update.check` and `update.status` report `managed`, and `update.apply` is refused: the host updates Core with its own package.
+- **Embedded start**: `service.StartEmbedded(pl, cfg, EmbeddedOptions{...})` requires both settings above and absolute directories. The host supplies the parent context, the API listener, the audio player, an optional API key provider and UI renderer, and phase (`starting`, `migrating`, `ready`, `stopped`) and fatal-error callbacks. Cancelling the parent context stops the service, and start and stop can repeat in one process. An embedded start creates no startup server: the host owns the listener and reports its own startup state. Global UI events are drawn only by the host's renderer, never one the platform implements.
+- **Supplied listener**: `api.StartWithListener(ListenerOptions{Listener, APIKeys, Network, OnNetwork})` serves the API on a listener the host created, typically an app-private Unix socket. Ready is reported once the listener accepts.
+- **Locality and auth on a supplied listener**: a Unix-socket peer is local (`IsLocalRequest`), so it skips the IP filter and rate limiter and may use plaintext WebSocket even when encryption is required: the socket is reachable only by the host app. It still needs a key from `APIKeys` on every private route, even when no standalone keys are configured; `/health` stays open. No TCP peer of a supplied-listener server is local, loopback included, because an embedding app shares loopback with every other app on the device.
+- **Network listener**: with `Network`, the server also binds the configured TCP address and serves the same API there exactly as a standalone server would (configured keys, pairing, encryption, IP filter, rate limits, origins); `APIKeys` authenticates nobody there. A failed bind is logged and costs only remote access; the supplied listener keeps serving.
+
 ## Global UI Events
 
 `pkg/ui/events/` owns presentation lifecycle, authoritative expiry, monotonic revision, and first-response-wins arbitration. It initially exposes at most one active event but serializes plural `events`/`resolved` arrays so future overlays or priorities need no wire-format break.

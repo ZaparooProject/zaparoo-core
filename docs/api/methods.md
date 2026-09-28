@@ -5796,7 +5796,7 @@ None.
 | latestVersion   | string  | No       | The latest available version (if the check succeeded).                                                                                                               |
 | releaseNotes    | string  | No       | Release notes for the latest version.                                                                                                                                |
 | channel         | string  | No       | The update channel the check used: `stable` or `beta`.                                                                                                               |
-| eligibility     | string  | No       | Whether this install can take OTA updates: `eligible`, `development`, `unsupported` (this install cannot be replaced in place, such as a Windows install under a directory Zaparoo cannot write to), or `managed` (a package manager owns the install, so it should do the installing). An install that cannot be replaced reports `unsupported` even when a package manager owns it, because that is the one an install is actually refused for. |
+| eligibility     | string  | No       | Whether this install can take OTA updates: `eligible`, `development`, `unsupported` (this install cannot be replaced in place, such as a Windows install under a directory Zaparoo cannot write to), or `managed` (a package manager owns the install, so it should do the installing). An install that cannot be replaced reports `unsupported` even when a package manager owns it, because that is the one an install is actually refused for. The exception is a Core embedded in a host application, which reports `managed` regardless: it never replaces its own executable, so replaceability does not apply. |
 | checkedAt       | string  | No       | RFC3339 timestamp of when the release metadata was last fetched.                                                                                                     |
 | rolloutHeld     | boolean | No       | The release is newer but has not reached this device's share of the fleet yet. Applying it by hand still works; automatic installs wait.                              |
 | blockedBy       | object  | No       | What is stopping an update being applied right now. Absent when nothing is.                                                                                          |
@@ -5882,6 +5882,8 @@ Reasons:
 **Access:** Requires `update.apply`.
 
 Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs.
+
+A Core embedded in a host application refuses `update.apply`: the host updates Core as part of its own package.
 
 Before anything is downloaded the device checks that it is safe to install: nothing writing to the databases, no backup or token write in progress, nothing playing, and enough battery. A refusal comes back as an error whose message is the same text `update.check` reports in `blockedBy.message`. Call `update.check` first to know in advance, and whether `force` would get past it.
 
