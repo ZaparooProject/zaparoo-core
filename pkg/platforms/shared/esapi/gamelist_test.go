@@ -21,6 +21,7 @@ package esapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -548,4 +549,27 @@ func TestParseRating(t *testing.T) {
 			assert.InDelta(t, tt.want, got, 0.0001)
 		})
 	}
+}
+
+// A cancelled scrape must not wait for a large list to finish decoding: on
+// MiSTer the Companion C64 list takes about ten seconds.
+func TestReadGameListXMLLimitFSContextStopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	var body strings.Builder
+	_, _ = body.WriteString("<gameList>")
+	for i := range 2000 {
+		_, _ = fmt.Fprintf(&body, "<game><path>./g%d.d64</path><name>G %d</name></game>", i, i)
+	}
+	_, _ = body.WriteString("</gameList>")
+	require.NoError(t, afero.WriteFile(fs, "/roms/gamelist.xml", []byte(body.String()), 0o600))
+
+	gl, err := ReadGameListXMLLimitFSContext(context.Background(), fs, "/roms/gamelist.xml", MaxGameListXMLSize)
+	require.NoError(t, err)
+	assert.Len(t, gl.Games, 2000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = ReadGameListXMLLimitFSContext(ctx, fs, "/roms/gamelist.xml", MaxGameListXMLSize)
+	require.ErrorIs(t, err, context.Canceled)
 }

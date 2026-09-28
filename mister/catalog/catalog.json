@@ -666,7 +666,8 @@
         {
           "mgl": {
             "method": "s",
-            "delay": 1
+            "delay": 1,
+            "index": 6
           },
           "label": "D1",
           "extensions": [
@@ -692,9 +693,9 @@
         },
         {
           "mgl": {
-            "method": "s",
+            "method": "f",
             "delay": 1,
-            "index": 2
+            "index": 8
           },
           "label": "Cartridge",
           "extensions": [

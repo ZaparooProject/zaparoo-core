@@ -22,6 +22,7 @@ package gamelistxml
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -31,6 +32,9 @@ func (g *GamelistXMLScraper) scrapeScoped(
 	ctx context.Context, opts scraper.ScrapeOptions, systems []scraper.ScrapeSystem,
 	mdb database.MediaDBI, ch chan<- scraper.ScrapeUpdate,
 ) {
+	// The selection and the parsed gamelist are released on every exit, as a
+	// full run releases each system's.
+	defer debug.FreeOSMemory()
 	selection, err := scraper.LoadScopedSelection(ctx, mdb, opts, "gamelist.xml")
 	if err != nil {
 		ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
@@ -71,7 +75,7 @@ func (g *GamelistXMLScraper) scrapeScoped(
 			}
 		}
 		targets = append(targets, g.scopedCompanionTargets(ctx, opts, system, indexes, parsed)...)
-		records, err := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+		records, err := g.loadRecordsFromParsed(ctx, system, indexes, parsed, nil)
 		if err != nil {
 			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}
 			return

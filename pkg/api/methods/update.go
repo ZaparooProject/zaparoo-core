@@ -172,6 +172,10 @@ func HandleUpdateCheck(
 		return nil, err
 	}
 
+	if env.Platform.Settings().DisableSelfUpdate {
+		return hostManagedUpdateResponse(env.Config), nil
+	}
+
 	autoInstall := env.Config.UpdateInstall()
 
 	opts := updaterOptions(&env, updater.ModeManual)
@@ -214,9 +218,21 @@ func HandleUpdateStatus(
 		return nil, err
 	}
 
+	if env.Platform.Settings().DisableSelfUpdate {
+		return hostManagedUpdateResponse(env.Config), nil
+	}
+
 	opts := updaterOptions(&env, updater.ModeManual)
 	opts.Gate = updateGateDeps(&env)
 	return updateResponse(statusFn(env.Context, opts), env.Config.UpdateInstall()), nil
+}
+
+func hostManagedUpdateResponse(cfg *config.Instance) models.UpdateCheckResponse {
+	return models.UpdateCheckResponse{
+		CurrentVersion: config.AppVersion,
+		Channel:        cfg.UpdateChannel(),
+		Eligibility:    updater.EligibilityManaged,
+	}
 }
 
 func updateResponse(result *updater.Result, autoInstall bool) models.UpdateCheckResponse {
@@ -278,6 +294,10 @@ func HandleUpdateApply(
 			Str("role", env.ClientRole).
 			Msg("rejected update apply request")
 		return nil, err
+	}
+
+	if env.Platform.Settings().DisableSelfUpdate {
+		return nil, models.ClientErrf("updates are managed by the host application")
 	}
 
 	var params models.UpdateApplyParams

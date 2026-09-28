@@ -305,6 +305,17 @@ func DecodeURIIfNeeded(uri string) string {
 	return uri
 }
 
+// virtualPathLeaf returns the decoded last segment of a virtual path's name,
+// or "" when p is not a virtual path.
+func virtualPathLeaf(p string) string {
+	result, err := virtualpath.ParseVirtualPathStr(p)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(result.Name, "/")
+	return segments[len(segments)-1]
+}
+
 func FilenameFromPath(p string) string {
 	if p == "" || !utf8.ValidString(p) {
 		return ""
@@ -345,11 +356,19 @@ func FilenameFromPath(p string) string {
 
 					// No %2F encoding - unencoded slashes are path separators
 					// Extract only the last segment
-					if strings.Contains(result.Name, "/") {
-						segments := strings.Split(result.Name, "/")
-						return segments[len(segments)-1]
+					name := result.Name
+					if strings.Contains(name, "/") {
+						segments := strings.Split(name, "/")
+						name = segments[len(segments)-1]
 					}
-					return result.Name
+					// A file-backed scheme's last segment is a file name; report it
+					// without its extension, as for a filesystem path.
+					if shared.IsFileBackedScheme(schemeLower) {
+						if ext := path.Ext(name); IsValidExtension(ext) {
+							name = strings.TrimSuffix(name, ext)
+						}
+					}
+					return name
 				}
 			}
 

@@ -51,6 +51,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -2310,6 +2312,54 @@ func (m *MockMediaDBI) GetIndexResumeCheckpoint() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+// The indexing current/skipped system methods return zero values when a test
+// sets no expectation, so indexing tests that do not exercise auto-resume
+// skipping need not stub them.
+func (m *MockMediaDBI) SetIndexingCurrentSystem(systemID string) error {
+	if !m.hasExpectedCall("SetIndexingCurrentSystem") {
+		return nil
+	}
+	args := m.Called(systemID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetIndexingCurrentSystem() (string, error) {
+	if !m.hasExpectedCall("GetIndexingCurrentSystem") {
+		return "", nil
+	}
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetIndexingSkippedSystems(systemIDs []string) error {
+	if !m.hasExpectedCall("SetIndexingSkippedSystems") {
+		return nil
+	}
+	args := m.Called(systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetIndexingSkippedSystems() ([]string, error) {
+	if !m.hasExpectedCall("GetIndexingSkippedSystems") {
+		return nil, nil
+	}
+	args := m.Called()
+	systems, ok := args.Get(0).([]string)
+	if !ok && args.Get(0) != nil {
+		return nil, fmt.Errorf("mock GetIndexingSkippedSystems returned %T, want []string", args.Get(0))
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return systems, nil
+}
+
 func (m *MockMediaDBI) SetIndexResumeCheckpoint(checkpoint string) error {
 	args := m.Called(checkpoint)
 	if err := args.Error(0); err != nil {
@@ -2558,6 +2608,72 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	}
 	// Default behavior when no expectations are set - return empty slice
 	return []database.MediaWithFullPath{}, nil
+}
+
+// ForEachTitleBySystemID streams the mock's GetTitlesBySystemID result, so
+// tests set expectations on that method either way.
+func (m *MockMediaDBI) ForEachTitleBySystemID(
+	ctx context.Context, systemID string, fn func(*database.TitleWithSystem) error,
+) error {
+	titles, err := m.GetTitlesBySystemID(systemID)
+	if err != nil {
+		return err
+	}
+	for i := range titles {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // mirrors the real stream's context error
+		}
+		if err := fn(&titles[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetMediaPageBySystemID pages the mock's GetMediaBySystemID result in path
+// order, so tests set expectations on that method either way.
+func (m *MockMediaDBI) GetMediaPageBySystemID(
+	_ context.Context, systemID, afterPath string, limit int,
+) ([]database.MediaWithFullPath, error) {
+	media, err := m.GetMediaBySystemID(systemID)
+	if err != nil {
+		return nil, err
+	}
+	sorted := slices.Clone(media)
+	slices.SortStableFunc(sorted, func(a, b database.MediaWithFullPath) int {
+		return strings.Compare(a.Path, b.Path)
+	})
+	page := make([]database.MediaWithFullPath, 0, limit)
+	for i := range sorted {
+		if sorted[i].Path <= afterPath {
+			continue
+		}
+		if len(page) == limit {
+			break
+		}
+		page = append(page, sorted[i])
+	}
+	return page, nil
+}
+
+// ForEachMediaBySystemID streams the mock's GetMediaBySystemID result, so
+// tests set expectations on that method either way.
+func (m *MockMediaDBI) ForEachMediaBySystemID(
+	ctx context.Context, systemID string, fn func(*database.MediaWithFullPath) error,
+) error {
+	media, err := m.GetMediaBySystemID(systemID)
+	if err != nil {
+		return err
+	}
+	for i := range media {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // mirrors the real stream's context error
+		}
+		if err := fn(&media[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error) {
@@ -3034,6 +3150,10 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil).Maybe()
 	mockMediaDB.On("GetIndexResumeCheckpoint").Return("", nil).Maybe()
 	mockMediaDB.On("SetIndexResumeCheckpoint", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("SetIndexingCurrentSystem", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("GetIndexingCurrentSystem").Return("", nil).Maybe()
+	mockMediaDB.On("SetIndexingSkippedSystems", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("GetIndexingSkippedSystems").Return([]string(nil), nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("HasAnyMedia").Return(false, nil).Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
@@ -3596,6 +3716,24 @@ func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+// ForEachMediaTitleWithoutSentinel streams the mock's
+// FindMediaTitlesWithoutSentinel result, so tests set expectations on that
+// method either way.
+func (m *MockMediaDBI) ForEachMediaTitleWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string, fn func(*database.MediaTitle) error,
+) error {
+	titles, err := m.FindMediaTitlesWithoutSentinel(ctx, systemDBID, sentinelTag)
+	if err != nil {
+		return err
+	}
+	for i := range titles {
+		if err := fn(&titles[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*database.MediaTitle, error) {

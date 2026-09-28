@@ -753,33 +753,47 @@ func countMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64
 	return count, nil
 }
 
-func findMediaTitlesBySystemDBID(ctx context.Context, db *sql.DB, systemDBID int64) ([]database.MediaTitle, error) {
-	rows, err := db.QueryContext(ctx, `
+func forEachMediaTitleBySystemDBID(
+	queryCtx, cancelCtx context.Context, db *sql.DB, systemDBID int64, fn func(*database.MediaTitle) error,
+) error {
+	rows, err := db.QueryContext(queryCtx, `
 		SELECT DBID, SystemDBID, Slug, Name
 		FROM MediaTitles
 		WHERE SystemDBID = ?
 	`, systemDBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query media titles by system DBID: %w", err)
+		return fmt.Errorf("failed to query media titles by system DBID: %w", err)
 	}
+	return scanMediaTitleRows(cancelCtx, rows, fn)
+}
+
+// scanMediaTitleRows feeds (DBID, SystemDBID, Slug, Name) rows to fn, checking
+// cancelCtx between rows, and closes rows.
+func scanMediaTitleRows(cancelCtx context.Context, rows *sql.Rows, fn func(*database.MediaTitle) error) error {
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close rows")
 		}
 	}()
 
-	var titles []database.MediaTitle
-	for rows.Next() {
-		var title database.MediaTitle
-		if err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name); err != nil {
-			return nil, fmt.Errorf("failed to scan media title: %w", err)
+	var title database.MediaTitle
+	for n := 1; rows.Next(); n++ {
+		if n%streamCancelCheckInterval == 0 {
+			if err := cancelCtx.Err(); err != nil {
+				return err //nolint:wrapcheck // callers match context errors directly
+			}
 		}
-		titles = append(titles, title)
+		if err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name); err != nil {
+			return fmt.Errorf("failed to scan media title: %w", err)
+		}
+		if err := fn(&title); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate media titles: %w", err)
+		return fmt.Errorf("failed to iterate media titles: %w", err)
 	}
-	return titles, nil
+	return nil
 }
 
 func scanInt64Rows(rows *sql.Rows, label string) ([]int64, error) {
@@ -2619,22 +2633,49 @@ func resolvePropertyTypeTag(ctx context.Context, db sqlQueryable, typeTag string
 func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 	ctx context.Context, systemDBID int64, sentinelTag string,
 ) ([]database.MediaTitle, error) {
+	var titles []database.MediaTitle
+	err := db.streamMediaTitlesWithoutSentinel(ctx, ctx, systemDBID, sentinelTag,
+		func(t *database.MediaTitle) error {
+			titles = append(titles, *t)
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return titles, nil
+}
+
+// ForEachMediaTitleWithoutSentinel calls fn for every row
+// FindMediaTitlesWithoutSentinel would return, in the same order, without
+// holding them all. The row passed to fn is reused between calls.
+//
+// The query runs without cancellation (see GetTitlesBySystemID) and ctx is
+// checked between rows instead.
+func (db *MediaDB) ForEachMediaTitleWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string, fn func(*database.MediaTitle) error,
+) error {
+	return db.streamMediaTitlesWithoutSentinel(context.WithoutCancel(ctx), ctx, systemDBID, sentinelTag, fn)
+}
+
+func (db *MediaDB) streamMediaTitlesWithoutSentinel(
+	queryCtx, cancelCtx context.Context, systemDBID int64, sentinelTag string, fn func(*database.MediaTitle) error,
+) error {
 	if db.sql.Load() == nil {
-		return nil, ErrNullSQL
+		return ErrNullSQL
 	}
 
 	idx := strings.Index(sentinelTag, ":")
 	if idx < 0 {
-		return nil, fmt.Errorf("sentinelTag %q is not in type:value format", sentinelTag)
+		return fmt.Errorf("sentinelTag %q is not in type:value format", sentinelTag)
 	}
 	tagType := sentinelTag[:idx]
 	tagPart := sentinelTag[idx+1:]
-	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql.Load(), tagType, tagPart)
+	tagDBIDs, err := findScraperSentinelTagDBIDs(cancelCtx, db.sql.Load(), tagType, tagPart)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find sentinel tag DBIDs: %w", err)
+		return fmt.Errorf("failed to find sentinel tag DBIDs: %w", err)
 	}
 	if len(tagDBIDs) == 0 {
-		return findMediaTitlesBySystemDBID(ctx, db.sql.Load(), systemDBID)
+		return forEachMediaTitleBySystemDBID(queryCtx, cancelCtx, db.sql.Load(), systemDBID, fn)
 	}
 
 	placeholders := prepareVariadic("?", ",", len(tagDBIDs))
@@ -2645,7 +2686,7 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-	stmt, err := db.sql.Load().PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(queryCtx, `
 		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
 		WHERE mt.SystemDBID = ?
@@ -2658,7 +2699,7 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 		  )
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare FindMediaTitlesWithoutSentinel: %w", err)
+		return fmt.Errorf("failed to prepare FindMediaTitlesWithoutSentinel: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -2666,25 +2707,11 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx, args...)
+	rows, err := stmt.QueryContext(queryCtx, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query FindMediaTitlesWithoutSentinel: %w", err)
+		return fmt.Errorf("failed to query FindMediaTitlesWithoutSentinel: %w", err)
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	var titles []database.MediaTitle
-	for rows.Next() {
-		var t database.MediaTitle
-		if err := rows.Scan(&t.DBID, &t.SystemDBID, &t.Slug, &t.Name); err != nil {
-			return nil, fmt.Errorf("failed to scan MediaTitle: %w", err)
-		}
-		titles = append(titles, t)
-	}
-	return titles, rows.Err()
+	return scanMediaTitleRows(cancelCtx, rows, fn)
 }
 
 // FindMediaTitleByDBID returns the MediaTitle with the given DBID, or nil, nil

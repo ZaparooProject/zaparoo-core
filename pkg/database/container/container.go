@@ -36,68 +36,95 @@ import (
 // companion files stands in for the set. A flat set of disc images also
 // collapses when every row belongs to the same known media title.
 func SelectLaunchMedia(rows []database.Media) *database.Media {
-	if len(rows) == 0 {
-		return nil
+	var sel LaunchSelector
+	for i := range rows {
+		sel.addAt(&rows[i], i)
 	}
-	if len(rows) == 1 {
-		return &rows[0]
+	if _, idx := sel.choice(); idx >= 0 {
+		return &rows[idx]
 	}
-
-	m3u := singleMediaWithExt(rows, ".m3u")
-	if m3u != nil && allOtherExtsMatch(rows, m3u.DBID, isM3UCompanionExt) {
-		return m3u
-	}
-
-	cue := singleMediaWithExt(rows, ".cue")
-	if cue != nil && allOtherExtsMatch(rows, cue.DBID, isCueCompanionExt) {
-		return cue
-	}
-
-	return sharedTitleDiscSetTarget(rows)
+	return nil
 }
 
-func sharedTitleDiscSetTarget(rows []database.Media) *database.Media {
-	mediaTitleDBID := rows[0].MediaTitleDBID
-	if mediaTitleDBID <= 0 {
-		return nil
-	}
+// LaunchSelector applies SelectLaunchMedia's rule to rows added one at a time
+// with a fixed amount of state, so a caller streaming a large system can answer
+// for a few directories without holding every row. The zero value is an empty
+// directory.
+type LaunchSelector struct {
+	first, m3u, cue, lowest database.Media
 
-	lowest := &rows[0]
-	for i := range rows {
-		if rows[i].MediaTitleDBID != mediaTitleDBID || !isDiscSetExt(MediaExt(rows[i].Path)) {
-			return nil
-		}
-		if rows[i].Path < lowest.Path || (rows[i].Path == lowest.Path && rows[i].DBID < lowest.DBID) {
-			lowest = &rows[i]
-		}
-	}
-	return lowest
+	firstIdx, m3uIdx, cueIdx, lowestIdx int
+	count, m3uCount, cueCount           int
+	// badForM3U and badForCue count rows that are neither the descriptor nor
+	// one of its companions; any one of them stops that descriptor standing in.
+	badForM3U, badForCue int
+	// discSet holds while every row so far is a disc image of first's title.
+	discSet bool
 }
 
-func singleMediaWithExt(rows []database.Media, ext string) *database.Media {
-	var match *database.Media
-	for i := range rows {
-		if MediaExt(rows[i].Path) != ext {
-			continue
-		}
-		if match != nil {
-			return nil
-		}
-		match = &rows[i]
-	}
-	return match
+// Add records one direct media row of the directory.
+func (s *LaunchSelector) Add(row *database.Media) {
+	s.addAt(row, s.count)
 }
 
-func allOtherExtsMatch(rows []database.Media, mediaDBID int64, allowed func(string) bool) bool {
-	for i := range rows {
-		if rows[i].DBID == mediaDBID {
-			continue
-		}
-		if !allowed(MediaExt(rows[i].Path)) {
-			return false
-		}
+// Result returns what SelectLaunchMedia would return for the rows added so
+// far, or nil. The returned row is a copy owned by the selector.
+func (s *LaunchSelector) Result() *database.Media {
+	row, _ := s.choice()
+	return row
+}
+
+// Count returns how many rows were added.
+func (s *LaunchSelector) Count() int {
+	return s.count
+}
+
+func (s *LaunchSelector) addAt(row *database.Media, idx int) {
+	ext := MediaExt(row.Path)
+	if s.count == 0 {
+		s.first, s.firstIdx = *row, idx
+		s.lowest, s.lowestIdx = *row, idx
+		s.discSet = row.MediaTitleDBID > 0
 	}
-	return true
+	s.count++
+
+	if ext == ".m3u" {
+		s.m3uCount++
+		s.m3u, s.m3uIdx = *row, idx
+	} else if !isM3UCompanionExt(ext) {
+		s.badForM3U++
+	}
+	if ext == ".cue" {
+		s.cueCount++
+		s.cue, s.cueIdx = *row, idx
+	} else if !isCueCompanionExt(ext) {
+		s.badForCue++
+	}
+
+	if row.MediaTitleDBID != s.first.MediaTitleDBID || !isDiscSetExt(ext) {
+		s.discSet = false
+	}
+	if row.Path < s.lowest.Path || (row.Path == s.lowest.Path && row.DBID < s.lowest.DBID) {
+		s.lowest, s.lowestIdx = *row, idx
+	}
+}
+
+// choice returns the chosen row and its position in add order, or nil and -1.
+func (s *LaunchSelector) choice() (row *database.Media, idx int) {
+	switch {
+	case s.count == 0:
+		return nil, -1
+	case s.count == 1:
+		return &s.first, s.firstIdx
+	case s.m3uCount == 1 && s.badForM3U == 0:
+		return &s.m3u, s.m3uIdx
+	case s.cueCount == 1 && s.badForCue == 0:
+		return &s.cue, s.cueIdx
+	case s.discSet:
+		return &s.lowest, s.lowestIdx
+	default:
+		return nil, -1
+	}
 }
 
 // MediaExt returns the lowercased extension of a slash-separated media path,

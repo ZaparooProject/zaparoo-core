@@ -125,6 +125,25 @@ func parseCustomControls(commands map[string]string) map[string]platforms.Contro
 	return controls
 }
 
+// customLauncherSchemes drops schemes a custom launcher may not claim. The
+// source scheme names media in folders a host application granted to Core;
+// a custom launcher declaring it would take over those launches.
+func customLauncherSchemes(launcherID string, schemes []string) []string {
+	kept := make([]string, 0, len(schemes))
+	for _, scheme := range schemes {
+		if strings.EqualFold(scheme, platforms.SourceScheme) {
+			log.Warn().Str("launcherID", launcherID).Str("scheme", scheme).
+				Msg("ignoring reserved scheme on custom launcher")
+			continue
+		}
+		kept = append(kept, scheme)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 // ParseCustomLauncher converts common custom-launcher fields into a platform
 // launcher. Native backends can add their own availability and launch functions.
 func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (platforms.Launcher, bool) {
@@ -155,7 +174,7 @@ func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (plat
 		Folders:       resolvedDirs,
 		Extensions:    exts,
 		Groups:        launcherGroups,
-		Schemes:       v.Schemes,
+		Schemes:       customLauncherSchemes(v.ID, v.Schemes),
 		AllowListOnly: v.Restricted,
 		Lifecycle:     lifecycle,
 		Controls:      parseCustomControls(v.Controls),

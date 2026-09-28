@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !android
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -155,4 +155,12 @@ func TestRunResourceTopologyManagerReWarnsAfterRecoveryAndFailureAgain(t *testin
 	// First failure streak (calls 1-2): one Warn. Success (call 3) resets it.
 	// Second failure streak (calls 4-5): a fresh Warn.
 	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"warn"`))
+}
+
+// Main_MiSTer pins itself to CPU1. Issue #1572: with no frontend, Core ran on
+// both CPUs, and a long index on slow storage starved Main's OSD and input.
+func TestCoreCPUStaysOffTheForegroundCPU(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 1, coreCPU(true), "the frontend owns CPU0")
+	assert.Equal(t, 0, coreCPU(false), "Main owns CPU1")
 }
