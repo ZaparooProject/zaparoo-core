@@ -293,7 +293,7 @@ func sendIndexPauseNotification(
 	paused bool,
 	throttled bool,
 ) {
-	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+	notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 		Indexing:  true,
 		Paused:    paused,
 		Throttled: throttled,

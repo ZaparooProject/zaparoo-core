@@ -216,6 +216,24 @@ func TestParseCustomLaunchers_IncludesCommandVirtualSystemsAndSkipsNativeBackend
 	assert.Equal(t, "CommandVirtual", launchers[1].ID)
 }
 
+// A custom launcher cannot claim the scheme of host-granted media, in any
+// case; its other schemes are kept.
+func TestParseCustomLaunchers_IgnoresReservedSourceScheme(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	launchers := ParseCustomLaunchers(mockPlatform, []config.LaunchersCustom{
+		{ID: "Mixed", Execute: "echo [[media_path]]", Schemes: []string{"mine", "source", "SOURCE"}},
+		{ID: "OnlySource", Execute: "echo [[media_path]]", Schemes: []string{"source"}},
+	})
+
+	require.Len(t, launchers, 2)
+	assert.Equal(t, []string{"mine"}, launchers[0].Schemes)
+	assert.Empty(t, launchers[1].Schemes)
+}
+
 func TestParseCustomLaunchers_EmptyGroups(t *testing.T) {
 	t.Parallel()
 

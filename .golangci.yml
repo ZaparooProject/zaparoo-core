@@ -200,6 +200,7 @@ linters:
         - models.ClientErr(
         - models.ClientErrf(
         - models.CategorizedErr(
+        - models.CategorizedDetailErr(
     forbidigo:
       forbid:
         - pattern: 'sync\.Mutex'

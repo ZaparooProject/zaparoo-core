@@ -110,8 +110,8 @@ func run(
 	return drain(t, ch)
 }
 
-func arcadeTitles() []database.TitleWithSystem {
-	return []database.TitleWithSystem{{DBID: 1, SystemID: systemdefs.SystemArcade, SystemDBID: 7}}
+func arcadeSystem() database.System {
+	return database.System{DBID: 7, SystemID: systemdefs.SystemArcade, Name: "Arcade"}
 }
 
 func TestScraperIsBoundToItsArcadeLaunchers(t *testing.T) {
@@ -136,7 +136,7 @@ func TestScrapeWritesCatalogMetadataToMatchedDescriptors(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
 		arcadeMedia(100, 1, matched),
 		arcadeMedia(101, 2, uncatalogued),
@@ -177,7 +177,7 @@ func TestScrapePrefersThePlatformSetNameCache(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
@@ -209,7 +209,7 @@ func TestScrapeReadsTheDescriptorWhenTheCacheMisses(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
@@ -235,7 +235,7 @@ func TestScrapeSkipsRowsItHasAlreadyWritten(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
 		arcadeMedia(100, 1, done), arcadeMedia(101, 1, pending),
 	}, nil)
@@ -259,7 +259,7 @@ func TestFillMissingRevisitsSentinelRowsAndMarksTheWrite(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	// A fill-missing run consults its own run markers, never the permanent
@@ -313,7 +313,7 @@ func TestScrapeStopsOnAWriteFailure(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
@@ -359,7 +359,7 @@ func TestSharedTitleWritesAreOrderedByPath(t *testing.T) {
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
 		arcadeMedia(101, 1, world),
 		arcadeMedia(100, 1, japan),
@@ -390,7 +390,7 @@ func TestScrapeRunCollectsValuesWithNoMapping(t *testing.T) {
 	path := descriptor(t, fs, "Odd Game", "oddgame")
 
 	mediaDB := testhelpers.NewMockMediaDBI()
-	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return(arcadeTitles(), nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil)
 	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
 		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil)
 	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
@@ -409,4 +409,79 @@ func TestScrapeRunCollectsValuesWithNoMapping(t *testing.T) {
 	assert.Equal(t, []string{"1990"}, tagValues((*writes)[0].Write.TitleTags, tags.TagTypeYear))
 	assert.Equal(t, 1, impl.unmapped.Count(tags.TagTypeGenre), "the run keeps the dropped category")
 	assert.Equal(t, 1, impl.unmapped.Count(tags.TagTypeArcadeBoard), "the run keeps the dropped board")
+}
+
+// A system with no present descriptor has nothing for the catalog to describe,
+// so the scrape reads nothing beyond the media stream that found none: no
+// titles, no system row and no scrape markers.
+func TestScrapeSkipsASystemWithNoDescriptors(t *testing.T) {
+	t.Parallel()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{
+		arcadeMedia(100, 1, filepath.Join(arcadeRoot, "Menu.mgl")),
+		{DBID: 101, MediaTitleDBID: 2, Path: filepath.Join(arcadeRoot, "Gone.mra"), IsMissing: true},
+	}, nil)
+
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	final := run(t, &s, afero.NewMemMapFs(), mediaDB, scraper.ScrapeOptions{})
+
+	last := final[len(final)-1]
+	require.NoError(t, last.FatalErr)
+	assert.Zero(t, last.Processed)
+	mediaDB.AssertNotCalled(t, "GetTitlesBySystemID", mock.Anything)
+	mediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mediaDB.AssertNotCalled(t, "GetScrapedMediaIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestScrapeStopsWhenCancelledWhileLoadingMedia(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	first := descriptor(t, fs, "1941 - Counter Attack (World)", "1941")
+	second := descriptor(t, fs, "Second", "1941")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
+		Run(func(mock.Arguments) { cancel() }).
+		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, first), arcadeMedia(101, 2, second)}, nil)
+
+	impl := &scraperImpl{
+		fs: fs, db: mediaDB, entries: index([]Entry{cps1Entry()}), unmapped: &scraper.UnmappedValues{},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	impl.scrapeLoop(ctx, scraper.ScrapeOptions{}, []string{systemdefs.SystemArcade}, ch)
+	updates := drain(t, ch)
+
+	last := updates[len(updates)-1]
+	require.ErrorIs(t, last.FatalErr, context.Canceled)
+	assert.Zero(t, last.Matched)
+	mediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mediaDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The media stream is the only per-system load: titles are never read, and the
+// system row the scrape markers need comes from a single lookup.
+func TestScrapeDoesNotLoadTitles(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	path := descriptor(t, fs, "1941 - Counter Attack (World)", "1941")
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("IndexedSystems").Return([]string{systemdefs.SystemArcade}, nil)
+	mediaDB.On("FindSystemBySystemID", systemdefs.SystemArcade).Return(arcadeSystem(), nil).Once()
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemArcade).
+		Return([]database.MediaWithFullPath{arcadeMedia(100, 1, path)}, nil).Once()
+	mediaDB.On("GetScrapedMediaIDs", mock.Anything, scraperID, int64(7)).
+		Return(map[int64]struct{}{}, nil).Once()
+	writes := captureWrites(t, mediaDB)
+
+	s := NewPlatformScraper([]string{systemdefs.SystemArcade}, fixtureCatalog(cps1Entry()), nil)
+	final := run(t, &s, fs, mediaDB, scraper.ScrapeOptions{})
+
+	assert.Equal(t, 1, final[len(final)-1].Matched)
+	require.Len(t, *writes, 1)
+	mediaDB.AssertNotCalled(t, "GetTitlesBySystemID", mock.Anything)
+	mediaDB.AssertExpectations(t)
 }

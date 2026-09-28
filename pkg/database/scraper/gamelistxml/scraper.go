@@ -38,7 +38,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -211,6 +210,23 @@ type loadRecordIndexes struct {
 	// nested media is not a container regardless of scrape state.
 	Containers scraper.ContainerResolver
 	Scoped     bool
+}
+
+// plannedIndexes is what a planned load knows beyond the indexes it built.
+type plannedIndexes struct {
+	// Sources are the system's indexed media sources, already read.
+	Sources []database.MediaSource
+	// UnretainedMedia counts unscraped rows left out because no lookup can
+	// reach them. They still count toward the system's candidates.
+	UnretainedMedia int
+	Stats           plannedLoadStats
+}
+
+func (p *plannedIndexes) unretainedMedia() int {
+	if p == nil {
+		return 0
+	}
+	return p.UnretainedMedia
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -446,18 +462,75 @@ func indexedExtensionsBySystem(launchers []platforms.Launcher) map[string][]stri
 }
 
 type parsedGamelistFile struct {
-	RootPath             string
-	AssetRootPath        string
-	GamelistPath         string
-	Games                []esapi.Game
-	Folders              []esapi.Folder
+	RootPath      string
+	AssetRootPath string
+	GamelistPath  string
+	Games         []esapi.Game
+	Folders       []esapi.Folder
+	// keys, when set, holds each game's resolved path and slug as
+	// buildLookupPlan computed them, so matching does not repeat the work.
+	keys []entryKeys
+	// companionDropped counts companion games dropCompanionGames removed.
+	companionDropped     int
 	RequireExistingImage bool
+}
+
+// entryKeys is one gamelist game's resolved ROM path, the root that holds it
+// and, for a regular entry with a path, its title slug.
+type entryKeys struct {
+	resolved string
+	romRoot  string
+	// key is pathFoldKey(resolved).
+	key  string
+	slug string
+}
+
+// gameKeys resolves game i of file, from the plan's cache when there is one.
+func (f *parsedGamelistFile) gameKeys(i int, system *scraper.ScrapeSystem) (resolved, romRoot string) {
+	if len(f.keys) > i {
+		return f.keys[i].resolved, f.keys[i].romRoot
+	}
+	return resolveGamelistROMPath(f.Games[i].Path, f.RootPath, system.ROMPaths)
 }
 
 type parsedGamelistSystem struct {
 	Files []parsedGamelistFile
 	// SourceErrors holds gamelist files that exist but could not be loaded.
 	SourceErrors []*scraper.SourceError
+}
+
+// dropCompanionGames removes every companion game from the parsed files,
+// keeping keys aligned. The kept games move to exactly sized slices so the
+// originals can be collected.
+func (p *parsedGamelistSystem) dropCompanionGames() {
+	for fi := range p.Files {
+		file := &p.Files[fi]
+		kept := 0
+		for i := range file.Games {
+			if !isCompanionGame(&file.Games[i]) {
+				kept++
+			}
+		}
+		if kept == len(file.Games) {
+			continue
+		}
+		games := make([]esapi.Game, 0, kept)
+		var keys []entryKeys
+		if file.keys != nil {
+			keys = make([]entryKeys, 0, kept)
+		}
+		for i := range file.Games {
+			if isCompanionGame(&file.Games[i]) {
+				continue
+			}
+			games = append(games, file.Games[i])
+			if keys != nil {
+				keys = append(keys, file.keys[i])
+			}
+		}
+		file.companionDropped += len(file.Games) - kept
+		file.Games, file.keys = games, keys
+	}
 }
 
 func (g *GamelistXMLScraper) loadParsedGamelistSystem(
@@ -483,7 +556,10 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			continue
 		}
 
-		gl, err := esapi.ReadGameListXMLLimitFS(g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
+		gl, err := esapi.ReadGameListXMLLimitFSContext(ctx, g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return parsed, ctxErr
+		}
 		if err != nil {
 			log.Warn().Err(err).Str("path", gamelistPath).Msg("gamelistxml: failed to read gamelist.xml, skipping")
 			parsed.SourceErrors = append(parsed.SourceErrors, &scraper.SourceError{Path: gamelistPath, Err: err})
@@ -509,7 +585,10 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 		return parsed, ctx.Err()
 	default:
 	}
-	customFile, ok, customErr := g.loadCustomGamelistFile(system)
+	customFile, ok, customErr := g.loadCustomGamelistFile(ctx, system)
+	if err := ctx.Err(); err != nil {
+		return parsed, err
+	}
 	if customErr != nil {
 		parsed.SourceErrors = append(parsed.SourceErrors, customErr)
 	}
@@ -524,7 +603,7 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 // relative to the bundle's system directory. Bundle image references are
 // treated as optional and only mapped when their files currently exist.
 func (g *GamelistXMLScraper) loadCustomGamelistFile(
-	system scraper.ScrapeSystem,
+	ctx context.Context, system scraper.ScrapeSystem,
 ) (parsedGamelistFile, bool, *scraper.SourceError) {
 	customBase := g.cfg.ScraperGamelistXMLCustomPath()
 	if customBase == "" {
@@ -543,7 +622,12 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(
 		return parsedGamelistFile{}, false, nil
 	}
 
-	gl, err := esapi.ReadGameListXMLLimitFS(g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
+	gl, err := esapi.ReadGameListXMLLimitFSContext(ctx, g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// Not a broken bundle: the caller checks the context next and
+		// reports the cancellation.
+		return parsedGamelistFile{}, false, nil
+	}
 	if err != nil {
 		log.Warn().Err(err).Str("path", gamelistPath).
 			Msg("gamelistxml: failed to read custom gamelist.xml, skipping")
@@ -583,7 +667,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 	if err != nil {
 		return nil, err
 	}
-	return g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+	return g.loadRecordsFromParsed(ctx, system, indexes, parsed, nil)
 }
 
 // arcadeSetOutranks reports whether a MiSTer arcade set name is better evidence
@@ -604,17 +688,22 @@ func arcadeSetOutranks(record *GamelistRecord) bool {
 // alone last. Each row is claimed once, and set-name records are held back
 // until every file has been walked, so neither of those two rankings depends
 // on the order the entries happen to appear in.
+//
+// planned is nil unless indexes came from loadPlannedIndexes.
 func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
 	indexes loadRecordIndexes,
 	parsed parsedGamelistSystem,
+	planned *plannedIndexes,
 ) ([]*GamelistRecord, error) {
 	var records []*GamelistRecord
 	var arcadeRecords []*GamelistRecord
 	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
 	var indexedSources []database.MediaSource
-	if g.db != nil {
+	if planned != nil {
+		indexedSources = planned.Sources
+	} else if g.db != nil {
 		var err error
 		indexedSources, err = g.db.GetMediaSourcesForScrape(ctx, system.ID, g.scope)
 		if err != nil {
@@ -630,7 +719,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 		}
 		indexes.MediaByTitleDBID = withoutSourceTitleMatches(indexes.MediaByTitleDBID, sources)
 	}
-	candidateMedia := len(indexes.MediaByPathFold)
+	candidateMedia := len(indexes.MediaByPathFold) + planned.unretainedMedia()
 	candidateTitles := len(indexes.TitlesBySlug)
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
 	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
@@ -640,7 +729,8 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	var parentEntries, groupEntries []folderEntry
 
 outer:
-	for _, file := range parsed.Files {
+	for fi := range parsed.Files {
+		file := &parsed.Files[fi]
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -657,7 +747,8 @@ outer:
 			}
 		}
 		gamelistFiles++
-		gamelistEntries += len(file.Games)
+		gamelistEntries += len(file.Games) + file.companionDropped
+		companionEntriesSkipped += file.companionDropped
 		folderEntries += len(file.Folders)
 
 		for i := range file.Games {
@@ -667,17 +758,17 @@ outer:
 				continue
 			}
 
-			resolved, romRoot := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
+			resolved, romRoot := file.gameKeys(i, &system)
 			holdsSources := sourceRecords.hasChildren(resolved)
 			if holdsSources {
-				parentEntries = append(parentEntries, folderEntry{file: &file, directory: resolved, game: *game})
+				parentEntries = append(parentEntries, folderEntry{file: file, directory: resolved, game: *game})
 			}
-			if record := g.matchSourceRecord(indexes, sourceRecords, &file, game, resolved); record != nil {
+			if record := g.matchSourceRecord(indexes, sourceRecords, file, game, resolved); record != nil {
 				records = append(records, record)
 				continue
 			}
 			if sourceRecords.isGroup(resolved) {
-				groupEntries = append(groupEntries, folderEntry{file: &file, directory: resolved, game: *game})
+				groupEntries = append(groupEntries, folderEntry{file: file, directory: resolved, game: *game})
 				continue
 			}
 			if holdsSources {
@@ -687,7 +778,8 @@ outer:
 			var matchedPathKey string
 			var pathOK bool
 			if resolved != "" {
-				pathMedia, matchedPathKey, pathOK = g.canonicalMediaForResolvedPath(indexes, resolved)
+				pathMedia, matchedPathKey, pathOK = g.canonicalMediaForResolvedPath(
+					indexes, resolved, entryFoldKey(file, i, resolved))
 				if !pathOK {
 					// ES-DE writes <game> entries whose path is a directory when the
 					// folder name carries a ROM extension, so a disc folder reads as
@@ -724,13 +816,7 @@ outer:
 				continue
 			}
 
-			pf := mediascanner.GetPathFragments(&mediascanner.PathFragmentParams{
-				Config:       g.cfg,
-				Path:         resolved,
-				SystemID:     system.ID,
-				NoExt:        true,
-				ProvidedName: game.Name,
-			})
+			slug := entrySlug(g.cfg, file, i, &system, resolved)
 
 			// main resolves the path above, before the arcade-set fallback, so
 			// only the scoped guard belongs here: a scoped run must not fall
@@ -739,7 +825,7 @@ outer:
 				continue
 			}
 
-			title, titleOK := indexes.TitlesBySlug[pf.Slug]
+			title, titleOK := indexes.TitlesBySlug[slug]
 			if indexes.Scoped && title.DBID != pathMedia.MediaTitleDBID {
 				titleOK = false
 			}
@@ -764,16 +850,17 @@ outer:
 					continue
 				}
 
-				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved, system.Extensions)
+				selection := selectMediaForSlugMatch(
+					indexes, title.DBID, resolved, entryFoldKey(file, i, resolved), system.Extensions)
 				if selection.media.DBID == 0 {
 					log.Debug().
 						Str("system", system.ID).
-						Str("slug", pf.Slug).
+						Str("slug", slug).
 						Int64("mediaTitleDBID", title.DBID).
 						Msg("gamelistxml: slug matched title but no compatible media row found, skipping")
 					unmatchedRecords++
 					if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
-						delete(indexes.TitlesBySlug, pf.Slug)
+						delete(indexes.TitlesBySlug, slug)
 					}
 					continue
 				}
@@ -800,7 +887,7 @@ outer:
 					MediaLevelWriteSafe:  mediaLevelWriteSafe,
 					RequireExistingImage: file.RequireExistingImage,
 				})
-				delete(indexes.TitlesBySlug, pf.Slug)
+				delete(indexes.TitlesBySlug, slug)
 			case pathOK:
 				pathOnlyFallbacks++
 				log.Debug().
@@ -808,7 +895,7 @@ outer:
 					Str("path", game.Path).
 					Str("resolved", resolved).
 					Str("name", game.Name).
-					Str("slug", pf.Slug).
+					Str("slug", slug).
 					Int64("mediaDBID", pathMedia.DBID).
 					Int64("mediaTitleDBID", pathMedia.MediaTitleDBID).
 					Msg("gamelistxml: path-only fallback matched record")
@@ -825,20 +912,21 @@ outer:
 					RequireExistingImage: file.RequireExistingImage,
 				})
 				delete(indexes.MediaByPathFold, matchedPathKey)
-			case titleSlugKnown(indexes, pf.Slug):
+			case titleSlugKnown(indexes, slug):
 				unmatchedRecords++
 				log.Debug().
 					Str("system", system.ID).
 					Str("path", game.Path).
 					Str("resolved", resolved).
 					Str("name", game.Name).
-					Str("slug", pf.Slug).
+					Str("slug", slug).
 					Msg("gamelistxml: slug exists for another or already-scraped title, skipping path-only fallback")
 			default:
 				unmatchedRecords++
 			}
 
-			if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
+			if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 &&
+				planned.unretainedMedia() == 0 {
 				break outer
 			}
 		}
@@ -855,14 +943,14 @@ outer:
 			game := folderAsGame(folder)
 			holdsSources := sourceRecords.hasChildren(resolved)
 			if holdsSources {
-				parentEntries = append(parentEntries, folderEntry{file: &file, directory: resolved, game: game})
+				parentEntries = append(parentEntries, folderEntry{file: file, directory: resolved, game: game})
 			}
-			if record := g.matchSourceRecord(indexes, sourceRecords, &file, &game, resolved); record != nil {
+			if record := g.matchSourceRecord(indexes, sourceRecords, file, &game, resolved); record != nil {
 				records = append(records, record)
 				continue
 			}
 			if sourceRecords.isGroup(resolved) {
-				groupEntries = append(groupEntries, folderEntry{file: &file, directory: resolved, game: game})
+				groupEntries = append(groupEntries, folderEntry{file: file, directory: resolved, game: game})
 				continue
 			}
 			if holdsSources {
@@ -953,7 +1041,7 @@ outer:
 		Int("unmatched_records", unmatchedRecords).
 		Int("matched_records", len(records)).
 		Int("remaining_unmatched_titles", len(indexes.TitlesBySlug)).
-		Int("remaining_unmatched_media", len(indexes.MediaByPathFold)).
+		Int("remaining_unmatched_media", len(indexes.MediaByPathFold)+planned.unretainedMedia()).
 		Int("total_records", len(records)).
 		Msg("gamelistxml: finished loading records for system")
 
@@ -1000,6 +1088,14 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	const id = "gamelist.xml"
 	metrics := perfmetrics.NewRecorderForDB(mdb)
 	var totalProcessed, totalMatched, totalSkipped int
+	// pendingRelease is set once a system starts loading and cleared when its
+	// memory is released, so a cancelled or failed system still hands it back.
+	var pendingRelease bool
+	defer func() {
+		if pendingRelease {
+			debug.FreeOSMemory()
+		}
+	}()
 	totalSteps := len(systems)
 
 	waitForResume := func(systemID string, currentStep, processed, matched, skipped int) bool {
@@ -1045,143 +1141,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		}:
 		}
 
-		titlesBySlug := make(map[string]database.MediaTitle)
-		allTitlesBySlug := make(map[string]database.MediaTitle)
-		if opts.Force {
-			titlesStart := time.Now()
-			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
-			titleLoadDuration = time.Since(titlesStart)
-			if titlesErr != nil {
-				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-					return
-				}
-				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
-				return
-			}
-			for _, t := range allTitles {
-				title := database.MediaTitle{
-					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
-				}
-				titlesBySlug[t.Slug] = title
-				allTitlesBySlug[t.Slug] = title
-			}
-		} else {
-			sentinel := scraper.SentinelTagInfo(id)
-			sentinelTag := sentinel.Type + ":" + sentinel.Tag
-			titlesStart := time.Now()
-			unscraped, titlesErr := mdb.FindMediaTitlesWithoutSentinel(ctx, system.DBID, sentinelTag)
-			titleLoadDuration = time.Since(titlesStart)
-			if titlesErr != nil {
-				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-					return
-				}
-				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
-				return
-			}
-			for _, t := range unscraped {
-				titlesBySlug[t.Slug] = t
-			}
-			allTitlesStart := time.Now()
-			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
-			allTitlesLoadDuration = time.Since(allTitlesStart)
-			if allTitlesErr != nil {
-				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
-					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-					return
-				}
-				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: allTitlesErr, Done: true})
-				return
-			}
-			for _, t := range allTitles {
-				allTitlesBySlug[t.Slug] = database.MediaTitle{
-					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
-				}
-			}
-		}
-
-		mediaStart := time.Now()
-		allMedia, mediaErr := mdb.GetMediaBySystemID(system.ID)
-		mediaLoadDuration = time.Since(mediaStart)
-		if mediaErr != nil {
-			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
-				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-				return
-			}
-			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: mediaErr, Done: true})
-			return
-		}
-		scrapedIDs := map[int64]struct{}{}
-		if opts.Force {
-			if shouldUseRunMarker(opts) {
-				var scrapeRunErr error
-				scrapedIDsStart := time.Now()
-				scrapedIDs, scrapeRunErr = mdb.GetScrapeRunMediaIDs(ctx, id, opts.RunID, system.DBID)
-				scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
-				if scrapeRunErr != nil {
-					if errors.Is(scrapeRunErr, context.Canceled) || errors.Is(scrapeRunErr, context.DeadlineExceeded) {
-						sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-						return
-					}
-					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapeRunErr, Done: true})
-					return
-				}
-			}
-		} else {
-			var scrapedErr error
-			scrapedIDsStart := time.Now()
-			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
-			scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
-			if scrapedErr != nil {
-				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
-					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-					return
-				}
-				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapedErr, Done: true})
-				return
-			}
-		}
-
-		indexes := loadRecordIndexes{
-			TitlesBySlug:     titlesBySlug,
-			AllTitlesBySlug:  allTitlesBySlug,
-			MediaByPathFold:  make(map[string]database.Media, len(allMedia)),
-			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
-			MediaByFilename:  make(map[string][]database.Media, len(allMedia)),
-		}
-		containerRows := make([]database.Media, 0, len(allMedia))
-		for i := range allMedia {
-			m := &allMedia[i]
-			// Reindexing retains renamed/deleted paths as missing rows. They
-			// must not claim XML entries or make a live slug match ambiguous.
-			if m.IsMissing {
-				continue
-			}
-			media := database.Media{
-				DBID:           m.DBID,
-				MediaTitleDBID: m.MediaTitleDBID,
-				Path:           m.Path,
-				ParentDir:      m.ParentDir,
-				IsMissing:      m.IsMissing,
-			}
-			containerRows = append(containerRows, media)
-			if _, scraped := scrapedIDs[m.DBID]; !scraped {
-				indexes.MediaByPathFold[pathFoldKey(m.Path)] = media
-				indexes.MediaByTitleDBID[m.MediaTitleDBID] = append(indexes.MediaByTitleDBID[m.MediaTitleDBID], media)
-				filenameKey := mediaFilenameKey(m.Path)
-				if filenameKey != "" {
-					indexes.MediaByFilename[filenameKey] = append(indexes.MediaByFilename[filenameKey], media)
-				}
-			}
-		}
-		indexes.Containers = container.NewIndex(containerRows)
-		for slug, title := range titlesBySlug {
-			if len(indexes.MediaByTitleDBID[title.DBID]) == 0 {
-				delete(titlesBySlug, slug)
-			}
-		}
-
+		// Parse first: the entries decide which rows the matchers can reach,
+		// and a system without any needs no rows at all. A large gamelist is
+		// tens of MB parsed, so from here the system's exit releases memory.
+		pendingRelease = true
 		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
 		parseDuration = time.Since(parseStart)
@@ -1196,23 +1159,68 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		for _, sourceErr := range parsed.SourceErrors {
 			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Err: sourceErr})
 		}
-
-		var arcadeErr error
-		indexes.ArcadeBySetName, arcadeErr = g.indexArcadeSets(ctx, allMedia, parsed)
-		if arcadeErr != nil {
-			// The only failure is cancellation: an unreadable descriptor is
-			// counted and skipped rather than raised, so nothing here is fatal.
-			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
-			return
+		plan := buildLookupPlan(g.cfg, system, &parsed)
+		if plan.entries == 0 {
+			log.Debug().Str("system", system.ID).Msg("gamelistxml: no gamelist entries for system, skipping")
+			continue
 		}
 
-		companion := g.processCompanionEntriesFromParsed(
-			ctx, opts, system, mdb, indexes, parsed, ch, totalSteps, currentStep,
+		var sources []database.MediaSource
+		if g.db != nil {
+			var sourcesErr error
+			sources, sourcesErr = g.db.GetMediaSourcesForScrape(ctx, system.ID, g.scope)
+			if sourcesErr != nil {
+				if errors.Is(sourcesErr, context.Canceled) || errors.Is(sourcesErr, context.DeadlineExceeded) {
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+					return
+				}
+				sendUpdate(scraper.ScrapeUpdate{
+					SystemID: system.ID, Done: true,
+					FatalErr: fmt.Errorf("load indexed media sources for %s: %w", system.ID, sourcesErr),
+				})
+				return
+			}
+			plan.addSources(sources)
+		}
+
+		indexes, planned, loadIndexesErr := g.loadPlannedIndexes(ctx, opts, id, system, mdb, plan, &parsed)
+		if loadIndexesErr != nil {
+			if errors.Is(loadIndexesErr, context.Canceled) || errors.Is(loadIndexesErr, context.DeadlineExceeded) {
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+				return
+			}
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: loadIndexesErr, Done: true})
+			return
+		}
+		planned.Sources = sources
+		loadStats := planned.Stats
+		titleLoadDuration = loadStats.titleLoad
+		allTitlesLoadDuration = loadStats.allTitleLoad
+		mediaLoadDuration = loadStats.mediaLoad
+		scrapedIDsLoadDuration = loadStats.scrapedIDsLoad
+		log.Debug().
+			Str("system", system.ID).
+			Int("entries", plan.entries).
+			Int("system_media", loadStats.systemMedia).
+			Int("retained_media", loadStats.retainedMedia).
+			Int("retained_titles", len(indexes.TitlesBySlug)).
+			Int("passes", loadStats.passes).
+			Msg("gamelistxml: loaded rows the gamelist can reach")
+
+		// The companion entries are copied out, so the parsed list stops
+		// holding them: a Companion list is mostly companion entries, and the
+		// writes that follow can take the rest of the system's run.
+		parents, children := companionEntriesFromParsed(ctx, system, parsed)
+		parsed.dropCompanionGames()
+		companion := g.writeCompanionEntries(
+			ctx, opts, system, mdb, indexes, parents, children, ch, totalSteps, currentStep,
 		)
 		if !waitForResume(system.ID, currentStep, companion.Processed, companion.Matched, companion.Skipped) {
 			return
 		}
 
+		// Nothing the gamelist can reach is left unscraped, so no record can
+		// match.
 		if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
 			if companion.Processed > 0 {
 				ch <- scraper.ScrapeUpdate{
@@ -1229,11 +1237,12 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			totalMatched += companion.Matched
 			totalSkipped += companion.Skipped
 			debug.FreeOSMemory()
+			pendingRelease = false
 			continue
 		}
 
 		recordLoadStart := time.Now()
-		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed, planned)
 		recordLoadDuration = time.Since(recordLoadStart)
 		if loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
@@ -1425,8 +1434,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				Int("processed", companion.Processed+processed).
 				Int("matched", companion.Matched+matched).
 				Int("skipped", companion.Skipped+skipped).
-				Int("titleCandidates", len(titlesBySlug)).
-				Int("mediaCandidates", len(indexes.MediaByPathFold)).
+				Int("titleCandidates", len(indexes.TitlesBySlug)).
+				Int("mediaCandidates", len(indexes.MediaByPathFold)+planned.unretainedMedia()).
+				Int("retainedMedia", loadStats.retainedMedia).
 				Dur("elapsed", time.Since(systemStart)).
 				Dur("titleLoadDuration", titleLoadDuration).
 				Dur("allTitlesLoadDuration", allTitlesLoadDuration).
@@ -1446,10 +1456,11 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		totalSkipped += companion.Skipped + skipped
 
 		// Hand this system's working set back to the OS before starting the
-		// next one. A system's peak is proportional to its size — C64 builds
-		// roughly 150 MB of indexes, parsed entries and parent metadata on top
-		// of a ~70 MB baseline — and Go does not return that on its own, so
-		// without this RSS ratchets from system to system.
+		// next one. The load keeps only rows the gamelist can reach, but the
+		// parsed entries and parent metadata still follow the gamelist's size —
+		// tens of MB for a Companion-generated C64 list — and Go does not
+		// return that on its own, so without this RSS ratchets from system to
+		// system.
 		//
 		// On the #1279 device (492 MB, no swap) that ratchet is what turns a
 		// large system into an outage: measured mid-scrape, concurrent API
@@ -1459,6 +1470,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		// per 15s to 44 in 48s, and sshd could not complete a banner exchange.
 		// Releasing per system keeps the peak to one system rather than the run.
 		debug.FreeOSMemory()
+		pendingRelease = false
 	}
 
 	ch <- scraper.ScrapeUpdate{
@@ -2018,10 +2030,10 @@ func titleSlugKnown(indexes loadRecordIndexes, slug string) bool {
 func selectMediaForSlugMatch(
 	indexes loadRecordIndexes,
 	mediaTitleDBID int64,
-	resolved string,
+	resolved, key string,
 	systemExtensions []string,
 ) slugMediaSelection {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
+	media, matchedKey, ok := matchMediaByResolvedKey(indexes, resolved, key)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
 		return slugMediaSelection{media: media, matchKind: gamelistMatchSlugPath, key: matchedKey}
 	}
@@ -2107,9 +2119,9 @@ func folderAsGame(folder *esapi.Folder) esapi.Game {
 
 func (g *GamelistXMLScraper) canonicalMediaForResolvedPath(
 	indexes loadRecordIndexes,
-	resolved string,
+	resolved, key string,
 ) (database.Media, string, bool) {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
+	media, matchedKey, ok := matchMediaByResolvedKey(indexes, resolved, key)
 	if ok {
 		return media, matchedKey, true
 	}
@@ -2285,7 +2297,15 @@ func matchMediaByResolvedPath(
 	indexes loadRecordIndexes,
 	resolved string,
 ) (database.Media, string, bool) {
-	key := pathFoldKey(resolved)
+	return matchMediaByResolvedKey(indexes, resolved, pathFoldKey(resolved))
+}
+
+// matchMediaByResolvedKey is matchMediaByResolvedPath for a caller that
+// already holds key, which must be pathFoldKey(resolved).
+func matchMediaByResolvedKey(
+	indexes loadRecordIndexes,
+	resolved, key string,
+) (database.Media, string, bool) {
 	if media, ok := indexes.MediaByPathFold[key]; ok {
 		return media, key, true
 	}
@@ -2394,7 +2414,8 @@ func companionEntriesFromParsed(
 	var skippedNonCompanion int
 	var skippedMalformed int
 	var unresolvedChildPaths int
-	for _, file := range parsed.Files {
+	for fi := range parsed.Files {
+		file := &parsed.Files[fi]
 		for i := range file.Games {
 			select {
 			case <-ctx.Done():
@@ -2416,7 +2437,7 @@ func companionEntriesFromParsed(
 					RequireExistingImage: file.RequireExistingImage,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
-				resolved, _ := resolveGamelistROMPath(game.Path, file.RootPath, system.ROMPaths)
+				resolved, _ := file.gameKeys(i, &system)
 				if resolved == "" {
 					unresolvedChildPaths++
 					continue
@@ -2659,6 +2680,23 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 	currentStep int,
 ) companionStats {
 	parents, children := companionEntriesFromParsed(ctx, system, parsed)
+	return g.writeCompanionEntries(ctx, opts, system, mdb, indexes, parents, children, ch, totalSteps, currentStep)
+}
+
+// writeCompanionEntries writes the parents' metadata to the rows their
+// children reach.
+func (g *GamelistXMLScraper) writeCompanionEntries(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	system scraper.ScrapeSystem,
+	mdb database.MediaDBI,
+	indexes loadRecordIndexes,
+	parents []companionParent,
+	children []companionChild,
+	ch chan<- scraper.ScrapeUpdate,
+	totalSteps int,
+	currentStep int,
+) companionStats {
 	if len(parents) == 0 && len(children) == 0 {
 		log.Debug().Msg("gamelistxml: companion entries not found")
 		return companionStats{}

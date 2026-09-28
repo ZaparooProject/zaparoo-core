@@ -54,6 +54,7 @@ package esapi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -263,16 +264,38 @@ func ReadGameListXMLFS(fs afero.Fs, path string) (GameList, error) {
 // an oversized list is refused with a clear reason instead of being decoded into
 // memory the device does not have.
 func ReadGameListXMLLimitFS(fs afero.Fs, path string, maxBytes int64) (GameList, error) {
+	return ReadGameListXMLLimitFSContext(context.Background(), fs, path, maxBytes)
+}
+
+// ReadGameListXMLLimitFSContext is ReadGameListXMLLimitFS stopping with ctx's
+// error once ctx is done. A large list takes seconds to decode on MiSTer, and a
+// cancelled scrape must not wait for it.
+func ReadGameListXMLLimitFSContext(
+	ctx context.Context, fs afero.Fs, path string, maxBytes int64,
+) (GameList, error) {
 	file, cleanPath, err := openGameListFS(fs, path, maxBytes)
 	if err != nil {
 		return GameList{}, err
 	}
 	defer file.Close() //nolint:errcheck // Read-only file; close errors do not affect parsed data.
-	gameList, err := decodeGameList(file, maxBytes)
+	gameList, err := decodeGameList(&contextReader{ctx: ctx, r: file}, maxBytes)
 	if err != nil {
 		return GameList{}, fmt.Errorf("failed to unmarshal gamelist XML file %s: %w", cleanPath, err)
 	}
 	return gameList, nil
+}
+
+// contextReader fails reads once ctx is done.
+type contextReader struct {
+	ctx context.Context //nolint:containedctx // bounds one read of one file
+	r   io.Reader
+}
+
+func (c *contextReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err //nolint:wrapcheck // callers match the context error
+	}
+	return c.r.Read(p) //nolint:wrapcheck // io.Reader contract: io.EOF must pass through unchanged.
 }
 
 // ReadGameReferencesXML decodes only names and paths needed during discovery.

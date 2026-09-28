@@ -29,7 +29,7 @@ import (
 
 func mediaArtworkNames(
 	media *database.MediaWithFullPath, roots []string,
-	containers scraper.ContainerResolver, sources *scraper.SourceIndex, cleanup bool,
+	containers launchTargetResolver, sources *scraper.SourceIndex, cleanup bool,
 ) (lookupRoots, names, cleanupNames []string) {
 	if sources != nil && sources.HasMedia(media.Path) {
 		source, ok := sources.ForMedia(media.Path)

@@ -21,9 +21,11 @@ package misterarcade
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -186,25 +188,33 @@ func (s *scraperImpl) scrapeSystem(
 	if err := waitForScrape(ctx, opts); err != nil {
 		return matchStats{}, err
 	}
-	titles, err := s.db.GetTitlesBySystemID(systemID)
-	if err != nil {
-		return matchStats{}, fmt.Errorf("misterarcade: load titles for %s: %w", systemID, err)
+	candidates, err := s.loadDescriptors(ctx, systemID)
+	if len(candidates) > 0 {
+		// Hand the system's working set back to the OS before the next one,
+		// so a run's peak is one system rather than the sum of them.
+		defer debug.FreeOSMemory()
 	}
-	if len(titles) == 0 {
+	if err != nil {
+		return matchStats{}, err
+	}
+	if len(candidates) == 0 {
 		return matchStats{}, nil
 	}
-	media, err := s.db.GetMediaBySystemID(systemID)
-	if err != nil {
-		return matchStats{}, fmt.Errorf("misterarcade: load media for %s: %w", systemID, err)
+	system, err := s.db.FindSystemBySystemID(systemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return matchStats{}, nil
 	}
-	completed, err := s.completedMedia(ctx, opts, titles[0].SystemDBID)
+	if err != nil {
+		return matchStats{}, fmt.Errorf("misterarcade: look up system %s: %w", systemID, err)
+	}
+	completed, err := s.completedMedia(ctx, opts, system.DBID)
 	if err != nil {
 		return matchStats{}, err
 	}
 
 	// First fill of a shared title is deterministic, independent of query order.
-	sort.Slice(media, func(i, j int) bool { return media[i].Path < media[j].Path })
-	targets, stats := s.buildTargets(ctx, media, completed, opts)
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].path < candidates[j].path })
+	targets, stats := s.buildTargets(ctx, candidates, completed, opts)
 	for i := range targets {
 		targets[i].Write.FillMissing = opts.FillMissing
 	}
@@ -260,37 +270,64 @@ func (s *scraperImpl) completedMedia(
 	}
 }
 
+// descriptorRow is the part of an indexed descriptor row the scrape reads.
+type descriptorRow struct {
+	path      string
+	dbid      int64
+	titleDBID int64
+}
+
+// loadDescriptors streams a system's media and keeps only the present .mra
+// rows, the only ones the catalog can describe. The stream holds a read open,
+// so nothing here touches the descriptors themselves.
+func (s *scraperImpl) loadDescriptors(ctx context.Context, systemID string) ([]descriptorRow, error) {
+	var candidates []descriptorRow
+	err := s.db.ForEachMediaBySystemID(ctx, systemID, func(row *database.MediaWithFullPath) error {
+		if row.IsMissing || !strings.EqualFold(filepath.Ext(row.Path), mra.Ext) {
+			return nil
+		}
+		candidates = append(candidates, descriptorRow{
+			path: row.Path, dbid: row.DBID, titleDBID: row.MediaTitleDBID,
+		})
+		return nil
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+			return candidates, ctxErr
+		}
+		return candidates, fmt.Errorf("misterarcade: load media for %s: %w", systemID, err)
+	}
+	return candidates, nil
+}
+
 // buildTargets resolves every indexed descriptor to the write that enriches it.
 // A descriptor with no readable set name, or one the catalog does not list,
 // counts as skipped: the catalog omits hundreds of sets, most of them
 // alternates, and those rows simply have no metadata to import.
 func (s *scraperImpl) buildTargets(
 	ctx context.Context,
-	media []database.MediaWithFullPath,
+	candidates []descriptorRow,
 	completed map[int64]struct{},
 	opts scraper.ScrapeOptions,
 ) ([]database.ScrapeWriteTarget, matchStats) {
-	targets := make([]database.ScrapeWriteTarget, 0, len(media))
+	var targets []database.ScrapeWriteTarget
 	stats := matchStats{}
-	for i := range media {
+	for i := range candidates {
 		if ctx.Err() != nil {
 			return targets, stats
 		}
-		row := &media[i]
-		if row.IsMissing || !strings.EqualFold(filepath.Ext(row.Path), mra.Ext) {
-			continue
-		}
-		if _, already := completed[row.DBID]; already {
+		row := &candidates[i]
+		if _, already := completed[row.dbid]; already {
 			continue
 		}
 		stats.Processed++
-		entry, found := s.entries[s.setName(row.Path)]
+		entry, found := s.entries[s.setName(row.path)]
 		if !found {
 			stats.Skipped++
 			continue
 		}
 		targets = append(targets, database.ScrapeWriteTarget{
-			MediaDBID: row.DBID, MediaTitleDBID: row.MediaTitleDBID,
+			MediaDBID: row.dbid, MediaTitleDBID: row.titleDBID,
 			Write: buildWrite(entry, opts.RunID, s.unmapped),
 		})
 		stats.Matched++
