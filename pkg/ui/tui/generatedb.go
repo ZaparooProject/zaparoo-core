@@ -46,6 +46,10 @@ const (
 	mediaManageIndex        = "index"
 	mediaManageScrape       = "scrape"
 	mediaManagePollInterval = 2 * time.Second
+	// mediaJobStartTimeout bounds waiting for Core to admit a scrape. Admission
+	// writes to the media database, which on a MiSTer SD card can take longer
+	// than an ordinary TUI request.
+	mediaJobStartTimeout = config.APIRequestTimeout
 )
 
 func getMediaState(ctx context.Context, cfg *config.Instance) (models.MediaResponse, error) {
@@ -121,16 +125,43 @@ func resumeMediaIndex(ctx context.Context, cfg *config.Instance) error {
 	return nil
 }
 
-func startMediaScrape(ctx context.Context, cfg *config.Instance, params models.MediaScrapeParams) error {
+// startMediaScrape asks Core to start a scrape. Core starts an admitted scrape
+// even when the TUI stopped waiting for the answer, so a request that times
+// out is only a failure when Core does not report that scraper running.
+func startMediaScrape(api client.APIClient, params models.MediaScrapeParams, timeout time.Duration) error {
 	b, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal scrape params: %w", err)
 	}
-	_, err = client.LocalClient(ctx, cfg, models.MethodMediaScrape, string(b))
-	if err != nil {
-		return fmt.Errorf("failed to start media scrape: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	_, err = api.Call(ctx, models.MethodMediaScrape, string(b))
+	cancel()
+	if err == nil {
+		return nil
 	}
-	return nil
+	if errors.Is(err, client.ErrRequestTimeout) && scraperRunning(api, params.ScraperID) {
+		log.Warn().Err(err).Str("scraper", params.ScraperID).
+			Msg("media scrape request timed out but the scrape is running")
+		return nil
+	}
+	return fmt.Errorf("failed to start media scrape: %w", err)
+}
+
+// scraperRunning reports whether Core says scraperID is scraping now.
+func scraperRunning(api client.APIClient, scraperID string) bool {
+	ctx, cancel := tuiContext()
+	defer cancel()
+	resp, err := api.Call(ctx, models.MethodMediaScrapeStatus, "")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check scrape status after a timed out start")
+		return false
+	}
+	var status models.ScrapingStatusResponse
+	if err := json.Unmarshal([]byte(resp), &status); err != nil {
+		log.Warn().Err(err).Msg("failed to parse scrape status after a timed out start")
+		return false
+	}
+	return status.Scraping && status.ScraperID == scraperID
 }
 
 func cancelMediaScrape(ctx context.Context, cfg *config.Instance) error {
@@ -991,9 +1022,7 @@ func BuildGenerateDBPage(
 		setProgressButtonBar(false)
 
 		go func() {
-			startCtx, startCancel := tuiContext()
-			err := startMediaScrape(startCtx, cfg, params)
-			startCancel()
+			err := startMediaScrape(client.NewLocalAPIClient(cfg), params, mediaJobStartTimeout)
 			if err != nil {
 				log.Warn().Err(err).Msg("error starting media scrape")
 				app.QueueUpdateDraw(func() {

@@ -40,12 +40,15 @@ const hiddenMediaIDsSQL = `SELECT mt.MediaDBID FROM MediaTags mt
 	WHERE tt.Type = 'user' AND t.Tag = 'hidden'`
 
 // Only non-missing rows, because every browse aggregate this set is subtracted
-// from already counts non-missing media alone.
-const hiddenMediaRowsSQL = `SELECT m.Path, s.SystemID FROM MediaTags mt
-	JOIN Tags t ON t.DBID = mt.TagDBID
-	JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-	JOIN Media m ON m.DBID = mt.MediaDBID
-	JOIN Systems s ON s.DBID = m.SystemDBID
+// from already counts non-missing media alone. CROSS JOIN pins the order to
+// start from the hidden tag's MediaTags rows. Left to the planner, once the
+// tag existed it walked every system's present media and probed MediaTags for
+// each, which took seconds on a MiSTer even with nothing hidden.
+const hiddenMediaRowsSQL = `SELECT m.Path, s.SystemID FROM TagTypes tt
+	CROSS JOIN Tags t ON t.TypeDBID = tt.DBID
+	CROSS JOIN MediaTags mt ON mt.TagDBID = t.DBID
+	CROSS JOIN Media m ON m.DBID = mt.MediaDBID
+	CROSS JOIN Systems s ON s.DBID = m.SystemDBID
 	WHERE tt.Type = 'user' AND t.Tag = 'hidden' AND m.IsMissing = 0`
 
 // MediaPreferencesRevision changes atomically with the tag projection. The
