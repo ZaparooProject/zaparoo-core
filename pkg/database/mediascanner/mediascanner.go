@@ -846,6 +846,14 @@ func GetFiles(
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
+	if isSourcePath(path) {
+		reader, ok := platform.(platforms.SourceRootReader)
+		if !ok {
+			return nil, fmt.Errorf("platform cannot read source root path %s", path)
+		}
+		return getSourceFiles(ctx, cfg, platform, reader, system.ID, path, pauser)
+	}
+
 	var entriesScanned atomic.Int64
 	var symlinksEncountered atomic.Int64
 	var directoriesExcluded atomic.Int64
@@ -1375,6 +1383,21 @@ func NewNamesIndexWithSources(
 	systemPaths := make(map[string][]string)
 	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
+	}
+	if reader, ok := platform.(platforms.SourceRootReader); ok {
+		// A host that cannot list or read its roots fails the run rather than
+		// leaving their media to be marked missing; see source_roots.go.
+		roots, rootsErr := reader.SourceRoots(ctx)
+		if rootsErr != nil {
+			return 0, fmt.Errorf("list source roots: %w", rootsErr)
+		}
+		sourcePaths, sourceErr := getSourceSystemPaths(ctx, reader, roots, systems, launcherCache)
+		if sourceErr != nil {
+			return 0, fmt.Errorf("discover source root systems: %w", sourceErr)
+		}
+		for _, v := range sourcePaths {
+			systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
+		}
 	}
 	logPhaseMetrics("path_discovery")
 	update(IndexStatus{Phase: PhaseInitializing})
