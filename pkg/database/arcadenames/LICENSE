@@ -1,0 +1,54 @@
+names.tsv.gz: arcade set names, descriptions, years and manufacturers
+
+Source: the machine list (mameNNNNlx.zip) published with each MAME release,
+https://github.com/mamedev/mame/releases. The MAME version is recorded on the
+first line of the file. scripts/arcadenames regenerates it from that list and
+is the preferred form for modifying it.
+
+Only the fields named above are taken, for runnable arcade machines. They
+come from the machine definitions in MAME's driver sources.
+
+MAME
+Copyright (c) 1997-2026 MAMEdev and contributors
+
+The MAME project as a whole is distributed under the terms of the GNU General
+Public License, version 2 or later (GPL-2.0+). Zaparoo Core uses this data
+under the GNU General Public License, version 3 or later, as part of Zaparoo
+Core; see LICENSE at the root of this repository. The great majority of MAME
+source files, including the arcade drivers this data is drawn from, are also
+available under the 3-Clause BSD License, whose terms follow.
+
+MAME is a registered trademark of Gregory Ember. It is named here only to
+identify the source of the data; Zaparoo is not affiliated with or endorsed
+by the MAME project.
+
+--------------------------------------------------------------------------
+
+Copyright (c) 1997-2026 MAMEdev and contributors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

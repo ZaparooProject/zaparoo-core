@@ -29,8 +29,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/arcadenames"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scummvmnames"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -282,7 +284,8 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			scheme = strings.ToLower(f.Path[:schemeEnd])
 		}
 
-		if platformsshared.IsStandardSchemeForDecoding(scheme) {
+		switch {
+		case platformsshared.IsStandardSchemeForDecoding(scheme):
 			// For http/https, extract the extension for tag creation
 			// ParseTitleFromFilename will strip it from the display title later
 			ext := strings.ToLower(filepath.Ext(f.FileName))
@@ -291,7 +294,18 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			} else {
 				f.Ext = ""
 			}
-		} else {
+		case platformsshared.IsFileBackedScheme(scheme):
+			// A file-backed scheme (source) names a file below a folder Core
+			// cannot open directly. FilenameFromPath already stripped its
+			// extension from f.FileName, as for a filesystem path, so recover
+			// it from the path's own leaf.
+			ext := strings.ToLower(helpers.GetPathInfo(f.Path).Extension)
+			if helpers.IsValidExtension(ext) {
+				f.Ext = ext
+			} else {
+				f.Ext = ""
+			}
+		default:
 			// For custom schemes (steam, kodi, etc.), there is no extension
 			f.Ext = ""
 		}
@@ -321,7 +335,36 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	}
 
 	fileNameForTitle := f.FileName
+	tagSource := f.FileName
 	trimmedName := strings.TrimSpace(params.ProvidedName)
+	// catalogResolved is true once a set or game list has already named the
+	// file, so a folder or file name that happens to look like a numbered or
+	// dated prefix cannot overwrite it below.
+	catalogResolved := false
+	if entry, ok := arcadeSet(params.SystemID, f.FileName, f.Ext, trimmedName); ok {
+		// A MAME set archive is named by its set ("dkong"), not its game: the
+		// title comes from MAME's description. Its variant notes become tags
+		// only as far as they name a region, set or revision, so same-title
+		// clones stay distinguishable; the catalog adds the year.
+		trimmedName = ""
+		catalogResolved = true
+		fileNameForTitle = entry.Title
+		if notes := arcadenames.VariantNotes(entry.Title); notes != "" {
+			tagSource += " " + notes
+		}
+		if len(entry.Year) == 4 && entry.Year[0] >= '1' && entry.Year[0] <= '2' {
+			tagSource += " (" + entry.Year + ")"
+		}
+	}
+	if title, ok := scummVMTitle(
+		params.SystemID, f.FileName, f.Ext, trimmedName, parentFolder(params.Path),
+	); ok {
+		// A ScummVM launch file is named by its game ID ("sky"): the title
+		// comes from ScummVM's own name for the game.
+		trimmedName = ""
+		catalogResolved = true
+		fileNameForTitle = title
+	}
 	if trimmedName != "" {
 		f.Title = trimmedName
 		f.DisplayTitle = trimmedName
@@ -330,7 +373,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		if !prefixPolicy.Enabled && params.StripLeadingNumbers {
 			prefixPolicy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
 		}
-		if stripped, ok := browseprefix.StripWithPolicy(f.FileName, prefixPolicy); ok {
+		if stripped, ok := browseprefix.StripWithPolicy(f.FileName, prefixPolicy); ok && !catalogResolved {
 			fileNameForTitle = stripped
 		}
 		f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
@@ -369,10 +412,65 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
 	if params.Config == nil || params.Config.FilenameTags() {
-		f.Tags = getTagsFromFileName(f.FileName, mediaType)
+		f.Tags = getTagsFromFileName(tagSource, mediaType)
 	} else {
 		f.Tags = []string{}
 	}
 
 	return f
+}
+
+// scummVMTitle names a ScummVM launch file whose name is its game ID. The
+// folder it sits in breaks ties between engines sharing an ID and, for an ID
+// the catalog does not know, stands in as the title when it is not just the
+// system's own folder. A name the source provided wins unless it is only the
+// file's own name again.
+func scummVMTitle(systemID, fileName, ext, providedName, folder string) (string, bool) {
+	if !scummvmnames.IsTargetFile(systemID, ext) {
+		return "", false
+	}
+	if providedName != "" && !strings.EqualFold(providedName, fileName) &&
+		!strings.EqualFold(providedName, fileName+ext) {
+		return "", false
+	}
+	if title, ok := scummvmnames.Title(fileName, folder); ok {
+		return title, true
+	}
+	if !scummvmnames.LooksLikeID(fileName) || folder == "" || strings.EqualFold(folder, systemID) {
+		return "", false
+	}
+	return folder, true
+}
+
+// parentFolder is the name of the folder holding a media file, or "" at a
+// root: the segment above a source path's last one, or a filesystem path's
+// own directory base name.
+func parentFolder(mediaPath string) string {
+	if _, segments, err := platforms.SourceLocation(mediaPath); err == nil {
+		if len(segments) < 2 {
+			return ""
+		}
+		return segments[len(segments)-2]
+	}
+	if helpers.ReURI.MatchString(mediaPath) {
+		return ""
+	}
+	dir := filepath.Dir(mediaPath)
+	if dir == "." || filepath.Dir(dir) == dir {
+		return ""
+	}
+	return filepath.Base(dir)
+}
+
+// arcadeSet finds the catalog record for an arcade set archive. A name the
+// source provided wins unless it is only the file's own name again.
+func arcadeSet(systemID, fileName, ext, providedName string) (arcadenames.Entry, bool) {
+	if !arcadenames.IsArcadeSystem(systemID) || !arcadenames.SetArchive(ext) {
+		return arcadenames.Entry{}, false
+	}
+	if providedName != "" && !strings.EqualFold(providedName, fileName) &&
+		!strings.EqualFold(providedName, fileName+ext) {
+		return arcadenames.Entry{}, false
+	}
+	return arcadenames.Lookup(fileName)
 }
