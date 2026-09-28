@@ -126,29 +126,63 @@ func applyMediaLauncherOverrideForPath(
 		// still resolved when nothing that matches the path is available.
 		launcher, found = inferLauncherForPathWithAvailability(pl, env, path, false)
 	}
-	if !found || launcher.SystemID == "" {
-		return current
-	}
 
 	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
-	system, err := env.Database.MediaDB.FindSystemBySystemID(launcher.SystemID)
-	if err != nil {
-		log.Debug().Err(err).Str("system", launcher.SystemID).Msg("failed to resolve launch path system")
+	if found && launcher.SystemID != "" {
+		if mediaDBID, ok := findMediaInSystem(ctx, env, launcher.SystemID, path); ok {
+			return applyMediaLauncherOverrideWithReplace(pl, env, mediaDBID, launcher.SystemID, replaceCurrent)
+		}
+	}
+	// The launcher inferred from the path can belong to another system than
+	// the media row, when a launcher of that system also accepts the path.
+	// Look the path up across systems, and use it only when one row has it.
+	row, ok := findUniqueMediaByPath(ctx, env, path)
+	if !ok {
 		return current
+	}
+	return applyMediaLauncherOverrideWithReplace(pl, env, row.DBID, row.SystemID, replaceCurrent)
+}
+
+// findMediaInSystem returns the DBID of the media row for path in systemID.
+func findMediaInSystem(ctx context.Context, env *platforms.CmdEnv, systemID, path string) (int64, bool) {
+	system, err := env.Database.MediaDB.FindSystemBySystemID(systemID)
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemID).Msg("failed to resolve launch path system")
+		return 0, false
 	}
 	media, err := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, path)
-	if errors.Is(err, sql.ErrNoRows) {
-		return current
-	}
 	if err != nil {
-		log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media")
-		return current
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media")
+		}
+		return 0, false
 	}
 	if media == nil {
-		return current
+		return 0, false
 	}
-	return applyMediaLauncherOverrideWithReplace(pl, env, media.DBID, launcher.SystemID, replaceCurrent)
+	return media.DBID, true
+}
+
+// findUniqueMediaByPath returns the one media row, in any system, whose path
+// is exactly path. It reports false when there is none, or when several
+// systems index the same path and nothing says which one is meant.
+func findUniqueMediaByPath(ctx context.Context, env *platforms.CmdEnv, path string) (database.MediaPathID, bool) {
+	rows, err := env.Database.MediaDB.FindMediaIDsByPaths(ctx, []string{path})
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media across systems")
+		return database.MediaPathID{}, false
+	}
+	var match database.MediaPathID
+	matches := 0
+	for i := range rows {
+		if rows[i].Path != path {
+			continue
+		}
+		match = rows[i]
+		matches++
+	}
+	return match, matches == 1
 }
 
 func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {

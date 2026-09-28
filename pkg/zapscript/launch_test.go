@@ -368,6 +368,66 @@ func TestCmdLaunch_URIAppliesUnavailableMediaLauncherOverride(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+// A launcher of another system can also accept a path. Inference then names
+// that system, where the media row does not live, and the row's own override
+// must still be found and applied.
+func TestCmdLaunch_URIFindsMediaOverrideInAnotherSystem(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+
+	uri := "custom://NES/game.nes"
+	scantest.IndexMediaPaths(t, mediaDB, "NES", uri)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		context.Background(), db, "NES", uri, rows[0].DBID, "Custom.NESOverride"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	matchesAny := func(_ *config.Instance, path string) bool {
+		return strings.HasPrefix(path, "custom://")
+	}
+	launchers := []platforms.Launcher{
+		{
+			// Available, and first: inference picks this system.
+			ID: "Custom.SNES", SystemID: "SNES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesAny,
+		},
+		{
+			ID: "Custom.NESOverride", SystemID: "NES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesAny,
+		},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, uri,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Custom.NESOverride"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err = cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing.T) {
 	t.Parallel()
 
