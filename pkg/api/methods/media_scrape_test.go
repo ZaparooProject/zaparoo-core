@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,6 +128,19 @@ func makeScrapeEnv(
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
 		Params:   rawParams,
+	}
+}
+
+// receiveScrapeOptions waits for a fake scraper to be started, which happens
+// after media.scrape has answered.
+func receiveScrapeOptions(t *testing.T, got <-chan scraper.ScrapeOptions) scraper.ScrapeOptions {
+	t.Helper()
+	select {
+	case opts := <-got:
+		return opts
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "scraper was not started")
+		return scraper.ScrapeOptions{}
 	}
 }
 
@@ -459,8 +473,10 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
 	}
 
+	// The request is answered once the job is admitted; a scraper that fails
+	// to start reports it through the failed notification.
 	_, err := HandleMediaScrape(env)
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	first := <-ns
 	require.Equal(t, models.NotificationMediaScraping, first.Method)
@@ -480,6 +496,7 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	assert.True(t, failedPayload.Done)
 	assert.False(t, failedPayload.Paused)
 	assert.Equal(t, "failed to start media scrape", failedPayload.Error)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
 	mockDB.AssertExpectations(t)
 }
 
@@ -627,7 +644,10 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 
 	pauser := syncutil.NewPauser()
 	pauser.Pause()
-	var scraperSawPaused bool
+	// The scraper's own Scrape function now runs on the background goroutine
+	// media.scrape starts once the job is admitted, so this is read only after
+	// synchronizing on the initial "scraping" notification below.
+	var scraperSawPaused atomic.Bool
 	testScraper := platforms.Scraper{
 		ID:   "test-scraper",
 		Name: "Test Scraper",
@@ -636,7 +656,7 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
-			scraperSawPaused = opts.Pauser != nil && opts.Pauser.IsPaused()
+			scraperSawPaused.Store(opts.Pauser != nil && opts.Pauser.IsPaused())
 			go func() {
 				ch <- scraper.ScrapeUpdate{Done: true}
 				close(ch)
@@ -665,7 +685,6 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 	result, err := HandleMediaScrape(env)
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, result)
-	assert.False(t, scraperSawPaused)
 	assert.False(t, pauser.IsPaused())
 
 	var gotStart bool
@@ -680,6 +699,10 @@ func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
 			require.NoError(t, json.Unmarshal(n.Params, &payload))
 			if payload.Scraping && !payload.Done {
 				assert.False(t, payload.Paused)
+				// The initial notification is published after the scraper's own
+				// Scrape function has already run on the background goroutine, so
+				// scraperSawPaused is safe to read from here on.
+				assert.False(t, scraperSawPaused.Load())
 				gotStart = true
 			}
 		case <-timeout:
@@ -1002,9 +1025,8 @@ func TestHandleMediaScrapeStatus_UsesScrapePauser(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-// TestHandleMediaScrape_ScraperInitError verifies that when the scraper's
-// Scrape method returns an error, HandleMediaScrape propagates the error and
-// the global scraping status is cleared.
+// TestResumeMediaScrape_RestoresStoredOptions verifies that a resumed job
+// starts its scraper with the stored scope, systems, run ID and force flag.
 func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
@@ -1034,7 +1056,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 
-	var gotOptions scraper.ScrapeOptions
+	gotOptions := make(chan scraper.ScrapeOptions, 1)
 	resumeScraper := platforms.Scraper{
 		ID:   "resume-scraper",
 		Name: "Resume Scraper",
@@ -1043,7 +1065,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
-			gotOptions = opts
+			gotOptions <- opts
 			go func() {
 				ch <- scraper.ScrapeUpdate{Done: true}
 				close(ch)
@@ -1058,10 +1080,11 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	)
 
 	require.NoError(t, ResumeMediaScrape(&env, operation))
-	assert.Equal(t, []string{"SNES"}, gotOptions.Systems)
-	assert.Equal(t, "resume-run", gotOptions.RunID)
-	assert.Equal(t, operation.Scope, gotOptions.Scope)
-	assert.True(t, gotOptions.Force)
+	opts := receiveScrapeOptions(t, gotOptions)
+	assert.Equal(t, []string{"SNES"}, opts.Systems)
+	assert.Equal(t, "resume-run", opts.RunID)
+	assert.Equal(t, operation.Scope, opts.Scope)
+	assert.True(t, opts.Force)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)
@@ -1094,7 +1117,7 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "scope-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 
-	var gotOptions scraper.ScrapeOptions
+	gotOptions := make(chan scraper.ScrapeOptions, 1)
 	scopeScraper := platforms.Scraper{
 		ID: "scope-scraper", Name: "Scope Scraper",
 		Scrape: func(
@@ -1102,7 +1125,7 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
-			gotOptions = opts
+			gotOptions <- opts
 			go func() {
 				ch <- scraper.ScrapeUpdate{Done: true}
 				close(ch)
@@ -1121,8 +1144,69 @@ func TestHandleMediaScrape_PassesResolvedScopeToScraper(t *testing.T) {
 
 	_, err := HandleMediaScrape(env)
 	require.NoError(t, err)
-	require.Equal(t, expectedScope, gotOptions.Scope)
-	require.Equal(t, []string{"NES"}, gotOptions.Systems)
+	opts := receiveScrapeOptions(t, gotOptions)
+	require.Equal(t, expectedScope, opts.Scope)
+	require.Equal(t, []string{"NES"}, opts.Systems)
+	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	mockDB.AssertExpectations(t)
+}
+
+// Issue #1584: on a MiSTer, a scraper's startup (finding installed packs on
+// the SD card) took longer than the TUI waits, so a scrape that did start was
+// reported as failed. media.scrape answers once the job is admitted.
+func TestHandleMediaScrape_AnswersBeforeScraperStartupFinishes(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", assertmock.Anything).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return().Once()
+	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "slow-scraper").Return(0, nil)
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	startupRelease := make(chan struct{})
+	slowScraper := platforms.Scraper{
+		ID: "slow-scraper", Name: "Slow Scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			<-startupRelease
+			go func() {
+				ch <- scraper.ScrapeUpdate{Done: true}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"slow-scraper": slowScraper},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "slow-scraper"},
+	)
+
+	answered := make(chan error, 1)
+	go func() {
+		_, err := HandleMediaScrape(env)
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(startupRelease)
+		require.FailNow(t, "media.scrape waited for the scraper's startup")
+	}
+	assert.True(t, IsScrapingRunning(), "the admitted scrape is running while its startup finishes")
+
+	close(startupRelease)
 	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
 	mockDB.AssertExpectations(t)
 }
@@ -1204,6 +1288,9 @@ func TestHandleMediaScrape_PersistOperationErrorClearsRunning(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestHandleMediaScrape_ScraperInitError verifies that when the scraper's
+// Scrape method returns an error, the scraping status is cleared and the
+// lease released.
 func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
@@ -1223,11 +1310,11 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	)
 
 	_, err := HandleMediaScrape(env)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to start scraper")
+	require.NoError(t, err, "startup runs after the request is answered")
 
-	assert.False(t, IsScrapingRunning(), "scraping status must be cleared after error")
-	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning() && mockDB.ActiveMediaWriteOperation() == database.MediaWriteOperationNone
+	}, 2*time.Second, 10*time.Millisecond, "a failed start clears the status and releases the lease")
 	mockDB.AssertExpectations(t)
 }
 
@@ -1523,7 +1610,7 @@ func TestMediaScrapeShutdownRetainsResumableWork(t *testing.T) {
 				db.On("GetScrapingOperation").Return(op, true, nil).Once()
 				env.ScrapePauser = syncutil.NewPauser()
 				require.NoError(t, ResumeMediaScrape(&env, op))
-				require.True(t, env.ScrapePauser.IsPaused())
+				require.Eventually(t, env.ScrapePauser.IsPaused, 2*time.Second, 10*time.Millisecond)
 			} else {
 				_, err := HandleMediaScrape(env)
 				require.NoError(t, err)
