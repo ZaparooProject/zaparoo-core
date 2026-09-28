@@ -1360,6 +1360,16 @@ type MediaDBI interface {
 	ResetIndexResumeAttempts() error
 	GetIndexResumeCheckpoint() (string, error)
 	SetIndexResumeCheckpoint(checkpoint string) error
+	// SetIndexingCurrentSystem and GetIndexingCurrentSystem track the system
+	// an index run is working on, so a run that keeps being interrupted
+	// inside the same system can be identified on the next boot.
+	SetIndexingCurrentSystem(systemID string) error
+	GetIndexingCurrentSystem() (string, error)
+	// SetIndexingSkippedSystems and GetIndexingSkippedSystems hold the systems
+	// a resumed index run leaves out because they repeatedly stopped it from
+	// progressing.
+	SetIndexingSkippedSystems(systemIDs []string) error
+	GetIndexingSkippedSystems() ([]string, error)
 	SetScrapingStatus(status string) error
 	GetScrapingStatus() (string, error)
 	SetScrapingOperation(operation ScrapingOperation) error
@@ -1499,6 +1509,17 @@ type MediaDBI interface {
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	// ForEachTitleBySystemID and ForEachMediaBySystemID stream the rows the two
+	// methods above return, in the same order, so a caller can keep only what
+	// it needs from a large system. The row passed to fn is reused between
+	// calls, and fn must not use the database: the read stays open while it
+	// runs. Cancelling ctx stops the read with ctx's error.
+	ForEachTitleBySystemID(ctx context.Context, systemID string, fn func(*TitleWithSystem) error) error
+	ForEachMediaBySystemID(ctx context.Context, systemID string, fn func(*MediaWithFullPath) error) error
+	// GetMediaPageBySystemID returns up to limit of GetMediaBySystemID's rows
+	// whose Path sorts after afterPath, in the same order, for a caller that
+	// must write between batches of a large system.
+	GetMediaPageBySystemID(ctx context.Context, systemID, afterPath string, limit int) ([]MediaWithFullPath, error)
 	// GetMediaSourceRoots returns distinct local metadata roots for present media in a system.
 	GetMediaSourceRoots(ctx context.Context, systemID string) ([]string, error)
 	// GetMediaSourcesForScrape returns source rows for a full system or optional scrape scope.
@@ -1618,6 +1639,11 @@ type MediaDBI interface {
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 	// that have no Media row with the given sentinel tag value.
 	FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]MediaTitle, error)
+	// ForEachMediaTitleWithoutSentinel streams FindMediaTitlesWithoutSentinel's
+	// rows under the same rules as ForEachMediaBySystemID.
+	ForEachMediaTitleWithoutSentinel(
+		ctx context.Context, systemDBID int64, sentinelTag string, fn func(*MediaTitle) error,
+	) error
 
 	// FindMediaTitleByDBID returns the MediaTitle with the given DBID,
 	// or nil, nil when no row is found.

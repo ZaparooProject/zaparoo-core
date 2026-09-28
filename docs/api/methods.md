@@ -549,6 +549,7 @@ None.
 | currentStepDisplay | string | No       | Display name of the current indexing step or optimization step. |
 | totalFiles         | number | No       | Total number of files to index.                 |
 | totalMedia         | number | No       | Total number of media entries in the database. Only included when database exists and is not indexing. |
+| scan               | object | No       | The current system's folder scan, only included while a scan is running: `path` is the folder being read and `entries` the files and folders read so far. |
 
 ##### Active media object
 

@@ -41,6 +41,8 @@ const (
 	DBConfigLastIndexedSystem               = "LastIndexedSystem"
 	DBConfigIndexingSystems                 = "IndexingSystems"
 	DBConfigIndexingPlanSystems             = "IndexingPlanSystems"
+	DBConfigIndexingCurrentSystem           = "IndexingCurrentSystem"
+	DBConfigIndexingSkippedSystems          = "IndexingSkippedSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
 	DBConfigBrowseIndexComplete             = "BrowseIndexComplete"
 	DBConfigMediaTotalCount                 = "MediaTotalCount"
@@ -484,4 +486,38 @@ func sqlSetIndexingPlanSystems(ctx context.Context, db sqlQueryable, systemIDs [
 
 func sqlGetIndexingPlanSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingPlanSystems)
+}
+
+func sqlSetIndexingSkippedSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+	return sqlSetSystemListConfig(ctx, db, DBConfigIndexingSkippedSystems, systemIDs)
+}
+
+func sqlGetIndexingSkippedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingSkippedSystems)
+}
+
+func sqlSetIndexingCurrentSystem(ctx context.Context, db sqlQueryable, systemID string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexingCurrentSystem,
+		systemID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set indexing current system: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexingCurrentSystem(ctx context.Context, db *sql.DB) (string, error) {
+	var systemID string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexingCurrentSystem,
+	).Scan(&systemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get indexing current system: %w", err)
+	}
+	return systemID, nil
 }

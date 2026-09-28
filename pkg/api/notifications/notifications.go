@@ -81,7 +81,7 @@ func MediaVisibility(ns chan<- models.Notification) {
 	sendNotification(ns, models.NotificationMediaVisibility, nil)
 }
 
-func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusResponse) {
+func MediaIndexing(ns chan<- models.Notification, payload *models.IndexingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 

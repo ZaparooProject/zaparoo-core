@@ -322,13 +322,24 @@ type IndexingStatusResponse struct {
 	// clients can serve partial results while a scan is still running.
 	SystemsCompleted *int `json:"systemsCompleted,omitempty"`
 	SystemsTotal     *int `json:"systemsTotal,omitempty"`
-	Exists           bool `json:"exists"`
-	Indexing         bool `json:"indexing"`
-	Optimizing       bool `json:"optimizing"`
-	Paused           bool `json:"paused"`
+	// Scan reports a system's folder scan while it runs. A scan can take many
+	// minutes on a large library, and without it nothing visibly moves.
+	// Absent outside a scan.
+	Scan       *IndexingScanResponse `json:"scan,omitempty"`
+	Exists     bool                  `json:"exists"`
+	Indexing   bool                  `json:"indexing"`
+	Optimizing bool                  `json:"optimizing"`
+	Paused     bool                  `json:"paused"`
 	// Throttled reports that indexing is running at reduced speed while
 	// media plays.
 	Throttled bool `json:"throttled,omitempty"`
+}
+
+// IndexingScanResponse is a running folder scan: the files and folders read so
+// far and the folder being read.
+type IndexingScanResponse struct {
+	Path    string `json:"path"`
+	Entries int    `json:"entries"`
 }
 
 type ReaderResponse struct {

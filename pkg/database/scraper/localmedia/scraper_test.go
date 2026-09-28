@@ -21,16 +21,20 @@ package localmedia
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -160,13 +164,19 @@ func TestIndexedDirectoryPaths_DedupesAncestorsAndSkipsMissing(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	paths := indexedDirectoryPaths([]database.MediaWithFullPath{
+	db := testhelpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
 		{Path: filepath.Join(root, "RPGs", "Game", "Disc 1.chd")},
 		{Path: filepath.Join(root, "RPGs", "Game", "Disc 2.chd")},
 		{Path: filepath.Join(root, "Missing", "Game.chd"), IsMissing: true},
 		{Path: filepath.Join(filepath.Dir(root), "Outside", "Game.chd")},
 		{Path: filepath.Join(root, "Root Game.nes")},
-	}, []string{root})
+	}, nil)
+	s := &scraperImpl{db: db, fs: afero.NewMemMapFs()}
+	scan, err := s.scanSystem(context.Background(), scraper.ScrapeSystem{ID: "NES", ROMPaths: []string{root}})
+	require.NoError(t, err)
+	paths := scan.directoryPaths
+	assert.Equal(t, 5, scan.rows)
 
 	assert.Equal(t, []string{
 		filepath.ToSlash(filepath.Join(root, "RPGs")),
@@ -525,10 +535,248 @@ func TestIsContainerLaunchTarget(t *testing.T) {
 	cue := database.MediaWithFullPath{DBID: 1, Path: filepath.Join(root, "Cool Game", "Disc 1.cue")}
 	bin := database.MediaWithFullPath{DBID: 2, Path: filepath.Join(root, "Cool Game", "Disc 1.bin")}
 	loose := database.MediaWithFullPath{DBID: 3, Path: filepath.Join(root, "Other.chd")}
-	containers := containerIndexForMedia([]database.MediaWithFullPath{cue, bin, loose})
+	containers := scannedLaunchTargets(t, []database.MediaWithFullPath{cue, bin, loose})
 
 	assert.True(t, isContainerLaunchTarget(containers, &cue))
 	assert.False(t, isContainerLaunchTarget(containers, &bin))
 	assert.False(t, isContainerLaunchTarget(containers, &loose),
 		"the system root holds nested media, so it is not a container")
+}
+
+// A system whose roots hold no artwork directory can match nothing, so an
+// ordinary run never reads its media. It still replaces the folder artwork
+// snapshot with the empty set, as a full pass over the rows would.
+func TestScrape_SkipsMediaLoadWithoutArtworkDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	// A media directory no artwork lookup searches.
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "media", "videos"), 0o750))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
+		{DBID: 11, MediaTitleDBID: 101, Path: filepath.Join(root, "Game.nes")},
+	}, nil).Maybe()
+	mockDB.On("ReplaceDirectoryProperties", mock.Anything, int64(1), []database.DirectoryProperty{}).
+		Return(false, nil).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	s := &scraperImpl{db: mockDB, fs: fs}
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: 1, ID: "NES", ROMPaths: []string{root},
+	}}, ch)
+
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+		updates = append(updates, update)
+	}
+	require.NotEmpty(t, updates)
+	assert.True(t, updates[len(updates)-1].Done)
+	mockDB.AssertNotCalled(t, "GetMediaBySystemID", mock.Anything)
+	mockDB.AssertNotCalled(t, "GetMediaSourcesForScrape", mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrape_StopsWhenCancelledWhileLoadingMedia(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	boxart := filepath.Join(root, "media", "boxart", "Game.png")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(boxart), 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxart, []byte("boxart"), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "NES").Run(func(mock.Arguments) { cancel() }).
+		Return([]database.MediaWithFullPath{
+			{DBID: 11, MediaTitleDBID: 101, Path: filepath.Join(root, "Game.nes")},
+		}, nil).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	s := &scraperImpl{db: mockDB, fs: fs}
+	s.scrapeLoop(ctx, scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: 1, ID: "NES", ROMPaths: []string{root},
+	}}, ch)
+
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		updates = append(updates, update)
+	}
+	require.Len(t, updates, 1)
+	assert.True(t, updates[0].Done)
+	require.ErrorIs(t, updates[0].FatalErr, context.Canceled)
+	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "ReplaceDirectoryProperties", mock.Anything, mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+// scannedLaunchTargets is the container view an ordinary run builds while it
+// scans media.
+func scannedLaunchTargets(t *testing.T, media []database.MediaWithFullPath) launchTargetResolver {
+	t.Helper()
+	db := testhelpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "PSX").Return(media, nil)
+	scan, err := (&scraperImpl{db: db, fs: afero.NewMemMapFs()}).scanSystem(
+		context.Background(), scraper.ScrapeSystem{ID: "PSX"})
+	require.NoError(t, err)
+	return scan.targets
+}
+
+// The per-directory container view built while scanning must answer as the
+// full index over the same rows does.
+func TestScanSystemLaunchTargets_MatchFullIndex(t *testing.T) {
+	t.Parallel()
+
+	media := []database.MediaWithFullPath{
+		{DBID: 1, MediaTitleDBID: 10, Path: "/roms/PSX/Cool Game/Disc 1.cue"},
+		{DBID: 2, MediaTitleDBID: 10, Path: "/roms/PSX/Cool Game/Disc 1.bin"},
+		{DBID: 3, MediaTitleDBID: 11, Path: "/roms/PSX/Loose.chd"},
+		{DBID: 4, MediaTitleDBID: 12, Path: "/roms/PSX/Solo/Solo.chd"},
+		{DBID: 5, MediaTitleDBID: 13, Path: "/roms/PSX/Multi/Multi.m3u"},
+		{DBID: 6, MediaTitleDBID: 13, Path: "/roms/PSX/Multi/Multi (Disc 1).chd"},
+		{DBID: 7, MediaTitleDBID: 13, Path: "/roms/PSX/Multi/Multi (Disc 2).chd"},
+		{DBID: 8, MediaTitleDBID: 14, Path: "/roms/PSX/Set/A.iso"},
+		{DBID: 9, MediaTitleDBID: 14, Path: "/roms/PSX/Set/B.iso"},
+		{DBID: 10, MediaTitleDBID: 15, Path: "/roms/PSX/Mixed/A.iso"},
+		{DBID: 11, MediaTitleDBID: 16, Path: "/roms/PSX/Mixed/B.iso"},
+		{DBID: 12, MediaTitleDBID: 17, Path: "/roms/PSX/Gone/Gone.chd", IsMissing: true},
+		{DBID: 13, MediaTitleDBID: 18, Path: "/roms/PSX/Half/Kept.chd"},
+		{DBID: 14, MediaTitleDBID: 19, Path: "/roms/PSX/Half/Lost.chd", IsMissing: true},
+		{DBID: 15, MediaTitleDBID: 20, Path: "/roms/PSX/Nest/Outer.chd"},
+		{DBID: 16, MediaTitleDBID: 21, Path: "/roms/PSX/Nest/Inner/Inner.chd"},
+		{DBID: 17, MediaTitleDBID: 22, Path: "/roms/PSX/Stored/Game.chd", ParentDir: "/roms/PSX/Stored/"},
+		{DBID: 18, MediaTitleDBID: 23, Path: "/roms/PSX/Moved/Game.chd", ParentDir: "/roms/PSX/Elsewhere/"},
+		{DBID: 19, MediaTitleDBID: 24, Path: "steam://123/Game"},
+	}
+	full := make([]database.Media, 0, len(media))
+	for i := range media {
+		full = append(full, database.Media{
+			DBID: media[i].DBID, MediaTitleDBID: media[i].MediaTitleDBID, Path: media[i].Path,
+			ParentDir: media[i].ParentDir, IsMissing: media[i].IsMissing,
+		})
+	}
+	want := container.NewIndex(full)
+	got := scannedLaunchTargets(t, media)
+
+	targets := 0
+	for i := range media {
+		expected := isContainerLaunchTarget(want, &media[i])
+		if expected {
+			targets++
+		}
+		assert.Equal(t, expected, isContainerLaunchTarget(got, &media[i]), media[i].Path)
+	}
+	assert.Positive(t, targets)
+}
+
+// An ordinary run over a real media database streams the system's rows and
+// writes what it finds only after the read has finished.
+func TestScrape_WritesArtworkFromStreamedRows(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	root := t.TempDir()
+	gamePath := filepath.Join(root, "Game.nes")
+	otherPath := filepath.Join(root, "Sub", "Other.nes")
+	scantest.IndexScanResults(t, db, systemdefs.SystemNES, database.ScanReconcileOpts{},
+		platforms.ScanResult{Path: gamePath}, platforms.ScanResult{Path: otherPath})
+
+	fs := afero.NewMemMapFs()
+	gameArt := filepath.Join(root, "media", "boxart", "Game.png")
+	otherArt := filepath.Join(root, "media", "boxart", "Sub", "Other.png")
+	folderArt := filepath.Join(root, "media", "boxart", "Sub.png")
+	for _, art := range []string{gameArt, otherArt, folderArt} {
+		require.NoError(t, fs.MkdirAll(filepath.Dir(art), 0o750))
+		require.NoError(t, afero.WriteFile(fs, art, []byte("image"), 0o600))
+	}
+	system, err := db.FindSystemBySystemID(systemdefs.SystemNES)
+	require.NoError(t, err)
+
+	ch := make(chan scraper.ScrapeUpdate, 64)
+	s := &scraperImpl{db: db, fs: fs}
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: system.DBID, ID: systemdefs.SystemNES, ROMPaths: []string{root},
+	}}, ch)
+	var last scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+		require.NoError(t, update.Err)
+		last = update
+	}
+	require.True(t, last.Done)
+
+	rows, err := db.GetMediaBySystemID(systemdefs.SystemNES)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	wantArt := map[string]string{gamePath: gameArt, otherPath: otherArt}
+	for i := range rows {
+		props, err := db.GetMediaPropertyMetadata(context.Background(), rows[i].DBID)
+		require.NoError(t, err)
+		texts := make([]string, 0, len(props))
+		for _, prop := range props {
+			texts = append(texts, prop.Text)
+		}
+		assert.Contains(t, texts, filepath.ToSlash(wantArt[filepath.FromSlash(rows[i].Path)]), rows[i].Path)
+	}
+}
+
+// An ordinary run reads rows a page at a time; every row, including those on
+// either side of a page boundary, must still be scraped.
+func TestScrape_PagesThroughLargeSystems(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	root := t.TempDir()
+	count := 2*mediaPageSize + 3
+	results := make([]platforms.ScanResult, 0, count)
+	for i := range count {
+		results = append(results, platforms.ScanResult{Path: filepath.Join(root, fmt.Sprintf("Game %04d.nes", i))})
+	}
+	scantest.IndexScanResults(t, db, systemdefs.SystemNES, database.ScanReconcileOpts{}, results...)
+
+	fs := afero.NewMemMapFs()
+	want := map[string]string{}
+	for _, i := range []int{0, mediaPageSize - 1, mediaPageSize, count - 1} {
+		art := filepath.Join(root, "media", "boxart", fmt.Sprintf("Game %04d.png", i))
+		require.NoError(t, fs.MkdirAll(filepath.Dir(art), 0o750))
+		require.NoError(t, afero.WriteFile(fs, art, []byte("image"), 0o600))
+		want[filepath.ToSlash(results[i].Path)] = filepath.ToSlash(art)
+	}
+	system, err := db.FindSystemBySystemID(systemdefs.SystemNES)
+	require.NoError(t, err)
+
+	ch := make(chan scraper.ScrapeUpdate, 4*count)
+	s := &scraperImpl{db: db, fs: fs}
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: system.DBID, ID: systemdefs.SystemNES, ROMPaths: []string{root},
+	}}, ch)
+	var lastProgress scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+		if !update.Done {
+			lastProgress = update
+		}
+	}
+	assert.Equal(t, count, lastProgress.Processed)
+	assert.Equal(t, len(want), lastProgress.Matched)
+
+	rows, err := db.GetMediaBySystemID(systemdefs.SystemNES)
+	require.NoError(t, err)
+	for i := range rows {
+		art, ok := want[rows[i].Path]
+		if !ok {
+			continue
+		}
+		props, err := db.GetMediaPropertyMetadata(context.Background(), rows[i].DBID)
+		require.NoError(t, err)
+		require.Len(t, props, 1, rows[i].Path)
+		assert.Equal(t, art, props[0].Text)
+	}
 }
