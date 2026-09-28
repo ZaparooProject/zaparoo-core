@@ -36,7 +36,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/sourcepath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -317,8 +316,9 @@ func TestCmdLaunch_URIAppliesUnavailableMediaLauncherOverride(t *testing.T) {
 	t.Cleanup(userCleanup)
 	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
 
-	uri, err := sourcepath.Format(sourcepath.ID("test-source"), []string{"NES", "game.nes"})
-	require.NoError(t, err)
+	// A custom scheme, like the ones launchers declare for media that is not
+	// a filesystem path.
+	uri := "player://NES/game.nes"
 	scantest.IndexMediaPaths(t, mediaDB, "NES", uri)
 	rows, err := mediaDB.GetMediaBySystemID("NES")
 	require.NoError(t, err)
@@ -330,16 +330,16 @@ func TestCmdLaunch_URIAppliesUnavailableMediaLauncherOverride(t *testing.T) {
 	cfg := &config.Instance{}
 	unavailable := errors.New("player is not installed")
 	matchesSource := func(_ *config.Instance, path string) bool {
-		return strings.HasPrefix(path, "source://") && strings.Contains(path, "/NES/")
+		return strings.HasPrefix(path, "player://NES/")
 	}
 	launchers := []platforms.Launcher{
 		{
-			ID: "Player.Default", SystemID: "NES", Schemes: []string{"source"},
+			ID: "Player.Default", SystemID: "NES", Schemes: []string{"player"},
 			Extensions: []string{".nes"}, Test: matchesSource,
 			Availability: func(*config.Instance) error { return unavailable },
 		},
 		{
-			ID: "Player.Override", SystemID: "NES", Schemes: []string{"source"},
+			ID: "Player.Override", SystemID: "NES", Schemes: []string{"player"},
 			Extensions: []string{".nes"}, Test: matchesSource,
 			Availability: func(*config.Instance) error { return unavailable },
 		},
@@ -375,11 +375,11 @@ func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing
 	mockMediaDB := helpers.NewMockMediaDBI()
 	db := &database.Database{MediaDB: mockMediaDB}
 	cfg := &config.Instance{}
-	uri := "source://abc123/NES/game.nes"
+	uri := "player://NES/game.nes"
 	launchers := []platforms.Launcher{{
 		ID:           "Player.Unavailable",
 		SystemID:     "NES",
-		Schemes:      []string{"source"},
+		Schemes:      []string{"player"},
 		Availability: func(*config.Instance) error { return errors.New("player is not installed") },
 	}}
 
@@ -1506,12 +1506,12 @@ func TestInferLauncherForPath_SkipsKnownMissingPlayer(t *testing.T) {
 	detected, missing := true, false
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
-		{ID: "NESMissing", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
-		{ID: "SNESInstalled", SystemID: systemdefs.SystemSNES, Schemes: []string{"source"}, Detected: &detected},
-		{ID: "SNESSecond", SystemID: systemdefs.SystemSNES, Schemes: []string{"source"}, Detected: &detected},
+		{ID: "NESMissing", SystemID: systemdefs.SystemNES, Schemes: []string{"player"}, Detected: &missing},
+		{ID: "SNESInstalled", SystemID: systemdefs.SystemSNES, Schemes: []string{"player"}, Detected: &detected},
+		{ID: "SNESSecond", SystemID: systemdefs.SystemSNES, Schemes: []string{"player"}, Detected: &detected},
 	})
 
-	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "source://abc/game.bin")
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "player://abc/game.bin")
 
 	require.True(t, found)
 	assert.Equal(t, "SNESInstalled", launcher.ID, "first registered launcher that is not known missing")
@@ -1525,11 +1525,11 @@ func TestInferLauncherForPath_AllMissingKeepsFirst(t *testing.T) {
 	missing := false
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
-		{ID: "First", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
-		{ID: "Second", SystemID: systemdefs.SystemNES, Schemes: []string{"source"}, Detected: &missing},
+		{ID: "First", SystemID: systemdefs.SystemNES, Schemes: []string{"player"}, Detected: &missing},
+		{ID: "Second", SystemID: systemdefs.SystemNES, Schemes: []string{"player"}, Detected: &missing},
 	})
 
-	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "source://abc/game.nes")
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "player://abc/game.nes")
 
 	require.True(t, found)
 	assert.Equal(t, "First", launcher.ID)
