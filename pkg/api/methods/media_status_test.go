@@ -81,18 +81,18 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	amstradStatus := mediascanner.IndexStatus{SystemID: "amstradcpc", Total: 20, Step: 5}
 	arcadeStatus := mediascanner.IndexStatus{SystemID: "arcade", Total: 20, Step: 6}
 
-	assert.True(t, notifState.shouldSend(amstradStatus, baseTime, throttleInterval))
+	assert.True(t, notifState.shouldSend(&amstradStatus, baseTime, throttleInterval))
 	assert.True(t,
-		notifState.shouldSend(arcadeStatus, baseTime.Add(10*time.Millisecond), throttleInterval),
+		notifState.shouldSend(&arcadeStatus, baseTime.Add(10*time.Millisecond), throttleInterval),
 		"system changes must bypass the throttle so clients don't stay on the previous system",
 	)
 	assert.False(t,
-		notifState.shouldSend(arcadeStatus, baseTime.Add(20*time.Millisecond), throttleInterval),
+		notifState.shouldSend(&arcadeStatus, baseTime.Add(20*time.Millisecond), throttleInterval),
 		"duplicate status updates should still be throttled",
 	)
 	assert.True(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{SystemID: "arcade", Total: 20, Step: 7},
+			&mediascanner.IndexStatus{SystemID: "arcade", Total: 20, Step: 7},
 			baseTime.Add(30*time.Millisecond),
 			throttleInterval,
 		),
@@ -100,7 +100,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.True(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
 			baseTime.Add(40*time.Millisecond),
 			throttleInterval,
 		),
@@ -108,7 +108,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.False(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
 			baseTime.Add(50*time.Millisecond),
 			throttleInterval,
 		),
@@ -116,7 +116,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.True(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
 			baseTime.Add(60*time.Millisecond),
 			throttleInterval,
 		),
@@ -124,7 +124,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.False(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
 			baseTime.Add(70*time.Millisecond),
 			throttleInterval,
 		),
@@ -132,7 +132,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.True(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 9, Step: 8},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 9, Step: 8},
 			baseTime.Add(80*time.Millisecond),
 			throttleInterval,
 		),
@@ -140,7 +140,7 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 	)
 	assert.True(t,
 		notifState.shouldSend(
-			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 8, Step: 8},
+			&mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 8, Step: 8},
 			baseTime.Add(90*time.Millisecond),
 			throttleInterval,
 		),

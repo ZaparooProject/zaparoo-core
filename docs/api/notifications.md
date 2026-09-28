@@ -231,8 +231,9 @@ Sent during media database generation to indicate indexing progress and completi
 | currentStepDisplay | string  | No       | Display name of current system being indexed, or optimization step name (e.g., `"vacuum"`).      |
 | totalFiles         | number  | No       | Total number of media files discovered during indexing.                                          |
 | totalMedia         | number  | No       | Total number of media entries in the database. Only included when database exists and is ready.  |
+| scan               | object | No       | The current system's folder scan, only included while a scan is running: `path` is the folder being read and `entries` the files and folders read so far. |
 
-**Indexing Progress:** Track using `currentStep` out of `totalSteps` systems processed.
+**Indexing Progress:** Track using `currentStep` out of `totalSteps` systems processed. A system's folder scan can run for many minutes on a large library; while it does, `scan` updates every few seconds.
 
 **Optimization Progress:** When `optimizing` is true and `indexing` is false, `currentStepDisplay` shows the optimization operation name (e.g., `"vacuum"`, `"analyze"`).
 

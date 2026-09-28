@@ -330,9 +330,10 @@ func TestHandleLaunchersRefresh_CustomLaunchersLoadError(t *testing.T) {
 func TestHandleLaunchers_ReturnsCachedLaunchers(t *testing.T) {
 	t.Parallel()
 
+	detected := true
 	cache := &corehelpers.LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
-		{ID: "snes9x", SystemID: "SNES", Groups: []string{"libretro"}},
+		{ID: "snes9x", SystemID: "SNES", Groups: []string{"libretro"}, Detected: &detected},
 		{ID: "retroarch", SystemID: "Genesis"},
 		{ID: "kodi-tv", SystemID: "TV", Groups: []string{"Kodi", "KodiTV"}},
 	})
@@ -355,6 +356,7 @@ func TestHandleLaunchers_ReturnsCachedLaunchers(t *testing.T) {
 	assert.Equal(t, "SNES", resp.Launchers[1].SystemID)
 	assert.Equal(t, "snes9x", resp.Launchers[1].ID)
 	assert.Equal(t, []string{"libretro"}, resp.Launchers[1].Groups)
+	assert.Equal(t, &detected, resp.Launchers[1].Detected)
 	assert.Equal(t, "TV", resp.Launchers[2].SystemID)
 	assert.Equal(t, "kodi-tv", resp.Launchers[2].ID)
 	assert.Equal(t, []string{"Kodi", "KodiTV"}, resp.Launchers[2].Groups)
