@@ -148,7 +148,7 @@ func TestLaunchRepairErrorAlwaysCarriesAReasonAndAMessage(t *testing.T) {
 		},
 		{
 			name:   "a multi-line message becomes the generic fallback",
-			reason: platforms.LaunchRepairHostUnavailable, message: "host said:\nbinder died",
+			reason: platforms.LaunchRepairHostUnavailable, message: "host said:\nconnection died",
 			want: platforms.LaunchRepairHostUnavailable, wantMsg: genericRepairMessage,
 		},
 		{
@@ -209,7 +209,7 @@ func TestLaunchRepairParamsAreBoundedDisplayNames(t *testing.T) {
 		},
 		{
 			name:   "a filesystem path is dropped",
-			params: map[string]string{"launcher": "/storage/emulated/0/roms/Game.nes"},
+			params: map[string]string{"launcher": "/private/roms/Game.nes"},
 			want:   nil,
 		},
 		{
@@ -292,7 +292,7 @@ func TestLaunchRepairParamsCannotBeEditedThroughTheError(t *testing.T) {
 func TestLaunchRepairErrorSurvivesWrapping(t *testing.T) {
 	t.Parallel()
 
-	cause := errors.New("binder transaction failed for /storage/emulated/0/roms/Game.nes")
+	cause := errors.New("host transaction failed for /private/roms/Game.nes")
 	err := fmt.Errorf("%w: %w",
 		platforms.NewLaunchRepairErrorWithReason(platforms.LaunchRepairHostUnavailable,
 			map[string]string{"launcher": "RetroArch"}, "the launcher service is not responding"),

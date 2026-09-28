@@ -51,7 +51,7 @@ func TestCategorizedErrorHidesCauseFromMessage(t *testing.T) {
 func TestCategorizedDetailErrCarriesStructuredDetail(t *testing.T) {
 	t.Parallel()
 
-	cause := errors.New("binder transaction failed")
+	cause := errors.New("host transaction failed")
 	params := map[string]string{"launcher": "RetroArch", "plugin": "Mesen"}
 	err := CategorizedDetailErr(ErrorCategoryLaunchRepair,
 		"this launcher's plugin for this system is not installed",

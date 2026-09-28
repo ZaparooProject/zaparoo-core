@@ -366,9 +366,9 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 		{
 			name: "a repair error with no code is unspecified",
 			cause: fmt.Errorf("launch failed for %s: %w", leakedPath,
-				platforms.NewLaunchRepairError("allow player storage access in Android Settings")),
+				platforms.NewLaunchRepairError("allow player storage access in system settings")),
 			category: models.ErrorCategoryLaunchRepair,
-			message:  "allow player storage access in Android Settings",
+			message:  "allow player storage access in system settings",
 			reason:   "unspecified",
 		},
 		{
