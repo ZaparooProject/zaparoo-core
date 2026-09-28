@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -62,17 +63,19 @@ func TestWalkProgressFastWalkIsNotSlow(t *testing.T) {
 func TestWalkProgressSendsStatusUpdates(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 9, 26, 15, 36, 17, 0, time.UTC)
+	root := filepath.Join(string(filepath.Separator), "roms", "Amiga")
+	tosec, noIntro := filepath.Join(root, "TOSEC"), filepath.Join(root, "No-Intro")
 	var got []walkUpdate
-	p := newWalkProgress("Amiga", "/roms/Amiga", start, func(u walkUpdate) { got = append(got, u) })
+	p := newWalkProgress("Amiga", root, start, func(u walkUpdate) { got = append(got, u) })
 
-	p.observe(start.Add(time.Second), 50, "/roms/Amiga/TOSEC/a.zip")
+	p.observe(start.Add(time.Second), 50, filepath.Join(tosec, "a.zip"))
 	assert.Empty(t, got, "no update before the first interval")
-	p.observe(start.Add(walkStatusInterval), 120, "/roms/Amiga/TOSEC/b.zip")
-	p.observe(start.Add(walkStatusInterval+time.Second), 130, "/roms/Amiga/TOSEC/c.zip")
-	p.observe(start.Add(2*walkStatusInterval), 200, "/roms/Amiga/No-Intro/d.zip")
+	p.observe(start.Add(walkStatusInterval), 120, filepath.Join(tosec, "b.zip"))
+	p.observe(start.Add(walkStatusInterval+time.Second), 130, filepath.Join(tosec, "c.zip"))
+	p.observe(start.Add(2*walkStatusInterval), 200, filepath.Join(noIntro, "d.zip"))
 	assert.Equal(t, []walkUpdate{
-		{dir: "/roms/Amiga/TOSEC", entries: 120},
-		{dir: "/roms/Amiga/No-Intro", entries: 200},
+		{dir: tosec, entries: 120},
+		{dir: noIntro, entries: 200},
 	}, got)
 }
 
@@ -89,16 +92,19 @@ func TestWalkProgressReportsStallOnce(t *testing.T) {
 		}
 	}
 
-	healthy := newWalkProgress("Amiga", "/roms/Amiga", start, onUpdate)
-	healthy.observe(start.Add(walkStallElapsed), int64(270*walkStallElapsed.Seconds()), "/roms/Amiga/x/a.zip")
+	root := filepath.Join(string(filepath.Separator), "roms", "Amiga")
+	other, tosec := filepath.Join(root, "x"), filepath.Join(root, "TOSEC")
+
+	healthy := newWalkProgress("Amiga", root, start, onUpdate)
+	healthy.observe(start.Add(walkStallElapsed), int64(270*walkStallElapsed.Seconds()), filepath.Join(other, "a.zip"))
 	assert.Empty(t, stalls, "270 entries/s is a healthy walk")
 
-	crawling := newWalkProgress("Amiga", "/roms/Amiga", start, onUpdate)
-	crawling.observe(start.Add(walkStallElapsed-time.Second), 100, "/roms/Amiga/x/a.zip")
+	crawling := newWalkProgress("Amiga", root, start, onUpdate)
+	crawling.observe(start.Add(walkStallElapsed-time.Second), 100, filepath.Join(other, "a.zip"))
 	assert.Empty(t, stalls, "not judged before the stall window has passed")
-	crawling.observe(start.Add(walkStallElapsed), 120, "/roms/Amiga/TOSEC/b.zip")
-	crawling.observe(start.Add(walkStallElapsed+walkStatusInterval), 130, "/roms/Amiga/TOSEC/c.zip")
-	assert.Equal(t, []walkUpdate{{dir: "/roms/Amiga/TOSEC", entries: 120, stalled: true}}, stalls)
+	crawling.observe(start.Add(walkStallElapsed), 120, filepath.Join(tosec, "b.zip"))
+	crawling.observe(start.Add(walkStallElapsed+walkStatusInterval), 130, filepath.Join(tosec, "c.zip"))
+	assert.Equal(t, []walkUpdate{{dir: tosec, entries: 120, stalled: true}}, stalls)
 }
 
 // Issue #1572: with each entry costing tens of milliseconds, checking the
