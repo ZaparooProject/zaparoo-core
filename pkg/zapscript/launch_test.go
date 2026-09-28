@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -298,6 +299,173 @@ func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A per-media override naming a launcher that cannot run right now must still
+// reach the platform, so the failure is that launcher's own availability error
+// rather than whatever automatic selection reports. The override is stored the
+// way media.meta.update stores it.
+func TestCmdLaunch_URIAppliesUnavailableMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+
+	// A custom scheme, like the ones launchers declare for media that is not
+	// a filesystem path.
+	uri := "custom://NES/game.nes"
+	scantest.IndexMediaPaths(t, mediaDB, "NES", uri)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		context.Background(), db, "NES", uri, rows[0].DBID, "Custom.Override"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	unavailable := errors.New("launcher is not installed")
+	matchesSource := func(_ *config.Instance, path string) bool {
+		return strings.HasPrefix(path, "custom://NES/")
+	}
+	launchers := []platforms.Launcher{
+		{
+			ID: "Custom.Default", SystemID: "NES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesSource,
+			Availability: func(*config.Instance) error { return unavailable },
+		},
+		{
+			ID: "Custom.Override", SystemID: "NES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesSource,
+			Availability: func(*config.Instance) error { return unavailable },
+		},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, uri,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Custom.Override"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(unavailable)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err = cmdLaunch(mockPlatform, env)
+
+	require.ErrorIs(t, err, unavailable)
+	mockPlatform.AssertExpectations(t)
+}
+
+// A launcher of another system can also accept a path. Inference then names
+// that system, where the media row does not live, and the row's own override
+// must still be found and applied.
+func TestCmdLaunch_URIFindsMediaOverrideInAnotherSystem(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := helpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+
+	uri := "custom://NES/game.nes"
+	scantest.IndexMediaPaths(t, mediaDB, "NES", uri)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(
+		context.Background(), db, "NES", uri, rows[0].DBID, "Custom.NESOverride"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	matchesAny := func(_ *config.Instance, path string) bool {
+		return strings.HasPrefix(path, "custom://")
+	}
+	launchers := []platforms.Launcher{
+		{
+			// Available, and first: inference picks this system.
+			ID: "Custom.SNES", SystemID: "SNES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesAny,
+		},
+		{
+			ID: "Custom.NESOverride", SystemID: "NES", Schemes: []string{"custom"},
+			Extensions: []string{".nes"}, Test: matchesAny,
+		},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, uri,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Custom.NESOverride"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err = cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_URIWithoutOverrideDoesNotSelectUnavailableLauncher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	uri := "custom://NES/game.nes"
+	launchers := []platforms.Launcher{{
+		ID:           "Custom.Unavailable",
+		SystemID:     "NES",
+		Schemes:      []string{"custom"},
+		Availability: func(*config.Instance) error { return errors.New("launcher is not installed") },
+	}}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("FindSystemBySystemID", "NES").
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), uri).
+		Return(&database.Media{DBID: 123, Path: uri}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, uri, (*platforms.Launcher)(nil), db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{uri},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
@@ -1365,6 +1533,66 @@ func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
 
 	assert.False(t, found)
 	assert.Empty(t, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForSystemPath_PrefersUniqueDetectedLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	detected, missing := true, false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "GenesisMissing", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}, Detected: &missing},
+		{ID: "GenesisInstalled", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}, Detected: &detected},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "SomeGame.bin"),
+		systemdefs.SystemGenesis,
+	)
+
+	require.True(t, found)
+	assert.Equal(t, "GenesisInstalled", launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForPath_SkipsKnownMissingLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	detected, missing := true, false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "NESMissing", SystemID: systemdefs.SystemNES, Schemes: []string{"custom"}, Detected: &missing},
+		{ID: "SNESInstalled", SystemID: systemdefs.SystemSNES, Schemes: []string{"custom"}, Detected: &detected},
+		{ID: "SNESSecond", SystemID: systemdefs.SystemSNES, Schemes: []string{"custom"}, Detected: &detected},
+	})
+
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "custom://abc/game.bin")
+
+	require.True(t, found)
+	assert.Equal(t, "SNESInstalled", launcher.ID, "first registered launcher that is not known missing")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForPath_AllMissingKeepsFirst(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	missing := false
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "First", SystemID: systemdefs.SystemNES, Schemes: []string{"custom"}, Detected: &missing},
+		{ID: "Second", SystemID: systemdefs.SystemNES, Schemes: []string{"custom"}, Detected: &missing},
+	})
+
+	launcher, found := inferLauncherForPath(mockPlatform, &platforms.CmdEnv{Cfg: cfg}, "custom://abc/game.nes")
+
+	require.True(t, found)
+	assert.Equal(t, "First", launcher.ID)
 	mockPlatform.AssertExpectations(t)
 }
 
