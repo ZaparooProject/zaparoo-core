@@ -502,12 +502,15 @@ func TestGetPathFragments_ProvidedName(t *testing.T) {
 	assert.Equal(t, "Metal Slug", withName.Title, "ProvidedName must be used as title")
 	assert.Equal(t, "metalslug", withName.Slug, "slug must derive from provided name")
 
-	// Without ProvidedName, the title falls back to filename parsing.
+	// Without ProvidedName, the title falls back to filename parsing. (A set
+	// the arcade catalog knows takes MAME's title instead; see
+	// arcade_titles_test.go.)
+	unknownSet := string(filepath.Separator) + filepath.Join("media", "fat", "games", "NEOGEO", "myhack.zip")
 	withoutName := GetPathFragments(&PathFragmentParams{
-		Path:     neoGeoPath,
+		Path:     unknownSet,
 		SystemID: "NeoGeo",
 	})
-	assert.Equal(t, "mslug", withoutName.Title, "filename-derived title without ProvidedName")
+	assert.Equal(t, "myhack", withoutName.Title, "filename-derived title without ProvidedName")
 
 	// A standalone .neo romset takes the romsets.xml title but keeps its
 	// extension, which is where the extension tag comes from.

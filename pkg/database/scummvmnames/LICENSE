@@ -1,0 +1,22 @@
+names.tsv.gz: ScummVM game IDs, engines and full titles
+
+Source: the game list a ScummVM release prints with `scummvm --list-games`
+(https://www.scummvm.org), drawn from the detection tables in ScummVM's
+engine sources. The ScummVM version is recorded on the first line of the
+file. scripts/scummvmnames regenerates it from that list and is the
+preferred form for modifying it.
+
+Only the fields named above are taken.
+
+ScummVM
+ScummVM is the legal property of its developers, whose names are too
+numerous to list here. Please refer to the COPYRIGHT file distributed with
+ScummVM's source.
+
+ScummVM is distributed under the terms of the GNU General Public License,
+version 3 or later (GPL-3.0-or-later), as is this data as part of Zaparoo
+Core; see LICENSE at the root of this repository.
+
+ScummVM is named here only to identify the source of the data; Zaparoo is
+not affiliated with or endorsed by the ScummVM project. Game titles are the
+trademarks of their respective owners.

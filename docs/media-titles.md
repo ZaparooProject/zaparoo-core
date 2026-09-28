@@ -19,6 +19,14 @@ When scanning media, Zaparoo:
 5. Slugifies the title using media-type-aware normalization (see [Slug normalization](#slug-normalization))
 6. Stores path, title, slug, tags, and metadata in the database
 
+### Arcade set archives
+
+A `.zip` or `.7z` on an arcade system (Arcade, the boards that fall back to it except Pinball, Neo Geo, NAOMI, Atomiswave and Sega Model 1/2/3) is named after its MAME set, such as `dkong.zip`, not after its game. When the set is in the embedded catalog (`pkg/database/arcadenames`, about 18,700 runnable arcade machines from a MAME release's machine list), indexing uses MAME's description instead of the file name: `dkong.zip` becomes "Donkey Kong". The description's variant notes become tags only where they name a region, set number or revision ("US set 1" gives `region:us` and `set:1`), so clones of one game share its title and stay distinguishable; the catalog year is added as `year:`. A name the scan source provides wins unless it is only the file's own name. Sets the catalog does not know, including BIOS and device archives, keep their file names. `scripts/arcadenames` regenerates the catalog from a newer MAME release; see the package's `LICENSE` for its terms.
+
+### ScummVM launch files
+
+A `.scummvm` file on the ScummVM system is usually named after the game's ScummVM ID, such as `sky.scummvm`, often inside a folder per game as EmulationStation lays them out. When the ID is in the embedded catalog (`pkg/database/scummvmnames`, about 11,700 games from a ScummVM release's `--list-games` output), indexing uses ScummVM's full title instead: `sky.scummvm` becomes "Beneath a Steel Sky". An `engine:gameid` name picks one engine's game; a bare ID that several engines share goes to the title sharing the most words with the file's folder name. An ID-shaped name the catalog does not know takes its folder's name as the title, unless the folder is the system's own (`ScummVM`). Readable file names and names the scan source provides are kept. Folder notes such as "(CD DOS)" do not become tags. `scripts/scummvmnames` regenerates the catalog from a newer ScummVM release; see the package's `LICENSE` for its terms.
+
 ### Resolution
 
 When launching by title (e.g. `launch.title` with arg `NES/Super Mario Bros`):
