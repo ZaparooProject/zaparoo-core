@@ -232,7 +232,7 @@ func TestMediaIndexing_Payload(t *testing.T) {
 	totalSteps := 5
 	currentStep := 2
 	totalMedia := 100
-	MediaIndexing(ns, models.IndexingStatusResponse{
+	MediaIndexing(ns, &models.IndexingStatusResponse{
 		Indexing:    true,
 		TotalSteps:  &totalSteps,
 		CurrentStep: &currentStep,

@@ -51,6 +51,8 @@ const (
 	CategoryMediaDBInterruptedRebuild        = "mediadb_interrupted_rebuild"
 	CategoryMediaDBSchemaReset               = "mediadb_schema_reset"
 	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
+	CategoryMediaIndexScanStalled            = "media_index_scan_stalled"
+	CategoryMediaIndexSystemSkipped          = "media_index_system_skipped"
 	CategoryUpdateAvailable                  = "update_available"
 	CategoryUpdateResult                     = "update_result"
 	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"

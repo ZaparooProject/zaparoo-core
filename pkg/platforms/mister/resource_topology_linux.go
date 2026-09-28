@@ -96,7 +96,7 @@ func runResourceTopologyManager(
 					if active {
 						log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
 					} else {
-						log.Info().Msg("MiSTer frontend inactive: Core restored to CPUs 0-1")
+						log.Info().Msg("MiSTer frontend inactive: Core assigned to CPU0, clear of Main on CPU1")
 					}
 					initialized = true
 					lastActive = active
@@ -145,14 +145,20 @@ func frontendResourceLeaseActive() (bool, error) {
 	return false, nil
 }
 
+func coreCPU(frontendActive bool) int {
+	if frontendActive {
+		return 1
+	}
+	return 0
+}
+
+// setCoreAffinity keeps Core off whichever CPU the foreground needs. The
+// frontend takes CPU0, so Core joins Main on CPU1. Without it, Main pins itself
+// to CPU1 and Core takes CPU0: on both CPUs, a long index or scrape on slow
+// storage competed with Main for CPU1 and stalled its OSD and input.
 func setCoreAffinity(frontendActive bool) error {
 	var cpus unix.CPUSet
-	if frontendActive {
-		cpus.Set(1)
-	} else {
-		cpus.Set(0)
-		cpus.Set(1)
-	}
+	cpus.Set(coreCPU(frontendActive))
 
 	tasks, err := os.ReadDir(coreTasksPath)
 	if err != nil {
