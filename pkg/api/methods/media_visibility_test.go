@@ -31,7 +31,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -404,4 +406,256 @@ func TestBuildBrowseResponse_HiddenSingletonStaysDirectory(t *testing.T) {
 	assert.Nil(t, entry.ZapScript)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
+}
+
+// browseVisibilityInjector wraps a real MediaDBI and, on selected calls, runs
+// a real preference edit before delegating. That reproduces a visibility
+// change landing while one browse or browse.index request is already
+// running, rather than only between two separate handler calls.
+type browseVisibilityInjector struct {
+	database.MediaDBI
+	onFiles    map[int]func()
+	onIndex    map[int]func()
+	filesCalls int
+	indexCalls int
+}
+
+func (w *browseVisibilityInjector) BrowseFiles(
+	ctx context.Context, opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	w.filesCalls++
+	if change, ok := w.onFiles[w.filesCalls]; ok {
+		change()
+	}
+	results, err := w.MediaDBI.BrowseFiles(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("wrapped browse files: %w", err)
+	}
+	return results, nil
+}
+
+//nolint:gocritic // Value options match the MediaDBI method being wrapped.
+func (w *browseVisibilityInjector) BrowseIndex(
+	ctx context.Context, opts database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	w.indexCalls++
+	if change, ok := w.onIndex[w.indexCalls]; ok {
+		change()
+	}
+	result, err := w.MediaDBI.BrowseIndex(ctx, opts)
+	if err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("wrapped browse index: %w", err)
+	}
+	return result, nil
+}
+
+// visibilityInjectorFixture is a small filesystem library, browsable at
+// root, whose MediaDB is wrapped so a test can inject a real hide/unhide
+// partway through a request.
+type visibilityInjectorFixture struct {
+	env      *requests.RequestEnv
+	injector *browseVisibilityInjector
+	root     string
+	ids      []int64
+	paths    []string
+}
+
+func newVisibilityInjectorFixture(t *testing.T) *visibilityInjectorFixture {
+	t.Helper()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	paths := []string{
+		filepath.Join(root, "Alpha.nes"), filepath.Join(root, "Beta.nes"), filepath.Join(root, "Gamma.nes"),
+	}
+	ids := addTestMediaPaths(t, mediaDB, paths...)
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+
+	platform := mocks.NewMockPlatform()
+	platform.On("RootDirs", mock.Anything).Return([]string{root})
+	platform.On("SupportedReaders", mock.Anything).Return(nil)
+	cache := &phelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "NES", SystemID: "NES", Folders: []string{root}}})
+
+	injector := &browseVisibilityInjector{
+		MediaDBI: mediaDB, onFiles: map[int]func(){}, onIndex: map[int]func(){},
+	}
+	env := &requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: injector, UserDB: userDB},
+		Platform: platform, Config: &config.Instance{}, LauncherCache: cache,
+	}
+	return &visibilityInjectorFixture{env: env, injector: injector, root: root, ids: ids, paths: paths}
+}
+
+// toggleHidden returns a closure that sets one entry's hidden flag through
+// both UserDB and MediaDB, exactly as ApplyMediaUserFlags does, so injecting
+// it mid-browse is a real listing-affecting change, not a synthetic one.
+func (f *visibilityInjectorFixture) toggleHidden(ctx context.Context, t *testing.T, index int, hidden bool) func() {
+	t.Helper()
+	return func() {
+		userDB, ok := f.env.Database.UserDB.(*userdb.UserDB)
+		require.True(t, ok)
+		require.NoError(t, userDB.SetMediaUserHidden("NES", f.paths[index], hidden))
+		mediaDB, ok := f.injector.MediaDBI.(*mediadb.MediaDB)
+		require.True(t, ok)
+		ref := database.MediaTagRef{Type: "user", Tag: "hidden"}
+		if hidden {
+			require.NoError(t, mediaDB.UpdateMediaTags(ctx, f.ids[index], nil, []database.MediaTagRef{ref}))
+		} else {
+			require.NoError(t, mediaDB.UpdateMediaTags(ctx, f.ids[index], []database.MediaTagRef{ref}, nil))
+		}
+	}
+}
+
+// A revision change landing entirely within one cursorless browse must not
+// be handed back to the client as an error: nothing the client did is stale,
+// there is no cursor to restart, and Core already knows how to run the
+// browse again. This is the regression test for #1564.
+func TestFreshBrowseRerunsOnceAfterMidRunVisibilityChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newVisibilityInjectorFixture(t)
+	f.injector.onFiles[1] = f.toggleHidden(ctx, t, 0, true)
+
+	result, err := HandleMediaBrowse(withParams(f.env, fmt.Sprintf(`{"path":%q}`, f.root)))
+	require.NoError(t, err)
+	page, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, 2, page.TotalFiles, "the rerun must reflect the entry hidden mid-request")
+	for _, entry := range page.Entries {
+		assert.NotEqual(t, f.ids[0], entry.MediaID)
+	}
+	assert.Equal(t, 2, f.injector.filesCalls, "exactly one rerun: the injected call plus the clean rerun")
+
+	// The rerun's own cursor must itself be usable, not carry a
+	// pre-invalidated revision forward.
+	if page.Pagination != nil && page.Pagination.NextCursor != nil {
+		_, err = HandleMediaBrowse(withParams(f.env, fmt.Sprintf(
+			`{"path":%q,"cursor":%q}`, f.root, *page.Pagination.NextCursor)))
+		require.NoError(t, err)
+	}
+}
+
+// If the revision keeps moving even across the one rerun, Core gives up and
+// reports it rather than looping or serving a page that may mix visibility.
+func TestFreshBrowseFailsWhenVisibilityKeepsChanging(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newVisibilityInjectorFixture(t)
+	f.injector.onFiles[1] = f.toggleHidden(ctx, t, 0, true)
+	f.injector.onFiles[2] = f.toggleHidden(ctx, t, 1, true)
+
+	_, err := HandleMediaBrowse(withParams(f.env, fmt.Sprintf(`{"path":%q}`, f.root)))
+	require.ErrorContains(t, err, "library visibility changed")
+	require.ErrorContains(t, err, "during browse")
+	assert.Equal(t, 2, f.injector.filesCalls, "no more than the one rerun")
+}
+
+// A cursor request is a continuation of a specific earlier page. A change
+// mid-request still means "restart without a cursor" for it, with no rerun.
+func TestCursorBrowseRejectsWithoutRerunOnVisibilityChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newVisibilityInjectorFixture(t)
+
+	first, err := HandleMediaBrowse(withParams(f.env, fmt.Sprintf(`{"path":%q,"maxResults":1}`, f.root)))
+	require.NoError(t, err)
+	page, ok := first.(models.BrowseResults)
+	require.True(t, ok)
+	require.NotNil(t, page.Pagination)
+	require.NotNil(t, page.Pagination.NextCursor)
+	cursor := *page.Pagination.NextCursor
+
+	// The next BrowseFiles call belongs to the cursor request below.
+	f.injector.onFiles[f.injector.filesCalls+1] = f.toggleHidden(ctx, t, 0, true)
+	callsBeforeCursorRequest := f.injector.filesCalls
+
+	_, err = HandleMediaBrowse(withParams(f.env, fmt.Sprintf(`{"path":%q,"cursor":%q}`, f.root, cursor)))
+	require.ErrorContains(t, err, "library visibility changed; restart browse without cursor")
+	assert.Equal(t, callsBeforeCursorRequest+1, f.injector.filesCalls, "a cursor request never reruns")
+}
+
+// media.browse.index never takes a cursor, so it always gets the rerun
+// treatment rather than a client-facing error.
+func TestBrowseIndexRerunsOnceAfterMidRunVisibilityChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newVisibilityInjectorFixture(t)
+	f.injector.onIndex[1] = f.toggleHidden(ctx, t, 0, true)
+
+	result, err := HandleMediaBrowseIndex(withParams(f.env, fmt.Sprintf(`{"path":%q}`, f.root)))
+	require.NoError(t, err)
+	index, ok := result.(models.BrowseIndexResults)
+	require.True(t, ok)
+	assert.Equal(t, 2, index.TotalFiles, "the rerun must reflect the entry hidden mid-request")
+	assert.Equal(t, 2, f.injector.indexCalls)
+
+	for _, group := range index.Groups {
+		if group.Cursor == "" {
+			continue
+		}
+		page, pageErr := HandleMediaBrowse(withParams(f.env, fmt.Sprintf(
+			`{"path":%q,"cursor":%q}`, f.root, group.Cursor)))
+		require.NoError(t, pageErr)
+		_, ok = page.(models.BrowseResults)
+		require.True(t, ok)
+	}
+}
+
+// A write that only advances UserDB's own media_preferences_revision
+// DeviceState row - and never touches MediaDB's projection - must not
+// invalidate an open browse cursor. Cursor validity depends solely on
+// MediaDB's own revision (#1564): UserDB's counter still advances (see
+// deckTx and mediaUserDataTx) for its own reasons, but a browse never reads
+// it. This reproduces the reported failure directly: unhiding an
+// already-visible entry, a deck edit that changes nothing, and a synced
+// deck write-back that matches what is already stored are three real writes
+// that bump only UserDB's counter without changing anything a browse or
+// search would serve.
+func TestUserDBOnlyRevisionDoesNotInvalidateBrowse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	paths := []string{filepath.Join(root, "Alpha.nes"), filepath.Join(root, "Beta.nes")}
+	addTestMediaPaths(t, mediaDB, paths...)
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+
+	platform := mocks.NewMockPlatform()
+	platform.On("RootDirs", mock.Anything).Return([]string{root})
+	platform.On("SupportedReaders", mock.Anything).Return(nil)
+	cache := &phelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "NES", SystemID: "NES", Folders: []string{root}}})
+	env := requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		Platform: platform, Config: &config.Instance{}, LauncherCache: cache,
+	}
+
+	page, err := HandleMediaBrowse(withParams(&env, fmt.Sprintf(`{"path":%q,"maxResults":1}`, root)))
+	require.NoError(t, err)
+	first, ok := page.(models.BrowseResults)
+	require.True(t, ok)
+	require.NotNil(t, first.Pagination)
+	require.NotNil(t, first.Pagination.NextCursor)
+	cursor := *first.Pagination.NextCursor
+
+	before, _, err := userDB.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
+	require.NoError(t, err)
+	// The exact write does not matter here: any UserDB-only bump reproduces
+	// the bug, since the point under test is that a browse never reads it.
+	require.NoError(t, userDB.SetDeviceState(database.DeviceStateKeyMediaPreferencesRevision, "not-a-real-revision"))
+	after, _, err := userDB.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
+	require.NoError(t, err)
+	require.NotEqual(t, before, after, "the write under test must actually move UserDB's counter")
+
+	next, err := HandleMediaBrowse(withParams(&env, fmt.Sprintf(`{"path":%q,"cursor":%q}`, root, cursor)))
+	require.NoError(t, err, "a UserDB-only revision change must not invalidate an open browse cursor")
+	_, ok = next.(models.BrowseResults)
+	require.True(t, ok)
 }
