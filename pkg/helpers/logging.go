@@ -25,7 +25,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -73,25 +72,30 @@ func init() {
 	log.Logger = log.Output(logOutput)
 }
 
-// retargetableWriter forwards writes to a target that can be swapped
-// atomically. With no target it writes to stderr.
+// retargetableWriter forwards writes to a target that can be swapped. With no
+// target it writes to stderr. retarget holds the target for the whole of its
+// swap, and Write holds it for the whole of its write, so retarget never
+// returns while a write it preempted is still in flight: a caller that closes
+// the previous target right after retarget cannot race a write still landing
+// on it.
 type retargetableWriter struct {
-	target atomic.Pointer[io.Writer]
+	mu     syncutil.RWMutex
+	target io.Writer
 }
 
 func (w *retargetableWriter) Write(p []byte) (int, error) {
-	if target := w.target.Load(); target != nil {
-		return (*target).Write(p) //nolint:wrapcheck // transparent forwarding writer
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.target != nil {
+		return w.target.Write(p) //nolint:wrapcheck // transparent forwarding writer
 	}
 	return os.Stderr.Write(p) //nolint:wrapcheck // transparent forwarding writer
 }
 
 func (w *retargetableWriter) retarget(target io.Writer) {
-	if target == nil {
-		w.target.Store(nil)
-		return
-	}
-	w.target.Store(&target)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.target = target
 }
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
