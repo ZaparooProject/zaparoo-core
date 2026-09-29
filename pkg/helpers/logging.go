@@ -79,8 +79,8 @@ func init() {
 // the previous target right after retarget cannot race a write still landing
 // on it.
 type retargetableWriter struct {
-	mu     syncutil.RWMutex
 	target io.Writer
+	mu     syncutil.RWMutex
 }
 
 func (w *retargetableWriter) Write(p []byte) (int, error) {
