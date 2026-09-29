@@ -241,7 +241,10 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
 			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT,
 			Tags TEXT NOT NULL DEFAULT '', MediaIdentity TEXT NOT NULL DEFAULT '',
-			MediaIdentityPolicyVersion INTEGER NOT NULL DEFAULT 0
+			MediaIdentityPolicyVersion INTEGER NOT NULL DEFAULT 0,
+			IsDeleted INTEGER DEFAULT 0,
+			SessionSource TEXT NOT NULL DEFAULT 'active_media',
+			SessionConfidence TEXT NOT NULL DEFAULT 'unspecified'
 		)
 	`)
 	require.NoError(t, err)
@@ -280,7 +283,8 @@ func TestGetDistinctMediaHistory_UniquePaginationAndSystemScope(t *testing.T) {
 			MediaPath TEXT NOT NULL,
 			MediaName TEXT NOT NULL,
 			LauncherID TEXT NOT NULL,
-			PlayTime INTEGER NOT NULL
+			PlayTime INTEGER NOT NULL,
+			IsDeleted INTEGER DEFAULT 0
 		)
 	`)
 	require.NoError(t, err)
@@ -352,7 +356,10 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
 			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT,
 			Tags TEXT NOT NULL DEFAULT '', MediaIdentity TEXT NOT NULL DEFAULT '',
-			MediaIdentityPolicyVersion INTEGER NOT NULL DEFAULT 0
+			MediaIdentityPolicyVersion INTEGER NOT NULL DEFAULT 0,
+			IsDeleted INTEGER DEFAULT 0,
+			SessionSource TEXT NOT NULL DEFAULT 'active_media',
+			SessionConfidence TEXT NOT NULL DEFAULT 'unspecified'
 		)
 	`)
 	require.NoError(t, err)

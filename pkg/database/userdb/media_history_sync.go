@@ -235,6 +235,7 @@ func sqlGetMediaHistorySyncBatch(
 			COALESCE(IsDeleted, 0), SyncedAt, Tags, MediaIdentity
 		FROM MediaHistory
 		WHERE SyncedAt IS NULL
+		  AND SessionConfidence != 'approximate'
 		  AND (UpdatedAt > ? OR (UpdatedAt = ? AND DBID > ?))
 		  AND ID IS NOT NULL AND ID != ''
 		ORDER BY UpdatedAt ASC, DBID ASC
