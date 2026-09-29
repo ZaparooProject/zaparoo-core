@@ -156,3 +156,30 @@ func arcadeMediaForSet(indexes loadRecordIndexes, sourcePath string) (media data
 	}
 	return row, true
 }
+
+// mameGamelistDirs returns the games/mame directory beside each configured
+// `_Arcade` root, deduplicated. This is where MiSTer Companion's ZapScraper
+// writes its own Arcade gamelist.xml, scanning MAME ZIPs under games/mame
+// rather than the _Arcade folder Core indexes, mirroring how MiSTer's own
+// firmware locates a core's ROM folder beside its arcade root.
+//
+// Granular MiSTer arcade systems (CPS1 etc.) always resolve to no roots here:
+// their ScrapeSystem.ROMPaths is empty because their launchers skip
+// filesystem scanning, so there is no `_Arcade`-named entry to derive a
+// sibling from.
+func mameGamelistDirs(arcadeRoots []string) []string {
+	seen := make(map[string]struct{}, len(arcadeRoots))
+	var dirs []string
+	for _, root := range arcadeRoots {
+		if filepath.Base(root) != "_Arcade" {
+			continue
+		}
+		dir := filepath.Join(filepath.Dir(root), "games", "mame")
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}

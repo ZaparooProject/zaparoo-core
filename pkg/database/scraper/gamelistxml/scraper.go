@@ -595,6 +595,15 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 	if ok {
 		parsed.Files = append(parsed.Files, customFile)
 	}
+
+	if g.matchArcadeSets {
+		mameFiles, mameErrs := g.loadMameGamelistFiles(ctx, system)
+		if err := ctx.Err(); err != nil {
+			return parsed, err
+		}
+		parsed.SourceErrors = append(parsed.SourceErrors, mameErrs...)
+		parsed.Files = append(parsed.Files, mameFiles...)
+	}
 	return parsed, nil
 }
 
@@ -652,6 +661,68 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(
 		Folders:              gl.Folders,
 		RequireExistingImage: true,
 	}, true, nil
+}
+
+// loadMameGamelistFiles auto-discovers MiSTer Companion ZapScraper's Arcade
+// output: a gamelist.xml written to games/mame beside each configured
+// _Arcade root, rather than into _Arcade itself. Its game paths name MAME
+// ZIPs, which never resolve under _Arcade (Core indexes .mra descriptors
+// there, not ROMs), so these files are only useful through the MRA set-name
+// fallback in loadRecordsFromParsed — the same fallback already used for
+// foreign or sibling ROM paths in an ordinary or custom-bundle gamelist.
+// Image references are treated as optional, like a custom bundle's, since
+// Core does not control when ZapScraper last wrote this file.
+func (g *GamelistXMLScraper) loadMameGamelistFiles(
+	ctx context.Context, system scraper.ScrapeSystem,
+) ([]parsedGamelistFile, []*scraper.SourceError) {
+	var files []parsedGamelistFile
+	var sourceErrors []*scraper.SourceError
+	for _, mameDir := range mameGamelistDirs(system.ROMPaths) {
+		select {
+		case <-ctx.Done():
+			return files, sourceErrors
+		default:
+		}
+
+		gamelistPath := filepath.Join(mameDir, "gamelist.xml")
+		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+		if statErr != nil {
+			log.Warn().Err(statErr).Str("path", gamelistPath).
+				Msg("gamelistxml: failed to stat games/mame gamelist.xml, skipping")
+			sourceErrors = append(sourceErrors, &scraper.SourceError{Path: gamelistPath, Err: statErr})
+			continue
+		}
+		if !exists {
+			continue
+		}
+
+		gl, err := esapi.ReadGameListXMLLimitFSContext(ctx, g.filesystem(), gamelistPath, g.maxGamelistFileBytes())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return files, sourceErrors
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("path", gamelistPath).
+				Msg("gamelistxml: failed to read games/mame gamelist.xml, skipping")
+			sourceErrors = append(sourceErrors, &scraper.SourceError{Path: gamelistPath, Err: err})
+			continue
+		}
+
+		log.Info().
+			Str("path", gamelistPath).
+			Int("entries", len(gl.Games)).
+			Int("folder_entries", len(gl.Folders)).
+			Int("skipped_entries", gl.Skipped).
+			Msg("gamelistxml: loaded games/mame gamelist.xml")
+		files = append(files, parsedGamelistFile{
+			RootPath:             mameDir,
+			AssetRootPath:        mameDir,
+			GamelistPath:         gamelistPath,
+			Games:                gl.Games,
+			Folders:              gl.Folders,
+			RequireExistingImage: true,
+		})
+	}
+	return files, sourceErrors
 }
 
 // LoadRecords iterates gamelist.xml files found under each ROM root path for
