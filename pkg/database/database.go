@@ -182,31 +182,36 @@ type HistoryEntry struct {
 }
 
 type MediaHistoryEntry struct {
-	StartTime      time.Time      `json:"startTime"`
-	UpdatedAt      time.Time      `json:"updatedAt,omitempty"`
-	CreatedAt      time.Time      `json:"createdAt,omitempty"`
-	EndTime        *time.Time     `json:"endTime,omitempty"`
-	SyncedAt       *time.Time     `json:"syncedAt,omitempty"`
-	DeviceID       *string        `json:"deviceId,omitempty"`
-	ProfileID      *string        `json:"profileId,omitempty"`
-	MediaIdentity  *MediaIdentity `json:"mediaIdentity,omitempty"`
-	BootUUID       string         `json:"bootUuid,omitempty"`
-	ClockSource    string         `json:"clockSource,omitempty"`
-	SystemID       string         `json:"systemId"`
-	ID             string         `json:"uuid,omitempty"`
-	LauncherID     string         `json:"launcherId"`
-	SystemName     string         `json:"systemName"`
-	MediaPath      string         `json:"mediaPath"`
-	MediaName      string         `json:"mediaName"`
-	Tags           []string       `json:"tags,omitempty"`
-	DBID           int64          `db:"DBID" json:"id"`
-	WallDuration   int            `json:"wallDuration"`
-	DurationSec    int            `json:"durationSec"`
-	MonotonicStart int64          `json:"monotonicStart,omitempty"`
-	PlayTime       int            `json:"playTime"`
-	TimeSkewFlag   bool           `json:"timeSkewFlag"`
-	ClockReliable  bool           `json:"clockReliable"`
-	IsDeleted      bool           `json:"isDeleted,omitempty"`
+	StartTime     time.Time      `json:"startTime"`
+	UpdatedAt     time.Time      `json:"updatedAt,omitempty"`
+	CreatedAt     time.Time      `json:"createdAt,omitempty"`
+	EndTime       *time.Time     `json:"endTime,omitempty"`
+	SyncedAt      *time.Time     `json:"syncedAt,omitempty"`
+	DeviceID      *string        `json:"deviceId,omitempty"`
+	ProfileID     *string        `json:"profileId,omitempty"`
+	MediaIdentity *MediaIdentity `json:"mediaIdentity,omitempty"`
+	BootUUID      string         `json:"bootUuid,omitempty"`
+	ClockSource   string         `json:"clockSource,omitempty"`
+	// SessionSource and SessionConfidence distinguish an externally-timed
+	// session's evidence from an estimate; every pre-existing row is
+	// explicitly Core's own launch lifecycle, not silently reclassified.
+	SessionSource     string   `json:"sessionSource,omitempty"`
+	SessionConfidence string   `json:"sessionConfidence,omitempty"`
+	SystemID          string   `json:"systemId"`
+	ID                string   `json:"uuid,omitempty"`
+	LauncherID        string   `json:"launcherId"`
+	SystemName        string   `json:"systemName"`
+	MediaPath         string   `json:"mediaPath"`
+	MediaName         string   `json:"mediaName"`
+	Tags              []string `json:"tags,omitempty"`
+	DBID              int64    `db:"DBID" json:"id"`
+	WallDuration      int      `json:"wallDuration"`
+	DurationSec       int      `json:"durationSec"`
+	MonotonicStart    int64    `json:"monotonicStart,omitempty"`
+	PlayTime          int      `json:"playTime"`
+	TimeSkewFlag      bool     `json:"timeSkewFlag"`
+	ClockReliable     bool     `json:"clockReliable"`
+	IsDeleted         bool     `json:"isDeleted,omitempty"`
 }
 
 // MediaHistorySyncRef identifies the exact local version acknowledged by a

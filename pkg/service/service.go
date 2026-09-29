@@ -1099,6 +1099,21 @@ func startServiceWithOptions(
 		close(doneCh)
 	}()
 
+	if recorder, ok := pl.(platforms.MediaHistoryRecorder); ok {
+		recorder.SetMediaHistoryHooks(platforms.MediaHistoryHooks{
+			ActiveProfileID: func() string {
+				if profile := st.ActiveProfile(); profile != nil {
+					return profile.ProfileID
+				}
+				return ""
+			},
+			Changed: func() {
+				notifications.MediaHistoryChanged(st.Notifications)
+				requestPlaySync()
+			},
+		})
+	}
+
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(st.GetContext(), cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db, idleSched)
 	if err != nil {

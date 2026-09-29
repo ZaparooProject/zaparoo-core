@@ -357,6 +357,11 @@ type MediaHistoryResponseEntry struct {
 	MediaPath  string  `json:"mediaPath"`
 	LauncherID string  `json:"launcherId"`
 	StartedAt  string  `json:"startedAt"`
+	// SessionSource and SessionConfidence distinguish an externally-timed
+	// session's evidence from an estimate; a session Core timed itself is
+	// "active_media", and a row predating this distinction is "unspecified".
+	SessionSource     string `json:"sessionSource"`
+	SessionConfidence string `json:"sessionConfidence"`
 	// Tags is nil when the media is unresolved or tag enrichment failed
 	// (key omitted) and an empty slice when the media is indexed but
 	// untagged (serialised as []). omitzero keeps that distinction;

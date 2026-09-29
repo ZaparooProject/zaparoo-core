@@ -87,6 +87,24 @@ type MediaReadyPlatform interface {
 	WaitForMediaReady(context.Context, *config.Instance, *models.ActiveMedia) error
 }
 
+// MediaHistoryHooks gives a platform that writes play history itself what
+// the service's own active-media tracker uses for its own rows.
+type MediaHistoryHooks struct {
+	// ActiveProfileID returns the profile a launch is attributed to, or "".
+	ActiveProfileID func() string
+	// Changed tells API clients to refetch history. It never blocks.
+	Changed func()
+}
+
+// MediaHistoryRecorder is implemented by a platform whose launchers are
+// LifecycleExternal and so write play history themselves - from host
+// foreground evidence, or a bounded host-return estimate - instead of
+// through the service's active-media tracker. The service sets the hooks
+// before StartPost.
+type MediaHistoryRecorder interface {
+	SetMediaHistoryHooks(MediaHistoryHooks)
+}
+
 // InputSession owns keyboard and gamepad inputs held by one durable client
 // connection. Implementations must isolate held input between sessions and
 // release all owned input when ReleaseAll is called.

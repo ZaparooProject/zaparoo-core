@@ -303,36 +303,38 @@ func (p *Platform) dispatch(entry *catalogEntry, path string) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
-	// The host gets its own copy. A Dispatch that wrote through the pointer
-	// would corrupt the catalog entry for the rest of the process, and the
-	// receipt check below would then compare a substituted component against
-	// itself and pass.
-	sent := definition.copy()
-	receipt, err := p.host.Dispatch(ctx, &sent, reference, segments)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("launch cancelled: %w", ctxErr)
+	return p.track(ctx, definition, definition.ID, path, func() error {
+		// The host gets its own copy. A Dispatch that wrote through the pointer
+		// would corrupt the catalog entry for the rest of the process, and the
+		// receipt check below would then compare a substituted component against
+		// itself and pass.
+		sent := definition.copy()
+		receipt, err := p.host.Dispatch(ctx, &sent, reference, segments)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("launch cancelled: %w", ctxErr)
+			}
+			return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
 		}
-		return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
-	}
-	if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
-		receipt.Strategy != definition.Strategy {
-		// The host started something the definition did not name. A user can do
-		// nothing about it, so the client only learns the outcome is
-		// unconfirmed. An operator has to be able to find this, so it is logged
-		// at error level with both components named.
-		log.Error().
-			Str("launcherID", definition.ID).
-			Str("expectedPackage", definition.Package).
-			Str("actualPackage", receipt.Package).
-			Str("expectedActivity", definition.Activity).
-			Str("actualActivity", receipt.Activity).
-			Str("expectedStrategy", definition.Strategy).
-			Str("actualStrategy", receipt.Strategy).
-			Msg("host dispatch receipt names a different component than the launch definition")
-		return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
-	}
-	return nil
+		if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
+			receipt.Strategy != definition.Strategy {
+			// The host started something the definition did not name. A user can do
+			// nothing about it, so the client only learns the outcome is
+			// unconfirmed. An operator has to be able to find this, so it is logged
+			// at error level with both components named.
+			log.Error().
+				Str("launcherID", definition.ID).
+				Str("expectedPackage", definition.Package).
+				Str("actualPackage", receipt.Package).
+				Str("expectedActivity", definition.Activity).
+				Str("actualActivity", receipt.Activity).
+				Str("expectedStrategy", definition.Strategy).
+				Str("actualStrategy", receipt.Strategy).
+				Msg("host dispatch receipt names a different component than the launch definition")
+			return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
+		}
+		return nil
+	})
 }
 
 func sourceFailure(ctx context.Context, entry *catalogEntry, err error) error {

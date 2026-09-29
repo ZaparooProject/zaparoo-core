@@ -81,6 +81,12 @@ func MediaVisibility(ns chan<- models.Notification) {
 	sendNotification(ns, models.NotificationMediaVisibility, nil)
 }
 
+// MediaHistoryChanged asks clients to refetch play history that a platform
+// recorded outside the media.started and media.stopped lifecycle.
+func MediaHistoryChanged(ns chan<- models.Notification) {
+	sendNotification(ns, models.NotificationMediaHistoryChanged, nil)
+}
+
 func MediaIndexing(ns chan<- models.Notification, payload *models.IndexingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }

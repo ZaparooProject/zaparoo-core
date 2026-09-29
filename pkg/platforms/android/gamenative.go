@@ -177,7 +177,7 @@ func (p *Platform) dispatchGameNative(entry *gameNativeEntry, path string) error
 	if validateErr := definition.Validate(); validateErr != nil {
 		return repairError(platforms.LaunchRepairLauncherUnsupportedMedia, entry.repairParams(), msgWrongMedia)
 	}
-	return p.dispatchApp(&catalogEntry{definition: definition, group: entry.group})
+	return p.dispatchApp(&catalogEntry{definition: definition, group: entry.group}, path)
 }
 
 // canonicalAppID accepts the file's trimmed content as a positive decimal

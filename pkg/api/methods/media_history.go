@@ -157,18 +157,20 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		}
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
-			MediaID:    mediaID,
-			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
-			HasCover:   hasCover,
-			SystemID:   entry.SystemID,
-			SystemName: entry.SystemName,
-			MediaName:  entry.MediaName,
-			MediaPath:  entry.MediaPath,
-			LauncherID: entry.LauncherID,
-			StartedAt:  startedAt,
-			EndedAt:    endedAt,
-			PlayTime:   entry.PlayTime,
-			Tags:       mediaEntryTags(tagsKnown, mediaID, tagsByID),
+			MediaID:           mediaID,
+			RelPath:           mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			HasCover:          hasCover,
+			SystemID:          entry.SystemID,
+			SystemName:        entry.SystemName,
+			MediaName:         entry.MediaName,
+			MediaPath:         entry.MediaPath,
+			LauncherID:        entry.LauncherID,
+			StartedAt:         startedAt,
+			EndedAt:           endedAt,
+			PlayTime:          entry.PlayTime,
+			SessionSource:     entry.SessionSource,
+			SessionConfidence: entry.SessionConfidence,
+			Tags:              mediaEntryTags(tagsKnown, mediaID, tagsByID),
 		})
 	}
 

@@ -92,6 +92,8 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 			database.EncodeTagStrings(entry.Tags),
 			"",
 			0,
+			"active_media",
+			"unspecified",
 		).
 		WillReturnResult(sqlmock.NewResult(expectedDBID, 1))
 
@@ -153,6 +155,8 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 			database.EncodeTagStrings(entry.Tags),
 			"",
 			0,
+			"active_media",
+			"unspecified",
 		).
 		WillReturnError(sqlmock.ErrCancelled)
 
@@ -508,21 +512,21 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "nes", "Nintendo Entertainment System",
 			filepath.Join(string(filepath.Separator), "games", "mario.nes"),
 			"Super Mario Bros.", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, `["region:us"]`, "",
+			true, "system", startTime, startTime, nil, nil, `["region:us"]`, "", "active_media", "unspecified",
 		).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "snes", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
 			"The Legend of Zelda", "retroarch", 7200,
 			"boot-1", int64(2000), 7200, 7200, false,
-			true, "system", startTime, startTime, nil, nil, "", "",
+			true, "system", startTime, startTime, nil, nil, "", "", "active_media", "unspecified",
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -554,7 +558,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	})
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -710,7 +714,7 @@ func TestSqlGetMediaHistory_SentinelUsesMaxInt64(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	})
 
 	// Verify that lastID=0 uses math.MaxInt64 as sentinel, not the old MaxInt32
@@ -740,12 +744,12 @@ func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	}).AddRow(
 		int64(math.MaxInt32)+50, "uuid-1", time.Now().Unix(), nil, "nes", "NES",
 		filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 100,
 		"boot-1", int64(1000), 100, 100, false,
-		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil, "", "",
+		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil, "", "", "active_media", "unspecified",
 	)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -775,17 +779,19 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
 			"The Legend of Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, `["region:jp"]`, "",
+			true, "system", startTime, startTime, nil, nil, `["region:jp"]`, "", "active_media", "unspecified",
 		)
 
-	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
+	mock.ExpectPrepare(
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`,
+	).
 		ExpectQuery().
 		WithArgs(int64(math.MaxInt64), "SNES", 10).
 		WillReturnRows(rows)
@@ -813,23 +819,23 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	}).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, "", "",
+			true, "system", startTime, startTime, nil, nil, "", "", "active_media", "unspecified",
 		).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "NES", "NES",
 			filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 1800,
 			"boot-1", int64(2000), 1800, 1800, false,
-			true, "system", startTime, startTime, nil, nil, "", "",
+			true, "system", startTime, startTime, nil, nil, "", "", "active_media", "unspecified",
 		)
 
 	mock.ExpectPrepare(
-		`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND SystemID IN \(\?, \?\).*ORDER BY DBID DESC LIMIT`,
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID IN \(\?, \?\).*ORDER BY DBID DESC LIMIT`,
 	).
 		ExpectQuery().
 		WithArgs(int64(math.MaxInt64), "SNES", "NES", 10).
@@ -858,17 +864,19 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
-		"MediaIdentity",
+		"MediaIdentity", "SessionSource", "SessionConfidence",
 	}).
 		AddRow(
 			int64(8), "uuid-8", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, "", "",
+			true, "system", startTime, startTime, nil, nil, "", "", "active_media", "unspecified",
 		)
 
 	// lastID=10 + SystemID filter — both conditions in WHERE clause
-	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
+	mock.ExpectPrepare(
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`,
+	).
 		ExpectQuery().
 		WithArgs(int64(10), "SNES", 25).
 		WillReturnRows(rows)
@@ -940,6 +948,17 @@ func TestSqlCleanupMediaHistory_Success(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
@@ -960,6 +979,17 @@ func TestSqlCleanupMediaHistory_RequiresSyncedRows(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, true)
 	require.NoError(t, err)
@@ -979,6 +1009,17 @@ func TestSqlCleanupMediaHistory_NoRowsToDelete(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
@@ -1066,7 +1107,7 @@ func TestSqlGetMediaHistoryTop_SystemFilter(t *testing.T) {
 			"Super Nintendo Entertainment System",
 			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"))
 
-	mock.ExpectPrepare(`SELECT.*WHERE SystemID = \?.*GROUP BY`).
+	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*GROUP BY`).
 		ExpectQuery().
 		WithArgs("SNES", 25).
 		WillReturnRows(rows)
@@ -1093,7 +1134,7 @@ func TestSqlGetMediaHistoryTop_SinceFilter(t *testing.T) {
 		"SystemName", "MediaPath",
 	})
 
-	mock.ExpectPrepare(`SELECT.*WHERE StartTime >= \?.*GROUP BY`).
+	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND StartTime >= \?.*GROUP BY`).
 		ExpectQuery().
 		WithArgs(since.Unix(), 25).
 		WillReturnRows(rows)
@@ -1186,7 +1227,7 @@ func TestSqlGetMediaHistoryTop_BothFilters(t *testing.T) {
 		AddRow("Genesis", "Sonic", 1800, 3, now.Unix(),
 			"Sega Genesis", filepath.Join(string(filepath.Separator), "games", "gen", "sonic.md"))
 
-	mock.ExpectPrepare(`SELECT.*WHERE SystemID = \? AND StartTime >= \?.*GROUP BY`).
+	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \? AND StartTime >= \?.*GROUP BY`).
 		ExpectQuery().
 		WithArgs("Genesis", since.Unix(), 10).
 		WillReturnRows(rows)
@@ -1219,7 +1260,7 @@ func TestSqlGetMediaHistoryTop_MultipleSystemIDs(t *testing.T) {
 			"Nintendo Entertainment System",
 			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"))
 
-	mock.ExpectPrepare(`SELECT.*WHERE SystemID IN \(\?, \?\).*GROUP BY`).
+	mock.ExpectPrepare(`SELECT.*WHERE COALESCE\(IsDeleted, 0\) = 0 AND SystemID IN \(\?, \?\).*GROUP BY`).
 		ExpectQuery().
 		WithArgs("SNES", "NES", 25).
 		WillReturnRows(rows)

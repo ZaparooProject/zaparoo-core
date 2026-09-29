@@ -177,14 +177,21 @@ func (db *UserDB) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID 
  * Internal SQL functions
  */
 
-func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHistoryEntry) (int64, error) {
+// historyExecer is satisfied by both *sql.DB and *sql.Tx, so a session
+// reconciliation can write a MediaHistory row in the same transaction as the
+// external-session state it derives from.
+type historyExecer interface {
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+}
+
+func sqlAddMediaHistory(ctx context.Context, db historyExecer, entry *database.MediaHistoryEntry) (int64, error) {
 	stmt, err := db.PrepareContext(ctx, `
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
 			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
-			MediaIdentity, MediaIdentityPolicyVersion
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			MediaIdentity, MediaIdentityPolicyVersion, SessionSource, SessionConfidence
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -206,6 +213,14 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 	identityPolicyVersion := 0
 	if entry.MediaIdentity != nil {
 		identityPolicyVersion = entry.MediaIdentity.PolicyVersion
+	}
+	sessionSource := entry.SessionSource
+	if sessionSource == "" {
+		sessionSource = "active_media"
+	}
+	sessionConfidence := entry.SessionConfidence
+	if sessionConfidence == "" {
+		sessionConfidence = "unspecified"
 	}
 
 	result, err := stmt.ExecContext(ctx,
@@ -231,6 +246,8 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		database.EncodeTagStrings(entry.Tags),
 		database.EncodeMediaIdentity(entry.MediaIdentity),
 		identityPolicyVersion,
+		sessionSource,
+		sessionConfidence,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -404,7 +421,9 @@ func sqlGetMediaHistory(
 		lastID = math.MaxInt64
 	}
 
-	conditions := []string{"DBID < ?"}
+	// Withdrawn rows (a provisional session never confirmed) stay in the
+	// table only so a sync can report the withdrawal; they are not history.
+	conditions := []string{"DBID < ?", notDeleted}
 	args := make([]any, 0, len(systemIDs)+3)
 	args = append(args, lastID)
 
@@ -436,7 +455,7 @@ func sqlGetMediaHistory(
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
 			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
-			MediaIdentity
+			MediaIdentity, SessionSource, SessionConfidence
 		FROM MediaHistory
 		WHERE %s
 		ORDER BY DBID DESC
@@ -496,6 +515,8 @@ func sqlGetMediaHistory(
 			&rowProfileID,
 			&rawTags,
 			&rawIdentity,
+			&entry.SessionSource,
+			&entry.SessionConfidence,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history row: %w", err)
@@ -542,6 +563,10 @@ func sqlGetMediaHistory(
 	return list, nil
 }
 
+// notDeleted keeps a withdrawn row out of every local read. It stays in the
+// table only so a play-history sync can report the withdrawal.
+const notDeleted = "COALESCE(IsDeleted, 0) = 0"
+
 func sqlGetDistinctMediaHistory(
 	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
 ) ([]database.MediaHistoryEntry, error) {
@@ -556,10 +581,10 @@ func sqlGetDistinctMediaHistory(
 	}
 
 	args := make([]any, 0, len(systemIDs)+2)
-	latestWhere := ""
+	latestWhere := "WHERE " + notDeleted
 	switch len(systemIDs) {
 	case 1:
-		latestWhere = "WHERE SystemID = ?"
+		latestWhere += " AND SystemID = ?"
 		args = append(args, systemIDs[0])
 	default:
 		if len(systemIDs) > 1 {
@@ -568,13 +593,15 @@ func sqlGetDistinctMediaHistory(
 				placeholders[i] = "?"
 				args = append(args, systemID)
 			}
-			latestWhere = "WHERE SystemID IN (" + strings.Join(placeholders, ", ") + ")"
+			latestWhere += " AND SystemID IN (" + strings.Join(placeholders, ", ") + ")"
 		}
 	}
 	args = append(args, lastID, limit)
 
 	// Group before applying the cursor. Filtering raw history rows first would
-	// let an older session for a media identity reappear on a later page.
+	// let an older session for a media identity reappear on a later page. A
+	// withdrawn row is excluded from the grouping itself, not just the
+	// cursor, so it never hides that media's real latest session.
 	//nolint:gosec // latestWhere contains only fixed SQL and placeholders.
 	query := fmt.Sprintf(`
 		WITH LatestMedia AS (
@@ -586,7 +613,8 @@ func sqlGetDistinctMediaHistory(
 		SELECT
 			history.DBID, history.StartTime, history.EndTime,
 			history.SystemID, history.SystemName, history.MediaPath,
-			history.MediaName, history.LauncherID, history.PlayTime
+			history.MediaName, history.LauncherID, history.PlayTime,
+			history.SessionSource, history.SessionConfidence
 		FROM MediaHistory AS history
 		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
 		WHERE history.DBID < ?
@@ -620,6 +648,8 @@ func sqlGetDistinctMediaHistory(
 			&entry.MediaName,
 			&entry.LauncherID,
 			&entry.PlayTime,
+			&entry.SessionSource,
+			&entry.SessionConfidence,
 		); scanErr != nil {
 			return list, fmt.Errorf("failed to scan distinct media history row: %w", scanErr)
 		}
@@ -646,6 +676,7 @@ func sqlGetLatestMediaHistory(ctx context.Context, db *sql.DB) (database.MediaHi
 	stmt, err := db.PrepareContext(ctx, `
 		SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID
 		FROM MediaHistory
+		WHERE `+notDeleted+`
 		ORDER BY DBID DESC
 		LIMIT 1;
 	`)
@@ -682,7 +713,10 @@ func sqlGetLatestMediaHistory(ctx context.Context, db *sql.DB) (database.MediaHi
 }
 
 func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
-	// For entries where EndTime is NULL, calculate EndTime as StartTime + PlayTime seconds
+	// For entries where EndTime is NULL, calculate EndTime as StartTime + PlayTime seconds.
+	// Only Core's own tracker (active_media) ever left a row hanging like this;
+	// an externally-timed row's own platform reconciles or stales it, with its
+	// ExternalSessions state kept consistent, which this blind sweep cannot do.
 	stmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
 		SET EndTime = StartTime + PlayTime,
@@ -690,7 +724,7 @@ func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
 		    WallDuration = PlayTime,
 		    UpdatedAt = MAX(unixepoch(), UpdatedAt + 1),
 		    SyncedAt = NULL
-		WHERE EndTime IS NULL;
+		WHERE EndTime IS NULL AND SessionSource = 'active_media';
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare close hanging media statement: %w", err)
@@ -721,7 +755,11 @@ func sqlCleanupMediaHistory(
 
 	query := `DELETE FROM MediaHistory WHERE StartTime < ?;`
 	if requireSynced {
-		query = `DELETE FROM MediaHistory WHERE StartTime < ? AND SyncedAt IS NOT NULL;`
+		// An approximate row is never included in a sync batch, so its
+		// SyncedAt can never be set: requiring one would protect it forever
+		// instead of just until it syncs.
+		query = `DELETE FROM MediaHistory WHERE StartTime < ?
+			AND (SyncedAt IS NOT NULL OR SessionConfidence = 'approximate');`
 	}
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
@@ -743,6 +781,52 @@ func sqlCleanupMediaHistory(
 		return 0, fmt.Errorf("failed to get rows affected: %w", err)
 	}
 
+	externalRows, err := sqlCleanupExternalSessions(ctx, db, cutoffTime)
+	if err != nil {
+		return rowsAffected, err
+	}
+
+	return rowsAffected + externalRows, nil
+}
+
+// sqlCleanupExternalSessions deletes terminal sessions requested before
+// cutoffUnix. ExternalSessions has no soft foreign key back to MediaHistory
+// worth relying on for this: nothing enforces it, so a row this never
+// touches would otherwise accumulate forever. A session still in flight is
+// never deleted here regardless of age - only a platform's own
+// reconciliation retires one, and this must never race ahead of it.
+func sqlCleanupExternalSessions(ctx context.Context, db *sql.DB, cutoffUnix int64) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin external session cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	cutoffMs := cutoffUnix * 1000
+	// ExternalSessionSegments and ExternalSessionEvidence's foreign keys are
+	// declarative only: nothing enforces them, so their rows must be deleted
+	// here explicitly or they are orphaned forever once their parent goes.
+	const terminal = `LaunchID IN (SELECT LaunchID FROM ExternalSessions
+		WHERE Status IN ('closed', 'abandoned', 'stale') AND RequestedMs < ?)`
+	if _, err = tx.ExecContext(ctx, `DELETE FROM ExternalSessionSegments WHERE `+terminal, cutoffMs); err != nil {
+		return 0, fmt.Errorf("failed to execute external session segment cleanup: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM ExternalSessionEvidence WHERE `+terminal, cutoffMs); err != nil {
+		return 0, fmt.Errorf("failed to execute external session evidence cleanup: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM ExternalSessions
+		WHERE Status IN ('closed', 'abandoned', 'stale') AND RequestedMs < ?;`,
+		cutoffMs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute external session cleanup: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get external session cleanup rows affected: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit external session cleanup: %w", err)
+	}
 	return rowsAffected, nil
 }
 
@@ -761,7 +845,8 @@ func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Ti
 		), 0)
 		FROM MediaHistory
 		WHERE EndTime IS NOT NULL
-		  AND EndTime > ?`
+		  AND EndTime > ?
+		  AND ` + notDeleted
 	args := []any{dayStartUnix, dayStartUnix, dayStartUnix}
 	if profileID != nil {
 		query += `
@@ -869,10 +954,9 @@ func sqlGetMediaHistoryTop(
 		limit = 100
 	}
 
-	where := ""
 	args := make([]any, 0, len(systemIDs)+2)
 
-	conditions := make([]string, 0, 2)
+	conditions := []string{notDeleted}
 	if len(systemIDs) == 1 {
 		conditions = append(conditions, "SystemID = ?")
 		args = append(args, systemIDs[0])
@@ -889,9 +973,7 @@ func sqlGetMediaHistoryTop(
 		args = append(args, since.Unix())
 	}
 
-	if len(conditions) > 0 {
-		where = "WHERE " + strings.Join(conditions, " AND ")
-	}
+	where := "WHERE " + strings.Join(conditions, " AND ")
 
 	//nolint:gosec // where clause uses only hardcoded column names, not user input
 	query := fmt.Sprintf(`

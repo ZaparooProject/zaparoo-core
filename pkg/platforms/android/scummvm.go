@@ -132,7 +132,7 @@ func (p *Platform) dispatchScummVM(path string) error {
 	if validateErr := definition.Validate(); validateErr != nil {
 		return repairError(platforms.LaunchRepairLauncherUnsupportedMedia, entry.repairParams(), msgWrongMedia)
 	}
-	return p.dispatchApp(&catalogEntry{definition: definition, group: entry.group})
+	return p.dispatchApp(&catalogEntry{definition: definition, group: entry.group}, path)
 }
 
 // scummVMTarget is the file's trimmed content, or its own name without the

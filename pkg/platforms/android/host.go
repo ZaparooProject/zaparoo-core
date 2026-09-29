@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
@@ -130,6 +131,41 @@ type Host interface {
 	// DispatchApp starts a definition that carries no media. A *HostError says
 	// why the host refused.
 	DispatchApp(definition *LaunchDefinition) (DispatchReceipt, error)
+	// ForegroundState reads a fresh framework snapshot: boot identity, Usage
+	// Access permission, and screen/keyguard state, on both the wall and
+	// elapsed clocks. It is read fresh before every dispatch and
+	// reconciliation pass; the platform never caches it.
+	ForegroundState() (ForegroundState, error)
+	// ForegroundEvents queries a bounded window of privacy-filtered
+	// foreground evidence for one already-dispatched launch's whole
+	// package - never a specific activity, so an intent that forwards
+	// through more than one activity of the same app still reads as one
+	// session. Cancelling ctx abandons a query in flight.
+	ForegroundEvents(
+		ctx context.Context, launchID, target string, fromMs, toMs int64,
+	) (database.ForegroundEvidence, error)
+}
+
+// ForegroundState is a host-owned snapshot taken before intent dispatch or a
+// reconciliation pass. It also supplies the boot and elapsed clocks needed to
+// reject cross-boot replay.
+type ForegroundState struct {
+	BootID      string
+	Permission  string
+	SampledMs   int64
+	ElapsedMs   int64
+	Version     int
+	Interactive bool
+	Unlocked    bool
+}
+
+// valid reports whether a snapshot has every field a launch needs to be
+// timed. The host is expected to always answer with a valid one; an invalid
+// one is logged and the launch dispatches untracked, the same as any other
+// reason tracking is unavailable - it must never block the launch itself.
+func (s ForegroundState) valid() bool {
+	return s.BootID != "" && s.SampledMs > 0 && s.ElapsedMs > 0 &&
+		(s.Permission == "granted" || s.Permission == "denied")
 }
 
 // AppInfo is one launchable app the host found. Label is the app's own
