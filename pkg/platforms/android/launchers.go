@@ -42,7 +42,38 @@ type hostSnapshot struct {
 	host      Host
 	targets   map[string]FailureReason
 	cores     map[string]struct{}
+	apps      []AppInfo
 	coresSeen bool
+	appsSeen  bool
+}
+
+// installedApps asks the host once per snapshot. A listing the host did not
+// make, or one that is implausibly large, reports nothing rather than being
+// read as absence.
+func (s *hostSnapshot) installedApps() []AppInfo {
+	if s.appsSeen {
+		return s.apps
+	}
+	s.appsSeen = true
+	apps, scanned := s.host.InstalledApps()
+	if !scanned || len(apps) > maxInstalledApps {
+		return nil
+	}
+	kept := make([]AppInfo, 0, len(apps))
+	seen := make(map[string]struct{}, len(apps))
+	for _, app := range apps {
+		if !dottedNamePattern.MatchString(app.Package) || !dottedNamePattern.MatchString(app.Activity) ||
+			!validCatalogText(app.Label) {
+			continue
+		}
+		if _, duplicate := seen[app.Package]; duplicate {
+			continue
+		}
+		seen[app.Package] = struct{}{}
+		kept = append(kept, app)
+	}
+	s.apps = kept
+	return s.apps
 }
 
 func newHostSnapshot(host Host) *hostSnapshot {
@@ -102,15 +133,20 @@ func (p *Platform) Launchers(*config.Instance) []platforms.Launcher {
 		return nil
 	}
 	snapshot := newHostSnapshot(p.host)
-	launchers := make([]platforms.Launcher, 0, len(p.entries))
+	launchers := make([]platforms.Launcher, 0, len(p.entries)+1)
 	for i := range p.entries {
 		launchers = append(launchers, p.launcher(&p.entries[i], snapshot))
 	}
-	return launchers
+	// Last, so a profile that describes an app is always preferred over the
+	// generic offer of the same app.
+	return append(launchers, p.installedAppsLauncher(snapshot))
 }
 
 func (p *Platform) launcher(entry *catalogEntry, snapshot *hostSnapshot) platforms.Launcher {
 	definition := &entry.definition
+	if definition.Strategy == StrategyApp {
+		return p.appLauncher(entry, snapshot)
+	}
 	target := snapshot.targetFailure(definition)
 	var availability error
 	if target != "" {
@@ -188,14 +224,20 @@ func (p *Platform) LaunchMedia(
 		}
 		launcher = &found
 	}
-	// Only a catalog definition may reach the host. The launcher is rebuilt
-	// from the catalog by ID, so a custom launcher with a colliding ID can
-	// substitute neither a command nor an intent.
-	entry, registered := p.entryByID[launcher.ID]
-	if !registered {
-		return fmt.Errorf("launcher %s is not in the Android catalog: %w", launcher.ID, platforms.ErrNotSupported)
+	// Only a definition this platform built may reach the host. The launcher
+	// is rebuilt here from the catalog, or from what the host reports, so a
+	// custom launcher with a colliding ID can substitute neither a command nor
+	// an intent.
+	var owned platforms.Launcher
+	if launcher.ID == installedAppsID {
+		owned = p.installedAppsLauncher(newHostSnapshot(p.host))
+	} else {
+		entry, registered := p.entryByID[launcher.ID]
+		if !registered {
+			return fmt.Errorf("launcher %s is not in the Android catalog: %w", launcher.ID, platforms.ErrNotSupported)
+		}
+		owned = p.launcher(entry, newHostSnapshot(p.host))
 	}
-	owned := p.launcher(entry, newHostSnapshot(p.host))
 	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Context:  ctx,
 		Platform: p,

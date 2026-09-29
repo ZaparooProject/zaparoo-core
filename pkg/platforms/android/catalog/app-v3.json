@@ -1,0 +1,132 @@
+{
+  "catalogVersion": 1,
+  "reviewed": "2026-09-22",
+  "profiles": [
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonRed",
+      "name": "Pokemon Red",
+      "variant": "red",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "red"
+        }
+      ]
+    },
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonBlue",
+      "name": "Pokemon Blue",
+      "variant": "blue",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "blue"
+        }
+      ]
+    },
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonYellow",
+      "name": "Pokemon Yellow",
+      "variant": "yellow",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "yellow"
+        }
+      ]
+    },
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonGold",
+      "name": "Pokemon Gold",
+      "variant": "gold",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "gold"
+        }
+      ]
+    },
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonSilver",
+      "name": "Pokemon Silver",
+      "variant": "silver",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "silver"
+        }
+      ]
+    },
+    {
+      "version": 3,
+      "id": "Pokeport.PokemonCrystal",
+      "name": "Pokemon Crystal",
+      "variant": "crystal",
+      "system": "Android",
+      "package": "com.theboisclub.pokemonred",
+      "activity": "org.love2d.android.GameActivity",
+      "action": "android.intent.action.VIEW",
+      "strategy": "app",
+      "storageAccess": "none",
+      "repair": "Install the Pokemon port and import this game once in its own launcher.",
+      "extras": [
+        {
+          "name": "game",
+          "type": "string",
+          "source": "literal",
+          "value": "crystal"
+        }
+      ]
+    }
+  ]
+}

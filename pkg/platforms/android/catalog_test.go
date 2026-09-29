@@ -154,10 +154,12 @@ func TestCatalogContentURIProfilesAreBoundedAndReviewed(t *testing.T) {
 	require.NoError(t, err)
 	type target struct{ pkg, system string }
 	expected := map[string]target{
-		"DuckStation.PSX":  {"com.github.stenzek.duckstation", "PSX"},
-		"PPSSPP.PSP":       {"org.ppsspp.ppsspp", "PSP"},
-		"Dolphin.GameCube": {"org.dolphinemu.dolphinemu", "GameCube"},
-		"Dolphin.Wii":      {"org.dolphinemu.dolphinemu", "Wii"},
+		"DuckStation.PSX":   {"com.github.stenzek.duckstation", "PSX"},
+		"PPSSPP.PSP":        {"org.ppsspp.ppsspp", "PSP"},
+		"Dolphin.GameCube":  {"org.dolphinemu.dolphinemu", "GameCube"},
+		"Dolphin.Wii":       {"org.dolphinemu.dolphinemu", "Wii"},
+		"MAME4droid.Arcade": {"com.seleuco.mame4d2024", "Arcade"},
+		"ARMSX2.PS2":        {"com.armsx2", "PS2"},
 	}
 	require.Len(t, entries, len(expected))
 	for i := range entries {
@@ -204,7 +206,7 @@ func TestLoadCatalogExpandsEveryProfile(t *testing.T) {
 
 	entries, err := loadCatalog()
 	require.NoError(t, err)
-	require.Len(t, entries, 264)
+	require.Len(t, entries, 272)
 	for i := range entries {
 		definition := &entries[i].definition
 		require.NoError(t, definition.Validate(), definition.ID)
@@ -248,7 +250,7 @@ func TestCatalogOrderIsLauncherPrecedence(t *testing.T) {
 	}, bySystem["Nintendo64"])
 
 	for system, first := range map[string]string{
-		"Arcade":       "RetroArch.FBNeo.Arcade",
+		"Arcade":       "MAME4droid.Arcade",
 		"Gameboy":      "RetroArch.Gambatte.Gameboy",
 		"GBA":          "RetroArch.mGBA",
 		"SNES":         "RetroArch.SNES9x",
@@ -258,7 +260,7 @@ func TestCatalogOrderIsLauncherPrecedence(t *testing.T) {
 		require.NotEmpty(t, bySystem[system], system)
 		assert.Equal(t, first, bySystem[system][0], system)
 	}
-	assert.Equal(t, []string{"RetroArch.FBNeo.Arcade", "RetroArch.Mame2003Plus.Arcade", "RetroArch.Mamearcade.Arcade"},
+	assert.Equal(t, []string{"MAME4droid.Arcade", "RetroArch.FBNeo.Arcade", "RetroArch.Mame2003Plus.Arcade"},
 		bySystem["Arcade"][:3])
 }
 

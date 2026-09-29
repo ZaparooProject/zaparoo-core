@@ -116,4 +116,21 @@ type Host interface {
 		reference string,
 		segments []string,
 	) (DispatchReceipt, error)
+	// InstalledApps lists the launchable apps the host found. scanned is false
+	// when the host has not looked, which is not evidence of absence.
+	InstalledApps() (apps []AppInfo, scanned bool)
+	// AppIcon returns a readable, app-private PNG for a launchable package.
+	// An unavailable icon is not evidence that the app is absent.
+	AppIcon(packageName string) (path string, err error)
+	// DispatchApp starts a definition that carries no media. A *HostError says
+	// why the host refused.
+	DispatchApp(definition *LaunchDefinition) (DispatchReceipt, error)
+}
+
+// AppInfo is one launchable app the host found. Label is the app's own
+// display name, which the host reads from the platform, never Core.
+type AppInfo struct {
+	Package  string
+	Activity string
+	Label    string
 }

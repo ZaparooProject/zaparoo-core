@@ -49,6 +49,9 @@ var retroArchCatalogJSON []byte
 //go:embed catalog/standalone-content-uri-v2.json
 var standaloneCatalogJSON []byte
 
+//go:embed catalog/app-v3.json
+var appCatalogJSON []byte
+
 type retroArchCatalog struct {
 	Source   retroArchCatalogSource `json:"source"`
 	Package  string                 `json:"package"`
@@ -105,9 +108,14 @@ func loadCatalog() ([]catalogEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]catalogEntry, 0, len(standalone)+len(retroArch))
+	apps, err := loadAppCatalog(appCatalogJSON)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]catalogEntry, 0, len(standalone)+len(retroArch)+len(apps))
 	entries = append(entries, standalone...)
 	entries = append(entries, retroArch...)
+	entries = append(entries, apps...)
 	seen := make(map[string]struct{}, len(entries))
 	for i := range entries {
 		id := strings.ToLower(entries[i].definition.ID)
@@ -216,6 +224,37 @@ func loadStandaloneCatalog(data []byte) ([]catalogEntry, error) {
 	return entries, nil
 }
 
+// loadAppCatalog reads the app profiles: launches that carry no media, where
+// an optional literal extra selects one profile-defined variant.
+func loadAppCatalog(data []byte) ([]catalogEntry, error) {
+	var catalog standaloneCatalog
+	if err := decodeCatalog(data, maxStandaloneCatalogBytes, &catalog); err != nil {
+		return nil, fmt.Errorf("decode app catalog: %w", err)
+	}
+	if catalog.CatalogVersion != 1 || !validCatalogText(catalog.Reviewed) ||
+		len(catalog.Profiles) == 0 || len(catalog.Profiles) > maxStandaloneProfiles {
+		return nil, fmt.Errorf("app catalog header: %w", ErrLaunchDefinition)
+	}
+	entries := make([]catalogEntry, 0, len(catalog.Profiles))
+	seen := make(map[string]struct{}, len(catalog.Profiles))
+	for i := range catalog.Profiles {
+		definition, err := parseLaunchDefinition(catalog.Profiles[i])
+		if err != nil || definition.Version != 3 {
+			return nil, fmt.Errorf("app catalog row %d: %w", i, ErrLaunchDefinition)
+		}
+		identity := AppIdentity{Package: definition.Package, Variant: definition.Variant}
+		if _, duplicate := seen[identity.id()]; duplicate {
+			return nil, fmt.Errorf("app catalog row %d: %w", i, ErrLaunchDefinition)
+		}
+		seen[identity.id()] = struct{}{}
+		entries = append(entries, catalogEntry{
+			definition: definition,
+			group:      standaloneGroup(definition.Package),
+		})
+	}
+	return entries, nil
+}
+
 func standaloneGroup(packageName string) string {
 	switch packageName {
 	case "com.github.stenzek.duckstation":
@@ -224,6 +263,12 @@ func standaloneGroup(packageName string) string {
 		return "PPSSPP"
 	case "org.dolphinemu.dolphinemu":
 		return "Dolphin"
+	case "com.seleuco.mame4d2024":
+		return "MAME4droid"
+	case "com.armsx2":
+		return "ARMSX2"
+	case "com.theboisclub.pokemonred":
+		return "Pokeport"
 	default:
 		return "Android"
 	}

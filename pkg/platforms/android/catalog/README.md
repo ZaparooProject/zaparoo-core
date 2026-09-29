@@ -49,10 +49,35 @@ Profiles include only single-file formats. Playlist and companion-file formats
 such as M3U and CUE stay excluded until multi-document grant semantics are
 proven.
 
+MAME4droid 2024 and ARMSX2 are also registered here, as version 2 profiles
+like the rest: they take a content URI the same way. A standalone app leads
+its system's RetroArch cores, so MAME4droid precedes the RetroArch arcade
+cores and ARMSX2 precedes RetroArch's PS2 core.
+
+## App profiles
+
+`app-v3.json` adds version 3 profiles: a launch that starts an installed app
+directly, with no media at all. The app's identity is the virtual path
+`android://<package>[:<variant>]/<name>`, so the activity, action and extras
+that actually start it stay in the catalog; an app update that renames its
+launch activity does not invalidate an identity already written to a card.
+
+A profile's `variant` key is opaque to the format and owned by the profile: it
+distinguishes one launchable configuration of an app from another (for
+example, a game-selection extra a fan-made port reads), so adding a variant is
+a catalog change, never a format change. Extras on a version 3 profile carry
+only a literal value; there is no media to source one from.
+
+An app the catalog does not describe is still offered: the platform lists
+every launchable app the host reports and starts one directly, generic and
+without a catalog entry, unless a profile already claims its package (a
+profiled variant is always preferred over the generic offer of the same app).
+
 ## Order is precedence
 
 Launchers register in file order: the standalone profiles first, then the
-RetroArch profiles. When nothing else chooses a launcher (a media override, a
+RetroArch profiles, then the app profiles, then the generic offer of every
+other installed app. When nothing else chooses a launcher (a media override, a
 system default or the global launcher preference), the first registered
 launcher that matches the media and is not known to be missing wins.
 
