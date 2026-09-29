@@ -1790,7 +1790,10 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 		}
 	}
 
-	assert.Equal(t, []int{5, 5}, progressCounts)
+	// The second progress update lands inside the notification throttle, so
+	// only the first is published; it still reads the cached count rather
+	// than querying again (the mock allows one progress query).
+	assert.Equal(t, []int{5}, progressCounts)
 	assert.Equal(t, 9, doneCount)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()

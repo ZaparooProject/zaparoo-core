@@ -26,6 +26,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -40,6 +42,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -58,8 +62,15 @@ func (*embeddedTestPlatform) StartPost(
 	return nil
 }
 
+// Launchers runs in the background beside API startup, which writes the
+// config testify would reflect over while matching; answer without the mock.
+func (*embeddedTestPlatform) Launchers(*config.Instance) []platforms.Launcher {
+	return nil
+}
+
 func embeddedFixture(t *testing.T, dir string) (*embeddedTestPlatform, *config.Instance, EmbeddedOptions) {
 	t.Helper()
+	restoreGlobalLogging(t)
 	platform := &embeddedTestPlatform{MockPlatform: mocks.NewMockPlatform()}
 	platform.On("Settings").Return(platforms.Settings{
 		DataDir: dir, ConfigDir: dir, TempDir: dir, LogDir: dir,
@@ -95,7 +106,13 @@ func TestEmbeddedLifecycle(t *testing.T) {
 		require.NoError(t, result.StopContext(stopCtx))
 		cancel()
 		require.NoError(t, result.Err())
-		for _, want := range []string{"starting", "migrating", "ready", "stopped"} {
+		// Only the first start has migrations to apply; the second reuses the
+		// upgraded databases, so it must not report a migration.
+		want := []string{"starting", "migrating", "ready", "stopped"}
+		if cycle > 0 {
+			want = []string{"starting", "ready", "stopped"}
+		}
+		for _, want := range want {
 			select {
 			case got := <-phases:
 				assert.Equal(t, want, got)
@@ -308,4 +325,140 @@ func TestEmbeddedUsesOnlyTheHostRenderer(t *testing.T) {
 	assert.Nil(t, uiRendererFor(platform, &EmbeddedOptions{}))
 	assert.NotNil(t, uiRendererFor(platform, nil), "standalone keeps the platform's renderer")
 	assert.Nil(t, uiRendererFor(mocks.NewMockPlatform(), nil))
+}
+
+// restoreGlobalLogging puts back the level an embedded start sets and closes
+// its log file before the test directory goes; closing sends later lines to
+// stderr.
+func restoreGlobalLogging(t *testing.T) {
+	t.Helper()
+	previousLevel := zerolog.GlobalLevel()
+	t.Cleanup(func() {
+		zerolog.SetGlobalLevel(previousLevel)
+		_ = helpers.CloseLogging()
+	})
+}
+
+func TestSetupEmbeddedLogging(t *testing.T) {
+	restoreGlobalLogging(t)
+	for _, debug := range []bool{false, true} {
+		dir := t.TempDir()
+		platform := mocks.NewMockPlatform()
+		platform.On("Settings").Return(platforms.Settings{LogDir: dir, HostManagedPaths: true})
+		cfg, err := testhelpers.NewTestConfig(testhelpers.NewMemoryFS(), dir)
+		require.NoError(t, err)
+		cfg.SetDebugLogging(debug)
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+
+		require.NoError(t, setupEmbeddedLogging(platform, cfg))
+		want := zerolog.InfoLevel
+		if debug {
+			want = zerolog.DebugLevel
+		}
+		if os.Getenv("ZAPAROO_TRACE") == "" {
+			assert.Equal(t, want, zerolog.GlobalLevel(), "debug_logging=%t", debug)
+		}
+		log.Info().Msg("embedded logging reaches the host log directory")
+		data, err := os.ReadFile(filepath.Join(dir, config.LogFile)) //nolint:gosec // test temp dir
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "embedded logging reaches the host log directory")
+
+		// A runtime settings change still moves the level.
+		cfg.SetDebugLogging(!debug)
+		if os.Getenv("ZAPAROO_TRACE") == "" {
+			assert.NotEqual(t, want, zerolog.GlobalLevel())
+		}
+		require.NoError(t, helpers.CloseLogging())
+	}
+}
+
+// blockingLaunchersPlatform holds launcher probing until released, standing in
+// for a host whose launcher discovery is slow.
+type blockingLaunchersPlatform struct {
+	*embeddedTestPlatform
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingLaunchersPlatform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	select {
+	case p.entered <- struct{}{}:
+	default:
+	}
+	<-p.release
+	return p.embeddedTestPlatform.Launchers(cfg)
+}
+
+// Launcher probing must not hold up the API or the ready phase, and cache
+// readers wait for it instead of seeing no launchers.
+func TestEmbeddedStartsBeforeLauncherProbingFinishes(t *testing.T) {
+	previousCache := helpers.GlobalLauncherCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = previousCache })
+	cache := &helpers.LauncherCache{}
+	helpers.GlobalLauncherCache = cache
+	base, cfg, opts := embeddedFixture(t, t.TempDir())
+	base.On("StartPre", mock.Anything).Return(nil)
+	base.On("Stop").Return(nil)
+	platform := &blockingLaunchersPlatform{
+		embeddedTestPlatform: base,
+		entered:              make(chan struct{}, 1),
+		release:              make(chan struct{}),
+	}
+	released := false
+	releaseProbe := func() {
+		if !released {
+			released = true
+			close(platform.release)
+		}
+	}
+	t.Cleanup(releaseProbe)
+
+	started := make(chan *StartResult, 1)
+	go func() {
+		result, err := StartEmbedded(platform, cfg, opts)
+		assert.NoError(t, err)
+		started <- result
+	}()
+	var result *StartResult
+	select {
+	case result = <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup waited for launcher probing")
+	}
+	require.NotNil(t, result)
+	select {
+	case <-platform.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("launcher probing never started")
+	}
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", opts.Listener.Addr().String())
+	require.NoError(t, err, "the API accepts connections while launchers are still probed")
+	require.NoError(t, conn.Close())
+
+	readerDone := make(chan int, 1)
+	go func() { readerDone <- len(cache.GetAllLaunchers()) }()
+	select {
+	case <-readerDone:
+		t.Fatal("a cache reader returned before probing finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseProbe()
+	select {
+	case <-readerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cache reader never resumed")
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, result.StopContext(stopCtx))
+}
+
+func TestBackgroundThrottled(t *testing.T) {
+	t.Parallel()
+	assert.False(t, backgroundThrottled(platforms.Settings{}))
+	assert.True(t, backgroundThrottled(platforms.Settings{ResourceConstrained: true}))
+	assert.True(t, backgroundThrottled(platforms.Settings{ThrottleBackground: true}),
+		"a host can ask for the throttle baseline without being resource constrained")
 }

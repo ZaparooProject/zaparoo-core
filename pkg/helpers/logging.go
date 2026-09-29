@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/crashdump"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -58,7 +59,40 @@ var (
 	logMu         syncutil.RWMutex
 	logFileWriter *lumberjack.Logger
 	logWriter     io.Writer
+	// logOutput is what the global logger writes to. InitLogging retargets it
+	// rather than replacing log.Logger, so a runtime started inside a process
+	// that is already logging never writes the logger variable while other
+	// goroutines read it.
+	logOutput = &retargetableWriter{}
 )
+
+// Bind the global logger to logOutput before anything logs. With no target it
+// writes to stderr, as zerolog's default logger does.
+func init() {
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+	log.Logger = log.Output(logOutput)
+}
+
+// retargetableWriter forwards writes to a target that can be swapped
+// atomically. With no target it writes to stderr.
+type retargetableWriter struct {
+	target atomic.Pointer[io.Writer]
+}
+
+func (w *retargetableWriter) Write(p []byte) (int, error) {
+	if target := w.target.Load(); target != nil {
+		return (*target).Write(p) //nolint:wrapcheck // transparent forwarding writer
+	}
+	return os.Stderr.Write(p) //nolint:wrapcheck // transparent forwarding writer
+}
+
+func (w *retargetableWriter) retarget(target io.Writer) {
+	if target == nil {
+		w.target.Store(nil)
+		return
+	}
+	w.target.Store(&target)
+}
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	if err := CloseLogging(); err != nil {
@@ -79,10 +113,8 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 		logWriters = append(logWriters, writers...)
 	}
 
-	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
-
 	logWriter = io.MultiWriter(logWriters...)
-	log.Logger = log.Output(logWriter)
+	logOutput.retarget(logWriter)
 
 	return nil
 }
@@ -243,6 +275,9 @@ func CloseLogging() error {
 		return nil
 	}
 
+	// Send later lines to stderr instead of letting the closed file writer
+	// reopen its file.
+	logOutput.retarget(nil)
 	err := logFileWriter.Close()
 	logFileWriter = nil
 	logWriter = nil

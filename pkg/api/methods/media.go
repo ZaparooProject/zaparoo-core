@@ -73,12 +73,32 @@ const (
 // so long-tail categories like credit: don't flood the response.
 const tagsPerCategoryLimit = 100
 
+// progressNotificationInterval is the minimum gap between progress
+// notifications that change nothing a client displays as a step.
+const progressNotificationInterval = 250 * time.Millisecond
+
+// progressThrottle rate-limits progress notifications. A notification whose
+// visible key changed (phase, system, step) or that is final is always sent;
+// otherwise at most one is sent per interval.
+type progressThrottle struct {
+	lastTime time.Time
+	lastKey  string
+	hasLast  bool
+}
+
+func (p *progressThrottle) allow(key string, final bool, now time.Time, interval time.Duration) bool {
+	changed := !p.hasLast || key != p.lastKey
+	if !final && !changed && now.Sub(p.lastTime) < interval {
+		return false
+	}
+	p.lastTime = now
+	p.lastKey = key
+	p.hasLast = true
+	return true
+}
+
 type indexingNotificationState struct {
-	lastTime     time.Time
-	lastPhase    string
-	lastSystemID string
-	lastStep     int
-	hasLast      bool
+	throttle progressThrottle
 }
 
 // capTagsByCategory returns at most limit tags per type, sorted by count desc
@@ -288,22 +308,30 @@ func (s *indexingNotificationState) shouldSend(
 	now time.Time,
 	interval time.Duration,
 ) bool {
-	visibleStepChanged := !s.hasLast ||
-		status.Phase != s.lastPhase ||
-		status.SystemID != s.lastSystemID ||
-		status.Step != s.lastStep
+	key := fmt.Sprintf("%s\x00%s\x00%d", status.Phase, status.SystemID, status.Step)
 	isFinalStep := status.Total > 0 && status.Step == status.Total
+	return s.throttle.allow(key, isFinalStep, now, interval)
+}
 
-	if !isFinalStep && !visibleStepChanged && now.Sub(s.lastTime) < interval {
-		return false
+// scrapingNotificationState throttles media.scraping the same way: state,
+// system, step, pause and throttle changes, errors and the final update are
+// always sent; per-item progress is sent at most once per interval.
+type scrapingNotificationState struct {
+	throttle progressThrottle
+}
+
+func (s *scrapingNotificationState) shouldSend(
+	status *models.ScrapingStatusResponse, now time.Time, interval time.Duration,
+) bool {
+	step := -1
+	if status.CurrentStep != nil {
+		step = *status.CurrentStep
 	}
-
-	s.lastTime = now
-	s.lastPhase = status.Phase
-	s.lastSystemID = status.SystemID
-	s.lastStep = status.Step
-	s.hasLast = true
-	return true
+	key := fmt.Sprintf("%s\x00%s\x00%d\x00%t\x00%t\x00%t",
+		status.State, status.SystemID, step, status.Scraping, status.Paused, status.Throttled)
+	// A system's last item is sent so its progress visibly completes.
+	final := status.Done || status.Error != "" || (status.Total > 0 && status.Processed >= status.Total)
+	return s.throttle.allow(key, final, now, interval)
 }
 
 func (s *indexingStatus) get() indexingStatusVals {
@@ -525,9 +553,9 @@ func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.
 	})
 }
 
-func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
+func invalidateIndexedThumbnails(mediaDB database.MediaDBI, systems []systemdefs.System, rebuild bool) {
 	if rebuild || len(systems) == 0 {
-		WipeMediaThumbCache()
+		WipeMediaThumbCache(mediaDB)
 		return
 	}
 	requested := make(map[string]struct{}, len(systems))
@@ -544,7 +572,7 @@ func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 			}
 		}
 		if allRequested {
-			WipeMediaThumbCache()
+			WipeMediaThumbCache(mediaDB)
 			return
 		}
 	}
@@ -552,7 +580,7 @@ func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
 	for systemID := range requested {
 		systemIDs = append(systemIDs, systemID)
 	}
-	WipeMediaThumbCacheSystems(systemIDs)
+	WipeMediaThumbCacheSystems(mediaDB, systemIDs)
 }
 
 func GenerateMediaDB(
@@ -767,7 +795,7 @@ func startMediaDBGeneration(
 		}
 
 		notifState := indexingNotificationState{}
-		const notifThrottleInterval = 250 * time.Millisecond
+		const notifThrottleInterval = progressNotificationInterval
 
 		// Tracks whether the DB holds queryable data, so status notifications
 		// stay truthful mid-index (clients serve partial results against it).
@@ -916,7 +944,7 @@ func startMediaDBGeneration(
 			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
 		}
 		mediaImageNoImages.clear()
-		invalidateIndexedThumbnails(systems, rebuild)
+		invalidateIndexedThumbnails(db.MediaDB, systems, rebuild)
 		notifications.MediaIndexing(ns, &models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
@@ -1289,6 +1317,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			Tags:               result.Tags,
 			DisambiguatingTags: result.ZapScriptTags,
 		})
+	}
+
+	if env.Database != nil && len(results) > 0 {
+		ids := make([]int64, len(results))
+		for i := range results {
+			ids[i] = results[i].MediaID
+		}
+		if colors := mediaCoverColors(ctx, env.Database.MediaDB, ids); len(colors) > 0 {
+			for i := range results {
+				results[i].CoverColor = colors[results[i].MediaID]
+			}
+		}
 	}
 
 	// Build pagination info

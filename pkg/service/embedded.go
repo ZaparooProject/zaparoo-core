@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
@@ -99,6 +100,9 @@ func StartEmbedded(pl platforms.Platform, cfg *config.Instance, opts EmbeddedOpt
 	if contextErr := opts.Context.Err(); contextErr != nil {
 		return nil, contextErr
 	}
+	if logErr := setupEmbeddedLogging(pl, cfg); logErr != nil {
+		return nil, logErr
+	}
 	opts.phase("starting")
 	result, err = startServiceWithOptions(pl, cfg, &opts)
 	if err != nil {
@@ -113,6 +117,19 @@ func StartEmbedded(pl platforms.Platform, cfg *config.Instance, opts EmbeddedOpt
 		opts.phase("stopped")
 	}(result)
 	return result, nil
+}
+
+// setupEmbeddedLogging writes the log to the host's log directory at the
+// configured level. A host captures a native process's stderr at an error
+// priority, so Core must not log there; and without a level the logger would
+// stay at Debug. Changing debug_logging at runtime still takes effect through
+// Config.SetDebugLogging.
+func setupEmbeddedLogging(pl platforms.Platform, cfg *config.Instance) error {
+	if err := helpers.InitLogging(pl, nil); err != nil {
+		return fmt.Errorf("embedded logging: %w", err)
+	}
+	cfg.SetDebugLogging(cfg.DebugLogging())
+	return nil
 }
 
 func (opts *EmbeddedOptions) phase(phase string) {

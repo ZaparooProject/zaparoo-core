@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/stretchr/testify/assert"
 )
@@ -383,4 +384,42 @@ func TestMediaIndexStatus_StateTransitions(t *testing.T) {
 		assert.False(t, statusInstance.isRunning())
 		assert.Nil(t, statusInstance.getCancelFunc())
 	})
+}
+
+func TestScrapingNotificationState_ThrottlesItemProgress(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	const interval = 250 * time.Millisecond
+	step := func(n int) *int { return &n }
+	progress := func(processed int) *models.ScrapingStatusResponse {
+		return &models.ScrapingStatusResponse{
+			State: "running", SystemID: "SNES", CurrentStep: step(1), Scraping: true,
+			Processed: processed, Total: 100,
+		}
+	}
+
+	var state scrapingNotificationState
+	assert.True(t, state.shouldSend(progress(1), base, interval), "the first update is sent")
+	assert.False(t, state.shouldSend(progress(2), base.Add(10*time.Millisecond), interval),
+		"per-item progress inside the interval is dropped")
+	assert.True(t, state.shouldSend(progress(3), base.Add(interval), interval),
+		"progress resumes once the interval passes")
+
+	paused := progress(4)
+	paused.Paused = true
+	assert.True(t, state.shouldSend(paused, base.Add(interval+time.Millisecond), interval),
+		"a pause is visible and bypasses the throttle")
+	nextSystem := progress(0)
+	nextSystem.SystemID, nextSystem.CurrentStep = "NES", step(2)
+	assert.True(t, state.shouldSend(nextSystem, base.Add(interval+2*time.Millisecond), interval),
+		"a system change bypasses the throttle")
+	assert.True(t, state.shouldSend(&models.ScrapingStatusResponse{
+		State: "running", SystemID: "NES", CurrentStep: step(2), Scraping: true, Processed: 100, Total: 100,
+	}, base.Add(interval+3*time.Millisecond), interval), "a system's last item is sent")
+	assert.True(t, state.shouldSend(&models.ScrapingStatusResponse{
+		State: "completed", Done: true,
+	}, base.Add(interval+4*time.Millisecond), interval), "the final update is always sent")
+	assert.True(t, state.shouldSend(&models.ScrapingStatusResponse{
+		State: "completed", Done: true,
+	}, base.Add(interval+5*time.Millisecond), interval), "a repeated final update is still sent")
 }

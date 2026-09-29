@@ -26,23 +26,32 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
-const maxInstalledCores = 512
+const (
+	maxInstalledCores = 512
+	// hostSnapshotTTL bounds how long one host report is reused. Package and
+	// core changes the host sees invalidate it sooner.
+	hostSnapshotTTL = 60 * time.Second
+)
 
 // hostSnapshot is what the host reported while building launchers. Targets are
-// inspected once each, because every RetroArch profile shares one.
+// inspected once each, because every RetroArch profile shares one. One
+// snapshot is shared by concurrent launches, so its lazy parts are locked.
 type hostSnapshot struct {
 	host      Host
 	targets   map[string]FailureReason
 	cores     map[string]struct{}
 	apps      []AppInfo
+	mu        syncutil.Mutex
 	coresSeen bool
 	appsSeen  bool
 }
@@ -51,6 +60,8 @@ type hostSnapshot struct {
 // make, or one that is implausibly large, reports nothing rather than being
 // read as absence.
 func (s *hostSnapshot) installedApps() []AppInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.appsSeen {
 		return s.apps
 	}
@@ -97,6 +108,8 @@ func newHostSnapshot(host Host) *hostSnapshot {
 // targetFailure returns the empty reason when the definition's target can be started.
 func (s *hostSnapshot) targetFailure(definition *LaunchDefinition) FailureReason {
 	key := definition.Package + "\x00" + definition.Activity + "\x00" + definition.Strategy
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	reason, inspected := s.targets[key]
 	if !inspected {
 		if err := s.host.InspectTarget(definition); err != nil {
@@ -132,7 +145,7 @@ func (p *Platform) Launchers(*config.Instance) []platforms.Launcher {
 	if p.host == nil {
 		return nil
 	}
-	snapshot := newHostSnapshot(p.host)
+	snapshot := p.hostSnapshot()
 	launchers := make([]platforms.Launcher, 0, len(p.entries)+len(gameNativeEntries)+2)
 	// The launchers Core builds rather than reads from the catalog come
 	// first: standalone ScummVM leads the RetroArch core for the same files.
@@ -264,7 +277,7 @@ func (p *Platform) LaunchMedia(
 	// is rebuilt here from the catalog, or from what the host reports, so a
 	// custom launcher with a colliding ID can substitute neither a command nor
 	// an intent.
-	owned, registered := p.ownedLauncher(launcher.ID, newHostSnapshot(p.host))
+	owned, registered := p.ownedLauncher(launcher.ID, p.hostSnapshot())
 	if !registered {
 		return fmt.Errorf("launcher %s is not in the Android catalog: %w", launcher.ID, platforms.ErrNotSupported)
 	}

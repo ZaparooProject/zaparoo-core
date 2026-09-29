@@ -694,7 +694,9 @@ func TestRunCommandResolvesPathRootBeforePlatformRoots(t *testing.T) {
 			cfg := &config.Instance{}
 			mockPlatform := mocks.NewMockPlatform()
 			mockPlatform.On("RootDirs", cfg).Return([]string{normalRoot}).Once()
-			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Twice()
+			// One command asks the platform for its launchers once, however
+			// many resolution steps consult them.
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Once()
 			mockPlatform.On(
 				"LaunchMedia",
 				cfg,

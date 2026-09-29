@@ -17,18 +17,36 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package service
+package platforms
 
 import (
 	"testing"
 
-	"github.com/rs/zerolog"
-	"go.uber.org/goleak"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestMain(m *testing.M) {
-	zerolog.SetGlobalLevel(zerolog.Disabled)
-	// Embedded starts route logging to a lumberjack file writer, whose
-	// rotation goroutine is not stopped by Close.
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"))
+type launcherCountingPlatform struct {
+	Platform
+	calls int
+}
+
+func (p *launcherCountingPlatform) Launchers(*config.Instance) []Launcher {
+	p.calls++
+	return []Launcher{{ID: "one"}}
+}
+
+func TestLauncherSnapshotAsksPlatformOnce(t *testing.T) {
+	t.Parallel()
+	pl := &launcherCountingPlatform{}
+	snapshot := &LauncherSnapshot{}
+	for range 3 {
+		assert.Equal(t, "one", snapshot.Get(pl, nil)[0].ID)
+	}
+	assert.Equal(t, 1, pl.calls)
+
+	var none *LauncherSnapshot
+	none.Get(pl, nil)
+	none.Get(pl, nil)
+	assert.Equal(t, 3, pl.calls, "a nil snapshot asks every time")
 }

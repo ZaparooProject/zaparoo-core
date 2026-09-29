@@ -470,7 +470,7 @@ func TestMigrationStartupReporter_NamesTheDatabaseOnThePage(t *testing.T) {
 	assert.NotContains(t, page(), "minutes",
 		"an ordinary start opens its databases in about a second and must not mention minutes")
 
-	migrationStartupReporter(startupServer)("media.db", 4)
+	migrationStartupReporter(startupServer, nil)("media.db", 4)
 
 	shown := page()
 	assert.Contains(t, shown, "Upgrading media.db (4 to apply)",

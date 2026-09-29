@@ -106,8 +106,22 @@ func (h *launchHook) call(path string) {
 // can prove what has and has not happened by the time it lands. Registered
 // once with the AddHistory expectation for the same reason as launchHook.
 type historyHook struct {
-	fn func(he *database.HistoryEntry)
-	mu syncutil.Mutex
+	fn  func(he *database.HistoryEntry)
+	err error
+	mu  syncutil.Mutex
+}
+
+// fail makes every later history write report err after it is recorded.
+func (h *historyHook) fail(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.err = err
+}
+
+func (h *historyHook) failure() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.err
 }
 
 func (h *historyHook) set(fn func(he *database.HistoryEntry)) {
@@ -123,6 +137,20 @@ func (h *historyHook) call(he *database.HistoryEntry) {
 	if fn != nil {
 		fn(he)
 	}
+}
+
+// historyFailingUserDB returns the hook's failure from AddHistory, so a test
+// can prove a failed history write does not change a reported outcome.
+type historyFailingUserDB struct {
+	*testhelpers.MockUserDBI
+	hook *historyHook
+}
+
+func (db *historyFailingUserDB) AddHistory(he *database.HistoryEntry) error {
+	if err := db.MockUserDBI.AddHistory(he); err != nil {
+		return err //nolint:wrapcheck // test double passes the mock's error through
+	}
+	return db.hook.failure()
 }
 
 func setupScanBehavior(
@@ -199,7 +227,7 @@ mode = "unrestricted"`))
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 
 	db := &database.Database{
-		UserDB:  mockUserDB,
+		UserDB:  &historyFailingUserDB{MockUserDBI: mockUserDB, hook: histHook},
 		MediaDB: mockMediaDB,
 	}
 

@@ -121,6 +121,19 @@ func mediaImageParams(row *database.MediaFullRow, extra string) json.RawMessage 
 	return json.RawMessage(fmt.Sprintf(`{"system": %q, "path": %q%s}`, row.System.SystemID, row.Path, extra))
 }
 
+// fillMediaImageSem takes every lookup slot so a handler blocks at the
+// semaphore, and returns a function that frees them all.
+func fillMediaImageSem() (release func()) {
+	for range cap(mediaImageSem) {
+		mediaImageSem <- struct{}{}
+	}
+	return func() {
+		for range cap(mediaImageSem) {
+			<-mediaImageSem
+		}
+	}
+}
+
 func setMediaThumbCacheForTest(
 	t testing.TB,
 	cache *mediaThumbCache,
@@ -230,7 +243,7 @@ func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
 	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 512)
 	require.True(t, found)
 
-	WipeMediaThumbCache()
+	WipeMediaThumbCache(nil)
 
 	// The live dir keeps its deterministic name (stable across restarts) rather
 	// than rolling to a new generation directory.
@@ -303,7 +316,7 @@ func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
 		t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
 	)
 
-	invalidateIndexedThumbnails([]systemdefs.System{{ID: "SNES"}}, false)
+	invalidateIndexedThumbnails(nil, []systemdefs.System{{ID: "SNES"}}, false)
 
 	_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
 	assert.False(t, found)
@@ -342,7 +355,7 @@ func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
 				t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
 			)
 
-			invalidateIndexedThumbnails(tt.systems, tt.rebuild)
+			invalidateIndexedThumbnails(nil, tt.systems, tt.rebuild)
 
 			_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
 			assert.False(t, found)
@@ -1373,8 +1386,8 @@ func TestHandleMediaImage_NoImageCacheBypassesSemaphore(t *testing.T) {
 	mediaImageNoImages.clear()
 	t.Cleanup(mediaImageNoImages.clear)
 
-	mediaImageSem <- struct{}{}
-	defer func() { <-mediaImageSem }()
+	release := fillMediaImageSem()
+	defer release()
 
 	params := json.RawMessage(`{"mediaId":406,"imageTypes":["boxart"]}`)
 	ref, _, err := parseMediaImageRequest(params)
@@ -1397,7 +1410,7 @@ func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
 	mediaImageNoImages.clear()
 	t.Cleanup(mediaImageNoImages.clear)
 
-	mediaImageSem <- struct{}{}
+	release := fillMediaImageSem()
 
 	params := json.RawMessage(`{"mediaId":407,"imageTypes":["boxart"]}`)
 	ref, _, err := parseMediaImageRequest(params)
@@ -1425,7 +1438,7 @@ func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
 		noImageKey,
 		&mediaImageNotFoundError{system: "NES", path: filepath.Join("games", "test-407.rom")},
 	)
-	<-mediaImageSem
+	release()
 
 	select {
 	case err = <-done:
@@ -1440,10 +1453,8 @@ func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
 }
 
 func TestHandleMediaImage_ContextCanceledWhileWaitingForSemaphore(t *testing.T) {
-	mediaImageSem <- struct{}{}
-	defer func() {
-		<-mediaImageSem
-	}()
+	release := fillMediaImageSem()
+	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

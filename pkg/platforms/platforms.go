@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
@@ -217,6 +218,31 @@ type ResolvedLaunch struct {
 	SystemID string
 }
 
+// LauncherSnapshot holds one Platform.Launchers result for the duration of a
+// command, so resolving a launch asks the platform once however many lookups
+// it makes. It is fresh per command: a host whose launcher list changes is
+// asked again on the next command. The zero value is ready to use; a nil
+// snapshot calls Platform.Launchers every time.
+type LauncherSnapshot struct {
+	launchers []Launcher
+	mu        syncutil.Mutex
+	loaded    bool
+}
+
+// Get returns the snapshot's launchers, asking pl on first use.
+func (s *LauncherSnapshot) Get(pl Platform, cfg *config.Instance) []Launcher {
+	if s == nil {
+		return pl.Launchers(cfg)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.loaded {
+		s.launchers = pl.Launchers(cfg)
+		s.loaded = true
+	}
+	return s.launchers
+}
+
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
@@ -248,8 +274,11 @@ type CmdEnv struct {
 	// launchers the platform cannot build itself, so it is the only complete
 	// source; never resolve a launcher ID from Platform.Launchers alone.
 	LauncherCache LauncherResolver
-	UI            *uievents.Service
-	Playlist      playlists.PlaylistController
+	// Launchers memoises Platform.Launchers for this command. Nil asks the
+	// platform each time.
+	Launchers *LauncherSnapshot
+	UI        *uievents.Service
+	Playlist  playlists.PlaylistController
 	// AllowedCommands is the bound the running token carries. It is forwarded
 	// so a playlist opened by this command keeps the same bound, the way
 	// Unsafe does.
@@ -518,6 +547,11 @@ type Settings struct {
 	// capacity. Core uses lower-cost audio processing and cooperatively paces
 	// expensive background media work on these platforms.
 	ResourceConstrained bool
+	// ThrottleBackground paces indexing and scraping the same way as
+	// ResourceConstrained, so an interactive host keeps CPU time for its UI,
+	// without the other ResourceConstrained effects (audio quality, scanner
+	// walkers, import limits, thumbnail concurrency).
+	ThrottleBackground bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.

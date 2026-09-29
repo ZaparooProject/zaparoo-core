@@ -213,7 +213,7 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 }
 
 func applyGlobalLauncherPreference(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
-	launchers := pl.Launchers(env.Cfg)
+	launchers := env.Launchers.Get(pl, env.Cfg)
 	for _, ref := range env.Cfg.LauncherPreference() {
 		launcherID, found := resolveLauncherRefInList(env, launchers, ref, systemID, true)
 		if !found {
@@ -246,7 +246,7 @@ func resolveLauncherRefForSystemWithAvailability(
 	systemID string,
 	requireAvailable bool,
 ) (string, bool) {
-	return resolveLauncherRefInList(env, pl.Launchers(env.Cfg), ref, systemID, requireAvailable)
+	return resolveLauncherRefInList(env, env.Launchers.Get(pl, env.Cfg), ref, systemID, requireAvailable)
 }
 
 func resolveLauncherRefInList(
@@ -312,7 +312,7 @@ func inferLauncherForPathWithAvailability(
 	path string,
 	requireAvailable bool,
 ) (platforms.Launcher, bool) {
-	launchers := pl.Launchers(env.Cfg)
+	launchers := env.Launchers.Get(pl, env.Cfg)
 	best := -1
 	bestScore := -1
 	bestMissing := true
@@ -364,7 +364,7 @@ func inferLauncherForSystemPath(
 		return platforms.Launcher{}, false
 	}
 
-	launchers := pl.Launchers(env.Cfg)
+	launchers := env.Launchers.Get(pl, env.Cfg)
 	candidates := make([]platforms.Launcher, 0, len(launchers))
 	for i := range launchers {
 		if launchers[i].ScanOnly || !strings.EqualFold(launchers[i].SystemID, systemID) {
@@ -805,7 +805,7 @@ func searchMediaBySystemTier(
 }
 
 func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID string) *platforms.Launcher {
-	return findLauncherIn(pl.Launchers(cfg.Cfg), helpers.GlobalLauncherCache, launcherID)
+	return findLauncherIn(cfg.Launchers.Get(pl, cfg.Cfg), helpers.GlobalLauncherCache, launcherID)
 }
 
 func findLauncherIn(
@@ -1154,7 +1154,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	var launchers []platforms.Launcher
-	allLaunchers := pl.Launchers(env.Cfg)
+	allLaunchers := env.Launchers.Get(pl, env.Cfg)
 	for i := range allLaunchers {
 		if allLaunchers[i].SystemID == system.ID {
 			launchers = append(launchers, allLaunchers[i])

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
@@ -736,8 +737,21 @@ func runMediaDBStartupMaintenanceWork(
 // actually being upgraded. It is named rather than inline so the sentence a
 // user reads, and the fact that it reaches the page at all, can be tested
 // without racing a migration that finishes in milliseconds.
-func migrationStartupReporter(startupServer *api.StartupServer) database.MigrationReporter {
+// backgroundThrottled reports whether index and scrape work should run with
+// the background throttle baseline.
+func backgroundThrottled(settings platforms.Settings) bool { //nolint:gocritic // settings snapshot
+	return settings.ResourceConstrained || settings.ThrottleBackground
+}
+
+// migrationStartupReporter reports pending migrations on the startup server.
+// onFirst runs once, before the first report, so an embedding host hears that
+// a migration is running only when one actually is.
+func migrationStartupReporter(startupServer *api.StartupServer, onFirst func()) database.MigrationReporter {
+	var once sync.Once
 	return func(dbLabel string, pending int) {
+		if onFirst != nil {
+			once.Do(onFirst)
+		}
 		startupServer.SetStartingDetail(fmt.Sprintf(
 			"Upgrading %s (%d to apply). This can take several minutes on a large library.",
 			dbLabel, pending,
