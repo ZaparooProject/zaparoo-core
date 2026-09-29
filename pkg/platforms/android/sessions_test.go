@@ -454,3 +454,60 @@ func TestStartPostReconcilesUnresolvedSessionsOnStartup(t *testing.T) {
 		return len(store.evidenceBatches) > 0
 	}, 2*time.Second, 5*time.Millisecond, "StartPost must reconcile unresolved sessions without being asked")
 }
+
+func TestReconcileSessionsRunsBothPassesAfterSettling(t *testing.T) {
+	// Not t.Parallel(): overrides the package-level returnSettleDelay, which
+	// TestReconcileSessionsStopsOnCancelDuringSettle also overrides.
+	original := returnSettleDelay
+	returnSettleDelay = time.Millisecond
+	t.Cleanup(func() { returnSettleDelay = original })
+
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{applyStatus: "closed"}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",
+		MediaName: "Game", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 500, Status: "pending", Source: "foreground_events",
+	}))
+
+	err := platform.ReconcileSessions(ctx, HostReturn{})
+	require.NoError(t, err)
+	require.Len(t, host.evidenceQueries, 1, "the evidence pass must run after the settle delay")
+}
+
+func TestReconcileSessionsStopsOnCancelDuringSettle(t *testing.T) {
+	// Not t.Parallel(): see TestReconcileSessionsRunsBothPassesAfterSettling.
+	original := returnSettleDelay
+	returnSettleDelay = time.Hour
+	t.Cleanup(func() { returnSettleDelay = original })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	cancel()
+	err := platform.ReconcileSessions(ctx, HostReturn{})
+	require.Error(t, err, "a cancelled context must not wait out the settle delay")
+}
+
+func TestSessionForLaunchAttributesTheActiveProfile(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{}
+	platform := trackedPlatform(ctx, t, host, store)
+	platform.SetMediaHistoryHooks(platforms.MediaHistoryHooks{
+		ActiveProfileID: func() string { return "profile-1" },
+	})
+
+	require.NoError(t, platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
+		func() error { return nil }))
+	require.Len(t, store.sessionOrder, 1)
+	session := store.sessions[store.sessionOrder[0]]
+	require.NotNil(t, session.ProfileID)
+	require.Equal(t, "profile-1", *session.ProfileID)
+}

@@ -387,3 +387,18 @@ func TestUpdateState_Payload(t *testing.T) {
 	// client could read as a failure.
 	assert.NotContains(t, string(notification.Params), `"error"`)
 }
+
+func TestMediaHistoryChanged(t *testing.T) {
+	t.Parallel()
+
+	ns := make(chan models.Notification, 1)
+
+	MediaHistoryChanged(ns)
+
+	select {
+	case notification := <-ns:
+		assert.Equal(t, models.NotificationMediaHistoryChanged, notification.Method)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected notification was not sent")
+	}
+}
