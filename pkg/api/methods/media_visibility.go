@@ -28,27 +28,28 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/rs/zerolog/log"
 )
 
 // Counts embedded in a cursor are valid only for the same visibility mode and
 // durable preference revision. Legacy cursors remain usable before any edits.
+//
+// This reads only MediaDB's own projection revision, not UserDB's. Browse and
+// search never read UserDB preference rows directly, only what MediaDB has
+// projected from them, so MediaDB's revision is the precise signal for "did
+// the served result set change": it moves exactly when the tag/deck
+// projection a browse or search actually reads has changed, and does not
+// move on a UserDB write that left the projection alone (a repeated "unhide"
+// of an already-visible entry, a deck edit that changed nothing, a synced
+// deck write-back that matches what was already stored). UserDB keeps
+// advancing its own DeviceState row with this same key for its own reasons
+// (see deckTx), but nothing here reads that value anymore.
 func browsePreferencesRevision(env *requests.RequestEnv) (string, error) {
-	var revision string
-	if env.Database.UserDB != nil {
-		var err error
-		revision, _, err = env.Database.UserDB.GetDeviceState(database.DeviceStateKeyMediaPreferencesRevision)
-		if err != nil {
-			return "", fmt.Errorf("read media preferences revision: %w", err)
-		}
-	}
 	projection, err := env.Database.MediaDB.MediaPreferencesRevision(env.Context)
 	if err != nil {
 		return "", fmt.Errorf("read media preferences projection: %w", err)
 	}
-	if revision == "" && projection == "" {
-		return "", nil
-	}
-	return revision + "/" + projection, nil
+	return projection, nil
 }
 
 func validateBrowseVisibility(env *requests.RequestEnv, cursor *string) (string, error) {
@@ -140,17 +141,11 @@ func mediaTagsHidden(mediaTags []database.TagInfo) bool {
 	return false
 }
 
-func stampBrowseVisibility(
-	env *requests.RequestEnv, result any, revision string, includeHidden bool,
-) (any, error) {
-	current, err := browsePreferencesRevision(env)
-	if err != nil {
-		return nil, err
-	}
-	if current != revision {
-		return nil, models.ClientErrf("library visibility changed; restart browse without cursor")
-	}
-
+// stampBrowseVisibility stamps a finished browse result's cursors with the
+// revision the browse ran under. It does no revision comparison of its own;
+// runBrowseVisibility only calls it once it has confirmed the revision held
+// for the whole run.
+func stampBrowseVisibility(result any, revision string, includeHidden bool) (any, error) {
 	switch response := result.(type) {
 	case models.BrowseResults:
 		if response.Pagination != nil && response.Pagination.NextCursor != nil {
@@ -173,4 +168,59 @@ func stampBrowseVisibility(
 	default:
 		return result, nil
 	}
+}
+
+// runBrowseVisibility runs one browse or browse-index call under the
+// preferences revision that was current when it started, and stamps the
+// result with that revision on the way out.
+//
+// A cursor request is a continuation of a specific earlier page: if the
+// revision moved underneath it, that continuation is no longer valid and the
+// client is told to restart. A fresh request (cursor nil or empty) has
+// nothing to continue, so telling the client to "restart without a cursor"
+// would just have it redo what it already did. Instead, when the revision
+// moved during a cursorless run, Core reruns the browse itself once under
+// the new revision. The result of a run whose revision changed underneath it
+// is never returned: a page can be built from a mix of old and new
+// visibility partway through, so a changed-again result is discarded rather
+// than stamped and handed back.
+func runBrowseVisibility(
+	env *requests.RequestEnv, cursor *string, browse func() (any, error),
+) (any, error) {
+	hasCursor := cursor != nil && *cursor != ""
+	revision, err := validateBrowseVisibility(env, cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := browse()
+	if err != nil {
+		return nil, err
+	}
+	current, err := browsePreferencesRevision(env)
+	if err != nil {
+		return nil, err
+	}
+	if current == revision {
+		return stampBrowseVisibility(result, revision, !env.ExcludeHidden)
+	}
+	if hasCursor {
+		return nil, models.ClientErrf("library visibility changed; restart browse without cursor")
+	}
+
+	log.Debug().Str("from", revision).Str("to", current).
+		Msg("preferences revision changed during a cursorless browse; rerunning once")
+	revision = current
+	result, err = browse()
+	if err != nil {
+		return nil, err
+	}
+	current, err = browsePreferencesRevision(env)
+	if err != nil {
+		return nil, err
+	}
+	if current != revision {
+		return nil, models.ClientErrf("library visibility changed during browse; try again")
+	}
+	return stampBrowseVisibility(result, revision, !env.ExcludeHidden)
 }

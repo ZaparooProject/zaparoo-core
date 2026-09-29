@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/apidiag"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -86,7 +87,7 @@ func HandleMediaBrowseIndex(env requests.RequestEnv) (any, error) { //nolint:goc
 }
 
 //nolint:gocritic // Request environment is a per-handler value.
-func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error) {
+func browseMediaIndex(env requests.RequestEnv) (any, error) {
 	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
 	defer endSlot()
 	select {
@@ -110,16 +111,19 @@ func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error)
 		return nil, err
 	}
 	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
-	revision, err := validateBrowseVisibility(&env, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if responseErr == nil {
-			response, responseErr = stampBrowseVisibility(&env, response, revision, !env.ExcludeHidden)
-		}
-	}()
 
+	// media.browse.index never takes a cursor: every call is a fresh request,
+	// so a preferences change mid-call always gets one rerun inside Core
+	// rather than an error handed back to the client.
+	return runBrowseVisibility(&env, nil, func() (any, error) {
+		return browseMediaIndexRequest(&env, &params, tagFilters)
+	})
+}
+
+//nolint:gocritic // Request environment is a per-handler value.
+func browseMediaIndexRequest(
+	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter,
+) (any, error) {
 	var sortOrder string
 	if params.Sort != nil {
 		sortOrder = *params.Sort
@@ -149,11 +153,11 @@ func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error)
 		if len(systems) != 1 {
 			return nil, models.ClientErrf("rootView contents requires exactly one system")
 		}
-		rootEntries, rootErr := resolveSystemRootEntries(&env, systems)
+		rootEntries, rootErr := resolveSystemRootEntries(env, systems)
 		if rootErr != nil {
 			return nil, rootErr
 		}
-		sources, _ := systemRootContentsSources(&env, rootEntries)
+		sources, _ := systemRootContentsSources(env, rootEntries)
 		if len(sources) == 0 {
 			return emptyBrowseIndex(), nil
 		}
@@ -175,7 +179,7 @@ func browseMediaIndex(env requests.RequestEnv) (response any, responseErr error)
 		})
 	}
 
-	prefix, err := resolveBrowseIndexPrefix(&env, *params.Path)
+	prefix, err := resolveBrowseIndexPrefix(env, *params.Path)
 	if err != nil {
 		return nil, err
 	}

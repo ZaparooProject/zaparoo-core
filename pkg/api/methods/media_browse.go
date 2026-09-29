@@ -276,7 +276,7 @@ func parseBrowseTagFilters(rawTags *[]string) ([]zapscript.TagFilter, error) {
 }
 
 //nolint:gocritic // Request environment is a per-handler value.
-func browseMedia(env requests.RequestEnv) (result any, resultErr error) {
+func browseMedia(env requests.RequestEnv) (any, error) {
 	endSlot := apidiag.Begin(env.Context, apidiag.ConcurrencySlot)
 	defer endSlot()
 	select {
@@ -300,16 +300,16 @@ func browseMedia(env requests.RequestEnv) (result any, resultErr error) {
 		return nil, err
 	}
 	env.ExcludeHidden = !filters.IncludesHidden(tagFilters, params.IncludeHidden)
-	revision, err := validateBrowseVisibility(&env, params.Cursor)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if resultErr == nil {
-			result, resultErr = stampBrowseVisibility(&env, result, revision, !env.ExcludeHidden)
-		}
-	}()
 
+	return runBrowseVisibility(&env, params.Cursor, func() (any, error) {
+		return browseMediaRequest(&env, &params, tagFilters)
+	})
+}
+
+//nolint:gocritic // Request environment is a per-handler value.
+func browseMediaRequest(
+	env *requests.RequestEnv, params *models.BrowseParams, tagFilters []zapscript.TagFilter,
+) (any, error) {
 	maxResults := defaultMaxResults
 	if params.MaxResults != nil && *params.MaxResults > 0 {
 		maxResults = *params.MaxResults
@@ -356,13 +356,13 @@ func browseMedia(env requests.RequestEnv) (result any, resultErr error) {
 				return nil, models.ClientErrf("cursor does not match rootView contents")
 			}
 			return browseSystemRootContents(
-				&env, systems, cursor, maxResults, params.Letter, sort, tagFilters,
+				env, systems, cursor, maxResults, params.Letter, sort, tagFilters,
 			)
 		}
 		if len(systems) > 0 {
-			return browseSystemRoots(&env, systems)
+			return browseSystemRoots(env, systems)
 		}
-		return browseRoots(&env)
+		return browseRoots(env)
 	}
 
 	path := *params.Path
@@ -372,11 +372,11 @@ func browseMedia(env requests.RequestEnv) (result any, resultErr error) {
 
 	// Virtual path (contains ://)
 	if strings.Contains(path, "://") {
-		return browseVirtual(&env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+		return browseVirtual(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 	}
 
 	// Filesystem path
-	return browseFilesystem(&env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+	return browseFilesystem(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 }
 
 // browseRoots returns the top-level root entries: filesystem roots with indexed

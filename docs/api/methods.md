@@ -845,7 +845,7 @@ A directory holding media for more than one system also stays plain, because its
 
 Tags filter direct media files in the current path. Directories remain visible for navigation with tag-unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
-Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required user tag filters, such as `user:favorite`, `user:liked` or `user:hidden`, also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors; restart without a cursor when Core reports `library visibility changed`.
+Visibility is separate from ordinary tag filtering: hidden media is excluded from files, directory/root counts, and letter indexes before pagination. Hidden-only directories/routes disappear. Set `includeHidden: true` to show hidden entries with their `user:hidden` tag. Required user tag filters, such as `user:favorite`, `user:liked` or `user:hidden`, also include hidden entries. Changing visibility mode or editing media preferences invalidates existing browse cursors. A request with a cursor must restart without one when Core reports `library visibility changed`. A request with no cursor is retried once inside Core automatically and only returns an error if preferences change again during that retry.
 
 #### Parameters
 
