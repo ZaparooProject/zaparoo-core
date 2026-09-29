@@ -22,6 +22,7 @@ package titles
 import (
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
@@ -122,6 +123,10 @@ func GenerateProgressiveTrimCandidates(
 
 	candidates := make([]ProgressiveTrimCandidate, 0)
 	seenSlugs := make(map[string]bool)
+	// The reference for SameTitleNumbers below: trimming a word off the end must
+	// never drop a sequel number and land on a shorter, unrelated title, the way
+	// "Street Fighter II Turbo" trims to "streetfighter" otherwise.
+	fullSlug := slugs.Slugify(mediaType, strings.Join(words, " "))
 
 	maxTrimCount := len(words) - 1
 	if maxDepth > 0 && maxTrimCount > maxDepth {
@@ -139,6 +144,10 @@ func GenerateProgressiveTrimCandidates(
 
 		if len(slug) < minProgressiveTrimSlugLength {
 			break
+		}
+
+		if !matcher.SameTitleNumbers(slug, fullSlug) {
+			continue
 		}
 
 		if seenSlugs[slug] {

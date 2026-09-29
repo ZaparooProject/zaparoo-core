@@ -39,6 +39,19 @@ const (
 	ConfidenceAcceptable = 0.70 // Good match with most tags matching - acceptable to launch
 	ConfidenceMinimum    = 0.60 // Minimum confidence to launch - below this, error out
 
+	// TitleAmbiguityDiscount applies whenever a result is fundamentally a guess
+	// rather than a found answer. Two cases: SelectBestResult's tie-break
+	// resolves across results that are genuinely different titles (e.g. a
+	// bare-prefix match spanning several distinct sequel entries), not just
+	// files of one; or a result comes from the raw Jaro-Winkler fuzzy strategy,
+	// which corrects a typo by character shape alone and has no structural
+	// guarantee it reached the right title (see resolve.go's Strategy 5) - two
+	// titles of the identical "N tokens vs N-1, sharing N-1" shape can score
+	// identically while one is the right typo correction and the other is a
+	// different, unrelated sequel. Both cases land the confidence in the
+	// 0.65-0.70 band instead of the 0.85-0.93 a clean match would claim.
+	TitleAmbiguityDiscount = 0.75
+
 	// Match quality scores (base confidence for each strategy, before tag matching adjustment)
 	MatchQualityExact           = 1.00 // Perfect slug match
 	MatchQualitySecondaryTitle  = 0.92 // Exact secondary title match

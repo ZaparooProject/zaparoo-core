@@ -1204,6 +1204,78 @@ func TestSelectBest_AllVariantsChooseAmongThem(t *testing.T) {
 	}
 }
 
+// TestSelectBest_AmbiguousTitlesDiscounted covers issue #1561's honesty
+// requirement: a tie-break that resolves across genuinely different titles -
+// not just files of one game - reports that pick as a guess, not a sure
+// match. MediaTitleID is what tells the two situations apart; every other
+// test in this file leaves it at its zero value, which is why none of them
+// are affected by this discount.
+func TestSelectBest_AmbiguousTitlesDiscounted(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		results        []database.SearchResultWithCursor
+		wantDiscounted bool
+	}{
+		{
+			// The Street Fighter II shape: three distinct games survive every
+			// filter and settle at the last-resort quality-score tie-break.
+			name: "distinct MediaTitleIDs - genuinely different games",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, MediaTitleID: 101, Name: "Street Fighter II The World Warrior", Path: "/sf2ww.mra"},
+				{MediaID: 2, MediaTitleID: 102, Name: "Street Fighter II Champion Edition", Path: "/sf2ce.mra"},
+				{MediaID: 3, MediaTitleID: 103, Name: "Street Fighter II Hyper Fighting", Path: "/sf2hf.mra"},
+			},
+			wantDiscounted: true,
+		},
+		{
+			// The ordinary case: several region/revision files of one title.
+			// Picking among them is a choice of file, not a guess between games.
+			name: "same MediaTitleID - region variants of one title",
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, MediaTitleID: 200, Name: "Game", Path: "/roms/game-usa.rom"},
+				{MediaID: 2, MediaTitleID: 200, Name: "Game", Path: "/roms/game-eu.rom"},
+			},
+			wantDiscounted: false,
+		},
+		{
+			// A result-assembly path that doesn't populate MediaTitleID (mirrors
+			// allResultsHaveTitleIDs in mediadb). Unknown must not be treated as
+			// "same": that would be the more dangerous failure for this safety net.
+			name:           "unset MediaTitleID - unknown, not treated as same",
+			wantDiscounted: false,
+			results: []database.SearchResultWithCursor{
+				{MediaID: 1, Name: "Street Fighter II The World Warrior", Path: "/sf2ww.mra"},
+				{MediaID: 2, Name: "Street Fighter II Champion Edition", Path: "/sf2ce.mra"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, confidence := SelectBestResult(tt.results, nil, cfg, MatchQualityMainTitle, nil)
+
+			want := MatchQualityMainTitle
+			if tt.wantDiscounted {
+				want *= TitleAmbiguityDiscount
+			}
+			assert.InDelta(t, want, confidence, 0.001)
+			if tt.wantDiscounted {
+				assert.Less(t, confidence, ConfidenceAcceptable,
+					"a guess among different games should launch, but not claim to be a sure match")
+				assert.GreaterOrEqual(t, confidence, ConfidenceMinimum,
+					"the discounted confidence for this scenario should still clear the launch floor")
+			}
+		})
+	}
+}
+
 func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 	t.Parallel()
 

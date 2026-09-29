@@ -83,6 +83,13 @@ func FindFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 			continue
 		}
 
+		// A query one sequel number off from a stored title is not a typo of it:
+		// "streetfighter2" and "streetfighter" differ by one character, so without
+		// this a shared 13-character prefix scores ~0.986 and launches the wrong game.
+		if !SameTitleNumbers(query, candidate) {
+			continue
+		}
+
 		// Calculate Jaro-Winkler similarity (0.0 to 1.0)
 		similarity := edlib.JaroWinklerSimilarity(query, candidate)
 
@@ -111,6 +118,82 @@ func FindFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 	})
 
 	return matches
+}
+
+// SameTitleNumbers reports whether two already-slugified titles carry the same
+// embedded numbers, comparing runs of ASCII digits in order. It never parses a
+// run as an integer — titles are untrusted input, and a digit run of arbitrary
+// length must not risk an overflow or allocation blowup.
+//
+// Leading zeros are ignored ("touhou06" agrees with "touhou6"), and a lone "1"
+// is treated as no number: a series' first game is often unnumbered
+// ("finalfantasy" / "finalfantasy1" name the same game). Any other
+// difference — including one side having a number the other lacks entirely —
+// means the titles disagree. This is what stops "streetfighter2" from being
+// treated as a typo of "streetfighter": Jaro-Winkler alone can't tell a typo
+// from a sequel number, only SameTitleNumbers can.
+func SameTitleNumbers(a, b string) bool {
+	return canonicalTitleNumbers(a) == canonicalTitleNumbers(b)
+}
+
+// canonicalTitleNumbers extracts the runs of ASCII digits from s, in order,
+// each with leading zeros stripped and a lone "1" dropped, joined by a
+// separator that cannot appear in a digit run so "12","3" never collides
+// with "1","23".
+func canonicalTitleNumbers(s string) string {
+	var b strings.Builder
+	start := -1
+	flush := func(end int) {
+		if start < 0 {
+			return
+		}
+		run := s[start:end]
+		for len(run) > 1 && run[0] == '0' {
+			run = run[1:]
+		}
+		if run != "1" {
+			_, _ = b.WriteString(run)
+			_ = b.WriteByte(',')
+		}
+		start = -1
+	}
+	for i := range len(s) {
+		if s[i] >= '0' && s[i] <= '9' {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		flush(i)
+	}
+	flush(len(s))
+	return b.String()
+}
+
+// TokenPrefixMatch reports whether query's word tokens are a strict, non-empty
+// prefix of candidateName's word tokens: same order, every query token
+// matched, and the candidate has at least one more. It compares tokens rather
+// than slug bytes so a compound word like "Firefly" cannot be prefix-matched
+// by "Fire" — slugification drops the space that would otherwise distinguish
+// them, but tokenization (done before spaces are dropped) still has it.
+//
+// query and candidateName must be original titles with word boundaries
+// (e.g. "Street Fighter II"), not slugs — SlugifyWithTokens needs the spaces.
+func TokenPrefixMatch(mediaType slugs.MediaType, query, candidateName string) bool {
+	queryTokens := slugs.SlugifyWithTokens(mediaType, query).Tokens
+	if len(queryTokens) == 0 {
+		return false
+	}
+	candidateTokens := slugs.SlugifyWithTokens(mediaType, candidateName).Tokens
+	if len(candidateTokens) <= len(queryTokens) {
+		return false
+	}
+	for i, token := range queryTokens {
+		if candidateTokens[i] != token {
+			return false
+		}
+	}
+	return true
 }
 
 // GenerateTokenSignature creates a normalized, sorted token signature for word-order independent matching.
@@ -212,4 +295,148 @@ func ApplyDamerauLevenshteinTieBreaker(query string, matches []FuzzyMatch, topN 
 	}
 
 	return result
+}
+
+// TokenCoverageRatio reports the fraction of query's *required* word tokens
+// that have a close match among candidateName's tokens, matching each
+// candidate token to at most one query token via a maximum bipartite
+// matching - not a greedy, query-order-dependent assignment, which can miss a
+// valid pairing that exists: e.g. query tokens ["cattle", "castel"] against
+// candidate tokens ["castle", "battle"] has a perfect matching (cattle-battle,
+// castel-castle), but greedily assigning "cattle" to its single best match
+// first ("castle", the closer of its two eligible candidates) leaves "castel"
+// with no eligible candidate left, even though swapping the query tokens'
+// order would have found it - the query's incidental word order must not
+// change whether coverage is complete. 1.0 means every required query token
+// was accounted for; candidateName may still carry extra tokens the query
+// never mentioned without being penalized here (a bare-prefix relationship,
+// scored separately by TokenPrefixMatch). A query token that is a lone "1" is
+// never required: SameTitleNumbers treats a lone "1" the same way, since a
+// series' first game is often unnumbered.
+//
+// A token "matches" if it's identical, close by Jaro-Winkler similarity, or -
+// since normal slugification only expands a correctly-spelled abbreviation,
+// leaving a typo of one exactly as typed - a typo of a known abbreviation
+// whose expansion matches instead ("bross" against "brothers", the same
+// tolerance AbbreviationExpansionSlack already gives the whole-string case).
+//
+// This exists because a whole-string Jaro-Winkler score, however heavily
+// patched, can't reliably tell "these are the same title with a typo" from
+// "these happen to share a lot of characters": "streetfighter2turbo" scores
+// 0.927 against "streetfighterzero2" by whole-string similarity alone, sharing
+// a "streetfighter" prefix and a "2" that SameTitleNumbers can't separate,
+// while the words "turbo" and "zero" are simply unrelated - which per-token
+// comparison sees directly (0.75 coverage, one required token unmatched)
+// instead of having to infer it from character-level side effects.
+//
+// It is not a universal fix. Two title pairs can have the identical *shape* of
+// disagreement with opposite ground truth, and no string-shape metric resolves
+// that from the text alone - this function does not try to.
+//
+// query and candidateName must be original titles with word boundaries (e.g.
+// "Street Fighter II"), not slugs - SlugifyWithTokens needs the spaces. A
+// word-order match from GenerateTokenSignature should not be checked this way:
+// it already requires every token to match, by definition.
+func TokenCoverageRatio(mediaType slugs.MediaType, query, candidateName string) float64 {
+	queryTokens := slugs.SlugifyWithTokens(mediaType, query).Tokens
+	if len(queryTokens) == 0 {
+		return 0
+	}
+	required := make([]string, 0, len(queryTokens))
+	for _, queryToken := range queryTokens {
+		if queryToken == "1" {
+			continue
+		}
+		required = append(required, queryToken)
+	}
+	if len(required) == 0 {
+		return 1
+	}
+	candidateTokens := slugs.SlugifyWithTokens(mediaType, candidateName).Tokens
+	return float64(maxTokenMatching(required, candidateTokens)) / float64(len(required))
+}
+
+// tokenIsMatch reports whether queryToken can be considered a match for
+// candidateToken: identical, close by Jaro-Winkler similarity, or - since
+// normal slugification only expands a correctly-spelled abbreviation, leaving
+// a typo of one exactly as typed - a typo of a known abbreviation whose
+// expansion is close to candidateToken instead.
+func tokenIsMatch(queryToken, candidateToken string) bool {
+	if queryToken == candidateToken {
+		return true
+	}
+	if edlib.JaroWinklerSimilarity(queryToken, candidateToken) >= FuzzyMatchMinSimilarity {
+		return true
+	}
+	if expansion, ok := slugs.ExpandWordIfAbbreviationTypo(queryToken); ok {
+		return tokenIsMatch(expansion, candidateToken)
+	}
+	return false
+}
+
+// maxTokenMatching returns the size of a maximum bipartite matching between
+// requiredTokens and candidateTokens, with an edge wherever tokenIsMatch
+// holds. Kuhn's augmenting-path algorithm: straightforward and exact at the
+// token counts a title ever has (a handful of words), where even the
+// O(tokens^3) worst case costs nothing.
+func maxTokenMatching(requiredTokens, candidateTokens []string) int {
+	adjacency := make([][]int, len(requiredTokens))
+	for i, queryToken := range requiredTokens {
+		for j, candidateToken := range candidateTokens {
+			if tokenIsMatch(queryToken, candidateToken) {
+				adjacency[i] = append(adjacency[i], j)
+			}
+		}
+	}
+
+	matchedTo := make([]int, len(candidateTokens))
+	for i := range matchedTo {
+		matchedTo[i] = -1
+	}
+
+	var augment func(i int, visited []bool) bool
+	augment = func(i int, visited []bool) bool {
+		for _, j := range adjacency[i] {
+			if visited[j] {
+				continue
+			}
+			visited[j] = true
+			if matchedTo[j] == -1 || augment(matchedTo[j], visited) {
+				matchedTo[j] = i
+				return true
+			}
+		}
+		return false
+	}
+
+	matched := 0
+	for i := range requiredTokens {
+		visited := make([]bool, len(candidateTokens))
+		if augment(i, visited) {
+			matched++
+		}
+	}
+	return matched
+}
+
+// FilterByTokenCoverage drops matches whose candidate (looked up in
+// namesBySlug by FuzzyMatch.Slug) does not fully cover query's word tokens per
+// TokenCoverageRatio. Applied after Jaro-Winkler and its tie-breaker have
+// already narrowed the candidate set to a handful, since computing token
+// coverage for every length-eligible candidate would cost as much as the
+// similarity scoring it exists to double-check. A candidate missing from
+// namesBySlug scores zero coverage and is dropped - every caller builds the
+// map from the same candidate list FindFuzzyMatches scored, so this should not
+// happen in practice, but a match this function cannot evaluate is not one it
+// can vouch for either.
+func FilterByTokenCoverage(
+	mediaType slugs.MediaType, query string, matches []FuzzyMatch, namesBySlug map[string]string,
+) []FuzzyMatch {
+	filtered := make([]FuzzyMatch, 0, len(matches))
+	for _, match := range matches {
+		if TokenCoverageRatio(mediaType, query, namesBySlug[match.Slug]) >= 1 {
+			filtered = append(filtered, match)
+		}
+	}
+	return filtered
 }

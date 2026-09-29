@@ -239,6 +239,19 @@ func TestGenerateProgressiveTrimCandidates(t *testing.T) {
 			expectedFirstSlug:  "gamegamegamefoo",
 			minExpectedSlugLen: 6,
 		},
+		{
+			// Issue #1561: trimming "Turbo" off "Street Fighter II Turbo" still
+			// keeps the "2" ("Street Fighter II" is a reasonable trim target), but
+			// trimming "II" too would reach "streetfighter" - the original game, not
+			// a shorter form of this one. SameTitleNumbers stops only that second
+			// trim, which drops the sequel number entirely.
+			name:              "trim cannot drop a sequel number",
+			input:             "Street Fighter II Turbo",
+			maxDepth:          3,
+			expectedCount:     4, // 2 slug levels (full, then "II" kept) x 2 (exact+prefix)
+			expectedFirstSlug: "streetfighter2turbo",
+			expectedLastSlug:  "streetfighter2", // "streetfighter" (no "2") is excluded, not just deeper
+		},
 	}
 
 	for _, tt := range tests {

@@ -411,19 +411,27 @@ func TestFindFuzzyMatches_CJK(t *testing.T) {
 		},
 		{
 			name:        "Japanese katakana small variation",
-			query:       "ドラゴンクエスト7",           // with number
-			candidates:  []string{"ドラゴンクエスト8"}, // different number (1 byte diff)
+			query:       "ドラゴンクエスト",
+			candidates:  []string{"ドラゴンクエスド"}, // one kana swapped, same length, no digits
 			maxDistance: 2,
 			wantMatch:   true,
 			reason:      "should handle small CJK variations within length filter",
 		},
 		{
 			name:        "mixed Latin and CJK small difference",
-			query:       "mario1マリオ",
-			candidates:  []string{"mario2マリオ"}, // 1 byte different
+			query:       "marioaマリオ",
+			candidates:  []string{"mariobマリオ"}, // 1 byte different, no digits
 			maxDistance: 2,
 			wantMatch:   true,
 			reason:      "should handle mixed scripts with small differences",
+		},
+		{
+			name:        "differing embedded numbers are not a CJK typo",
+			query:       "ドラゴンクエスト7",
+			candidates:  []string{"ドラゴンクエスト8"}, // same length, but "7" and "8" are different sequel numbers
+			maxDistance: 2,
+			wantMatch:   false,
+			reason:      "a sequel number is not a typo, even when it's a single differing byte",
 		},
 		{
 			name: "Chinese characters",
@@ -486,6 +494,368 @@ func TestFindFuzzyMatches_MultipleSimilarCandidates(t *testing.T) {
 
 		t.Logf("Found %d matches", len(matches))
 	})
+}
+
+// TestSameTitleNumbers covers issue #1561: "Street Fighter II" slugifies to
+// within one character of "Street Fighter", and Jaro-Winkler alone scores that
+// a near-perfect typo match. SameTitleNumbers is what tells them apart.
+func TestSameTitleNumbers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		a      string
+		b      string
+		reason string
+		want   bool
+	}{
+		{
+			name:   "identical, no numbers",
+			a:      "streetfighter",
+			b:      "streetfighter",
+			want:   true,
+			reason: "trivially equal",
+		},
+		{
+			name:   "sequel number vs none - the reported bug",
+			a:      "streetfighter2",
+			b:      "streetfighter",
+			want:   false,
+			reason: "a query one sequel number longer is not a typo of the original",
+		},
+		{
+			name:   "none vs sequel number, reversed",
+			a:      "megaman",
+			b:      "megaman2",
+			want:   false,
+			reason: "disagreement is symmetric regardless of which side has the number",
+		},
+		{
+			name:   "same number, roman vs arabic already normalized",
+			a:      "streetfighter2",
+			b:      "streetfighter2theworldwarrior",
+			want:   true,
+			reason: "both carry the same sequel number; the extra subtitle words carry none",
+		},
+		{
+			name:   "different numbers",
+			a:      "megaman2",
+			b:      "megaman3",
+			want:   false,
+			reason: "different sequels, not a typo of each other",
+		},
+		{
+			name:   "leading zeros ignored",
+			a:      "touhou06",
+			b:      "touhou6",
+			want:   true,
+			reason: "06 and 6 name the same numbered entry",
+		},
+		{
+			name:   "lone 1 treated as no number",
+			a:      "finalfantasy1",
+			b:      "finalfantasy",
+			want:   true,
+			reason: "a series' first game is often unnumbered",
+		},
+		{
+			name:   "lone 1 does not excuse a real second number",
+			a:      "finalfantasy1",
+			b:      "finalfantasy2",
+			want:   false,
+			reason: "1 is excused as unnumbered, but 2 is still a different, real sequel number",
+		},
+		{
+			name:   "multiple digit runs, second run differs",
+			a:      "ninjagaiden3chapter2",
+			b:      "ninjagaiden3chapter5",
+			want:   false,
+			reason: "the shared 3 doesn't excuse the differing chapter number",
+		},
+		{
+			name:   "multiple digit runs, both agree",
+			a:      "ninjagaiden3chapter2",
+			b:      "ninjagaiden3chapter2remastered",
+			want:   true,
+			reason: "every digit run agrees; extra trailing words carry none",
+		},
+		{
+			name:   "empty strings",
+			a:      "",
+			b:      "",
+			want:   true,
+			reason: "no digits on either side",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := SameTitleNumbers(tt.a, tt.b)
+			assert.Equal(t, tt.want, got, tt.reason)
+			// Symmetric by construction (string equality of canonical forms).
+			assert.Equal(t, got, SameTitleNumbers(tt.b, tt.a), "must be symmetric")
+		})
+	}
+}
+
+// TestTokenPrefixMatch covers the companion half of #1561: reaching an actual
+// sequel game rather than merely refusing to launch the original. MiSTer
+// arcade titles like "Street Fighter II The World Warrior" carry no colon or
+// dash to mark "The World Warrior" as a subtitle, so a bare "Street Fighter II"
+// query needs a delimiter-agnostic, word-boundary prefix check to reach it.
+func TestTokenPrefixMatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		query     string
+		candidate string
+		reason    string
+		want      bool
+	}{
+		{
+			name:      "real prefix, no delimiter",
+			query:     "Street Fighter II",
+			candidate: "Street Fighter II The World Warrior",
+			want:      true,
+			reason:    "query is a strict word-for-word prefix of the candidate",
+		},
+		{
+			name:      "candidate adds a word before, not after",
+			query:     "Street Fighter II",
+			candidate: "Super Street Fighter II",
+			want:      false,
+			reason:    "the extra word comes first, so this is not a prefix relationship",
+		},
+		{
+			name:      "compound word is not a prefix of itself split",
+			query:     "Fire",
+			candidate: "Firefly",
+			want:      false,
+			reason:    "token-level comparison: \"firefly\" is one token, not \"fire\"+\"fly\"",
+		},
+		{
+			name:      "genuine multi-word prefix with a compound-looking name",
+			query:     "Fire",
+			candidate: "Fire Emblem",
+			want:      true,
+			reason:    "two real words, so the prefix relationship holds",
+		},
+		{
+			name:      "equal titles are not a strict prefix",
+			query:     "Street Fighter",
+			candidate: "Street Fighter",
+			want:      false,
+			reason:    "an exact match is handled elsewhere, not as a prefix",
+		},
+		{
+			name:      "candidate shorter than query",
+			query:     "Street Fighter II The World Warrior",
+			candidate: "Street Fighter II",
+			want:      false,
+			reason:    "the candidate must have more tokens, not fewer",
+		},
+		{
+			name:      "empty query",
+			query:     "",
+			candidate: "Street Fighter II",
+			want:      false,
+			reason:    "an empty query has no tokens to prefix-match with",
+		},
+		{
+			name:      "colon already normalized away before tokenizing",
+			query:     "Street Fighter II",
+			candidate: "Street Fighter II: The World Warrior",
+			want:      true,
+			reason:    "ParseGame drops the colon before tokenizing, so this behaves like the bare case",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := TokenPrefixMatch(slugs.MediaTypeGame, tt.query, tt.candidate)
+			assert.Equal(t, tt.want, got, tt.reason)
+		})
+	}
+}
+
+// TestTokenCoverageRatio covers issue #1561's fuzzy residual: a whole-string
+// Jaro-Winkler score can be high for reasons that have nothing to do with
+// being the same title. "Street Fighter II Turbo" scores 0.927 against
+// "Street Fighter Zero 2" by character overlap alone - they share a
+// "streetfighter" prefix and both carry a "2", so SameTitleNumbers doesn't
+// separate them either - even though "turbo" and "zero" are simply unrelated
+// words, which per-token comparison sees directly. "Metriod" (a typo of
+// "Metroid," not itself indexed on the system where this was found) scores
+// "Mr. Do!" ("misterdo" once "Mr." expands) at 0.855 with barely a shared
+// prefix at all - the same failure mode, a different shape.
+func TestTokenCoverageRatio(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		query     string
+		candidate string
+		reason    string
+		want      float64
+	}{
+		{
+			name:      "long shared prefix, one unrelated word on each side",
+			query:     "Street Fighter II Turbo",
+			candidate: "Street Fighter Zero 2",
+			want:      0.75,
+			reason:    "\"turbo\" has no match; \"street\", \"fighter\" and \"2\" all do (3 of 4)",
+		},
+		{
+			name:      "no shared prefix, coincidentally high Jaro-Winkler score",
+			query:     "Metriod",
+			candidate: "Mr. Do!",
+			want:      0,
+			reason:    "\"metriod\" matches neither \"mister\" nor \"do\" closely enough",
+		},
+		{
+			name:      "single letter must not credit an unrelated abbreviation",
+			query:     "Rocky V",
+			candidate: "Rocky Versus Apollo",
+			want:      0.5,
+			reason: "a single-letter word is trivially \"one deletion away\" from any two-letter " +
+				"abbreviation containing it (here \"v\" from \"vs\"); \"v\" must not silently expand to " +
+				"\"versus\" and credit an unrelated candidate word - only \"rocky\" (1 of 2) is covered",
+		},
+		{
+			name:      "ordinary typo: missing letter",
+			query:     "Donky Kong Country",
+			candidate: "Donkey Kong Country",
+			want:      1,
+		},
+		{
+			name:      "ordinary typo: transposition",
+			query:     "Mraio",
+			candidate: "Mario",
+			want:      1,
+		},
+		{
+			name:      "bare prefix: candidate has extra words, not penalized",
+			query:     "Street Fighter II",
+			candidate: "Street Fighter II The World Warrior",
+			want:      1,
+			reason:    "every query word is covered; the candidate's extra words don't count against it",
+		},
+		{
+			name:      "lone 1 is never required, same as SameTitleNumbers",
+			query:     "Final Fantasy I",
+			candidate: "Final Fantasy",
+			want:      1,
+			reason:    "a series' first game is often unnumbered",
+		},
+		{
+			name:      "typo of an abbreviation still credits its expansion",
+			query:     "Super Mario Bross",
+			candidate: "Super Mario Brothers",
+			want:      1,
+			reason:    "\"bross\" is one edit from \"bros\", which normal slugification expands to \"brothers\"",
+		},
+		{
+			name:      "'n contraction, attached vs spelled out",
+			query:     "Ghosts n Goblins",
+			candidate: "Ghosts'n Goblins",
+			want:      1,
+			reason:    "both normalize \"n\"/\"'n\" to \"and\" before tokenizing",
+		},
+		{
+			name:      "'n contraction, glued on both sides vs spelled out",
+			query:     "Bump n Jump",
+			candidate: "Bump'n'Jump",
+			want:      1,
+			reason: "a real MiSTer catalog title (\"Bump'n'Jump\") glues the contraction on both sides " +
+				"with no space at all, unlike \"Ghosts'n Goblins\" which only glues the left side",
+		},
+		{
+			name:      "identical strings",
+			query:     "Street Fighter",
+			candidate: "Street Fighter",
+			want:      1,
+		},
+		{
+			name:      "empty query",
+			query:     "",
+			candidate: "Street Fighter",
+			want:      0,
+		},
+		{
+			name:      "no valid perfect matching exists",
+			query:     "Mario Kart",
+			candidate: "Kario Mart",
+			want:      0.5,
+			reason:    "\"kart\" is not close enough to the remaining \"mart\" once \"mario\" claims \"kario\"",
+		},
+		{
+			name:      "requires a maximum matching, not a greedy one",
+			query:     "Cattle Castel",
+			candidate: "Castle Battle",
+			want:      1,
+			reason: "greedily assigning \"cattle\"'s single best match (\"castle\") first leaves \"castel\" " +
+				"with nothing, even though the query's incidental word order must not change whether " +
+				"coverage is complete: cattle-battle and castel-castle both clear the similarity threshold",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := TokenCoverageRatio(slugs.MediaTypeGame, tt.query, tt.candidate)
+			assert.InDelta(t, tt.want, got, 0.001, tt.reason)
+		})
+	}
+}
+
+// TestTokenCoverageRatioOrderIndependent guards the maximum-matching fix
+// directly: reordering the query's own words must never change the ratio,
+// since coverage asks whether every word is accounted for, not in what order
+// they happened to be typed. A greedy, query-order-dependent assignment
+// (assign each query token its single best remaining candidate, in query
+// order) can find a matching for one order and miss an equally valid one for
+// another - see "requires a maximum matching, not a greedy one" above for a
+// concrete case this regression-tests.
+func TestTokenCoverageRatioOrderIndependent(t *testing.T) {
+	t.Parallel()
+	queries := []string{"Cattle Castel", "Castel Cattle"}
+	const candidate = "Castle Battle"
+	var want float64
+	for i, query := range queries {
+		got := TokenCoverageRatio(slugs.MediaTypeGame, query, candidate)
+		if i == 0 {
+			want = got
+			continue
+		}
+		assert.InDelta(t, want, got, 0.001,
+			"reordering query tokens changed the ratio: %q vs %q", queries[0], query)
+	}
+}
+
+func TestFilterByTokenCoverage(t *testing.T) {
+	t.Parallel()
+
+	matches := []FuzzyMatch{
+		{Slug: "streetfighterzero2", Similarity: 0.927},
+		{Slug: "streetfighter2turboo", Similarity: 0.9}, // genuine typo of the query, extra "o"
+	}
+	namesBySlug := map[string]string{
+		"streetfighterzero2":   "Street Fighter Zero 2",
+		"streetfighter2turboo": "Street Fighter II Turbo",
+	}
+	filtered := FilterByTokenCoverage(slugs.MediaTypeGame, "Street Fighter II Turbo", matches, namesBySlug)
+
+	kept := make([]string, 0, len(filtered))
+	for _, m := range filtered {
+		kept = append(kept, m.Slug)
+	}
+	assert.NotContains(t, kept, "streetfighterzero2",
+		"\"turbo\" has no match in \"Street Fighter Zero 2\" - not a typo of the query")
+	assert.Contains(t, kept, "streetfighter2turboo",
+		"a genuine typo of the query itself must still pass")
 }
 
 // buildSyntheticCandidates generates n deterministic game-title-like slugs

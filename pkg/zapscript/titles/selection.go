@@ -53,6 +53,14 @@ func SelectBestResult(
 		return results[0], confidence
 	}
 
+	// A tie-break below may resolve across results that are not files of one game
+	// but entirely different titles (e.g. a bare prefix match spanning "Street
+	// Fighter II The World Warrior" and "...Champion Edition"). Whichever
+	// priority settles it, that pick is a guess between different games, not a
+	// found answer, and finalConfidence discounts it accordingly. Computed once,
+	// upfront: filtering below only narrows the set, never adds a title back.
+	ambiguousTitles := titlesSpanDifferentIDs(results)
+
 	initialCount := len(results)
 	log.Info().Msgf("multiple results found (%d), picking best match", initialCount)
 
@@ -61,7 +69,7 @@ func SelectBestResult(
 		filtered := FilterByTags(results, tagFilters)
 		if len(filtered) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&filtered[0], tagFilters)
-			confidence = matchQuality * tagConfidence
+			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 			log.Info().Msgf("selected result based on user-specified tags, confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return filtered[0], confidence
@@ -80,7 +88,7 @@ func SelectBestResult(
 		mainGames := FilterOutVariants(results)
 		if len(mainGames) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&mainGames[0], tagFilters)
-			confidence = matchQuality * tagConfidence
+			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 			log.Info().Msgf("selected main game (filtered out variants), confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return mainGames[0], confidence
@@ -96,7 +104,7 @@ func SelectBestResult(
 	originals := FilterOutRereleases(results)
 	if len(originals) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&originals[0], tagFilters)
-		confidence = matchQuality * tagConfidence
+		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 		log.Info().Msgf("selected original release, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return originals[0], confidence
@@ -109,7 +117,7 @@ func SelectBestResult(
 	preferredRegions := FilterByPreferredRegions(results, cfg.DefaultRegions())
 	if len(preferredRegions) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&preferredRegions[0], tagFilters)
-		confidence = matchQuality * tagConfidence
+		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 		log.Info().Msgf("selected preferred region, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return preferredRegions[0], confidence
@@ -122,7 +130,7 @@ func SelectBestResult(
 	preferredLanguages := FilterByPreferredLanguages(results, cfg.DefaultLangs())
 	if len(preferredLanguages) == 1 {
 		tagConfidence := CalculateTagMatchConfidence(&preferredLanguages[0], tagFilters)
-		confidence = matchQuality * tagConfidence
+		confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 		log.Info().Msgf("selected preferred language, confidence: %.2f (match: %.2f, tags: %.2f)",
 			confidence, matchQuality, tagConfidence)
 		return preferredLanguages[0], confidence
@@ -137,7 +145,7 @@ func SelectBestResult(
 		preferredFiles := FilterByFileTypePriority(results, launchers)
 		if len(preferredFiles) == 1 {
 			tagConfidence := CalculateTagMatchConfidence(&preferredFiles[0], tagFilters)
-			confidence = matchQuality * tagConfidence
+			confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 			log.Info().Msgf("selected by file type priority, confidence: %.2f (match: %.2f, tags: %.2f)",
 				confidence, matchQuality, tagConfidence)
 			return preferredFiles[0], confidence
@@ -151,11 +159,53 @@ func SelectBestResult(
 	// Considers: numeric suffix penalty, path depth, char density, name length
 	selected := selectByQualityScore(results)
 	tagConfidence := CalculateTagMatchConfidence(&selected, tagFilters)
-	confidence = matchQuality * tagConfidence
+	confidence = finalConfidence(matchQuality, tagConfidence, ambiguousTitles)
 	log.Info().Msgf(
 		"multiple results (%d), selecting by quality score, confidence: %.2f (match: %.2f, tags: %.2f)",
 		len(results), confidence, matchQuality, tagConfidence)
 	return selected, confidence
+}
+
+// finalConfidence applies the ambiguous-title discount, if any, to an
+// otherwise-computed confidence. Kept as one small multiplier rather than
+// duplicated at each SelectBestResult return site.
+func finalConfidence(matchQuality, tagConfidence float64, ambiguousTitles bool) float64 {
+	confidence := matchQuality * tagConfidence
+	if ambiguousTitles {
+		confidence *= TitleAmbiguityDiscount
+	}
+	return confidence
+}
+
+// titlesSpanDifferentIDs reports whether results contains more than one
+// distinct MediaTitleID - i.e. whether picking among them is a guess between
+// different games, not just a choice of file for one game (region/language
+// variants of a single title share one MediaTitleID by construction).
+//
+// A zero MediaTitleID means "unknown," not "same title": a few result-assembly
+// paths don't populate it (mirroring allResultsHaveTitleIDs in mediadb), and
+// every hand-written test fixture in this package leaves it unset. Treating
+// zero as "same" would be the more dangerous failure - the discount is a safety
+// net, so an unpopulated ID errs toward not applying it, at the cost of not
+// applying it once in a rare case that also doesn't set it.
+func titlesSpanDifferentIDs(results []database.SearchResultWithCursor) bool {
+	if len(results) < 2 {
+		return false
+	}
+	first := results[0].MediaTitleID
+	if first == 0 {
+		return false
+	}
+	for i := 1; i < len(results); i++ {
+		id := results[i].MediaTitleID
+		if id == 0 {
+			return false
+		}
+		if id != first {
+			return true
+		}
+	}
+	return false
 }
 
 // FilterByTags filters results that match all specified tags

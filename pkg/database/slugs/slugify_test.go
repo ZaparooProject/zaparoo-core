@@ -1267,6 +1267,28 @@ func TestConjunctionNormalization(t *testing.T) {
 			input:    "Rock n",
 			expected: "rockn",
 		},
+		{
+			// #1561: glued directly onto the preceding word, no leading
+			// space - real MiSTer catalog title style ("Ghosts'n Goblins",
+			// "Chack'n Pop"). Must normalize the same as the spaced form so
+			// both spellings of the same game produce one slug.
+			name:     "n_glued_left_no_closing_apostrophe",
+			input:    "Ghosts'n Goblins",
+			expected: "ghostsandgoblins",
+		},
+		{
+			name:     "n_glued_left_with_closing_apostrophe",
+			input:    "Ghosts'n' Goblins",
+			expected: "ghostsandgoblins",
+		},
+		{
+			// Fully glued on both sides, no space anywhere - real MiSTer
+			// catalog file names ("Bump'n'Jump", "Lock'n'Chase") for titles
+			// that also exist spaced out ("Bump 'n' Jump").
+			name:     "n_glued_both_sides",
+			input:    "Bump'n'Jump",
+			expected: "bumpandjump",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1965,4 +1987,53 @@ func TestSlugifyMediaType_EmptyMediaType(t *testing.T) {
 	// Article stripping only happens in media parsers now, not in universal pipeline
 	assert.Equal(t, "thelegendofzelda", withEmpty,
 		"Empty media type should get universal-only processing (no article stripping)")
+}
+
+func TestExpandWordIfAbbreviationTypo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		word          string
+		wantExpansion string
+		wantOK        bool
+	}{
+		{name: "exact abbreviation, no period", word: "vs", wantExpansion: "versus", wantOK: true},
+		{name: "exact abbreviation, uppercase", word: "VS", wantExpansion: "versus", wantOK: true},
+		{name: "exact abbreviation, with period", word: "vs.", wantExpansion: "versus", wantOK: true},
+		{name: "genuine typo of an abbreviation", word: "bross", wantExpansion: "brothers", wantOK: true},
+		{
+			name: "period-required abbreviation missing its period is one edit away",
+			word: "feat", wantExpansion: "featuring", wantOK: true,
+		},
+		{name: "period-required abbreviation, correct", word: "feat.", wantExpansion: "featuring", wantOK: true},
+		{name: "unrelated whole word", word: "castle", wantExpansion: "", wantOK: false},
+		{name: "empty string", word: "", wantExpansion: "", wantOK: false},
+		{name: "whitespace only", word: "   ", wantExpansion: "", wantOK: false},
+		{name: "punctuation only", word: "...", wantExpansion: "", wantOK: false},
+		// Regression: a single character is trivially "one deletion away" from
+		// every two-letter abbreviation that contains it ("v" and "s" both
+		// register as edit-distance 1 from "vs"), which used to turn ordinary
+		// single-letter tokens - initials, a stray roman-numeral remnant for a
+		// media type that skips numeral conversion - into false abbreviation
+		// credit. None of these may ever expand, for any single letter that
+		// appears in any abbreviation key.
+		{name: "single letter matching part of vs", word: "v", wantExpansion: "", wantOK: false},
+		{name: "single letter matching the other part of vs", word: "s", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of dr", word: "d", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of mr", word: "m", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of pt", word: "p", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of pt, other side", word: "t", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of ft", word: "f", wantExpansion: "", wantOK: false},
+		{name: "single letter matching part of jr", word: "j", wantExpansion: "", wantOK: false},
+		{name: "single letter, uppercase", word: "V", wantExpansion: "", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			expansion, ok := ExpandWordIfAbbreviationTypo(tt.word)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantExpansion, expansion)
+		})
+	}
 }

@@ -1092,13 +1092,19 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 		// ============================================================
 
 		{
-			name:                  "confidence_very_high_single_char_typo",
-			input:                 "NES/Thundar",
-			expectedPath:          "/roms/nes/Thunder (USA).nes",
-			expectedStrategy:      titles.StrategyJaroWinklerDamerau,
-			expectedMinConfidence: 0.90, // Single char typo produces ~0.94 confidence
-			description: "Single character typo 'Thundar' → 'Thunder' produces very high confidence (0.90+), " +
-				"silent launch",
+			name:             "confidence_discounted_single_char_typo",
+			input:            "NES/Thundar",
+			expectedPath:     "/roms/nes/Thunder (USA).nes",
+			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			// Single char typo scores ~0.94 on raw similarity, but every raw
+			// Jaro-Winkler fuzzy match is deliberately discounted by
+			// TitleAmbiguityDiscount (see resolve.go's Strategy 5): it corrected
+			// a typo by character shape alone, with no structural guarantee
+			// (unlike token-signature or bare-prefix) that it reached the right
+			// title rather than a same-shaped different one. 0.94 * 0.75 ~= 0.71.
+			expectedMinConfidence: titles.ConfidenceAcceptable,
+			description: "Single character typo 'Thundar' → 'Thunder' lands in the acceptable range " +
+				"(0.70-0.90) once discounted, not silent-launch territory",
 		},
 		{
 			name:                  "confidence_acceptable_range_moderate_typo",
@@ -1551,11 +1557,20 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 				"(which would also match 'Shadow Knight' variants)",
 		},
 		{
-			name:          "negative_token_signature_partial_token_not_supported",
-			input:         "PC/Quest",
-			expectedError: true,
-			description: "Single-word 'Quest' doesn't match 'Space Quest' - token signature requires " +
-				"exact token set match, not partial/subset (1 token ≠ 2 tokens)",
+			// Token signature (5a) still correctly rejects this as a subset match - 1
+			// token isn't the 2-token set of "Space Quest", so that strategy finds
+			// nothing, exactly as before. But issue #1561 added a bare word-for-word
+			// prefix strategy (main-title-only, case 3) specifically so a query one
+			// word shorter than a longer title can still reach it: "Quest" is a
+			// genuine prefix of "Quest Space Crystal" (not of "Space Quest", which
+			// starts with a different word), so it now resolves there instead of
+			// failing.
+			name:             "positive_bare_prefix_reaches_longer_title_not_token_signature",
+			input:            "PC/Quest",
+			expectedPath:     "/games/pc/crystal_space_quest.exe",
+			expectedStrategy: titles.StrategyMainTitleOnly,
+			description: "Single-word 'Quest' doesn't match 'Space Quest' via token signature " +
+				"(1 token ≠ 2 tokens), but is a bare word-for-word prefix of 'Quest Space Crystal'",
 		},
 		{
 			name:          "negative_token_signature_no_token_alignment",
@@ -1813,7 +1828,9 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	}
 
 	// Test 1: Fuzzy match "Earthbond" (typo) should match "EarthBound"
-	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold)
+	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold), discounted by
+	// TitleAmbiguityDiscount to ~0.735 since every raw fuzzy match is treated as
+	// a guess rather than a found answer - see resolve.go's Strategy 5.
 	t.Run("typo_earthbond_matches_earthbound", func(t *testing.T) {
 		mockPlatform := newMockPlatformForCmdTitle()
 		mockPlatform.On(
@@ -1837,13 +1854,14 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 		require.NoError(t, err, "should fuzzy match 'Earthbond' → 'EarthBound'")
 		assert.True(t, result.MediaChanged)
 		assert.Equal(t, titles.StrategyJaroWinklerDamerau, result.Strategy, "should use fuzzy matching strategy")
-		assert.GreaterOrEqual(t, result.Confidence, 0.90, "should have high confidence")
+		assert.GreaterOrEqual(t, result.Confidence, titles.ConfidenceAcceptable,
+			"should be in the acceptable range once discounted")
 
 		mockPlatform.AssertExpectations(t)
 	})
 
 	// Test 2: British spelling "neighbours" should match American "neighbors"
-	// Jaro-Winkler similarity: 0.99
+	// Jaro-Winkler similarity: 0.99, discounted by TitleAmbiguityDiscount to ~0.74.
 	t.Run("british_spelling_neighbours_matches_neighbors", func(t *testing.T) {
 		mockPlatform := newMockPlatformForCmdTitle()
 		mockPlatform.On(
@@ -1871,7 +1889,8 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 		assert.Equal(t, titles.StrategyJaroWinklerDamerau, result.Strategy,
 			"should use fuzzy matching, not progressive trim")
 
-		assert.GreaterOrEqual(t, result.Confidence, 0.90, "should have high confidence")
+		assert.GreaterOrEqual(t, result.Confidence, titles.ConfidenceAcceptable,
+			"should be in the acceptable range once discounted")
 
 		mockPlatform.AssertExpectations(t)
 	})

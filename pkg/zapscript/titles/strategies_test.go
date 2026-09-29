@@ -149,6 +149,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 				HasSecondaryTitle: false,
 				MainTitleSlug:     "mario",
 				CanonicalSlug:     "mario",
+				OriginalInput:     "Mario",
 			},
 			slug:     "mario",
 			systemID: "NES",
@@ -157,8 +158,58 @@ func TestTryMainTitleOnly(t *testing.T) {
 					Return([]database.SearchResultWithCursor{
 						// This matches the prefix but is not a valid match:
 						// Query is simple "mario", DB is "MarioKart" which also has no secondary
-						// but CanonicalSlug is "mariokart" not "mario", so no match
+						// but CanonicalSlug is "mariokart" not "mario", so no match. It's also not
+						// a token-boundary prefix: "MarioKart" tokenizes as one word "mariokart",
+						// not "mario"+"kart", so the new bare-prefix case (below) doesn't fire either.
 						{SystemID: "NES", Name: "MarioKart", Path: "/mariokart.rom"},
+					}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			// Issue #1561: MiSTer arcade titles like "Street Fighter II The World
+			// Warrior" have no colon/dash marking a subtitle, so neither existing
+			// partial case fires (both require the DB side to be classified as
+			// having one). This is the case that reaches an actual sequel game
+			// instead of just refusing to launch the wrong one.
+			name: "bare prefix match: neither side has a delimited secondary",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "streetfighter2",
+				CanonicalSlug:     "streetfighter2",
+				OriginalInput:     "Street Fighter II",
+			},
+			slug:     "streetfighter2",
+			systemID: "Arcade",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "Arcade", "streetfighter2", []zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "Arcade", Name: "Street Fighter II The World Warrior", Path: "/sf2ww.mra"},
+					}, nil)
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategyMainTitleOnly,
+			shouldError:      false,
+		},
+		{
+			// The reported bug's shape: "streetfighter" is a byte-level prefix
+			// relationship in reverse (query is longer), so this exercises the
+			// number guard on a query that already carries no secondary title.
+			name: "bare prefix rejects a differing sequel number",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "megaman",
+				CanonicalSlug:     "megaman",
+				OriginalInput:     "Mega Man",
+			},
+			slug:     "megaman",
+			systemID: "NES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "megaman", []zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "NES", Name: "Mega Man 2", Path: "/megaman2.rom"},
 					}, nil)
 			},
 			expectedCount:    0,
@@ -634,16 +685,26 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name:     "fuzzy match found with similar slug",
-			gameName: "Super Mario World",
-			slug:     "mariosuperworld", // Different order
+			// A genuine typo (missing "i"), not a word reordering: reordering is
+			// GenerateTokenSignature's job (5a), and issue #1561 established that
+			// raw Jaro-Winkler + Damerau-Levenshtein (5b/5c) must not accept a
+			// candidate that isn't genuinely close by edit distance, which a full
+			// word-block move rarely is despite scoring high on character overlap
+			// alone. gameName itself carries the typo (not just slug): a real
+			// caller's slug is always Slugify(gameName), so pairing a typo'd slug
+			// with a clean gameName - as this case did before #1561's token
+			// coverage check existed - would make GenerateTokenSignature see the
+			// query's true, untyped name and match via 5a, never reaching 5b/5c.
+			name:     "fuzzy match found with a real typo",
+			gameName: "Super Maro World",
+			slug:     "supermaroworld", // missing "i"
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("GetTitlesWithPreFilter", mock.Anything, "SNES",
 					mock.AnythingOfType("int"), mock.AnythingOfType("int"),
 					mock.AnythingOfType("int"), mock.AnythingOfType("int")).
 					Return([]database.MediaTitle{
-						{Slug: "supermarioworld"},
+						{Slug: "supermarioworld", Name: "Super Mario World"},
 					}, nil)
 				m.On("SearchMediaBySlug", mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
@@ -664,8 +725,8 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 					mock.AnythingOfType("int"), mock.AnythingOfType("int"),
 					mock.AnythingOfType("int"), mock.AnythingOfType("int")).
 					Return([]database.MediaTitle{
-						{Slug: "zelda"},
-						{Slug: "zeldaii"},
+						{Slug: "zelda", Name: "Zelda"},
+						{Slug: "zeldaii", Name: "Zelda II"},
 					}, nil)
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "zelda", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
@@ -686,6 +747,28 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 					mock.AnythingOfType("int"), mock.AnythingOfType("int"),
 					mock.AnythingOfType("int"), mock.AnythingOfType("int")).
 					Return([]database.MediaTitle{}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			// Issue #1561's fuzzy residual: "streetfighter2turbo" and
+			// "streetfighterzero2" share a 13-character prefix and both carry a
+			// "2" (so SameTitleNumbers doesn't separate them), scoring 0.927 by
+			// Jaro-Winkler similarity alone - but turning one into the other
+			// takes 5 edits past that shared prefix, far more than a typo.
+			name:     "long shared prefix with an unrelated suffix is not a typo",
+			gameName: "Street Fighter II Turbo",
+			slug:     "streetfighter2turbo",
+			systemID: "Arcade",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("GetTitlesWithPreFilter", mock.Anything, "Arcade",
+					mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+					mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+					Return([]database.MediaTitle{
+						{Slug: "streetfighterzero2", Name: "Street Fighter Zero 2", DBID: 1},
+					}, nil)
 			},
 			expectedCount:    0,
 			expectedStrategy: "",
@@ -1006,7 +1089,7 @@ func TestTryAdvancedFuzzyMatchingRecoversMistypedAbbreviation(t *testing.T) {
 		mock.AnythingOfType("int"), mock.AnythingOfType("int"),
 		mock.AnythingOfType("int"), mock.AnythingOfType("int")).
 		Run(func(args mock.Arguments) { sawMaxLength = args.Int(3) }).
-		Return([]database.MediaTitle{{Slug: targetSlug}}, nil)
+		Return([]database.MediaTitle{{Slug: targetSlug, Name: "Super Mario Bros."}}, nil)
 	mockDB.On("SearchMediaBySlug", mock.Anything, "NES", targetSlug, []zapscript.TagFilter(nil)).
 		Return([]database.SearchResultWithCursor{
 			{SystemID: "NES", Name: "Super Mario Bros.", Path: "/smb.nes"},

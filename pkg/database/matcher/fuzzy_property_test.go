@@ -20,6 +20,7 @@
 package matcher
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -466,5 +467,224 @@ func TestPropertyDLTieBreakerNeverPanics(t *testing.T) {
 
 		// Should not panic
 		_ = ApplyDamerauLevenshteinTieBreaker(query, matches, topN)
+	})
+}
+
+// ============================================================================
+// SameTitleNumbers Property Tests
+// ============================================================================
+
+// TestPropertySameTitleNumbersNeverPanics verifies function never panics on
+// arbitrary, untrusted title-derived input.
+func TestPropertySameTitleNumbersNeverPanics(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		a := rapid.String().Draw(t, "a")
+		b := rapid.String().Draw(t, "b")
+
+		// Should not panic
+		_ = SameTitleNumbers(a, b)
+	})
+}
+
+// TestPropertySameTitleNumbersSymmetric verifies order doesn't matter.
+func TestPropertySameTitleNumbersSymmetric(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		a := rapid.String().Draw(t, "a")
+		b := rapid.String().Draw(t, "b")
+
+		if SameTitleNumbers(a, b) != SameTitleNumbers(b, a) {
+			t.Fatalf("SameTitleNumbers(%q, %q) != SameTitleNumbers(%q, %q)", a, b, b, a)
+		}
+	})
+}
+
+// TestPropertySameTitleNumbersReflexive verifies a string always agrees with itself.
+func TestPropertySameTitleNumbersReflexive(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		s := rapid.String().Draw(t, "s")
+
+		if !SameTitleNumbers(s, s) {
+			t.Fatalf("SameTitleNumbers(%q, %q) = false, want true", s, s)
+		}
+	})
+}
+
+// ============================================================================
+// TokenPrefixMatch Property Tests
+// ============================================================================
+
+// TestPropertyTokenPrefixMatchNeverPanics verifies function never panics on
+// arbitrary, untrusted title input.
+func TestPropertyTokenPrefixMatchNeverPanics(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := rapid.String().Draw(t, "query")
+		candidate := rapid.String().Draw(t, "candidate")
+
+		// Should not panic
+		_ = TokenPrefixMatch(mediaType, query, candidate)
+	})
+}
+
+// TestPropertyTokenPrefixMatchNotReflexive verifies a title is never considered
+// a strict prefix of itself - that's an exact match, handled elsewhere.
+func TestPropertyTokenPrefixMatchNotReflexive(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		name := gameNameGen().Draw(t, "name")
+
+		if TokenPrefixMatch(mediaType, name, name) {
+			t.Fatalf("TokenPrefixMatch(%q, %q) = true, want false (not a strict prefix of itself)", name, name)
+		}
+	})
+}
+
+// ============================================================================
+// TokenCoverageRatio Property Tests
+// ============================================================================
+
+// TestPropertyTokenCoverageRatioNeverPanics verifies function never panics on
+// arbitrary, untrusted title-derived input.
+func TestPropertyTokenCoverageRatioNeverPanics(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := rapid.String().Draw(t, "query")
+		candidate := rapid.String().Draw(t, "candidate")
+
+		// Should not panic
+		_ = TokenCoverageRatio(mediaType, query, candidate)
+	})
+}
+
+// TestPropertyTokenCoverageRatioBounds verifies the result always sits in [0, 1].
+func TestPropertyTokenCoverageRatioBounds(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := rapid.String().Draw(t, "query")
+		candidate := rapid.String().Draw(t, "candidate")
+
+		got := TokenCoverageRatio(mediaType, query, candidate)
+		if got < 0 || got > 1 {
+			t.Fatalf("TokenCoverageRatio(%q, %q) = %v, want a value in [0, 1]", query, candidate, got)
+		}
+	})
+}
+
+// TestPropertyTokenCoverageRatioReflexive verifies a real game name always
+// fully covers itself.
+func TestPropertyTokenCoverageRatioReflexive(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		name := gameNameGen().Draw(t, "name")
+
+		got := TokenCoverageRatio(mediaType, name, name)
+		if got != 1 {
+			t.Fatalf("TokenCoverageRatio(%q, %q) = %v, want 1", name, name, got)
+		}
+	})
+}
+
+// TestPropertyTokenCoverageRatioOrderIndependent verifies that permuting the
+// query's own words never changes the ratio: coverage asks whether every word
+// is accounted for, not in what order they happened to be typed. This
+// regression-tests a real bug in an earlier, greedy query-order-dependent
+// implementation, where assigning each query token its single best remaining
+// candidate in query order could find a valid matching for one word order and
+// miss an equally valid one for a reordering of the identical words - see
+// TestTokenCoverageRatioOrderIndependent for the concrete case that caught it.
+func TestPropertyTokenCoverageRatioOrderIndependent(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := gameNameGen().Draw(t, "query")
+		candidate := gameNameGen().Draw(t, "candidate")
+
+		words := strings.Fields(query)
+		if len(words) < 2 {
+			return
+		}
+		type keyed struct {
+			word string
+			key  int
+		}
+		pairs := make([]keyed, len(words))
+		for i, word := range words {
+			pairs[i] = keyed{word: word, key: rapid.IntRange(0, 1_000_000).Draw(t, "key")}
+		}
+		sort.Slice(pairs, func(a, b int) bool { return pairs[a].key < pairs[b].key })
+		shuffled := make([]string, len(pairs))
+		for i, p := range pairs {
+			shuffled[i] = p.word
+		}
+		reorderedQuery := strings.Join(shuffled, " ")
+
+		original := TokenCoverageRatio(mediaType, query, candidate)
+		reordered := TokenCoverageRatio(mediaType, reorderedQuery, candidate)
+		if original != reordered {
+			t.Fatalf("reordering query words changed the ratio: %q (%v) vs %q (%v) against %q",
+				query, original, reorderedQuery, reordered, candidate)
+		}
+	})
+}
+
+// ============================================================================
+// FilterByTokenCoverage Property Tests
+// ============================================================================
+
+// filterByTokenCoverageNamesBySlug builds a namesBySlug map that resolves every
+// match's slug to itself, so FilterByTokenCoverage always has a real, if plain,
+// name to tokenize for each candidate under test.
+func filterByTokenCoverageNamesBySlug(matches []FuzzyMatch) map[string]string {
+	names := make(map[string]string, len(matches))
+	for _, m := range matches {
+		names[m.Slug] = m.Slug
+	}
+	return names
+}
+
+// TestPropertyFilterByTokenCoverageNeverPanics verifies function never panics.
+func TestPropertyFilterByTokenCoverageNeverPanics(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := rapid.String().Draw(t, "query")
+		matches := fuzzyMatchSliceGen().Draw(t, "matches")
+
+		// Should not panic
+		_ = FilterByTokenCoverage(mediaType, query, matches, filterByTokenCoverageNamesBySlug(matches))
+	})
+}
+
+// TestPropertyFilterByTokenCoverageSubset verifies the result is always a
+// subset of the input, in the same relative order.
+func TestPropertyFilterByTokenCoverageSubset(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		mediaType := mediaTypeGen().Draw(t, "mediaType")
+		query := rapid.String().Draw(t, "query")
+		matches := fuzzyMatchSliceGen().Draw(t, "matches")
+
+		filtered := FilterByTokenCoverage(mediaType, query, matches, filterByTokenCoverageNamesBySlug(matches))
+		if len(filtered) > len(matches) {
+			t.Fatalf("filtered result (%d) is longer than input (%d)", len(filtered), len(matches))
+		}
+		j := 0
+		for _, m := range filtered {
+			for j < len(matches) && matches[j] != m {
+				j++
+			}
+			if j == len(matches) {
+				t.Fatalf("filtered match %+v not found in input order", m)
+			}
+			j++
+		}
 	})
 }

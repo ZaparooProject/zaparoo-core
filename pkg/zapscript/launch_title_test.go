@@ -678,7 +678,13 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			candidateTitles := make([]database.MediaTitle, len(tt.allSlugs))
 			for i, slug := range tt.allSlugs {
 				candidateTitles[i] = database.MediaTitle{
+					// Name matches the slug (both are single, made-up "words" here,
+					// not real multi-word titles): #1561's token-coverage check needs
+					// the original name to tokenize, and a name that doesn't
+					// correspond to its own slug isn't something a real indexed row
+					// would ever have.
 					Slug: slug,
+					Name: slug,
 				}
 			}
 			mockMediaDB.On("GetTitlesWithPreFilter",

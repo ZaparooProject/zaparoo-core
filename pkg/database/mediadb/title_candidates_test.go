@@ -69,6 +69,21 @@ func seedCandidateTitles(t testing.TB, db *MediaDB, systemID string, names ...st
 	return ids
 }
 
+// digitsToLettersReplacer gives generated fixture titles a per-row
+// differentiator that carries no digit run, so SameTitleNumbers (issue #1561)
+// can't reject a candidate purely because these tests numbered their fixture
+// titles for uniqueness. The mapping is fixed and arbitrary; it exists only to
+// preserve each generated string's length and distinctness, the same way the
+// zero-padded decimal it replaces did.
+var digitsToLettersReplacer = strings.NewReplacer(
+	"0", "b", "1", "c", "2", "d", "3", "f", "4", "g",
+	"5", "h", "6", "j", "7", "k", "8", "l", "9", "m",
+)
+
+func digitsToLetters(s string) string {
+	return digitsToLettersReplacer.Replace(s)
+}
+
 func TestTitleCandidatesEvidence(t *testing.T) {
 	t.Parallel()
 	for _, cached := range []bool{false, true} {
@@ -119,6 +134,149 @@ func TestTitleCandidatesEvidence(t *testing.T) {
 	}
 }
 
+// TestTitleCandidatesSequelNumberSafety covers issue #1561 at the discovery
+// level. "Street Fighter II" slugifies to within one character of "Street
+// Fighter," and Jaro-Winkler alone scored that a near-perfect typo match. None
+// of the real MiSTer Arcade file names for the sequel carry a colon or dash, so
+// only the bare-prefix match (classified as "secondary": exact words, just
+// fewer of them, the same evidentiary tier as a colon-delimited secondary
+// title) can reach them.
+func TestTitleCandidatesSequelNumberSafety(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupTempMediaDB(t)
+			t.Cleanup(cleanup)
+			seedCandidateTitles(t, db, "Arcade",
+				"Street Fighter (US, set 1)",
+				"Street Fighter II The World Warrior",
+				"Street Fighter II' Champion Edition",
+				"Street Fighter II' Hyper Fighting",
+				"Super Street Fighter II Turbo",
+				"Street Fighter Zero 2")
+			seedCandidateTitles(t, db, "NES", "Final Fantasy", "Mega Man", "Mega Man 2")
+			if cached {
+				require.NoError(t, db.RebuildSlugSearchCache())
+			}
+
+			sf2 := map[string]bool{
+				"Street Fighter II The World Warrior": true,
+				"Street Fighter II' Champion Edition": true,
+				"Street Fighter II' Hyper Fighting":   true,
+			}
+			for _, query := range []string{"Street Fighter II", "Street Fighter 2"} {
+				t.Run(query, func(t *testing.T) {
+					got, err := db.TitleCandidates(context.Background(), "Arcade", query, 5)
+					require.NoError(t, err)
+					require.NotEmpty(t, got)
+					for _, candidate := range got {
+						assert.NotEqual(t, "Street Fighter (US, set 1)", candidate.Name,
+							"must never surface the original game for a sequel query")
+						assert.NotEqual(t, "Super Street Fighter II Turbo", candidate.Name,
+							"adds a word before Street Fighter, not after - not a prefix relationship")
+						assert.True(t, sf2[candidate.Name], "unexpected candidate %q", candidate.Name)
+						assert.Equal(t, "secondary", candidate.MatchType)
+					}
+				})
+			}
+
+			t.Run("Final Fantasy I still resolves the unnumbered first game", func(t *testing.T) {
+				got, err := db.TitleCandidates(context.Background(), "NES", "Final Fantasy I", 5)
+				require.NoError(t, err)
+				require.NotEmpty(t, got)
+				assert.Equal(t, "Final Fantasy", got[0].Name)
+			})
+
+			t.Run("bare Mega Man does not reach the numbered sequel", func(t *testing.T) {
+				got, err := db.TitleCandidates(context.Background(), "NES", "Mega Man", 5)
+				require.NoError(t, err)
+				require.NotEmpty(t, got)
+				assert.Equal(t, "Mega Man", got[0].Name)
+				assert.Equal(t, "exact", got[0].MatchType)
+				for _, candidate := range got {
+					assert.NotEqual(t, "Mega Man 2", candidate.Name)
+				}
+			})
+
+			// Live-confirmed fuzzy residual: "streetfighter2turbo" and
+			// "streetfighterzero2" both carry a "2" (SameTitleNumbers doesn't
+			// separate them) and share the 13-character prefix "streetfighter",
+			// which used to score 0.927 by Jaro-Winkler similarity alone. Neither
+			// is a word-for-word prefix of the other either ("Turbo" and "Zero 2"
+			// diverge at the third word), so this must not surface at all.
+			t.Run("long shared prefix does not reach an unrelated same-numbered title", func(t *testing.T) {
+				got, err := db.TitleCandidates(context.Background(), "Arcade", "Street Fighter II Turbo", 5)
+				require.NoError(t, err)
+				for _, candidate := range got {
+					assert.NotEqual(t, "Street Fighter Zero 2", candidate.Name,
+						"5 edits past the shared prefix is not a typo of the query")
+				}
+			})
+		})
+	}
+}
+
+// TestTitleCandidatesFuzzyRejectsCoincidentalScores covers the other shape
+// issue #1561's fuzzy residual turned out to take. A long shared prefix isn't
+// the only way Jaro-Winkler scores two unrelated titles above threshold: its
+// core, position-window matching can do the same for two short-to-medium
+// strings with barely any shared prefix at all. "Metriod" (a typo of
+// "Metroid," a console game that was never on this system) scored "Mr. Do!"
+// ("misterdo" once "Mr." expands) at 0.855 with only the leading "m" in
+// common - live-confirmed on the MiSTer test device once the shared-prefix fix
+// (above) was already in place. Both take 5 real edits to turn one into the
+// other, same as the shared-prefix case, and WithinEditDistanceBudget rejects
+// both the same way.
+func TestTitleCandidatesFuzzyRejectsCoincidentalScores(t *testing.T) {
+	t.Parallel()
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := setupTempMediaDB(t)
+			t.Cleanup(cleanup)
+			seedCandidateTitles(t, db, "Arcade", "Mr. Do!", "Metroid")
+			if cached {
+				require.NoError(t, db.RebuildSlugSearchCache())
+			}
+
+			got, err := db.TitleCandidates(context.Background(), "Arcade", "Metriod", 5)
+			require.NoError(t, err)
+			for _, candidate := range got {
+				assert.NotEqual(t, "Mr. Do!", candidate.Name,
+					"5 edits with barely a shared prefix is not a typo of the query")
+			}
+
+			// The real target must still be found: this isn't a blanket
+			// tightening of the similarity threshold, only of true edit distance.
+			require.NotEmpty(t, got)
+			assert.Equal(t, "Metroid", got[0].Name)
+		})
+	}
+}
+
+// TestTitleCandidatesBarePrefixHasNoMinimumLength covers a discovery/launch
+// inconsistency found while verifying #1561's fixes on real data: "1943"
+// (query slug "1943", 4 characters) resolved to "1943 The Battle of Midway"
+// through the launch path (TryMainTitleOnly has no minimum length for this
+// exact, word-for-word match) but returned no candidates at all through this
+// discovery path, because the bare-prefix SQL pass shared its gate with the
+// fuzzy dispatch below it - MinSlugLengthForFuzzy, a threshold that exists to
+// keep approximate matching from being noisy on short queries, which has
+// nothing to do with an exact prefix match.
+func TestTitleCandidatesBarePrefixHasNoMinimumLength(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+	seedCandidateTitles(t, db, "Arcade", "1943 The Battle of Midway", "1942")
+
+	got, err := db.TitleCandidates(context.Background(), "Arcade", "1943", 5)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	assert.Equal(t, "1943 The Battle of Midway", got[0].Name)
+	assert.Equal(t, "secondary", got[0].MatchType)
+}
+
 func TestTitleCandidatesVisibilityBeforeLimit(t *testing.T) {
 	t.Parallel()
 	db, cleanup := setupTempMediaDB(t)
@@ -156,20 +314,40 @@ func TestTitleCandidatesVisibilityBeforeLimit(t *testing.T) {
 	}
 }
 
+// singleSubstitutionBase and singleSubstitutionVariant generate many candidate
+// names that are each exactly one character away from the same query, used by
+// TestTitleCandidatesFuzzyEligibilityBeforeRanking. Distinguishing 140 titles by
+// a shared, longer trailing number or code (as elsewhere in this file) would
+// make many of them several edits apart from any one query - which #1561
+// established is not a real typo relationship, and WithinEditDistanceBudget
+// correctly excludes it. The replacement alphabet shares no letters with the
+// base, so every (position, replacement) pair is guaranteed a distinct string
+// with no possibility of reproducing the base itself.
+const singleSubstitutionBase = "supermarioworld"
+
+var singleSubstitutionReplacements = []byte("bcfghjknqtvxyz")
+
+func singleSubstitutionVariant(i int) string {
+	pos := i % len(singleSubstitutionBase)
+	letter := singleSubstitutionReplacements[(i/len(singleSubstitutionBase))%len(singleSubstitutionReplacements)]
+	return singleSubstitutionBase[:pos] + string(letter) + singleSubstitutionBase[pos+1:]
+}
+
 func TestTitleCandidatesFuzzyEligibilityBeforeRanking(t *testing.T) {
 	t.Parallel()
 	db, cleanup := setupTempMediaDB(t)
 	t.Cleanup(cleanup)
 	names := make([]string, candidateBatchSize+12)
 	for i := range names {
-		names[i] = fmt.Sprintf("Mario Game %03d", i)
+		names[i] = singleSubstitutionVariant(i)
 	}
 	ids := seedCandidateTitles(t, db, "NES", names...)
 	for _, id := range ids[:candidateBatchSize] {
 		require.NoError(t, db.UpdateMediaTags(context.Background(), id, nil,
 			[]database.MediaTagRef{{Type: "user", Tag: "hidden"}}))
 	}
-	cold, err := db.TitleCandidates(context.Background(), "NES", "Mario Gmae 003", 5)
+	query := singleSubstitutionBase
+	cold, err := db.TitleCandidates(context.Background(), "NES", query, 5)
 	require.NoError(t, err)
 	require.Len(t, cold, 5)
 	for _, candidate := range cold {
@@ -177,7 +355,7 @@ func TestTitleCandidatesFuzzyEligibilityBeforeRanking(t *testing.T) {
 		assert.Equal(t, "fuzzy", candidate.MatchType)
 	}
 	require.NoError(t, db.RebuildSlugSearchCache())
-	warm, err := db.TitleCandidates(context.Background(), "NES", "Mario Gmae 003", 5)
+	warm, err := db.TitleCandidates(context.Background(), "NES", query, 5)
 	require.NoError(t, err)
 	assert.Equal(t, cold, warm, "ineligible high-scoring cache nominations cannot consume the top-five budget")
 }
@@ -425,10 +603,10 @@ func TestTitleCandidateDenseTiesMatchExhaustiveRanking(t *testing.T) {
 	t.Parallel()
 	system, err := systemdefs.GetSystem("NES")
 	require.NoError(t, err)
-	const query = "Library Adventuer 001234"
+	query := digitsToLetters("Library Adventuer 001234")
 	names := make([]string, 256)
 	for i := range names {
-		names[i] = fmt.Sprintf("Library Adventure %06d", 1100+i)
+		names[i] = digitsToLetters(fmt.Sprintf("Library Adventure %06d", 1100+i))
 		a := slugs.Slugify(slugs.MediaTypeGame, query)
 		b := slugs.Slugify(slugs.MediaTypeGame, names[i])
 		assert.Equal(t,
@@ -530,12 +708,12 @@ func TestTitleCandidateSeedTraversalPreservesEligibility(t *testing.T) {
 	t.Cleanup(cleanup)
 	names := make([]string, 640)
 	for i := range names {
-		names[i] = fmt.Sprintf("Library Adventure %06d", 1000+i)
+		names[i] = digitsToLetters(fmt.Sprintf("Library Adventure %06d", 1000+i))
 	}
 	seedCandidateTitles(t, db, "NES", names...)
 	require.NoError(t, db.RebuildSlugSearchCache())
 	cache := db.slugSearchCache.Load()
-	query := "Library Adventuer 001234"
+	query := digitsToLetters("Library Adventuer 001234")
 	metadata := GenerateSlugWithMetadata(slugs.MediaTypeGame, query)
 	seeds, count, err := cache.seedBlocks(t.Context(), metadata.Slug, 0, cache.systemRanges[1])
 	require.NoError(t, err)
@@ -691,16 +869,17 @@ func TestTitleCandidatesSQLReadsAreBatched(t *testing.T) {
 	mockDB.ExpectQuery("SELECT DBID FROM Systems").WithArgs("NES").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 	columns := []string{"DBID", "Name", "Slug", "SecondarySlug"}
-	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(columns))
+	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(columns)) // exact pass
+	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(sqlmock.NewRows(columns)) // bare-prefix pass
 	rows := sqlmock.NewRows(columns)
 	for i := range 100 {
-		rows.AddRow(i+1, fmt.Sprintf("Mario%02d", i), fmt.Sprintf("mario%02d", i), "")
+		rows.AddRow(i+1, digitsToLetters(fmt.Sprintf("Mario%02d", i)), digitsToLetters(fmt.Sprintf("mario%02d", i)), "")
 	}
-	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(rows)
+	mockDB.ExpectQuery("SELECT t.DBID").WillReturnRows(rows) // fuzzy prefilter pass
 	got, err := db.TitleCandidates(context.Background(), "NES", "Mario", 5)
 	require.NoError(t, err)
 	require.Len(t, got, 5)
-	require.NoError(t, mockDB.ExpectationsWereMet(), "one system read and two title queries, not per-candidate reads")
+	require.NoError(t, mockDB.ExpectationsWereMet(), "one system read and three title queries, not per-candidate reads")
 }
 
 func TestTitleCandidatesStreamErrorDiscardsPartialResults(t *testing.T) {
@@ -753,11 +932,20 @@ func TestTitleCandidatesTypoDefeatingAnAbbreviation(t *testing.T) {
 		"Super Mario Turbo", "Super Mario USA", "Super Mario World", "Super Mario Jr.")
 	require.NoError(t, db.RebuildSlugSearchCache())
 
-	for _, query := range []string{"Super Mario Bross", "Super Mario Bros2"} {
-		got, err := db.TitleCandidates(context.Background(), "NES", query, 5)
-		require.NoError(t, err)
-		require.NotEmpty(t, got, "%q returned nothing", query)
-		assert.Equal(t, target, got[0].Name,
-			"%q must rank the title it is a typo of first, not a same-length neighbour", query)
-	}
+	got, err := db.TitleCandidates(context.Background(), "NES", "Super Mario Bross", 5)
+	require.NoError(t, err)
+	require.NotEmpty(t, got, "letter typo returned nothing")
+	assert.Equal(t, target, got[0].Name,
+		"must rank the title it is a typo of first, not a same-length neighbour")
+
+	// "Super Mario Bros2" is also within one edit of the abbreviation "bros" -
+	// appending any single character counts, digit or not - so it once hid the
+	// same bug via a different route. It is no longer expected to find the
+	// digit-free target, though: issue #1561 established that a query carrying
+	// a number the candidate lacks is not a safe match (the same reasoning that
+	// stops "Street Fighter II" from resolving to "Street Fighter"). Nothing in
+	// this fixture carries a "2", so the correct answer is now no match at all.
+	got, err = db.TitleCandidates(context.Background(), "NES", "Super Mario Bros2", 5)
+	require.NoError(t, err)
+	assert.Empty(t, got, "a query numbered differently from every candidate must not resolve to one")
 }
