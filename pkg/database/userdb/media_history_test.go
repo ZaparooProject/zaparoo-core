@@ -789,7 +789,9 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 			true, "system", startTime, startTime, nil, nil, `["region:jp"]`, "", "active_media", "unspecified",
 		)
 
-	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
+	mock.ExpectPrepare(
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`,
+	).
 		ExpectQuery().
 		WithArgs(int64(math.MaxInt64), "SNES", 10).
 		WillReturnRows(rows)
@@ -833,7 +835,7 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 		)
 
 	mock.ExpectPrepare(
-		`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID IN \(\?, \?\).*ORDER BY DBID DESC LIMIT`,
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID IN \(\?, \?\).*ORDER BY DBID DESC LIMIT`,
 	).
 		ExpectQuery().
 		WithArgs(int64(math.MaxInt64), "SNES", "NES", 10).
@@ -872,7 +874,9 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 		)
 
 	// lastID=10 + SystemID filter — both conditions in WHERE clause
-	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
+	mock.ExpectPrepare(
+		`WHERE DBID < \? AND COALESCE\(IsDeleted, 0\) = 0 AND SystemID = \?.*ORDER BY DBID DESC LIMIT`,
+	).
 		ExpectQuery().
 		WithArgs(int64(10), "SNES", 25).
 		WillReturnRows(rows)

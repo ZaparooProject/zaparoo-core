@@ -77,9 +77,11 @@ func (p *Platform) track(
 		return dispatchErr
 	}
 	recorded, err := store.RecordExternalDispatch(ctx, session.LaunchID, nowMs)
-	if err != nil {
+	notify := p.mediaHistoryHooks().Changed
+	switch {
+	case err != nil:
 		log.Error().Err(err).Msg("Android launch dispatched but its receipt could not be persisted")
-	} else if notify := p.mediaHistoryHooks().Changed; recorded && notify != nil && session.Source == "foreground_events" {
+	case recorded && notify != nil && session.Source == "foreground_events":
 		// A foreground_events launch now has an in-progress history row.
 		notify()
 	}

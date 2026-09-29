@@ -90,8 +90,9 @@ func (db *UserDB) BeginExternalSession(ctx context.Context, session *database.Ex
 			}
 		}
 	}
-	if err = supersedeOlderExternalSessions(ctx, tx, session.BootID, session.LaunchID, session.RequestedMs); err != nil {
-		return err
+	supersedeErr := supersedeOlderExternalSessions(ctx, tx, session.BootID, session.LaunchID, session.RequestedMs)
+	if supersedeErr != nil {
+		return supersedeErr
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit pending external session: %w", err)
@@ -261,8 +262,8 @@ func (db *UserDB) AbandonExternalSession(ctx context.Context, launchID string, f
 	if changed != 1 {
 		return false, nil
 	}
-	if err = deleteExternalEvidence(ctx, tx, launchID); err != nil {
-		return false, err
+	if pruneErr := deleteExternalEvidence(ctx, tx, launchID); pruneErr != nil {
+		return false, pruneErr
 	}
 	if err = tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit external session abandonment: %w", err)
@@ -317,8 +318,8 @@ func (db *UserDB) MarkExternalSessionStale(ctx context.Context, launchID string,
 		}
 	}
 	if changed == 1 {
-		if err = deleteExternalEvidence(ctx, tx, launchID); err != nil {
-			return false, err
+		if pruneErr := deleteExternalEvidence(ctx, tx, launchID); pruneErr != nil {
+			return false, pruneErr
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -422,8 +423,8 @@ func (db *UserDB) CloseExternalSessionApproximate(
 		endMs, historyID, endMs, launchID); err != nil {
 		return false, fmt.Errorf("close approximate external session: %w", err)
 	}
-	if err = deleteExternalEvidence(ctx, tx, launchID); err != nil {
-		return false, err
+	if pruneErr := deleteExternalEvidence(ctx, tx, launchID); pruneErr != nil {
+		return false, pruneErr
 	}
 	if err = tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit approximate external session: %w", err)

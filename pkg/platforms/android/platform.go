@@ -62,8 +62,8 @@ type Platform struct {
 	// from, as of the last SourceRoots call.
 	folders      map[string]string
 	settings     platforms.Settings
-	entries      []catalogEntry
 	historyHooks platforms.MediaHistoryHooks
+	entries      []catalogEntry
 	mu           syncutil.RWMutex
 }
 

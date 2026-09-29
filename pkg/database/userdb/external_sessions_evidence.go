@@ -212,8 +212,8 @@ func (db *UserDB) ApplyExternalEvidence(ctx context.Context, batch *database.For
 		return false, fmt.Errorf("advance external evidence cursor: %w", err)
 	}
 	if status == "closed" || status == "abandoned" || status == "stale" {
-		if err = deleteExternalEvidence(ctx, tx, batch.LaunchID); err != nil {
-			return false, err
+		if pruneErr := deleteExternalEvidence(ctx, tx, batch.LaunchID); pruneErr != nil {
+			return false, pruneErr
 		}
 	}
 	if err = tx.Commit(); err != nil {

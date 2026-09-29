@@ -22,11 +22,11 @@ package android
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/require"
 )
@@ -41,16 +41,16 @@ type approxClose struct {
 // tests focus on how the platform orchestrates them.
 type sessionStoreProbe struct {
 	database.UserDBI
+	beginErr        error
+	applyErr        error
 	sessions        map[string]*database.ExternalSession
+	applyStatus     string
 	sessionOrder    []string
 	evidenceBatches []database.ForegroundEvidence
 	approxCloses    []approxClose
 	staled          []string
 	abandoned       []string
-	applyStatus     string
-	beginErr        error
-	applyErr        error
-	mu              sync.Mutex
+	mu              syncutil.Mutex
 }
 
 func (p *sessionStoreProbe) BeginExternalSession(_ context.Context, session *database.ExternalSession) error {
@@ -149,7 +149,7 @@ func (p *sessionStoreProbe) ApplyExternalEvidence(_ context.Context, batch *data
 	return true, nil
 }
 
-func trackedPlatform(t *testing.T, ctx context.Context, host Host, store database.UserDBI) *Platform {
+func trackedPlatform(ctx context.Context, t *testing.T, host Host, store database.UserDBI) *Platform {
 	t.Helper()
 	platform, err := New(platforms.Settings{DataDir: "/data"}, host)
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestTrackPersistsBeforeDispatchAndRecordsSuccess(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	dispatched := false
 	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
@@ -193,7 +193,7 @@ func TestTrackHostReturnPathHasNoImmediateHistoryNotification(t *testing.T) {
 	deniedState := ForegroundState{BootID: "boot-1", Permission: "denied", SampledMs: 1000, ElapsedMs: 500}
 	host := &fakeHost{state: &deniedState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 	notified := false
 	platform.SetMediaHistoryHooks(platforms.MediaHistoryHooks{Changed: func() { notified = true }})
 
@@ -211,7 +211,7 @@ func TestTrackAbandonsOnDefiniteFailure(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	dispatchErr := &HostError{Reason: FailureNotInstalled}
 	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
@@ -225,7 +225,7 @@ func TestTrackLeavesPendingOnAmbiguousFailure(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	for _, reason := range []FailureReason{FailureHostUnavailable, FailureInvalidResponse, FailureOutcomeUnknown} {
 		dispatchErr := &HostError{Reason: reason}
@@ -242,7 +242,7 @@ func TestTrackInvalidForegroundStateRefusesLaunch(t *testing.T) {
 	badState := ForegroundState{}
 	host := &fakeHost{state: &badState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	dispatched := false
 	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
@@ -271,7 +271,7 @@ func TestTrackWithoutStoreCapabilityDispatchesUntracked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
-	platform := trackedPlatform(t, ctx, host, nil)
+	platform := trackedPlatform(ctx, t, host, nil)
 
 	dispatched := false
 	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
@@ -297,7 +297,7 @@ func TestReconcileExternalSessionsConfirmsAndNotifiesOnce(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{applyStatus: "closed"}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 	notifications := 0
 	platform.SetMediaHistoryHooks(platforms.MediaHistoryHooks{Changed: func() { notifications++ }})
 
@@ -320,7 +320,7 @@ func TestReconcileExternalSessionsStalesOnBootChange(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
 		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",
@@ -338,7 +338,7 @@ func TestReconcileHostReturnSessionsClosesApproximateOnReturn(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
 		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",
@@ -361,7 +361,7 @@ func TestReconcileHostReturnSessionsStalesADeadObserverProcess(t *testing.T) {
 	ctx := t.Context()
 	host := &fakeHost{state: &defaultForegroundState}
 	store := &sessionStoreProbe{}
-	platform := trackedPlatform(t, ctx, host, store)
+	platform := trackedPlatform(ctx, t, host, store)
 
 	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
 		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",

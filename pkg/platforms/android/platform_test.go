@@ -49,17 +49,17 @@ type fakeHost struct {
 	evidenceErr     error
 	substitute      string
 	receipt         *DispatchReceipt
+	icons           map[string]string
+	files           map[string][]byte
+	state           *ForegroundState
+	evidence        *database.ForegroundEvidence
 	references      []string
 	cores           []string
 	apps            []AppInfo
-	icons           map[string]string
-	files           map[string][]byte
 	iconCalls       []string
 	inspections     []string
 	dispatched      []dispatchCall
 	evidenceQueries []evidenceQuery
-	state           *ForegroundState
-	evidence        *database.ForegroundEvidence
 	listings        int
 	mu              syncutil.Mutex
 	scanned         bool
@@ -246,7 +246,8 @@ func (h *fakeHost) ForegroundEvents(
 ) (database.ForegroundEvidence, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.evidenceQueries = append(h.evidenceQueries, evidenceQuery{launchID: launchID, target: target, fromMs: fromMs, toMs: toMs})
+	h.evidenceQueries = append(h.evidenceQueries,
+		evidenceQuery{launchID: launchID, target: target, fromMs: fromMs, toMs: toMs})
 	if h.evidenceErr != nil {
 		return database.ForegroundEvidence{}, h.evidenceErr
 	}
