@@ -222,9 +222,10 @@ func (p *Platform) reconcileHostReturnSessions(ctx context.Context, observed Hos
 			notify()
 		}
 	}()
+	var errs []error
 	for i := range sessions {
 		session := &sessions[i]
-		if session.Source != "host_return" || session.Status != "pending" || session.DispatchedMs == nil {
+		if session.Source != "host_return" || session.Status != "pending" {
 			continue
 		}
 		if !stateRead {
@@ -233,12 +234,21 @@ func (p *Platform) reconcileHostReturnSessions(ctx context.Context, observed Hos
 			}
 			stateRead = true
 		}
+		// A wrong-boot or dead-observer session is unobservable whether or
+		// not it was ever dispatched: an outcome-unknown dispatch must not
+		// leave it pending forever just because it never got a receipt.
 		if session.BootID != state.BootID || session.RequestedElapsedMs < observed.ObserverStartedElapsedMs {
 			staled, staleErr := store.MarkExternalSessionStale(ctx, session.LaunchID, state.SampledMs)
 			if staleErr != nil {
-				return fmt.Errorf("retire unobservable external launch: %w", staleErr)
+				// One session's store error must not stop every other
+				// unresolved session from reconciling in this pass.
+				errs = append(errs, fmt.Errorf("retire unobservable external launch: %w", staleErr))
+				continue
 			}
 			changed = changed || staled
+			continue
+		}
+		if session.DispatchedMs == nil {
 			continue
 		}
 		// Dispatch follows the request within the host's dispatch timeout. The
@@ -265,11 +275,12 @@ func (p *Platform) reconcileHostReturnSessions(ctx context.Context, observed Hos
 		closed, closeErr := store.CloseExternalSessionApproximate(ctx, session.LaunchID,
 			*session.DispatchedMs, *session.DispatchedMs+endElapsed-dispatchedElapsed)
 		if closeErr != nil {
-			return fmt.Errorf("close approximate external launch %s: %w", session.LaunchID, closeErr)
+			errs = append(errs, fmt.Errorf("close approximate external launch %s: %w", session.LaunchID, closeErr))
+			continue
 		}
 		changed = changed || closed
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ReconcileExternalSessions queries only recorded launch targets. The
@@ -296,22 +307,29 @@ func (p *Platform) ReconcileExternalSessions(ctx context.Context) error {
 			notify()
 		}
 	}()
+	var errs []error
 	for i := range sessions {
 		session := &sessions[i]
 		if session.Source != "foreground_events" {
 			continue
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("session reconciliation cancelled: %w", ctxErr)
+			// Cancellation stops the whole pass; every other session is
+			// exactly as unresolved next time as it is now.
+			return errors.Join(append(errs, fmt.Errorf("session reconciliation cancelled: %w", ctxErr))...)
 		}
 		state, stateErr := p.host.ForegroundState()
 		if stateErr != nil {
-			return fmt.Errorf("read Android foreground state: %w", stateErr)
+			// One session's failure must not stop every other unresolved
+			// session from reconciling in this pass.
+			errs = append(errs, fmt.Errorf("read Android foreground state: %w", stateErr))
+			continue
 		}
 		if state.BootID != session.BootID || state.Permission != "granted" {
 			staled, staleErr := store.MarkExternalSessionStale(ctx, session.LaunchID, state.SampledMs)
 			if staleErr != nil {
-				return fmt.Errorf("retire unobservable external session: %w", staleErr)
+				errs = append(errs, fmt.Errorf("retire unobservable external session: %w", staleErr))
+				continue
 			}
 			applied = applied || staled
 			continue
@@ -332,13 +350,15 @@ func (p *Platform) ReconcileExternalSessions(ctx context.Context) error {
 		}
 		batch, queryErr := p.host.ForegroundEvents(ctx, session.LaunchID, session.Target, from, to)
 		if queryErr != nil {
-			return fmt.Errorf("query Android foreground events: %w", queryErr)
+			errs = append(errs, fmt.Errorf("query Android foreground events: %w", queryErr))
+			continue
 		}
 		changed, applyErr := store.ApplyExternalEvidence(ctx, &batch)
 		if applyErr != nil {
-			return fmt.Errorf("reconcile external launch %s: %w", session.LaunchID, applyErr)
+			errs = append(errs, fmt.Errorf("reconcile external launch %s: %w", session.LaunchID, applyErr))
+			continue
 		}
 		applied = applied || changed
 	}
-	return nil
+	return errors.Join(errs...)
 }

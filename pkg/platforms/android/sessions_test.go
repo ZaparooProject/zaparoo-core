@@ -378,3 +378,47 @@ func TestReconcileHostReturnSessionsStalesADeadObserverProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"launch-1"}, store.staled)
 }
+
+func TestReconcileHostReturnSessionsStalesAnUndispatchedDeadObserverSession(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	// Never dispatched: the outcome was ambiguous (host-unavailable, say) and
+	// nothing ever recorded a receipt for it.
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",
+		MediaName: "Game", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 1000, RequestedElapsedMs: 100, Status: "pending", Source: "host_return",
+	}))
+
+	err := platform.reconcileHostReturnSessions(ctx, HostReturn{ObserverStartedElapsedMs: 5000})
+	require.NoError(t, err)
+	require.Equal(t, []string{"launch-1"}, store.staled,
+		"an undispatched session from a dead observer process must not linger pending forever")
+}
+
+func TestReconcileExternalSessionsOneFailureDoesNotBlockAnother(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{applyStatus: "closed", applyErr: errors.New("boom")}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-broken", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/a.steam",
+		MediaName: "A", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 500, Status: "pending", Source: "foreground_events",
+	}))
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-ok", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/b.steam",
+		MediaName: "B", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 600, Status: "pending", Source: "foreground_events",
+	}))
+
+	err := platform.ReconcileExternalSessions(ctx)
+	require.Error(t, err, "the failing session's error is still surfaced")
+	require.Len(t, host.evidenceQueries, 2, "both sessions must still be queried in the same pass")
+}

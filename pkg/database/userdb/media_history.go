@@ -613,7 +613,8 @@ func sqlGetDistinctMediaHistory(
 		SELECT
 			history.DBID, history.StartTime, history.EndTime,
 			history.SystemID, history.SystemName, history.MediaPath,
-			history.MediaName, history.LauncherID, history.PlayTime
+			history.MediaName, history.LauncherID, history.PlayTime,
+			history.SessionSource, history.SessionConfidence
 		FROM MediaHistory AS history
 		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
 		WHERE history.DBID < ?
@@ -647,6 +648,8 @@ func sqlGetDistinctMediaHistory(
 			&entry.MediaName,
 			&entry.LauncherID,
 			&entry.PlayTime,
+			&entry.SessionSource,
+			&entry.SessionConfidence,
 		); scanErr != nil {
 			return list, fmt.Errorf("failed to scan distinct media history row: %w", scanErr)
 		}

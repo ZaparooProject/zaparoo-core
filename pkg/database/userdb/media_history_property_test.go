@@ -284,7 +284,9 @@ func TestGetDistinctMediaHistory_UniquePaginationAndSystemScope(t *testing.T) {
 			MediaName TEXT NOT NULL,
 			LauncherID TEXT NOT NULL,
 			PlayTime INTEGER NOT NULL,
-			IsDeleted INTEGER DEFAULT 0
+			IsDeleted INTEGER DEFAULT 0,
+			SessionSource TEXT NOT NULL DEFAULT 'active_media',
+			SessionConfidence TEXT NOT NULL DEFAULT 'unspecified'
 		)
 	`)
 	require.NoError(t, err)

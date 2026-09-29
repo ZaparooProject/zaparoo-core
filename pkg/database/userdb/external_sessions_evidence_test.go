@@ -225,3 +225,30 @@ func TestApplyExternalEvidenceRejectsInvalidBatch(t *testing.T) {
 	_, err = db.ApplyExternalEvidence(ctx, nil)
 	require.Error(t, err)
 }
+
+func TestApplyExternalEvidenceIgnoresEventsPastTheSupersedeBound(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+	beginAndDispatch(t, db, "launch-1")
+
+	second := externalSessionFixture("launch-2")
+	second.RequestedMs = 108000
+	require.NoError(t, db.BeginExternalSession(ctx, second))
+
+	// The same package resumes again well after the supersede bound - Android
+	// cannot know this event belongs to a different, later-dispatched title.
+	batch := evidenceBatch("launch-1", 200000,
+		database.ForegroundEvent{Kind: "target_resumed", TimestampMs: 100500, Sequence: 0},
+		database.ForegroundEvent{Kind: "target_resumed", TimestampMs: 150000, Sequence: 1},
+	)
+	changed, err := db.ApplyExternalEvidence(ctx, batch)
+	require.NoError(t, err, "an event past the supersede bound must be dropped, not rejected as out of order")
+	require.True(t, changed)
+
+	var status string
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT Status FROM ExternalSessions WHERE LaunchID = 'launch-1'`).Scan(&status))
+	require.Equal(t, "closed", status)
+}

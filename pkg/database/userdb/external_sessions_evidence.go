@@ -137,6 +137,17 @@ func (db *UserDB) ApplyExternalEvidence(ctx context.Context, batch *database.For
 		if queryEndMs > hardCloseAtMs {
 			queryEndMs = hardCloseAtMs
 		}
+		// The host cannot know a later event belongs to a title it dispatched
+		// after this one: a supersede is proof this session's story ends at
+		// hardCloseAtMs, so anything retained past it is simply not this
+		// session's evidence, not an out-of-order batch to reject.
+		kept := events[:0]
+		for _, event := range events {
+			if event.TimestampMs <= queryEndMs {
+				kept = append(kept, event)
+			}
+		}
+		events = kept
 	}
 	result, err := sessionevidence.ReconcileForeground(session.RequestedMs, queryEndMs, hardCloseAtMs, events)
 	if err != nil {
