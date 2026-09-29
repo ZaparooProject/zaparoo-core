@@ -89,6 +89,183 @@ func TestScrapeLoop_ArcadeSetNameBundle(t *testing.T) {
 	mdb.AssertExpectations(t)
 }
 
+func TestMameGamelistDirs(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, mameGamelistDirs(nil),
+		"granular arcade systems have no ROM paths to derive a games/mame sibling from")
+	assert.Empty(t, mameGamelistDirs([]string{
+		filepath.Join("media", "fat", "SNES"), filepath.Join("media", "fat", "_Arcade", "cores"),
+	}), "only a root literally named _Arcade supplies a sibling games/mame dir")
+	assert.Equal(t,
+		[]string{filepath.Join("media", "fat", "games", "mame"), filepath.Join("media", "usb0", "games", "mame")},
+		mameGamelistDirs([]string{
+			filepath.Join("media", "fat", "_Arcade"),
+			filepath.Join("media", "usb0", "_Arcade"),
+			filepath.Join("media", "fat", "_Arcade"), // reported twice, e.g. by an indexed source root
+		}),
+		"dedups repeated roots and keeps encounter order")
+}
+
+// TestScrapeLoop_MameGamelistAutoDiscovery is the regression case for #1579:
+// MiSTer Companion's ZapScraper writes gamelist.xml to games/mame beside
+// _Arcade, not into it, and never through custom_path. Before this fix,
+// nothing read it without manually copying it into a configured bundle.
+func TestScrapeLoop_MameGamelistAutoDiscovery(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	base := t.TempDir()
+	root := filepath.Join(base, "_Arcade")
+	mameDir := filepath.Join(base, "games", "mame")
+	mraPath := filepath.Join(root, "Pac-Man (Midway).mra")
+	image := filepath.Join(mameDir, "media", "images", "pacman.png")
+	for path, content := range map[string]string{
+		mraPath: "<misterromdescription><setname>pacman</setname></misterromdescription>",
+		image:   "image",
+		filepath.Join(mameDir, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>
+<name>ZapScraper title</name><desc>Arcade metadata from ZapScraper</desc><image>./media/images/pacman.png</image>
+</game></gameList>`,
+	} {
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+	mdb := newMockMediaDB(t)
+	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
+		DBID: 1, Slug: "pacman", Name: "Pac-Man", SystemDBID: 100,
+	}}, nil)
+	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{{
+		DBID: 10, MediaTitleDBID: 1, Path: mraPath,
+	}}, nil)
+	mdb.On("ApplyScrapeResult", mock.Anything, int64(10), int64(1),
+		mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+			prop, ok := propertyByType(w.MediaProps, "property:image-image")
+			return assert.True(t, ok) && assert.Equal(t, filepath.ToSlash(image), prop.Text)
+		})).Return(nil).Once()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	s := &GamelistXMLScraper{db: mdb, fs: fs, cfg: cfg, matchArcadeSets: true}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(t.Context(), scraper.ScrapeOptions{Force: true, Pauser: syncutil.NewPauser()},
+		[]scraper.ScrapeSystem{{ID: systemdefs.SystemArcade, DBID: 100, ROMPaths: []string{root}}}, mdb, ch)
+	var done scraper.ScrapeUpdate
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+		if update.Done {
+			done = update
+		}
+	}
+	assert.Equal(t, 1, done.Matched)
+	mdb.AssertExpectations(t)
+}
+
+// TestScrapeLoop_MameGamelistYieldsToArcadeGamelist checks precedence: an
+// _Arcade/gamelist.xml naming the same set wins over the auto-discovered
+// games/mame source.
+func TestScrapeLoop_MameGamelistYieldsToArcadeGamelist(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	base := t.TempDir()
+	root := filepath.Join(base, "_Arcade")
+	mameDir := filepath.Join(base, "games", "mame")
+	mraPath := filepath.Join(root, "Pac-Man (Midway).mra")
+	for path, content := range map[string]string{
+		mraPath: "<misterromdescription><setname>pacman</setname></misterromdescription>",
+		filepath.Join(root, "gamelist.xml"): `<gameList><game><path>pacman</path>
+<name>_Arcade title</name><desc>From _Arcade</desc></game></gameList>`,
+		filepath.Join(mameDir, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>
+<name>ZapScraper title</name><desc>From ZapScraper</desc></game></gameList>`,
+	} {
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+	mdb := newMockMediaDB(t)
+	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
+		DBID: 1, Slug: "arcadetitle", Name: "Arcade Title", SystemDBID: 100,
+	}}, nil)
+	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{{
+		DBID: 10, MediaTitleDBID: 1, Path: mraPath,
+	}}, nil)
+	mdb.On("ApplyScrapeResult", mock.Anything, int64(10), int64(1),
+		mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+			prop, ok := propertyByType(w.TitleProps, "property:description")
+			return assert.True(t, ok) && assert.Equal(t, "From _Arcade", prop.Text)
+		})).Return(nil).Once()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	s := &GamelistXMLScraper{db: mdb, fs: fs, cfg: cfg, matchArcadeSets: true}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(t.Context(), scraper.ScrapeOptions{Force: true, Pauser: syncutil.NewPauser()},
+		[]scraper.ScrapeSystem{{ID: systemdefs.SystemArcade, DBID: 100, ROMPaths: []string{root}}}, mdb, ch)
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+	}
+	mdb.AssertExpectations(t)
+}
+
+// TestScrapeLoop_MameGamelistYieldsToCustomBundle checks precedence against
+// the other existing source: an explicitly configured custom bundle wins
+// over the auto-discovered games/mame source.
+func TestScrapeLoop_MameGamelistYieldsToCustomBundle(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	base := t.TempDir()
+	root := filepath.Join(base, "_Arcade")
+	mameDir := filepath.Join(base, "games", "mame")
+	custom := t.TempDir()
+	bundle := filepath.Join(custom, systemdefs.SystemArcade)
+	mraPath := filepath.Join(root, "Pac-Man (Midway).mra")
+	for path, content := range map[string]string{
+		mraPath: "<misterromdescription><setname>pacman</setname></misterromdescription>",
+		filepath.Join(bundle, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>
+<name>Bundle title</name><desc>From bundle</desc></game></gameList>`,
+		filepath.Join(mameDir, "gamelist.xml"): `<gameList><game><path>./pacman.zip</path>
+<name>ZapScraper title</name><desc>From ZapScraper</desc></game></gameList>`,
+	} {
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+	mdb := newMockMediaDB(t)
+	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
+		DBID: 1, Slug: "arcadetitle", Name: "Arcade Title", SystemDBID: 100,
+	}}, nil)
+	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{{
+		DBID: 10, MediaTitleDBID: 1, Path: mraPath,
+	}}, nil)
+	mdb.On("ApplyScrapeResult", mock.Anything, int64(10), int64(1),
+		mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+			prop, ok := propertyByType(w.TitleProps, "property:description")
+			return assert.True(t, ok) && assert.Equal(t, "From bundle", prop.Text)
+		})).Return(nil).Once()
+	s := &GamelistXMLScraper{db: mdb, fs: fs, cfg: newCustomGamelistConfig(t, custom), matchArcadeSets: true}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(t.Context(), scraper.ScrapeOptions{Force: true, Pauser: syncutil.NewPauser()},
+		[]scraper.ScrapeSystem{{ID: systemdefs.SystemArcade, DBID: 100, ROMPaths: []string{root}}}, mdb, ch)
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+	}
+	mdb.AssertExpectations(t)
+}
+
+// TestLoadParsedGamelistSystem_MameGamelistGatedByArcadeSetMatching pins the
+// same gate indexArcadeSets already relies on: games/mame is only read on
+// platforms that also do MRA set-name matching.
+func TestLoadParsedGamelistSystem_MameGamelistGatedByArcadeSetMatching(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	base := t.TempDir()
+	root := filepath.Join(base, "_Arcade")
+	mameDir := filepath.Join(base, "games", "mame")
+	require.NoError(t, fs.MkdirAll(mameDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(mameDir, "gamelist.xml"),
+		[]byte(`<gameList><game><path>./pacman.zip</path><name>ZapScraper title</name></game></gameList>`), 0o600))
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	s := &GamelistXMLScraper{fs: fs, cfg: cfg, matchArcadeSets: false}
+	parsed, err := s.loadParsedGamelistSystem(t.Context(),
+		scraper.ScrapeSystem{ID: systemdefs.SystemArcade, ROMPaths: []string{root}})
+	require.NoError(t, err)
+	assert.Empty(t, parsed.Files, "games/mame gamelist.xml must not be read when arcade set matching is disabled")
+}
+
 func TestArcadeMatching(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
