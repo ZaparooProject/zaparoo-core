@@ -511,3 +511,18 @@ func TestSessionForLaunchAttributesTheActiveProfile(t *testing.T) {
 	require.NotNil(t, session.ProfileID)
 	require.Equal(t, "profile-1", *session.ProfileID)
 }
+
+func TestTrackDispatchesUntrackedWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{beginErr: errors.New("disk full")}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	dispatched := false
+	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
+		func() error { dispatched = true; return nil })
+	require.NoError(t, err)
+	require.True(t, dispatched, "a bookkeeping failure must not block the launch itself")
+	require.Empty(t, store.sessionOrder)
+}

@@ -183,6 +183,7 @@ func TestReconcileForegroundHardCloseClosesAnOpenSegmentAtTheBound(t *testing.T)
 	require.Equal(t, []ForegroundSegment{{StartMs: 1000, EndMs: 4000}}, result.Segments,
 		"a later recorded launch proves this target ended by the supersede bound")
 	require.Zero(t, result.OpenStartMs)
+	require.Equal(t, int64(4000), result.ClosedMs)
 }
 
 func TestReconcileForegroundHardCloseWithinGraceClosesAtThePause(t *testing.T) {
@@ -195,6 +196,7 @@ func TestReconcileForegroundHardCloseWithinGraceClosesAtThePause(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "closed", result.Status)
 	require.Equal(t, []ForegroundSegment{{StartMs: 1000, EndMs: 3000}}, result.Segments)
+	require.Equal(t, int64(3000), result.ClosedMs, "the proven end is the pause, not the later supersede bound")
 }
 
 func TestReconcileForegroundHardCloseOnUnconfirmedAbandons(t *testing.T) {

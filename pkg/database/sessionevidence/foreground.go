@@ -219,13 +219,17 @@ func ReconcileForeground(
 		case pausedAt > 0:
 			// Paused-but-not-yet-timed-out is an unresolved gap, not proof
 			// of continued foreground; only a later resume could bridge it,
-			// and a supersede is never that.
+			// and a supersede is never that. The session's proven end is the
+			// pause, not the later bound that merely revealed it.
 			closeSegment(pausedAt)
+			result.ClosedMs = pausedAt
 		case opened > 0:
 			closeSegment(hardCloseAtMs)
+			result.ClosedMs = hardCloseAtMs
+		default:
+			result.ClosedMs = hardCloseAtMs
 		}
 		result.Status = "closed"
-		result.ClosedMs = hardCloseAtMs
 		result.OpenStartMs = 0
 	}
 	return result, nil

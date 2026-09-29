@@ -65,7 +65,11 @@ func (p *Platform) track(
 	}
 	session := p.sessionForLaunch(ctx, db.MediaDB, definition, launcherID, path, state)
 	if beginErr := store.BeginExternalSession(ctx, session); beginErr != nil {
-		return fmt.Errorf("persist external launch before dispatch: %w", beginErr)
+		// Same policy as every other reason tracking is unavailable: a
+		// storage problem in the bookkeeping must not stop the launch the
+		// user actually asked for.
+		log.Warn().Err(beginErr).Msg("Android launch could not be persisted; launch cannot be timed")
+		return dispatch()
 	}
 	dispatchErr := dispatch()
 	nowMs := time.Now().UnixMilli()
