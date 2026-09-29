@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
+	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"pgregory.net/rapid"
 )
 
@@ -401,7 +402,11 @@ func TestPropertyParseTagFiltersResultNeverNil(t *testing.T) {
 func TestPropertyParseTagFiltersOrderPreserved(t *testing.T) {
 	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate unique tags
+		// Generate tags that stay distinct after ParseTagFilters' own
+		// normalization, not just as raw strings: two raw values that
+		// normalize alike, such as "-" and "--", are one filter by design,
+		// so uniqueness has to be checked on the normalized key or the
+		// count below can never match.
 		count := rapid.IntRange(2, 10).Draw(t, "count")
 		uniqueTags := make([]string, count)
 		seen := make(map[string]bool)
@@ -412,8 +417,13 @@ func TestPropertyParseTagFiltersOrderPreserved(t *testing.T) {
 				tagType := tagTypeGen().Draw(t, "type")
 				tagValue := tagValueGen().Draw(t, "value")
 				tagStr = tagType + ":" + tagValue
-				if !seen[tagStr] {
-					seen[tagStr] = true
+				// Mirror ParseTagFilters' own dedup key exactly: value
+				// normalization is type-aware (company names for
+				// developer/publisher/credit), not the plain rule.
+				normType := dbtags.NormalizeTag(tagType)
+				normKey := normType + ":" + dbtags.NormalizeTagValue(normType, tagValue)
+				if !seen[normKey] {
+					seen[normKey] = true
 					break
 				}
 			}
@@ -429,12 +439,14 @@ func TestPropertyParseTagFiltersOrderPreserved(t *testing.T) {
 			t.Fatalf("Expected %d filters, got %d", count, len(result))
 		}
 
-		// Verify order matches input order
+		// Verify order matches input order. Comparing both the normalized
+		// type and value, not just the type, catches a same-type run whose
+		// values were reordered: types alone could match by coincidence.
 		for i, filter := range result {
-			expectedFilter := uniqueTags[i]
-			// Parse expected to compare
-			parts := strings.SplitN(expectedFilter, ":", 2)
-			if !strings.EqualFold(filter.Type, parts[0]) {
+			parts := strings.SplitN(uniqueTags[i], ":", 2)
+			expectedType := dbtags.NormalizeTag(parts[0])
+			expectedValue := dbtags.NormalizeTagValue(expectedType, parts[1])
+			if filter.Type != expectedType || filter.Value != expectedValue {
 				t.Fatalf("Order not preserved at index %d", i)
 			}
 		}
