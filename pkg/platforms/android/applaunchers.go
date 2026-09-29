@@ -85,8 +85,8 @@ func (p *Platform) appLauncher(entry *catalogEntry, snapshot *hostSnapshot) plat
 				Path: identity.AppPath(), Name: definition.Name, NoExt: true,
 			}), nil
 		},
-		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			return nil, p.dispatchApp(entry)
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, p.dispatchApp(entry, path)
 		},
 	}
 	if availability != nil {
@@ -185,34 +185,43 @@ func (p *Platform) dispatchInstalledApp(snapshot *hostSnapshot, identity string)
 		return repairError(platforms.LaunchRepairLauncherNotInstalled, nil, msgNotInstalled)
 	}
 	entry := &catalogEntry{definition: definition, group: installedAppsGroup}
-	return p.dispatchApp(entry)
+	return p.dispatchApp(entry, identity)
 }
 
-// dispatchApp starts a definition that carries no media at all.
-func (p *Platform) dispatchApp(entry *catalogEntry) error {
+// dispatchApp starts a definition that carries no media of its own. path is
+// the media or app identity path a session is recorded under: the real
+// source path for ScummVM/GameNative, or the app's own identity for a plain
+// app launch.
+func (p *Platform) dispatchApp(entry *catalogEntry, path string) error {
 	definition := &entry.definition
 	if p.host == nil {
 		return unsupported("launch an app before the host is ready")
 	}
-	// The host gets its own copy, so a Dispatch that wrote through the pointer
-	// cannot corrupt the catalog entry for the rest of the process.
-	sent := definition.copy()
-	receipt, err := p.host.DispatchApp(&sent)
-	if err != nil {
-		return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
+	ctx := p.launcherContext()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
-		receipt.Strategy != definition.Strategy {
-		log.Error().
-			Str("launcherID", definition.ID).
-			Str("expectedPackage", definition.Package).
-			Str("actualPackage", receipt.Package).
-			Str("expectedActivity", definition.Activity).
-			Str("actualActivity", receipt.Activity).
-			Str("expectedStrategy", definition.Strategy).
-			Str("actualStrategy", receipt.Strategy).
-			Msg("host app dispatch receipt names a different component than the launch definition")
-		return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
-	}
-	return nil
+	return p.track(ctx, definition, definition.ID, path, func() error {
+		// The host gets its own copy, so a Dispatch that wrote through the pointer
+		// cannot corrupt the catalog entry for the rest of the process.
+		sent := definition.copy()
+		receipt, err := p.host.DispatchApp(&sent)
+		if err != nil {
+			return fmt.Errorf("%w: %w", hostRepairError(failureReason(err), entry), err)
+		}
+		if receipt.Package != definition.Package || receipt.Activity != definition.Activity ||
+			receipt.Strategy != definition.Strategy {
+			log.Error().
+				Str("launcherID", definition.ID).
+				Str("expectedPackage", definition.Package).
+				Str("actualPackage", receipt.Package).
+				Str("expectedActivity", definition.Activity).
+				Str("actualActivity", receipt.Activity).
+				Str("expectedStrategy", definition.Strategy).
+				Str("actualStrategy", receipt.Strategy).
+				Msg("host app dispatch receipt names a different component than the launch definition")
+			return repairError(platforms.LaunchRepairOutcomeUnknown, entry.repairParams(), msgReceiptMismatch)
+		}
+		return nil
+	})
 }

@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
@@ -40,24 +41,36 @@ const testReference = "content://org.example.documents/tree/games"
 // fakeHost is an in-memory Host: packages are installed unless listed in
 // failures, and one media folder holds nes/Game.nes and psx/Game.chd.
 type fakeHost struct {
-	failures    map[string]FailureReason
-	dispatchErr error
-	foldersErr  error
-	readErr     error
-	substitute  string
-	receipt     *DispatchReceipt
-	references  []string
-	cores       []string
-	apps        []AppInfo
-	icons       map[string]string
-	files       map[string][]byte
-	iconCalls   []string
-	inspections []string
-	dispatched  []dispatchCall
-	listings    int
-	mu          syncutil.Mutex
-	scanned     bool
-	appsScanned bool
+	failures        map[string]FailureReason
+	dispatchErr     error
+	foldersErr      error
+	readErr         error
+	foregroundErr   error
+	evidenceErr     error
+	substitute      string
+	receipt         *DispatchReceipt
+	references      []string
+	cores           []string
+	apps            []AppInfo
+	icons           map[string]string
+	files           map[string][]byte
+	iconCalls       []string
+	inspections     []string
+	dispatched      []dispatchCall
+	evidenceQueries []evidenceQuery
+	state           *ForegroundState
+	evidence        *database.ForegroundEvidence
+	listings        int
+	mu              syncutil.Mutex
+	scanned         bool
+	appsScanned     bool
+}
+
+type evidenceQuery struct {
+	launchID string
+	target   string
+	fromMs   int64
+	toMs     int64
 }
 
 type dispatchCall struct {
@@ -206,6 +219,48 @@ func (h *fakeHost) Dispatch(
 	}
 	return DispatchReceipt{
 		Package: definition.Package, Activity: definition.Activity, Strategy: definition.Strategy,
+	}, nil
+}
+
+// defaultForegroundState is a plausible granted-permission snapshot for
+// tests that need one but do not care about its exact values.
+var defaultForegroundState = ForegroundState{
+	BootID: "boot-1", Permission: "granted", SampledMs: 1_000_000, ElapsedMs: 5_000,
+	Interactive: true, Unlocked: true,
+}
+
+func (h *fakeHost) ForegroundState() (ForegroundState, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.foregroundErr != nil {
+		return ForegroundState{}, h.foregroundErr
+	}
+	if h.state != nil {
+		return *h.state, nil
+	}
+	return defaultForegroundState, nil
+}
+
+func (h *fakeHost) ForegroundEvents(
+	_ context.Context, launchID, target string, fromMs, toMs int64,
+) (database.ForegroundEvidence, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.evidenceQueries = append(h.evidenceQueries, evidenceQuery{launchID: launchID, target: target, fromMs: fromMs, toMs: toMs})
+	if h.evidenceErr != nil {
+		return database.ForegroundEvidence{}, h.evidenceErr
+	}
+	if h.evidence != nil {
+		return *h.evidence, nil
+	}
+	state := defaultForegroundState
+	if h.state != nil {
+		state = *h.state
+	}
+	return database.ForegroundEvidence{
+		Version: 1, LaunchID: launchID, BootID: state.BootID, Permission: state.Permission,
+		Complete: true, QueryFromMs: fromMs, QueryToMs: toMs,
+		ObservedElapsedMs: state.ElapsedMs, ObservedWallMs: toMs,
 	}, nil
 }
 

@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/rs/zerolog/log"
 )
 
 // errFolderUnavailable reports media in a folder the host no longer lists.
@@ -55,18 +56,21 @@ var errNotAFile = errors.New("source path names no file")
 type Platform struct {
 	host             Host
 	launcherContexts platforms.LauncherContextManager
+	db               *database.Database
 	entryByID        map[string]*catalogEntry
 	// folders maps each source root ID to the host reference it was made
 	// from, as of the last SourceRoots call.
-	folders  map[string]string
-	settings platforms.Settings
-	entries  []catalogEntry
-	mu       syncutil.RWMutex
+	folders      map[string]string
+	settings     platforms.Settings
+	entries      []catalogEntry
+	historyHooks platforms.MediaHistoryHooks
+	mu           syncutil.RWMutex
 }
 
 var (
-	_ platforms.Platform         = (*Platform)(nil)
-	_ platforms.SourceRootReader = (*Platform)(nil)
+	_ platforms.Platform             = (*Platform)(nil)
+	_ platforms.SourceRootReader     = (*Platform)(nil)
+	_ platforms.MediaHistoryRecorder = (*Platform)(nil)
 )
 
 // New builds the platform over the directories the host owns. A nil host
@@ -144,17 +148,23 @@ func (*Platform) ID() string { return platformids.Android }
 func (*Platform) StartPre(*config.Instance) error { return nil }
 
 func (p *Platform) StartPost(
-	_ context.Context,
+	ctx context.Context,
 	_ *config.Instance,
 	launcherContexts platforms.LauncherContextManager,
 	_ func() *models.ActiveMedia,
 	_ func(*models.ActiveMedia),
-	_ *database.Database,
+	db *database.Database,
 	_ *idle.Scheduler,
 ) error {
 	p.mu.Lock()
 	p.launcherContexts = launcherContexts
+	p.db = db
 	p.mu.Unlock()
+	go func() {
+		if err := p.ReconcileExternalSessions(ctx); err != nil && ctx.Err() == nil {
+			log.Warn().Err(err).Msg("Android startup session reconciliation deferred")
+		}
+	}()
 	return nil
 }
 
@@ -165,8 +175,30 @@ func (p *Platform) StartPost(
 func (p *Platform) Stop() error {
 	p.mu.Lock()
 	p.launcherContexts = nil
+	p.db = nil
 	p.mu.Unlock()
 	return nil
+}
+
+// SetMediaHistoryHooks receives the service's profile and history
+// notification hooks. Android history for a LifecycleExternal launcher comes
+// from session reconciliation, not the active-media tracker.
+func (p *Platform) SetMediaHistoryHooks(hooks platforms.MediaHistoryHooks) {
+	p.mu.Lock()
+	p.historyHooks = hooks
+	p.mu.Unlock()
+}
+
+func (p *Platform) mediaHistoryHooks() platforms.MediaHistoryHooks {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.historyHooks
+}
+
+func (p *Platform) database() *database.Database {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.db
 }
 
 func (p *Platform) Settings() platforms.Settings { return p.settings }
