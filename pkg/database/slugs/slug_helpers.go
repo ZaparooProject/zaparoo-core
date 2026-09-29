@@ -903,11 +903,53 @@ func AbbreviationExpansionSlack(name string) int {
 	return slack
 }
 
+// ExpandWordIfAbbreviationTypo reports the expansion word would produce if it
+// is a known abbreviation, or a single-edit typo of one - the same tolerance
+// AbbreviationExpansionSlack uses to size its length window, exposed here so a
+// caller comparing individual words (not a whole slug) can recognise "bross"
+// as a typo of "bros" and credit it against "brothers", not just against
+// "bros" itself. A correctly-spelled abbreviation is already expanded by the
+// normal slugification pipeline before either side reaches word comparison,
+// so this only has real work to do for the misspelled side of a match.
+// Returns ok=false if word is not close to any known abbreviation.
+func ExpandWordIfAbbreviationTypo(word string) (expansion string, ok bool) {
+	lowerWord := strings.ToLower(strings.Trim(word, ".,:;!?()[]{}\"'-"))
+	if lowerWord == "" {
+		return "", false
+	}
+	if expansion, found := checkAbbreviation(lowerWord); found {
+		return expansion, true
+	}
+	for abbreviation, expansion := range withOrWithoutPeriodAbbreviations {
+		if withinOneEdit(lowerWord, abbreviation) {
+			return expansion, true
+		}
+	}
+	for abbreviation, expansion := range periodRequiredAbbreviations {
+		if withinOneEdit(lowerWord, abbreviation) {
+			return expansion, true
+		}
+	}
+	return "", false
+}
+
 // withinOneEdit reports whether one insertion, deletion or substitution turns a
 // into b. Bounded by construction: the abbreviation table holds short words.
+//
+// Requires the shorter string to have at least 2 characters. A single
+// character carries no real signal at this length ratio: every one-letter
+// word is trivially "one deletion away" from any two-letter abbreviation that
+// contains it, so without this floor "v", "s" and "vs" itself would all
+// register as typos of "vs" - and every other 2-letter abbreviation's two
+// individual letters the same way - turning ordinary single-letter tokens
+// (initials, a stray roman-numeral remnant for a non-game media type that
+// skips numeral conversion, etc.) into false abbreviation-typo credit.
 func withinOneEdit(a, b string) bool {
 	if len(a) > len(b) {
 		a, b = b, a
+	}
+	if len(a) < 2 {
+		return false
 	}
 	if len(b)-len(a) > 1 {
 		return false

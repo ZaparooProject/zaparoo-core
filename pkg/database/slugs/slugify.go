@@ -416,6 +416,22 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	s = strings.ReplaceAll(s, " 'n ", " and ")
 	s = strings.ReplaceAll(s, " n' ", " and ")
 	s = strings.ReplaceAll(s, " n ", " and ")
+	// Same "'n" contraction, glued directly onto the preceding word with no
+	// space before the apostrophe ("Ghosts'n Goblins", "Pop'n Music") - a
+	// common enough retro-game title style that the space-delimited patterns
+	// above miss it entirely, normalizing to a different slug than the same
+	// title spelled with the "n" written out as its own word. Order matters:
+	// these run after the space-delimited patterns above have already
+	// consumed the genuine standalone cases, so only the attached form is left.
+	s = strings.ReplaceAll(s, "'n' ", " and ")
+	s = strings.ReplaceAll(s, "'n ", " and ")
+	// Fully glued on both sides, with no space anywhere ("Bump'n'Jump",
+	// "Lock'n'Chase") - real MiSTer-catalog file names for titles that also
+	// exist spaced out ("Bump 'n' Jump"), which the two patterns above miss
+	// entirely since they both require a trailing space. Checked last: by
+	// this point every "'n' " with a trailing space has already been consumed
+	// above, so this only matches what those left behind.
+	s = strings.ReplaceAll(s, "'n'", " and ")
 
 	// Plus symbol normalization (for titles like "Game+" or "Mario Kart 8+")
 	s = strings.ReplaceAll(s, "+", " plus ")

@@ -760,6 +760,153 @@ func TestResolveTitle_Strategy4_FuzzyMatching(t *testing.T) {
 	assert.Equal(t, StrategyJaroWinklerDamerau, result.Strategy)
 }
 
+// TestResolveTitle_FuzzyMatchAmbiguousAcrossTitlesCompoundsDiscount documents
+// and locks in an interaction between two independent safety nets: every raw
+// Jaro-Winkler fuzzy result is discounted (resolve.go's Strategy 5, since a
+// character-shape typo correction has no structural guarantee it reached the
+// right title), and separately SelectBestResult discounts again whenever its
+// tie-break resolves across results that are genuinely different titles (not
+// just files of one). A fuzzy-matched slug that collides across two distinct
+// MediaTitleIDs - e.g. two differently-spelled real MediaTitle rows for what a
+// human would call "the same game" ("Ghosts'n Goblins" / "Ghosts 'N Goblins"
+// sharing one slug after #1561's normalization fix is a real example from the
+// live catalog) - triggers both at once, compounding to at most 1.0 * 0.75 *
+// 0.75 = 0.5625 however good the underlying similarity was. That is always
+// below ConfidenceMinimum (0.60), so this case can never launch - it always
+// refuses with ErrLowConfidence, unconditionally, regardless of how close the
+// typo was. That is intentional, not a bug: two independent sources of doubt
+// (an uncertain character-shape guess, and then which of several literal
+// title records it lands on) should compound, not cancel out, and refusing
+// rather than guessing between different real titles is exactly the safe
+// direction. This test pins that outcome so a future change to either
+// discount that accidentally lets this case launch is a deliberate, visible
+// decision, not a silent regression.
+func TestResolveTitle_FuzzyMatchAmbiguousAcrossTitlesCompoundsDiscount(t *testing.T) {
+	t.Parallel()
+
+	const dbSlug = "donkeykongcountry"
+	buildMocks := func(results []database.SearchResultWithCursor) *helpers.MockMediaDBI {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		setupCacheMiss(mockMediaDB)
+		mockMediaDB.On("SearchMediaBySlug",
+			mock.Anything, mock.Anything,
+			mock.MatchedBy(func(slug string) bool { return slug == dbSlug }),
+			mock.Anything,
+		).Return(results, nil)
+		mockMediaDB.On("SearchMediaBySlug",
+			mock.Anything, mock.Anything,
+			mock.MatchedBy(func(slug string) bool { return slug != dbSlug }),
+			mock.Anything,
+		).Return([]database.SearchResultWithCursor{}, nil)
+		mockMediaDB.On("SearchMediaBySecondarySlug",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return([]database.SearchResultWithCursor{}, nil)
+		mockMediaDB.On("SearchMediaBySlugPrefix",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return([]database.SearchResultWithCursor{}, nil)
+		mockMediaDB.On("SearchMediaBySlugIn",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return([]database.SearchResultWithCursor{}, nil)
+		mockMediaDB.On("GetTitlesWithPreFilter",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return([]database.MediaTitle{
+			{Slug: dbSlug, Name: "Donkey Kong Country", DBID: 1},
+		}, nil)
+		setupCacheWrite(mockMediaDB)
+		return mockMediaDB
+	}
+	resolve := func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) (*ResolveResult, error) {
+		t.Helper()
+		cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+		require.NoError(t, err)
+		return ResolveTitle(context.Background(), &ResolveParams{
+			SystemID:  "SNES",
+			GameName:  "Donky Kong Country",
+			MediaDB:   mockMediaDB,
+			Cfg:       cfg,
+			MediaType: slugs.MediaTypeGame,
+		})
+	}
+
+	single, err := resolve(t, buildMocks([]database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 101, SystemID: "SNES", Name: "Donkey Kong Country", Path: "/games/snes/dkc.sfc"},
+	}))
+	require.NoError(t, err, "a single-title fuzzy match launches normally")
+	require.NotNil(t, single)
+	require.Equal(t, StrategyJaroWinklerDamerau, single.Strategy)
+	assert.GreaterOrEqual(t, single.Confidence, ConfidenceMinimum)
+
+	_, err = resolve(t, buildMocks([]database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 101, SystemID: "SNES", Name: "Donkey Kong Country", Path: "/games/snes/dkc.sfc"},
+		{MediaID: 2, MediaTitleID: 102, SystemID: "SNES", Name: "Donkey Kong Kountry", Path: "/games/snes/dkc2.sfc"},
+	}))
+	require.ErrorIs(t, err, ErrLowConfidence,
+		"a fuzzy match ambiguous across title IDs must always refuse rather than guess, since the two "+
+			"discounts compound to at most 0.5625 - below ConfidenceMinimum however good the typo match was")
+}
+
+// TestResolveTitle_UnnumberedFirstGameStillResolves is the control for
+// SameTitleNumbers' one addition beyond issue #1561's own ask: a lone "1" is
+// treated as no number, so a series' unnumbered first game - "Final Fantasy,"
+// indexed with no number - still resolves from a query that spells it out as
+// "Final Fantasy I". This goes through the fuzzy strategy, not the bare-prefix
+// one: "finalfantasy1" (13 chars) and "finalfantasy" (12 chars) are within the
+// fuzzy length window, and "finalfantasy" is the shorter of the two, so it's
+// never reachable as a bare-prefix match (that direction requires the DB title
+// to be the longer one).
+func TestResolveTitle_UnnumberedFirstGameStillResolves(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+
+	const dbSlug = "finalfantasy"
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything,
+		mock.MatchedBy(func(slug string) bool { return slug == dbSlug }),
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{MediaID: 1, SystemID: "NES", Name: "Final Fantasy", Path: "/games/nes/ff.nes"},
+	}, nil)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything,
+		mock.MatchedBy(func(slug string) bool { return slug != dbSlug }),
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{
+		{Slug: dbSlug, Name: "Final Fantasy", DBID: 1},
+	}, nil)
+
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "Final Fantasy I",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "Final Fantasy", result.Result.Name)
+	assert.Equal(t, StrategyJaroWinklerDamerau, result.Strategy)
+}
+
 func TestResolveTitle_Strategy5_MainTitleOnly(t *testing.T) {
 	t.Parallel()
 
@@ -814,6 +961,220 @@ func TestResolveTitle_Strategy5_MainTitleOnly(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, StrategyMainTitleOnly, result.Strategy)
 	assert.Equal(t, "Legend of Zelda", result.Result.Name)
+}
+
+// sf2Titles are the real MiSTer Arcade file names for issue #1561: none of
+// them carry a colon/dash, so only the new bare-prefix case in TryMainTitleOnly
+// can reach them; the fuzzy strategy is isolated out (GetTitlesWithPreFilter
+// mocked empty) so this test exercises exactly the strategy this fix adds.
+var sf2Titles = []database.SearchResultWithCursor{
+	{
+		MediaID: 1, MediaTitleID: 101, SystemID: "Arcade",
+		Name: "Street Fighter II The World Warrior", Path: "/media/fat/_Arcade/sf2ww.mra",
+	},
+	{
+		MediaID: 2, MediaTitleID: 102, SystemID: "Arcade",
+		Name: "Street Fighter II' Champion Edition", Path: "/media/fat/_Arcade/sf2ce.mra",
+	},
+	{
+		MediaID: 3, MediaTitleID: 103, SystemID: "Arcade",
+		Name: "Street Fighter II' Hyper Fighting", Path: "/media/fat/_Arcade/sf2hf.mra",
+	},
+}
+
+// setupSequelResolveMocks wires every strategy but 6 (TryMainTitleOnly) to
+// return empty, isolating the new bare-prefix case the same way every other
+// strategy test in this file isolates its own target.
+func setupSequelResolveMocks(m *helpers.MockMediaDBI) {
+	setupCacheMiss(m)
+	m.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	m.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	m.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{}, nil)
+	m.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	m.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(sf2Titles, nil)
+	setupCacheWrite(m)
+}
+
+// TestResolveTitle_SequelQueryReachesRealSequelNotOriginal is issue #1561 end
+// to end: "Street Fighter II" (and its "2" spelling) used to launch "Street
+// Fighter (US, set 1)" - the 1991 original - at reported 0.99 confidence,
+// because "streetfighter2" and "streetfighter" differ by one character and
+// Jaro-Winkler scored that a near-perfect typo match. It must now resolve to
+// one of the three real Street Fighter II games, never the original, and the
+// pick - a guess among three distinct games, not a choice of file for one -
+// must be scored as one: above the launch floor, below "acceptable."
+func TestResolveTitle_SequelQueryReachesRealSequelNotOriginal(t *testing.T) {
+	t.Parallel()
+
+	sf2Names := map[string]bool{
+		"Street Fighter II The World Warrior": true,
+		"Street Fighter II' Champion Edition": true,
+		"Street Fighter II' Hyper Fighting":   true,
+	}
+
+	for _, query := range []string{"Street Fighter II", "Street Fighter 2"} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+			require.NoError(t, err)
+			setupSequelResolveMocks(mockMediaDB)
+
+			result, err := ResolveTitle(context.Background(), &ResolveParams{
+				SystemID:  "Arcade",
+				GameName:  query,
+				MediaDB:   mockMediaDB,
+				Cfg:       cfg,
+				MediaType: slugs.MediaTypeGame,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.NotEqual(t, "Street Fighter (US, set 1)", result.Result.Name,
+				"must never launch the original game for a sequel query")
+			assert.True(t, sf2Names[result.Result.Name],
+				"expected one of the real Street Fighter II games, got %q", result.Result.Name)
+			assert.Equal(t, StrategyMainTitleOnly, result.Strategy)
+			assert.Greater(t, result.Confidence, ConfidenceMinimum)
+			assert.Less(t, result.Confidence, ConfidenceAcceptable,
+				"a pick among several distinct sequel games is a guess, not a sure match")
+		})
+	}
+}
+
+// TestResolveTitle_OverspecificSequelQueryNeverLaunchesOriginal covers the
+// reported bug's other query, "Street Fighter II Turbo," which is not a real
+// title and is not a word-for-word prefix of any of the three real games
+// either (none of them continues with "Turbo" as the fourth word) - so unlike
+// the bare "Street Fighter II" above, this one is correctly allowed to find no
+// match. What it must never do, with or without a match, is reach the original.
+func TestResolveTitle_OverspecificSequelQueryNeverLaunchesOriginal(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	setupSequelResolveMocks(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "Arcade",
+		GameName:  "Street Fighter II Turbo",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+	if err != nil {
+		require.ErrorIs(t, err, ErrNoMatch)
+		assert.Nil(t, result)
+		return
+	}
+	require.NotNil(t, result)
+	assert.NotEqual(t, "Street Fighter (US, set 1)", result.Result.Name,
+		"must never launch the original game for a sequel query")
+}
+
+// TestResolveTitle_LongSharedPrefixIsNotATypoOfAnUnrelatedTitle is the fuzzy
+// residual live-confirmed on the MiSTer device after the first #1561 fix
+// shipped: "Street Fighter II Turbo" stopped launching the original game, but
+// started launching "Street Fighter Zero 2" instead (confidence 0.927,
+// undiscounted). Both slugs carry a "2", so SameTitleNumbers doesn't separate
+// them, and Jaro-Winkler's prefix weighting scores their shared "streetfighter"
+// (13 characters) highly regardless of the completely different "2turbo"/
+// "zero2" that follows. Unlike the bare-prefix cases above, this exercises the
+// fuzzy strategy directly, so GetTitlesWithPreFilter is NOT mocked empty here.
+func TestResolveTitle_LongSharedPrefixIsNotATypoOfAnUnrelatedTitle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{
+		{Slug: "streetfighterzero2", Name: "Street Fighter Zero 2", DBID: 1},
+	}, nil)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "Arcade",
+		GameName:  "Street Fighter II Turbo",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.ErrorIs(t, err, ErrNoMatch)
+	assert.Nil(t, result)
+}
+
+// TestResolveTitle_FuzzyRejectsCoincidentalScore is the other shape issue
+// #1561's fuzzy residual took, live-confirmed on the MiSTer test device once
+// the shared-prefix fix above was already in place: "Metriod" (a typo of
+// "Metroid," a console game not on this system) scored "Mr. Do!" ("misterdo"
+// once "Mr." expands) at 0.855, with barely a shared prefix to blame -
+// Jaro-Winkler's core, position-window matching did this on its own. Both
+// take 5 real edits, same as the shared-prefix case, and
+// WithinEditDistanceBudget rejects both the same way.
+func TestResolveTitle_FuzzyRejectsCoincidentalScore(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{
+		{Slug: "misterdo", Name: "Mr. Do!", DBID: 1},
+	}, nil)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "Arcade",
+		GameName:  "Metriod",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.ErrorIs(t, err, ErrNoMatch)
+	assert.Nil(t, result)
 }
 
 func TestResolveTitle_Strategy6_ProgressiveTrim(t *testing.T) {

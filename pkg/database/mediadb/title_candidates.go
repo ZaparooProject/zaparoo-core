@@ -93,6 +93,25 @@ func (db *MediaDB) TitleCandidates(
 		if err != nil {
 			return nil, err
 		}
+		if len(ranker.top) == 0 {
+			// A bare query can be a word-for-word prefix of a longer title with no
+			// delimiter marking the rest as a subtitle ("Street Fighter II" against
+			// "Street Fighter II The World Warrior") - MiSTer arcade titles routinely
+			// describe a sequel this way. The fuzzy prefilter below can't reach these:
+			// it bounds candidates to within a few characters of the query, but a
+			// legitimate prefix match is deliberately longer by a whole subtitle. A
+			// real byte-level prefix search finds them; tokenPrefixMatch in consider
+			// rejects anything that isn't a genuine word-boundary, same-numbered match.
+			//
+			// No MinSlugLengthForFuzzy gate here, unlike the fuzzy dispatch below:
+			// this is an exact word-for-word match, not an approximate one, so a short
+			// query ("1943") is not noisy the way a short fuzzy query would be. The
+			// launch path's equivalent (TryMainTitleOnly) has never gated this either.
+			err = ranker.read(ctx, conn, systemDBID, "t.Slug LIKE ?", []any{query.Slug + "%"})
+			if err != nil {
+				return nil, err
+			}
+		}
 		if len(ranker.top) == 0 && len(query.Slug) >= matcher.MinSlugLengthForFuzzy {
 			ranker.allowFuzzy = true
 			ranker.signature = matcher.GenerateTokenSignature(system.GetMediaType(), name)
@@ -457,6 +476,17 @@ func (r *titleRanker) secondaryMatch(name, slug, secondary string) bool {
 	return first != "" && first == firstCandidateToken(r.system.GetMediaType(), name)
 }
 
+// tokenPrefixMatch reports whether the query is a bare, word-for-word prefix of
+// name with no delimiter marking the rest as a subtitle - "Street Fighter II"
+// against "Street Fighter II The World Warrior". Classified alongside
+// secondaryMatch as "secondary" evidence: both are exact-word, non-approximate
+// matches, just found via a different route. SameTitleNumbers keeps a bare
+// "Mega Man" from prefix-matching "Mega Man 2 ...".
+func (r *titleRanker) tokenPrefixMatch(name, slug string) bool {
+	return matcher.SameTitleNumbers(r.query.Slug, slug) &&
+		matcher.TokenPrefixMatch(r.system.GetMediaType(), r.name, name)
+}
+
 func (r *titleRanker) consider(id int64, name, slug, secondary string) {
 	item := rankedTitle{id: id, candidate: database.TitleCandidate{SystemID: r.system.ID, Name: name}}
 	switch {
@@ -465,9 +495,15 @@ func (r *titleRanker) consider(id int64, name, slug, secondary string) {
 	case r.secondaryMatch(name, slug, secondary):
 		item.quality = 1
 		item.candidate.MatchType, item.candidate.Confidence = "secondary", 0.92
+	case r.tokenPrefixMatch(name, slug):
+		item.quality = 1
+		item.candidate.MatchType, item.candidate.Confidence = "secondary", 0.90
 	default:
 		if !r.allowFuzzy || len(r.query.Slug) < matcher.MinSlugLengthForFuzzy ||
 			outsideCandidateLengthWindow(len(slug), len(r.query.Slug), r.expansionSlack) {
+			return
+		}
+		if !matcher.SameTitleNumbers(r.query.Slug, slug) {
 			return
 		}
 		possibleSignature, possible := r.characterBound().check(slug, r.fuzzyCutoff())
@@ -475,8 +511,9 @@ func (r *titleRanker) consider(id int64, name, slug, secondary string) {
 			return
 		}
 		similarity := candidateSimilarity(r.query.Slug, slug)
-		if possibleSignature &&
-			matcher.GenerateTokenSignature(r.system.GetMediaType(), name) == r.signature {
+		tokenSignatureMatch := possibleSignature &&
+			matcher.GenerateTokenSignature(r.system.GetMediaType(), name) == r.signature
+		if tokenSignatureMatch {
 			similarity = 1
 		}
 		if similarity < matcher.FuzzyMatchMinSimilarity {
@@ -499,6 +536,16 @@ func (r *titleRanker) consider(id int64, name, slug, secondary string) {
 			}
 		}
 		item.distance = edlib.DamerauLevenshteinDistance(r.query.Slug, slug)
+		// A whole-string similarity score can be high for reasons that have
+		// nothing to do with being the same title ("streetfighter2turbo" scores
+		// 0.927 against "streetfighterzero2" by character overlap alone, even
+		// though SameTitleNumbers can't separate them and the words "turbo"/
+		// "zero" are simply unrelated). Requiring every query word to also have a
+		// close match among the candidate's words catches this directly. A
+		// word-order match is exempt: it already requires every token to match.
+		if !tokenSignatureMatch && matcher.TokenCoverageRatio(r.system.GetMediaType(), r.name, name) < 1 {
+			return
+		}
 	}
 	// The public identity is system + canonical name, not a regional media row
 	// or a potentially duplicated title row. Only retained top-k needs deduping.

@@ -40,9 +40,13 @@ type FuzzyMatchResult struct {
 }
 
 // TryMainTitleOnly attempts main title-only search when query and DB have mismatched secondary titles.
-// Handles two cases:
+// Handles three cases:
 // 1. Query has secondary title, DB doesn't: "Some Game: The Next Gen" → "Some Game" (exact match on main)
 // 2. Query lacks secondary title, DB has one: "Some Game" → "Some Game: The Next Gen" (partial match)
+// 3. Neither has a colon/dash-delimited secondary, but the query is a bare word-for-word prefix of
+// a longer DB title: "Street Fighter II" → "Street Fighter II The World Warrior" (partial match).
+// MiSTer arcade titles routinely describe a sequel this way with no delimiter at all, so cases 1/2's
+// requirement that the DB side "look like" it has a subtitle never fires for them.
 // Expects matchInfo to be pre-generated to avoid redundant computation.
 func TryMainTitleOnly(
 	ctx context.Context,
@@ -81,9 +85,12 @@ func TryMainTitleOnly(
 			continue
 		}
 
-		// Partial match case 1: Query simple, DB has secondary - DB's main title starts with query's main
+		// Partial match case 1: Query simple, DB has secondary - DB's main title starts with query's main.
+		// SameTitleNumbers stops a bare "Mega Man" from reaching "Mega Man 2: Dr. Wily's Revenge" -
+		// a prefix match alone can't tell a sequel's main title from the base game's.
 		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, mainSlug) &&
-			!matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
+			!matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle &&
+			matcher.SameTitleNumbers(mainSlug, dbMatchInfo.MainTitleSlug) {
 			partialMatches = append(partialMatches, *result)
 			continue
 		}
@@ -93,7 +100,20 @@ func TryMainTitleOnly(
 		// where different delimiters are present causing different split points
 		// Uses prefix to handle the delimiter mismatch, but only if query's full slug aligns with DB main
 		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, slug) &&
-			matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
+			matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle &&
+			matcher.SameTitleNumbers(slug, dbMatchInfo.MainTitleSlug) {
+			partialMatches = append(partialMatches, *result)
+			continue
+		}
+
+		// Partial match case 3: Bare prefix, no delimiter on either side - "Street Fighter II" is a
+		// word-for-word prefix of "Street Fighter II The World Warrior", with no colon/dash to mark
+		// the rest as a subtitle. Cases 1/2 above only fire when the DB title is classified as having
+		// one; MiSTer arcade names commonly don't. SameTitleNumbers keeps this from reaching a
+		// same-named-but-different sequel ("Mega Man" must not prefix-match "Mega Man 2 ...").
+		if !matchInfo.HasSecondaryTitle && !dbMatchInfo.HasSecondaryTitle &&
+			matcher.SameTitleNumbers(mainSlug, dbMatchInfo.MainTitleSlug) &&
+			matcher.TokenPrefixMatch(mediaType, matchInfo.OriginalInput, result.Name) {
 			partialMatches = append(partialMatches, *result)
 		}
 	}
@@ -379,10 +399,14 @@ func TryAdvancedFuzzyMatching(
 
 	log.Info().Msgf("pre-filter reduced candidate set to %d titles", len(candidateTitles))
 
-	// Extract slugs from MediaTitle objects for fuzzy matching
+	// Extract slugs from MediaTitle objects for fuzzy matching, and keep the
+	// original names alongside them for FilterByTokenCoverage - a slug has
+	// already lost its word boundaries, so token coverage needs the source text.
 	candidateSlugs := make([]string, 0, len(candidateTitles))
+	namesBySlug := make(map[string]string, len(candidateTitles))
 	for _, title := range candidateTitles {
 		candidateSlugs = append(candidateSlugs, title.Slug)
+		namesBySlug[title.Slug] = title.Name
 	}
 
 	// Sub-strategy 5a: Token signature matching (word-order independent)
@@ -425,6 +449,20 @@ func TryAdvancedFuzzyMatching(
 		const dlTopN = 5
 		fuzzyMatches = matcher.ApplyDamerauLevenshteinTieBreaker(slug, fuzzyMatches, dlTopN)
 		log.Debug().Msg("applied Damerau-Levenshtein tie-breaking")
+
+		// A whole-string similarity score can be high for reasons that have
+		// nothing to do with being the same title: "streetfighter2turbo" scores
+		// 0.927 against "streetfighterzero2" by character overlap alone, even
+		// though SameTitleNumbers can't separate them (both carry a "2") and the
+		// words "turbo"/"zero" are simply unrelated. Requiring every query word
+		// to also have a close match among the candidate's words catches this
+		// directly, rather than trying to infer it from more edit-distance rules.
+		preFilterCount := len(fuzzyMatches)
+		fuzzyMatches = matcher.FilterByTokenCoverage(mediaType, gameName, fuzzyMatches, namesBySlug)
+		if len(fuzzyMatches) < preFilterCount {
+			log.Debug().Int("before", preFilterCount).Int("after", len(fuzzyMatches)).
+				Msg("filtered fuzzy candidates that did not cover every query word")
+		}
 
 		// Try matches in order (best first)
 		for _, match := range fuzzyMatches {

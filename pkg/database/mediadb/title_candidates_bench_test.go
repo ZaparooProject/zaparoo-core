@@ -44,10 +44,23 @@ func prepareCandidateBenchmark(b *testing.B, db *MediaDB, size int) {
 		loadCandidateFixtureDB(b, db, filepath.Join(root, name))
 	} else {
 		seedCandidateTitles(b, db, "NES", "Mario", "Series: Planet Zebes", "Metroid")
+		// The per-row differentiator is letters, not the digits printf would give:
+		// a run of digits is what SameTitleNumbers (issue #1561) compares between a
+		// query and a candidate, and 500k candidates each carrying a different
+		// number would almost all disagree with any one query number. Substituting
+		// letters keeps every generated slug's length and distinctness identical to
+		// the zero-padded decimal it replaces, without giving it a digit run at all.
 		_, err := db.sql.Load().ExecContext(b.Context(), `WITH RECURSIVE n(x) AS (
 			VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
 			INSERT INTO MediaTitles (SystemDBID, Name, Slug, SecondarySlug, SlugLength, SlugWordCount)
-			SELECT 1, printf('Library Adventure %06d', x), printf('libraryadventure%06d', x), '', 22, 3
+			SELECT 1,
+				'Library Adventure ' || replace(replace(replace(replace(replace(replace(replace(replace(
+					replace(replace(printf('%06d', x),
+					'0','b'),'1','c'),'2','d'),'3','f'),'4','g'),'5','h'),'6','j'),'7','k'),'8','l'),'9','m'),
+				'libraryadventure' || replace(replace(replace(replace(replace(replace(replace(replace(
+					replace(replace(printf('%06d', x),
+					'0','b'),'1','c'),'2','d'),'3','f'),'4','g'),'5','h'),'6','j'),'7','k'),'8','l'),'9','m'),
+				'', 22, 3
 			FROM n`, size)
 		require.NoError(b, err)
 		_, err = db.sql.Load().ExecContext(b.Context(),
@@ -121,7 +134,9 @@ func BenchmarkTitleCandidatesTraversal(b *testing.B) {
 	defer func() { require.NoError(b, conn.Close()) }()
 	system, err := systemdefs.GetSystem("NES")
 	require.NoError(b, err)
-	for _, query := range []string{"Library Adventuer 001234", "Library Adventuer 412340"} {
+	// Letter suffixes ("bbcdfg"/"gcdfgb") instead of the original "001234"/"412340":
+	// see the digit-to-letter comment in prepareCandidateBenchmark.
+	for _, query := range []string{"Library Adventuer bbcdfg", "Library Adventuer gcdfgb"} {
 		b.Run(query, func(b *testing.B) {
 			metadata := GenerateSlugWithMetadata(slugs.MediaTypeGame, query)
 			signature := matcher.GenerateTokenSignature(slugs.MediaTypeGame, query)
@@ -175,7 +190,7 @@ func BenchmarkTitleCandidates(b *testing.B) {
 						{"secondary", "Planet Zebes"},
 						{"typo", "Metriod"},
 						{"no-match", "zzzzzzz qqqqqqqqq vvvvvv"},
-						{"largest-system", "Library Adventuer 001234"},
+						{"largest-system", "Library Adventuer bbcdfg"},
 					} {
 						b.Run(tc.name, func(b *testing.B) {
 							b.ReportAllocs()

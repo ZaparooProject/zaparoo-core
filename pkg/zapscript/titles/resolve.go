@@ -379,6 +379,15 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 			matchQuality := fuzzyResult.Similarity
 			selectedResult, confidence := SelectBestResult(
 				fuzzyResult.Results, tagFilters, params.Cfg, matchQuality, params.Launchers)
+			// A raw Jaro-Winkler match corrected a typo by character shape
+			// alone, with no structural guarantee (unlike token-signature or
+			// bare-prefix) that it reached the right title rather than a
+			// same-shaped different one. Discount it the same way an
+			// ambiguous tie-break is discounted, unconditionally - not only
+			// when a second candidate happened to survive to tie against it.
+			if fuzzyResult.Strategy == StrategyJaroWinklerDamerau {
+				confidence *= TitleAmbiguityDiscount
+			}
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
 					result:     selectedResult,
