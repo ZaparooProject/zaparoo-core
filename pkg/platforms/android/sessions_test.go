@@ -245,7 +245,7 @@ func TestTrackLeavesPendingOnAmbiguousFailure(t *testing.T) {
 	require.Empty(t, store.abandoned, "an ambiguous outcome must stay pending, never abandoned")
 }
 
-func TestTrackInvalidForegroundStateRefusesLaunch(t *testing.T) {
+func TestTrackInvalidForegroundStateDispatchesUntracked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	badState := ForegroundState{}
@@ -256,9 +256,9 @@ func TestTrackInvalidForegroundStateRefusesLaunch(t *testing.T) {
 	dispatched := false
 	err := platform.track(ctx, testDefinition(), "GameNative.Steam", "source://test/PC/game.steam",
 		func() error { dispatched = true; return nil })
-	require.Error(t, err)
-	require.False(t, dispatched, "a host reporting garbage state must not be trusted to time a launch")
-	require.Empty(t, store.sessionOrder)
+	require.NoError(t, err)
+	require.True(t, dispatched, "a host reporting garbage state must not block the launch itself")
+	require.Empty(t, store.sessionOrder, "garbage state must not be trusted to time a launch either")
 }
 
 func TestTrackWithoutDatabaseDispatchesUntracked(t *testing.T) {

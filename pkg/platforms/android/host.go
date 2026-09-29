@@ -159,9 +159,10 @@ type ForegroundState struct {
 	Unlocked    bool
 }
 
-// valid rejects a snapshot with missing or nonsensical fields. The host is
-// expected to always answer with a valid one; treating a broken answer as
-// merely "untracked" would hide a host bug from anyone watching for it.
+// valid reports whether a snapshot has every field a launch needs to be
+// timed. The host is expected to always answer with a valid one; an invalid
+// one is logged and the launch dispatches untracked, the same as any other
+// reason tracking is unavailable - it must never block the launch itself.
 func (s ForegroundState) valid() bool {
 	return s.BootID != "" && s.SampledMs > 0 && s.ElapsedMs > 0 &&
 		(s.Permission == "granted" || s.Permission == "denied")

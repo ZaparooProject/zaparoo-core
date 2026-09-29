@@ -57,7 +57,11 @@ func (p *Platform) track(
 		return dispatch()
 	}
 	if !state.valid() {
-		return errors.New("invalid Android foreground state")
+		// A host bug belongs in the log, not in the way of the launch the
+		// user actually asked for: every other reason tracking is
+		// unavailable also just dispatches untracked.
+		log.Warn().Msg("Android foreground state invalid; launch cannot be timed")
+		return dispatch()
 	}
 	session := p.sessionForLaunch(ctx, db.MediaDB, definition, launcherID, path, state)
 	if beginErr := store.BeginExternalSession(ctx, session); beginErr != nil {

@@ -1699,6 +1699,8 @@ Optionally, an object:
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
         "playTime": 2730,
+        "sessionSource": "foreground_events",
+        "sessionConfidence": "exact",
         "tags": [
           { "tag": "favorite", "type": "user" },
           { "tag": "action:platformer", "type": "genre" }
