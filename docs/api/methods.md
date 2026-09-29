@@ -1659,6 +1659,8 @@ Optionally, an object:
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
 | playTime   | number | Yes      | Duration of the play session in seconds.               |
+| sessionSource | string | Yes   | How the session was timed: `active_media` (Core's own launch lifecycle), `foreground_events` (host foreground evidence, with user-granted permission) or `host_return` (until the launcher came back, without that permission). |
+| sessionConfidence | string | Yes | `unspecified` for a row predating this distinction, `exact` for measured foreground time, `approximate` for a `host_return` estimate that never proves the game was played, or `provisional` for a `foreground_events` launch not yet confirmed (no `endedAt`, `playTime` 0; it becomes `exact` or is withdrawn). |
 | tags       | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example

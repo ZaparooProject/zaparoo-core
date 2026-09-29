@@ -157,6 +157,10 @@ Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for co
 
 An indexed media item's hidden preference changed. No payload. Refresh browse/search, system counts, and favorites/history hidden indicators; discard existing `media.browse`, `media.browse.index` and `media.search` cursors, all of which stop being valid. Clients should also refresh after reconnect because notifications are not replayed. Visibility is a shared installation-wide preference, not a launch restriction.
 
+### media.history.changed
+
+A platform recorded or updated play history outside the `media.started` and `media.stopped` lifecycle - for example, an externally launched game's playtime confirmed from host foreground evidence after it closed. No payload. Refetch `media.history`, `media.history.latest` and `media.history.top`. Notifications are not replayed, so also refetch after reconnect.
+
 ### media.started
 
 New media was started on server.
