@@ -42,11 +42,18 @@ const (
 	StrategyFilesystemPath = "filesystem_path"
 	// StrategyContentURI hands the target a content URI with a read grant.
 	StrategyContentURI = "content_uri"
+	// StrategyApp starts an installed app with no media at all. The optional
+	// literal extras select one profile-defined variant of it.
+	StrategyApp = "app"
 
 	actionMain = "android.intent.action.MAIN"
 	actionView = "android.intent.action.VIEW"
 
 	extraSourceMedia = "media"
+	// extraSourceLiteral carries a constant the profile chose, never anything
+	// derived from media or the device.
+	extraSourceLiteral = "literal"
+	maxLiteralBytes    = 128
 )
 
 // ErrLaunchDefinition reports a launch definition that is malformed or asks
@@ -66,6 +73,7 @@ type LaunchExtra struct {
 	Type   string `json:"type"`
 	Source string `json:"source"`
 	Suffix string `json:"suffix,omitempty"`
+	Value  string `json:"value,omitempty"`
 }
 
 // LaunchDefinition is binding data: which component to start and how media
@@ -74,6 +82,8 @@ type LaunchExtra struct {
 // silently substitute one strategy for the other.
 type LaunchDefinition struct {
 	ID            string        `json:"id"`
+	Name          string        `json:"name,omitempty"`
+	Variant       string        `json:"variant,omitempty"`
 	System        string        `json:"system"`
 	Package       string        `json:"package"`
 	Activity      string        `json:"activity"`
@@ -125,7 +135,7 @@ func parseLaunchDefinition(data []byte) (LaunchDefinition, error) {
 // definition uses exactly one supported strategy.
 func (d *LaunchDefinition) Validate() error {
 	if !validDottedName(d.ID) || !validDottedName(d.Package) || !validDottedName(d.Activity) ||
-		len(d.Extensions) == 0 || len(d.Extensions) > maxLaunchExtensions || len(d.Extras) > maxLaunchExtras ||
+		!d.validExtensionCount() || len(d.Extensions) > maxLaunchExtensions || len(d.Extras) > maxLaunchExtras ||
 		d.Repair == "" || len(d.Repair) > maxRepairBytes || strings.ContainsAny(d.Repair, "\x00\r\n") {
 		return ErrLaunchDefinition
 	}
@@ -146,6 +156,15 @@ func (d *LaunchDefinition) Validate() error {
 	return d.validateExtras()
 }
 
+// validExtensionCount requires extensions for a media strategy and forbids
+// them for an app, which never matches a file.
+func (d *LaunchDefinition) validExtensionCount() bool {
+	if d.Version == 3 {
+		return len(d.Extensions) == 0
+	}
+	return len(d.Extensions) > 0
+}
+
 func (d *LaunchDefinition) validStrategy() bool {
 	switch d.Version {
 	case 1:
@@ -156,9 +175,20 @@ func (d *LaunchDefinition) validStrategy() bool {
 		return d.Action == actionView && d.Strategy == StrategyContentURI &&
 			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.GrantReadURI && d.ClipData &&
 			(d.DataSource == "" || d.DataSource == extraSourceMedia)
+	case 3:
+		return (d.Action == actionMain || d.Action == actionView) && d.Strategy == StrategyApp &&
+			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.DataSource == "" &&
+			!d.GrantReadURI && !d.ClipData &&
+			validCatalogText(d.Name) && d.validVariant()
 	default:
 		return false
 	}
+}
+
+// validVariant allows no variant, or one that matches the identity grammar so
+// a definition can never describe a variant no path could name.
+func (d *LaunchDefinition) validVariant() bool {
+	return d.Variant == "" || variantPattern.MatchString(d.Variant)
 }
 
 // validateExtras requires the media to reach the target exactly once.
@@ -167,6 +197,10 @@ func (d *LaunchDefinition) validateExtras() error {
 	media := 0
 	if d.DataSource == extraSourceMedia {
 		media++
+	}
+	wantMedia := 1
+	if d.Version == 3 {
+		wantMedia = 0
 	}
 	for _, extra := range d.Extras {
 		if _, duplicate := seen[extra.Name]; duplicate ||
@@ -177,7 +211,15 @@ func (d *LaunchDefinition) validateExtras() error {
 		if d.Version == 2 && extra.Source != extraSourceMedia {
 			return ErrLaunchDefinition
 		}
+		if d.Version == 3 && extra.Source != extraSourceLiteral {
+			return ErrLaunchDefinition
+		}
 		switch extra.Source {
+		case extraSourceLiteral:
+			if d.Version != 3 || extra.Suffix != "" || extra.Value == "" ||
+				len(extra.Value) > maxLiteralBytes || !validCatalogText(extra.Value) {
+				return ErrLaunchDefinition
+			}
 		case extraSourceMedia:
 			media++
 			if extra.Suffix != "" {
@@ -195,7 +237,7 @@ func (d *LaunchDefinition) validateExtras() error {
 			return ErrLaunchDefinition
 		}
 	}
-	if media != 1 {
+	if media != wantMedia {
 		return ErrLaunchDefinition
 	}
 	return nil

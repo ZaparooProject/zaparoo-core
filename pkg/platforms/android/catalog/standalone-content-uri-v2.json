@@ -1,6 +1,6 @@
 {
   "catalogVersion": 1,
-  "reviewed": "2026-09-20",
+  "reviewed": "2026-09-22",
   "profiles": [
     {
       "version": 2,
@@ -58,6 +58,36 @@
       "strategy": "content_uri",
       "storageAccess": "none",
       "repair": "Install or enable Dolphin Emulator and complete its first-run setup.",
+      "dataSource": "media",
+      "grantReadUri": true,
+      "clipData": true
+    },
+    {
+      "version": 2,
+      "id": "MAME4droid.Arcade",
+      "system": "Arcade",
+      "extensions": [".zip", ".7z"],
+      "package": "com.seleuco.mame4d2024",
+      "activity": "com.seleuco.mame4droid.MAME4droid",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable MAME4droid 2024 and finish its first-run setup.",
+      "dataSource": "media",
+      "grantReadUri": true,
+      "clipData": true
+    },
+    {
+      "version": 2,
+      "id": "ARMSX2.PS2",
+      "system": "PS2",
+      "extensions": [".chd", ".iso", ".cso", ".gz", ".bin"],
+      "package": "com.armsx2",
+      "activity": "com.armsx2.Main",
+      "action": "android.intent.action.VIEW",
+      "strategy": "content_uri",
+      "storageAccess": "none",
+      "repair": "Install or enable ARMSX2 and add a PS2 BIOS in its own settings.",
       "dataSource": "media",
       "grantReadUri": true,
       "clipData": true

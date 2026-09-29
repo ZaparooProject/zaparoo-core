@@ -1,0 +1,141 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package android
+
+import (
+	"context"
+	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/stretchr/testify/require"
+)
+
+type appScrapeDB struct {
+	database.MediaDBI
+	media     []database.MediaWithFullPath
+	completed map[int64]struct{}
+	writes    []database.ScrapeWriteTarget
+}
+
+func (*appScrapeDB) GetTitlesBySystemID(string) ([]database.TitleWithSystem, error) {
+	return []database.TitleWithSystem{{SystemDBID: 9}}, nil
+}
+
+func (db *appScrapeDB) GetMediaBySystemID(string) ([]database.MediaWithFullPath, error) {
+	return db.media, nil
+}
+
+func (db *appScrapeDB) GetScrapeRunMediaIDs(context.Context, string, string, int64) (map[int64]struct{}, error) {
+	return db.completed, nil
+}
+
+func (db *appScrapeDB) GetScrapedMediaIDs(context.Context, string, int64) (map[int64]struct{}, error) {
+	return db.completed, nil
+}
+
+func (db *appScrapeDB) ApplyScrapeResult(_ context.Context, mediaID, titleID int64, write *database.ScrapeWrite) error {
+	db.writes = append(db.writes, database.ScrapeWriteTarget{
+		MediaDBID: mediaID, MediaTitleDBID: titleID, Write: write,
+	})
+	return nil
+}
+
+func TestAppScraperFillsIconsByPackageWithoutChangingTitles(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	platform := &Platform{host: host}
+	s := platform.appScraper()
+	require.Equal(t, appScraperID, s.ID)
+	require.Contains(t, s.AutoScrapeLaunchers, installedAppsID)
+	require.True(t, s.SupportsFillMissing)
+	db := &appScrapeDB{
+		media: []database.MediaWithFullPath{
+			{DBID: 1, MediaTitleDBID: 11, Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath()},
+			{
+				DBID: 2, MediaTitleDBID: 12,
+				Path: (AppIdentity{Package: "com.example.game", Variant: "arcade", Name: "Arcade"}).AppPath(),
+			},
+			{
+				DBID: 3, MediaTitleDBID: 13,
+				Path: (AppIdentity{Package: "com.example.missing", Name: "Missing"}).AppPath(),
+			},
+			{DBID: 4, MediaTitleDBID: 14, Path: "source://documents/something"},
+		},
+	}
+	updates := make(chan scraper.ScrapeUpdate, 8)
+	require.NoError(t, s.Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{FillMissing: true, RunID: "run-one"}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.True(t, last.Done)
+	require.NoError(t, last.FatalErr)
+	require.Equal(t, 3, last.Processed)
+	require.Equal(t, 2, last.Matched)
+	require.Equal(t, 1, last.Skipped)
+	require.Equal(t, []string{"com.example.game", "com.example.missing"}, host.iconCalls)
+	require.Len(t, db.writes, 2)
+	for _, target := range db.writes {
+		require.True(t, target.Write.FillMissing)
+		require.Empty(t, target.Write.TitleProps)
+		require.Empty(t, target.Write.TitleTags)
+		require.Equal(t, scraper.SentinelTagInfo(appScraperID), target.Write.Sentinel)
+		require.Equal(t, []database.TagInfo{scraper.RunTagInfo(appScraperID, "run-one")}, target.Write.MediaTags)
+		require.Equal(t, []database.MediaProperty{{
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageImage), Text: "/private/game.png",
+		}}, target.Write.MediaProps)
+	}
+}
+
+func TestAppScraperDoesNotRevisitCompletedRows(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	p := &Platform{host: host}
+	db := &appScrapeDB{
+		media: []database.MediaWithFullPath{{
+			DBID: 1, MediaTitleDBID: 11,
+			Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+		}},
+		completed: map[int64]struct{}{1: {}},
+	}
+	updates := make(chan scraper.ScrapeUpdate, 1)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{RunID: "run-one", FillMissing: true}, platforms.ScraperCustomOptions{}, updates))
+	for update := range updates {
+		require.NoError(t, update.FatalErr)
+	}
+	require.Empty(t, host.iconCalls)
+	require.Empty(t, db.writes)
+}
+
+func TestAppScraperIncludesProfileLaunchers(t *testing.T) {
+	t.Parallel()
+	p := &Platform{host: &fakeHost{}, entries: []catalogEntry{{
+		definition: LaunchDefinition{ID: "Android.Game", Strategy: StrategyApp, System: systemdefs.SystemAndroid},
+	}}}
+	s := p.appScraper()
+	require.Contains(t, s.AutoScrapeLaunchers, "Android.Game")
+	require.Contains(t, p.Scrapers(nil), appScraperID)
+}

@@ -41,6 +41,7 @@ const (
 	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
 	SchemePopper     = "popper"
+	SchemeAndroid    = "android"
 )
 
 // SchemeSource is media in a folder a host application granted to Core. Its
@@ -75,6 +76,7 @@ var customSchemes = []string{
 	SchemeFaugus,
 	SchemeGOG,
 	SchemePopper,
+	SchemeAndroid,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,

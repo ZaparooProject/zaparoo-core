@@ -47,17 +47,55 @@ type fakeHost struct {
 	receipt     *DispatchReceipt
 	references  []string
 	cores       []string
+	apps        []AppInfo
+	icons       map[string]string
+	iconCalls   []string
 	inspections []string
 	dispatched  []dispatchCall
 	listings    int
 	mu          syncutil.Mutex
 	scanned     bool
+	appsScanned bool
 }
 
 type dispatchCall struct {
 	reference  string
 	segments   []string
 	definition LaunchDefinition
+}
+
+func (h *fakeHost) InstalledApps() ([]AppInfo, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.apps, h.appsScanned
+}
+
+func (h *fakeHost) AppIcon(packageName string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.iconCalls = append(h.iconCalls, packageName)
+	return h.icons[packageName], nil
+}
+
+func (h *fakeHost) DispatchApp(definition *LaunchDefinition) (DispatchReceipt, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dispatched = append(h.dispatched, dispatchCall{definition: *definition})
+	if h.dispatchErr != nil {
+		return DispatchReceipt{}, h.dispatchErr
+	}
+	if h.receipt != nil {
+		return *h.receipt, nil
+	}
+	pkg := definition.Package
+	if h.substitute != "" {
+		pkg = h.substitute
+	}
+	return DispatchReceipt{
+		Package:  pkg,
+		Activity: definition.Activity,
+		Strategy: definition.Strategy,
+	}, nil
 }
 
 func (h *fakeHost) InspectTarget(definition *LaunchDefinition) error {
@@ -215,9 +253,17 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	platform := startedPlatform(t.Context(), t, host)
 	launchers := platform.Launchers(nil)
 
-	require.Len(t, launchers, len(platform.entries))
-	for i := range launchers {
+	// One extra launcher offers every installed app no profile describes.
+	require.Len(t, launchers, len(platform.entries)+1)
+	assert.Equal(t, installedAppsID, launchers[len(launchers)-1].ID)
+	for i := range platform.entries {
 		assert.Equal(t, platform.entries[i].definition.ID, launchers[i].ID)
+		if platform.entries[i].definition.Strategy == StrategyApp {
+			assert.Equal(t, []string{"android"}, launchers[i].Schemes)
+			assert.Equal(t, platforms.LifecycleExternal, launchers[i].Lifecycle)
+			assert.NotEmpty(t, launchers[i].SystemID)
+			continue
+		}
 		assert.Empty(t, launchers[i].Schemes)
 		assert.NotEmpty(t, launchers[i].Folders)
 		assert.False(t, launchers[i].SkipFilesystemScan, "media folders are indexed like root directories")
@@ -225,7 +271,8 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 		assert.NotEmpty(t, launchers[i].SystemID)
 	}
 	assert.ElementsMatch(t, []string{
-		"com.github.stenzek.duckstation", "org.ppsspp.ppsspp", "org.dolphinemu.dolphinemu", retroArchPackage,
+		"com.github.stenzek.duckstation", "org.ppsspp.ppsspp", "org.dolphinemu.dolphinemu",
+		"com.seleuco.mame4d2024", "com.armsx2", "com.theboisclub.pokemonred", retroArchPackage,
 	}, host.inspections, "each target is inspected once per sweep, not once per profile")
 
 	mesen := launcherByID(t, launchers, "RetroArch.Mesen")

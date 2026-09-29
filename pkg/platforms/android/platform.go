@@ -177,13 +177,19 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager { return platforms.No
 // ManagedByPackageManager is true: the host's package is the only update path.
 func (*Platform) ManagedByPackageManager() bool { return true }
 
-// Scrapers offers the libretro thumbnail scraper: box art, screenshots and
-// title screens for indexed media, matched by libretro's own sanitised
-// name. It never runs automatically after indexing, since it is the only
-// scraper that downloads.
-func (*Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
+// Scrapers offers the libretro thumbnail scraper (box art, screenshots and
+// title screens for indexed media, matched by libretro's own sanitised name;
+// it never runs automatically after indexing, since it is the only scraper
+// that downloads) and, once a host is present, an app icon scraper for
+// installed apps offered as media.
+func (p *Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	return map[string]platforms.Scraper{thumbnails.ID: thumbnails}
+	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails}
+	if p.host != nil {
+		apps := p.appScraper()
+		scrapers[apps.ID] = apps
+	}
+	return scrapers
 }
 
 // SourceRoots lists the media folders the user granted to the host.
