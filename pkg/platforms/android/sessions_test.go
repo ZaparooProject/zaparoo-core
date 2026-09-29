@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -149,12 +150,20 @@ func (p *sessionStoreProbe) ApplyExternalEvidence(_ context.Context, batch *data
 	return true, nil
 }
 
+// trackedPlatform sets up a Platform with a database and launcher context,
+// without going through StartPost: StartPost fires a real startup
+// reconciliation goroutine (exercised on its own in
+// TestStartPostReconcilesUnresolvedSessionsOnStartup), which would otherwise
+// race with these tests' own direct calls to the same reconciliation
+// functions on the same fakeHost/store.
 func trackedPlatform(ctx context.Context, t *testing.T, host Host, store database.UserDBI) *Platform {
 	t.Helper()
 	platform, err := New(platforms.Settings{DataDir: "/data"}, host)
 	require.NoError(t, err)
-	require.NoError(t, platform.StartPost(ctx, nil, fixedContext{ctx: ctx}, nil, nil,
-		&database.Database{UserDB: store}, nil))
+	platform.mu.Lock()
+	platform.launcherContexts = fixedContext{ctx: ctx}
+	platform.db = &database.Database{UserDB: store}
+	platform.mu.Unlock()
 	return platform
 }
 
@@ -421,4 +430,27 @@ func TestReconcileExternalSessionsOneFailureDoesNotBlockAnother(t *testing.T) {
 	err := platform.ReconcileExternalSessions(ctx)
 	require.Error(t, err, "the failing session's error is still surfaced")
 	require.Len(t, host.evidenceQueries, 2, "both sessions must still be queried in the same pass")
+}
+
+func TestStartPostReconcilesUnresolvedSessionsOnStartup(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{applyStatus: "closed"}
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-1", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/game.steam",
+		MediaName: "Game", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 500, Status: "pending", Source: "foreground_events",
+	}))
+
+	platform, err := New(platforms.Settings{DataDir: "/data"}, host)
+	require.NoError(t, err)
+	require.NoError(t, platform.StartPost(ctx, nil, fixedContext{ctx: ctx}, nil, nil,
+		&database.Database{UserDB: store}, nil))
+
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.evidenceBatches) > 0
+	}, 2*time.Second, 5*time.Millisecond, "StartPost must reconcile unresolved sessions without being asked")
 }
