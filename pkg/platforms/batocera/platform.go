@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -857,5 +858,6 @@ func (*Platform) ManagedByPackageManager() bool {
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
-	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
+	thumbnails := libretrothumbs.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media, thumbnails.ID: thumbnails}
 }
