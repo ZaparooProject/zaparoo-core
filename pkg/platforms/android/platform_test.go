@@ -43,12 +43,14 @@ type fakeHost struct {
 	failures    map[string]FailureReason
 	dispatchErr error
 	foldersErr  error
+	readErr     error
 	substitute  string
 	receipt     *DispatchReceipt
 	references  []string
 	cores       []string
 	apps        []AppInfo
 	icons       map[string]string
+	files       map[string][]byte
 	iconCalls   []string
 	inspections []string
 	dispatched  []dispatchCall
@@ -135,6 +137,27 @@ func (*fakeHost) ReadMediaDir(_ context.Context, reference string, segments []st
 		"psx": {{Name: "Game.chd", Size: 16}},
 	}
 	return tree[strings.Join(segments, "/")], nil
+}
+
+func (h *fakeHost) ReadFile(
+	_ context.Context, reference string, segments []string, limit int64,
+) ([]byte, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.readErr != nil {
+		return nil, h.readErr
+	}
+	if reference != testReference {
+		return nil, &HostError{Reason: FailureSourceUnavailable}
+	}
+	content, found := h.files[strings.Join(segments, "/")]
+	if !found {
+		return nil, &HostError{Reason: FailureSourceUnavailable}
+	}
+	if int64(len(content)) > limit {
+		content = content[:limit+1]
+	}
+	return content, nil
 }
 
 func (h *fakeHost) exists(reference string, segments []string) bool {
@@ -253,9 +276,22 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	platform := startedPlatform(t.Context(), t, host)
 	launchers := platform.Launchers(nil)
 
-	// One extra launcher offers every installed app no profile describes.
-	require.Len(t, launchers, len(platform.entries)+1)
+	// Three launchers Core builds (ScummVM standalone, two GameNative) lead
+	// the catalog; one trailing launcher offers every installed app no
+	// profile describes.
+	require.Len(t, launchers, len(platform.entries)+len(gameNativeEntries)+2)
 	assert.Equal(t, installedAppsID, launchers[len(launchers)-1].ID)
+	assert.Equal(t, scummVMStandaloneID, launchers[0].ID)
+	assert.Equal(t, gameNativeSteamID, launchers[1].ID)
+	assert.Equal(t, gameNativeWindowsID, launchers[2].ID)
+	for _, id := range []string{scummVMStandaloneID, gameNativeSteamID, gameNativeWindowsID} {
+		built := launcherByID(t, launchers, id)
+		assert.Empty(t, built.Schemes)
+		assert.NotEmpty(t, built.Folders)
+		assert.False(t, built.SkipFilesystemScan, "media folders are indexed like root directories")
+		assert.Equal(t, platforms.LifecycleExternal, built.Lifecycle)
+	}
+	launchers = launchers[len(gameNativeEntries)+1:]
 	for i := range platform.entries {
 		assert.Equal(t, platform.entries[i].definition.ID, launchers[i].ID)
 		if platform.entries[i].definition.Strategy == StrategyApp {
@@ -273,6 +309,7 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"com.github.stenzek.duckstation", "org.ppsspp.ppsspp", "org.dolphinemu.dolphinemu",
 		"com.seleuco.mame4d2024", "com.armsx2", "com.theboisclub.pokemonred", retroArchPackage,
+		scummVMPackage, gameNativePackage,
 	}, host.inspections, "each target is inspected once per sweep, not once per profile")
 
 	mesen := launcherByID(t, launchers, "RetroArch.Mesen")
