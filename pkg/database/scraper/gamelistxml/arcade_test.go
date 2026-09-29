@@ -201,6 +201,58 @@ func TestScrapeLoop_MameGamelistYieldsToArcadeGamelist(t *testing.T) {
 	mdb.AssertExpectations(t)
 }
 
+// TestScrapeLoop_MameGamelistSetNameOutranksArcadeGamelistSlugGuess pins the
+// other half of precedence, raised in review of #1579: "lowest precedence"
+// only governs competing identity (set-name) matches for the same row. It
+// does not mean games/mame loses to any record at all — a real identity
+// match still outranks an unconfirmed slug-only guess from a higher-priority
+// source, exactly as it already outranks one from within the same _Arcade
+// gamelist (TestArcadeSetNameOutranksTitleGuess). This is pre-existing
+// arcadeSetOutranks behavior, unrelated to which source discovered which
+// entry: an _Arcade gamelist whose <path> is stale still slug-matches
+// "R-Type" and, on its own, would write GUESS; the correctly identified set
+// name from games/mame must still win the row.
+func TestScrapeLoop_MameGamelistSetNameOutranksArcadeGamelistSlugGuess(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	base := t.TempDir()
+	root := filepath.Join(base, "_Arcade")
+	mameDir := filepath.Join(base, "games", "mame")
+	mraPath := filepath.Join(root, "R-Type (World).mra")
+	for path, content := range map[string]string{
+		mraPath: "<misterromdescription><setname>rtype</setname></misterromdescription>",
+		filepath.Join(root, "gamelist.xml"): `<gameList><game><path>./nonexistent.zip</path>
+<name>R-Type</name><desc>GUESS</desc></game></gameList>`,
+		filepath.Join(mameDir, "gamelist.xml"): `<gameList><game><path>./rtype.zip</path>
+<name>R-Type</name><desc>SET</desc></game></gameList>`,
+	} {
+		require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+	mdb := newMockMediaDB(t)
+	mdb.On("GetTitlesBySystemID", systemdefs.SystemArcade).Return([]database.TitleWithSystem{{
+		DBID: 1, Slug: "rtype", Name: "R-Type", SystemDBID: 100,
+	}}, nil)
+	mdb.On("GetMediaBySystemID", systemdefs.SystemArcade).Return([]database.MediaWithFullPath{{
+		DBID: 10, MediaTitleDBID: 1, Path: mraPath,
+	}}, nil)
+	mdb.On("ApplyScrapeResult", mock.Anything, int64(10), int64(1),
+		mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+			prop, ok := propertyByType(w.TitleProps, "property:description")
+			return assert.True(t, ok) && assert.Equal(t, "SET", prop.Text)
+		})).Return(nil).Once()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	s := &GamelistXMLScraper{db: mdb, fs: fs, cfg: cfg, matchArcadeSets: true}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(t.Context(), scraper.ScrapeOptions{Force: true, Pauser: syncutil.NewPauser()},
+		[]scraper.ScrapeSystem{{ID: systemdefs.SystemArcade, DBID: 100, ROMPaths: []string{root}}}, mdb, ch)
+	for update := range ch {
+		require.NoError(t, update.FatalErr)
+	}
+	mdb.AssertExpectations(t)
+}
+
 // TestScrapeLoop_MameGamelistYieldsToCustomBundle checks precedence against
 // the other existing source: an explicitly configured custom bundle wins
 // over the auto-discovered games/mame source.
