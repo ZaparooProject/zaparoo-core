@@ -46,6 +46,10 @@ import (
 // errFolderUnavailable reports media in a folder the host no longer lists.
 var errFolderUnavailable = errors.New("media folder is no longer granted")
 
+// errNotAFile reports a source path with no segments below its root, which
+// names a folder, not a file whose content could be read.
+var errNotAFile = errors.New("source path names no file")
+
 // Platform implements platforms.Platform for Android. Token readers, input
 // and screenshots have no host capability yet and report ErrNotSupported.
 type Platform struct {
@@ -82,6 +86,9 @@ func New(settings platforms.Settings, host Host) (*Platform, error) {
 		entries[i].folders = folders[system]
 		entryByID[entries[i].definition.ID] = &entries[i]
 	}
+	if err := validateBuiltEntries(entryByID); err != nil {
+		return nil, err
+	}
 	return &Platform{
 		host:      host,
 		settings:  settings,
@@ -108,6 +115,28 @@ func systemFolders(systemID string) []string {
 		}
 	}
 	return folders
+}
+
+// validateBuiltEntries checks the templates of the launchers Core builds
+// rather than reads from the catalog, and that none shares an ID with a
+// catalog launcher or the generic installed-apps launcher, as loadCatalog
+// does for its own.
+func validateBuiltEntries(catalog map[string]*catalogEntry) error {
+	entries := make([]*catalogEntry, 0, 1+len(gameNativeEntries))
+	entries = append(entries, &scummVMEntry)
+	for i := range gameNativeEntries {
+		entries = append(entries, &gameNativeEntries[i].catalogEntry)
+	}
+	for _, entry := range entries {
+		id := entry.definition.ID
+		if _, clash := catalog[id]; clash || id == installedAppsID {
+			return fmt.Errorf("built launcher %s clashes with a registered launcher: %w", id, ErrLaunchDefinition)
+		}
+		if err := entry.definition.Validate(); err != nil {
+			return fmt.Errorf("built launcher %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func (*Platform) ID() string { return platformids.Android }
@@ -239,6 +268,32 @@ func (p *Platform) ReadSourceDir(ctx context.Context, path string) ([]platforms.
 		return nil, fmt.Errorf("read host media directory: %w", err)
 	}
 	return entries, nil
+}
+
+// readSourceFile returns up to limit+1 bytes of the file at path, so an
+// oversized file is detectable. This is a launch-time capability only: unlike
+// SourceRoots/ReadSourceDir, it is not part of platforms.SourceRootReader and
+// indexing never calls it.
+func (p *Platform) readSourceFile(ctx context.Context, path string, limit int64) ([]byte, error) {
+	if p.host == nil {
+		return nil, unsupported("read media without a host")
+	}
+	id, segments, err := platforms.SourceLocation(path)
+	if err != nil {
+		return nil, fmt.Errorf("read media file: %w", err)
+	}
+	if len(segments) == 0 {
+		return nil, errNotAFile
+	}
+	reference, err := p.folderReference(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	content, err := p.host.ReadFile(ctx, reference, segments, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read host media file: %w", err)
+	}
+	return content, nil
 }
 
 // folderReference returns the host reference of the source root id. A root

@@ -173,3 +173,45 @@ func FuzzDefinition(f *testing.F) {
 		}
 	})
 }
+
+func appFixture() LaunchDefinition {
+	return LaunchDefinition{
+		Version: 3, ID: "Example.App", Name: "Example", System: "Android",
+		Package: "org.example.app", Activity: "org.example.app.MainActivity",
+		Action: actionMain, Strategy: StrategyApp, StorageAccess: "none",
+		Repair: "Install or enable the app.",
+	}
+}
+
+// Data and a custom action are each reserved for the one package whose
+// exported activity actually needs them; every other definition must carry
+// neither, even though the schema now allows both to exist.
+func TestAppDefinitionRestrictsDataAndActionByPackage(t *testing.T) {
+	t.Parallel()
+
+	scummVM := appFixture()
+	scummVM.Package, scummVM.Activity = scummVMPackage, scummVMActivity
+	scummVM.Data = "scummvm:sky"
+	require.NoError(t, scummVM.Validate())
+	other := scummVM
+	other.Package, other.Activity = "org.example.app", "org.example.app.MainActivity"
+	require.ErrorIs(t, other.Validate(), ErrLaunchDefinition, "Data is reserved for ScummVM's package")
+
+	gameNative := appFixture()
+	gameNative.Package, gameNative.Activity = gameNativePackage, gameNativeActivity
+	gameNative.Action = gameNativeAction
+	gameNative.Extras = []LaunchExtra{
+		{Name: "app_id", Type: "int", Source: extraSourceLiteral, Value: "220"},
+		{Name: "game_source", Type: "string", Source: extraSourceLiteral, Value: "STEAM"},
+	}
+	require.NoError(t, gameNative.Validate())
+
+	otherAction := gameNative
+	otherAction.Package, otherAction.Activity = "org.example.app", "org.example.app.MainActivity"
+	require.ErrorIs(t, otherAction.Validate(), ErrLaunchDefinition,
+		"the custom action is reserved for GameNative's package")
+
+	otherExtra := appFixture()
+	otherExtra.Extras = []LaunchExtra{{Name: "app_id", Type: "int", Source: extraSourceLiteral, Value: "220"}}
+	require.ErrorIs(t, otherExtra.Validate(), ErrLaunchDefinition, "an int extra is reserved for GameNative's package")
+}

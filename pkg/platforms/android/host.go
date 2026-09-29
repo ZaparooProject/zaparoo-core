@@ -107,6 +107,11 @@ type Host interface {
 	// ReadMediaDir lists the directory at segments below the folder named by
 	// reference; no segments lists the folder itself.
 	ReadMediaDir(ctx context.Context, reference string, segments []string) ([]platforms.SourceEntry, error)
+	// ReadFile returns up to limit+1 bytes of the file at segments below the
+	// folder named by reference, so an oversized file is detectable. It is
+	// used only at launch, to read the small amount of a media file's own
+	// content a launch needs; indexing never reads a file's content.
+	ReadFile(ctx context.Context, reference string, segments []string, limit int64) ([]byte, error)
 	// Dispatch starts a validated definition for the file at segments below
 	// the folder named by reference. Cancelling ctx abandons a dispatch in
 	// flight. A *HostError says why the host refused.

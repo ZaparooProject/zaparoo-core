@@ -133,7 +133,13 @@ func (p *Platform) Launchers(*config.Instance) []platforms.Launcher {
 		return nil
 	}
 	snapshot := newHostSnapshot(p.host)
-	launchers := make([]platforms.Launcher, 0, len(p.entries)+1)
+	launchers := make([]platforms.Launcher, 0, len(p.entries)+len(gameNativeEntries)+2)
+	// The launchers Core builds rather than reads from the catalog come
+	// first: standalone ScummVM leads the RetroArch core for the same files.
+	launchers = append(launchers, p.scummVMLauncher(snapshot))
+	for i := range gameNativeEntries {
+		launchers = append(launchers, p.gameNativeLauncher(&gameNativeEntries[i], snapshot))
+	}
 	for i := range p.entries {
 		launchers = append(launchers, p.launcher(&p.entries[i], snapshot))
 	}
@@ -204,6 +210,36 @@ func preflight(
 	return nil
 }
 
+// ownedLauncher rebuilds a launcher this platform registered, by ID: a
+// catalog entry, the generic installed-apps launcher, or one of the
+// launchers Core builds rather than reads from the catalog.
+func (p *Platform) ownedLauncher(id string, snapshot *hostSnapshot) (platforms.Launcher, bool) {
+	switch id {
+	case installedAppsID:
+		return p.installedAppsLauncher(snapshot), true
+	case scummVMStandaloneID:
+		return p.scummVMLauncher(snapshot), true
+	}
+	if entry := gameNativeEntryByID(id); entry != nil {
+		return p.gameNativeLauncher(entry, snapshot), true
+	}
+	entry, registered := p.entryByID[id]
+	if !registered {
+		return platforms.Launcher{}, false
+	}
+	return p.launcher(entry, snapshot), true
+}
+
+// gameNativeEntryByID finds the launch template of one GameNative launcher.
+func gameNativeEntryByID(id string) *gameNativeEntry {
+	for i := range gameNativeEntries {
+		if gameNativeEntries[i].definition.ID == id {
+			return &gameNativeEntries[i]
+		}
+	}
+	return nil
+}
+
 // LaunchMedia starts path with launcher, or with the launcher Core's usual
 // inference picks when none was chosen upstream.
 func (p *Platform) LaunchMedia(
@@ -228,15 +264,9 @@ func (p *Platform) LaunchMedia(
 	// is rebuilt here from the catalog, or from what the host reports, so a
 	// custom launcher with a colliding ID can substitute neither a command nor
 	// an intent.
-	var owned platforms.Launcher
-	if launcher.ID == installedAppsID {
-		owned = p.installedAppsLauncher(newHostSnapshot(p.host))
-	} else {
-		entry, registered := p.entryByID[launcher.ID]
-		if !registered {
-			return fmt.Errorf("launcher %s is not in the Android catalog: %w", launcher.ID, platforms.ErrNotSupported)
-		}
-		owned = p.launcher(entry, newHostSnapshot(p.host))
+	owned, registered := p.ownedLauncher(launcher.ID, newHostSnapshot(p.host))
+	if !registered {
+		return fmt.Errorf("launcher %s is not in the Android catalog: %w", launcher.ID, platforms.ErrNotSupported)
 	}
 	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Context:  ctx,

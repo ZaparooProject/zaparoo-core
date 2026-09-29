@@ -67,7 +67,8 @@ var (
 )
 
 // LaunchExtra binds one typed intent extra to a host capability, not a string
-// template. Only string extras exist; adding a type requires host negotiation.
+// template. Extras are string unless a package's own intent contract needs
+// otherwise; adding a type for general use requires host negotiation.
 type LaunchExtra struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
@@ -81,23 +82,28 @@ type LaunchExtra struct {
 // a content URI with an explicit read grant and ClipData. A host must never
 // silently substitute one strategy for the other.
 type LaunchDefinition struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name,omitempty"`
-	Variant       string        `json:"variant,omitempty"`
-	System        string        `json:"system"`
-	Package       string        `json:"package"`
-	Activity      string        `json:"activity"`
-	Action        string        `json:"action"`
-	Strategy      string        `json:"strategy"`
-	StorageAccess string        `json:"storageAccess"`
-	Repair        string        `json:"repair"`
-	DataSource    string        `json:"dataSource,omitempty"`
-	Extensions    []string      `json:"extensions"`
-	Extras        []LaunchExtra `json:"extras,omitempty"`
-	Version       int           `json:"version"`
-	MaxTargetSDK  int           `json:"maxTargetSdk,omitempty"`
-	GrantReadURI  bool          `json:"grantReadUri,omitempty"`
-	ClipData      bool          `json:"clipData,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Variant       string `json:"variant,omitempty"`
+	System        string `json:"system"`
+	Package       string `json:"package"`
+	Activity      string `json:"activity"`
+	Action        string `json:"action"`
+	Strategy      string `json:"strategy"`
+	StorageAccess string `json:"storageAccess"`
+	Repair        string `json:"repair"`
+	DataSource    string `json:"dataSource,omitempty"`
+	// Data is an Intent data URI, set only at dispatch from a file the
+	// definition itself carries no reference to. Reserved for the one
+	// package whose exported activity reads its target from Intent data
+	// (scummVMPackage); every other definition must leave it empty.
+	Data         string        `json:"data,omitempty"`
+	Extensions   []string      `json:"extensions"`
+	Extras       []LaunchExtra `json:"extras,omitempty"`
+	Version      int           `json:"version"`
+	MaxTargetSDK int           `json:"maxTargetSdk,omitempty"`
+	GrantReadURI bool          `json:"grantReadUri,omitempty"`
+	ClipData     bool          `json:"clipData,omitempty"`
 }
 
 // copy returns a definition that shares nothing with the receiver, so a caller
@@ -176,13 +182,33 @@ func (d *LaunchDefinition) validStrategy() bool {
 			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.GrantReadURI && d.ClipData &&
 			(d.DataSource == "" || d.DataSource == extraSourceMedia)
 	case 3:
-		return (d.Action == actionMain || d.Action == actionView) && d.Strategy == StrategyApp &&
+		return d.validAppAction() && d.Strategy == StrategyApp &&
 			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.DataSource == "" &&
 			!d.GrantReadURI && !d.ClipData &&
-			validCatalogText(d.Name) && d.validVariant()
+			validCatalogText(d.Name) && d.validVariant() && d.validData()
 	default:
 		return false
 	}
+}
+
+// validAppAction allows the two ordinary app actions for every package, and
+// one custom action reserved for the single package whose exported activity
+// needs it.
+func (d *LaunchDefinition) validAppAction() bool {
+	if d.Action == actionMain || d.Action == actionView {
+		return true
+	}
+	return d.Action == gameNativeAction && d.Package == gameNativePackage
+}
+
+// validData allows an Intent data URI only for the one package whose
+// exported activity reads its target from it; every other definition must
+// carry none.
+func (d *LaunchDefinition) validData() bool {
+	if d.Data == "" {
+		return true
+	}
+	return d.Package == scummVMPackage && validCatalogText(d.Data) && len(d.Data) <= maxScummVMDataBytes
 }
 
 // validVariant allows no variant, or one that matches the identity grammar so
@@ -203,8 +229,10 @@ func (d *LaunchDefinition) validateExtras() error {
 		wantMedia = 0
 	}
 	for _, extra := range d.Extras {
-		if _, duplicate := seen[extra.Name]; duplicate ||
-			!extraNamePattern.MatchString(extra.Name) || extra.Type != "string" {
+		// An int extra exists only for the one package whose intent contract
+		// needs one; every other definition's extras stay string.
+		validType := extra.Type == "string" || (extra.Type == "int" && d.Package == gameNativePackage)
+		if _, duplicate := seen[extra.Name]; duplicate || !extraNamePattern.MatchString(extra.Name) || !validType {
 			return ErrLaunchDefinition
 		}
 		seen[extra.Name] = struct{}{}

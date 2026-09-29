@@ -73,13 +73,48 @@ every launchable app the host reports and starts one directly, generic and
 without a catalog entry, unless a profile already claims its package (a
 profiled variant is always preferred over the generic offer of the same app).
 
+## Launchers Core builds
+
+Two more launchers derive their intent from a file's content rather than a
+catalog row: standalone ScummVM and GameNative (`scummvm.go`, `gamenative.go`).
+Neither uses a virtual-path scheme of its own; a `.scummvm` file or a
+GameNative export is ordinary source-backed media, matched by `Folders` and
+`Extensions` exactly like any other system's files. Content is read only at
+dispatch, for the few bytes a launch needs, and never reaches the identity or
+the indexer:
+
+- ScummVM (`org.scummvm.scummvm`), launcher `ScummVM.Standalone`: exported
+  `SplashActivity`, which forwards the intent's action and data to
+  `ScummVMActivity`; that passes the `scummvm:<target>` data URI's
+  scheme-specific part to ScummVM as its only argument, as ScummVM's own
+  home-screen shortcuts do. The `.scummvm` file stays the media identity,
+  shared with `RetroArch.ScummVM`, and registers ahead of that core so it is
+  preferred when installed. Core reads the target ID from the file (at most
+  256 bytes, trimmed), or from its own name when the file is empty, and
+  refuses anything that is not a plain target ID. The game must already be
+  added in ScummVM with that ID.
+- GameNative (`app.gamenative`), launchers `GameNative.Steam` (system PC) and
+  `GameNative.Windows`: exported `MainActivity`, action
+  `app.gamenative.LAUNCH_GAME`, int extra `app_id` and string extra
+  `game_source`. GameNative's frontend export writes one file per installed
+  game, `<title>.<ext>`, holding the decimal app ID: `.steam` (PC, the system
+  ES-DE's `steam` folder maps to) and `.epic`, `.gog`, `.amazon`, `.pcgame`
+  (Windows). The store is read from the file's own extension; the app ID from
+  its content (at most 64 bytes, a positive decimal fitting a Java int).
+
+Only these packages may receive a data URI (`scummvm:` for ScummVM), an int
+extra or a custom action (`app.gamenative.LAUNCH_GAME` for GameNative);
+`definition.go` holds that list.
+
 ## Order is precedence
 
-Launchers register in file order: the standalone profiles first, then the
-RetroArch profiles, then the app profiles, then the generic offer of every
-other installed app. When nothing else chooses a launcher (a media override, a
-system default or the global launcher preference), the first registered
-launcher that matches the media and is not known to be missing wins.
+Launchers register in order: the launchers Core builds first (standalone
+ScummVM and GameNative lead the same media's RetroArch cores), then the
+standalone profiles, then the RetroArch profiles, then the app profiles, then
+the generic offer of every other installed app. When nothing else chooses a
+launcher (a media override, a system default or the global launcher
+preference), the first registered launcher that matches the media and is not
+known to be missing wins.
 
 Within each system the profiles are therefore listed most preferred first:
 mature compatibility and stable performance lead, accuracy breaks ties, and a
