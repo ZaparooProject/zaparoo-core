@@ -252,3 +252,28 @@ func TestApplyExternalEvidenceIgnoresEventsPastTheSupersedeBound(t *testing.T) {
 		`SELECT Status FROM ExternalSessions WHERE LaunchID = 'launch-1'`).Scan(&status))
 	require.Equal(t, "closed", status)
 }
+
+func TestApplyExternalEvidenceElapsedClockRegressionMarksStaleNotError(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+	beginAndDispatch(t, db, "launch-1")
+
+	first := evidenceBatch("launch-1", 110000,
+		database.ForegroundEvent{Kind: "target_resumed", TimestampMs: 100500, Sequence: 0})
+	_, err := db.ApplyExternalEvidence(ctx, first)
+	require.NoError(t, err)
+
+	regressed := evidenceBatch("launch-1", 120000)
+	regressed.QueryFromMs = 110000
+	regressed.ObservedElapsedMs = 1 // before the cursor's recorded elapsed time
+	changed, err := db.ApplyExternalEvidence(ctx, regressed)
+	require.NoError(t, err, "a permanent clock failure must retire the session, not error forever")
+	require.True(t, changed)
+
+	var status string
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT Status FROM ExternalSessions WHERE LaunchID = 'launch-1'`).Scan(&status))
+	require.Equal(t, "stale", status)
+}

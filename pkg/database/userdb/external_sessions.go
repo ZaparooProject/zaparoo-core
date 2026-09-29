@@ -39,6 +39,9 @@ var _ database.ExternalSessionStore = (*UserDB)(nil)
 // later recorded launch is proof its target can no longer be current,
 // whether or not the older one ever got evidence to say so.
 func (db *UserDB) BeginExternalSession(ctx context.Context, session *database.ExternalSession) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
 	if session == nil {
 		return errors.New("missing pending external session")
 	}
@@ -120,6 +123,9 @@ func supersedeOlderExternalSessions(ctx context.Context, tx *sql.Tx, bootID, lau
 // exact or retracts it. A receipt never records playtime, and a timed-out
 // dispatch stays pending; Core must reconcile it before retrying.
 func (db *UserDB) RecordExternalDispatch(ctx context.Context, launchID string, dispatchedMs int64) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
 	if launchID == "" || dispatchedMs <= 0 {
 		return false, errors.New("invalid external dispatch receipt")
 	}
@@ -240,6 +246,9 @@ func deleteExternalEvidence(ctx context.Context, tx *sql.Tx, launchID string) er
 // AbandonExternalSession is only for a known failed preflight or dispatch. An
 // unknown outcome must remain pending for evidence reconciliation.
 func (db *UserDB) AbandonExternalSession(ctx context.Context, launchID string, failedMs int64) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
 	if launchID == "" || failedMs <= 0 {
 		return false, errors.New("invalid external dispatch failure")
 	}
@@ -276,6 +285,9 @@ func (db *UserDB) AbandonExternalSession(ctx context.Context, launchID string, f
 // retains only its last proven closed segment; a never-confirmed launch
 // creates no history.
 func (db *UserDB) MarkExternalSessionStale(ctx context.Context, launchID string, atMs int64) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
 	if launchID == "" || atMs <= 0 {
 		return false, errors.New("invalid stale external session")
 	}
@@ -331,6 +343,9 @@ func (db *UserDB) MarkExternalSessionStale(ctx context.Context, launchID string,
 // UnresolvedExternalSessions survives both Core and host restarts. The caller
 // must recheck host permission and boot identity before asking for evidence.
 func (db *UserDB) UnresolvedExternalSessions(ctx context.Context) ([]database.ExternalSession, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
 	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT LaunchID, SystemID, SystemName, MediaPath, MediaName, MediaIdentity, LauncherID,
 			ProfileID, Target, BootID,
@@ -382,6 +397,9 @@ func (db *UserDB) UnresolvedExternalSessions(ctx context.Context) ([]database.Ex
 func (db *UserDB) CloseExternalSessionApproximate(
 	ctx context.Context, launchID string, startMs, endMs int64,
 ) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
 	if launchID == "" || startMs <= 0 || endMs < startMs {
 		return false, errors.New("invalid approximate external interval")
 	}

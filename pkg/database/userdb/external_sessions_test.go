@@ -324,3 +324,54 @@ func TestCloseExternalSessionApproximateRejectsPrecedingDispatch(t *testing.T) {
 	_, err = db.CloseExternalSessionApproximate(ctx, "launch-1", 99000, 110000)
 	require.Error(t, err)
 }
+
+func TestExternalSessionMethodsReportErrNullSQLWhenDisconnected(t *testing.T) {
+	t.Parallel()
+	db := &UserDB{}
+	ctx := t.Context()
+
+	require.ErrorIs(t, db.BeginExternalSession(ctx, externalSessionFixture("launch-1")), ErrNullSQL)
+	_, err := db.RecordExternalDispatch(ctx, "launch-1", 1000)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = db.AbandonExternalSession(ctx, "launch-1", 1000)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = db.MarkExternalSessionStale(ctx, "launch-1", 1000)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = db.UnresolvedExternalSessions(ctx)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = db.CloseExternalSessionApproximate(ctx, "launch-1", 1000, 2000)
+	require.ErrorIs(t, err, ErrNullSQL)
+	_, err = db.ApplyExternalEvidence(ctx, evidenceBatch("launch-1", 2000))
+	require.ErrorIs(t, err, ErrNullSQL)
+}
+
+func TestCleanupMediaHistoryDeletesOnlyTerminalExternalSessions(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+
+	oldClosed := externalSessionFixture("launch-old-closed")
+	oldClosed.RequestedMs = 1000
+	require.NoError(t, db.BeginExternalSession(ctx, oldClosed))
+	staled, err := db.MarkExternalSessionStale(ctx, "launch-old-closed", 2000)
+	require.NoError(t, err)
+	require.True(t, staled)
+
+	oldPending := externalSessionFixture("launch-old-pending")
+	oldPending.RequestedMs = 1000
+	require.NoError(t, db.BeginExternalSession(ctx, oldPending))
+
+	rows, err := db.CleanupMediaHistory(0, false)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, rows, int64(0))
+
+	var count int
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ExternalSessions WHERE LaunchID = 'launch-old-closed'`).Scan(&count))
+	require.Zero(t, count, "a terminal session past the retention cutoff must be deleted")
+
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ExternalSessions WHERE LaunchID = 'launch-old-pending'`).Scan(&count))
+	require.Equal(t, 1, count, "a session still in flight must never be deleted regardless of age")
+}

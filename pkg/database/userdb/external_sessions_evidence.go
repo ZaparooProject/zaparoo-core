@@ -36,6 +36,9 @@ import (
 // it. A session already superseded by a later recorded launch is closed at
 // that bound rather than left open past it, no matter what the evidence says.
 func (db *UserDB) ApplyExternalEvidence(ctx context.Context, batch *database.ForegroundEvidence) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
 	if batch == nil || batch.Version != 1 || batch.LaunchID == "" || batch.BootID == "" ||
 		batch.Permission != "granted" || !batch.Complete || batch.QueryFromMs < 0 ||
 		batch.QueryToMs < batch.QueryFromMs || batch.ObservedElapsedMs <= 0 ||
@@ -73,15 +76,29 @@ func (db *UserDB) ApplyExternalEvidence(ctx context.Context, batch *database.For
 	if session.Status == "stale" || session.Status == "abandoned" || session.Status == "closed" {
 		return false, errors.New("external evidence cannot revive a terminal session")
 	}
+	// A regressed or diverged clock is not a transient query problem that a
+	// later batch could resolve: it is proof this session's remaining
+	// evidence can never be trusted, so it is retired now rather than
+	// retried identically, and uselessly, on every later reconciliation pass.
 	if cursorElapsed.Valid && batch.ObservedElapsedMs < cursorElapsed.Int64 {
-		return false, errors.New("external elapsed clock regressed")
+		_ = tx.Rollback()
+		staled, staleErr := db.MarkExternalSessionStale(ctx, batch.LaunchID, batch.ObservedWallMs)
+		if staleErr != nil {
+			return false, fmt.Errorf("retire external session with a regressed elapsed clock: %w", staleErr)
+		}
+		return staled, nil
 	}
 	if session.RequestedElapsedMs > 0 {
 		wallDuration := batch.ObservedWallMs - session.RequestedMs
 		elapsedDuration := batch.ObservedElapsedMs - session.RequestedElapsedMs
 		if elapsedDuration < 0 || wallDuration-elapsedDuration > 3000 ||
 			elapsedDuration-wallDuration > 3000 {
-			return false, errors.New("external wall and elapsed clocks diverged")
+			_ = tx.Rollback()
+			staled, staleErr := db.MarkExternalSessionStale(ctx, batch.LaunchID, batch.ObservedWallMs)
+			if staleErr != nil {
+				return false, fmt.Errorf("retire external session with diverged clocks: %w", staleErr)
+			}
+			return staled, nil
 		}
 	}
 	if cursor.Valid && batch.QueryToMs <= cursor.Int64 {

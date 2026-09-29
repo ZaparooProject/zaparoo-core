@@ -777,6 +777,32 @@ func sqlCleanupMediaHistory(
 		return 0, fmt.Errorf("failed to get rows affected: %w", err)
 	}
 
+	externalRows, err := sqlCleanupExternalSessions(ctx, db, cutoffTime)
+	if err != nil {
+		return rowsAffected, err
+	}
+
+	return rowsAffected + externalRows, nil
+}
+
+// sqlCleanupExternalSessions deletes terminal sessions requested before
+// cutoffUnix. ExternalSessions has no soft foreign key back to MediaHistory
+// worth relying on for this: nothing enforces it, so a row this never
+// touches would otherwise accumulate forever. A session still in flight is
+// never deleted here regardless of age - only a platform's own
+// reconciliation retires one, and this must never race ahead of it.
+func sqlCleanupExternalSessions(ctx context.Context, db *sql.DB, cutoffUnix int64) (int64, error) {
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM ExternalSessions
+		WHERE Status IN ('closed', 'abandoned', 'stale') AND RequestedMs < ?;`,
+		cutoffUnix*1000)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute external session cleanup: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get external session cleanup rows affected: %w", err)
+	}
 	return rowsAffected, nil
 }
 

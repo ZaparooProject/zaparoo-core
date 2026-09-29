@@ -948,6 +948,9 @@ func TestSqlCleanupMediaHistory_Success(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
@@ -968,6 +971,9 @@ func TestSqlCleanupMediaHistory_RequiresSyncedRows(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, true)
 	require.NoError(t, err)
@@ -985,6 +991,9 @@ func TestSqlCleanupMediaHistory_NoRowsToDelete(t *testing.T) {
 
 	mock.ExpectPrepare(`DELETE FROM MediaHistory WHERE StartTime`).
 		ExpectExec().
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessions`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
