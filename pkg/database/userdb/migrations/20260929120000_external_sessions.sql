@@ -5,8 +5,7 @@
 -- the active-media tracker never sees it end. A launch is durable before its
 -- host intent is dispatched: a successful dispatch is not proof of play, only
 -- host foreground evidence - or, without it, the host's own launcher return -
--- can confirm and time one. See docs/decisions/0002-android-playtime.md and
--- docs/platforms/android/session-reconciliation.md (Zaparoo Go).
+-- can confirm and time one.
 CREATE TABLE ExternalSessions (
     LaunchID TEXT PRIMARY KEY,
     MediaHistoryDBID INTEGER REFERENCES MediaHistory(DBID),
