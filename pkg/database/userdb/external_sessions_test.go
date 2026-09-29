@@ -353,10 +353,18 @@ func TestCleanupMediaHistoryDeletesOnlyTerminalExternalSessions(t *testing.T) {
 
 	oldClosed := externalSessionFixture("launch-old-closed")
 	oldClosed.RequestedMs = 1000
+	oldClosed.Source = "host_return"
 	require.NoError(t, db.BeginExternalSession(ctx, oldClosed))
-	staled, err := db.MarkExternalSessionStale(ctx, "launch-old-closed", 2000)
+	_, err := db.RecordExternalDispatch(ctx, "launch-old-closed", 1500)
 	require.NoError(t, err)
-	require.True(t, staled)
+	closed, err := db.CloseExternalSessionApproximate(ctx, "launch-old-closed", 1500, 31500)
+	require.NoError(t, err)
+	require.True(t, closed)
+
+	var segmentCount int
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ExternalSessionSegments WHERE LaunchID = 'launch-old-closed'`).Scan(&segmentCount))
+	require.Equal(t, 1, segmentCount, "closing approximately must have left a segment to clean up")
 
 	oldPending := externalSessionFixture("launch-old-pending")
 	oldPending.RequestedMs = 1000
@@ -372,6 +380,33 @@ func TestCleanupMediaHistoryDeletesOnlyTerminalExternalSessions(t *testing.T) {
 	require.Zero(t, count, "a terminal session past the retention cutoff must be deleted")
 
 	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ExternalSessionSegments WHERE LaunchID = 'launch-old-closed'`).Scan(&segmentCount))
+	require.Zero(t, segmentCount, "a deleted session's segments must not be left orphaned")
+
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM ExternalSessions WHERE LaunchID = 'launch-old-pending'`).Scan(&count))
 	require.Equal(t, 1, count, "a session still in flight must never be deleted regardless of age")
+}
+
+func TestCleanupMediaHistoryDeletesApproximateRowsEvenWhenSyncRequired(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+
+	_, err := db.sql.Load().ExecContext(ctx, `INSERT INTO MediaHistory
+		(StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
+		SessionSource, SessionConfidence)
+		VALUES (1000, 'PC', 'PC', 'source://test/PC/game.steam', 'Game', 'GameNative.Steam', 30,
+		'host_return', 'approximate')`)
+	require.NoError(t, err)
+
+	rows, err := db.CleanupMediaHistory(0, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows, "an approximate row can never be synced, so requiring sync must not protect it")
+
+	var count int
+	require.NoError(t, db.sql.Load().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaHistory WHERE SessionConfidence = 'approximate'`).Scan(&count))
+	require.Zero(t, count)
 }

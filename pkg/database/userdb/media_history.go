@@ -755,7 +755,11 @@ func sqlCleanupMediaHistory(
 
 	query := `DELETE FROM MediaHistory WHERE StartTime < ?;`
 	if requireSynced {
-		query = `DELETE FROM MediaHistory WHERE StartTime < ? AND SyncedAt IS NOT NULL;`
+		// An approximate row is never included in a sync batch, so its
+		// SyncedAt can never be set: requiring one would protect it forever
+		// instead of just until it syncs.
+		query = `DELETE FROM MediaHistory WHERE StartTime < ?
+			AND (SyncedAt IS NOT NULL OR SessionConfidence = 'approximate');`
 	}
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
@@ -792,16 +796,36 @@ func sqlCleanupMediaHistory(
 // never deleted here regardless of age - only a platform's own
 // reconciliation retires one, and this must never race ahead of it.
 func sqlCleanupExternalSessions(ctx context.Context, db *sql.DB, cutoffUnix int64) (int64, error) {
-	result, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin external session cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	cutoffMs := cutoffUnix * 1000
+	// ExternalSessionSegments and ExternalSessionEvidence's foreign keys are
+	// declarative only: nothing enforces them, so their rows must be deleted
+	// here explicitly or they are orphaned forever once their parent goes.
+	const terminal = `LaunchID IN (SELECT LaunchID FROM ExternalSessions
+		WHERE Status IN ('closed', 'abandoned', 'stale') AND RequestedMs < ?)`
+	if _, err = tx.ExecContext(ctx, `DELETE FROM ExternalSessionSegments WHERE `+terminal, cutoffMs); err != nil {
+		return 0, fmt.Errorf("failed to execute external session segment cleanup: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM ExternalSessionEvidence WHERE `+terminal, cutoffMs); err != nil {
+		return 0, fmt.Errorf("failed to execute external session evidence cleanup: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM ExternalSessions
 		WHERE Status IN ('closed', 'abandoned', 'stale') AND RequestedMs < ?;`,
-		cutoffUnix*1000)
+		cutoffMs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute external session cleanup: %w", err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get external session cleanup rows affected: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit external session cleanup: %w", err)
 	}
 	return rowsAffected, nil
 }

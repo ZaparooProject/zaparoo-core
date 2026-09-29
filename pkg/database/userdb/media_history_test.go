@@ -948,9 +948,17 @@ func TestSqlCleanupMediaHistory_Success(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`DELETE FROM ExternalSessions`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
@@ -971,9 +979,17 @@ func TestSqlCleanupMediaHistory_RequiresSyncedRows(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`DELETE FROM ExternalSessions`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, true)
 	require.NoError(t, err)
@@ -993,9 +1009,17 @@ func TestSqlCleanupMediaHistory_NoRowsToDelete(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM ExternalSessionSegments`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM ExternalSessionEvidence`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`DELETE FROM ExternalSessions`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
