@@ -6,7 +6,7 @@ it builds an intent.
 
 ## RetroArch cores
 
-`retroarch-aarch64-catalog-v1.json` lists launcher metadata for the RetroArch
+`retroarch-android-catalog-v2.json` lists launcher metadata for the RetroArch
 AArch64 package (`com.retroarch.aarch64`). It was reviewed on 2026-09-19 against:
 
 - Core's canonical system IDs and ES-DE extension mappings;
@@ -18,9 +18,19 @@ AArch64 package (`com.retroarch.aarch64`). It was reviewed on 2026-09-19 against
   `RetroActivityFuture` target.
 
 The index contained 236 artifacts. The catalog includes 169 applicable emulator
-cores as 260 core/system profiles across 92 canonical systems. Each row records
-the exact downloaded filename because most Android cores use
+cores as 260 core/system profiles across 92 canonical systems. The `cores` map
+records each one's exact downloaded filename once (not once per profile row -
+verified 1:1 per core, never per system) because most Android cores use
 `_libretro_android.so`, while exceptions such as Azahar use `_libretro.so`.
+Version 2 (2026-09-30) moved the system→core assignment and its precedence
+order out of this file's row order and into
+[`pkg/platforms/shared/retroarch`](../../shared/retroarch) (`CoreLaunches(
+ProfileAndroid)`), the package Linux/SteamOS/Bazzite/ChimeraOS/ZapOS already
+share for the same job - `androidCoreAlternates` there, not this file, is
+where to add a system's extra core candidates or move one's rank. This file
+now supplies only what that package has no reason to know: each profile's
+stable launcher ID and accepted extensions, and each core's display name and
+Android `.so` filename.
 
 The remaining 67 artifacts are excluded because they are game engines, demos,
 runtimes, media utilities or test cores; target a machine without compatible
@@ -116,11 +126,13 @@ launcher (a media override, a system default or the global launcher
 preference), the first registered launcher that matches the media and is not
 known to be missing wins.
 
-Within each system the profiles are therefore listed most preferred first:
+Within each system the launchers are therefore ordered most preferred first:
 mature compatibility and stable performance lead, accuracy breaks ties, and a
-reviewed standalone app leads the equivalent RetroArch core. Add a profile at
-the position its preference deserves, not at the end. Stable ID
-`RetroArch.Mesen` remains for compatibility.
+reviewed standalone app leads the equivalent RetroArch core. For a RetroArch
+core, that rank lives in `pkg/platforms/shared/retroarch`'s `androidCoreAlternates`
+(add or move a core's position there, not in this file's `profiles` array,
+which carries no rank of its own). Stable ID `RetroArch.Mesen` remains for
+compatibility.
 
 Arcade is an inherent exception to universal compatibility: ZIP contents must
 match the selected core's ROM set. FinalBurn Neo leads, followed by MAME

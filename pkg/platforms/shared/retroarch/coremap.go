@@ -41,8 +41,12 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemAppleII, DefaultCore: "applewin", Policy: PolicyFree, ESFolder: "apple2"},
 	{
 		SystemID: systemdefs.SystemArcade, DefaultCore: "mame", Policy: PolicyFree, ESFolder: "arcade",
-		PerProfileCore:   map[Profile]string{ProfileApplianceARM: "fbneo"},
-		PerProfilePolicy: map[Profile]DownloadPolicy{ProfileApplianceARM: PolicyNonCommercial},
+		PerProfileCore: map[Profile]string{
+			ProfileApplianceARM: "fbneo", ProfileAndroid: "fbneo",
+		},
+		PerProfilePolicy: map[Profile]DownloadPolicy{
+			ProfileApplianceARM: PolicyNonCommercial, ProfileAndroid: PolicyNonCommercial,
+		},
 	},
 	{SystemID: systemdefs.SystemAtari2600, DefaultCore: "stella", Policy: PolicyFree, ESFolder: "atari2600"},
 	{SystemID: systemdefs.SystemAtari5200, DefaultCore: "atari800", Policy: PolicyFree, ESFolder: "atari5200"},
@@ -50,11 +54,19 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemAtari800, DefaultCore: "atari800", Policy: PolicyFree, ESFolder: "atari800"},
 	{SystemID: systemdefs.SystemAtariST, DefaultCore: "hatari", Policy: PolicyFree, ESFolder: "atarist"},
 	{SystemID: systemdefs.SystemBBCMicro, DefaultCore: "b2", Policy: PolicyFree, ESFolder: "bbc"},
-	{SystemID: systemdefs.SystemC64, DefaultCore: "vice_x128", Policy: PolicyFree, ESFolder: "c128"},
+	{
+		SystemID: systemdefs.SystemC64, DefaultCore: "vice_x128", Policy: PolicyFree, ESFolder: "c128",
+		// Android doesn't distinguish a separate C128 folder/system; its C64
+		// alternates (below) already attach to the "c64" folder entry.
+		PerProfileCore: map[Profile]string{ProfileAndroid: ""},
+	},
 	{SystemID: systemdefs.SystemVIC20, DefaultCore: "vice_xvic", Policy: PolicyFree, ESFolder: "c20"},
 	{SystemID: systemdefs.SystemC64, DefaultCore: "vice_x64", Policy: PolicyFree, ESFolder: "c64"},
 	{SystemID: systemdefs.SystemChannelF, DefaultCore: "freechaf", Policy: PolicyFree, ESFolder: "channelf"},
-	{SystemID: systemdefs.SystemColecoVision, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "colecovision"},
+	{
+		SystemID: systemdefs.SystemColecoVision, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "colecovision",
+		PerProfileCore: map[Profile]string{ProfileAndroid: "gearcoleco"},
+	},
 	{SystemID: systemdefs.SystemCommodorePlus4, DefaultCore: "vice_xplus4", Policy: PolicyFree, ESFolder: "cplus4"},
 	{SystemID: systemdefs.SystemCPS1, DefaultCore: "fbneo", Policy: PolicyNonCommercial, ESFolder: "cps1"},
 	{SystemID: systemdefs.SystemCPS2, DefaultCore: "fbneo", Policy: PolicyNonCommercial, ESFolder: "cps2"},
@@ -78,8 +90,16 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemGameboyColor, DefaultCore: "gambatte", Policy: PolicyFree, ESFolder: "gbc"},
 	{SystemID: systemdefs.SystemIntellivision, DefaultCore: "freeintv", Policy: PolicyFree, ESFolder: "intellivision"},
 	{SystemID: systemdefs.SystemJaguar, DefaultCore: "virtualjaguar", Policy: PolicyFree, ESFolder: "jaguar"},
-	{SystemID: systemdefs.SystemAtariLynx, DefaultCore: "handy", Policy: PolicyFree, ESFolder: "lynx"},
-	{SystemID: systemdefs.SystemArcade, DefaultCore: "mame", Policy: PolicyFree, ESFolder: "mame"},
+	{
+		SystemID: systemdefs.SystemAtariLynx, DefaultCore: "handy", Policy: PolicyFree, ESFolder: "lynx",
+		PerProfileCore: map[Profile]string{ProfileAndroid: "mednafen_lynx"},
+	},
+	{
+		SystemID: systemdefs.SystemArcade, DefaultCore: "mame", Policy: PolicyFree, ESFolder: "mame",
+		// Android doesn't distinguish a separate "mame" folder/system; its
+		// Arcade alternates (below) already attach to the "arcade" folder entry.
+		PerProfileCore: map[Profile]string{ProfileAndroid: ""},
+	},
 	{
 		SystemID: systemdefs.SystemMasterSystem, DefaultCore: "genesis_plus_gx",
 		Policy: PolicyNonCommercial, ESFolder: "mastersystem",
@@ -99,11 +119,18 @@ var coreDefinitions = []CoreDef{
 		Policy: PolicyNonCommercial, ESFolder: "pico",
 	},
 	{SystemID: systemdefs.SystemMSX, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx1"},
-	{SystemID: systemdefs.SystemMSX, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx2"},
+	{
+		SystemID: systemdefs.SystemMSX, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx2",
+		// Android doesn't distinguish a separate MSX2 folder/system; its MSX
+		// alternates (below) already attach to the "msx1" folder entry.
+		PerProfileCore: map[Profile]string{ProfileAndroid: ""},
+	},
 	{SystemID: systemdefs.SystemMSX2Plus, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx2+"},
 	{
 		SystemID: systemdefs.SystemNintendo64, DefaultCore: "mupen64plus_next", Policy: PolicyFree,
-		ESFolder: "n64", PerProfileCore: map[Profile]string{ProfileApplianceARM: ""},
+		ESFolder: "n64", PerProfileCore: map[Profile]string{
+			ProfileApplianceARM: "", ProfileAndroid: "mupen64plus_next_gles3",
+		},
 	},
 	{
 		SystemID: systemdefs.SystemNDS, DefaultCore: "melondsds", Policy: PolicyFree, ESFolder: "nds",
@@ -126,22 +153,32 @@ var coreDefinitions = []CoreDef{
 	{
 		SystemID: systemdefs.SystemTurboGrafx16, DefaultCore: "mednafen_pce_fast",
 		Policy: PolicyFree, ESFolder: "pcengine",
+		PerProfileCore: map[Profile]string{ProfileAndroid: "mednafen_pce"},
 	},
 	{
 		SystemID: systemdefs.SystemTurboGrafx16CD, DefaultCore: "mednafen_pce_fast",
 		Policy: PolicyFree, ESFolder: "pcenginecd",
+		PerProfileCore: map[Profile]string{ProfileAndroid: "mednafen_pce"},
 	},
 	{SystemID: systemdefs.SystemPCFX, DefaultCore: "mednafen_pcfx", Policy: PolicyFree, ESFolder: "pcfx"},
 	{SystemID: systemdefs.SystemPET2001, DefaultCore: "vice_xpet", Policy: PolicyFree, ESFolder: "pet"},
 	{SystemID: systemdefs.SystemPokemonMini, DefaultCore: "pokemini", Policy: PolicyFree, ESFolder: "pokemini"},
-	{SystemID: systemdefs.SystemDOS, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom"},
+	{
+		SystemID: systemdefs.SystemDOS, DefaultCore: "prboom", Policy: PolicyFree, ESFolder: "prboom",
+		// Android doesn't distinguish a separate PrBoom folder/system; it lists
+		// prboom as one of its "DOS" alternates (below), attached to the "dos"
+		// folder entry.
+		PerProfileCore: map[Profile]string{ProfileAndroid: ""},
+	},
 	{
 		SystemID: systemdefs.SystemPSP, DefaultCore: "ppsspp", Policy: PolicyFree, ESFolder: "psp",
 		PerProfileCore: map[Profile]string{ProfileApplianceARM: ""},
 	},
 	{
 		SystemID: systemdefs.SystemPSX, DefaultCore: "mednafen_psx_hw", Policy: PolicyFree, ESFolder: "psx",
-		PerProfileCore: map[Profile]string{ProfileApplianceARM: "pcsx_rearmed"},
+		PerProfileCore: map[Profile]string{
+			ProfileApplianceARM: "pcsx_rearmed", ProfileAndroid: "swanstation",
+		},
 	},
 	{
 		SystemID: systemdefs.SystemSaturn, DefaultCore: "mednafen_saturn", Policy: PolicyFree, ESFolder: "saturn",
@@ -172,6 +209,43 @@ var coreDefinitions = []CoreDef{
 	{SystemID: systemdefs.SystemX68000, DefaultCore: "px68k", Policy: PolicyFree, ESFolder: "x68000"},
 	{SystemID: systemdefs.SystemZX81, DefaultCore: "81", Policy: PolicyFree, ESFolder: "zx81"},
 	{SystemID: systemdefs.SystemZXSpectrum, DefaultCore: "fuse", Policy: PolicyFree, ESFolder: "zxspectrum"},
+
+	// The systems below were absent from this table before Android's own
+	// catalog (pkg/platforms/android/catalog) was generalized onto it
+	// (2026-09-30): real libretro cores desktop platforms simply hadn't
+	// picked up yet, not systems unique to Android. Arcade-board emulators
+	// (flycast, supermodel, same_cdi) get PolicyNonCommercial to match the
+	// existing CPS1/2/3/NeoGeo precedent; everything else is PolicyFree.
+	{SystemID: systemdefs.System3DS, DefaultCore: "azahar", Policy: PolicyFree, ESFolder: "3ds"},
+	{SystemID: systemdefs.SystemArcadia, DefaultCore: "amiarcadia", Policy: PolicyFree, ESFolder: "arcadia"},
+	{SystemID: systemdefs.SystemArduboy, DefaultCore: "ardens", Policy: PolicyFree, ESFolder: "arduboy"},
+	{
+		SystemID: systemdefs.SystemAtomiswave, DefaultCore: "flycast",
+		Policy: PolicyNonCommercial, ESFolder: "atomiswave",
+	},
+	{SystemID: systemdefs.SystemCDI, DefaultCore: "same_cdi", Policy: PolicyNonCommercial, ESFolder: "cdi"},
+	{SystemID: systemdefs.SystemGameCube, DefaultCore: "dolphin", Policy: PolicyFree, ESFolder: "gamecube"},
+	{SystemID: systemdefs.SystemJ2ME, DefaultCore: "squirreljme", Policy: PolicyFree, ESFolder: "j2me"},
+	{SystemID: systemdefs.SystemMacOS, DefaultCore: "minivmac", Policy: PolicyFree, ESFolder: "macintosh"},
+	{SystemID: systemdefs.SystemMegaDuck, DefaultCore: "sameduck", Policy: PolicyFree, ESFolder: "megaduck"},
+	{
+		SystemID: systemdefs.SystemModel3, DefaultCore: "supermodel",
+		Policy: PolicyNonCommercial, ESFolder: "model3",
+	},
+	{SystemID: systemdefs.SystemNAOMI, DefaultCore: "flycast", Policy: PolicyNonCommercial, ESFolder: "naomi"},
+	{SystemID: systemdefs.SystemNAOMI2, DefaultCore: "flycast", Policy: PolicyNonCommercial, ESFolder: "naomi2"},
+	{SystemID: systemdefs.SystemPS2, DefaultCore: "pcsx2", Policy: PolicyFree, ESFolder: "ps2"},
+	{SystemID: systemdefs.SystemPico8, DefaultCore: "retro8", Policy: PolicyFree, ESFolder: "pico8"},
+	{
+		SystemID: systemdefs.SystemSuperCassetteVision, DefaultCore: "emuscv",
+		Policy: PolicyFree, ESFolder: "scv",
+	},
+	{SystemID: systemdefs.SystemSuperVision, DefaultCore: "potator", Policy: PolicyFree, ESFolder: "supervision"},
+	{SystemID: systemdefs.SystemThomson, DefaultCore: "theodore", Policy: PolicyFree, ESFolder: "thomson"},
+	{SystemID: systemdefs.SystemUzebox, DefaultCore: "uzem", Policy: PolicyFree, ESFolder: "uzebox"},
+	{SystemID: systemdefs.SystemWii, DefaultCore: "dolphin", Policy: PolicyFree, ESFolder: "wii"},
+	{SystemID: systemdefs.SystemWiiU, DefaultCore: "cemu", Policy: PolicyFree, ESFolder: "wiiu"},
+	{SystemID: systemdefs.SystemX1, DefaultCore: "x1", Policy: PolicyFree, ESFolder: "x1"},
 }
 
 // CoreDefinitions returns a defensive copy of the core table.
@@ -191,8 +265,12 @@ func CoreLaunches(profile Profile) []CoreLaunch {
 	coreCounts := selectedCoreCounts(profile)
 	for i := range coreDefinitions {
 		launch, ok := coreLaunchForDef(&coreDefinitions[i], profile, coreCounts)
-		if ok {
-			launches = append(launches, launch)
+		if !ok {
+			continue
+		}
+		launches = append(launches, launch)
+		if profile == ProfileAndroid {
+			launches = append(launches, androidAlternateLaunches(coreDefinitions[i].SystemID, &launch, coreCounts)...)
 		}
 	}
 	for i := range alternateCoreLaunches {
@@ -302,6 +380,159 @@ func (a *alternateCoreLaunch) forProfile(profile Profile) (CoreLaunch, bool) {
 	return CoreLaunch{}, false
 }
 
+// androidAlternates names the extra cores Android's own catalog offers for a
+// system beyond whichever core CoreLaunches(ProfileAndroid) already resolves
+// as that system's default (via DefaultCore or a PerProfileCore[ProfileAndroid]
+// override). Cores are listed in Android's own documented precedence order
+// (pkg/platforms/android/catalog/README.md, "Order is precedence") -
+// transcribed from that catalog's JSON array order, not re-derived.
+type androidAlternates struct {
+	SystemID string
+	Cores    []string
+}
+
+//nolint:gochecknoglobals // Static launcher data mirroring Android's own catalog precedence.
+var androidCoreAlternates = []androidAlternates{
+	{SystemID: systemdefs.System3DS, Cores: []string{"citra2018", "citra", "panda3ds"}},
+	{SystemID: systemdefs.SystemAmiga1200, Cores: []string{"amiberry", "puae2021"}},
+	{SystemID: systemdefs.SystemAmiga500, Cores: []string{"amiberry", "puae2021"}},
+	{SystemID: systemdefs.SystemAmigaCD32, Cores: []string{"amiberry", "puae2021"}},
+	{SystemID: systemdefs.SystemAmstrad, Cores: []string{"crocods", "ep128emu_core"}},
+	{
+		SystemID: systemdefs.SystemArcade,
+		Cores: []string{
+			"mame2003_plus", "mamearcade", "fbalpha2012", "hbmame", "mame2000", "mame2003",
+			"mame2003_midway", "mame2010", "mame2015", "mame2016", "mamemess", "same_cdi",
+		},
+	},
+	{SystemID: systemdefs.SystemArduboy, Cores: []string{"arduous"}},
+	{SystemID: systemdefs.SystemAtari2600, Cores: []string{"stella2014", "stella2023", "tia"}},
+	{SystemID: systemdefs.SystemAtari5200, Cores: []string{"a5200"}},
+	{SystemID: systemdefs.SystemAtariLynx, Cores: []string{"handy", "gearlynx", "holani"}},
+	{SystemID: systemdefs.SystemAtariST, Cores: []string{"hatari2014", "hatarib"}},
+	{SystemID: systemdefs.SystemC64, Cores: []string{"frodo", "vice_x64sc", "vice_xscpu64"}},
+	{SystemID: systemdefs.SystemCPS1, Cores: []string{"fbalpha2012_cps1"}},
+	{SystemID: systemdefs.SystemCPS2, Cores: []string{"fbalpha2012_cps2"}},
+	{SystemID: systemdefs.SystemCPS3, Cores: []string{"fbalpha2012_cps3"}},
+	{SystemID: systemdefs.SystemColecoVision, Cores: []string{"bluemsx", "jollycv"}},
+	{SystemID: systemdefs.SystemCommodoreCDTV, Cores: []string{"amiberry", "puae2021"}},
+	{SystemID: systemdefs.SystemDOS, Cores: []string{"prboom", "dosbox_core", "dosbox", "dosbox_svn"}},
+	{SystemID: systemdefs.SystemFDS, Cores: []string{"fceumm", "fixnes", "mesen2", "nestopia", "rustynes"}},
+	{
+		SystemID: systemdefs.SystemGBA,
+		Cores:    []string{"gpsp", "mednafen_gba", "mesen2", "meteor", "skyemu", "vbam", "vba_next"},
+	},
+	{
+		SystemID: systemdefs.SystemGameGear,
+		Cores:    []string{"blastem", "gearsystem", "genesis_plus_gx_wide", "picodrive", "smsplus"},
+	},
+	{
+		SystemID: systemdefs.SystemGameboy,
+		Cores: []string{
+			"sameboy", "DoubleCherryGB", "fixgb", "gearboy", "irogb",
+			"mesen-s", "mesen2", "mgba", "skyemu", "tgbdual", "vbam",
+		},
+	},
+	{
+		SystemID: systemdefs.SystemGameboyColor,
+		Cores: []string{
+			"sameboy", "DoubleCherryGB", "fixgb", "gearboy", "irogb",
+			"mesen-s", "mesen2", "mgba", "skyemu", "tgbdual", "vbam",
+		},
+	},
+	{
+		SystemID: systemdefs.SystemGenesis,
+		Cores:    []string{"blastem", "clownmdemu", "genesis_plus_gx_wide", "picodrive"},
+	},
+	{SystemID: systemdefs.SystemMSX, Cores: []string{"fmsx"}},
+	{SystemID: systemdefs.SystemMSX2Plus, Cores: []string{"fmsx"}},
+	{
+		SystemID: systemdefs.SystemMasterSystem,
+		Cores:    []string{"blastem", "gearsystem", "genesis_plus_gx_wide", "picodrive", "smsplus"},
+	},
+	{
+		SystemID: systemdefs.SystemMegaCD,
+		Cores:    []string{"blastem", "clownmdemu", "genesis_plus_gx_wide", "picodrive"},
+	},
+	{
+		SystemID: systemdefs.SystemNDS,
+		Cores:    []string{"melonds", "desmume2015", "desmume", "noods", "skyemu"},
+	},
+	{
+		SystemID: systemdefs.SystemNES,
+		Cores:    []string{"fceumm", "fixnes", "mesen2", "nestopia", "quicknes", "rustynes"},
+	},
+	{SystemID: systemdefs.SystemNeoGeo, Cores: []string{"fbalpha2012_neogeo", "geolith"}},
+	{SystemID: systemdefs.SystemNeoGeoPocket, Cores: []string{"race"}},
+	{SystemID: systemdefs.SystemNeoGeoPocketColor, Cores: []string{"race"}},
+	{SystemID: systemdefs.SystemNintendo64, Cores: []string{"mupen64plus_next_gles2", "parallel_n64"}},
+	{SystemID: systemdefs.SystemPC98, Cores: []string{"nekop2"}},
+	{SystemID: systemdefs.SystemPS2, Cores: []string{"armsx2", "pcee2", "play"}},
+	{SystemID: systemdefs.SystemPSX, Cores: []string{"mednafen_psx_hw", "mednafen_psx", "pcsx_rearmed"}},
+	{
+		SystemID: systemdefs.SystemSG1000,
+		Cores:    []string{"blastem", "bluemsx", "gearsystem", "genesis_plus_gx_wide"},
+	},
+	{
+		SystemID: systemdefs.SystemSNES,
+		Cores: []string{
+			"bsnes", "bsnes-jg", "bsnes2014_accuracy", "bsnes2014_balanced", "bsnes2014_performance",
+			"bsnes_cplusplus98", "bsnes_hd_beta", "bsnes_mercury_accuracy", "bsnes_mercury_balanced",
+			"bsnes_mercury_performance", "mednafen_snes", "mednafen_supafaust", "mesen-s", "mesen2",
+			"snes9x2002", "snes9x2005", "snes9x2005_plus", "snes9x2010",
+		},
+	},
+	{SystemID: systemdefs.SystemSaturn, Cores: []string{"yabasanshiro", "yabause", "ymir"}},
+	{SystemID: systemdefs.SystemSega32X, Cores: []string{"blastem"}},
+	{
+		SystemID: systemdefs.SystemSegaPico,
+		Cores:    []string{"blastem", "genesis_plus_gx_wide", "picodrive"},
+	},
+	{SystemID: systemdefs.SystemSuperGrafx, Cores: []string{"geargrafx", "mednafen_pce", "mesen2"}},
+	{
+		SystemID: systemdefs.SystemTurboGrafx16,
+		Cores:    []string{"mednafen_pce_fast", "geargrafx", "mednafen_supergrafx", "mesen2"},
+	},
+	{
+		SystemID: systemdefs.SystemTurboGrafx16CD,
+		Cores:    []string{"mednafen_pce_fast", "geargrafx", "mednafen_supergrafx", "mesen2"},
+	},
+	{SystemID: systemdefs.SystemWonderSwan, Cores: []string{"mesen2"}},
+	{SystemID: systemdefs.SystemWonderSwanColor, Cores: []string{"mesen2"}},
+	{SystemID: systemdefs.SystemZXSpectrum, Cores: []string{"ep128emu_core"}},
+}
+
+// androidAlternateLaunches expands androidCoreAlternates into extra
+// CoreLaunch entries for systemID, reusing that system's already-resolved
+// scan folder/extensions (from its coreDefinitions entry) and coreCounts
+// for the same launcher-ID disambiguation coreLaunchForDef uses. Returns
+// nil for a system with no listed alternates.
+func androidAlternateLaunches(systemID string, scanSpec *CoreLaunch, coreCounts map[string]int) []CoreLaunch {
+	for i := range androidCoreAlternates {
+		alt := &androidCoreAlternates[i]
+		if alt.SystemID != systemID {
+			continue
+		}
+		launches := make([]CoreLaunch, 0, len(alt.Cores))
+		for _, core := range alt.Cores {
+			filename, err := normalizeCoreFilename(core)
+			if err != nil {
+				continue
+			}
+			launches = append(launches, CoreLaunch{
+				ID:         coreLauncherID(filename, systemID, scanSpec.Folders[0], coreCounts[filename]),
+				SystemID:   systemID,
+				Core:       filename,
+				Folders:    append([]string(nil), scanSpec.Folders...),
+				Extensions: append([]string(nil), scanSpec.Extensions...),
+				Scan:       true,
+			})
+		}
+		return launches
+	}
+	return nil
+}
+
 func selectedCoreCounts(profile Profile) map[string]int {
 	counts := make(map[string]int, len(coreDefinitions))
 	for i := range coreDefinitions {
@@ -312,6 +543,18 @@ func selectedCoreCounts(profile Profile) map[string]int {
 		filename, err := normalizeCoreFilename(core)
 		if err == nil {
 			counts[filename]++
+		}
+	}
+	// ProfileAndroid alone lists more than one core per system, so its launcher
+	// IDs must disambiguate against the full set, not just each system's default.
+	if profile == ProfileAndroid {
+		for i := range androidCoreAlternates {
+			for _, core := range androidCoreAlternates[i].Cores {
+				filename, err := normalizeCoreFilename(core)
+				if err == nil {
+					counts[filename]++
+				}
+			}
 		}
 	}
 	return counts

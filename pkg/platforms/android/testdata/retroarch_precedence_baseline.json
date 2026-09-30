@@ -1,0 +1,446 @@
+{
+  "3DO": [
+    "opera"
+  ],
+  "3DS": [
+    "azahar",
+    "citra2018",
+    "citra",
+    "panda3ds"
+  ],
+  "Amiga1200": [
+    "puae",
+    "amiberry",
+    "puae2021"
+  ],
+  "Amiga500": [
+    "puae",
+    "amiberry",
+    "puae2021"
+  ],
+  "AmigaCD32": [
+    "puae",
+    "amiberry",
+    "puae2021"
+  ],
+  "Amstrad": [
+    "cap32",
+    "crocods",
+    "ep128emu_core"
+  ],
+  "AmstradGX4000": [
+    "cap32"
+  ],
+  "AppleII": [
+    "applewin"
+  ],
+  "Arcade": [
+    "fbneo",
+    "mame2003_plus",
+    "mamearcade",
+    "fbalpha2012",
+    "hbmame",
+    "mame2000",
+    "mame2003",
+    "mame2003_midway",
+    "mame2010",
+    "mame2015",
+    "mame2016",
+    "mamemess",
+    "same_cdi"
+  ],
+  "Arcadia": [
+    "amiarcadia"
+  ],
+  "Arduboy": [
+    "ardens",
+    "arduous"
+  ],
+  "Atari2600": [
+    "stella",
+    "stella2014",
+    "stella2023",
+    "tia"
+  ],
+  "Atari5200": [
+    "atari800",
+    "a5200"
+  ],
+  "Atari7800": [
+    "prosystem"
+  ],
+  "Atari800": [
+    "atari800"
+  ],
+  "AtariLynx": [
+    "mednafen_lynx",
+    "handy",
+    "gearlynx",
+    "holani"
+  ],
+  "AtariST": [
+    "hatari",
+    "hatari2014",
+    "hatarib"
+  ],
+  "Atomiswave": [
+    "flycast"
+  ],
+  "BBCMicro": [
+    "b2"
+  ],
+  "C64": [
+    "vice_x64",
+    "frodo",
+    "vice_x64sc",
+    "vice_xscpu64"
+  ],
+  "CDI": [
+    "same_cdi"
+  ],
+  "CPS1": [
+    "fbneo",
+    "fbalpha2012_cps1"
+  ],
+  "CPS2": [
+    "fbneo",
+    "fbalpha2012_cps2"
+  ],
+  "CPS3": [
+    "fbneo",
+    "fbalpha2012_cps3"
+  ],
+  "ChannelF": [
+    "freechaf"
+  ],
+  "ColecoVision": [
+    "gearcoleco",
+    "bluemsx",
+    "jollycv"
+  ],
+  "CommodoreCDTV": [
+    "puae",
+    "amiberry",
+    "puae2021"
+  ],
+  "CommodorePlus4": [
+    "vice_xplus4"
+  ],
+  "DOS": [
+    "dosbox_pure",
+    "prboom",
+    "dosbox_core",
+    "dosbox",
+    "dosbox_svn"
+  ],
+  "Dreamcast": [
+    "flycast"
+  ],
+  "FDS": [
+    "mesen",
+    "fceumm",
+    "fixnes",
+    "mesen2",
+    "nestopia",
+    "rustynes"
+  ],
+  "GBA": [
+    "mgba",
+    "gpsp",
+    "mednafen_gba",
+    "mesen2",
+    "meteor",
+    "skyemu",
+    "vbam",
+    "vba_next"
+  ],
+  "GameCube": [
+    "dolphin"
+  ],
+  "GameGear": [
+    "genesis_plus_gx",
+    "blastem",
+    "gearsystem",
+    "genesis_plus_gx_wide",
+    "picodrive",
+    "smsplus"
+  ],
+  "GameNWatch": [
+    "gw"
+  ],
+  "Gameboy": [
+    "gambatte",
+    "sameboy",
+    "DoubleCherryGB",
+    "fixgb",
+    "gearboy",
+    "irogb",
+    "mesen-s",
+    "mesen2",
+    "mgba",
+    "skyemu",
+    "tgbdual",
+    "vbam"
+  ],
+  "GameboyColor": [
+    "gambatte",
+    "sameboy",
+    "DoubleCherryGB",
+    "fixgb",
+    "gearboy",
+    "irogb",
+    "mesen-s",
+    "mesen2",
+    "mgba",
+    "skyemu",
+    "tgbdual",
+    "vbam"
+  ],
+  "Genesis": [
+    "genesis_plus_gx",
+    "blastem",
+    "clownmdemu",
+    "genesis_plus_gx_wide",
+    "picodrive"
+  ],
+  "Intellivision": [
+    "freeintv"
+  ],
+  "J2ME": [
+    "squirreljme"
+  ],
+  "Jaguar": [
+    "virtualjaguar"
+  ],
+  "MSX": [
+    "bluemsx",
+    "fmsx"
+  ],
+  "MSX2Plus": [
+    "bluemsx",
+    "fmsx"
+  ],
+  "MacOS": [
+    "minivmac"
+  ],
+  "MasterSystem": [
+    "genesis_plus_gx",
+    "blastem",
+    "gearsystem",
+    "genesis_plus_gx_wide",
+    "picodrive",
+    "smsplus"
+  ],
+  "MegaCD": [
+    "genesis_plus_gx",
+    "blastem",
+    "clownmdemu",
+    "genesis_plus_gx_wide",
+    "picodrive"
+  ],
+  "MegaDuck": [
+    "sameduck"
+  ],
+  "Model3": [
+    "supermodel"
+  ],
+  "NAOMI": [
+    "flycast"
+  ],
+  "NAOMI2": [
+    "flycast"
+  ],
+  "NDS": [
+    "melondsds",
+    "melonds",
+    "desmume2015",
+    "desmume",
+    "noods",
+    "skyemu"
+  ],
+  "NES": [
+    "mesen",
+    "fceumm",
+    "fixnes",
+    "mesen2",
+    "nestopia",
+    "quicknes",
+    "rustynes"
+  ],
+  "NeoGeo": [
+    "fbneo",
+    "fbalpha2012_neogeo",
+    "geolith"
+  ],
+  "NeoGeoCD": [
+    "neocd"
+  ],
+  "NeoGeoPocket": [
+    "mednafen_ngp",
+    "race"
+  ],
+  "NeoGeoPocketColor": [
+    "mednafen_ngp",
+    "race"
+  ],
+  "Nintendo64": [
+    "mupen64plus_next_gles3",
+    "mupen64plus_next_gles2",
+    "parallel_n64"
+  ],
+  "Odyssey2": [
+    "o2em"
+  ],
+  "PC88": [
+    "quasi88"
+  ],
+  "PC98": [
+    "np2kai",
+    "nekop2"
+  ],
+  "PCFX": [
+    "mednafen_pcfx"
+  ],
+  "PET2001": [
+    "vice_xpet"
+  ],
+  "PS2": [
+    "pcsx2",
+    "armsx2",
+    "pcee2",
+    "play"
+  ],
+  "PSP": [
+    "ppsspp"
+  ],
+  "PSX": [
+    "swanstation",
+    "mednafen_psx_hw",
+    "mednafen_psx",
+    "pcsx_rearmed"
+  ],
+  "Pico8": [
+    "retro8"
+  ],
+  "PokemonMini": [
+    "pokemini"
+  ],
+  "SG1000": [
+    "genesis_plus_gx",
+    "blastem",
+    "bluemsx",
+    "gearsystem",
+    "genesis_plus_gx_wide"
+  ],
+  "SNES": [
+    "snes9x",
+    "bsnes",
+    "bsnes-jg",
+    "bsnes2014_accuracy",
+    "bsnes2014_balanced",
+    "bsnes2014_performance",
+    "bsnes_cplusplus98",
+    "bsnes_hd_beta",
+    "bsnes_mercury_accuracy",
+    "bsnes_mercury_balanced",
+    "bsnes_mercury_performance",
+    "mednafen_snes",
+    "mednafen_supafaust",
+    "mesen-s",
+    "mesen2",
+    "snes9x2002",
+    "snes9x2005",
+    "snes9x2005_plus",
+    "snes9x2010"
+  ],
+  "Saturn": [
+    "mednafen_saturn",
+    "yabasanshiro",
+    "yabause",
+    "ymir"
+  ],
+  "ScummVM": [
+    "scummvm"
+  ],
+  "Sega32X": [
+    "picodrive",
+    "blastem"
+  ],
+  "SegaPico": [
+    "genesis_plus_gx",
+    "blastem",
+    "genesis_plus_gx_wide",
+    "picodrive"
+  ],
+  "SuperCassetteVision": [
+    "emuscv"
+  ],
+  "SuperGrafx": [
+    "mednafen_supergrafx",
+    "geargrafx",
+    "mednafen_pce",
+    "mesen2"
+  ],
+  "SuperVision": [
+    "potator"
+  ],
+  "TIC80": [
+    "tic80"
+  ],
+  "Thomson": [
+    "theodore"
+  ],
+  "TurboGrafx16": [
+    "mednafen_pce",
+    "mednafen_pce_fast",
+    "geargrafx",
+    "mednafen_supergrafx",
+    "mesen2"
+  ],
+  "TurboGrafx16CD": [
+    "mednafen_pce",
+    "mednafen_pce_fast",
+    "geargrafx",
+    "mednafen_supergrafx",
+    "mesen2"
+  ],
+  "Uzebox": [
+    "uzem"
+  ],
+  "VIC20": [
+    "vice_xvic"
+  ],
+  "Vectrex": [
+    "vecx"
+  ],
+  "VirtualBoy": [
+    "mednafen_vb"
+  ],
+  "Wii": [
+    "dolphin"
+  ],
+  "WiiU": [
+    "cemu"
+  ],
+  "WonderSwan": [
+    "mednafen_wswan",
+    "mesen2"
+  ],
+  "WonderSwanColor": [
+    "mednafen_wswan",
+    "mesen2"
+  ],
+  "X1": [
+    "x1"
+  ],
+  "X68000": [
+    "px68k"
+  ],
+  "ZX81": [
+    "81"
+  ],
+  "ZXSpectrum": [
+    "fuse",
+    "ep128emu_core"
+  ]
+}
