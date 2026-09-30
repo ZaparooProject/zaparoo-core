@@ -445,7 +445,14 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
-	mockDB.On("BackgroundOperationDone").Return().Once()
+	// The goroutine clears the running flag (which IsScrapingRunning reads)
+	// before its deferred BackgroundOperationDone unwinds, so polling
+	// IsScrapingRunning is not proof the mock call already landed. Wait on
+	// the call itself instead.
+	backgroundOperationDone := make(chan struct{})
+	mockDB.On("BackgroundOperationDone").Run(func(assertmock.Arguments) {
+		close(backgroundOperationDone)
+	}).Return().Once()
 
 	pl := mocks.NewMockPlatform()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
@@ -496,7 +503,14 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	assert.True(t, failedPayload.Done)
 	assert.False(t, failedPayload.Paused)
 	assert.Equal(t, "failed to start media scrape", failedPayload.Error)
-	require.Eventually(t, func() bool { return !IsScrapingRunning() }, 2*time.Second, 10*time.Millisecond)
+	select {
+	case <-backgroundOperationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scraper start failure goroutine never called BackgroundOperationDone")
+	}
+	// The goroutine clears the running flag before this deferred call, so
+	// receiving from the channel above already proves it is false here.
+	assert.False(t, IsScrapingRunning())
 	mockDB.AssertExpectations(t)
 }
 
