@@ -38,6 +38,13 @@ func ReadCoreName() (string, error) {
 	return parseCoreNameFile(config.CoreNameFile)
 }
 
+// ReadRBFName returns the name of the loaded RBF as Main saw it before any
+// MGL setname override. It differs from ReadCoreName when an MGL sets a
+// setname such as RA_SNES.
+func ReadRBFName() (string, error) {
+	return parseCoreNameFile(config.RBFNameFile)
+}
+
 func parseCoreNameFile(path string) (string, error) {
 	//nolint:gosec // Path is fixed in production and test-controlled otherwise.
 	data, err := os.ReadFile(path)

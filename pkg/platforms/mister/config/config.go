@@ -27,6 +27,7 @@ const (
 	ActiveGameFile     = "/tmp/ACTIVEGAME"
 	LastLaunchFile     = SDRootDir + "/.LASTLAUNCH.mgl"
 	CoreNameFile       = "/tmp/CORENAME"
+	RBFNameFile        = "/tmp/RBFNAME"
 	CurrentPathFile    = "/tmp/CURRENTPATH"
 	FullPathFile       = "/tmp/FULLPATH"
 	FileSelectFile     = "/tmp/FILESELECT"
