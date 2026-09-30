@@ -73,13 +73,20 @@ var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"KitrinxNeoGeoPocketColor": {},
 }
 
+// misterDefaultScanExcludes names files MiSTer Main auto-loads or auto-mounts
+// by fixed name from a core's games folder, rather than media the user chose:
+// numbered boot ROMs/VHDs for cores that load a multipart BIOS, and
+// Atari800's SID patch data.
 var misterDefaultScanExcludes = []string{
 	"boot.rom",
+	"boot[0-9].rom",
 	"boot.vhd",
+	"boot[0-3].vhd",
 	"boot.zip/boot.vhd",
 	"blank.vhd",
 	"blank.zip/blank.vhd",
 	"empty_hdd.zip/boot.vhd",
+	"sid_data.bin",
 }
 
 // arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
