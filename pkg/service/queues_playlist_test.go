@@ -23,6 +23,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,6 +79,7 @@ func setupPlaylistTestEnv(t *testing.T) *ServiceContext {
 		DB:                  &database.Database{UserDB: mockUserDB},
 		LaunchSoftwareQueue: make(chan softwareTokenUpdate, 10),
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
+		BackgroundWG:        &sync.WaitGroup{},
 	}
 }
 
@@ -631,22 +633,42 @@ func TestHandlePlaylist_PrimaryPlayResumesPausedPlayback(t *testing.T) {
 	assert.True(t, svc.State.GetActivePlaylist().Playing)
 }
 
+// The relaunch this test names happens on a goroutine (handlePlaylist only
+// sets state synchronously before spawning it), so the item's ZapScript must
+// actually succeed and the test must wait for svc.BackgroundWG: otherwise the
+// launch and the assertion race, and an item that fails to launch (e.g. an
+// unresolvable command) pauses the playlist out from under a check that
+// assumed it was still the pre-launch state.
 func TestHandlePlaylist_BackgroundPlayRelaunchesWhenNoPlaybackSource(t *testing.T) {
 	t.Parallel()
 
 	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	path := filepath.Join(t.TempDir(), "track.mp3")
+	require.NoError(t, os.WriteFile(path, []byte("rom"), 0o600))
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		})).Return(nil).Once()
+
 	recorder := &servicePlaybackRecorder{}
 	svc.PlaybackManager = recorder
-	background := makeServicePlaylist()
+	background := playlists.NewPlaylist("id", "name", []playlists.PlaylistItem{
+		{Name: "Item 1", ZapScript: "**launch:" + path + "?slot=background"},
+	})
 	background.Slot = mediaslot.Background
 	background.Playing = false
 	svc.State.SetBackgroundPlaylist(background)
 
 	playing := playlists.Play(*background)
 	handlePlaylist(svc, playing, nil)
+	svc.BackgroundWG.Wait()
 
 	assert.Empty(t, recorder.resumed)
 	assert.True(t, svc.State.GetBackgroundPlaylist().Playing)
+	mockPlatform.AssertNumberOfCalls(t, "LaunchMedia", 1)
 }
 
 func TestStopNativePlaybackBeforePrimaryCommandStopsAndClearsPrimaryNativeAudio(t *testing.T) {

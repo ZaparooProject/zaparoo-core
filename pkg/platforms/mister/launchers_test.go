@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -586,24 +587,58 @@ func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
 		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
 }
 
+// TestCreateLaunchersAppliesDefaultScanExcludes covers the numbered boot
+// ROMs/VHDs and BIOS side files MiSTer Main auto-loads by fixed name from a
+// core's games folder (issue #1580): Intellivision and Jaguar auto-load
+// boot0-3.rom, generic cores auto-mount boot0-3.vhd, and Atari800 auto-loads
+// sid_data.bin. None of these are media the user chose, so they must not be
+// indexed, while a numbered-looking file outside the exact pattern still is.
 func TestCreateLaunchersAppliesDefaultScanExcludes(t *testing.T) {
-	t.Parallel()
+	// Not parallel: mutates the shared GlobalLauncherCache.
+	root := filepath.Join(misterconfig.SDRootDir, "games")
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", cfg).Return([]string{root})
 
-	pl := NewPlatform()
 	launchers := CreateLaunchers(pl)
+	oldCache := helpers.GlobalLauncherCache
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
+	t.Cleanup(func() { helpers.GlobalLauncherCache = oldCache })
+	helpers.GlobalLauncherCache.InitializeFromSlice(launchers)
 
-	var colecoLauncher *platforms.Launcher
-	for i := range launchers {
-		if launchers[i].ID == systemdefs.SystemColecoVision {
-			colecoLauncher = &launchers[i]
-			break
-		}
+	matcher := helpers.NewLauncherMatcher(cfg, pl)
+
+	excluded := []struct{ system, folder, file string }{
+		{systemdefs.SystemIntellivision, "Intellivision", "boot0.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "boot1.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "boot2.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "boot3.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "BOOT2.ROM"},
+		{systemdefs.SystemJaguar, "Jaguar", "boot1.rom"},
+		{systemdefs.SystemColecoVision, "Coleco", "boot.rom"},
+		{systemdefs.SystemAtari800, "ATARI800", "sid_data.bin"},
+		{systemdefs.SystemBBCMicro, "BBCMicro", "boot1.vhd"},
+		{systemdefs.SystemBBCMicro, "BBCMicro", "boot.vhd"},
+	}
+	for _, tc := range excluded {
+		path := filepath.Join(root, tc.folder, tc.file)
+		assert.False(t, matcher.MatchSystemFileForScan(tc.system, path),
+			"%s must be excluded from the %s scan", path, tc.system)
 	}
 
-	require.NotNil(t, colecoLauncher, "ColecoVision launcher should exist")
-	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.rom")
-	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.vhd")
-	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.zip/boot.vhd")
+	stillIndexed := []struct{ system, folder, file string }{
+		{systemdefs.SystemIntellivision, "Intellivision", "Astrosmash.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "boot10.rom"},
+		{systemdefs.SystemIntellivision, "Intellivision", "bootleg.rom"},
+		{systemdefs.SystemBBCMicro, "BBCMicro", "boot4.vhd"},
+		{systemdefs.SystemAtari800, "ATARI800", "game.bin"},
+	}
+	for _, tc := range stillIndexed {
+		path := filepath.Join(root, tc.folder, tc.file)
+		assert.True(t, matcher.MatchSystemFileForScan(tc.system, path),
+			"%s must still be indexed for %s", path, tc.system)
+	}
 }
 
 func TestCreateLaunchersUsesCatalogScanMetadata(t *testing.T) {
