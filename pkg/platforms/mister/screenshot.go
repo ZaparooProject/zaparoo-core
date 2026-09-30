@@ -68,7 +68,20 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 
 	// An MGL setname with same_dir (e.g. RA_SNES) changes CORENAME, but Main
 	// still writes screenshots under the original RBF name. Watch both.
-	watchDirs := screenshotWatchDirs(coreName, rbfName)
+	return captureScreenshot(
+		screenshotWatchDirs(coreName, rbfName),
+		screenshotTimeout,
+		func() error { return mistermain.RunDevCmd("screenshot", "scaled") },
+	)
+}
+
+// captureScreenshot watches dirs, calls trigger, and returns the first
+// complete .png/.bmp created in any of them within timeoutDur.
+func captureScreenshot(
+	watchDirs []string,
+	timeoutDur time.Duration,
+	trigger func() error,
+) (*platforms.ScreenshotResult, error) {
 	var created []string
 	defer func() {
 		// Only removes directories left empty; one holding a screenshot stays.
@@ -101,13 +114,13 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 		}
 	}
 
-	if err := mistermain.RunDevCmd("screenshot", "scaled"); err != nil {
+	if err := trigger(); err != nil {
 		return nil, fmt.Errorf("trigger screenshot: %w", err)
 	}
 
 	log.Debug().Strs("dirs", watchDirs).Msg("waiting for screenshot file")
 
-	timeout := time.NewTimer(screenshotTimeout)
+	timeout := time.NewTimer(timeoutDur)
 	defer timeout.Stop()
 
 	for {
@@ -142,7 +155,7 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 
 				select {
 				case <-timeout.C:
-					return nil, fmt.Errorf("screenshot file incomplete after %s", screenshotTimeout)
+					return nil, fmt.Errorf("screenshot file incomplete after %s", timeoutDur)
 				case <-time.After(pollInterval):
 				}
 			}
@@ -165,7 +178,7 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 			return nil, fmt.Errorf("file watcher error: %w", watchErr)
 
 		case <-timeout.C:
-			return nil, fmt.Errorf("screenshot timed out after %s", screenshotTimeout)
+			return nil, fmt.Errorf("screenshot timed out after %s", timeoutDur)
 		}
 	}
 }

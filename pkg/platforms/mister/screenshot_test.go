@@ -22,12 +22,21 @@
 package mister
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// pngIEND is the fixed tail that marks a PNG as fully written.
+var pngIEND = []byte{0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
+
+const testCaptureTimeout = 500 * time.Millisecond
 
 func TestScreenshotWatchDirs(t *testing.T) {
 	t.Parallel()
@@ -68,4 +77,104 @@ func TestScreenshotWatchDirs(t *testing.T) {
 			assert.Equal(t, tt.want, screenshotWatchDirs(tt.coreName, tt.rbfName))
 		})
 	}
+}
+
+func TestCaptureScreenshot_FindsFileInSecondDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	coreDir := filepath.Join(root, "RA_SNES")
+	rbfDir := filepath.Join(root, "SNES")
+	shot := filepath.Join(rbfDir, "shot.png")
+
+	result, err := captureScreenshot([]string{coreDir, rbfDir}, testCaptureTimeout, func() error {
+		return os.WriteFile(shot, pngIEND, 0o600)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, shot, result.Path)
+	assert.Equal(t, pngIEND, result.Data)
+}
+
+func TestCaptureScreenshot_RemovesOnlyUnusedCreatedDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	coreDir := filepath.Join(root, "RA_SNES")
+	rbfDir := filepath.Join(root, "SNES")
+
+	_, err := captureScreenshot([]string{coreDir, rbfDir}, testCaptureTimeout, func() error {
+		return os.WriteFile(filepath.Join(rbfDir, "shot.png"), pngIEND, 0o600)
+	})
+
+	require.NoError(t, err)
+	assert.NoDirExists(t, coreDir, "empty directory created by the call is removed")
+	assert.DirExists(t, rbfDir, "directory holding the screenshot is kept")
+}
+
+func TestCaptureScreenshot_KeepsPreexistingEmptyDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	existing := filepath.Join(root, "SNES")
+	require.NoError(t, os.Mkdir(existing, 0o750))
+
+	_, err := captureScreenshot([]string{existing}, testCaptureTimeout, func() error {
+		return errors.New("trigger failed")
+	})
+
+	require.Error(t, err)
+	assert.DirExists(t, existing)
+}
+
+func TestCaptureScreenshot_IgnoresOtherExtensions(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "SNES")
+
+	_, err := captureScreenshot([]string{dir}, 100*time.Millisecond, func() error {
+		return os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600)
+	})
+
+	require.ErrorContains(t, err, "screenshot timed out")
+}
+
+func TestCaptureScreenshot_TriggerError(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "SNES")
+	triggerErr := errors.New("no command interface")
+
+	result, err := captureScreenshot([]string{dir}, testCaptureTimeout, func() error {
+		return triggerErr
+	})
+
+	require.ErrorIs(t, err, triggerErr)
+	assert.Nil(t, result)
+	assert.NoDirExists(t, dir)
+}
+
+func TestCaptureScreenshot_IncompleteFileTimesOut(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "SNES")
+
+	_, err := captureScreenshot([]string{dir}, 300*time.Millisecond, func() error {
+		return os.WriteFile(filepath.Join(dir, "shot.png"), pngIEND[:4], 0o600)
+	})
+
+	require.ErrorContains(t, err, "screenshot file incomplete")
+}
+
+func TestCaptureScreenshot_CreateDirError(t *testing.T) {
+	t.Parallel()
+
+	blocker := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	_, err := captureScreenshot([]string{filepath.Join(blocker, "SNES")}, testCaptureTimeout, func() error {
+		return nil
+	})
+
+	require.ErrorContains(t, err, "create screenshots dir")
 }
