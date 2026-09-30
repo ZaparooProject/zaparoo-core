@@ -422,6 +422,7 @@ func NewMethodMap() *MethodMap {
 		// settings
 		models.MethodSettings:                    methods.HandleSettings,
 		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
+		models.MethodSettingsZapScriptHold:       methods.HandleSettingsZapScriptHold,
 		models.MethodSettingsReload:              methods.HandleSettingsReload,
 		models.MethodSettingsLogsDownload:        methods.HandleLogsDownload,
 		models.MethodSettingsBackup:              methods.HandleBackup,
@@ -1524,9 +1525,12 @@ func handleWSMessage(
 			ScrapePauser:    scrapePauser,
 			BackupPauser:    backupPauser,
 			InputSession:    dispatcher.inputSession,
-			PlatformID:      platformID,
-			IsLocal:         isLocal,
-			ClientID:        session.Request.RemoteAddr,
+			ZapScriptHold: func() bool {
+				return dispatcher.holdZapScript(st.AcquireZapScriptHold)
+			},
+			PlatformID: platformID,
+			IsLocal:    isLocal,
+			ClientID:   session.Request.RemoteAddr,
 		}
 		if cs != nil {
 			env.ClientRole = cs.ClientRole()

@@ -3086,6 +3086,42 @@ Returns `null` on success.
 }
 ```
 
+### settings.zapscript.hold
+
+**Access:** Localhost or `settings.write`. WebSocket only.
+
+Disable ZapScript execution for as long as this WebSocket connection stays open. The hold is released when the connection closes for any reason, including a client that is killed, so it cannot leave ZapScript disabled the way `settings.update` with `runZapScript: false` can. Holds do not change the `runZapScript` setting. A connection holds at most once; repeat calls succeed without stacking.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "settings.zapscript.hold"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": null
+}
+```
+
 ### settings.reload
 
 **Access:** All clients.

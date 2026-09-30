@@ -146,6 +146,26 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	return NoContent{}, nil
 }
 
+// HandleSettingsZapScriptHold disables ZapScript for as long as the calling
+// WebSocket connection stays open, so a client that is killed rather than
+// exited cannot leave launches disabled.
+//
+//nolint:gocritic // single-use parameter in API handler
+func HandleSettingsZapScriptHold(env requests.RequestEnv) (any, error) {
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
+	}
+	if env.ZapScriptHold == nil {
+		return nil, models.ClientErrf("holding ZapScript disabled requires a WebSocket connection")
+	}
+	if env.ZapScriptHold() {
+		log.Debug().Msg("ZapScript disabled for the lifetime of the connection")
+	}
+	return NoContent{}, nil
+}
+
 //nolint:gocritic // single-use parameter in API handler
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Debug().Msg("received settings update request")

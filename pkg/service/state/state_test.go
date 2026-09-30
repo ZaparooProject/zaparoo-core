@@ -570,3 +570,43 @@ func TestClearActiveMediaIf_ConditionSeesConcurrentPublication(t *testing.T) {
 	require.NotNil(t, st.ActiveMedia())
 	assert.Equal(t, "Game", st.ActiveMedia().Name)
 }
+
+func TestZapScriptHold(t *testing.T) {
+	t.Parallel()
+
+	newState := func() *State {
+		st, _ := NewState(mocks.NewMockPlatform(), "test-boot")
+		return st
+	}
+
+	t.Run("hold disables until released", func(t *testing.T) {
+		t.Parallel()
+		st := newState()
+		release := st.AcquireZapScriptHold()
+		assert.False(t, st.RunZapScriptEnabled())
+		release()
+		assert.True(t, st.RunZapScriptEnabled())
+	})
+
+	t.Run("release twice does not release another hold", func(t *testing.T) {
+		t.Parallel()
+		st := newState()
+		first := st.AcquireZapScriptHold()
+		second := st.AcquireZapScriptHold()
+		first()
+		first()
+		assert.False(t, st.RunZapScriptEnabled())
+		second()
+		assert.True(t, st.RunZapScriptEnabled())
+	})
+
+	t.Run("release keeps the user setting", func(t *testing.T) {
+		t.Parallel()
+		st := newState()
+		st.SetRunZapScript(false)
+		st.AcquireZapScriptHold()()
+		assert.False(t, st.RunZapScriptEnabled())
+		st.SetRunZapScript(true)
+		assert.True(t, st.RunZapScriptEnabled())
+	})
+}

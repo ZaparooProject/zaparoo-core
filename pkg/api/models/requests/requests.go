@@ -60,8 +60,12 @@ type RequestEnv struct {
 	// InputSession is non-nil only for durable transports such as WebSocket.
 	// It owns keyboard and gamepad inputs held across requests.
 	InputSession platforms.InputSession
-	ClientID     string
-	PlatformID   string
+	// ZapScriptHold is non-nil only for durable transports such as WebSocket.
+	// It disables ZapScript until the connection closes and reports whether
+	// this call acquired a new hold.
+	ZapScriptHold func() (acquired bool)
+	ClientID      string
+	PlatformID    string
 	// ClientRole is the paired client's permission role ("admin" or
 	// "member"), or "" when the request carries no paired identity (local
 	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.

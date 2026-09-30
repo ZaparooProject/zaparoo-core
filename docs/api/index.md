@@ -304,6 +304,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | media.title.parse               | Preview media title and slug parsing.                                                  | All clients |
 | settings                        | List current configuration settings.                                                  | Tiered |
 | settings.update                 | Update and save configuration settings.                                               | `settings.write` |
+| settings.zapscript.hold         | Disable ZapScript until this WebSocket connection closes.                             | `settings.write` |
 | settings.reload                 | Reload settings from disk.                                                            | All clients |
 | settings.logs.download          | Download current log file.                                                            | All clients |
 | settings.backup                 | Create local device backup.                                                           | Local/admin |
