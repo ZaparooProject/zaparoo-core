@@ -21,6 +21,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -325,9 +326,9 @@ func TestTokenCompletion_ReaderTokensCarryNoCompletion(t *testing.T) {
 	assert.Nil(t, env.st.GetActiveCard().Completion)
 }
 
-// A caller released by the completion must be able to read the run back out
-// of tokens.history straight away, so the history write has to land first.
-func TestTokenCompletion_HistoryIsDurableBeforeCompletion(t *testing.T) {
+// The reply reports the outcome as soon as the script has finished; the
+// history write records that outcome afterwards and must not hold the caller.
+func TestTokenCompletion_ReplyDoesNotWaitForHistory(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, "tap", 0)
 
@@ -335,8 +336,7 @@ func TestTokenCompletion_HistoryIsDurableBeforeCompletion(t *testing.T) {
 	var enteredOnce, releaseOnce sync.Once
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	// Always unblock the launch goroutine, including on a failed assertion,
-	// so a regression fails the test instead of hanging it.
+	// Always unblock the history worker, including on a failed assertion.
 	releaseHook := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseHook()
 	env.historyHook.set(func(he *database.HistoryEntry) {
@@ -349,22 +349,34 @@ func TestTokenCompletion_HistoryIsDurableBeforeCompletion(t *testing.T) {
 
 	c := env.sendAPIToken(t, script)
 
+	// The history write is held open, yet the caller already has its answer.
+	require.ErrorIs(t, waitCompletion(t, c), zapscript.ErrUnknownCommand)
 	select {
 	case <-entered:
 	case <-time.After(behaviorTimeout):
 		t.Fatal("history was never written for the failed run")
 	}
-	completedEarly := false
-	select {
-	case <-c.Done():
-		completedEarly = true
-	default:
-	}
 	releaseHook()
-	require.False(t, completedEarly, "run completed before its history entry was written")
+	assert.False(t, c.Complete(nil), "completion must be delivered exactly once")
+	assert.False(t, env.waitForHistory(t, script).Success, "history still records the failure")
+}
 
-	require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrUnknownCommand)
-	assert.False(t, env.waitForHistory(t, script).Success)
+// A history write that fails after the reply cannot turn the reported
+// outcome into something else, for a success or a failure.
+func TestTokenCompletion_HistoryFailureLeavesOutcomeUnchanged(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+	env.historyHook.fail(errors.New("disk full"))
+
+	path := env.gamePath("game1.gba")
+	c := env.sendAPIToken(t, path)
+	assert.Equal(t, path, env.waitForLaunch(t))
+	require.NoError(t, assertCompletedOnce(t, c))
+	assert.True(t, env.waitForHistory(t, path).Success)
+
+	c2 := env.sendAPIToken(t, "**nonexistent.cmd")
+	require.ErrorIs(t, assertCompletedOnce(t, c2), zapscript.ErrUnknownCommand)
+	assert.False(t, env.waitForHistory(t, "**nonexistent.cmd").Success)
 }
 
 // The completion is a channel handle, not token content: logging the token

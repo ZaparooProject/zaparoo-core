@@ -113,6 +113,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	// valid image request merely because optional enrichment timed out.
 	coverStatusesKnown := false
 	var tagsByID map[int64][]database.TagInfo
+	var coverColors map[int64]string
 	tagsKnown := false
 	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
 	defer cancelEnrichment()
@@ -135,6 +136,11 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			}
 		}
 		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		coverIDs := make([]int64, 0, len(resolvedRefs))
+		for _, ref := range resolvedRefs {
+			coverIDs = append(coverIDs, ref.MediaDBID)
+		}
+		coverColors = mediaCoverColors(enrichCtx, env.Database.MediaDB, coverIDs)
 	}
 	enrichElapsed := time.Since(enrichStarted)
 
@@ -160,6 +166,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			MediaID:           mediaID,
 			RelPath:           mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
 			HasCover:          hasCover,
+			CoverColor:        coverColors[mediaID],
 			SystemID:          entry.SystemID,
 			SystemName:        entry.SystemName,
 			MediaName:         entry.MediaName,

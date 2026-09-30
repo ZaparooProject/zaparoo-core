@@ -1186,12 +1186,12 @@ func handleQueuedToken(
 				}
 			}
 
+			// The refusal is the outcome; recording it cannot change it.
+			t.Completion.Complete(admitErr)
 			he.Success = false
 			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
 				log.Error().Err(histErr).Msgf("error adding history")
 			}
-
-			t.Completion.Complete(admitErr)
 			reportRunFailure(svc, &t, admitErr, nil)
 			return
 		}
@@ -1251,14 +1251,17 @@ func launchQueuedToken(
 	}
 
 	he.Success = err == nil || disabled
-	if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
-		log.Error().Err(histErr).Msgf("error adding history")
-	}
 
-	// Complete once history is durable: a caller that waited for this
-	// result can immediately read the run back from tokens.history. The
-	// fail sound follows, so the caller never waits on audio.
+	// The script's result is the launch outcome, and it is final here: any
+	// launch-side records that must precede it (such as a host's pending
+	// session row) were written while the script ran. Reply now. The token
+	// history entry only records that outcome and cannot change it, so it is
+	// written afterwards on its own worker, and a failed write is logged
+	// rather than reported; a caller that reads tokens.history straight after
+	// the reply may briefly not see this run yet. The fail sound also follows
+	// the reply, so the caller never waits on audio or the history write.
 	t.Completion.Complete(err)
+	recordTokenHistory(svc, he)
 
 	switch {
 	case failed:
@@ -1273,6 +1276,23 @@ func launchQueuedToken(
 		path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 	}
+}
+
+// recordTokenHistory writes a token's history entry after its outcome has
+// been reported. Shutdown waits for it through BackgroundWG so the write lands
+// before the database closes.
+func recordTokenHistory(svc *ServiceContext, he *database.HistoryEntry) {
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Add(1)
+	}
+	go func() {
+		if svc.BackgroundWG != nil {
+			defer svc.BackgroundWG.Done()
+		}
+		if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
+			log.Error().Err(histErr).Msgf("error adding history")
+		}
+	}()
 }
 
 // runTokenZapScriptRecovering runs the token's ZapScript and converts a panic

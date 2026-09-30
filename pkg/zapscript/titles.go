@@ -75,7 +75,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// use only that one. Otherwise, get all launchers for the system.
 	var launchersForSystem []platforms.Launcher
 	if args.Launcher != "" {
-		allLaunchers := pl.Launchers(env.Cfg)
+		allLaunchers := env.Launchers.Get(pl, env.Cfg)
 		for i := range allLaunchers {
 			if allLaunchers[i].ID == args.Launcher {
 				launchersForSystem = []platforms.Launcher{allLaunchers[i]}

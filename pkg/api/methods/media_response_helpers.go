@@ -62,6 +62,38 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 	return mediaIDsByPath(ctx, env.Database.MediaDB, refs)
 }
 
+// formatCoverColor renders a 0xRRGGBB cover colour as "#rrggbb".
+func formatCoverColor(value uint32) string {
+	return fmt.Sprintf("#%06x", value&0xffffff)
+}
+
+// mediaCoverColors looks up recorded cover colours for one page of media
+// rows. Colour is optional enrichment: failures and timeouts return no
+// colours rather than failing the page.
+func mediaCoverColors(ctx context.Context, mediaDB database.MediaDBI, mediaIDs []int64) map[int64]string {
+	ids := make([]int64, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if mediaDB == nil || len(ids) == 0 {
+		return nil
+	}
+	lookupCtx, cancel := optionalDBEnrichmentContext(ctx)
+	defer cancel()
+	colors, err := mediaDB.GetMediaCoverColors(lookupCtx, ids)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not enrich media cover colours")
+		return nil
+	}
+	formatted := make(map[int64]string, len(colors))
+	for id, value := range colors {
+		formatted[id] = formatCoverColor(value)
+	}
+	return formatted
+}
+
 func optionalDBEnrichmentContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()

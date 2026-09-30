@@ -20,9 +20,11 @@
 package helpers
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -379,4 +381,51 @@ func TestInitialize_WithoutExtrasClearsPreviousExtras(t *testing.T) {
 	// Initialize states the full set of extras; a later call with none replaces them.
 	cache.Initialize(mp, nil)
 	assert.Nil(t, cache.GetLauncherByID("native-audio"))
+}
+
+func TestLauncherCache_ReadersWaitForPendingInitialize(t *testing.T) {
+	t.Parallel()
+	cache := &LauncherCache{}
+	cache.BeginInitialize()
+
+	got := make(chan []platforms.Launcher, 1)
+	go func() { got <- cache.GetLaunchersBySystem("NES") }()
+	select {
+	case <-got:
+		t.Fatal("a reader must not see the cache before initialization finishes")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "nes", SystemID: "NES"}})
+	select {
+	case launchers := <-got:
+		require.Len(t, launchers, 1)
+		assert.Equal(t, "nes", launchers[0].ID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader did not resume after initialization")
+	}
+	require.NoError(t, cache.WaitReady(context.Background()))
+}
+
+func TestLauncherCache_WaitReadyHonoursContext(t *testing.T) {
+	t.Parallel()
+	cache := &LauncherCache{}
+	require.NoError(t, cache.WaitReady(context.Background()), "nothing pending")
+	cache.BeginInitialize()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, cache.WaitReady(ctx), context.Canceled)
+}
+
+func TestLauncherCache_ReaderStopsWaitingAfterTimeout(t *testing.T) {
+	// Not parallel: shortens the package-wide wait bound.
+	previous := launcherCacheWaitTimeout
+	launcherCacheWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { launcherCacheWaitTimeout = previous })
+
+	cache := &LauncherCache{}
+	cache.BeginInitialize()
+	started := time.Now()
+	assert.Empty(t, cache.GetAllLaunchers())
+	assert.Less(t, time.Since(started), 5*time.Second)
 }

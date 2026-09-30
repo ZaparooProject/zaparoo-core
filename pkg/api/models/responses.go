@@ -59,11 +59,14 @@ type UIStateResponse struct {
 }
 
 type SearchResultMedia struct {
-	RelPath            *string            `json:"relativePath,omitempty"`
-	System             System             `json:"system"`
-	Name               string             `json:"name"`
-	Path               string             `json:"path"`
-	ZapScript          string             `json:"zapScript"`
+	RelPath   *string `json:"relativePath,omitempty"`
+	System    System  `json:"system"`
+	Name      string  `json:"name"`
+	Path      string  `json:"path"`
+	ZapScript string  `json:"zapScript"`
+	// CoverColor is the cover thumbnail's average colour as "#rrggbb", for a
+	// placeholder while the image loads. Omitted until a thumbnail was built.
+	CoverColor         string             `json:"coverColor,omitempty"`
 	Tags               []database.TagInfo `json:"tags"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
@@ -87,14 +90,17 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
-	SystemID           *string            `json:"systemId,omitempty"`
-	RelPath            *string            `json:"relativePath,omitempty"`
-	ZapScript          *string            `json:"zapScript,omitempty"`
-	FileCount          *int               `json:"fileCount,omitempty"`
-	Group              *string            `json:"group,omitempty"`
-	Path               string             `json:"path"`
-	Type               string             `json:"type"`
-	Name               string             `json:"name"`
+	SystemID  *string `json:"systemId,omitempty"`
+	RelPath   *string `json:"relativePath,omitempty"`
+	ZapScript *string `json:"zapScript,omitempty"`
+	FileCount *int    `json:"fileCount,omitempty"`
+	Group     *string `json:"group,omitempty"`
+	Path      string  `json:"path"`
+	Type      string  `json:"type"`
+	Name      string  `json:"name"`
+	// CoverColor is the cover thumbnail's average colour as "#rrggbb".
+	// Omitted until a thumbnail was built.
+	CoverColor         string             `json:"coverColor,omitempty"`
 	SystemIDs          []string           `json:"systemIds,omitempty"`
 	Tags               []database.TagInfo `json:"tags,omitempty"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
@@ -362,6 +368,9 @@ type MediaHistoryResponseEntry struct {
 	// "active_media", and a row predating this distinction is "unspecified".
 	SessionSource     string `json:"sessionSource"`
 	SessionConfidence string `json:"sessionConfidence"`
+	// CoverColor is the cover thumbnail's average colour as "#rrggbb".
+	// Omitted until a thumbnail was built.
+	CoverColor string `json:"coverColor,omitempty"`
 	// Tags is nil when the media is unresolved or tag enrichment failed
 	// (key omitted) and an empty slice when the media is indexed but
 	// untagged (serialised as []). omitzero keeps that distinction;

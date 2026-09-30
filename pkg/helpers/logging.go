@@ -58,7 +58,45 @@ var (
 	logMu         syncutil.RWMutex
 	logFileWriter *lumberjack.Logger
 	logWriter     io.Writer
+	// logOutput is what the global logger writes to. InitLogging retargets it
+	// rather than replacing log.Logger, so a runtime started inside a process
+	// that is already logging never writes the logger variable while other
+	// goroutines read it.
+	logOutput = &retargetableWriter{}
 )
+
+// Bind the global logger to logOutput before anything logs. With no target it
+// writes to stderr, as zerolog's default logger does.
+func init() {
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+	log.Logger = log.Output(logOutput)
+}
+
+// retargetableWriter forwards writes to a target that can be swapped. With no
+// target it writes to stderr. retarget holds the target for the whole of its
+// swap, and Write holds it for the whole of its write, so retarget never
+// returns while a write it preempted is still in flight: a caller that closes
+// the previous target right after retarget cannot race a write still landing
+// on it.
+type retargetableWriter struct {
+	target io.Writer
+	mu     syncutil.RWMutex
+}
+
+func (w *retargetableWriter) Write(p []byte) (int, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.target != nil {
+		return w.target.Write(p) //nolint:wrapcheck // transparent forwarding writer
+	}
+	return os.Stderr.Write(p) //nolint:wrapcheck // transparent forwarding writer
+}
+
+func (w *retargetableWriter) retarget(target io.Writer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.target = target
+}
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	if err := CloseLogging(); err != nil {
@@ -79,10 +117,8 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 		logWriters = append(logWriters, writers...)
 	}
 
-	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
-
 	logWriter = io.MultiWriter(logWriters...)
-	log.Logger = log.Output(logWriter)
+	logOutput.retarget(logWriter)
 
 	return nil
 }
@@ -243,6 +279,9 @@ func CloseLogging() error {
 		return nil
 	}
 
+	// Send later lines to stderr instead of letting the closed file writer
+	// reopen its file.
+	logOutput.retarget(nil)
 	err := logFileWriter.Close()
 	logFileWriter = nil
 	logWriter = nil

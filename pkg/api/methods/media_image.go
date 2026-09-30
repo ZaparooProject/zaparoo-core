@@ -85,8 +85,20 @@ const (
 )
 
 // mediaImageSem limits concurrent image lookups so high-volume image misses do
-// not saturate SQLite and starve browse/status calls.
-var mediaImageSem = make(chan struct{}, 1)
+// not saturate SQLite and starve browse/status calls. MediaDB reads use a small
+// connection pool, so a few lookups may overlap without blocking browse.
+var mediaImageSem = make(chan struct{}, 3)
+
+const (
+	// mediaImageResizeConcurrency bounds concurrent decode/resize/encode work,
+	// which is CPU and memory heavy and otherwise unbounded once the lookup
+	// semaphore is released. Resource-constrained platforms resize one at a time.
+	mediaImageResizeConcurrency            = 2
+	mediaImageResizeConcurrencyConstrained = 1
+)
+
+// defaultMediaImageResizeSem is used when no thumbnail cache was initialised.
+var defaultMediaImageResizeSem = make(chan struct{}, mediaImageResizeConcurrency)
 
 var mediaImageBeforeSemAcquire func()
 
@@ -124,10 +136,21 @@ type resolvedThumb struct {
 }
 
 type mediaThumbCache struct {
+	createdAt     time.Time
 	fs            afero.Fs
 	resolvedTypes map[string]resolvedThumb
+	resizeSem     chan struct{}
+	reapDone      chan struct{}
 	dir           string
 	resolvedMu    syncutil.RWMutex
+}
+
+// resizeSemaphore returns the channel bounding concurrent resize work.
+func (c *mediaThumbCache) resizeSemaphore() chan struct{} {
+	if c == nil || c.resizeSem == nil {
+		return defaultMediaImageResizeSem
+	}
+	return c.resizeSem
 }
 
 // mediaThumbCacheVersionDir is the basename of the live cache directory for the
@@ -179,13 +202,28 @@ func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCac
 		fs = afero.NewOsFs()
 	}
 	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, mediaThumbCacheVersionDir())
-	return &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]resolvedThumb)}
+	concurrency := mediaImageResizeConcurrency
+	if pl != nil && pl.Settings().ResourceConstrained {
+		concurrency = mediaImageResizeConcurrencyConstrained
+	}
+	return &mediaThumbCache{
+		fs:            fs,
+		dir:           dir,
+		resolvedTypes: make(map[string]resolvedThumb),
+		resizeSem:     make(chan struct{}, concurrency),
+		createdAt:     time.Now(),
+	}
 }
 
 // reapStaleVersions ensures the live versioned directory exists and removes
 // every sibling under thumbs/ that is not the current version. This invalidates
 // the cache after a mediaThumbCacheVersion bump and reaps directories left by a
 // crash mid-wipe or by an older build (the previous current/ and gen-N layout).
+//
+// It runs in the background while requests are served, so it only removes
+// temporary files older than the cache itself: a temporary file written by a
+// live request is left to its own rename or cleanup. Temporary files are never
+// served either way, because lookups only match final hashed names.
 func (c *mediaThumbCache) reapStaleVersions() {
 	if err := c.fs.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
 		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to create dir")
@@ -214,6 +252,9 @@ func (c *mediaThumbCache) reapStaleVersions() {
 			return walkErr
 		}
 		if info.IsDir() || !strings.HasPrefix(info.Name(), ".thumb-") || !strings.HasSuffix(info.Name(), ".tmp") {
+			return nil
+		}
+		if !c.createdAt.IsZero() && !info.ModTime().Before(c.createdAt) {
 			return nil
 		}
 		if err := c.fs.Remove(path); err != nil {
@@ -492,29 +533,51 @@ func (c *mediaThumbCache) wipeSystems(systemIDs []string) {
 }
 
 // InitMediaThumbCache creates or replaces the process-wide thumb cache for the
-// given platform and reaps any stale-version directories. Must be called once
-// during service start, before any media.image requests are handled. Uses atomic
-// store so concurrent StartWithReady calls in tests do not race.
+// given platform. Must be called once during service start, before any
+// media.image requests are handled. The cache is usable as soon as this
+// returns; stale-version directories and abandoned temporary files are reaped
+// in the background so a large cache does not delay startup. Uses atomic store
+// so concurrent StartWithReady calls in tests do not race.
 func InitMediaThumbCache(pl platforms.Platform) {
 	cache := newMediaThumbCache(pl)
-	cache.reapStaleVersions()
+	if err := cache.fs.MkdirAll(cache.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+		log.Debug().Err(err).Str("dir", cache.dir).Msg("media.image: thumb cache: failed to create dir")
+	}
+	cache.reapDone = make(chan struct{})
 	mediaThumbCachePointer.Store(cache)
+	go func() {
+		defer close(cache.reapDone)
+		cache.reapStaleVersions()
+	}()
 }
 
-// WipeMediaThumbCache removes all cached thumbnails. Called after a successful
-// scrape (image sources may have changed) or media reindex so the cache does
-// not serve stale art.
-func WipeMediaThumbCache() {
+// WipeMediaThumbCache removes all cached thumbnails and, when mediaDB is not
+// nil, every recorded cover thumbnail row. Called after a successful scrape
+// (image sources may have changed) or media reindex (media IDs may change) so
+// neither the cache nor its records serve stale art.
+func WipeMediaThumbCache(mediaDB database.MediaDBI) {
 	if cache := mediaThumbCachePointer.Load(); cache != nil {
 		cache.wipe()
 	}
+	if mediaDB != nil {
+		if err := mediaDB.ClearMediaCoverThumbs(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("media.image: failed to clear cover thumbnail records")
+		}
+	}
 }
 
-// WipeMediaThumbCacheSystems removes cached thumbnails only for the supplied
-// systems. Other system directories and resolved request memos remain warm.
-func WipeMediaThumbCacheSystems(systemIDs []string) {
+// WipeMediaThumbCacheSystems removes cached thumbnails and recorded cover
+// thumbnail rows only for the supplied systems. Other system directories and
+// resolved request memos remain warm.
+func WipeMediaThumbCacheSystems(mediaDB database.MediaDBI, systemIDs []string) {
 	if cache := mediaThumbCachePointer.Load(); cache != nil {
 		cache.wipeSystems(systemIDs)
+	}
+	if mediaDB != nil && len(systemIDs) > 0 {
+		if err := mediaDB.ClearMediaCoverThumbsForSystems(context.Background(), systemIDs); err != nil {
+			log.Warn().Err(err).Strs("systems", systemIDs).
+				Msg("media.image: failed to clear cover thumbnail records for systems")
+		}
 	}
 }
 
@@ -547,6 +610,7 @@ type rawMediaImage struct {
 	typeTag     string
 	system      string
 	binary      []byte
+	mediaDBID   int64 // 0 when the image belongs to a directory, not a media row
 }
 
 // resizeImageIfNeeded decodes binary, scales it down to fit within a
@@ -558,12 +622,22 @@ type rawMediaImage struct {
 // Returns the original bytes unchanged when maxSize <= 0 (full size requested)
 // or when the source cannot be decoded.
 func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resized []byte, resizedType string) {
+	resized, resizedType, _ = resizeImageWithColor(binary, contentType, maxSize)
+	return resized, resizedType
+}
+
+// resizeImageWithColor is resizeImageIfNeeded that also returns the average
+// colour of the decoded frame as 0xRRGGBB, or nil when the image was not
+// decoded or is fully transparent.
+func resizeImageWithColor(
+	binary []byte, contentType string, maxSize int,
+) (resized []byte, resizedType string, avgColor *uint32) {
 	if maxSize <= 0 || len(binary) == 0 {
-		return binary, contentType
+		return binary, contentType, nil
 	}
 	src, err := decodeResizableImage(binary, contentType)
 	if err != nil {
-		return binary, contentType
+		return binary, contentType, nil
 	}
 	bounds := src.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
@@ -591,14 +665,15 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, draw.Over, nil)
 		frame = dst
 	}
+	avgColor = averageImageColor(frame)
 	out, outputType, err := encodeResizedImage(frame)
 	if err != nil {
-		return binary, contentType
+		return binary, contentType, avgColor
 	}
 	// When no downscale happened, only adopt the WebP if it actually shrank the
 	// payload; some already-compact sources re-encode larger.
 	if newW == w && newH == h && len(out) >= len(binary) {
-		return binary, contentType
+		return binary, contentType, avgColor
 	}
 	log.Debug().
 		Str("contentType", contentType).
@@ -611,7 +686,48 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 		Int("inputBytes", len(binary)).
 		Int("resizedBytes", len(out)).
 		Msg("media.image: resized image")
-	return out, outputType
+	return out, outputType, avgColor
+}
+
+// averageColorSampleSide bounds the colour average to about this many samples
+// per axis, so the cost is independent of the frame size.
+const averageColorSampleSide = 64
+
+// averageImageColor returns the alpha-weighted average colour of img as
+// 0xRRGGBB, sampling at most averageColorSampleSide² pixels. It returns nil
+// for an empty or fully transparent image.
+func averageImageColor(img image.Image) *uint32 {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	stepX := max(1, w/averageColorSampleSide)
+	stepY := max(1, h/averageColorSampleSide)
+	var sumR, sumG, sumB, sumA uint64
+	for y := bounds.Min.Y; y < bounds.Max.Y; y += stepY {
+		for x := bounds.Min.X; x < bounds.Max.X; x += stepX {
+			// RGBA returns alpha-premultiplied 16-bit channels, so the sums are
+			// already weighted by coverage.
+			r, g, b, a := img.At(x, y).RGBA()
+			sumR += uint64(r)
+			sumG += uint64(g)
+			sumB += uint64(b)
+			sumA += uint64(a)
+		}
+	}
+	if sumA == 0 {
+		return nil
+	}
+	channel := func(sum uint64) uint32 {
+		v := sum * 0xff / sumA
+		if v > 0xff {
+			v = 0xff
+		}
+		return uint32(v) //nolint:gosec // clamped to 8 bits above
+	}
+	value := channel(sumR)<<16 | channel(sumG)<<8 | channel(sumB)
+	return &value
 }
 
 // encodeResizedImage encodes a resized frame as lossy WebP (VP8) with alpha
@@ -958,6 +1074,21 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
 		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
+
+	// Recorded fast path: after a restart the in-memory memo is empty, but the
+	// cover's resolved type is recorded in MediaDB. Confirm it is still the
+	// first match for these preferences and serve the disk thumbnail without
+	// reading the original artwork or waiting for the lookup semaphore.
+	if ref.MaxSize != nil && *ref.MaxSize > 0 {
+		if cache := mediaThumbCachePointer.Load(); cache != nil {
+			if response, found := recordedThumbResponse(
+				&env, cache, ref, prefs, int(*ref.MaxSize), localPath,
+			); found {
+				return response, nil
+			}
+		}
+	}
+
 	if mediaImageBeforeSemAcquire != nil {
 		mediaImageBeforeSemAcquire()
 	}
@@ -1001,16 +1132,28 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 			if response, found := cachedMediaImageResponse(
 				cache, ref, raw.system, raw.typeTag, maxSize, raw.text, localPath,
 			); found {
+				recordCachedCoverThumb(&env, cache, ref, raw, prefs, maxSize)
 				return response, nil
 			}
 		}
 
-		binary, contentType = resizeImageIfNeeded(binary, contentType, maxSize)
+		resizeSem := cache.resizeSemaphore()
+		select {
+		case resizeSem <- struct{}{}:
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
+		var avgColor *uint32
+		binary, contentType, avgColor = resizeImageWithColor(binary, contentType, maxSize)
+		<-resizeSem
 		if cache != nil {
 			path, cacheErr := cache.set(ref, raw.system, raw.typeTag, maxSize, binary, contentType)
 			if cacheErr != nil {
 				log.Debug().Err(cacheErr).Msg("media.image: failed to materialize thumbnail cache file")
-			} else if localPath {
+			} else {
+				recordCoverThumb(&env, raw, prefs, avgColor)
+			}
+			if cacheErr == nil && localPath {
 				if response, ok := localMediaImageResponse(cache, path, contentType, raw.typeTag); ok {
 					return response, nil
 				}
@@ -1019,6 +1162,141 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 		}
 	}
 	return inlineMediaImageResponse(binary, contentType, raw.text, raw.typeTag), nil
+}
+
+// recordedThumbResponse serves a cached thumbnail using the cover type
+// recorded in MediaDB, without loading the original image. It reports false
+// whenever the record cannot be proven to match what a full lookup would
+// resolve, and the caller then takes the full path.
+func recordedThumbResponse(
+	env *requests.RequestEnv,
+	cache *mediaThumbCache,
+	ref mediaRefParam,
+	prefs []string,
+	maxSize int,
+	localPath bool,
+) (models.MediaImageResponse, bool) {
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return models.MediaImageResponse{}, false
+	}
+	db := env.Database.MediaDB
+	mediaDBID, ok := mediaImageRequestDBID(env, ref)
+	if !ok {
+		return models.MediaImageResponse{}, false
+	}
+	thumb, found, err := db.GetMediaCoverThumb(env.Context, mediaDBID)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", mediaDBID).Msg("media.image: cover thumb record lookup failed")
+		return models.MediaImageResponse{}, false
+	}
+	if !found || (ref.MediaID == nil && thumb.SystemID != ref.System) {
+		return models.MediaImageResponse{}, false
+	}
+	if !recordedTypeMatchesPrefs(thumb.TypeTag, thumb.AvailableTypeTags, prefs) {
+		return models.MediaImageResponse{}, false
+	}
+	// Zip container aliases add artwork from equivalent media rows that the
+	// recorded property list does not cover; let the full path decide.
+	if zipContainerAliasesEnabled(env) &&
+		(helpers.IsZip(thumb.Path) || helpers.IsZip(strings.TrimSuffix(thumb.ParentDir, "/"))) {
+		return models.MediaImageResponse{}, false
+	}
+	response, cached := cachedMediaImageResponse(cache, ref, thumb.SystemID, thumb.TypeTag, maxSize, "", localPath)
+	if !cached {
+		return models.MediaImageResponse{}, false
+	}
+	cache.setResolvedThumb(ref, prefs, maxSize, thumb.SystemID, thumb.TypeTag)
+	return response, true
+}
+
+// mediaImageRequestDBID resolves a request to its media row with cheap
+// indexed lookups. Path requests only match an exact indexed path; relative,
+// singleton and directory fallbacks are left to the full path.
+func mediaImageRequestDBID(env *requests.RequestEnv, ref mediaRefParam) (int64, bool) {
+	if ref.MediaID != nil {
+		return *ref.MediaID, *ref.MediaID > 0
+	}
+	db := env.Database.MediaDB
+	system, err := db.FindSystemBySystemID(ref.System)
+	if err != nil {
+		return 0, false
+	}
+	media, err := db.FindMediaBySystemAndPath(env.Context, system.DBID, ref.Path)
+	if err != nil || media == nil {
+		return 0, false
+	}
+	return media.DBID, true
+}
+
+// recordedTypeMatchesPrefs reports whether typeTag is what the preference
+// walk would pick: it must be one of prefs and no preference ahead of it may
+// be available on the media row or its title.
+func recordedTypeMatchesPrefs(typeTag string, available, prefs []string) bool {
+	availableSet := make(map[string]struct{}, len(available))
+	for _, tag := range available {
+		availableSet[tag] = struct{}{}
+	}
+	if _, ok := availableSet[typeTag]; !ok {
+		return false
+	}
+	for _, pref := range prefs {
+		prefTag, ok := resolveImageTypeTag(pref)
+		if !ok {
+			continue
+		}
+		if prefTag == typeTag {
+			return true
+		}
+		if _, ok := availableSet[prefTag]; ok {
+			return false
+		}
+	}
+	return false
+}
+
+// coverRecordEligible reports whether a resolved image should be recorded as
+// the media row's cover. Requests with a single explicit type (a detail view
+// asking for a screenshot, say) do not define the cover, so they never
+// replace the record written by cover requests with fallbacks.
+func coverRecordEligible(env *requests.RequestEnv, raw *rawMediaImage, prefs []string) bool {
+	return raw != nil && raw.mediaDBID > 0 && len(prefs) > 1 &&
+		env.Database != nil && env.Database.MediaDB != nil
+}
+
+// recordCoverThumb records the cover's resolved type and average colour.
+// Failures are logged and ignored: the record is an optimisation.
+func recordCoverThumb(env *requests.RequestEnv, raw *rawMediaImage, prefs []string, avgColor *uint32) {
+	if !coverRecordEligible(env, raw, prefs) {
+		return
+	}
+	if err := env.Database.MediaDB.PutMediaCoverThumb(
+		context.WithoutCancel(env.Context), raw.mediaDBID, raw.typeTag, avgColor,
+	); err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", raw.mediaDBID).Msg("media.image: failed to record cover thumb")
+	}
+}
+
+// recordCachedCoverThumb records a cover whose thumbnail was already on disk,
+// for example one built before cover records existed. The colour is taken
+// from the small cached thumbnail rather than the original.
+func recordCachedCoverThumb(
+	env *requests.RequestEnv,
+	cache *mediaThumbCache,
+	ref mediaRefParam,
+	raw *rawMediaImage,
+	prefs []string,
+	maxSize int,
+) {
+	if !coverRecordEligible(env, raw, prefs) {
+		return
+	}
+	var avgColor *uint32
+	if data, contentType, found := cache.read(ref, raw.system, raw.typeTag, maxSize); found {
+		if img, err := decodeResizableImage(data, contentType); err == nil {
+			avgColor = averageImageColor(img)
+		}
+	}
+	recordCoverThumb(env, raw, prefs, avgColor)
 }
 
 func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, string, error) {
@@ -1341,6 +1619,7 @@ func loadRawMediaImageProperty(
 		text:        prop.Text,
 		typeTag:     typeTag,
 		system:      row.System.SystemID,
+		mediaDBID:   row.DBID,
 	}, false, nil
 }
 

@@ -89,7 +89,10 @@ var (
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
 func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
-	launchers := pl.Launchers(cfg)
+	return launcherIDs(pl.Launchers(cfg))
+}
+
+func launcherIDs(launchers []platforms.Launcher) []string {
 	ids := make([]string, len(launchers))
 	for i := range launchers {
 		ids[i] = launchers[i].ID
@@ -100,7 +103,7 @@ func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 // ParseAdvArgs parses and validates advanced arguments for a command.
 // Returns an error if parsing or validation fails.
 func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
-	ctx := advargs.NewParseContext(GetLauncherIDs(pl, env.Cfg))
+	ctx := advargs.NewParseContext(launcherIDs(env.Launchers.Get(pl, env.Cfg)))
 	if err := advargs.Parse(env.Cmd.AdvArgs.Raw(), dest, ctx); err != nil {
 		return fmt.Errorf("failed to parse advanced args: %w", err)
 	}
@@ -575,6 +578,7 @@ func RunCommand(
 		RefreshOwnedDeck:   opts.RefreshOwnedDeck,
 		PlaybackManager:    opts.PlaybackManager,
 		LauncherCache:      helpers.GlobalLauncherCache,
+		Launchers:          &platforms.LauncherSnapshot{},
 		UI:                 opts.UI,
 		Playlist:           plsc,
 		Source:             token.Source,

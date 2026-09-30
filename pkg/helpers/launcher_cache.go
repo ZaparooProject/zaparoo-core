@@ -20,8 +20,11 @@
 package helpers
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -30,11 +33,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// launcherCacheWaitTimeout bounds how long a reader waits for a pending
+// initialization before it proceeds with whatever the cache holds.
+var launcherCacheWaitTimeout = 30 * time.Second
+
 // LauncherCache provides fast O(1) launcher lookups by system ID.
 // This replaces the expensive O(n*m) pl.Launchers() calls in hot paths.
+//
+// Startup may build the cache in the background: BeginInitialize marks it
+// pending, and until Initialize finishes every reader waits for it (up to
+// launcherCacheWaitTimeout) rather than seeing an empty cache.
 type LauncherCache struct {
 	bySystemID          map[string][]platforms.Launcher
 	availableBySystemID map[string][]platforms.Launcher
+	pending             chan struct{}
 	allLaunchers        []platforms.Launcher
 	launchableSystems   []launchables.VirtualSystem
 	extraLaunchers      []platforms.Launcher
@@ -49,8 +61,65 @@ var GlobalLauncherCache = &LauncherCache{}
 // deduplication. This should be called once at startup after custom launchers are loaded.
 // The extras are retained so Refresh can reapply them.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
+	defer lc.finishInitialize()
 	lc.setExtraLaunchers(extra)
 	lc.rebuild(pl, cfg, extra)
+}
+
+// BeginInitialize marks the cache as being built so readers wait for the
+// Initialize call that follows instead of reading an empty cache. Call it
+// before starting Initialize in the background.
+func (lc *LauncherCache) BeginInitialize() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.pending == nil {
+		lc.pending = make(chan struct{})
+	}
+}
+
+func (lc *LauncherCache) finishInitialize() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.pending != nil {
+		close(lc.pending)
+		lc.pending = nil
+	}
+}
+
+// WaitReady blocks until a pending initialization finishes or ctx ends. It
+// returns immediately when no initialization is pending.
+func (lc *LauncherCache) WaitReady(ctx context.Context) error {
+	lc.mu.RLock()
+	pending := lc.pending
+	lc.mu.RUnlock()
+	if pending == nil {
+		return nil
+	}
+	select {
+	case <-pending:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // callers compare against context errors
+	}
+}
+
+// awaitReady is the bounded wait every reader performs before reading.
+func (lc *LauncherCache) awaitReady() {
+	lc.mu.RLock()
+	pending := lc.pending
+	lc.mu.RUnlock()
+	if pending == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), launcherCacheWaitTimeout)
+	defer cancel()
+	started := time.Now()
+	if err := lc.WaitReady(ctx); errors.Is(err, context.DeadlineExceeded) {
+		log.Warn().Dur("waited", time.Since(started)).
+			Msg("launcher cache still initializing; reading it anyway")
+		return
+	}
+	log.Debug().Dur("waited", time.Since(started)).Msg("launcher cache reader waited for initialization")
 }
 
 func (lc *LauncherCache) rebuild(pl platforms.Platform, cfg *config.Instance, extra []platforms.Launcher) {
@@ -100,6 +169,7 @@ func launcherInSlice(launchers []platforms.Launcher, id string) bool {
 // GetLaunchersBySystem returns all launchers for a specific system ID.
 // Returns nil if no launchers found for the system.
 func (lc *LauncherCache) GetLaunchersBySystem(systemID string) []platforms.Launcher {
+	lc.awaitReady()
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
@@ -109,6 +179,7 @@ func (lc *LauncherCache) GetLaunchersBySystem(systemID string) []platforms.Launc
 // GetAllLaunchers returns all cached launchers.
 // GetAvailableLaunchersBySystem returns cached launchers whose runtime dependencies are available.
 func (lc *LauncherCache) GetAvailableLaunchersBySystem(systemID string) []platforms.Launcher {
+	lc.awaitReady()
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
@@ -116,6 +187,7 @@ func (lc *LauncherCache) GetAvailableLaunchersBySystem(systemID string) []platfo
 }
 
 func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
+	lc.awaitReady()
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
@@ -126,6 +198,7 @@ func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 
 // GetLaunchableSystems returns available virtual systems cached during launcher initialization.
 func (lc *LauncherCache) GetLaunchableSystems() []launchables.VirtualSystem {
+	lc.awaitReady()
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
@@ -135,6 +208,7 @@ func (lc *LauncherCache) GetLaunchableSystems() []launchables.VirtualSystem {
 // InitializeFromSlice builds the launcher cache from a pre-built slice of launchers.
 // This is useful for testing or when launchers are already available.
 func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
+	defer lc.finishInitialize()
 	lc.rebuildFromSlice(launchers)
 }
 
@@ -194,6 +268,7 @@ func (lc *LauncherCache) getExtraLaunchers() []platforms.Launcher {
 // GetLauncherByID finds a launcher by its case-insensitive unique ID.
 // Returns nil if no launcher is found or IDs differing only by case make the lookup ambiguous.
 func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
+	lc.awaitReady()
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 

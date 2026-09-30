@@ -296,7 +296,7 @@ Sent during media database generation to indicate indexing progress and completi
 
 Sent while a metadata scraper run is active and when it completes.
 
-The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, per-system counters, whole-run system-step progress, pause state, and completion state. A final notification has `scraping` set to false and `done` set to true. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
+The first notification for a scraper run identifies the scraper and sets `scraping` to true. Per-item progress is sent at most every 250 ms; changes of state, system, step, pause or throttle, a system's last item, errors and the final notification are always sent. `media.scrape.status` returns the latest progress between notifications. Progress notifications include the current system, per-system counters, whole-run system-step progress, pause state, and completion state. A final notification has `scraping` set to false and `done` set to true. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
 
 #### Parameters
 

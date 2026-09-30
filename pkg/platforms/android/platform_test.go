@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -61,9 +62,18 @@ type fakeHost struct {
 	dispatched      []dispatchCall
 	evidenceQueries []evidenceQuery
 	listings        int
+	coreCalls       int
+	appCalls        int
 	mu              syncutil.Mutex
 	scanned         bool
 	appsScanned     bool
+}
+
+// calls reports how often each host sweep ran.
+func (h *fakeHost) calls() (cores, apps, inspections int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.coreCalls, h.appCalls, len(h.inspections)
 }
 
 type evidenceQuery struct {
@@ -82,6 +92,7 @@ type dispatchCall struct {
 func (h *fakeHost) InstalledApps() ([]AppInfo, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.appCalls++
 	return h.apps, h.appsScanned
 }
 
@@ -124,6 +135,9 @@ func (h *fakeHost) InspectTarget(definition *LaunchDefinition) error {
 }
 
 func (h *fakeHost) InstalledCores() (files []string, scanned bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.coreCalls++
 	return h.cores, h.scanned
 }
 
@@ -767,4 +781,73 @@ func TestSourceFailureKeepsTheHostReason(t *testing.T) {
 			assert.Equal(t, test.wantReason, repair.Reason())
 		})
 	}
+}
+
+// Listing launchers and launching share one host report: a launch sweeps the
+// host at most once, and a second launch inside the TTL does not sweep it at
+// all.
+//
+//nolint:paralleltest // replaces the shared launcher cache
+func TestHostSnapshotIsSharedAcrossListingAndLaunch(t *testing.T) {
+	host := &fakeHost{scanned: true, cores: []string{"mesen_libretro_android.so"}}
+	platform := startedPlatform(t.Context(), t, host)
+	current := time.Unix(1000, 0)
+	platform.clock = func() time.Time { return current }
+	useLauncherCache(t, platform)
+	cores, _, inspections := host.calls()
+	require.Equal(t, 1, cores, "building the launcher cache sweeps the host once")
+
+	game := identity(t, "nes", "Game.nes")
+	mesen := launcherByID(t, platform.Launchers(nil), "RetroArch.Mesen")
+	require.NoError(t, platform.LaunchMedia(&config.Instance{}, game, mesen, nil, nil))
+	require.NoError(t, platform.LaunchMedia(&config.Instance{}, game, mesen, nil, nil))
+	gotCores, _, gotInspections := host.calls()
+	assert.Equal(t, cores, gotCores, "launches inside the TTL reuse the report")
+	assert.Equal(t, inspections, gotInspections, "targets are not inspected again")
+
+	current = current.Add(hostSnapshotTTL)
+	platform.Launchers(nil)
+	gotCores, _, _ = host.calls()
+	assert.Equal(t, cores+1, gotCores, "an expired report is swept again")
+
+	platform.InvalidateHostSnapshot()
+	platform.Launchers(nil)
+	platform.Launchers(nil)
+	gotCores, _, _ = host.calls()
+	assert.Equal(t, cores+2, gotCores, "an invalidated report is swept again, once")
+}
+
+// A package change the host reports reaches the next listing only through
+// invalidation, which the embedding host triggers.
+func TestInvalidateHostSnapshotPicksUpInstalledPackages(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{failures: map[string]FailureReason{
+		"com.github.stenzek.duckstation": FailureNotInstalled,
+	}}
+	platform := startedPlatform(t.Context(), t, host)
+	assert.False(t, launcherByID(t, platform.Launchers(nil), "DuckStation.PSX").Available)
+
+	host.mu.Lock()
+	host.failures = nil
+	host.mu.Unlock()
+	assert.False(t, launcherByID(t, platform.Launchers(nil), "DuckStation.PSX").Available,
+		"the memoised report still stands")
+	platform.InvalidateHostSnapshot()
+	assert.True(t, launcherByID(t, platform.Launchers(nil), "DuckStation.PSX").Available)
+}
+
+// launchers.refresh must not wait out the host snapshot TTL to see a change.
+func TestRefreshLauncherDependenciesInvalidatesTheSnapshot(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{failures: map[string]FailureReason{
+		"com.github.stenzek.duckstation": FailureNotInstalled,
+	}}
+	platform := startedPlatform(t.Context(), t, host)
+	assert.False(t, launcherByID(t, platform.Launchers(nil), "DuckStation.PSX").Available)
+
+	host.mu.Lock()
+	host.failures = nil
+	host.mu.Unlock()
+	require.NoError(t, platform.RefreshLauncherDependencies())
+	assert.True(t, launcherByID(t, platform.Launchers(nil), "DuckStation.PSX").Available)
 }

@@ -676,6 +676,7 @@ An object:
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
 | relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | hasCover  | boolean                  | Yes      | Whether media-level or title-level image properties are available. |
+| coverColor | string                  | No       | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Omitted until Core has built a thumbnail for the media through `media.image` with a `maxSize`. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item. Includes the disambiguating tags inline (e.g. `@Arcade/X-Men Vs. Street Fighter (region:eu) (builddate:1996-10-04)`) so the written command resolves back to this specific variant. |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 | disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Omitted when there is nothing to disambiguate. Clients can render these to tell variants apart. |
@@ -891,6 +892,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Same object shape as `tags`. Omitted when there is nothing to disambiguate. |
 | hasCover     | boolean  | Yes      | Whether image properties are available. For directories this includes path-keyed folder artwork and, when collapsed, media/title artwork. Clients can skip image requests when false. |
+| coverColor   | string   | No       | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Present on `media` entries and logical single-game container `directory` entries once Core has built a thumbnail for the media through `media.image` with a `maxSize`. |
 
 ##### Browse pagination object
 
@@ -1655,6 +1657,7 @@ Optionally, an object:
 | mediaPath  | string | Yes      | Path to the media file.                                |
 | relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | hasCover   | boolean | Yes     | Whether media-level or title-level image properties are available. |
+| coverColor | string  | No      | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Omitted until Core has built a thumbnail for the media through `media.image` with a `maxSize`. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
@@ -2290,6 +2293,8 @@ An object identifying a media row by `mediaId` or identifying media/directory co
 Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
 Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
+
+When a resized thumbnail is built for a request whose image type preference list has more than one entry, Core records the image type it resolved to and the thumbnail's average colour. Later requests, including after a restart, are then served from the thumbnail cache without reading the original artwork, and list results (`media.browse`, `media.search`, `media.history`) report the colour as `coverColor`. A request for a single image type does not change the recorded cover. The records are cleared together with the thumbnail cache after indexing or scraping changes artwork.
 
 `localPath` never returns an original scraper or media path. Core resolves image semantics, materializes its own bounded thumbnail cache artifact, and returns that path. Path delivery is available to any client that explicitly requests it, regardless of peer locality or Core platform; remote callers are responsible for having an appropriate shared-filesystem view of the Core host path. Treat the path as opaque, transient, and nonportable: read it immediately, never persist it or derive neighboring paths, and retry once with `delivery: "inline"` if the file is inaccessible or disappears before it is opened. If cache materialization fails, Core can safely return `delivery: "inline"` in the same response.
 

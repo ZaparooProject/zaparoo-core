@@ -28,6 +28,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -61,10 +62,14 @@ type Platform struct {
 	// folders maps each source root ID to the host reference it was made
 	// from, as of the last SourceRoots call.
 	folders      map[string]string
+	snapshotAt   time.Time
+	clock        func() time.Time
+	snapshot     *hostSnapshot
 	settings     platforms.Settings
 	historyHooks platforms.MediaHistoryHooks
 	entries      []catalogEntry
 	mu           syncutil.RWMutex
+	snapshotMu   syncutil.Mutex
 }
 
 var (
@@ -199,6 +204,46 @@ func (p *Platform) database() *database.Database {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.db
+}
+
+// hostSnapshot returns the memoised host report, asking the host again once
+// it is older than hostSnapshotTTL or was invalidated. Launcher listing and
+// launch both read the same report instead of each sweeping the host.
+func (p *Platform) hostSnapshot() *hostSnapshot {
+	p.snapshotMu.Lock()
+	defer p.snapshotMu.Unlock()
+	now := p.now()
+	if p.snapshot != nil && now.Sub(p.snapshotAt) < hostSnapshotTTL && !now.Before(p.snapshotAt) {
+		return p.snapshot
+	}
+	p.snapshot = newHostSnapshot(p.host)
+	p.snapshotAt = now
+	return p.snapshot
+}
+
+// InvalidateHostSnapshot drops the memoised host report so the next launcher
+// listing or launch asks the host again. An embedding host calls it when
+// packages are installed, removed or changed, and when the RetroArch core
+// list changes.
+func (p *Platform) InvalidateHostSnapshot() {
+	p.snapshotMu.Lock()
+	defer p.snapshotMu.Unlock()
+	p.snapshot = nil
+}
+
+// RefreshLauncherDependencies drops the memoised host report, so an explicit
+// launchers.refresh sees a RetroArch core install without waiting out
+// hostSnapshotTTL.
+func (p *Platform) RefreshLauncherDependencies() error {
+	p.InvalidateHostSnapshot()
+	return nil
+}
+
+func (p *Platform) now() time.Time {
+	if p.clock != nil {
+		return p.clock()
+	}
+	return time.Now()
 }
 
 func (p *Platform) Settings() platforms.Settings { return p.settings }

@@ -308,10 +308,10 @@ func scrapeCountStatusContext(parent context.Context) (context.Context, context.
 func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
 	systems, all := mediaDB.ConsumeScrapeImageChanges()
 	if all {
-		WipeMediaThumbCache()
+		WipeMediaThumbCache(mediaDB)
 		return
 	}
-	WipeMediaThumbCacheSystems(systems)
+	WipeMediaThumbCacheSystems(mediaDB, systems)
 }
 
 // refreshScrapedTags makes tags written by a scrape visible to media.tags.
@@ -761,6 +761,7 @@ func startMediaScrapeOperation(
 			finalStatus := mediadb.IndexingStatusCompleted
 			var receivedDone bool
 			var sourceErrs scrapeSourceErrors
+			notifState := scrapingNotificationState{}
 			for update := range ch {
 				if update.Done {
 					receivedDone = true
@@ -781,7 +782,13 @@ func startMediaScrapeOperation(
 					continue
 				}
 				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
-				publishScrapingStatus(ns, &status)
+				// Per-item progress is rate-limited so a fast scraper does not
+				// flood clients; the status query still sees every update.
+				if notifState.shouldSend(&status, time.Now(), progressNotificationInterval) {
+					publishScrapingStatus(ns, &status)
+				} else {
+					scrapingStatusInstance.setLatest(&status)
+				}
 			}
 
 			if scrapeCtx.Err() != nil {

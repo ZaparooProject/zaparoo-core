@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -274,4 +275,66 @@ func TestInitLoggingIntegration(t *testing.T) {
 		assert.NotEqual(t, platform.Settings().TempDir, platform.Settings().LogDir,
 			"TempDir and LogDir should be different directories")
 	})
+}
+
+// blockingWriter blocks its Write call until release is closed, signalling
+// started once the write has actually begun. It stands in for a slow
+// downstream writer (a real file write can block on I/O).
+type blockingWriter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingWriter) Write(p []byte) (int, error) {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	return len(p), nil
+}
+
+// A retarget (as CloseLogging performs before closing the previous file)
+// must not return while a write that already selected the old target is
+// still in flight: otherwise the file can be reopened by that late write
+// after the caller believes it is closed.
+func TestRetargetableWriter_RetargetWaitsForInFlightWrite(t *testing.T) {
+	t.Parallel()
+	w := &retargetableWriter{}
+	blocking := &blockingWriter{started: make(chan struct{}), release: make(chan struct{})}
+	w.retarget(blocking)
+
+	writeDone := make(chan struct{})
+	go func() {
+		_, _ = w.Write([]byte("hello"))
+		close(writeDone)
+	}()
+
+	select {
+	case <-blocking.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("write never started")
+	}
+
+	retargetDone := make(chan struct{})
+	go func() {
+		w.retarget(nil)
+		close(retargetDone)
+	}()
+
+	select {
+	case <-retargetDone:
+		t.Fatal("retarget returned before the in-flight write it preempted had finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(blocking.release)
+	select {
+	case <-writeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("write never finished")
+	}
+	select {
+	case <-retargetDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retarget never finished")
+	}
 }

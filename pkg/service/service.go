@@ -578,7 +578,6 @@ func startServiceWithOptions(
 	preStarted = true
 	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
-	opts.phase("migrating")
 	log.Info().Msg("opening databases")
 	databaseStarted := time.Now()
 	startupServer.SetStartingDetail("Opening databases.")
@@ -586,7 +585,9 @@ func startServiceWithOptions(
 	// migration on a 229k-item library took 2m14s (#1372), and saying so up
 	// front would tell every ordinary start, which finishes in about a second,
 	// to expect minutes. Say it only once a migration is actually running.
-	restoreReporter := database.SetMigrationReporter(migrationStartupReporter(startupServer))
+	restoreReporter := database.SetMigrationReporter(migrationStartupReporter(startupServer, func() {
+		opts.phase("migrating")
+	}))
 	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	restoreReporter()
 	if err != nil {
@@ -675,8 +676,7 @@ func startServiceWithOptions(
 	}
 
 	// LauncherCache is the pointer to the shared cache, assigned before the
-	// Initialize below fills it: nothing resolves a launcher through it until
-	// media exists.
+	// background Initialize below fills it. Readers wait for that to finish.
 	svc := &ServiceContext{
 		Platform:            pl,
 		Config:              cfg,
@@ -739,26 +739,34 @@ func startServiceWithOptions(
 	}
 	log.Debug().Dur("duration", time.Since(launchersStarted)).Msg("custom launchers loaded")
 
+	// Launcher probing can be slow (a host may inspect installed apps and
+	// emulator cores), so it runs beside the API rather than ahead of it.
+	// Readers of the cache wait for it to finish instead of seeing it empty.
 	log.Info().Msg("initializing launcher cache")
-	launcherCacheStarted := time.Now()
-	helpers.GlobalLauncherCache.Initialize(
-		pl, cfg,
-		platforms.NativeAudioLauncher(
-			playbackManager,
-			st.SetBackgroundMedia,
-			func(ctx context.Context, stop func() error) error {
-				return stopNativeAudioPrimaryMedia(ctx, svc, stop)
-			},
-		),
+	launcherCache := helpers.GlobalLauncherCache
+	launcherCache.BeginInitialize()
+	nativeAudioLauncher := platforms.NativeAudioLauncher(
+		playbackManager,
+		st.SetBackgroundMedia,
+		func(ctx context.Context, stop func() error) error {
+			return stopNativeAudioPrimaryMedia(ctx, svc, stop)
+		},
 	)
-	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
+	launcherCacheDone := make(chan struct{})
+	go func() {
+		defer close(launcherCacheDone)
+		launcherCacheStarted := time.Now()
+		launcherCache.Initialize(pl, cfg, nativeAudioLauncher)
+		log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
+	}()
 
-	// Resource-constrained platforms pace indexing and scraping so UI, API,
-	// reader, and audio work gets regular CPU time. Active media can impose the
-	// stronger light/heavy throttle or full pause through these same pausers.
+	// Resource-constrained platforms, and hosts that ask for it, pace indexing
+	// and scraping so UI, API, reader, and audio work gets regular CPU time.
+	// Active media can impose the stronger light/heavy throttle or full pause
+	// through these same pausers.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
-	if platformSettings.ResourceConstrained {
+	if backgroundThrottled(platformSettings) {
 		indexPauser.SetBaselineThrottle(syncutil.ThrottleBackground)
 		scrapePauser.SetBaselineThrottle(syncutil.ThrottleBackground)
 	}
@@ -795,6 +803,8 @@ func startServiceWithOptions(
 	apiReadyStarted := time.Now()
 	if apiErr := <-apiReady; apiErr != nil {
 		discoveryService.Stop()
+		// Launcher probing uses the platform; let it finish before stopping it.
+		<-launcherCacheDone
 		if stopErr := pl.Stop(); stopErr != nil {
 			log.Warn().Msgf("error stopping platform after API startup failure: %s", stopErr)
 		}
@@ -1064,6 +1074,7 @@ func startServiceWithOptions(
 		for _, publisher := range activePublishers {
 			publisher.Stop()
 		}
+		<-launcherCacheDone
 		if stopErr := pl.Stop(); stopErr != nil {
 			log.Warn().Msgf("error stopping platform: %s", stopErr)
 		}

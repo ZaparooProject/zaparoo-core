@@ -1398,6 +1398,7 @@ func buildBrowseResponse(
 		entry := buildMediaEntry(&files[i], env)
 		entries = append(entries, entry)
 	}
+	attachBrowseCoverColors(env, entries)
 
 	var pagination *models.PaginationInfo
 	if len(entries) > 0 {
@@ -1582,6 +1583,27 @@ func browseMediaDisplayName(path, sortName, titleName string) string {
 	}
 
 	return titleName
+}
+
+// attachBrowseCoverColors sets coverColor on the page's media entries and
+// collapsed single-game directories with one lookup for the whole page.
+func attachBrowseCoverColors(env *requests.RequestEnv, entries []models.BrowseEntry) {
+	if env == nil || env.Database == nil {
+		return
+	}
+	ids := make([]int64, 0, len(entries))
+	for i := range entries {
+		if entries[i].MediaID > 0 {
+			ids = append(ids, entries[i].MediaID)
+		}
+	}
+	colors := mediaCoverColors(env.Context, env.Database.MediaDB, ids)
+	if len(colors) == 0 {
+		return
+	}
+	for i := range entries {
+		entries[i].CoverColor = colors[entries[i].MediaID]
+	}
 }
 
 // buildMediaEntry converts a SearchResultWithCursor into a BrowseEntry of type "media".
