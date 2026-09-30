@@ -60,7 +60,7 @@ func TestCatalogIdentityAndBound(t *testing.T) {
 	t.Parallel()
 
 	catalog := decodeRetroArchCatalog(t)
-	assert.Equal(t, 1, catalog.Version)
+	assert.Equal(t, 2, catalog.Version)
 	assert.Equal(t, "com.retroarch.aarch64", catalog.Package)
 	assert.Equal(t, "com.retroarch.browser.retroactivity.RetroActivityFuture", catalog.Activity)
 	assert.Len(t, catalog.Profiles, 260)
@@ -73,7 +73,8 @@ func TestCatalogProfilesAreUniqueAndBounded(t *testing.T) {
 	t.Parallel()
 
 	var raw struct {
-		Profiles []map[string]json.RawMessage `json:"profiles"`
+		Cores    map[string]map[string]json.RawMessage `json:"cores"`
+		Profiles []map[string]json.RawMessage          `json:"profiles"`
 	}
 	require.NoError(t, json.Unmarshal(retroArchCatalogJSON, &raw))
 	for _, profile := range raw.Profiles {
@@ -81,17 +82,29 @@ func TestCatalogProfilesAreUniqueAndBounded(t *testing.T) {
 		for key := range profile {
 			keys = append(keys, key)
 		}
-		assert.ElementsMatch(t, []string{"id", "name", "system", "core", "file", "extensions"}, keys)
+		assert.ElementsMatch(t, []string{"id", "system", "core", "extensions"}, keys)
+	}
+	for _, info := range raw.Cores {
+		keys := make([]string, 0, len(info))
+		for key := range info {
+			keys = append(keys, key)
+		}
+		assert.ElementsMatch(t, []string{"name", "file"}, keys)
 	}
 
 	coreFile := regexp.MustCompile(`^[A-Za-z0-9_-]+_libretro(?:_android)?\.so$`)
+	catalog := decodeRetroArchCatalog(t)
+	for core, info := range catalog.Cores {
+		assert.True(t, validCoreName(core), core)
+		assert.Regexp(t, coreFile, info.File, core)
+		assert.True(t, validCatalogText(info.Name), core)
+	}
 	ids := make(map[string]struct{})
 	systemCores := make(map[string]struct{})
-	for _, profile := range decodeRetroArchCatalog(t).Profiles {
+	for _, profile := range catalog.Profiles {
 		assert.True(t, validDottedName(profile.ID), profile.ID)
 		assert.True(t, validCoreName(profile.Core), profile.ID)
-		assert.Regexp(t, coreFile, profile.File, profile.ID)
-		assert.True(t, validCatalogText(profile.Name), profile.ID)
+		assert.Contains(t, catalog.Cores, profile.Core, profile.ID)
 		assert.NotEmpty(t, profile.Extensions, profile.ID)
 		assert.LessOrEqual(t, len(profile.Extensions), maxLaunchExtensions, profile.ID)
 		seenExtensions := make(map[string]struct{}, len(profile.Extensions))
@@ -132,13 +145,14 @@ func TestCatalogAccountsForEveryBuildbotArtifact(t *testing.T) {
 	}
 	assert.Len(t, excludedCores, 67)
 
+	catalog := decodeRetroArchCatalog(t)
 	includedFiles := make(map[string]struct{})
 	accounted := make(map[string]struct{}, len(artifactCores))
-	for _, profile := range decodeRetroArchCatalog(t).Profiles {
-		includedFiles[profile.File] = struct{}{}
-		assert.Contains(t, artifacts, profile.File+".zip", "catalog core missing from the buildbot inventory")
-		assert.NotContains(t, excludedCores, profile.Core, "core is both included and excluded")
-		accounted[profile.Core] = struct{}{}
+	for core, info := range catalog.Cores {
+		includedFiles[info.File] = struct{}{}
+		assert.Contains(t, artifacts, info.File+".zip", "catalog core missing from the buildbot inventory")
+		assert.NotContains(t, excludedCores, core, "core is both included and excluded")
+		accounted[core] = struct{}{}
 	}
 	assert.Len(t, includedFiles, 169)
 	for core := range excludedCores {
@@ -186,18 +200,20 @@ func TestCatalogContentURIProfilesAreBoundedAndReviewed(t *testing.T) {
 func TestCatalogOverridesAndCompatibilityIDs(t *testing.T) {
 	t.Parallel()
 
+	catalog := decodeRetroArchCatalog(t)
 	byID := make(map[string]retroArchProfile)
-	for _, profile := range decodeRetroArchCatalog(t).Profiles {
+	for _, profile := range catalog.Profiles {
 		byID[profile.ID] = profile
 		assert.NotEqual(t, "mame", profile.Core, "the arm64 index has no unsuffixed MAME core")
 		assert.NotEqual(t, "vice_x128", profile.Core, "a C128 core must not pass as a C64 launcher")
 	}
+	fileOf := func(core string) string { return catalog.Cores[core].File }
 	assert.Equal(t, "NES", byID["RetroArch.Mesen"].System)
 	assert.Equal(t, "mesen", byID["RetroArch.Mesen"].Core)
 	assert.Equal(t, "fbneo", byID["RetroArch.FBNeo.Arcade"].Core)
 	assert.Equal(t, "mednafen_pce", byID["RetroArch.MednafenPce.TurboGrafx16"].Core)
-	assert.Equal(t, "mednafen_pce_libretro_android.so", byID["RetroArch.MednafenPce.TurboGrafx16"].File)
-	assert.Equal(t, "azahar_libretro.so", byID["RetroArch.Azahar.System3DS"].File)
+	assert.Equal(t, "mednafen_pce_libretro_android.so", fileOf(byID["RetroArch.MednafenPce.TurboGrafx16"].Core))
+	assert.Equal(t, "azahar_libretro.so", fileOf(byID["RetroArch.Azahar.System3DS"].Core))
 	assert.Equal(t, "mupen64plus_next_gles3", byID["RetroArch.Mupen64PlusNext"].Core)
 }
 
@@ -269,16 +285,21 @@ func TestLoadCatalogRejectsMalformedData(t *testing.T) {
 
 	for name, data := range map[string]string{
 		"empty":          "",
-		"unknown field":  `{"version":1,"surprise":true}`,
-		"trailing value": `{"version":1}{}`,
-		"wrong package": `{"version":1,"package":"org.example.other","activity":"` + retroArchActivity +
+		"unknown field":  `{"version":2,"surprise":true}`,
+		"trailing value": `{"version":2}{}`,
+		"wrong package": `{"version":2,"package":"org.example.other","activity":"` + retroArchActivity +
 			`","source":{"buildbot":"b","coreInfoRepository":"r","coreInfoRevision":"v","reviewed":"d"},` +
-			`"profiles":[{"id":"RetroArch.Test","name":"T","system":"NES","core":"t",` +
-			`"file":"t_libretro_android.so","extensions":[".nes"]}]}`,
-		"path in core file": `{"version":1,"package":"` + retroArchPackage + `","activity":"` + retroArchActivity +
+			`"cores":{"t":{"name":"T","file":"t_libretro_android.so"}},` +
+			`"profiles":[{"id":"RetroArch.Test","system":"NES","core":"t","extensions":[".nes"]}]}`,
+		"path in core file": `{"version":2,"package":"` + retroArchPackage + `","activity":"` + retroArchActivity +
 			`","source":{"buildbot":"b","coreInfoRepository":"r","coreInfoRevision":"v","reviewed":"d"},` +
-			`"profiles":[{"id":"RetroArch.Test","name":"T","system":"NES","core":"t",` +
-			`"file":"../t_libretro_android.so","extensions":[".nes"]}]}`,
+			`"cores":{"t":{"name":"T","file":"../t_libretro_android.so"}},` +
+			`"profiles":[{"id":"RetroArch.Test","system":"NES","core":"t","extensions":[".nes"]}]}`,
+		"profile core with no packaging entry": `{"version":2,"package":"` + retroArchPackage +
+			`","activity":"` + retroArchActivity +
+			`","source":{"buildbot":"b","coreInfoRepository":"r","coreInfoRevision":"v","reviewed":"d"},` +
+			`"cores":{"t":{"name":"T","file":"t_libretro_android.so"}},` +
+			`"profiles":[{"id":"RetroArch.Test","system":"NES","core":"unknown","extensions":[".nes"]}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

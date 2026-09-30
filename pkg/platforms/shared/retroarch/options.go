@@ -34,6 +34,13 @@ type Profile string
 const (
 	ProfileApplianceARM Profile = "appliance-arm"
 	ProfileDesktop      Profile = "desktop"
+	// ProfileAndroid selects every core Android's own catalog lists for a
+	// system, in Android's documented precedence order (see
+	// androidCoreAlternates), not just the single resolved default every
+	// other profile gets. A handful of systems also carry a PerProfileCore
+	// override for this profile, where Android's top pick differs from the
+	// desktop default (e.g. Arcade: fbneo on Android, mame on desktop).
+	ProfileAndroid Profile = "android"
 )
 
 // DownloadPolicy controls how a future downloader may fetch a core.
