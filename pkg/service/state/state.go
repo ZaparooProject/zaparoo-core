@@ -22,6 +22,7 @@ package state
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -94,6 +95,7 @@ type State struct {
 	librarySyncSignals    LibrarySyncSignals
 	bootUUID              string
 	activeMediaReadyGen   uint64
+	zapScriptHolds        int
 	activeMediaPublishMu  syncutil.RWMutex
 	remoteStatusMu        syncutil.RWMutex
 	mediaRestoreMu        syncutil.RWMutex
@@ -300,10 +302,31 @@ func (s *State) SetRunZapScript(run bool) {
 	s.runZapScript = run
 }
 
+// RunZapScriptEnabled reports whether ZapScript may run. It is false while the
+// user setting is off or any client holds ZapScript disabled.
 func (s *State) RunZapScriptEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.runZapScript
+	return s.runZapScript && s.zapScriptHolds == 0
+}
+
+// AcquireZapScriptHold disables ZapScript until the returned release function
+// is called. Holds are independent of the runZapScript setting, so a holder
+// that goes away always leaves the user's own choice intact. The release
+// function is safe to call more than once.
+func (s *State) AcquireZapScriptHold() (release func()) {
+	s.mu.Lock()
+	s.zapScriptHolds++
+	s.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.zapScriptHolds--
+			s.mu.Unlock()
+		})
+	}
 }
 
 func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia, uint64)) {

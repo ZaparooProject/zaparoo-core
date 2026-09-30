@@ -89,6 +89,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodStop,
 		models.MethodConfirm,
 		models.MethodSettingsUpdate,
+		models.MethodSettingsZapScriptHold,
 		models.MethodPlaytimeLimitsUpdate,
 		models.MethodPlaytimeExtend,
 		models.MethodClientsDelete,

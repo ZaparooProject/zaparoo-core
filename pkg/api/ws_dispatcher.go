@@ -136,7 +136,10 @@ type wsSessionDispatcher struct {
 	low          chan *wsRequestJob
 	responses    chan *wsResponseJob
 	inputDone    chan struct{}
+	releaseHold  func()
+	holdMu       syncutil.Mutex
 	closeOnce    sync.Once
+	closed       bool
 }
 
 func getOrCreateWSDispatcher(
@@ -185,9 +188,32 @@ func closeWSDispatcher(session *melody.Session) {
 	d.close()
 }
 
+// holdZapScript disables ZapScript until the dispatcher closes. A connection
+// owns at most one hold, and a hold requested after close is never taken.
+func (d *wsSessionDispatcher) holdZapScript(acquire func() (release func())) bool {
+	d.holdMu.Lock()
+	defer d.holdMu.Unlock()
+	if d.closed || d.releaseHold != nil {
+		return false
+	}
+	d.releaseHold = acquire()
+	return true
+}
+
+func (d *wsSessionDispatcher) releaseZapScriptHold() {
+	d.holdMu.Lock()
+	defer d.holdMu.Unlock()
+	d.closed = true
+	if d.releaseHold != nil {
+		d.releaseHold()
+		d.releaseHold = nil
+	}
+}
+
 func (d *wsSessionDispatcher) close() {
 	d.closeOnce.Do(func() {
 		d.cancel()
+		d.releaseZapScriptHold()
 		d.releaseInputSession()
 		d.drainQueuedJobs(d.high)
 		d.drainQueuedJobs(d.run)

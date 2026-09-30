@@ -139,6 +139,7 @@ const (
 	MethodMediaCleanOrphans           = "media.clean.orphans"
 	MethodSettings                    = "settings"
 	MethodSettingsUpdate              = "settings.update"
+	MethodSettingsZapScriptHold       = "settings.zapscript.hold"
 	MethodSettingsReload              = "settings.reload"
 	MethodSettingsLogsDownload        = "settings.logs.download"
 	MethodSettingsBackup              = "settings.backup"

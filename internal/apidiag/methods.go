@@ -32,7 +32,7 @@ media.history media.history.latest media.history.top media.lookup media.lookup.c
 media.meta media.image media.asset
 scrapers media.scrape media.scrape.status media.scrape.cancel media.scrape.resume
 media.browse media.browse.index media.control media.active.update media.clean.orphans
-settings settings.update settings.reload settings.logs.download
+settings settings.update settings.zapscript.hold settings.reload settings.logs.download
 settings.backup settings.backup.list settings.backup.inspect settings.backup.delete
 settings.backup.restore settings.backup.status settings.backup.remote.run
 settings.backup.remote.list settings.backup.remote.restore

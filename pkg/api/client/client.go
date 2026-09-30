@@ -71,14 +71,6 @@ func isExpectedWebsocketClose(err error) bool {
 		)
 }
 
-// DisableZapScript disables the service running any processed ZapScript from
-// tokens, and returns a function to re-enable it.
-// The returned function must be run even if there is an error so the service
-// isn't left in an unusable state.
-func DisableZapScript(cfg *config.Instance) func() {
-	return disableZapScriptWithRequest(cfg, LocalClient)
-}
-
 func disableZapScriptWithRequest(
 	cfg *config.Instance,
 	request func(context.Context, *config.Instance, string, string) (string, error),
@@ -117,6 +109,31 @@ func logZapScriptToggleError(err error, message string) {
 	}
 }
 
+// dialLocalWebsocket opens a connection to the local API service.
+func dialLocalWebsocket(ctx context.Context, cfg *config.Instance) (*websocket.Conn, error) {
+	localWebsocketURL := url.URL{
+		Scheme: "ws",
+		Host:   "127.0.0.1:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
+	}
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: config.APIRequestTimeout,
+		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{
+				Timeout:   config.APIRequestTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+			return d.DialContext(dialCtx, network, addr)
+		},
+	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
+	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), useragent.Header())
+	if err != nil {
+		return nil, websocketDialError(err, response)
+	}
+	return c, nil
+}
+
 // LocalClient sends a single unauthenticated method with params to the local
 // running API service, waits for a response until timeout then disconnects.
 func LocalClient(
@@ -125,12 +142,6 @@ func LocalClient(
 	method string,
 	params string,
 ) (string, error) {
-	localWebsocketURL := url.URL{
-		Scheme: "ws",
-		Host:   "127.0.0.1:" + strconv.Itoa(cfg.APIPort()),
-		Path:   APIPath,
-	}
-
 	id := models.NewStringID(uuid.New().String())
 
 	req := models.RequestObject{
@@ -148,20 +159,9 @@ func LocalClient(
 		return "", ErrInvalidParams
 	}
 
-	dialer := &websocket.Dialer{
-		HandshakeTimeout: config.APIRequestTimeout,
-		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-			d := &net.Dialer{
-				Timeout:   config.APIRequestTimeout,
-				KeepAlive: 30 * time.Second,
-			}
-			return d.DialContext(dialCtx, network, addr)
-		},
-	}
-	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
-	c, response, err := dialer.DialContext(ctx, localWebsocketURL.String(), useragent.Header())
+	c, err := dialLocalWebsocket(ctx, cfg)
 	if err != nil {
-		return "", websocketDialError(err, response)
+		return "", err
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
