@@ -39,6 +39,16 @@ import (
 
 const screenshotTimeout = 3 * time.Second
 
+// screenshotWatchDirs returns the screenshot directories Main may write to for
+// the given core and RBF names, without duplicates. An empty rbfName is ignored.
+func screenshotWatchDirs(coreName, rbfName string) []string {
+	dirs := []string{filepath.Join(misterconfig.ScreenshotsDir, coreName)}
+	if rbfName != "" && rbfName != coreName {
+		dirs = append(dirs, filepath.Join(misterconfig.ScreenshotsDir, rbfName))
+	}
+	return dirs
+}
+
 // Screenshot triggers a MiSTer screenshot via the command interface and waits
 // for the resulting file to appear in the screenshots directory. The full image
 // is read into memory and returned as bytes. Typical PNGs are ~200-500KB which
@@ -50,9 +60,29 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 		return nil, fmt.Errorf("read core name: %w", err)
 	}
 
-	watchDir := filepath.Join(misterconfig.ScreenshotsDir, coreName)
-	if mkErr := os.MkdirAll(watchDir, 0o750); mkErr != nil {
-		return nil, fmt.Errorf("create screenshots dir: %w", mkErr)
+	rbfName, rbfErr := mistermain.ReadRBFName()
+	if rbfErr != nil {
+		log.Debug().Err(rbfErr).Msg("rbf name unavailable, watching core name dir only")
+		rbfName = ""
+	}
+
+	// An MGL setname with same_dir (e.g. RA_SNES) changes CORENAME, but Main
+	// still writes screenshots under the original RBF name. Watch both.
+	watchDirs := screenshotWatchDirs(coreName, rbfName)
+	var created []string
+	defer func() {
+		// Only removes directories left empty; one holding a screenshot stays.
+		for _, dir := range created {
+			_ = os.Remove(dir)
+		}
+	}()
+	for _, dir := range watchDirs {
+		if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
+			created = append(created, dir)
+		}
+		if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
+			return nil, fmt.Errorf("create screenshots dir: %w", mkErr)
+		}
 	}
 
 	watcher, err := fsnotify.NewWatcher()
@@ -65,15 +95,17 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 		}
 	}()
 
-	if err := watcher.Add(watchDir); err != nil {
-		return nil, fmt.Errorf("watch screenshots dir: %w", err)
+	for _, dir := range watchDirs {
+		if err := watcher.Add(dir); err != nil {
+			return nil, fmt.Errorf("watch screenshots dir: %w", err)
+		}
 	}
 
 	if err := mistermain.RunDevCmd("screenshot", "scaled"); err != nil {
 		return nil, fmt.Errorf("trigger screenshot: %w", err)
 	}
 
-	log.Debug().Str("dir", watchDir).Msg("waiting for screenshot file")
+	log.Debug().Strs("dirs", watchDirs).Msg("waiting for screenshot file")
 
 	timeout := time.NewTimer(screenshotTimeout)
 	defer timeout.Stop()
