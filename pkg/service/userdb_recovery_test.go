@@ -21,6 +21,8 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,6 +34,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,4 +178,130 @@ func TestNotifyUserDBRecovery_NothingToReport(t *testing.T) {
 	messages, err := db.UserDB.GetInboxMessages()
 	require.NoError(t, err)
 	assert.Empty(t, messages, "a normal start must leave the inbox alone")
+}
+
+func newPlatformWithDataDir(t *testing.T, dataDir string) platforms.Platform {
+	t.Helper()
+	mockPlatform := testmocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir})
+	return mockPlatform
+}
+
+// damageUserDBMigrationTable ruins the one page that holds the migration
+// history and nothing else, so the file still opens and the damage is only found
+// when the migration reads that table.
+func damageUserDBMigrationTable(t *testing.T, dataDir string) {
+	t.Helper()
+	path := filepath.Join(dataDir, config.UserDbFile)
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	var rootPage, pageSize int64
+	require.NoError(t, conn.QueryRow(
+		"SELECT rootpage FROM sqlite_master WHERE name = 'goose_db_version'").Scan(&rootPage))
+	require.NoError(t, conn.QueryRow("PRAGMA page_size").Scan(&pageSize))
+	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600) //nolint:gosec // test-owned temp dir
+	require.NoError(t, err)
+	junk := make([]byte, pageSize)
+	for i := range junk {
+		junk[i] = byte(i%251) ^ 0xA5
+	}
+	_, err = f.WriteAt(junk, (rootPage-1)*pageSize)
+	require.NoError(t, err)
+	require.NoError(t, f.Sync())
+	require.NoError(t, f.Close())
+	for _, name := range []string{config.UserDbFile + "-wal", config.UserDbFile + "-shm"} {
+		if removeErr := os.Remove(filepath.Join(dataDir, name)); removeErr != nil {
+			require.ErrorIs(t, removeErr, os.ErrNotExist)
+		}
+	}
+}
+
+func TestMakeDatabase_UserDBDamagedMigrationTableIsRecovered(t *testing.T) {
+	ctx := context.Background()
+	pl, dataDir := newMediaDBPlatform(t)
+	backup := seedUserDB(ctx, t, pl, true)
+	damageUserDBMigrationTable(t, dataDir)
+
+	db, _, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err, "damage found by the migration must not stop startup")
+	require.NotNil(t, db.UserDBRecovery)
+	require.NotNil(t, db.UserDBRecovery.RestoredFrom)
+	assert.Equal(t, backup.Name, db.UserDBRecovery.RestoredFrom.Name)
+}
+
+func TestMakeDatabase_UserDBMarkedCorruptIsRecovered(t *testing.T) {
+	ctx := context.Background()
+	pl, _ := newMediaDBPlatform(t)
+	backup := seedUserDB(ctx, t, pl, true)
+
+	marked, err := userdb.OpenUserDB(ctx, pl)
+	require.NoError(t, err)
+	marked.MarkCorrupt("found while running")
+	require.NoError(t, marked.Close())
+
+	db, _, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err)
+	require.NotNil(t, db.UserDBRecovery, "a marked database is replaced at the next start")
+	require.NotNil(t, db.UserDBRecovery.RestoredFrom)
+	assert.Equal(t, backup.Name, db.UserDBRecovery.RestoredFrom.Name)
+}
+
+func TestMakeDatabase_UserDBThatCannotBeOpenedStopsStartup(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	file := filepath.Join(parent, "not-a-directory")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
+	pl := newPlatformWithDataDir(t, filepath.Join(file, "data"))
+
+	db, _, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.Error(t, err, "a database that is not damaged but cannot be opened is not recovered")
+	assert.Nil(t, db.UserDBRecovery)
+}
+
+type failingUserDBRecoverer struct{ err error }
+
+func (failingUserDBRecoverer) IntegrityReport() []string { return []string{"page 2: broken"} }
+
+func (f failingUserDBRecoverer) RecoverFromCorruption() (database.RestoreInfo, error) {
+	return database.RestoreInfo{}, f.err
+}
+
+func TestRecoverUserDB_FailureNamesHowDamageWasFound(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("no space left")
+	recovery, err := recoverUserDB(failingUserDBRecoverer{err: cause}, "after open error")
+	require.ErrorIs(t, err, cause)
+	require.ErrorContains(t, err, "after open error")
+	assert.Nil(t, recovery, "a failed recovery has nothing to report")
+}
+
+func TestNotifyUserDBRecovery_WithoutInboxOrWhenAddFails(t *testing.T) {
+	ctx := context.Background()
+	pl, _ := newMediaDBPlatform(t)
+
+	db, _, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err)
+	recovery := &database.UserDBRecovery{}
+
+	st, _ := state.NewState(pl, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	notifyUserDBRecovery(st, recovery) // no inbox attached: must not panic or write
+
+	messages, err := db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+
+	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+	require.NoError(t, db.UserDB.Close())
+	notifyUserDBRecovery(st, recovery) // the write fails: must be reported, not returned
 }

@@ -483,37 +483,21 @@ func openAndRecoverUserDB(
 	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
 		if userDB != nil && userDB.NoteCorruption(err) {
-			logUserDBIntegrityReport(userDB)
-			recovery, recoverErr := userDB.RecoverFromCorruption()
-			if recoverErr != nil {
-				return userDB, nil, fmt.Errorf(
-					"failed to recover corrupt user database after open error: %w", recoverErr,
-				)
-			}
-			return userDB, newUserDBRecovery(&recovery), nil
+			recovery, recoverErr := recoverUserDB(userDB, "after open error")
+			return userDB, recovery, recoverErr
 		}
 		return userDB, nil, fmt.Errorf("failed to open user database: %w", err)
 	}
 	if userDB.IsMarkedCorrupt() {
-		logUserDBIntegrityReport(userDB)
-		recovery, recoverErr := userDB.RecoverFromCorruption()
-		if recoverErr != nil {
-			return userDB, nil, fmt.Errorf("failed to recover marked corrupt user database: %w", recoverErr)
-		}
-		return userDB, newUserDBRecovery(&recovery), nil
+		recovery, recoverErr := recoverUserDB(userDB, "marked corrupt")
+		return userDB, recovery, recoverErr
 	}
 
 	log.Debug().Msg("running user database migrations")
 	if err = userDB.MigrateUp(); err != nil {
 		if userDB.NoteCorruption(err) {
-			logUserDBIntegrityReport(userDB)
-			recovery, recoverErr := userDB.RecoverFromCorruption()
-			if recoverErr != nil {
-				return userDB, nil, fmt.Errorf(
-					"failed to recover corrupt user database after migration error: %w", recoverErr,
-				)
-			}
-			return userDB, newUserDBRecovery(&recovery), nil
+			recovery, recoverErr := recoverUserDB(userDB, "after migration error")
+			return userDB, recovery, recoverErr
 		}
 		return userDB, nil, fmt.Errorf("error migrating userdb: %w", err)
 	}
@@ -524,6 +508,26 @@ func openAndRecoverUserDB(
 		log.Info().Str("path", backup.Path).Msg("created scheduled user database backup")
 	}
 	return userDB, nil, nil
+}
+
+// userDBRecoverer is the part of the user database that replaces a damaged one.
+type userDBRecoverer interface {
+	IntegrityReport() []string
+	RecoverFromCorruption() (database.RestoreInfo, error)
+}
+
+// recoverUserDB replaces a damaged user database from its newest valid backup,
+// or with an empty one, and describes what was done. found says how the damage
+// came to light, for the error when recovery itself fails.
+func recoverUserDB(userDB userDBRecoverer, found string) (*database.UserDBRecovery, error) {
+	for _, line := range userDB.IntegrityReport() {
+		log.Warn().Str("report", line).Msg("user database integrity report")
+	}
+	info, err := userDB.RecoverFromCorruption()
+	if err != nil {
+		return nil, fmt.Errorf("failed to recover corrupt user database (%s): %w", found, err)
+	}
+	return newUserDBRecovery(&info), nil
 }
 
 // newUserDBRecovery turns the result of a recovery into what the user is told.
@@ -568,12 +572,6 @@ func notifyUserDBRecovery(st *state.State, recovery *database.UserDBRecovery) {
 		inbox.WithCategory(inbox.CategoryUserDBCorruptionRecovery),
 	); err != nil {
 		log.Warn().Err(err).Msg("failed to add inbox message about user database recovery")
-	}
-}
-
-func logUserDBIntegrityReport(userDB *userdb.UserDB) {
-	for _, line := range userDB.IntegrityReport() {
-		log.Warn().Str("report", line).Msg("user database integrity report")
 	}
 }
 
