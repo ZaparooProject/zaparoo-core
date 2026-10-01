@@ -197,10 +197,11 @@ func damageUserDBMigrationTable(t *testing.T, dataDir string) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	var rootPage, pageSize int64
-	require.NoError(t, conn.QueryRow(
+	ctx := context.Background()
+	require.NoError(t, conn.QueryRowContext(ctx,
 		"SELECT rootpage FROM sqlite_master WHERE name = 'goose_db_version'").Scan(&rootPage))
-	require.NoError(t, conn.QueryRow("PRAGMA page_size").Scan(&pageSize))
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize))
+	_, err = conn.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
