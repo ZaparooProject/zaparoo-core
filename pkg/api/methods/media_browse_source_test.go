@@ -292,3 +292,54 @@ func TestHandleMediaBrowseOpensASystemBackedBySourceRootShowsEveryGame(t *testin
 	}
 	assert.Len(t, browseResults.Entries, gameCount, "every game must be on the first page, nothing capped early")
 }
+
+// The two tests above never populate the browse cache, so their route count
+// is always resolved by the uncached media fallback (a plain Path LIKE
+// prefix scan), which tolerates a route string with or without a trailing
+// slash. A real device's cache gets fully rebuilt on reindex (the schema
+// version bump that shipped with this PR forces one), and the cache-backed
+// lookup is an *exact* match against the cache's own dir node for that
+// route - which is always stored with a trailing slash. This is the real
+// end-to-end repro of the physical-device report of every system coming up
+// empty right after a reindex: a route built without that trailing slash
+// never matches its own cache node, so the route silently drops and no
+// content merges in at all.
+func TestHandleMediaBrowseOpensASystemBackedBySourceRootWhenBrowseCacheIsFullyBuilt(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+
+	const root = "source://abc123"
+	scantest.IndexScanResults(t, db.MediaDB, systemdefs.SystemNES, database.ScanReconcileOpts{},
+		platforms.ScanResult{Path: root + "/NES/Game.nes", Name: "Game"})
+
+	require.NoError(t, db.MediaDB.PopulateBrowseCache(context.Background()),
+		"force the cache into the fully-rebuilt state a real reindex leaves it in")
+
+	platform := &sourceBrowseTestPlatform{MockPlatform: mocks.NewMockPlatform(), roots: []string{root}}
+	platform.On("RootDirs", mock.Anything).Return([]string{})
+	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	rootView := "contents"
+	systems := []string{systemdefs.SystemNES}
+	paramsJSON, err := json.Marshal(models.BrowseParams{Systems: &systems, RootView: &rootView})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context: context.Background(), Params: paramsJSON, Database: db, Platform: platform,
+		Config: &config.Instance{}, LauncherCache: nesLauncherCache(),
+	}
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	var sawGame bool
+	for _, entry := range browseResults.Entries {
+		if entry.Name == "Game" {
+			sawGame = true
+		}
+	}
+	assert.True(t, sawGame, "the game must still appear once the browse cache is fully built, not just via fallback")
+}

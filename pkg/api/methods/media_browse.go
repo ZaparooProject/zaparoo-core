@@ -937,8 +937,12 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 	}
 	addSourceRoute := func(root, folder string) {
 		// filepath.Join mangles "://"; root and folder already share "/" as
-		// their only separator.
-		addRoute(strings.TrimSuffix(root, "/") + "/" + folder)
+		// their only separator. The trailing slash matters: browseRouteCacheKey
+		// leaves any "://"-containing route unchanged (unlike a real filesystem
+		// path, which it appends one to), so without it here the route would
+		// never match the cache's own node for this folder, which is always
+		// stored with one (sourceCacheAncestorDirs).
+		addRoute(strings.TrimSuffix(root, "/") + "/" + folder + "/")
 	}
 
 	if env.LauncherCache != nil {
