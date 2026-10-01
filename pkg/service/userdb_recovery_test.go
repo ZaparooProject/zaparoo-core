@@ -116,10 +116,12 @@ func TestNotifyUserDBRecovery(t *testing.T) {
 		wantBody  string
 	}{
 		{
-			name:      "restored from a backup",
-			recovery:  &database.UserDBRecovery{RestoredFrom: &database.BackupInfo{CreatedAt: backupTime}},
+			name: "restored from a backup",
+			recovery: &database.UserDBRecovery{
+				RestoredFrom: &database.BackupInfo{Name: "backup-20260928-143000-auto.db", CreatedAt: backupTime},
+			},
 			wantTitle: "Saved data was restored from a backup after damage was found",
-			wantBody:  "28 Sep 2026 14:30 UTC",
+			wantBody:  "backup-20260928-143000-auto.db, made on 28 Sep 2026 14:30 UTC",
 		},
 		{
 			name:      "no valid backup",

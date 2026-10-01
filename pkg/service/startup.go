@@ -558,7 +558,7 @@ func notifyUserDBRecovery(st *state.State, recovery *database.UserDBRecovery) {
 		title = "Saved data was restored from a backup after damage was found"
 		madeAt := recovery.RestoredFrom.CreatedAt.UTC().Format("2 Jan 2006 15:04 UTC")
 		body = "Zaparoo found damage in its saved data (play history, mappings and profiles) and " +
-			"restored it from a backup made on " + madeAt +
+			"restored it from the backup " + recovery.RestoredFrom.Name + ", made on " + madeAt +
 			". Anything saved after that, such as recent play history, may be missing."
 	}
 	body += " If this keeps happening, check the device's storage."
