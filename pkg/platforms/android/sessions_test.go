@@ -105,6 +105,23 @@ func (p *sessionStoreProbe) UnresolvedExternalSessions(context.Context) ([]datab
 	return out, nil
 }
 
+func (p *sessionStoreProbe) NextExternalLaunchElapsed(
+	_ context.Context, bootID string, afterElapsedMs int64,
+) (elapsedMs int64, found bool, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, session := range p.sessions {
+		if session.BootID != bootID || session.RequestedElapsedMs <= afterElapsedMs || session.Status == "abandoned" {
+			continue
+		}
+		if !found || session.RequestedElapsedMs < elapsedMs {
+			elapsedMs = session.RequestedElapsedMs
+			found = true
+		}
+	}
+	return elapsedMs, found, nil
+}
+
 func (p *sessionStoreProbe) MarkExternalSessionStale(_ context.Context, launchID string, _ int64) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -363,6 +380,42 @@ func TestReconcileHostReturnSessionsClosesApproximateOnReturn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, store.approxCloses, 1)
 	require.Equal(t, "launch-1", store.approxCloses[0].launchID)
+}
+
+// A later launch caps an earlier pending one even when the later launch has
+// already resolved (closed) by the time this reconcile runs, not only while
+// it is still itself unresolved in the same pass.
+func TestReconcileHostReturnSessionsCapsOnAnAlreadyResolvedLaterLaunch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-a", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/a.steam",
+		MediaName: "A", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 1000, RequestedElapsedMs: 1000, Status: "pending", Source: "host_return",
+	}))
+	dispatchedMs := int64(1200)
+	store.sessions["launch-a"].DispatchedMs = &dispatchedMs
+
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-b", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/b.steam",
+		MediaName: "B", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 2000, RequestedElapsedMs: 2000, Status: "closed", Source: "host_return",
+	}))
+
+	// No return evidence at all: without the fix, only an in-memory scan of
+	// this pass's still-unresolved sessions would find the cap, and B is
+	// already closed, so A would never be capped and this reconcile would be
+	// a no-op every time it runs.
+	err := platform.reconcileHostReturnSessions(ctx, HostReturn{ObserverStartedElapsedMs: 500})
+	require.NoError(t, err)
+	require.Len(t, store.approxCloses, 1)
+	require.Equal(t, "launch-a", store.approxCloses[0].launchID)
+	require.Equal(t, dispatchedMs+(2000-1200), store.approxCloses[0].endMs,
+		"A's estimate ends at B's request, not left open")
 }
 
 func TestReconcileHostReturnSessionsStalesADeadObserverProcess(t *testing.T) {

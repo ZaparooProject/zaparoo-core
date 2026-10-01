@@ -90,6 +90,7 @@ The reasons and the parameters each one can carry:
 | `storage_provider_unsupported`  | The media lives on a provider this launcher cannot read.                          | `launcher`, `plugin` |
 | `storage_unavailable`           | The storage holding the media is not present.                                     | `launcher`, `plugin` |
 | `media_unavailable`             | The media file cannot be resolved or opened.                                      | `launcher`, `plugin` |
+| `media_access_revoked`          | The host's own access to this media's source was revoked or withdrawn, distinct from `media_unavailable`'s unspecified cause: the user can act on this one by re-granting access. | `launcher`, `plugin` |
 | `host_unavailable`              | The host's launch service is not answering.                                       | `launcher`, `plugin` |
 | `host_foreground_required`      | The launch needs the user to return to the app first.                             | `launcher`, `plugin` |
 | `cancelled`                     | The launch was cancelled before it started.                                       | `launcher`, `plugin` |

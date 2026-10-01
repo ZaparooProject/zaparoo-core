@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
@@ -205,14 +206,19 @@ func loadRetroArchCatalog(data []byte) ([]catalogEntry, error) {
 
 	launches := sharedretroarch.CoreLaunches(sharedretroarch.ProfileAndroid)
 	entries := make([]catalogEntry, 0, len(launches))
+	usedKeys := make(map[string]bool, len(byKey))
+	usedCores := make(map[string]bool, len(catalog.Cores))
 	for i := range launches {
 		launch := &launches[i]
 		core := strings.TrimSuffix(strings.TrimSuffix(launch.Core, ".so"), "_libretro")
-		profile, found := byKey[launch.SystemID+"\x00"+core]
+		key := launch.SystemID + "\x00" + core
+		profile, found := byKey[key]
 		if !found {
 			return nil, fmt.Errorf("RetroArch catalog has no packaging data for %s/%s: %w",
 				launch.SystemID, core, ErrLaunchDefinition)
 		}
+		usedKeys[key] = true
+		usedCores[core] = true
 		info := catalog.Cores[core]
 		definition := retroArchDefinition(profile, info.File, info.Name)
 		if err := definition.Validate(); err != nil {
@@ -222,7 +228,49 @@ func loadRetroArchCatalog(data []byte) ([]catalogEntry, error) {
 			definition: definition, coreFile: info.File, coreName: info.Name, group: retroArchGroup,
 		})
 	}
+	// A row or packaged core the shared retroarch package's own ranked output
+	// never matched is stale data silently carried forward from a previous
+	// catalog edit: the embedded catalog is reviewed data, not a format that
+	// tolerates drift, so this fails loudly instead of just shipping it unused.
+	if unused, ok := firstUnused(byKey, usedKeys); ok {
+		return nil, fmt.Errorf("RetroArch catalog row for %s was never matched: %w", unused, ErrLaunchDefinition)
+	}
+	if unused, ok := firstUnusedCore(catalog.Cores, usedCores); ok {
+		return nil, fmt.Errorf("RetroArch catalog core %s was never matched: %w", unused, ErrLaunchDefinition)
+	}
 	return entries, nil
+}
+
+// firstUnused returns the lexicographically first key in byKey that usedKeys
+// does not mark, for a deterministic error message.
+func firstUnused(byKey map[string]*retroArchProfile, usedKeys map[string]bool) (string, bool) {
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		if !usedKeys[key] {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return "", false
+	}
+	sort.Strings(keys)
+	return keys[0], true
+}
+
+// firstUnusedCore returns the lexicographically first core name in cores that
+// usedCores does not mark, for a deterministic error message.
+func firstUnusedCore(cores map[string]retroArchCoreInfo, usedCores map[string]bool) (string, bool) {
+	names := make([]string, 0, len(cores))
+	for name := range cores {
+		if !usedCores[name] {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "", false
+	}
+	sort.Strings(names)
+	return names[0], true
 }
 
 // retroArchDefinition expands a catalog row into RetroArch's external-launch

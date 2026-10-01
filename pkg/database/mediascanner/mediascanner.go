@@ -1408,19 +1408,30 @@ func NewNamesIndexWithSources(
 	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
+	// Seeded only when one or more source roots fail to read below: the
+	// systems a source root could have held media for, so the per-system loop
+	// starts them already incomplete instead of treating a root's failure to
+	// answer as "this system has no source media".
+	sourceScanIncomplete := make(map[string]bool)
 	if reader, ok := platform.(platforms.SourceRootReader); ok {
-		// A host that cannot list or read its roots fails the run rather than
-		// leaving their media to be marked missing; see source_roots.go.
+		// A host that cannot list its roots at all fails the run: the host
+		// itself is unreachable, not just one root of it. A root that is
+		// listed but fails to read does not; see source_roots.go.
 		roots, rootsErr := reader.SourceRoots(ctx)
 		if rootsErr != nil {
 			return 0, fmt.Errorf("list source roots: %w", rootsErr)
 		}
-		sourcePaths, sourceErr := getSourceSystemPaths(ctx, reader, roots, systems, launcherCache)
+		sourcePaths, failedRoots, sourceErr := getSourceSystemPaths(ctx, reader, roots, systems, launcherCache)
 		if sourceErr != nil {
 			return 0, fmt.Errorf("discover source root systems: %w", sourceErr)
 		}
 		for _, v := range sourcePaths {
 			systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
+		}
+		if len(failedRoots) > 0 {
+			log.Warn().Int("failedRoots", len(failedRoots)).
+				Msg("one or more source roots failed to read; affected systems marked incomplete")
+			sourceScanIncomplete = sourceRootSystems(systems, launcherCache)
 		}
 	}
 	logPhaseMetrics("path_discovery")
@@ -1754,9 +1765,10 @@ func NewNamesIndexWithSources(
 		systemSetupDur := collectStart.Sub(systemSetupStart)
 		// Set when any file source for this system errors. The staged set is
 		// then a subset of the library, so the reconcile must not treat
-		// absence from it as evidence media is missing.
-		scanIncomplete := false
-		filesystemIncomplete := false
+		// absence from it as evidence media is missing. Starts true when a
+		// source root this system could use failed to read above.
+		scanIncomplete := sourceScanIncomplete[systemID]
+		filesystemIncomplete := scanIncomplete
 		var successfulSources map[string]bool
 		if sourceCollector != nil {
 			successfulSources = make(map[string]bool)

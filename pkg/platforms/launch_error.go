@@ -68,6 +68,10 @@ const (
 	LaunchRepairStorageUnavailable LaunchRepairReason = "storage_unavailable"
 	// LaunchRepairMediaUnavailable means the media file cannot be resolved or opened.
 	LaunchRepairMediaUnavailable LaunchRepairReason = "media_unavailable"
+	// LaunchRepairMediaAccessRevoked means the host's access to this media's
+	// source was revoked or withdrawn, distinct from LaunchRepairMediaUnavailable's
+	// unspecified cause: the user can act on this one by re-granting access.
+	LaunchRepairMediaAccessRevoked LaunchRepairReason = "media_access_revoked"
 	// LaunchRepairHostUnavailable means the host's launch service is not answering.
 	LaunchRepairHostUnavailable LaunchRepairReason = "host_unavailable"
 	// LaunchRepairHostForegroundRequired means the launch needs the user to return
@@ -120,6 +124,7 @@ var launchRepairReasons = []LaunchRepairReason{
 	LaunchRepairStorageProviderUnsupported,
 	LaunchRepairStorageUnavailable,
 	LaunchRepairMediaUnavailable,
+	LaunchRepairMediaAccessRevoked,
 	LaunchRepairHostUnavailable,
 	LaunchRepairHostForegroundRequired,
 	LaunchRepairCancelled,

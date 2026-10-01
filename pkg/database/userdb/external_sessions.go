@@ -340,6 +340,32 @@ func (db *UserDB) MarkExternalSessionStale(ctx context.Context, launchID string,
 	return changed == 1, nil
 }
 
+// NextExternalLaunchElapsed returns the smallest RequestedElapsedMs over every
+// session in bootID requested after afterElapsedMs, regardless of that
+// session's own current status: an already-resolved later launch still
+// replaced the one being reconciled against it. Only abandoned is excluded:
+// it means that launch never actually dispatched, so it never replaced
+// anything.
+func (db *UserDB) NextExternalLaunchElapsed(
+	ctx context.Context, bootID string, afterElapsedMs int64,
+) (elapsedMs int64, found bool, err error) {
+	if db.sql.Load() == nil {
+		return 0, false, ErrNullSQL
+	}
+	var elapsed sql.NullInt64
+	err = db.sql.Load().QueryRowContext(ctx, `
+		SELECT MIN(RequestedElapsedMs) FROM ExternalSessions
+		WHERE BootID = ? AND RequestedElapsedMs > ? AND Status != 'abandoned'`,
+		bootID, afterElapsedMs).Scan(&elapsed)
+	if err != nil {
+		return 0, false, fmt.Errorf("query next external launch: %w", err)
+	}
+	if !elapsed.Valid {
+		return 0, false, nil
+	}
+	return elapsed.Int64, true, nil
+}
+
 // UnresolvedExternalSessions survives both Core and host restarts. The caller
 // must recheck host permission and boot identity before asking for evidence.
 func (db *UserDB) UnresolvedExternalSessions(ctx context.Context) ([]database.ExternalSession, error) {

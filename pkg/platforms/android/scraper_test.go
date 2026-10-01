@@ -38,8 +38,8 @@ type appScrapeDB struct {
 	writes    []database.ScrapeWriteTarget
 }
 
-func (*appScrapeDB) GetTitlesBySystemID(string) ([]database.TitleWithSystem, error) {
-	return []database.TitleWithSystem{{SystemDBID: 9}}, nil
+func (*appScrapeDB) FindSystemBySystemID(string) (database.System, error) {
+	return database.System{DBID: 9}, nil
 }
 
 func (db *appScrapeDB) GetMediaBySystemID(string) ([]database.MediaWithFullPath, error) {

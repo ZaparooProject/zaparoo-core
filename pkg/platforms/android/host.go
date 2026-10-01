@@ -50,6 +50,10 @@ const (
 	FailureStorageUnmounted FailureReason = "storage-unmounted"
 	// FailureSourceUnavailable means the media file cannot be reached in its media folder.
 	FailureSourceUnavailable FailureReason = "source-unavailable"
+	// FailureSourceRevoked means the host's own access to the media's source
+	// folder was revoked or withdrawn, distinct from FailureSourceUnavailable's
+	// unspecified cause: the user can act on this one by re-granting access.
+	FailureSourceRevoked FailureReason = "source-revoked"
 	// FailureForegroundRequired means the host UI must be in front to start an activity.
 	FailureForegroundRequired FailureReason = "foreground-required"
 	// FailureCancelled means the dispatch was cancelled before it started.

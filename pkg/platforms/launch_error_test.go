@@ -48,7 +48,7 @@ func TestLaunchRepairReasonSetIsClosed(t *testing.T) {
 	reasons := platforms.LaunchRepairReasons()
 	// Clients are written against the published set, so its size is part of the
 	// contract: changing it means telling them.
-	assert.Len(t, reasons, 17)
+	assert.Len(t, reasons, 18)
 	assert.Contains(t, reasons, platforms.LaunchRepairRefused)
 	assert.Contains(t, reasons, platforms.LaunchRepairUnspecified)
 	assert.NotEqual(t, platforms.LaunchRepairRefused, platforms.LaunchRepairUnspecified,

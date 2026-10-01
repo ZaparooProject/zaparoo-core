@@ -268,14 +268,19 @@ func (p *Platform) reconcileHostReturnSessions(ctx context.Context, observed Hos
 		if observed.ReturnedElapsedMs > dispatchedElapsed {
 			endElapsed = observed.ReturnedElapsedMs
 		}
-		// A later Zaparoo launch replaced this title even without a return.
-		// Order by the monotonic clock: wall time can repeat or step.
-		for j := range sessions {
-			next := &sessions[j]
-			if next.BootID == session.BootID && next.RequestedElapsedMs > dispatchedElapsed &&
-				(endElapsed == 0 || next.RequestedElapsedMs < endElapsed) {
-				endElapsed = next.RequestedElapsedMs
-			}
+		// A later Zaparoo launch replaced this title even without a return,
+		// whether or not that later launch is still unresolved itself in this
+		// same pass — checked against the store, not just this pass's
+		// in-memory unresolved set, or a later launch that already resolved
+		// before this reconcile would stop capping the one before it. Order
+		// by the monotonic clock: wall time can repeat or step.
+		next, found, nextErr := store.NextExternalLaunchElapsed(ctx, session.BootID, dispatchedElapsed)
+		if nextErr != nil {
+			errs = append(errs, fmt.Errorf("find next external launch after %s: %w", session.LaunchID, nextErr))
+			continue
+		}
+		if found && (endElapsed == 0 || next < endElapsed) {
+			endElapsed = next
 		}
 		if endElapsed == 0 {
 			continue
