@@ -25,7 +25,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
+	"slices"
 	sortpkg "sort"
 	"strings"
 	"time"
@@ -39,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -368,6 +371,14 @@ func browseMediaRequest(
 	path := *params.Path
 	if cursor != nil && cursor.RootView != "" {
 		return nil, models.ClientErrf("rootView contents cursor does not match path browse")
+	}
+
+	// Source root path: real nested folders below a host-granted root, unlike
+	// every other virtual scheme, so it gets the filesystem-style dirs-then-
+	// files browse below (not browseVirtual's flat listing), with its own
+	// validation since filepath.Clean/Join mangle "://".
+	if platforms.IsSourcePath(path) {
+		return browseSourcePath(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 	}
 
 	// Virtual path (contains ://)
@@ -1065,6 +1076,26 @@ func browseFilesystem(
 		prefix += "/"
 	}
 
+	return browsePathPrefix(env, prefix, cleaned, cursor, maxResults, letter, sort, systems, tags)
+}
+
+// browsePathPrefix pages a directory-then-files listing for an already
+// validated, already slash-terminated path prefix, shared by browseFilesystem
+// (a real OS path under RootDirs) and browseSourcePath (a source root path):
+// everything from here on is opaque-string matching against the indexed
+// database, and does not care which kind of path prefix it was given.
+// displayPath is what the response and the next browse path for each child
+// entry are built from.
+func browsePathPrefix(
+	env *requests.RequestEnv,
+	prefix, displayPath string,
+	cursor *database.BrowseCursor,
+	maxResults int,
+	letter *string,
+	sort string,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) (any, error) {
 	ctx := env.Context
 
 	// Counts are computed once on the first page and carried forward in the
@@ -1128,7 +1159,7 @@ func browseFilesystem(
 				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
 			}
 			return buildBrowseResponse(
-				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, &next, true, systems, tags)
+				env, displayPath, dirs, nil, maxResults, totalFiles, totalDirs, &next, true, systems, tags)
 		}
 
 		// Directories are exhausted. Fill the rest of the page with the first
@@ -1154,7 +1185,7 @@ func browseFilesystem(
 				next = &encoded
 			}
 			return buildBrowseResponse(
-				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, next, hasNext, systems, tags)
+				env, displayPath, dirs, nil, maxResults, totalFiles, totalDirs, next, hasNext, systems, tags)
 		}
 
 		started = time.Now()
@@ -1175,7 +1206,7 @@ func browseFilesystem(
 			return nil, encErr
 		}
 		return buildBrowseResponse(
-			env, cleaned, dirs, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
+			env, displayPath, dirs, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
 	}
 
 	// Files phase. A files-phase cursor with no keyset (LastID == 0) marks the
@@ -1215,7 +1246,47 @@ func browseFilesystem(
 		return nil, encErr
 	}
 	return buildBrowseResponse(
-		env, cleaned, nil, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
+		env, displayPath, nil, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
+}
+
+// browseSourcePath validates a source root path (one of a host's granted
+// media folders, read through a platforms.SourceRootReader) and dispatches it
+// through the same dirs-then-files pagination browseFilesystem uses for a
+// real OS path: a source root has real nested folders, unlike every other
+// virtual scheme. filepath.Clean/Join and browseFilesystem's RootDirs-based
+// validation both mangle or do not apply to a "scheme://id/..." path, so this
+// validates and builds paths with source-aware helpers instead.
+func browseSourcePath(
+	env *requests.RequestEnv,
+	path string,
+	cursor *database.BrowseCursor,
+	maxResults int,
+	letter *string,
+	sort string,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) (any, error) {
+	// A client may send either form, same tolerance browseFilesystem gives a
+	// real path (cleaned, or cleaned with a trailing slash): segment parsing
+	// itself requires no trailing slash, an empty final segment otherwise.
+	displayPath := strings.TrimSuffix(path, "/")
+	id, _, err := platforms.SourceLocation(displayPath)
+	if err != nil {
+		return nil, models.ClientErrf("invalid source path: %w", err)
+	}
+	reader, ok := env.Platform.(platforms.SourceRootReader)
+	if !ok {
+		return nil, models.ClientErrf("platform does not support source root paths")
+	}
+	roots, err := reader.SourceRoots(env.Context)
+	if err != nil {
+		return nil, fmt.Errorf("error listing source roots: %w", err)
+	}
+	if !slices.Contains(roots, platforms.SourceScheme+"://"+id) {
+		return nil, models.ClientErrf("source root is no longer granted")
+	}
+
+	return browsePathPrefix(env, displayPath+"/", displayPath, cursor, maxResults, letter, sort, systems, tags)
 }
 
 // browseTotalFileCount returns the direct-child file count for a path prefix,
@@ -1360,10 +1431,10 @@ func buildBrowseResponse(
 	for _, dir := range dirs {
 		dirPath := dir.Path
 		if dirPath == "" {
-			dirPath = filepath.ToSlash(filepath.Join(path, dir.Name))
+			dirPath = browseChildPath(path, dir.Name)
 		}
 		entry := models.BrowseEntry{
-			Name:      dir.Name,
+			Name:      browseDirDisplayName(path, dir.Name),
 			Path:      dirPath,
 			Type:      "directory",
 			FileCount: &dir.FileCount,
@@ -1470,7 +1541,7 @@ func groupSingletonAliasCandidates(
 
 		childDir := dir.Path
 		if childDir == "" {
-			childDir = filepath.ToSlash(filepath.Join(path, dir.Name))
+			childDir = browseChildPath(path, dir.Name)
 		}
 		if _, seen := bySystem[systemID]; !seen {
 			order = append(order, systemID)
@@ -1565,6 +1636,35 @@ func resolveDirSingletonAliases(
 		Dur("duration", time.Since(started)).
 		Msg("browse singleton alias resolution timing")
 	return singletonAliases
+}
+
+// browseChildPath builds the next browse path for a child directory one level
+// below parent. filepath.Join mangles a source path's "://", so a source
+// parent is built with plain string concatenation instead: parent and name
+// already share "/" as their only separator either way.
+func browseChildPath(parent, name string) string {
+	if platforms.IsSourcePath(parent) {
+		return strings.TrimSuffix(parent, "/") + "/" + name
+	}
+	return filepath.ToSlash(filepath.Join(parent, name))
+}
+
+// browseDirDisplayName returns a directory's display name, decoded when it is
+// a source path segment: those are stored percent-escaped, the same way a
+// multi-segment virtual path's segments always are (virtualpath.
+// CreateVirtualPathSegments), since BrowseDirectoryResult.Name otherwise comes
+// straight from a raw indexed Path substring. An undecodable name (never
+// expected, since every source path is escaped at index time) is shown as-is
+// rather than dropped.
+func browseDirDisplayName(parentPath, name string) string {
+	if !platforms.IsSourcePath(parentPath) {
+		return name
+	}
+	decoded, err := url.PathUnescape(name)
+	if err != nil {
+		return name
+	}
+	return decoded
 }
 
 func browseMediaDisplayName(path, sortName, titleName string) string {

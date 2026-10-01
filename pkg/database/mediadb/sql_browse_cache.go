@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -128,7 +129,7 @@ func acquireBrowseCacheConn(ctx context.Context, db *sql.DB) (*sql.Conn, func(),
 	return conn, release, nil
 }
 
-const browseCacheSchemaVersion = "3"
+const browseCacheSchemaVersion = "4"
 
 // browseCacheInvalidatedVersion is the sentinel written to
 // DBConfig.BrowseIndexVersion when the cache is marked stale (e.g. media changed
@@ -381,6 +382,9 @@ func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCo
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
 		root := b.ensureDir("/")
 		scheme := b.ensureDir(mediaPath[:idx+3])
+		if mediaPath[:idx] == container.SourceVirtualScheme {
+			return b.sourceCountPairsForPath(mediaPath, root, scheme)
+		}
 		return []browseCacheCountPair{
 			{parent: root, child: scheme},
 			{parent: scheme, child: scheme},
@@ -406,6 +410,63 @@ func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCo
 		pairs = append(pairs, browseCacheCountPair{parent: leaf, child: leaf})
 	}
 	return pairs
+}
+
+// sourceCountPairsForPath builds the real ancestor chain below a source
+// scheme root, the same shape countPairsForPath's filesystem branch builds
+// from "/", just rooted one level lower at the scheme bucket: a source root
+// has real nested folders (mediascanner's source root indexing walks them),
+// unlike every other virtual scheme, which stays a flat bucket with every
+// media file as its direct child. root and scheme are already ensured by the
+// caller.
+func (b *browseCacheBuilder) sourceCountPairsForPath(
+	mediaPath string, root, scheme *browseCacheDir,
+) []browseCacheCountPair {
+	dirs := sourceCacheAncestorDirs(mediaPath)
+	pairs := make([]browseCacheCountPair, 0, len(dirs)+2)
+	pairs = append(pairs, browseCacheCountPair{parent: root, child: scheme})
+	for i := 0; i+1 < len(dirs); i++ {
+		pairs = append(pairs, browseCacheCountPair{
+			parent: b.ensureDir(dirs[i]),
+			child:  b.ensureDir(dirs[i+1]),
+		})
+	}
+	// Unlike the flat virtual-scheme case, no source media file's direct
+	// parent is ever the bare scheme bucket itself (every one has a real
+	// id-rooted parent, at minimum), so there is no {scheme,scheme} self-pair
+	// here — only the real leaf gets one, same condition as the filesystem
+	// branch's own leaf self-pair.
+	if len(dirs) > 1 {
+		leaf := b.ensureDir(dirs[len(dirs)-1])
+		pairs = append(pairs, browseCacheCountPair{parent: leaf, child: leaf})
+	}
+	return pairs
+}
+
+// sourceCacheAncestorDirs returns the real directory chain below a source
+// scheme root for mediaPath (scheme://id/dir/.../file), from the scheme
+// bucket itself down to the file's immediate parent, each with a trailing
+// slash — the source-rooted equivalent of browseCacheAncestorDirs, which
+// starts its chain at "/" instead. mediaPath has already been through
+// browseCacheNormalizePath.
+func sourceCacheAncestorDirs(mediaPath string) []string {
+	idx := strings.Index(mediaPath, "://")
+	scheme := mediaPath[:idx+3]
+	dirs := []string{scheme}
+	rest := strings.Trim(mediaPath[idx+3:], "/")
+	dir := path.Dir("/" + rest)
+	if dir == "." || dir == "/" {
+		return dirs
+	}
+	current := scheme
+	for _, part := range strings.Split(strings.Trim(dir, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		current += part + "/"
+		dirs = append(dirs, current)
+	}
+	return dirs
 }
 
 func browseCacheAncestorDirs(mediaPath string) []string {
@@ -460,8 +521,22 @@ func browseCacheDirParentAndName(dirPath string) (parentPath, name string, isVir
 	if dirPath == "" {
 		return "", "", false
 	}
-	if strings.Contains(dirPath, "://") {
-		return "/", dirPath, true
+	if idx := strings.Index(dirPath, "://"); idx >= 0 {
+		scheme := dirPath[:idx+3]
+		if dirPath[:idx] != container.SourceVirtualScheme || dirPath == scheme {
+			// The bare scheme bucket itself, or any other virtual scheme
+			// (which never has real hierarchy): one node directly under "/".
+			return "/", dirPath, true
+		}
+		// A real directory below a source root, not the scheme bucket: the
+		// same ancestor logic as a filesystem path below, just rooted at the
+		// scheme bucket instead of "/".
+		rest := strings.TrimSuffix(dirPath[idx+3:], "/")
+		parentRest := path.Dir(rest)
+		if parentRest == "." {
+			return scheme, path.Base(rest), false
+		}
+		return scheme + parentRest + "/", path.Base(rest), false
 	}
 	if dirPath == "/" {
 		return "", "/", false
