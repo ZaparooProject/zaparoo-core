@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -291,7 +292,8 @@ func (*Platform) ManagedByPackageManager() bool { return true }
 // installed apps offered as media.
 func (p *Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails}
+	folderCovers := localmedia.NewPlatformScraper()
+	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails, folderCovers.ID: folderCovers}
 	if p.host != nil {
 		apps := p.appScraper()
 		scrapers[apps.ID] = apps
