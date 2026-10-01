@@ -347,6 +347,13 @@ func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 		}
 		if rbf, ok := selectByCanonicalDir(unstableByBase[key], canonicalDir); ok {
 			c.bySystemID[system.ID] = rbf
+			continue
+		}
+		for _, alias := range system.RBFAliases {
+			if rbf, ok := c.getByMglPathLocked(alias); ok {
+				c.bySystemID[system.ID] = rbf
+				break
+			}
 		}
 	}
 }

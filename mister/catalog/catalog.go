@@ -52,11 +52,16 @@ type Slot struct {
 	Exts  []string   `json:"extensions,omitempty"`
 }
 
+// Core describes one MiSTer core and the media it loads. RBFAliases are file
+// name patterns tried when no core installed under RBF is found; they cover
+// builds whose names do not follow the Name_YYYYMMDD convention, such as
+// release candidates. Of several matches the last in name order wins.
 type Core struct {
 	ID             string   `json:"id"`
 	LauncherID     string   `json:"launcherId,omitempty"`
 	SetName        string   `json:"setName,omitempty"`
 	RBF            string   `json:"rbf,omitempty"`
+	RBFAliases     []string `json:"rbfAliases,omitempty"`
 	Folders        []string `json:"folders,omitempty"`
 	Extensions     []string `json:"extensions,omitempty"`
 	Slots          []Slot   `json:"slots,omitempty"`
@@ -101,6 +106,7 @@ func cloneSlot(slot *Slot) Slot {
 
 func cloneCore(core *Core) Core {
 	cloned := *core
+	cloned.RBFAliases = append([]string(nil), core.RBFAliases...)
 	cloned.Folders = append([]string(nil), core.Folders...)
 	cloned.Extensions = append([]string(nil), core.Extensions...)
 	cloned.Slots = make([]Slot, len(core.Slots))

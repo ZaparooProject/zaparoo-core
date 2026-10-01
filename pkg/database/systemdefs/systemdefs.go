@@ -211,6 +211,15 @@ const (
 	SystemUzebox              = "Uzebox"
 	SystemVMU                 = "VMU"
 	SystemZeebo               = "Zeebo"
+	SystemGameKing            = "GameKing"
+	SystemMyVision            = "MyVision"
+	SystemSuperVision8000     = "SuperVision8000"
+	SystemStudioII            = "StudioII"
+	SystemBBCBridgeCompanion  = "BBCBridgeCompanion"
+	SystemGameTank            = "GameTank"
+	SystemDataRover840        = "DataRover840"
+	SystemAtariLynx2P         = "AtariLynx2P"
+	SystemTI89                = "TI89"
 )
 
 // Computers
@@ -300,6 +309,28 @@ const (
 	SystemPC6000                 = "PC6000"
 	SystemPDP10                  = "PDP10"
 	SystemPLATO                  = "PLATO"
+	SystemC128                   = "C128"
+	SystemCBMII                  = "CBMII"
+	SystemEnterprise             = "Enterprise"
+	SystemJR100                  = "JR100"
+	SystemTK2000                 = "TK2000"
+	SystemIQ151                  = "IQ151"
+	SystemEG2000                 = "EG2000"
+	SystemHomelab                = "Homelab"
+	SystemAltair8800             = "Altair8800"
+	SystemNeXT                   = "NeXT"
+	SystemSGIIndy                = "SGIIndy"
+	SystemPCjr                   = "PCjr"
+	SystemTandy1000              = "Tandy1000"
+	SystemAppleIII               = "AppleIII"
+	SystemVideoBrain             = "VideoBrain"
+	SystemTVC                    = "TVC"
+	SystemAmstradNC              = "AmstradNC"
+	SystemMicroBee               = "MicroBee"
+	SystemCoCo3                  = "CoCo3"
+	SystemSparcStation           = "SparcStation"
+	SystemND120                  = "ND120"
+	SystemSBC7                   = "SBC7"
 )
 
 // Other
@@ -378,6 +409,9 @@ const (
 	SystemWindowsMixedReality = "WindowsMixedReality"
 	SystemWindowsMobile       = "WindowsMobile"
 	SystemWindowsPhone        = "WindowsPhone"
+	SystemTamagotchi          = "Tamagotchi"
+	SystemSolarus             = "Solarus"
+	SystemBennuGD             = "BennuGD"
 )
 
 // GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
@@ -1702,6 +1736,133 @@ var Systems = map[string]System{
 	SystemThomson: {
 		ID:    SystemThomson,
 		Slugs: []string{"thomsonto7", "mo5", "to8"},
+	},
+	SystemGameKing: {
+		ID:    SystemGameKing,
+		Slugs: []string{"timetopgameking"},
+	},
+	SystemMyVision: {
+		ID:    SystemMyVision,
+		Slugs: []string{"nichibutsumyvision"},
+	},
+	SystemSuperVision8000: {
+		ID: SystemSuperVision8000,
+	},
+	SystemStudioII: {
+		ID:    SystemStudioII,
+		Slugs: []string{"rcastudioii"},
+	},
+	SystemBBCBridgeCompanion: {
+		ID: SystemBBCBridgeCompanion,
+	},
+	SystemTamagotchi: {
+		ID:    SystemTamagotchi,
+		Slugs: []string{"bandaitamagotchi"},
+	},
+	SystemC128: {
+		ID:    SystemC128,
+		Slugs: []string{"commodore128"},
+	},
+	SystemCBMII: {
+		ID:    SystemCBMII,
+		Slugs: []string{"commodorecbmii", "commodorecbm2"},
+	},
+	SystemEnterprise: {
+		ID:    SystemEnterprise,
+		Slugs: []string{"enterprise64", "enterprise128"},
+	},
+	SystemJR100: {
+		ID:    SystemJR100,
+		Slugs: []string{"nationaljr100", "panasonicjr100"},
+	},
+	SystemTK2000: {
+		ID:    SystemTK2000,
+		Slugs: []string{"microdigitaltk2000"},
+	},
+	SystemIQ151: {
+		ID:    SystemIQ151,
+		Slugs: []string{"zpaiq151"},
+	},
+	SystemEG2000: {
+		ID:    SystemEG2000,
+		Slugs: []string{"colourgenie", "eacaeg2000"},
+	},
+	SystemHomelab: {
+		ID:    SystemHomelab,
+		Slugs: []string{"microkeyhomelab"},
+	},
+	SystemAltair8800: {
+		ID:    SystemAltair8800,
+		Slugs: []string{"mitsaltair8800", "altair"},
+	},
+	SystemNeXT: {
+		ID:    SystemNeXT,
+		Slugs: []string{"nextcomputer", "nextcube", "nextstation"},
+	},
+	SystemSGIIndy: {
+		ID:    SystemSGIIndy,
+		Slugs: []string{"silicongraphicsindy", "irisindy"},
+	},
+	SystemPCjr: {
+		ID:    SystemPCjr,
+		Slugs: []string{"ibmpcjr"},
+	},
+	SystemTandy1000: {
+		ID:    SystemTandy1000,
+		Slugs: []string{"radioshacktandy1000"},
+	},
+	SystemAppleIII: {
+		ID: SystemAppleIII,
+	},
+	SystemVideoBrain: {
+		ID:    SystemVideoBrain,
+		Slugs: []string{"fairchildvideobrain"},
+	},
+	SystemGameTank: {
+		ID: SystemGameTank,
+	},
+	SystemTVC: {
+		ID:    SystemTVC,
+		Slugs: []string{"videotontvc"},
+	},
+	SystemAmstradNC: {
+		ID:    SystemAmstradNC,
+		Slugs: []string{"amstradnc100", "amstradnc200"},
+	},
+	SystemDataRover840: {
+		ID: SystemDataRover840,
+	},
+	SystemMicroBee: {
+		ID:    SystemMicroBee,
+		Slugs: []string{"microbee32"},
+	},
+	SystemAtariLynx2P: {
+		ID: SystemAtariLynx2P,
+	},
+	SystemCoCo3: {
+		ID:    SystemCoCo3,
+		Slugs: []string{"tandycoco3"},
+	},
+	SystemSparcStation: {
+		ID:    SystemSparcStation,
+		Slugs: []string{"sunsparcstation"},
+	},
+	SystemND120: {
+		ID:    SystemND120,
+		Slugs: []string{"norskdatand120"},
+	},
+	SystemTI89: {
+		ID:    SystemTI89,
+		Slugs: []string{"texasinstrumentsti89"},
+	},
+	SystemSolarus: {
+		ID: SystemSolarus,
+	},
+	SystemBennuGD: {
+		ID: SystemBennuGD,
+	},
+	SystemSBC7: {
+		ID: SystemSBC7,
 	},
 	SystemDICE: {
 		ID:    SystemDICE,

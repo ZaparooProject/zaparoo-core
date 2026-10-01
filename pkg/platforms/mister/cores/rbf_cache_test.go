@@ -809,6 +809,68 @@ func TestUnstableCoreBaseName(t *testing.T) {
 	}
 }
 
+func TestBuildFromRBFs_ResolvesCoreByAlias(t *testing.T) {
+	t.Parallel()
+
+	rbf := func(dir, name string) RBFInfo {
+		return RBFInfo{
+			Path:      filepath.Join("media", "fat", dir, name+".rbf"),
+			Filename:  name + ".rbf",
+			ShortName: name,
+			MglName:   filepath.Join(dir, name),
+		}
+	}
+
+	t.Run("release candidate build resolves", func(t *testing.T) {
+		t.Parallel()
+
+		cache := &RBFCache{}
+		cache.BuildFromRBFs([]RBFInfo{rbf("_Console", "Marty_20260927_RC3")})
+
+		got, err := cache.Resolve(nil, &Core{ID: "FMTowns", RBF: "_Console/Marty"})
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join("_Console", "Marty_20260927_RC3"), got.MglName)
+	})
+
+	t.Run("newest matching build wins", func(t *testing.T) {
+		t.Parallel()
+
+		cache := &RBFCache{}
+		cache.BuildFromRBFs([]RBFInfo{
+			rbf("_Console", "Marty_20260901_RC1"),
+			rbf("_Console", "Marty_20260927_RC3"),
+		})
+
+		got, ok := cache.GetBySystemID("FMTowns")
+		require.True(t, ok)
+		assert.Equal(t, filepath.Join("_Console", "Marty_20260927_RC3"), got.MglName)
+	})
+
+	t.Run("exact name beats alias", func(t *testing.T) {
+		t.Parallel()
+
+		cache := &RBFCache{}
+		cache.BuildFromRBFs([]RBFInfo{
+			rbf("_Console", "Marty_20260927_RC3"),
+			rbf("_Console", "Marty"),
+		})
+
+		got, ok := cache.GetBySystemID("FMTowns")
+		require.True(t, ok)
+		assert.Equal(t, filepath.Join("_Console", "Marty"), got.MglName)
+	})
+
+	t.Run("unrelated core does not match", func(t *testing.T) {
+		t.Parallel()
+
+		cache := &RBFCache{}
+		cache.BuildFromRBFs([]RBFInfo{rbf("_Console", "MartyMcFly_20260927")})
+
+		_, ok := cache.GetBySystemID("FMTowns")
+		assert.False(t, ok)
+	})
+}
+
 func TestBuildFromRBFs_UsesUnstableNightlyFallback(t *testing.T) {
 	t.Parallel()
 

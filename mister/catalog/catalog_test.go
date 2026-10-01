@@ -53,8 +53,8 @@ func TestCatalogDefinitions(t *testing.T) {
 	t.Parallel()
 
 	all := catalog.All()
-	if len(all) != 120 {
-		t.Fatalf("expected 120 systems, got %d", len(all))
+	if len(all) != 182 {
+		t.Fatalf("expected 182 systems, got %d", len(all))
 	}
 	if all[0].ID != "3DO" {
 		t.Fatalf("catalog is not sorted: first ID %q", all[0].ID)
@@ -240,4 +240,95 @@ func TestGroupsIsSafeForConcurrentUse(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// Each row pins a slot to the index its core declares in CONF_STR: an F or S
+// entry's digit, which Main_MiSTer matches against the MGL index attribute.
+func TestAddedCoreSlots(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		core   string
+		file   string
+		method string
+		index  int
+	}{
+		{"C128", "game.d71", "s", 0},
+		{"C128", "game.crt", "f", 2},
+		{"CBMII", "game.d80", "s", 0},
+		{"CBMII", "game.prg", "f", 9},
+		{"Enterprise", "disk.img", "s", 1},
+		{"Enterprise", "cart.rom", "f", 0},
+		{"JR100", "game.prg", "f", 1},
+		{"JR100", "game.bas", "f", 2},
+		{"JR100", "tape.cmt", "s", 1},
+		{"FM7", "tape.t77", "f", 1},
+		{"FM7", "disk.d77", "s", 0},
+		{"PC88", "disk.d88", "s", 0},
+		{"Thomson", "cart.rom", "f", 1},
+		{"Thomson", "tape.wav", "f", 2},
+		{"Thomson", "disk.fd", "f", 3},
+		{"StudioII", "game.st2", "f", 1},
+		{"StudioII", "game.ch8", "f", 3},
+		{"PocketStation", "card.gme", "f", 1},
+		{"ColecoAdam", "disk.dsk", "s", 0},
+		{"ColecoAdam", "tape.ddp", "s", 4},
+		{"FMTowns", "disc.cue", "s", 0},
+		{"FMTowns", "floppy.d88", "s", 1},
+		{"FMTowns", "card.icm", "s", 2},
+		{"FMTowns", "disk.vhd", "s", 4},
+		{"PCFX", "disc.chd", "s", 2},
+		{"MacLC", "floppy.dsk", "s", 6},
+		{"MacLC", "disk.hda", "s", 0},
+		{"MacLC", "disc.toast", "s", 4},
+		{"MacQuadra800", "disk.vhd", "s", 0},
+		{"PCjr", "cart.jrc", "f", 2},
+		{"SGIIndy", "disk.img", "s", 1},
+		{"SGIIndy", "disc.iso", "s", 3},
+		{"NeXT", "disk.vhd", "s", 0},
+		{"NeXT", "disc.cue", "s", 3},
+		{"AtariLynx2P", "game.lyx", "f", 1},
+		{"CoCo3", "game.ccc", "f", 1},
+		{"CoCo3", "tape.cas", "f", 2},
+		{"CoCo3", "disk.dsk", "s", 2},
+		{"MacIIvi", "floppy.dsk", "f", 1},
+		{"MacIIvi", "disc.chd", "s", 4},
+		{"MacLCII", "disk.hda", "s", 0},
+		{"SparcStation", "disc.iso", "s", 2},
+		{"ND120", "tape.bpu", "s", 4},
+		{"TI89", "os.89u", "f", 0},
+		{"Solarus", "quest.sol", "s", 0},
+		{"BennuGD", "game.dcb", "s", 0},
+		{"SBC7", "program.h7x", "f", 1},
+		{"NDS", "game.nds", "f", 3},
+		{"CommanderX16", "card.img", "s", 0},
+		{"CommanderX16", "cart.crt", "s", 2},
+		{"PC98", "disk.d88", "s", 0},
+		{"PC98", "disc.iso", "s", 4},
+		{"Atari2600ARM", "game.a26", "f", 1},
+		{"System80", "disk.dmk", "s", 0},
+		{"System80", "tape.cas", "f", 1},
+		{"Z486", "disc.chd", "s", 4},
+		{"PC110", "disk.vhd", "s", 2},
+		{"Raster", "film.mpg", "s", 0},
+		{"Phosphor", "song.flac", "s", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.core+"/"+tt.file, func(t *testing.T) {
+			t.Parallel()
+
+			core, err := catalog.Get(tt.core)
+			if err != nil {
+				t.Fatal(err)
+			}
+			params, err := catalog.PathToMGLDef(core, tt.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if params.Method != tt.method || params.Index != tt.index {
+				t.Fatalf("want %s/%d, got %s/%d", tt.method, tt.index, params.Method, params.Index)
+			}
+		})
+	}
 }

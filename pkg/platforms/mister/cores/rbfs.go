@@ -42,6 +42,7 @@ type RBFInfo struct {
 var nestedRBFDirectories = []string{
 	filepath.Join("_RA_Cores", "Cores"),
 	filepath.Join("_Custom Cores", "Cores"),
+	filepath.Join("_Other", "_BennuGD"),
 }
 
 func stripOfficialDateSuffix(name string) string {
