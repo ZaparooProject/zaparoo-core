@@ -79,18 +79,20 @@ func TestBroadcastNotifications_AsyncBroadcastDoesNotBlockConsumer(t *testing.T)
 		}
 	}
 
-	// Give consumer time to drain the channel
-	// With async broadcasts, consumer should drain quickly (~1-2ms total)
-	// With sync broadcasts, this would take ~500ms (100 * 5ms)
-	time.Sleep(50 * time.Millisecond)
-
-	mu.Lock()
-	consumed := consumedCount
-	mu.Unlock()
-
-	// Consumer should have consumed all or nearly all notifications
-	// (Even with async processing, channel draining is fast)
-	assert.GreaterOrEqual(t, consumed, 95, "consumer should drain channel rapidly with async broadcasts")
+	// Wait for the consumer to drain the channel, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention (e.g. the full
+	// suite running under -race/deadlock instrumentation), since the
+	// consumer goroutine simply may not have been scheduled enough times
+	// within an arbitrary window. With async broadcasts the drain is fast
+	// (not gated on each 5ms simulated broadcast); with sync broadcasts it
+	// would take ~500ms (100 * 5ms) to reach this count at all, so a bound
+	// well under that still proves the non-blocking behavior this test
+	// guards against.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return consumedCount >= sentCount
+	}, 300*time.Millisecond, time.Millisecond, "consumer should drain channel rapidly with async broadcasts")
 }
 
 // TestBroadcastNotifications_BufferSizeHandlesBurst verifies that the

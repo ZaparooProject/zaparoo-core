@@ -229,12 +229,16 @@ func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
 	// Advance clock by 2 seconds to trigger tracker tick
 	fakeClock.Advance(2 * time.Second)
 
-	// Give the tracker goroutine a moment to execute
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the tracker goroutine to pick this up, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention (e.g. the full
+	// suite running under -race/deadlock instrumentation).
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia != nil
+	}, 2*time.Second, 10*time.Millisecond, "should detect externally launched game")
 
-	// Verify game was detected
 	mediaMu.RLock()
-	require.NotNil(t, capturedMedia, "Should detect externally launched game")
 	assert.Equal(t, systemdefs.SystemGenesis, capturedMedia.SystemID)
 	assert.Equal(t, "Sonic the Hedgehog", capturedMedia.Name)
 	assert.Equal(t, "/userdata/roms/genesis/sonic.md", capturedMedia.Path)
@@ -297,13 +301,13 @@ func TestBackgroundTracker_DetectsExternalGameClose(t *testing.T) {
 	// Advance clock by 2 seconds to trigger tracker tick
 	fakeClock.Advance(2 * time.Second)
 
-	// Give the tracker goroutine a moment to execute
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify game close was detected
-	mediaMu.RLock()
-	assert.Nil(t, capturedMedia, "Should detect when game closes externally")
-	mediaMu.RUnlock()
+	// Wait for the tracker goroutine to pick this up, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention.
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia == nil
+	}, 2*time.Second, 10*time.Millisecond, "should detect when game closes externally")
 }
 
 // TestBackgroundTracker_ClearsKodiWhenNotReachable tests that the tracker
@@ -369,19 +373,16 @@ func TestBackgroundTracker_ClearsKodiWhenNotReachable(t *testing.T) {
 	// Since Kodi is not actually running, the tracker should detect this and clear kodiActive
 	fakeClock.Advance(2 * time.Second)
 
-	// Give the tracker goroutine a moment to execute
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify kodiActive was cleared when Kodi couldn't be reached
-	platform.trackerMu.RLock()
-	kodiActiveAfter := platform.kodiActive
-	platform.trackerMu.RUnlock()
-	assert.False(t, kodiActiveAfter, "Should clear kodiActive when Kodi is not reachable")
-
-	// Verify active media was cleared
-	mediaMu.RLock()
-	assert.Nil(t, capturedMedia, "Should clear media when Kodi is not reachable")
-	mediaMu.RUnlock()
+	// Wait for the tracker goroutine to pick this up, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention.
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		cleared := capturedMedia == nil
+		mediaMu.RUnlock()
+		platform.trackerMu.RLock()
+		defer platform.trackerMu.RUnlock()
+		return cleared && !platform.kodiActive
+	}, 2*time.Second, 10*time.Millisecond, "should clear kodiActive and media when Kodi is not reachable")
 }
 
 // TestBackgroundTracker_ClearsKodiWhenNotActive tests that the tracker
@@ -442,13 +443,13 @@ func TestBackgroundTracker_ClearsKodiWhenNotActive(t *testing.T) {
 	// Advance clock by 2 seconds to trigger tracker tick
 	fakeClock.Advance(2 * time.Second)
 
-	// Give the tracker goroutine a moment to execute
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify media was cleared since API says no game and kodiActive=false
-	mediaMu.RLock()
-	assert.Nil(t, capturedMedia, "Should clear media when no game and kodiActive=false")
-	mediaMu.RUnlock()
+	// Wait for the tracker goroutine to pick this up, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention.
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia == nil
+	}, 2*time.Second, 10*time.Millisecond, "should clear media when no game and kodiActive=false")
 }
 
 // TestBackgroundTracker_DetectsGameChange tests that the tracker detects
@@ -506,14 +507,15 @@ func TestBackgroundTracker_DetectsGameChange(t *testing.T) {
 		SystemName: "nes",
 	})
 
-	// Advance clock
+	// Advance clock and wait for the tracker goroutine to pick this up,
+	// rather than guessing a fixed delay: a fixed sleep flakes under CPU
+	// contention.
 	fakeClock.Advance(2 * time.Second)
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify game change detected
-	mediaMu.RLock()
-	assert.Equal(t, "Game 2", capturedMedia.Name)
-	mediaMu.RUnlock()
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia != nil && capturedMedia.Name == "Game 2"
+	}, 2*time.Second, 10*time.Millisecond, "should detect game change")
 }
 
 // TestBackgroundTracker_StopsCleanly tests that the tracker cleanup function
@@ -839,12 +841,15 @@ func TestBackgroundTracker_PollingInterval(t *testing.T) {
 	assert.Equal(t, 0, callCount, "Should not poll after 1 second")
 	mediaMu.RUnlock()
 
-	// Advance clock by another 1 second (total 2 seconds, should trigger)
+	// Advance clock by another 1 second (total 2 seconds, should trigger) and
+	// wait for the tracker goroutine to pick this up, rather than guessing a
+	// fixed delay: a fixed sleep flakes under CPU contention.
 	fakeClock.Advance(1 * time.Second)
-	time.Sleep(50 * time.Millisecond)
-	mediaMu.RLock()
-	assert.Equal(t, 1, callCount, "Should poll after 2 seconds")
-	mediaMu.RUnlock()
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return callCount == 1
+	}, 2*time.Second, 10*time.Millisecond, "should poll after 2 seconds")
 
 	// Verify game was detected
 	mediaMu.RLock()
