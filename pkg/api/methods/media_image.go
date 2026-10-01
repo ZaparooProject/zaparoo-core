@@ -1363,7 +1363,7 @@ func loadRawMediaImageSinglePath(
 			},
 		}
 		raw, directoryErr := selectRawMediaImageFromSources(
-			env.Context, afero.NewOsFs(), db, directoryRow, nil, directoryProps, prefs, maxBytes,
+			env.Context, afero.NewOsFs(), env.Platform, db, directoryRow, nil, directoryProps, prefs, maxBytes,
 		)
 		if directoryErr == nil {
 			return raw, nil
@@ -1397,7 +1397,7 @@ func loadRawMediaImageRow(
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 	return selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
+		env.Context, afero.NewOsFs(), env.Platform, db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
 }
 
@@ -1425,7 +1425,7 @@ func loadRawMediaImageByID(
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 	return selectRawMediaImageFromSources(
-		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
+		env.Context, afero.NewOsFs(), env.Platform, db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
 }
 
@@ -1503,6 +1503,7 @@ func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow)
 func selectRawMediaImageFromSources(
 	ctx context.Context,
 	fs afero.Fs,
+	platform platforms.Platform,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	mediaPropSources [][]database.MediaProperty,
@@ -1534,7 +1535,7 @@ func selectRawMediaImageFromSources(
 			if prop.Text != "" {
 				fileBackedCandidatesChecked = true
 			}
-			raw, stale, err := loadRawMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
+			raw, stale, err := loadRawMediaImageProperty(ctx, fs, platform, db, row, &prop, src, typeTag, maxBytes)
 			if stale {
 				delete(src.propMap, typeTag)
 				continue
@@ -1568,6 +1569,7 @@ func selectRawMediaImageFromSources(
 func loadRawMediaImageProperty(
 	ctx context.Context,
 	fs afero.Fs,
+	platform platforms.Platform,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
@@ -1604,7 +1606,7 @@ func loadRawMediaImageProperty(
 			return nil, true, nil
 		}
 	case prop.Text != "":
-		data, stale, err := loadMediaImageFile(fs, row, prop, src.isMedia, typeTag, maxBytes)
+		data, stale, err := loadMediaImageFile(ctx, fs, platform, row, prop, src.isMedia, typeTag, maxBytes)
 		if stale || err != nil {
 			return nil, stale, err
 		}
@@ -1624,13 +1626,18 @@ func loadRawMediaImageProperty(
 }
 
 func loadMediaImageFile(
+	ctx context.Context,
 	fs afero.Fs,
+	platform platforms.Platform,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
 	isMedia bool,
 	typeTag string,
 	maxBytes int64,
 ) (data []byte, stale bool, err error) {
+	if platforms.IsSourcePath(prop.Text) {
+		return loadSourceMediaImageFile(ctx, platform, row, prop, isMedia, typeTag, maxBytes)
+	}
 	info, err := fs.Stat(prop.Text)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1659,6 +1666,42 @@ func loadMediaImageFile(
 		return nil, false, mediaImageReadError(prop.Text, readErr)
 	}
 	return data, false, nil
+}
+
+// loadSourceMediaImageFile is loadMediaImageFile's counterpart for a folder
+// cover or media image stored under a source root: a platform.SourceFileReader
+// read instead of an afero.Fs one, since those bytes live behind the host
+// (e.g. SAF on Android), not on a filesystem Core can open directly. A
+// platform without the capability, or a read failure (the root may no longer
+// be granted), is treated as a stale property - the same graceful skip a
+// missing real file already gets - not a hard error.
+func loadSourceMediaImageFile(
+	ctx context.Context,
+	platform platforms.Platform,
+	row *database.MediaFullRow,
+	prop *database.MediaProperty,
+	isMedia bool,
+	typeTag string,
+	maxBytes int64,
+) (data []byte, stale bool, err error) {
+	reader, ok := platform.(platforms.SourceFileReader)
+	if !ok {
+		logStaleMediaImageProperty(row, prop, isMedia, typeTag, "platform cannot read source root files")
+		return nil, true, nil
+	}
+	content, readErr := reader.ReadSourceFile(ctx, prop.Text, maxBytes)
+	if readErr != nil {
+		logStaleMediaImageProperty(row, prop, isMedia, typeTag, readErr.Error())
+		return nil, true, nil
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, false, mediaImageReadError(prop.Text, &mediaBinaryTooLargeError{
+			path: prop.Text,
+			size: int64(len(content)),
+			max:  maxBytes,
+		})
+	}
+	return content, false, nil
 }
 
 func logStaleMediaImageProperty(

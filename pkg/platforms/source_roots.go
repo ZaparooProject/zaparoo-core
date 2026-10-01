@@ -97,3 +97,15 @@ type SourceRootReader interface {
 	// directory below one, as a canonical multi-segment virtual path.
 	ReadSourceDir(ctx context.Context, path string) ([]SourceEntry, error)
 }
+
+// SourceFileReader is implemented by a platform that can also return a source
+// root file's bytes, not just list its directories: a separate, optional
+// capability from SourceRootReader, since returning file content needs a real
+// read of the host's data (e.g. through Binder on Android), not just a
+// directory listing.
+type SourceFileReader interface {
+	// ReadSourceFile returns up to limit+1 bytes of the file at path (a
+	// source root path below a root, never a bare root), so a caller can
+	// detect an oversized file without reading all of it.
+	ReadSourceFile(ctx context.Context, path string, limit int64) ([]byte, error)
+}

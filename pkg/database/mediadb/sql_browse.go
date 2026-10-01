@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -677,7 +678,13 @@ func browseDirectoryPropertyPath(
 ) (string, error) {
 	path := result.Path
 	if path == "" {
-		path = filepath.ToSlash(filepath.Join(opts.PathPrefix, result.Name))
+		if platforms.IsSourcePath(opts.PathPrefix) {
+			// filepath.Join mangles "://"; parent and name already share "/"
+			// as their only separator, so plain concatenation is correct.
+			path = strings.TrimSuffix(opts.PathPrefix, "/") + "/" + result.Name
+		} else {
+			path = filepath.ToSlash(filepath.Join(opts.PathPrefix, result.Name))
+		}
 	}
 	return normalizeDirectoryPropertyPath(path)
 }

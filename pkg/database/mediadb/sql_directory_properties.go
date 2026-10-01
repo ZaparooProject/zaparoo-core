@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
 type normalizedDirectoryProperty struct {
@@ -37,8 +38,23 @@ type normalizedDirectoryProperty struct {
 	text    string
 }
 
+// normalizeDirectoryPropertyPath accepts either a real filesystem path or a
+// source root path (or a path below one): both can carry a folder cover, a
+// source root's real nested folders being the one virtual scheme that can.
+// Any other "://" scheme is rejected, same as before - a flat virtual scheme
+// such as android:// has no directory to attach a cover to.
 func normalizeDirectoryPropertyPath(value string) (string, error) {
-	if value == "" || strings.Contains(value, "://") {
+	if value == "" {
+		return "", fmt.Errorf("invalid directory property path %q", value)
+	}
+	if platforms.IsSourcePath(value) {
+		trimmed := strings.TrimSuffix(value, "/")
+		if _, _, err := platforms.SourceLocation(trimmed); err != nil {
+			return "", fmt.Errorf("invalid directory property path %q: %w", value, err)
+		}
+		return trimmed, nil
+	}
+	if strings.Contains(value, "://") {
 		return "", fmt.Errorf("invalid directory property path %q", value)
 	}
 	path := filepath.ToSlash(filepath.Clean(value))
