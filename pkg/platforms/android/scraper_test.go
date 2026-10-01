@@ -21,6 +21,9 @@ package android
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -33,12 +36,16 @@ import (
 
 type appScrapeDB struct {
 	database.MediaDBI
-	media     []database.MediaWithFullPath
+	systemErr error
 	completed map[int64]struct{}
+	media     []database.MediaWithFullPath
 	writes    []database.ScrapeWriteTarget
 }
 
-func (*appScrapeDB) FindSystemBySystemID(string) (database.System, error) {
+func (db *appScrapeDB) FindSystemBySystemID(string) (database.System, error) {
+	if db.systemErr != nil {
+		return database.System{}, db.systemErr
+	}
 	return database.System{DBID: 9}, nil
 }
 
@@ -128,6 +135,101 @@ func TestAppScraperDoesNotRevisitCompletedRows(t *testing.T) {
 	}
 	require.Empty(t, host.iconCalls)
 	require.Empty(t, db.writes)
+}
+
+func TestAppScraperFinishesCleanlyWhenNoAppsAreIndexed(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	p := &Platform{host: host}
+	db := &appScrapeDB{}
+	updates := make(chan scraper.ScrapeUpdate, 1)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.True(t, last.Done)
+	require.NoError(t, last.FatalErr)
+	require.Zero(t, last.Processed)
+	require.Empty(t, host.iconCalls, "an empty library must never look up the Android system row")
+}
+
+func TestAppScraperFinishesCleanlyWhenAndroidSystemNotYetRegistered(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	p := &Platform{host: host}
+	db := &appScrapeDB{
+		media: []database.MediaWithFullPath{{
+			DBID: 1, MediaTitleDBID: 11,
+			Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+		}},
+		systemErr: sql.ErrNoRows,
+	}
+	updates := make(chan scraper.ScrapeUpdate, 1)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.True(t, last.Done)
+	require.NoError(t, last.FatalErr, "no Android system row yet is not a fatal error, just nothing to do")
+	require.Zero(t, last.Processed)
+	require.Empty(t, host.iconCalls)
+}
+
+func TestAppScraperPropagatesSystemLookupError(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	p := &Platform{host: host}
+	db := &appScrapeDB{
+		media: []database.MediaWithFullPath{{
+			DBID: 1, MediaTitleDBID: 11,
+			Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+		}},
+		systemErr: errors.New("db unavailable"),
+	}
+	updates := make(chan scraper.ScrapeUpdate, 1)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.True(t, last.Done)
+	require.Error(t, last.FatalErr,
+		"a real lookup failure must surface, not be swallowed like the not-yet-registered case")
+}
+
+func TestAppScraperReportsProgressEveryTwentyFiveRows(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	p := &Platform{host: host}
+	media := make([]database.MediaWithFullPath, 30)
+	for i := range media {
+		media[i] = database.MediaWithFullPath{
+			DBID: int64(i + 1), MediaTitleDBID: int64(i + 1),
+			Path: (AppIdentity{Package: "com.example.game", Variant: fmt.Sprintf("v%d", i), Name: "Game"}).AppPath(),
+		}
+	}
+	db := &appScrapeDB{media: media}
+	updates := make(chan scraper.ScrapeUpdate, 40)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var sawProgressAt25 bool
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		if !update.Done && update.Processed == 25 {
+			sawProgressAt25 = true
+		}
+		last = update
+	}
+	require.True(t, sawProgressAt25, "a long-running scrape must report progress before it finishes")
+	require.True(t, last.Done)
+	require.NoError(t, last.FatalErr)
+	require.Equal(t, 30, last.Processed)
+	require.Equal(t, 30, last.Matched)
 }
 
 func TestAppScraperIncludesProfileLaunchers(t *testing.T) {

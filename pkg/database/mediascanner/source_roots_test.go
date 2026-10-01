@@ -222,6 +222,26 @@ func TestSourceRootFailuresNeverMarkMediaMissing(t *testing.T) {
 	assert.Equal(t, indexed, present(), "the unreadable root's system keeps its media")
 }
 
+// A cancelled context aborts discovery entirely: it is the caller giving up,
+// not a flaky root, so it must not be swallowed as a per-root failure.
+func TestGetSourceSystemPathsAbortsEntirelyOnContextCancellation(t *testing.T) {
+	t.Parallel()
+	root := platforms.SourceRootPath("granted-tree")
+	launchers := []platforms.Launcher{{
+		ID: "NESCore", SystemID: systemdefs.SystemNES,
+		Folders: []string{"NES"}, Extensions: []string{".nes"},
+	}}
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice(launchers)
+	pl := &sourceTestPlatform{roots: []string{root}, readErr: map[string]error{}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := getSourceSystemPaths(ctx, pl, pl.roots, []systemdefs.System{{ID: systemdefs.SystemNES}}, cache)
+	require.ErrorIs(t, err, context.Canceled,
+		"a cancelled context must abort discovery entirely, not just mark one root failed")
+}
+
 // Multiple source roots are independent: one failing to read does not stop
 // discovery in the others, and does not mark its own previously-indexed
 // media missing.

@@ -343,6 +343,78 @@ func TestExternalSessionMethodsReportErrNullSQLWhenDisconnected(t *testing.T) {
 	require.ErrorIs(t, err, ErrNullSQL)
 	_, err = db.ApplyExternalEvidence(ctx, evidenceBatch("launch-1", 2000))
 	require.ErrorIs(t, err, ErrNullSQL)
+	_, _, err = db.NextExternalLaunchElapsed(ctx, "boot-1", 1000)
+	require.ErrorIs(t, err, ErrNullSQL)
+}
+
+func TestNextExternalLaunchElapsedFindsTheEarliestLaterLaunch(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+
+	earlier := externalSessionFixture("launch-earlier")
+	earlier.RequestedElapsedMs = 4000
+	require.NoError(t, db.BeginExternalSession(ctx, earlier))
+
+	later := externalSessionFixture("launch-later")
+	later.RequestedMs = 200000
+	later.RequestedElapsedMs = 9000
+	require.NoError(t, db.BeginExternalSession(ctx, later))
+
+	evenLater := externalSessionFixture("launch-even-later")
+	evenLater.RequestedMs = 300000
+	evenLater.RequestedElapsedMs = 15000
+	require.NoError(t, db.BeginExternalSession(ctx, evenLater))
+
+	elapsed, found, err := db.NextExternalLaunchElapsed(ctx, "boot-1", 5000)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int64(9000), elapsed, "the nearest later launch must win, not the furthest")
+}
+
+func TestNextExternalLaunchElapsedExcludesAbandonedSessions(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+
+	pending := externalSessionFixture("launch-pending")
+	pending.RequestedElapsedMs = 4000
+	require.NoError(t, db.BeginExternalSession(ctx, pending))
+
+	abandoned := externalSessionFixture("launch-abandoned")
+	abandoned.RequestedMs = 200000
+	abandoned.RequestedElapsedMs = 9000
+	require.NoError(t, db.BeginExternalSession(ctx, abandoned))
+	wasAbandoned, err := db.AbandonExternalSession(ctx, "launch-abandoned", 200100)
+	require.NoError(t, err)
+	require.True(t, wasAbandoned)
+
+	_, found, err := db.NextExternalLaunchElapsed(ctx, "boot-1", 5000)
+	require.NoError(t, err)
+	require.False(t, found, "an abandoned launch never dispatched, so it cannot cap an earlier one")
+}
+
+func TestNextExternalLaunchElapsedIgnoresOtherBootsAndEarlierLaunches(t *testing.T) {
+	t.Parallel()
+	db, cleanup := setupTempUserDB(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+
+	earlier := externalSessionFixture("launch-earlier")
+	earlier.RequestedElapsedMs = 3000
+	require.NoError(t, db.BeginExternalSession(ctx, earlier))
+
+	otherBoot := externalSessionFixture("launch-other-boot")
+	otherBoot.BootID = "boot-2"
+	otherBoot.RequestedMs = 200000
+	otherBoot.RequestedElapsedMs = 9000
+	require.NoError(t, db.BeginExternalSession(ctx, otherBoot))
+
+	_, found, err := db.NextExternalLaunchElapsed(ctx, "boot-1", 5000)
+	require.NoError(t, err)
+	require.False(t, found, "an earlier launch and a different boot's launch must not satisfy the query")
 }
 
 func TestCleanupMediaHistoryDeletesOnlyTerminalExternalSessions(t *testing.T) {

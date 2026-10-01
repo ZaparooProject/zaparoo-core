@@ -311,3 +311,33 @@ func TestLoadCatalogRejectsMalformedData(t *testing.T) {
 	_, err := loadStandaloneCatalog([]byte(`{"catalogVersion":1,"reviewed":"d","profiles":[{"version":1}]}`))
 	require.ErrorIs(t, err, ErrLaunchDefinition)
 }
+
+func TestLoadRetroArchCatalogRejectsARowNoLaunchEverMatches(t *testing.T) {
+	t.Parallel()
+
+	catalog := decodeRetroArchCatalog(t)
+	catalog.Profiles = append(catalog.Profiles, retroArchProfile{
+		ID: "RetroArch.Test.UnmatchedRow", System: "ZZZ_TEST_SYSTEM", Core: "mesen", Extensions: []string{".nes"},
+	})
+	data, err := json.Marshal(catalog)
+	require.NoError(t, err)
+
+	_, err = loadRetroArchCatalog(data)
+	require.ErrorIs(t, err, ErrLaunchDefinition)
+	require.ErrorContains(t, err, "was never matched")
+}
+
+func TestLoadRetroArchCatalogRejectsAPackagedCoreNoProfileReferences(t *testing.T) {
+	t.Parallel()
+
+	catalog := decodeRetroArchCatalog(t)
+	catalog.Cores["unused_test_core"] = retroArchCoreInfo{
+		Name: "Unused Test Core", File: "unused_test_core_libretro_android.so",
+	}
+	data, err := json.Marshal(catalog)
+	require.NoError(t, err)
+
+	_, err = loadRetroArchCatalog(data)
+	require.ErrorIs(t, err, ErrLaunchDefinition)
+	require.ErrorContains(t, err, "unused_test_core")
+}

@@ -44,6 +44,7 @@ type sessionStoreProbe struct {
 	database.UserDBI
 	beginErr        error
 	applyErr        error
+	nextErr         error
 	sessions        map[string]*database.ExternalSession
 	applyStatus     string
 	sessionOrder    []string
@@ -110,6 +111,9 @@ func (p *sessionStoreProbe) NextExternalLaunchElapsed(
 ) (elapsedMs int64, found bool, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.nextErr != nil {
+		return 0, false, p.nextErr
+	}
 	for _, session := range p.sessions {
 		if session.BootID != bootID || session.RequestedElapsedMs <= afterElapsedMs || session.Status == "abandoned" {
 			continue
@@ -416,6 +420,31 @@ func TestReconcileHostReturnSessionsCapsOnAnAlreadyResolvedLaterLaunch(t *testin
 	require.Equal(t, "launch-a", store.approxCloses[0].launchID)
 	require.Equal(t, dispatchedMs+(2000-1200), store.approxCloses[0].endMs,
 		"A's estimate ends at B's request, not left open")
+}
+
+// A store error looking up the next external launch must surface, not be
+// silently swallowed, and must not stop any other session in the same pass
+// from reconciling.
+func TestReconcileHostReturnSessionsSurfacesNextLaunchLookupError(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	host := &fakeHost{state: &defaultForegroundState}
+	store := &sessionStoreProbe{}
+	platform := trackedPlatform(ctx, t, host, store)
+
+	require.NoError(t, store.BeginExternalSession(ctx, &database.ExternalSession{
+		LaunchID: "launch-a", SystemID: "PC", SystemName: "PC", MediaPath: "source://test/PC/a.steam",
+		MediaName: "A", LauncherID: "GameNative.Steam", Target: "app.gamenative",
+		BootID: "boot-1", RequestedMs: 1000, RequestedElapsedMs: 1000, Status: "pending", Source: "host_return",
+	}))
+	dispatchedMs := int64(1200)
+	store.sessions["launch-a"].DispatchedMs = &dispatchedMs
+	store.nextErr = errors.New("database unavailable")
+
+	err := platform.reconcileHostReturnSessions(ctx, HostReturn{ObserverStartedElapsedMs: 500})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "database unavailable")
+	require.Empty(t, store.approxCloses, "a failed lookup must not close the session on a wrong estimate")
 }
 
 func TestReconcileHostReturnSessionsStalesADeadObserverProcess(t *testing.T) {
