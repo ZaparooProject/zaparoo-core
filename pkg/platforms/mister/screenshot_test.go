@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,18 @@ import (
 var pngIEND = []byte{0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
 
 const testCaptureTimeout = 500 * time.Millisecond
+
+// TestScreenshotTimeoutCoversMainWriteTime pins the wait to Main's real write
+// time. On a MiSTer with a full-HD output Main creates the PNG at once but
+// takes 3.3 to 3.7 s to finish writing it; a 3 s wait failed about half of all
+// captures for a screenshot that did succeed. The wait must stay inside the
+// API request timeout, or the request is cancelled before Core can report.
+func TestScreenshotTimeoutCoversMainWriteTime(t *testing.T) {
+	t.Parallel()
+
+	assert.GreaterOrEqual(t, screenshotTimeout, 8*time.Second)
+	assert.Less(t, screenshotTimeout, config.APIRequestTimeout)
+}
 
 func TestScreenshotWatchDirs(t *testing.T) {
 	t.Parallel()
