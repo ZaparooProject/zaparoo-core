@@ -331,3 +331,36 @@ func TestSourceRootDirectoriesBrowseHierarchically(t *testing.T) {
 	require.NoError(t, fx.db.MediaDB.PopulateBrowseCache(t.Context()))
 	check(t, "rebuilt cache")
 }
+
+// The bare scheme bucket, not a specific root id, is the actual path
+// Frontend browses into first: media.browse's own root discovery collapses
+// every granted source root into one shared "source://" route, which
+// single_root_auto_nav then follows immediately with no id attached.
+// Browsing that bare bucket must surface the real root id as a directory
+// (no backfill needed beyond the normal reindex this fixture already does).
+func TestSourceRootBareSchemeBucketListsEachGrantedRoot(t *testing.T) {
+	fx := sourceIndexFixture(t)
+	pl, index := fx.pl, fx.index
+	root := pl.roots[0]
+	_, err := index()
+	require.NoError(t, err)
+
+	id, _, locErr := platforms.SourceLocation(root)
+	require.NoError(t, locErr)
+
+	check := func(t *testing.T, label string) {
+		t.Helper()
+		dirs, dirsErr := fx.db.MediaDB.BrowseDirectories(
+			t.Context(), database.BrowseDirectoriesOptions{PathPrefix: platforms.SourceScheme + "://"})
+		require.NoError(t, dirsErr, label)
+		names := make([]string, 0, len(dirs))
+		for _, d := range dirs {
+			names = append(names, d.Name)
+		}
+		assert.Equal(t, []string{id}, names, "%s: the granted root's id is the bucket's only child", label)
+	}
+
+	check(t, "uncached fallback")
+	require.NoError(t, fx.db.MediaDB.PopulateBrowseCache(t.Context()))
+	check(t, "rebuilt cache")
+}

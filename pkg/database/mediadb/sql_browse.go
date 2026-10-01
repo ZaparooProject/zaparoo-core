@@ -678,7 +678,7 @@ func browseDirectoryPropertyPath(
 ) (string, error) {
 	path := result.Path
 	if path == "" {
-		if platforms.IsSourcePath(opts.PathPrefix) {
+		if platforms.IsSourceScheme(opts.PathPrefix) {
 			// filepath.Join mangles "://"; parent and name already share "/"
 			// as their only separator, so plain concatenation is correct.
 			path = strings.TrimSuffix(opts.PathPrefix, "/") + "/" + result.Name

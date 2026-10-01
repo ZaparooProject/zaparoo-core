@@ -52,3 +52,19 @@ func TestSourceLocation(t *testing.T) {
 	_, _, err = platforms.SourceLocation(root + "/NES/Game (USA).nes")
 	require.Error(t, err, "a non-canonical spelling is rejected")
 }
+
+func TestIsSourceScheme(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, platforms.IsSourceScheme("source://"), "the bare scheme, media.browse's aggregated route")
+	assert.True(t, platforms.IsSourceScheme("source://abc"))
+	assert.True(t, platforms.IsSourceScheme("source://abc/NES/game.nes"))
+	assert.False(t, platforms.IsSourceScheme(""))
+	assert.False(t, platforms.IsSourceScheme("source:/"), "missing the second slash")
+	assert.False(t, platforms.IsSourceScheme("android://pkg/Name"))
+
+	// Unlike IsSourceScheme, IsSourcePath requires a root id: the bare
+	// scheme is not a reference to any one root.
+	assert.False(t, platforms.IsSourcePath("source://"))
+	assert.True(t, platforms.IsSourcePath("source://abc"))
+}

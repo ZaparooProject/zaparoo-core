@@ -206,7 +206,7 @@ func browseMediaIndexRequest(
 // prefix to scope the facet by, mirroring the security checks in
 // browseFilesystem/browseVirtual.
 func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, error) {
-	if platforms.IsSourcePath(path) {
+	if platforms.IsSourceScheme(path) {
 		return resolveSourceIndexPrefix(env, path)
 	}
 	if strings.Contains(path, "://") {
@@ -241,6 +241,15 @@ func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, er
 // root must still be granted, since filepath-based root validation does not
 // apply to a "scheme://id/..." path.
 func resolveSourceIndexPrefix(env *requests.RequestEnv, path string) (string, error) {
+	// Same bare-scheme aggregated route as browseSourcePath: no single root
+	// id to validate.
+	if path == platforms.SourceScheme+"://" {
+		if _, ok := env.Platform.(platforms.SourceRootReader); !ok {
+			return "", models.ClientErrf("platform does not support source root paths")
+		}
+		return path, nil
+	}
+
 	// Same trailing-slash tolerance as browseSourcePath: segment parsing
 	// itself requires no trailing slash.
 	trimmed := strings.TrimSuffix(path, "/")

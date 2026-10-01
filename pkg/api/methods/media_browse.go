@@ -377,7 +377,7 @@ func browseMediaRequest(
 	// every other virtual scheme, so it gets the filesystem-style dirs-then-
 	// files browse below (not browseVirtual's flat listing), with its own
 	// validation since filepath.Clean/Join mangle "://".
-	if platforms.IsSourcePath(path) {
+	if platforms.IsSourceScheme(path) {
 		return browseSourcePath(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 	}
 
@@ -1266,6 +1266,18 @@ func browseSourcePath(
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
 ) (any, error) {
+	// The bare scheme is the aggregated route media.browse's root discovery
+	// (BrowseVirtualSchemes) always surfaces for every granted source root
+	// combined - not a reference to any one of them, so there is no single
+	// root id to validate here. Each root still gets validated on its own
+	// below, once a client descends into it specifically.
+	if path == platforms.SourceScheme+"://" {
+		if _, ok := env.Platform.(platforms.SourceRootReader); !ok {
+			return nil, models.ClientErrf("platform does not support source root paths")
+		}
+		return browsePathPrefix(env, path, path, cursor, maxResults, letter, sort, systems, tags)
+	}
+
 	// A client may send either form, same tolerance browseFilesystem gives a
 	// real path (cleaned, or cleaned with a trailing slash): segment parsing
 	// itself requires no trailing slash, an empty final segment otherwise.
@@ -1643,7 +1655,7 @@ func resolveDirSingletonAliases(
 // parent is built with plain string concatenation instead: parent and name
 // already share "/" as their only separator either way.
 func browseChildPath(parent, name string) string {
-	if platforms.IsSourcePath(parent) {
+	if platforms.IsSourceScheme(parent) {
 		return strings.TrimSuffix(parent, "/") + "/" + name
 	}
 	return filepath.ToSlash(filepath.Join(parent, name))
@@ -1657,7 +1669,7 @@ func browseChildPath(parent, name string) string {
 // expected, since every source path is escaped at index time) is shown as-is
 // rather than dropped.
 func browseDirDisplayName(parentPath, name string) string {
-	if !platforms.IsSourcePath(parentPath) {
+	if !platforms.IsSourceScheme(parentPath) {
 		return name
 	}
 	decoded, err := url.PathUnescape(name)

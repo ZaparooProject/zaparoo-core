@@ -91,6 +91,34 @@ func TestHandleMediaBrowseOpensAGrantedSourceRootWithoutUnknownSchemeError(t *te
 	require.NoError(t, err)
 }
 
+// The exact real-world repro: media.browse's own root discovery
+// (BrowseVirtualSchemes) always collapses every granted source root into
+// one shared "source://" route - Frontend's single_root_auto_nav follows
+// that bare route immediately once a system resolves to it, with no root id
+// attached at all. That bare path must browse cleanly too, not just a
+// path that already names a specific root.
+func TestHandleMediaBrowseOpensTheBareSourceSchemeBucket(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirectories", mock.Anything, mock.Anything).
+		Return([]database.BrowseDirectoryResult{{Name: "granted", FileCount: 3}}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, mock.Anything).Return(1, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.Anything).Return(0, nil)
+	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{}, nil)
+
+	env := newSourceBrowseEnv(t, mockMediaDB, []string{"source://granted"}, "source://")
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	results, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, results.Entries, 1)
+	assert.Equal(t, "source://granted", results.Entries[0].Path,
+		"the listed root id becomes the next browse path, built without filepath.Join mangling \"://\"")
+}
+
 // A root the host no longer grants (revoked, or never existed) must be
 // rejected outright, not silently browsed as if it still were: a stale
 // Frontend path_stack entry from before a revocation must not leak whatever

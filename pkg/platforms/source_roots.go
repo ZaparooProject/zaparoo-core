@@ -54,6 +54,19 @@ func IsSourcePath(path string) bool {
 	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
 }
 
+// IsSourceScheme reports whether path is the bare source scheme or any path
+// under it - unlike IsSourcePath, which requires a root id (a genuine
+// reference), this also matches the bare scheme itself. media.browse's root
+// discovery (BrowseVirtualSchemes) collapses every granted source root into
+// one shared "source://" route the same way it already does for a flat
+// virtual scheme, so the browse API needs to recognize that bare bucket as
+// its own browsable path - an aggregated view across every granted root,
+// not a reference to any one of them.
+func IsSourceScheme(path string) bool {
+	prefix := SourceScheme + "://"
+	return len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
+}
+
 // SourceLocation splits a source root, or a path below one, into the root's
 // ID and the decoded segments below it. A root has no segments. A path below
 // a root must be in its canonical form.
