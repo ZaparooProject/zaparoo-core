@@ -191,9 +191,11 @@ func TestSourceRootNoLongerGrantedMarksMediaMissing(t *testing.T) {
 	assert.Empty(t, present())
 }
 
-// A host that cannot list its roots fails the run, and one that cannot read
-// a system folder marks that system incomplete: either way nothing is marked
-// missing because the host did not answer.
+// A host that cannot list its roots at all fails the run: the host itself is
+// unreachable, not just one root of it. A root that is listed but fails to
+// read, whether at a system folder or at the root itself, does not fail the
+// run: it marks the affected systems incomplete instead. Either way nothing
+// is marked missing because the host did not answer.
 func TestSourceRootFailuresNeverMarkMediaMissing(t *testing.T) {
 	fx := sourceIndexFixture(t)
 	pl, index, present := fx.pl, fx.index, fx.present
@@ -216,6 +218,55 @@ func TestSourceRootFailuresNeverMarkMediaMissing(t *testing.T) {
 
 	pl.readErr = map[string]error{pl.roots[0]: unavailable}
 	_, err = index()
-	require.ErrorIs(t, err, unavailable)
-	assert.Equal(t, indexed, present())
+	require.NoError(t, err, "a root that fails to read is skipped, not an aborted run")
+	assert.Equal(t, indexed, present(), "the unreadable root's system keeps its media")
+}
+
+// A cancelled context aborts discovery entirely: it is the caller giving up,
+// not a flaky root, so it must not be swallowed as a per-root failure.
+func TestGetSourceSystemPathsAbortsEntirelyOnContextCancellation(t *testing.T) {
+	t.Parallel()
+	root := platforms.SourceRootPath("granted-tree")
+	launchers := []platforms.Launcher{{
+		ID: "NESCore", SystemID: systemdefs.SystemNES,
+		Folders: []string{"NES"}, Extensions: []string{".nes"},
+	}}
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice(launchers)
+	pl := &sourceTestPlatform{roots: []string{root}, readErr: map[string]error{}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := getSourceSystemPaths(ctx, pl, pl.roots, []systemdefs.System{{ID: systemdefs.SystemNES}}, cache)
+	require.ErrorIs(t, err, context.Canceled,
+		"a cancelled context must abort discovery entirely, not just mark one root failed")
+}
+
+// Multiple source roots are independent: one failing to read does not stop
+// discovery in the others, and does not mark its own previously-indexed
+// media missing.
+func TestSourceRootFailureDoesNotAffectOtherRoots(t *testing.T) {
+	fx := sourceIndexFixture(t)
+	pl, index, present := fx.pl, fx.index, fx.present
+	firstRoot := pl.roots[0]
+	_, err := index()
+	require.NoError(t, err)
+	firstIndexed := present()
+	require.Len(t, firstIndexed, 2)
+
+	secondRoot := platforms.SourceRootPath("second-granted-tree")
+	secondNes := mustSourcePath(t, secondRoot, "nes")
+	secondFile := mustSourcePath(t, secondRoot, "nes", "Second Fixture (USA).nes")
+	pl.tree[secondRoot] = []platforms.SourceEntry{folder("nes")}
+	pl.tree[secondNes] = []platforms.SourceEntry{file("Second Fixture (USA).nes")}
+	pl.roots = []string{firstRoot, secondRoot}
+	pl.readErr = map[string]error{firstRoot: errors.New("host unavailable")}
+
+	_, err = index()
+	require.NoError(t, err)
+	combined := present()
+	assert.Contains(t, combined, secondFile, "the second root still indexes while the first fails")
+	for _, path := range firstIndexed {
+		assert.Contains(t, combined, path, "the failed root's previously-indexed media is not marked missing")
+	}
 }

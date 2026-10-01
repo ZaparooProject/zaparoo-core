@@ -71,6 +71,8 @@ func repairReason(reason FailureReason) platforms.LaunchRepairReason {
 		return platforms.LaunchRepairLauncherVersionUnsupported
 	case FailureSourceUnavailable:
 		return platforms.LaunchRepairMediaUnavailable
+	case FailureSourceRevoked:
+		return platforms.LaunchRepairMediaAccessRevoked
 	case FailureForegroundRequired:
 		return platforms.LaunchRepairHostForegroundRequired
 	case FailureCancelled:
@@ -110,6 +112,8 @@ func repairMessage(reason FailureReason, installHint string) string {
 		return "the storage holding this media is not available"
 	case FailureSourceUnavailable:
 		return "this media entry could not be resolved or opened"
+	case FailureSourceRevoked:
+		return "Zaparoo's access to this media's source folder was revoked; re-grant it in Settings"
 	case FailureForegroundRequired:
 		return "return to Zaparoo before launching a game"
 	case FailureCancelled:

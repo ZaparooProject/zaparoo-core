@@ -85,4 +85,13 @@ type ExternalSessionStore interface {
 	ApplyExternalEvidence(context.Context, *ForegroundEvidence) (bool, error)
 	CloseExternalSessionApproximate(ctx context.Context, launchID string, startMs, endMs int64) (bool, error)
 	MarkExternalSessionStale(context.Context, string, int64) (bool, error)
+	// NextExternalLaunchElapsed returns the smallest RequestedElapsedMs over
+	// every session in bootID requested after afterElapsedMs, regardless of
+	// that session's own current status: an already-closed or stale later
+	// launch still replaced the one being reconciled. Abandoned is the one
+	// status excluded, since it means dispatch never happened and that
+	// launch never actually replaced anything.
+	NextExternalLaunchElapsed(
+		ctx context.Context, bootID string, afterElapsedMs int64,
+	) (elapsedMs int64, found bool, err error)
 }

@@ -354,10 +354,10 @@ func sourceFailure(ctx context.Context, entry *catalogEntry, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("launch cancelled: %w", ctxErr)
 	}
-	// A host that said what went wrong keeps its reason: a revoked grant and
-	// an unmounted card are the two the user can actually act on, and
-	// flattening them to "unavailable" loses the only useful advice. An
-	// untyped error is a source Core could not reach.
+	// A host that said what went wrong keeps its reason: a revoked grant
+	// (FailureSourceRevoked) and an unmounted card are the two the user can
+	// actually act on, and flattening them to "unavailable" loses the only
+	// useful advice. An untyped error is a source Core could not reach.
 	reason := FailureSourceUnavailable
 	var hostErr *HostError
 	if errors.As(err, &hostErr) && hostErr.Reason != "" {

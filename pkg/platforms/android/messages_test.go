@@ -98,6 +98,7 @@ func TestRepairReasonMapsEveryHostFailure(t *testing.T) {
 		FailureProviderUnsupported: platforms.LaunchRepairStorageProviderUnsupported,
 		FailureStorageUnmounted:    platforms.LaunchRepairStorageUnavailable,
 		FailureSourceUnavailable:   platforms.LaunchRepairMediaUnavailable,
+		FailureSourceRevoked:       platforms.LaunchRepairMediaAccessRevoked,
 		FailureForegroundRequired:  platforms.LaunchRepairHostForegroundRequired,
 		FailureCancelled:           platforms.LaunchRepairCancelled,
 		FailureOutcomeUnknown:      platforms.LaunchRepairOutcomeUnknown,

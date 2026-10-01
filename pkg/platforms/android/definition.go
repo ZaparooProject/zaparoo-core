@@ -176,11 +176,13 @@ func (d *LaunchDefinition) validStrategy() bool {
 	case 1:
 		return d.Action == actionMain && d.Strategy == StrategyFilesystemPath &&
 			d.StorageAccess == "legacy_read" && d.MaxTargetSDK >= 1 && d.MaxTargetSDK <= 28 &&
-			d.DataSource == "" && !d.GrantReadURI && !d.ClipData && len(d.Extras) > 0
+			d.DataSource == "" && !d.GrantReadURI && !d.ClipData && len(d.Extras) > 0 &&
+			d.Name == "" && d.Variant == "" && d.Data == ""
 	case 2:
 		return d.Action == actionView && d.Strategy == StrategyContentURI &&
 			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.GrantReadURI && d.ClipData &&
-			(d.DataSource == "" || d.DataSource == extraSourceMedia)
+			(d.DataSource == "" || d.DataSource == extraSourceMedia) &&
+			d.Name == "" && d.Variant == "" && d.Data == ""
 	case 3:
 		return d.validAppAction() && d.Strategy == StrategyApp &&
 			d.StorageAccess == "none" && d.MaxTargetSDK == 0 && d.DataSource == "" &&

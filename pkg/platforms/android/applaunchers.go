@@ -194,12 +194,9 @@ func (p *Platform) dispatchInstalledApp(snapshot *hostSnapshot, identity string)
 // app launch.
 func (p *Platform) dispatchApp(entry *catalogEntry, path string) error {
 	definition := &entry.definition
-	if p.host == nil {
-		return unsupported("launch an app before the host is ready")
-	}
 	ctx := p.launcherContext()
-	if ctx == nil {
-		ctx = context.Background()
+	if p.host == nil || ctx == nil {
+		return unsupported("launch an app before the host is ready")
 	}
 	return p.track(ctx, definition, definition.ID, path, func() error {
 		// The host gets its own copy, so a Dispatch that wrote through the pointer

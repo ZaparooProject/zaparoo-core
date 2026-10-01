@@ -81,6 +81,27 @@ func TestAppDispatchSendsTheProfileLiteralAndNoMedia(t *testing.T) {
 	assert.Equal(t, extraSourceLiteral, sent.definition.Extras[0].Source)
 }
 
+// An app launch must refuse rather than dispatch with no way to cancel it,
+// whether the host itself is missing or the launcher context simply has not
+// been supplied yet (before StartPost, or after Stop on a reused Platform).
+func TestAppDispatchRefusesBeforeTheHostIsReady(t *testing.T) {
+	t.Parallel()
+
+	noHost, err := New(platforms.Settings{DataDir: "/data"}, nil)
+	require.NoError(t, err)
+	entry, ok := noHost.entryByID["Pokeport.PokemonCrystal"]
+	require.True(t, ok)
+	require.Error(t, noHost.dispatchApp(entry, "android://com.theboisclub.pokemonred:crystal/Pokemon%20Crystal"),
+		"no host at all must refuse")
+
+	notStarted, err := New(platforms.Settings{DataDir: "/data"}, &fakeHost{})
+	require.NoError(t, err)
+	entry, ok = notStarted.entryByID["Pokeport.PokemonCrystal"]
+	require.True(t, ok)
+	require.Error(t, notStarted.dispatchApp(entry, "android://com.theboisclub.pokemonred:crystal/Pokemon%20Crystal"),
+		"a host with no launcher context yet must also refuse, not fall back to a background context")
+}
+
 // Every launchable app the host reports is offered, except one a profile
 // already describes, so an app is never listed twice.
 func TestInstalledAppsLauncherSkipsProfiledPackages(t *testing.T) {

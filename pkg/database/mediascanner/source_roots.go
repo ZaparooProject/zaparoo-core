@@ -135,42 +135,84 @@ func findSourceFolder(
 	return path, true, nil
 }
 
+// relativeScanFolders is every distinct non-absolute, non-SkipFilesystemScan
+// launcher folder for one system. Absolute launcher folders are filesystem
+// paths and never apply to a source root.
+func relativeScanFolders(systemID string, launcherCache *helpers.LauncherCache) []string {
+	launchers := launcherCache.GetLaunchersBySystem(systemID)
+	var folders []string
+	for i := range launchers {
+		if launchers[i].SkipFilesystemScan {
+			continue
+		}
+		for _, folder := range launchers[i].Folders {
+			if !filepath.IsAbs(folder) && !helpers.Contains(folders, folder) {
+				folders = append(folders, folder)
+			}
+		}
+	}
+	return folders
+}
+
+// sourceRootSystems returns the systems a source root could hold media for:
+// every system with at least one relative, scannable launcher folder. It is
+// used to decide which systems a failed root's discovery might have affected,
+// since a root that could not be read says nothing about what it would have
+// contained.
+func sourceRootSystems(systems []systemdefs.System, launcherCache *helpers.LauncherCache) map[string]bool {
+	affected := make(map[string]bool, len(systems))
+	for _, system := range systems {
+		if len(relativeScanFolders(system.ID, launcherCache)) > 0 {
+			affected[system.ID] = true
+		}
+	}
+	return affected
+}
+
 // getSourceSystemPaths finds each system's launcher folders in the source
-// roots, as getSystemPathsForLauncherCache does in RootDirs. Absolute launcher
-// folders are filesystem paths and never apply to a source root.
+// roots, as getSystemPathsForLauncherCache does in RootDirs.
+//
+// A root that cannot be read (a flaky provider, a transient host error) does
+// not abort discovery for every other root and system: it is logged, recorded
+// in failedRoots, and skipped, the same way one bad RootDirs path already
+// does not fail an entire scan. A root the host no longer lists at all is
+// simply absent from roots and never reaches this function, per this file's
+// own two-outcome design: "fails the run or marks the system incomplete".
+// Only ctx.Err() still fails the whole call, since nothing further can be
+// discovered once the caller has stopped waiting.
 func getSourceSystemPaths(
 	ctx context.Context,
 	reader platforms.SourceRootReader,
 	roots []string,
 	systems []systemdefs.System,
 	launcherCache *helpers.LauncherCache,
-) ([]PathResult, error) {
+) (matches []PathResult, failedRoots []string, err error) {
 	listings := &sourceListings{reader: reader, dirs: make(map[string][]platforms.SourceEntry)}
-	var matches []PathResult
 	seen := make(map[string]bool)
 	for _, root := range roots {
-		id, segments, err := platforms.SourceLocation(root)
-		if err != nil || len(segments) > 0 {
+		id, segments, locErr := platforms.SourceLocation(root)
+		if locErr != nil || len(segments) > 0 {
 			log.Warn().Str("root", root).Msg("skipping malformed source root")
 			continue
 		}
+		// Collected separately from matches: a root that fails partway through
+		// has its partial results discarded rather than committed, since a
+		// listing failure partway through a root says nothing reliable about
+		// the rest of it either.
+		var rootMatches []PathResult
+		rootFailed := false
 		for _, system := range systems {
-			launchers := launcherCache.GetLaunchersBySystem(system.ID)
-			var folders []string
-			for i := range launchers {
-				if launchers[i].SkipFilesystemScan {
-					continue
-				}
-				for _, folder := range launchers[i].Folders {
-					if !filepath.IsAbs(folder) && !helpers.Contains(folders, folder) {
-						folders = append(folders, folder)
-					}
-				}
-			}
+			folders := relativeScanFolders(system.ID, launcherCache)
 			for _, folder := range folders {
-				path, found, err := findSourceFolder(ctx, listings, id, folder)
-				if err != nil {
-					return nil, err
+				path, found, findErr := findSourceFolder(ctx, listings, id, folder)
+				if findErr != nil {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return nil, nil, ctxErr
+					}
+					log.Warn().Err(findErr).Str("root", id).
+						Msg("skipping source root: discovery failed reading it")
+					rootFailed = true
+					break
 				}
 				if !found {
 					continue
@@ -179,13 +221,24 @@ func getSourceSystemPaths(
 				if seen[key] {
 					continue
 				}
-				seen[key] = true
-				matches = append(matches, PathResult{System: system, Path: path})
+				rootMatches = append(rootMatches, PathResult{System: system, Path: path})
+			}
+			if rootFailed {
+				break
 			}
 		}
+		if rootFailed {
+			failedRoots = append(failedRoots, root)
+			continue
+		}
+		for _, match := range rootMatches {
+			seen[match.System.ID+":"+match.Path] = true
+		}
+		matches = append(matches, rootMatches...)
 	}
-	log.Info().Int("roots", len(roots)).Int("matches", len(matches)).Msg("source root discovery complete")
-	return matches, nil
+	log.Info().Int("roots", len(roots)).Int("failedRoots", len(failedRoots)).
+		Int("matches", len(matches)).Msg("source root discovery complete")
+	return matches, failedRoots, nil
 }
 
 // getSourceFiles walks one system folder in a source root and returns the

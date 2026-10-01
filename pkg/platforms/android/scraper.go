@@ -21,6 +21,7 @@ package android
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -93,25 +94,30 @@ func scrapeApps(
 		}
 		rows, _ = selection.Pending()
 	} else {
-		titles, err := db.GetTitlesBySystemID(systemdefs.SystemAndroid)
-		if err != nil {
-			finish(0, 0, 0, fmt.Errorf("android-apps: load titles: %w", err))
-			return
-		}
-		if len(titles) == 0 {
-			finish(0, 0, 0, nil)
-			return
-		}
+		var err error
 		rows, err = db.GetMediaBySystemID(systemdefs.SystemAndroid)
 		if err != nil {
 			finish(0, 0, 0, fmt.Errorf("android-apps: load media: %w", err))
 			return
 		}
+		if len(rows) == 0 {
+			finish(0, 0, 0, nil)
+			return
+		}
+		system, err := db.FindSystemBySystemID(systemdefs.SystemAndroid)
+		if errors.Is(err, sql.ErrNoRows) {
+			finish(0, 0, 0, nil)
+			return
+		}
+		if err != nil {
+			finish(0, 0, 0, fmt.Errorf("android-apps: look up system: %w", err))
+			return
+		}
 		switch {
 		case opts.RunID != "" && (opts.Force || opts.FillMissing):
-			completed, err = db.GetScrapeRunMediaIDs(ctx, appScraperID, opts.RunID, titles[0].SystemDBID)
+			completed, err = db.GetScrapeRunMediaIDs(ctx, appScraperID, opts.RunID, system.DBID)
 		case !opts.Force && !opts.FillMissing:
-			completed, err = db.GetScrapedMediaIDs(ctx, appScraperID, titles[0].SystemDBID)
+			completed, err = db.GetScrapedMediaIDs(ctx, appScraperID, system.DBID)
 		}
 		if err != nil {
 			finish(0, 0, 0, fmt.Errorf("android-apps: load markers: %w", err))
@@ -120,6 +126,15 @@ func scrapeApps(
 	}
 	processed, matched, skipped := 0, 0, 0
 	icons := make(map[string]string)
+	report := func() {
+		select {
+		case ch <- scraper.ScrapeUpdate{
+			SystemID: systemdefs.SystemAndroid, Processed: processed, Total: len(rows),
+			Matched: matched, Skipped: skipped, TotalSteps: 1, CurrentStep: 1,
+		}:
+		case <-ctx.Done():
+		}
+	}
 	for _, row := range rows {
 		if err := ctx.Err(); err != nil {
 			finish(processed, matched, skipped, err)
@@ -142,6 +157,9 @@ func scrapeApps(
 			continue
 		}
 		processed++
+		if processed%25 == 0 {
+			report()
+		}
 		icon := icons[identity.Package]
 		if icon == "" {
 			icon, err = host.AppIcon(identity.Package)
