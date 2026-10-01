@@ -46,6 +46,16 @@ type Database struct {
 	// MediaUserData rebuilds the MediaDB projection of media user data in the
 	// background. It is nil wherever DeckTags is.
 	MediaUserData MediaUserDataReconciler
+	// UserDBRecovery is set when startup found the user database damaged and
+	// replaced it, so the user can be told. It is nil after a normal open.
+	UserDBRecovery *UserDBRecovery
+}
+
+// UserDBRecovery describes how startup replaced a damaged user database.
+type UserDBRecovery struct {
+	// RestoredFrom is the backup the database was restored from. It is nil when
+	// no valid backup existed and a fresh, empty database was created instead.
+	RestoredFrom *BackupInfo
 }
 
 // DeckTagQueue brings the deck membership tags in MediaDB in line with the

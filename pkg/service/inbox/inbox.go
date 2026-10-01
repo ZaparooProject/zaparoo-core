@@ -50,6 +50,7 @@ const (
 	CategoryMediaDBCorruptionRecoveryLimit   = "mediadb_corruption_recovery_limit"
 	CategoryMediaDBInterruptedRebuild        = "mediadb_interrupted_rebuild"
 	CategoryMediaDBSchemaReset               = "mediadb_schema_reset"
+	CategoryUserDBCorruptionRecovery         = "userdb_corruption_recovery"
 	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
 	CategoryMediaIndexScanStalled            = "media_index_scan_stalled"
 	CategoryMediaIndexSystemSkipped          = "media_index_system_skipped"
