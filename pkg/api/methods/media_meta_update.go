@@ -91,7 +91,9 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		// The snapshot never inserts, so it is safe even when the write failed.
 		snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
 		if applyErr != nil {
-			return nil, fmt.Errorf("failed to apply media launcher override: %w", applyErr)
+			return nil, mediaWriteClientError(
+				fmt.Errorf("failed to apply media launcher override: %w", applyErr), database.MediaWriteOperationNone,
+			)
 		}
 	}
 

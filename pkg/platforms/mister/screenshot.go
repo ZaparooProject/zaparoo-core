@@ -37,7 +37,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const screenshotTimeout = 3 * time.Second
+// screenshotTimeout bounds the wait for Main to finish writing a screenshot. Main
+// takes up to ~4 s to write one at full HD, so this leaves room for a slower SD card
+// and stays well inside the API request timeout.
+const screenshotTimeout = 10 * time.Second
 
 // screenshotWatchDirs returns the screenshot directories Main may write to for
 // the given core and RBF names, without duplicates. An empty rbfName is ignored.

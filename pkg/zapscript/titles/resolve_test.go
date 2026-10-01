@@ -1177,6 +1177,78 @@ func TestResolveTitle_FuzzyRejectsCoincidentalScore(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// TestResolveTitle_TypoInDroppedArticleKeepsSubtitledTitle covers a typo in
+// the article that opens a subtitle. Slugification drops "The" from the
+// candidate, so the typo "Te" has no word of its own to match; the token
+// coverage check must not treat it as a missing word, or the subtitled game is
+// rejected and the query falls back to the plain game that shares its main
+// title.
+func TestResolveTitle_TypoInDroppedArticleKeepsSubtitledTitle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+
+	const fullName = "Kestrel Squadron: The Silver Manager"
+	const plainName = "Kestrel Squadron"
+	fullSlug := slugs.Slugify(slugs.MediaTypeGame, fullName)
+	plainSlug := slugs.Slugify(slugs.MediaTypeGame, plainName)
+
+	fullResult := database.SearchResultWithCursor{
+		MediaID: 1, MediaTitleID: 1, SystemID: "NES", Name: fullName, Path: "/games/nes/silver-manager.nes",
+	}
+	plainResult := database.SearchResultWithCursor{
+		MediaID: 2, MediaTitleID: 2, SystemID: "NES", Name: plainName, Path: "/games/nes/kestrel-squadron.nes",
+	}
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything,
+		mock.MatchedBy(func(slug string) bool { return slug == fullSlug }),
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{fullResult}, nil)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything,
+		mock.MatchedBy(func(slug string) bool { return slug == plainSlug }),
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{plainResult}, nil)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything,
+		mock.MatchedBy(func(slug string) bool { return slug != fullSlug && slug != plainSlug }),
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySecondarySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugPrefix",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaBySlugIn",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("GetTitlesWithPreFilter",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.MediaTitle{
+		{Slug: fullSlug, Name: fullName, DBID: 1},
+		{Slug: plainSlug, Name: plainName, DBID: 2},
+	}, nil)
+
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "Kestrel Squadron: Te Silver Manager",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, fullName, result.Result.Name)
+}
+
 func TestResolveTitle_Strategy6_ProgressiveTrim(t *testing.T) {
 	t.Parallel()
 

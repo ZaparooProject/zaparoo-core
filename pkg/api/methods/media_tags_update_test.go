@@ -499,3 +499,51 @@ func TestSyncedFlagChanged(t *testing.T) {
 	}))
 	assert.False(t, syncedFlagChanged(nil))
 }
+
+// A flag or launcher-override write during an index, optimization, recovery or
+// maintenance job waited out SQLite's busy timeout and returned a raw
+// "database is locked" after the choice was already saved. It must now be
+// refused at once, with the same message every other media operation gives.
+func TestHandleMediaTagsUpdateAndMetaUpdate_RefusedDuringOptimization(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	path := filepath.Join("roms", "NES", "Game.nes")
+	scantest.IndexMediaPaths(t, mediaDB, "NES", path)
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	require.NoError(t, err)
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+
+	env := func(params string) requests.RequestEnv {
+		return requests.RequestEnv{
+			Context:  context.Background(),
+			Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+			Params:   []byte(params),
+		}
+	}
+	mediaID := rows[0].DBID
+
+	_, err = HandleMediaTagsUpdate(env(fmt.Sprintf(`{"mediaId":%d,"add":["user:favorite"]}`, mediaID)))
+	require.Error(t, err)
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Equal(t, "database optimization in progress", err.Error())
+
+	_, err = HandleMediaMetaUpdate(env(fmt.Sprintf(`{"mediaId":%d,"media":{"launcherOverride":null}}`, mediaID)))
+	require.Error(t, err)
+	require.ErrorAs(t, err, &clientErr)
+	assert.Equal(t, "database optimization in progress", err.Error())
+
+	stored, _, err := userDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.False(t, stored.IsFavorite, "a refused write must not be saved")
+	lease.Release()
+}

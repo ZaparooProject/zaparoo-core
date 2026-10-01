@@ -115,11 +115,12 @@ func makeDatabase(
 	// its schema is newer than this build understands there is nothing to be done
 	// about it, and the media database must not have been thrown away by then.
 	log.Debug().Msg("opening user database")
-	userDB, err := openAndRecoverUserDB(ctx, pl)
+	userDB, userRecovery, err := openAndRecoverUserDB(ctx, pl)
 	// Assign before the error check: openAndRecoverUserDB can return a non-nil
 	// handle alongside an error, and the deferred closeDatabase only closes what
 	// is stored on db. Assigning here ensures that handle is not leaked.
 	db.UserDB = userDB
+	db.UserDBRecovery = userRecovery
 	if err != nil {
 		return db, nil, err
 	}
@@ -476,38 +477,29 @@ func backfillMediaUserData(ctx context.Context, db *database.Database, rescued [
 	return nil
 }
 
-func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.UserDB, error) {
+func openAndRecoverUserDB(
+	ctx context.Context, pl platforms.Platform,
+) (*userdb.UserDB, *database.UserDBRecovery, error) {
 	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
 		if userDB != nil && userDB.NoteCorruption(err) {
-			logUserDBIntegrityReport(userDB)
-			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
-				return userDB, fmt.Errorf("failed to recover corrupt user database after open error: %w", recoverErr)
-			}
-			return userDB, nil
+			recovery, recoverErr := recoverUserDB(userDB, "after open error")
+			return userDB, recovery, recoverErr
 		}
-		return userDB, fmt.Errorf("failed to open user database: %w", err)
+		return userDB, nil, fmt.Errorf("failed to open user database: %w", err)
 	}
 	if userDB.IsMarkedCorrupt() {
-		logUserDBIntegrityReport(userDB)
-		if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
-			return userDB, fmt.Errorf("failed to recover marked corrupt user database: %w", recoverErr)
-		}
-		return userDB, nil
+		recovery, recoverErr := recoverUserDB(userDB, "marked corrupt")
+		return userDB, recovery, recoverErr
 	}
 
 	log.Debug().Msg("running user database migrations")
 	if err = userDB.MigrateUp(); err != nil {
 		if userDB.NoteCorruption(err) {
-			logUserDBIntegrityReport(userDB)
-			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
-				return userDB, fmt.Errorf(
-					"failed to recover corrupt user database after migration error: %w", recoverErr,
-				)
-			}
-			return userDB, nil
+			recovery, recoverErr := recoverUserDB(userDB, "after migration error")
+			return userDB, recovery, recoverErr
 		}
-		return userDB, fmt.Errorf("error migrating userdb: %w", err)
+		return userDB, nil, fmt.Errorf("error migrating userdb: %w", err)
 	}
 
 	if backup, created, backupErr := userDB.EnsureRecentBackup(userDBBackupMaxAge); backupErr != nil {
@@ -515,12 +507,71 @@ func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.U
 	} else if created {
 		log.Info().Str("path", backup.Path).Msg("created scheduled user database backup")
 	}
-	return userDB, nil
+	return userDB, nil, nil
 }
 
-func logUserDBIntegrityReport(userDB *userdb.UserDB) {
+// userDBRecoverer is the part of the user database that replaces a damaged one.
+type userDBRecoverer interface {
+	IntegrityReport() []string
+	RecoverFromCorruption() (database.RestoreInfo, error)
+}
+
+// recoverUserDB replaces a damaged user database from its newest valid backup,
+// or with an empty one, and describes what was done. found says how the damage
+// came to light, for the error when recovery itself fails.
+func recoverUserDB(userDB userDBRecoverer, found string) (*database.UserDBRecovery, error) {
 	for _, line := range userDB.IntegrityReport() {
 		log.Warn().Str("report", line).Msg("user database integrity report")
+	}
+	info, err := userDB.RecoverFromCorruption()
+	if err != nil {
+		return nil, fmt.Errorf("failed to recover corrupt user database (%s): %w", found, err)
+	}
+	return newUserDBRecovery(&info), nil
+}
+
+// newUserDBRecovery turns the result of a recovery into what the user is told.
+// A recovery that restored no backup left a fresh database, which the empty
+// RestoredFrom path marks.
+func newUserDBRecovery(info *database.RestoreInfo) *database.UserDBRecovery {
+	if info.RestoredFrom.Path == "" {
+		return &database.UserDBRecovery{}
+	}
+	restoredFrom := info.RestoredFrom
+	return &database.UserDBRecovery{RestoredFrom: &restoredFrom}
+}
+
+// notifyUserDBRecovery tells the user their saved data was replaced after
+// damage. The user database is the only copy of play history, mappings and
+// profiles, so a silent restore would leave them to find the gap on their own.
+// It runs once the inbox service exists: the message is written to the
+// recovered database.
+func notifyUserDBRecovery(st *state.State, recovery *database.UserDBRecovery) {
+	if st == nil || recovery == nil {
+		return
+	}
+	inboxSvc := st.Inbox()
+	if inboxSvc == nil {
+		log.Warn().Msg("inbox unavailable, cannot report user database recovery")
+		return
+	}
+	title := "Saved data was reset after damage was found"
+	body := "Zaparoo found damage in its saved data (play history, mappings and profiles) and could " +
+		"not read it. No valid backup was available, so it started again with empty saved data."
+	if recovery.RestoredFrom != nil {
+		title = "Saved data was restored from a backup after damage was found"
+		madeAt := recovery.RestoredFrom.CreatedAt.UTC().Format("2 Jan 2006 15:04 UTC")
+		body = "Zaparoo found damage in its saved data (play history, mappings and profiles) and " +
+			"restored it from the backup " + recovery.RestoredFrom.Name + ", made on " + madeAt +
+			". Anything saved after that, such as recent play history, may be missing."
+	}
+	body += " If this keeps happening, check the device's storage."
+	if err := inboxSvc.Add(title,
+		inbox.WithBody(body),
+		inbox.WithSeverity(inbox.SeverityWarning),
+		inbox.WithCategory(inbox.CategoryUserDBCorruptionRecovery),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about user database recovery")
 	}
 }
 

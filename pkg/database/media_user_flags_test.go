@@ -282,3 +282,84 @@ func TestApplyMediaUserFlagsConcurrentEditsConverge(t *testing.T) {
 	assert.False(t, overlap.Load(), "two edits ran between a UserDB write and its projection at once")
 	assert.Equal(t, storedFlags(t, realDB, path), projectedUserTags(t, realDB, mediaDBID))
 }
+
+// A flag write while an index, optimization, recovery or maintenance job owns
+// the media database used to save the flag in UserDB, then wait out the busy
+// timeout and fail on the projection with a raw "database is locked": the
+// client got an error for a change that was kept, and the two stores differed.
+// The write must be refused before either is touched.
+func TestApplyMediaUserFlagsRefusedDuringLongMediaWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	operations := []database.MediaWriteOperation{
+		database.MediaWriteOperationIndexing,
+		database.MediaWriteOperationOptimization,
+		database.MediaWriteOperationRecovery,
+		database.MediaWriteOperationMaintenance,
+	}
+	for _, operation := range operations {
+		t.Run(string(operation), func(t *testing.T) {
+			t.Parallel()
+			db, path, mediaDBID := newFlagTestDB(t)
+			coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+			require.NoError(t, err)
+			lease, err := coordinator.AcquireMediaWrite(operation)
+			require.NoError(t, err)
+
+			_, err = database.ApplyMediaUserFlags(ctx, db, "NES", path, mediaDBID,
+				map[database.MediaUserFlag]bool{database.MediaUserFlagFavorite: true})
+			require.ErrorIs(t, err, database.ErrMediaWriteConflict)
+			var conflict *database.MediaWriteConflictError
+			require.ErrorAs(t, err, &conflict)
+			assert.Equal(t, operation, conflict.Active)
+			assert.Empty(t, storedFlags(t, db, path), "a refused write must not reach UserDB")
+			assert.Empty(t, projectedUserTags(t, db, mediaDBID))
+
+			lease.Release()
+			_, err = database.ApplyMediaUserFlags(ctx, db, "NES", path, mediaDBID,
+				map[database.MediaUserFlag]bool{database.MediaUserFlagFavorite: true})
+			require.NoError(t, err, "the same write must succeed once the job is over")
+			assert.Equal(t, map[database.MediaUserFlag]bool{database.MediaUserFlagFavorite: true},
+				storedFlags(t, db, path))
+		})
+	}
+}
+
+// Scraping commits in short transactions and can run for hours, so a flag
+// write is not refused for it.
+func TestApplyMediaUserFlagsAllowedDuringScraping(t *testing.T) {
+	t.Parallel()
+	db, path, mediaDBID := newFlagTestDB(t)
+	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+	require.NoError(t, err)
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	_, err = database.ApplyMediaUserFlags(context.Background(), db, "NES", path, mediaDBID,
+		map[database.MediaUserFlag]bool{database.MediaUserFlagLiked: true})
+	require.NoError(t, err)
+}
+
+func TestApplyMediaUserLauncherOverrideRefusedDuringLongMediaWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, path, mediaDBID := newFlagTestDB(t)
+	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+	require.NoError(t, err)
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, err)
+
+	err = database.ApplyMediaUserLauncherOverride(ctx, db, "NES", path, mediaDBID, "RetroArch")
+	require.ErrorIs(t, err, database.ErrMediaWriteConflict)
+	row, _, err := db.UserDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.Empty(t, row.LauncherOverride, "a refused override must not reach UserDB")
+
+	lease.Release()
+	require.NoError(t, database.ApplyMediaUserLauncherOverride(ctx, db, "NES", path, mediaDBID, "RetroArch"))
+	row, _, err = db.UserDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.Equal(t, "RetroArch", row.LauncherOverride)
+}

@@ -631,6 +631,7 @@ func startServiceWithOptions(
 	if mediaDBReset != nil {
 		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost, mediaDBReset.corrupt)
 	}
+	notifyUserDBRecovery(st, db.UserDBRecovery)
 
 	// Initialize profiles and restore the persisted active profile before
 	// the limits manager starts, so limit checks see the right profile.

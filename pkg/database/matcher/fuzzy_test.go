@@ -773,6 +773,67 @@ func TestTokenCoverageRatio(t *testing.T) {
 				"with no space at all, unlike \"Ghosts'n Goblins\" which only glues the left side",
 		},
 		{
+			name:      "typo of a dropped article: one letter missing",
+			query:     "Kestrel Squadron: Te Silver Manager",
+			candidate: "Kestrel Squadron: The Silver Manager",
+			want:      1,
+			reason: "slugification drops the article \"The\" from the candidate's subtitle, so its typo " +
+				"\"te\" has no candidate word to match; it must not count as a required word",
+		},
+		{
+			name:      "typo of a dropped article: leading letter missing",
+			query:     "Rogue Guardian: he Lunar Dungeon",
+			candidate: "Rogue Guardian: The Lunar Dungeon",
+			want:      1,
+		},
+		{
+			name:      "typo of a dropped article: transposed",
+			query:     "Rogue Guardian: Teh Lunar Dungeon",
+			candidate: "Rogue Guardian: The Lunar Dungeon",
+			want:      1,
+		},
+		{
+			name:      "article kept where the candidate's subtitle delimiter was dropped",
+			query:     "Twisted Arena The Mega Odyssey",
+			candidate: "Twisted Arena: The Mega Odyssey",
+			want:      1,
+		},
+		{
+			name:      "article glued to the next word",
+			query:     "Galactic Legend: TheSun Empire",
+			candidate: "Galactic Legend: The Sun Empire",
+			want:      1,
+			reason:    "\"thesun\" is the dropped article \"the\" plus the candidate's \"sun\"",
+		},
+		{
+			name:      "short word with a letter missing",
+			query:     "Thunder oo Remix",
+			candidate: "Thunder Zoo Remix",
+			want:      1,
+			reason: "\"oo\" is \"zoo\" with one letter deleted; Jaro-Winkler scores two-letter words " +
+				"too low to see it",
+		},
+		{
+			name:      "short word with an inner letter missing",
+			query:     "Super Outpost V: The ky Kart",
+			candidate: "Super Outpost V: The Sky Kart",
+			want:      1,
+		},
+		{
+			name:      "short words one substitution apart are different words",
+			query:     "F1 GP",
+			candidate: "F1 GT",
+			want:      0.5,
+			reason:    "only a deleted or swapped letter is a typo of a short word; a substituted one is another word",
+		},
+		{
+			name:      "a dropped-article typo does not make a real short word free",
+			query:     "Tie Fighter",
+			candidate: "Fighter Pilot",
+			want:      0.5,
+			reason:    "\"tie\" is a substitution away from \"the\", not a deletion or swap of it",
+		},
+		{
 			name:      "identical strings",
 			query:     "Street Fighter",
 			candidate: "Street Fighter",
