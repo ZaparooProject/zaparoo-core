@@ -314,7 +314,8 @@ func TestAddedCoreSlots(t *testing.T) {
 		{"Phosphor", "song.flac", "s", 0},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := tests[i]
 		t.Run(tt.core+"/"+tt.file, func(t *testing.T) {
 			t.Parallel()
 
