@@ -99,7 +99,9 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	// and it keeps the identity of a recorded flag when only the projection did.
 	snapshotMediaUserIdentity(&env, row.System.SystemID, row.Path)
 	if applyErr != nil {
-		return nil, fmt.Errorf("failed to apply media user flags: %w", applyErr)
+		return nil, mediaWriteClientError(
+			fmt.Errorf("failed to apply media user flags: %w", applyErr), database.MediaWriteOperationNone,
+		)
 	}
 	updateDuration := time.Since(updateStarted)
 	_, hiddenRequested := changes[database.MediaUserFlagHidden]

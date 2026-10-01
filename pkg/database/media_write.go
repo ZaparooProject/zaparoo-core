@@ -118,6 +118,26 @@ func WaitForLongMediaWrites(ctx context.Context, mediaDB MediaDBI, poll time.Dur
 	}
 }
 
+// EnsureMediaWritable returns a MediaWriteConflictError while an index,
+// optimization, recovery or maintenance job owns the media database. A small
+// write started then would wait out SQLite's busy timeout and fail with a raw
+// "database is locked", so callers about to write user data check first and
+// leave both stores untouched. Scraping is not refused: it commits in short
+// transactions. A MediaDB without write arbitration is never refused.
+func EnsureMediaWritable(mediaDB MediaDBI) error {
+	coordinator, err := GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return nil //nolint:nilerr // Without arbitration there is nothing to check.
+	}
+	switch active := coordinator.ActiveMediaWriteOperation(); active {
+	case MediaWriteOperationIndexing, MediaWriteOperationOptimization,
+		MediaWriteOperationRecovery, MediaWriteOperationMaintenance:
+		return &MediaWriteConflictError{Requested: MediaWriteOperationNone, Active: active}
+	default:
+		return nil
+	}
+}
+
 // MediaWriteConflictError reports which process-local owner blocked a request.
 type MediaWriteConflictError struct {
 	Requested MediaWriteOperation

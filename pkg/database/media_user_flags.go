@@ -63,6 +63,15 @@ func ApplyMediaUserFlags(
 	mediaUserFlagsMu.Lock()
 	defer mediaUserFlagsMu.Unlock()
 
+	// UserDB is written first, so a projection that cannot follow would leave
+	// the two stores apart and the caller with an error for a change that was
+	// kept. Refuse before either is touched.
+	if mediaDBID > 0 {
+		if err := EnsureMediaWritable(db.MediaDB); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, flag := range MediaUserFlags {
 		value, ok := changes[flag]
 		if !ok {

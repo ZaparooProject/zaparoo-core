@@ -48,6 +48,13 @@ func ApplyMediaUserLauncherOverride(
 	mediaUserFlagsMu.Lock()
 	defer mediaUserFlagsMu.Unlock()
 
+	// See ApplyMediaUserFlags: refuse before UserDB is written, not after.
+	if mediaDBID > 0 {
+		if err := EnsureMediaWritable(db.MediaDB); err != nil {
+			return err
+		}
+	}
+
 	if err := db.UserDB.SetMediaUserLauncherOverride(systemID, path, launcherID); err != nil {
 		return fmt.Errorf("failed to set media user launcher override: %w", err)
 	}
