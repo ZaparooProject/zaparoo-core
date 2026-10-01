@@ -119,7 +119,7 @@ func (p *Platform) dispatchScummVM(path string) error {
 	if p.host == nil || ctx == nil {
 		return unsupported("launch media before the host is ready")
 	}
-	content, err := p.readSourceFile(ctx, path, maxScummVMFileBytes)
+	content, err := p.ReadSourceFile(ctx, path, maxScummVMFileBytes)
 	if err != nil {
 		return sourceFailure(ctx, entry, err)
 	}

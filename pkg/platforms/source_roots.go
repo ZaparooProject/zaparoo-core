@@ -54,6 +54,19 @@ func IsSourcePath(path string) bool {
 	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
 }
 
+// IsSourceScheme reports whether path is the bare source scheme or any path
+// under it - unlike IsSourcePath, which requires a root id (a genuine
+// reference), this also matches the bare scheme itself. media.browse's root
+// discovery (BrowseVirtualSchemes) collapses every granted source root into
+// one shared "source://" route the same way it already does for a flat
+// virtual scheme, so the browse API needs to recognize that bare bucket as
+// its own browsable path - an aggregated view across every granted root,
+// not a reference to any one of them.
+func IsSourceScheme(path string) bool {
+	prefix := SourceScheme + "://"
+	return len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
+}
+
 // SourceLocation splits a source root, or a path below one, into the root's
 // ID and the decoded segments below it. A root has no segments. A path below
 // a root must be in its canonical form.
@@ -96,4 +109,16 @@ type SourceRootReader interface {
 	// ReadSourceDir lists one directory. path is a source root or a
 	// directory below one, as a canonical multi-segment virtual path.
 	ReadSourceDir(ctx context.Context, path string) ([]SourceEntry, error)
+}
+
+// SourceFileReader is implemented by a platform that can also return a source
+// root file's bytes, not just list its directories: a separate, optional
+// capability from SourceRootReader, since returning file content needs a real
+// read of the host's data (e.g. through Binder on Android), not just a
+// directory listing.
+type SourceFileReader interface {
+	// ReadSourceFile returns up to limit+1 bytes of the file at path (a
+	// source root path below a root, never a bare root), so a caller can
+	// detect an oversized file without reading all of it.
+	ReadSourceFile(ctx context.Context, path string, limit int64) ([]byte, error)
 }

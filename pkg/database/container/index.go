@@ -26,9 +26,18 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
+// SourceVirtualScheme matches platforms.SourceScheme (pkg/platforms/source_roots.go).
+// Duplicated here as a literal instead of imported, to avoid an import cycle:
+// pkg/platforms -> pkg/database/scraper -> pkg/database/container.
+const SourceVirtualScheme = "source"
+
 // ParentDir returns the immediate browse parent of an indexed media path,
-// including the trailing slash. Virtual media collapses to its scheme prefix
-// because those paths have no directory hierarchy.
+// including the trailing slash. Most virtual media collapses to its scheme
+// prefix because those paths have no directory hierarchy (e.g. an Android app
+// path is scheme://package:variant/Name, always exactly one level deep). A
+// source root path is the one virtual scheme with real nested folders
+// (scheme://id/dir/.../file, walked by mediascanner's source root indexing),
+// so it gets the same last-segment parent a filesystem path gets instead.
 //
 // Indexed paths are normally stored forward-slashed, but one that reached the
 // row from filepath.Join carries the host separator instead. Searching only
@@ -36,6 +45,11 @@ import (
 // container at all, silently dropping folder artwork on Windows.
 func ParentDir(path string) string {
 	if idx := strings.Index(path, "://"); idx >= 0 {
+		if path[:idx] == SourceVirtualScheme {
+			if lastSlash := strings.LastIndex(path, "/"); lastSlash > idx+2 {
+				return path[:lastSlash+1]
+			}
+		}
 		return path[:idx+3]
 	}
 	slashed := filepath.ToSlash(path)

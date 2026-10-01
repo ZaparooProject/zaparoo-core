@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -204,6 +206,9 @@ func browseMediaIndexRequest(
 // prefix to scope the facet by, mirroring the security checks in
 // browseFilesystem/browseVirtual.
 func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, error) {
+	if platforms.IsSourceScheme(path) {
+		return resolveSourceIndexPrefix(env, path)
+	}
 	if strings.Contains(path, "://") {
 		if !isKnownVirtualScheme(env, path) {
 			return "", models.ClientErrf("unknown virtual scheme: %s", path)
@@ -229,6 +234,41 @@ func resolveBrowseIndexPrefix(env *requests.RequestEnv, path string) (string, er
 		prefix += "/"
 	}
 	return prefix, nil
+}
+
+// resolveSourceIndexPrefix is resolveBrowseIndexPrefix's source-root
+// counterpart, validated the same way browseSourcePath validates one: the
+// root must still be granted, since filepath-based root validation does not
+// apply to a "scheme://id/..." path.
+func resolveSourceIndexPrefix(env *requests.RequestEnv, path string) (string, error) {
+	// Same bare-scheme aggregated route as browseSourcePath: no single root
+	// id to validate.
+	if path == platforms.SourceScheme+"://" {
+		if _, ok := env.Platform.(platforms.SourceRootReader); !ok {
+			return "", models.ClientErrf("platform does not support source root paths")
+		}
+		return path, nil
+	}
+
+	// Same trailing-slash tolerance as browseSourcePath: segment parsing
+	// itself requires no trailing slash.
+	trimmed := strings.TrimSuffix(path, "/")
+	id, _, err := platforms.SourceLocation(trimmed)
+	if err != nil {
+		return "", models.ClientErrf("invalid source path: %w", err)
+	}
+	reader, ok := env.Platform.(platforms.SourceRootReader)
+	if !ok {
+		return "", models.ClientErrf("platform does not support source root paths")
+	}
+	roots, err := reader.SourceRoots(env.Context)
+	if err != nil {
+		return "", fmt.Errorf("error listing source roots: %w", err)
+	}
+	if !slices.Contains(roots, platforms.SourceScheme+"://"+id) {
+		return "", models.ClientErrf("source root is no longer granted")
+	}
+	return trimmed + "/", nil
 }
 
 func emptyBrowseIndex() models.BrowseIndexResults {

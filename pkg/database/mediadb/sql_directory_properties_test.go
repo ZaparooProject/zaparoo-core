@@ -223,3 +223,28 @@ func TestReplaceDirectoryProperties_RejectsInvalidRows(t *testing.T) {
 	_, err = mediaDB.ReplaceDirectoryProperties(ctx, 999, nil)
 	require.ErrorContains(t, err, "not found")
 }
+
+func TestNormalizeDirectoryPropertyPathAcceptsSourceRootsAndRejectsOtherSchemes(t *testing.T) {
+	t.Parallel()
+
+	path, err := normalizeDirectoryPropertyPath("source://abc/NES")
+	require.NoError(t, err)
+	assert.Equal(t, "source://abc/NES", path)
+
+	path, err = normalizeDirectoryPropertyPath("source://abc/NES/")
+	require.NoError(t, err, "a trailing slash is tolerated, same as a real path")
+	assert.Equal(t, "source://abc/NES", path)
+
+	path, err = normalizeDirectoryPropertyPath("source://abc")
+	require.NoError(t, err, "a bare root can carry a cover too")
+	assert.Equal(t, "source://abc", path)
+
+	_, err = normalizeDirectoryPropertyPath("source://")
+	require.Error(t, err, "a scheme with no root id is not a real path")
+
+	_, err = normalizeDirectoryPropertyPath("android://com.example.game:variant")
+	require.Error(t, err, "a flat virtual scheme has no directory to attach a cover to")
+
+	_, err = normalizeDirectoryPropertyPath("")
+	require.Error(t, err)
+}

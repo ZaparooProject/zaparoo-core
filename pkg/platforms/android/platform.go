@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/libretrothumbs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -75,6 +76,7 @@ type Platform struct {
 var (
 	_ platforms.Platform             = (*Platform)(nil)
 	_ platforms.SourceRootReader     = (*Platform)(nil)
+	_ platforms.SourceFileReader     = (*Platform)(nil)
 	_ platforms.MediaHistoryRecorder = (*Platform)(nil)
 )
 
@@ -290,7 +292,8 @@ func (*Platform) ManagedByPackageManager() bool { return true }
 // installed apps offered as media.
 func (p *Platform) Scrapers(*config.Instance) map[string]platforms.Scraper {
 	thumbnails := libretrothumbs.NewPlatformScraper()
-	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails}
+	folderCovers := localmedia.NewPlatformScraper()
+	scrapers := map[string]platforms.Scraper{thumbnails.ID: thumbnails, folderCovers.ID: folderCovers}
 	if p.host != nil {
 		apps := p.appScraper()
 		scrapers[apps.ID] = apps
@@ -347,11 +350,12 @@ func (p *Platform) ReadSourceDir(ctx context.Context, path string) ([]platforms.
 	return entries, nil
 }
 
-// readSourceFile returns up to limit+1 bytes of the file at path, so an
-// oversized file is detectable. This is a launch-time capability only: unlike
-// SourceRoots/ReadSourceDir, it is not part of platforms.SourceRootReader and
-// indexing never calls it.
-func (p *Platform) readSourceFile(ctx context.Context, path string, limit int64) ([]byte, error) {
+// ReadSourceFile returns up to limit+1 bytes of the file at path, so an
+// oversized file is detectable. Unlike SourceRoots/ReadSourceDir, this is not
+// part of platforms.SourceRootReader (indexing never calls it) - it satisfies
+// the separate platforms.SourceFileReader capability instead, used at launch
+// time by ScummVM/GameNative and to serve a scraped folder cover's bytes.
+func (p *Platform) ReadSourceFile(ctx context.Context, path string, limit int64) ([]byte, error) {
 	if p.host == nil {
 		return nil, unsupported("read media without a host")
 	}

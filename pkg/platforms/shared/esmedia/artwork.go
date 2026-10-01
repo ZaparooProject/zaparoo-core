@@ -168,7 +168,7 @@ func DirectoryArtworkFallbackNames(directoryPath, systemRootPath string) []strin
 	}
 
 	stems := []string{base}
-	if ext := filepath.Ext(base); isDiscFolderExt(ext) {
+	if ext := filepath.Ext(base); IsDiscFolderExt(ext) {
 		if trimmed := strings.TrimSuffix(base, ext); trimmed != "" {
 			stems = append(stems, trimmed)
 		}
@@ -192,10 +192,10 @@ func DirectoryArtworkFallbackNames(directoryPath, systemRootPath string) []strin
 	return names
 }
 
-// isDiscFolderExt reports whether ext is one EmulationStation uses to name a
+// IsDiscFolderExt reports whether ext is one EmulationStation uses to name a
 // folder after the disc image or playlist it stands in for, or after the
 // ScummVM game whose data it holds.
-func isDiscFolderExt(ext string) bool {
+func IsDiscFolderExt(ext string) bool {
 	switch strings.ToLower(ext) {
 	case ".cue", ".m3u", ".chd", ".iso", ".bin", ".img", ".pbp", ".scummvm":
 		return true

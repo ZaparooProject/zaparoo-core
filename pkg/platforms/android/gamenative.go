@@ -161,7 +161,7 @@ func (p *Platform) dispatchGameNative(entry *gameNativeEntry, path string) error
 	if !ok {
 		return repairError(platforms.LaunchRepairLauncherUnsupportedMedia, entry.repairParams(), msgWrongMedia)
 	}
-	content, err := p.readSourceFile(ctx, path, maxGameNativeExportBytes)
+	content, err := p.ReadSourceFile(ctx, path, maxGameNativeExportBytes)
 	if err != nil {
 		return sourceFailure(ctx, &entry.catalogEntry, err)
 	}

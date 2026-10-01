@@ -347,7 +347,8 @@ func TestMediaPropsForPath_UsesFlatFallbackAfterMirroredPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, flatCoverPath, []byte("cover"), 0o600))
 
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, []string{root}, s.availableDirsByRoot([]string{root}), false)
+	dirs := s.availableDirsByRoot(t.Context(), []string{root})
+	props := s.mediaPropsForPath(t.Context(), romPath, []string{root}, dirs, false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
@@ -370,7 +371,7 @@ func TestMediaPropsForPath_FindsArtworkOnDifferentRoot(t *testing.T) {
 
 	roots := []string{romRoot, artRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
+	props := s.mediaPropsForPath(t.Context(), romPath, roots, s.availableDirsByRoot(t.Context(), roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
@@ -394,7 +395,7 @@ func TestMediaPropsForPath_PrefersEarlierRootInOrder(t *testing.T) {
 
 	roots := []string{firstRoot, secondRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
+	props := s.mediaPropsForPath(t.Context(), romPath, roots, s.availableDirsByRoot(t.Context(), roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, filepath.ToSlash(firstBoxart), props[0].Text)
@@ -416,7 +417,7 @@ func TestMediaPropsForPath_MirroredSubfolderCrossRoot(t *testing.T) {
 
 	roots := []string{romRoot, artRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
+	props := s.mediaPropsForPath(t.Context(), romPath, roots, s.availableDirsByRoot(t.Context(), roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageImage), props[0].TypeTag)
@@ -497,10 +498,10 @@ func TestMediaPropsForPath_FindsFolderNamedArtworkForContainerTarget(t *testing.
 	s := &scraperImpl{fs: fs}
 	roots := []string{root}
 
-	assert.Empty(t, s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), false),
+	assert.Empty(t, s.mediaPropsForPath(t.Context(), cuePath, roots, s.availableDirsByRoot(t.Context(), roots), false),
 		"an ordinary file must not borrow its folder's artwork")
 
-	props := s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), true)
+	props := s.mediaPropsForPath(t.Context(), cuePath, roots, s.availableDirsByRoot(t.Context(), roots), true)
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
 	assert.Equal(t, filepath.ToSlash(boxartPath), props[0].Text)
@@ -521,7 +522,7 @@ func TestMediaPropsForPath_PrefersOwnArtworkOverFolderArtwork(t *testing.T) {
 
 	s := &scraperImpl{fs: fs}
 	roots := []string{root}
-	props := s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), true)
+	props := s.mediaPropsForPath(t.Context(), cuePath, roots, s.availableDirsByRoot(t.Context(), roots), true)
 	require.Len(t, props, 1)
 	assert.Equal(t, filepath.ToSlash(ownArt), props[0].Text)
 }

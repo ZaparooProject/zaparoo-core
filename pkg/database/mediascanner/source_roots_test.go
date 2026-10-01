@@ -270,3 +270,97 @@ func TestSourceRootFailureDoesNotAffectOtherRoots(t *testing.T) {
 		assert.Contains(t, combined, path, "the failed root's previously-indexed media is not marked missing")
 	}
 }
+
+// A source root has real nested folders, unlike every other virtual scheme,
+// and browsing must see them: the root's top level lists "nes" as a
+// directory, not a flat dump of every file under it; browsing into "nes"
+// lists its one real subdirectory ("Sub") plus the file sitting directly in
+// it, not the file inside Sub; browsing into Sub lists only its own file.
+// Checked against both the uncached (live media scan) and cache-populated
+// paths, since a rebuilt cache must agree with the fallback it replaces.
+func TestSourceRootDirectoriesBrowseHierarchically(t *testing.T) {
+	fx := sourceIndexFixture(t)
+	pl, index := fx.pl, fx.index
+	root := pl.roots[0]
+	_, err := index()
+	require.NoError(t, err)
+
+	rootPrefix := mustSourcePath(t, root) + "/"
+	nesPrefix := mustSourcePath(t, root, "nes") + "/"
+	subPrefix := mustSourcePath(t, root, "nes", "Sub") + "/"
+
+	check := func(t *testing.T, label string) {
+		t.Helper()
+		ctx := t.Context()
+
+		rootDirs, err := fx.db.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: rootPrefix})
+		require.NoError(t, err, label)
+		rootNames := make([]string, 0, len(rootDirs))
+		for _, d := range rootDirs {
+			rootNames = append(rootNames, d.Name)
+		}
+		assert.Equal(t, []string{"nes"}, rootNames, "%s: the root's only real child is the nes folder", label)
+
+		nesDirs, err := fx.db.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: nesPrefix})
+		require.NoError(t, err, label)
+		nesDirNames := make([]string, 0, len(nesDirs))
+		for _, d := range nesDirs {
+			nesDirNames = append(nesDirNames, d.Name)
+		}
+		assert.Equal(t, []string{"Sub"}, nesDirNames, "%s: nes's only real subdirectory is Sub", label)
+
+		nesFiles, err := fx.db.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: nesPrefix, Limit: 50})
+		require.NoError(t, err, label)
+		nesFileNames := make([]string, 0, len(nesFiles))
+		for _, f := range nesFiles {
+			nesFileNames = append(nesFileNames, f.Path)
+		}
+		assert.Equal(t, []string{mustSourcePath(t, root, "nes", "Fixture + 50% (USA).nes")}, nesFileNames,
+			"%s: nes's direct files exclude Sub's content", label)
+
+		subFiles, err := fx.db.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: subPrefix, Limit: 50})
+		require.NoError(t, err, label)
+		subFileNames := make([]string, 0, len(subFiles))
+		for _, f := range subFiles {
+			subFileNames = append(subFileNames, f.Path)
+		}
+		assert.Equal(t, []string{mustSourcePath(t, root, "nes", "Sub", "Deep #2.nes")}, subFileNames, "%s", label)
+	}
+
+	check(t, "uncached fallback")
+	require.NoError(t, fx.db.MediaDB.PopulateBrowseCache(t.Context()))
+	check(t, "rebuilt cache")
+}
+
+// The bare scheme bucket, not a specific root id, is the actual path
+// Frontend browses into first: media.browse's own root discovery collapses
+// every granted source root into one shared "source://" route, which
+// single_root_auto_nav then follows immediately with no id attached.
+// Browsing that bare bucket must surface the real root id as a directory
+// (no backfill needed beyond the normal reindex this fixture already does).
+func TestSourceRootBareSchemeBucketListsEachGrantedRoot(t *testing.T) {
+	fx := sourceIndexFixture(t)
+	pl, index := fx.pl, fx.index
+	root := pl.roots[0]
+	_, err := index()
+	require.NoError(t, err)
+
+	id, _, locErr := platforms.SourceLocation(root)
+	require.NoError(t, locErr)
+
+	check := func(t *testing.T, label string) {
+		t.Helper()
+		dirs, dirsErr := fx.db.MediaDB.BrowseDirectories(
+			t.Context(), database.BrowseDirectoriesOptions{PathPrefix: platforms.SourceScheme + "://"})
+		require.NoError(t, dirsErr, label)
+		names := make([]string, 0, len(dirs))
+		for _, d := range dirs {
+			names = append(names, d.Name)
+		}
+		assert.Equal(t, []string{id}, names, "%s: the granted root's id is the bucket's only child", label)
+	}
+
+	check(t, "uncached fallback")
+	require.NoError(t, fx.db.MediaDB.PopulateBrowseCache(t.Context()))
+	check(t, "rebuilt cache")
+}

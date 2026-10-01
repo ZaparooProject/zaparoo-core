@@ -251,6 +251,26 @@ func TestParentDir(t *testing.T) {
 	assert.Empty(t, container.ParentDir("Game.chd"))
 }
 
+// A source root path has real nested folders, unlike every other virtual
+// scheme, so it gets a real hierarchical parent instead of collapsing to the
+// bare scheme the way android:// (exactly one level, package:variant/Name)
+// must keep doing: browseVirtual's flat BrowseFiles(ParentDir="android://")
+// query depends on every app sharing that one exact parent.
+func TestParentDirSourceRootsAreHierarchicalButOtherVirtualSchemesStayFlat(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "source://abc123/NES/sub/", container.ParentDir("source://abc123/NES/sub/game.nes"),
+		"a nested source file gets its real parent directory")
+	assert.Equal(t, "source://abc123/", container.ParentDir("source://abc123/game.nes"),
+		"a root-level source file's parent is the root itself")
+	assert.Equal(t, "source://", container.ParentDir("source://abc123"),
+		"a bare source root (no segments) collapses to the scheme, same as any other virtual root")
+	assert.Equal(t, "android://", container.ParentDir("android://com.example.game:variant/Name"),
+		"android app paths stay flat: every app must share one exact parent for browseVirtual's flat listing")
+	assert.Equal(t, "scummvm://", container.ParentDir("scummvm://monkey/Monkey%20Island"),
+		"scummvm paths stay flat too")
+}
+
 func TestMediaExt(t *testing.T) {
 	t.Parallel()
 

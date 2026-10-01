@@ -60,12 +60,16 @@ var artworkPropertyOrder = []tags.TagValue{ //nolint:gochecknoglobals // Stable 
 }
 
 type scraperImpl struct {
-	db database.MediaDBI
-	fs afero.Fs
+	db       database.MediaDBI
+	fs       afero.Fs
+	listings *sourceDirListings
 }
 
 // NewPlatformScraper returns a scraper that imports image paths from local
-// EmulationStation media directories under each system folder.
+// EmulationStation media directories under each system folder. A platform
+// that also grants source roots (Android's host-managed folders) gets the
+// same artwork convention read through platforms.SourceRootReader instead of
+// a filesystem, since a source root has no filesystem Core can open.
 func NewPlatformScraper() platforms.Scraper {
 	return platforms.Scraper{
 		ID:                 scraperID,
@@ -86,6 +90,9 @@ func NewPlatformScraper() platforms.Scraper {
 				return fmt.Errorf("localmedia: resolve systems: %w", err)
 			}
 			s := &scraperImpl{db: db.MediaDB, fs: fs}
+			if reader, ok := pl.(platforms.SourceRootReader); ok {
+				s.listings = newSourceDirListings(reader)
+			}
 			go s.scrapeLoop(ctx, opts, systems, ch)
 			return nil
 		},
@@ -230,7 +237,7 @@ func (s *scraperImpl) scrapeSystem(
 		return false
 	}
 
-	availableDirs := s.availableDirsByRoot(system.ROMPaths)
+	availableDirs := s.availableDirsByRoot(ctx, system.ROMPaths)
 	if opts.Scope == nil && !opts.Force && !hasArtworkDirs(availableDirs) {
 		return s.finishSystemWithoutArtwork(ctx, opts, systems, systemIdx, ch)
 	}
@@ -310,7 +317,7 @@ func (s *scraperImpl) scrapeSystem(
 			return true
 		}
 		roots, names, cleanupNames := mediaArtworkNames(media, system.ROMPaths, containers, sources, opts.Force)
-		props := s.mediaPropsForNames(names, roots, availableDirs)
+		props := s.mediaPropsForNames(ctx, names, roots, availableDirs)
 		staleDeleted := 0
 		if opts.Force {
 			var cleanupErr error
@@ -421,7 +428,7 @@ func (s *scraperImpl) scrapeSystem(
 			return false
 		}
 
-		props := s.directoryPropsForPath(directoryPath, system.ROMPaths, availableDirs)
+		props := s.directoryPropsForPath(ctx, directoryPath, system.ROMPaths, availableDirs)
 		if len(props) == 0 {
 			skipped++
 		} else {
@@ -564,9 +571,15 @@ func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
 	return nil
 }
 
-func (s *scraperImpl) availableDirsByRoot(roots []string) map[string]map[string]string {
+func (s *scraperImpl) availableDirsByRoot(ctx context.Context, roots []string) map[string]map[string]string {
 	result := make(map[string]map[string]string, len(roots))
 	for _, root := range roots {
+		if platforms.IsSourcePath(root) {
+			if s.listings != nil {
+				result[root] = statSourceMediaDirs(ctx, s.listings, root)
+			}
+			continue
+		}
 		result[root] = esmedia.StatMediaDirsFS(s.fs, root)
 	}
 	return result
@@ -601,6 +614,16 @@ func newDirectoryCollector(roots []string) *directoryCollector {
 // add records the directories above one present media path.
 func (c *directoryCollector) add(path string) {
 	for rootIndex, root := range c.roots {
+		if platforms.IsSourcePath(root) {
+			relative := sourceRelativeSegments(path, root)
+			if relative == nil {
+				continue
+			}
+			for _, dir := range sourceAncestorDirectories(path, root) {
+				c.directories[dir] = struct{}{}
+			}
+			return
+		}
 		resolved := esmedia.ResolvePath(path, root)
 		if resolved == "" {
 			continue
@@ -634,83 +657,115 @@ func (c *directoryCollector) paths() []string {
 	return paths
 }
 
+// findArtworkFile searches every root's media/<subdir> candidates in order
+// for the first fallback name that exists, dispatching each root to a real
+// filesystem check or a source-root listing check depending on its kind -
+// the one place esmedia.FindFileFS/FindFileAcrossRootsFS and their
+// source-root equivalent findSourceFile actually get called from, so a
+// system whose roots mix a real folder and a source root (both lookup
+// against both on, like art living on a different drive than the rom) still
+// works as one search.
+func (s *scraperImpl) findArtworkFile(
+	ctx context.Context, roots, candidates, fallbackNames []string, availableDirs map[string]map[string]string,
+) *esmedia.File {
+	for _, root := range roots {
+		dirs := availableDirs[root]
+		if len(dirs) == 0 {
+			continue
+		}
+		var file *esmedia.File
+		if platforms.IsSourcePath(root) {
+			if s.listings != nil {
+				file = findSourceFile(ctx, s.listings, fallbackNames, candidates, dirs)
+			}
+		} else {
+			file = esmedia.FindFileFS(s.fs, fallbackNames, candidates, dirs)
+		}
+		if file != nil {
+			return file
+		}
+	}
+	return nil
+}
+
+// directoryArtworkFallbackNames is directoryPropsForPath's fallback-name
+// resolution, trying every root (a directory belongs to exactly one) with
+// the matching scheme's helper.
+func directoryArtworkFallbackNames(directoryPath string, roots []string) []string {
+	for _, root := range roots {
+		var names []string
+		if platforms.IsSourcePath(root) {
+			names = sourceDirectoryArtworkFallbackNames(directoryPath, root)
+		} else {
+			names = esmedia.DirectoryArtworkFallbackNames(directoryPath, root)
+		}
+		if len(names) > 0 {
+			return names
+		}
+	}
+	return nil
+}
+
 func (s *scraperImpl) directoryPropsForPath(
+	ctx context.Context,
 	directoryPath string,
 	roots []string,
 	availableDirs map[string]map[string]string,
 ) []database.DirectoryProperty {
-	var fallbackNames []string
-	for _, root := range roots {
-		fallbackNames = esmedia.DirectoryArtworkFallbackNames(directoryPath, root)
-		if len(fallbackNames) > 0 {
-			break
-		}
-	}
+	fallbackNames := directoryArtworkFallbackNames(directoryPath, roots)
 	if len(fallbackNames) == 0 {
 		return nil
 	}
 
-	orderedDirs := make([]map[string]string, 0, len(roots))
-	for _, root := range roots {
-		orderedDirs = append(orderedDirs, availableDirs[root])
-	}
-
 	props := make([]database.DirectoryProperty, 0)
 	for _, propValue := range artworkPropertyOrder {
-		file := esmedia.FindFileAcrossRootsFS(
-			s.fs,
-			fallbackNames,
-			esmedia.ArtworkDirCandidates[string(propValue)],
-			orderedDirs,
+		file := s.findArtworkFile(
+			ctx, roots, esmedia.ArtworkDirCandidates[string(propValue)], fallbackNames, availableDirs,
 		)
 		if file == nil {
 			continue
 		}
+		propPath := directoryPath
+		if !platforms.IsSourcePath(directoryPath) {
+			propPath = filepath.ToSlash(filepath.Clean(directoryPath))
+		}
 		props = append(props, database.DirectoryProperty{
-			Path:    filepath.ToSlash(filepath.Clean(directoryPath)),
+			Path:    propPath,
 			TypeTag: tags.PropertyTypeTag(propValue),
-			Text:    filepath.ToSlash(file.Path),
+			Text:    file.Path,
 		})
 	}
 	return props
 }
 
 func (s *scraperImpl) mediaPropsForPath(
+	ctx context.Context,
 	path string,
 	roots []string,
 	availableDirs map[string]map[string]string,
 	isContainerTarget bool,
 ) []database.MediaProperty {
-	return s.mediaPropsForNames(artworkFallbackNames(path, roots, isContainerTarget), roots, availableDirs)
+	return s.mediaPropsForNames(ctx, artworkFallbackNames(path, roots, isContainerTarget), roots, availableDirs)
 }
 
 func (s *scraperImpl) mediaPropsForNames(
-	fallbackNames, roots []string, availableDirs map[string]map[string]string,
+	ctx context.Context, fallbackNames, roots []string, availableDirs map[string]map[string]string,
 ) []database.MediaProperty {
 	if len(fallbackNames) == 0 {
 		return nil
 	}
 
-	// roots is in RootDirs order, so the first root with a match wins.
-	orderedDirs := make([]map[string]string, 0, len(roots))
-	for _, root := range roots {
-		orderedDirs = append(orderedDirs, availableDirs[root])
-	}
-
 	props := make([]database.MediaProperty, 0)
 	for _, propValue := range artworkPropertyOrder {
-		file := esmedia.FindFileAcrossRootsFS(
-			s.fs,
-			fallbackNames,
-			esmedia.ArtworkDirCandidates[string(propValue)],
-			orderedDirs,
+		file := s.findArtworkFile(
+			ctx, roots, esmedia.ArtworkDirCandidates[string(propValue)], fallbackNames, availableDirs,
 		)
 		if file == nil {
 			continue
 		}
 		props = append(props, database.MediaProperty{
 			TypeTag:     tags.PropertyTypeTag(propValue),
-			Text:        filepath.ToSlash(file.Path),
+			Text:        file.Path,
 			ContentType: file.ContentType,
 		})
 	}
@@ -734,6 +789,16 @@ func isContainerLaunchTarget(containers launchTargetResolver, media *database.Me
 // stores art for a folder it shows as one game.
 func artworkFallbackNames(path string, roots []string, isContainerTarget bool) []string {
 	for _, root := range roots {
+		if platforms.IsSourcePath(root) {
+			names := sourceArtworkFallbackNames(path, root)
+			if len(names) == 0 {
+				continue
+			}
+			if isContainerTarget {
+				names = append(names, sourceContainerArtworkFallbackNames(path, root)...)
+			}
+			return names
+		}
 		names := esmedia.ArtworkFallbackNames(path, root)
 		if len(names) == 0 {
 			continue
@@ -807,8 +872,27 @@ func isLocalMediaPropForNames(prop *database.MediaProperty, roots, fallbackNames
 		return false
 	}
 
+	if platforms.IsSourcePath(prop.Text) {
+		for _, root := range roots {
+			if !platforms.IsSourcePath(root) {
+				continue
+			}
+			for _, dir := range candidates {
+				for _, name := range fallbackNames {
+					if isSourceSegmentsPropForNames(prop.Text, root, dir, name) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
 	propPath := filepath.Clean(filepath.FromSlash(prop.Text))
 	for _, root := range roots {
+		if platforms.IsSourcePath(root) {
+			continue
+		}
 		for _, dir := range candidates {
 			for _, name := range fallbackNames {
 				candidate := filepath.Clean(filepath.Join(root, "media", dir, name))
