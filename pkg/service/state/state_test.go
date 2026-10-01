@@ -600,6 +600,19 @@ func TestZapScriptHold(t *testing.T) {
 		assert.True(t, st.RunZapScriptEnabled())
 	})
 
+	t.Run("setting ignores holds", func(t *testing.T) {
+		t.Parallel()
+		st := newState()
+		assert.True(t, st.RunZapScriptSetting())
+		release := st.AcquireZapScriptHold()
+		assert.True(t, st.RunZapScriptSetting(), "a hold does not change the user's setting")
+		assert.False(t, st.RunZapScriptEnabled())
+		st.SetRunZapScript(false)
+		assert.False(t, st.RunZapScriptSetting())
+		release()
+		assert.False(t, st.RunZapScriptSetting())
+	})
+
 	t.Run("release keeps the user setting", func(t *testing.T) {
 		t.Parallel()
 		st := newState()
