@@ -538,11 +538,20 @@ func systemRootContentsSources(
 	physical := make([]models.BrowseEntry, 0, len(entries))
 	virtual := make([]models.BrowseEntry, 0)
 	for i := range entries {
-		if strings.Contains(entries[i].Path, "://") {
+		switch {
+		case platforms.IsSourcePath(entries[i].Path):
+			// Unlike a genuinely flat virtual scheme (android://, scummvm://),
+			// a rooted source path (expanded per granted root by
+			// addBrowseDBSystemRoots, never the bare scheme bucket) has real
+			// content of its own and merges into the page directly, the same
+			// way a real RootDirs root already does - not a separate opaque
+			// entry a client has to browse through first.
+			physical = append(physical, entries[i])
+		case strings.Contains(entries[i].Path, "://"):
 			virtual = append(virtual, entries[i])
-			continue
+		default:
+			physical = append(physical, entries[i])
 		}
-		physical = append(physical, entries[i])
 	}
 
 	rootDirs := browseRootDirs(env)
@@ -567,9 +576,15 @@ func systemRootContentsSources(
 				break
 			}
 		}
-		prefix := filepath.ToSlash(filepath.Clean(physical[i].Path))
-		if !strings.HasSuffix(prefix, "/") {
-			prefix += "/"
+		var prefix string
+		if platforms.IsSourcePath(physical[i].Path) {
+			// filepath.Clean mangles "://".
+			prefix = strings.TrimSuffix(physical[i].Path, "/") + "/"
+		} else {
+			prefix = filepath.ToSlash(filepath.Clean(physical[i].Path))
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
 		}
 		sources = append(sources, database.BrowseSource{
 			PathPrefix:  prefix,
@@ -892,6 +907,17 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 	if env.Platform != nil {
 		scanRoots = env.Platform.RootDirs(env.Config)
 	}
+	// A granted source root has the same per-system folder convention a real
+	// RootDirs root does (mediascanner's indexing already walks it the same
+	// way), so it is joined against the same relative launcher folders below
+	// - the source-root equivalent of scanRoots, found the same way
+	// addBrowseDBSystemRoots finds any other route: this one just also needs
+	// the folder name to go deeper than the bare granted root, which has no
+	// content of its own.
+	var sourceRoots []string
+	if reader, ok := env.Platform.(platforms.SourceRootReader); ok {
+		sourceRoots, _ = reader.SourceRoots(env.Context)
+	}
 
 	routes := make([]string, 0)
 	seen := make(map[string]bool)
@@ -908,6 +934,11 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 			return
 		}
 		addRoute(filepath.ToSlash(cleaned))
+	}
+	addSourceRoute := func(root, folder string) {
+		// filepath.Join mangles "://"; root and folder already share "/" as
+		// their only separator.
+		addRoute(strings.TrimSuffix(root, "/") + "/" + folder)
 	}
 
 	if env.LauncherCache != nil {
@@ -929,6 +960,9 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 					}
 					for _, root := range scanRoots {
 						addFilesystemRoute(filepath.Join(root, folder))
+					}
+					for _, root := range sourceRoots {
+						addSourceRoute(root, folder)
 					}
 				}
 			}
@@ -1018,6 +1052,18 @@ func addBrowseDBSystemRoots(
 		return fmt.Errorf("error getting system virtual routes: %w", err)
 	}
 	for _, scheme := range virtualSchemes {
+		// The bare source scheme itself is never offered as a route: a
+		// source root has real content of its own, unlike a genuinely flat
+		// virtual scheme (android://, scummvm://), so it is discovered the
+		// same way a real RootDirs entry already is, per system-matching
+		// folder, in the loop above - see the sourceRoots join alongside
+		// scanRoots. Falling back to the bare bucket here would offer a
+		// second, broader, overlapping route into the same content with no
+		// way to dedupe against the more specific one (dedupeSystemRootEntries
+		// only compares real filesystem paths).
+		if scheme.Scheme == platforms.SourceScheme+"://" {
+			continue
+		}
 		addRoute(scheme.Scheme)
 	}
 	return nil

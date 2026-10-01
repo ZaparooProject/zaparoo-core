@@ -22,15 +22,19 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -181,4 +185,110 @@ func TestResolveSourceIndexPrefix(t *testing.T) {
 	_, err = resolveSourceIndexPrefix(env, "source://revoked/NES")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no longer granted")
+}
+
+// nesLauncherCache builds a LauncherCache with one NES launcher declaring the
+// relative "NES" folder, the same shape buildSystemBrowseRouteCandidates
+// joins against a granted source root to find the system-specific route,
+// mirroring exactly what it already does for a real RootDirs entry.
+func nesLauncherCache() *phelpers.LauncherCache {
+	cache := &phelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "TestNES", SystemID: systemdefs.SystemNES, Folders: []string{"NES"}, Extensions: []string{".nes"}},
+	})
+	return cache
+}
+
+// End to end against real indexed data: opening a system backed by a single
+// granted source root must surface that root's real content directly, not a
+// meaningless hash-named folder the user has to tap through first - the
+// exact symptom reported from the physical device after the scheme-dispatch
+// fix alone: every system showed one GUID-looking folder before any games.
+func TestHandleMediaBrowseOpensASystemBackedBySourceRootWithoutAnOpaqueFolder(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+
+	const root = "source://abc123"
+	scantest.IndexScanResults(t, db.MediaDB, systemdefs.SystemNES, database.ScanReconcileOpts{},
+		platforms.ScanResult{Path: root + "/NES/Game.nes", Name: "Game"})
+
+	platform := &sourceBrowseTestPlatform{MockPlatform: mocks.NewMockPlatform(), roots: []string{root}}
+	platform.On("RootDirs", mock.Anything).Return([]string{})
+	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	rootView := "contents"
+	systems := []string{systemdefs.SystemNES}
+	paramsJSON, err := json.Marshal(models.BrowseParams{Systems: &systems, RootView: &rootView})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context: context.Background(), Params: paramsJSON, Database: db, Platform: platform,
+		Config: &config.Instance{}, LauncherCache: nesLauncherCache(),
+	}
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	results, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	// Content merges directly into the first page - no intermediate root
+	// entry left for Frontend to display or even auto-skip through.
+	var sawRootFolder, sawGame bool
+	for _, entry := range results.Entries {
+		if entry.Type == "root" {
+			sawRootFolder = true
+		}
+		if entry.Name == "Game" {
+			sawGame = true
+		}
+	}
+	assert.False(t, sawRootFolder, "no opaque root-id folder should ever reach the client")
+	assert.True(t, sawGame, "the game itself should be on the first page")
+}
+
+// Multiple games in the same source-backed folder must all appear on the
+// first page (within the default page size), not get capped early - the
+// other half of the physical-device report, alongside the opaque folder.
+func TestHandleMediaBrowseOpensASystemBackedBySourceRootShowsEveryGame(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	t.Cleanup(cleanup)
+
+	const root = "source://abc123"
+	const gameCount = 5
+	results := make([]platforms.ScanResult, 0, gameCount)
+	for i := range gameCount {
+		name := fmt.Sprintf("Game %d", i)
+		results = append(results, platforms.ScanResult{Path: fmt.Sprintf("%s/NES/%s.nes", root, name), Name: name})
+	}
+	scantest.IndexScanResults(t, db.MediaDB, systemdefs.SystemNES, database.ScanReconcileOpts{}, results...)
+
+	platform := &sourceBrowseTestPlatform{MockPlatform: mocks.NewMockPlatform(), roots: []string{root}}
+	platform.On("RootDirs", mock.Anything).Return([]string{})
+	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	rootView := "contents"
+	systems := []string{systemdefs.SystemNES}
+	paramsJSON, err := json.Marshal(models.BrowseParams{Systems: &systems, RootView: &rootView})
+	require.NoError(t, err)
+	env := requests.RequestEnv{
+		Context: context.Background(), Params: paramsJSON, Database: db, Platform: platform,
+		Config: &config.Instance{}, LauncherCache: nesLauncherCache(),
+	}
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	names := make([]string, 0, len(browseResults.Entries))
+	for _, entry := range browseResults.Entries {
+		names = append(names, entry.Name)
+	}
+	for i := range gameCount {
+		assert.Contains(t, names, fmt.Sprintf("Game %d", i))
+	}
+	assert.Len(t, browseResults.Entries, gameCount, "every game must be on the first page, nothing capped early")
 }
