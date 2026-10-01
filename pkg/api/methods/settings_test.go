@@ -261,6 +261,42 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 	assert.Empty(t, resp.ReadersConnect[1].Path)
 }
 
+// TestHandleSettings_RunZapScriptIgnoresHolds locks in that settings reports
+// the user's own runZapScript choice. A hold is a transient, per-connection
+// block; a client that read it as the setting and wrote it back would leave
+// ZapScript disabled with no hold behind it.
+func TestHandleSettings_RunZapScriptIgnoresHolds(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	runZapScript := func() bool {
+		result, handleErr := HandleSettings(requests.RequestEnv{Platform: mockPlatform, Config: cfg, State: appState})
+		require.NoError(t, handleErr)
+		resp, ok := result.(models.SettingsResponse)
+		require.True(t, ok)
+		return resp.RunZapScript
+	}
+
+	require.True(t, runZapScript())
+
+	release := appState.AcquireZapScriptHold()
+	assert.True(t, runZapScript(), "a hold must not change the reported setting")
+	release()
+	assert.True(t, runZapScript())
+
+	appState.SetRunZapScript(false)
+	release = appState.AcquireZapScriptHold()
+	assert.False(t, runZapScript(), "the user's own disable is still reported")
+	release()
+	assert.False(t, runZapScript())
+}
+
 func TestHandleSettings_ReportsEncryptionSetting(t *testing.T) {
 	t.Parallel()
 

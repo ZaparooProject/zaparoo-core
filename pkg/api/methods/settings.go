@@ -65,7 +65,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		UpdateChannel:             env.Config.UpdateChannel(),
 		UpdateCheck:               env.Config.UpdateCheck(),
 		UpdateInstall:             env.Config.UpdateInstall(),
-		RunZapScript:              env.State.RunZapScriptEnabled(),
+		RunZapScript:              env.State.RunZapScriptSetting(),
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
 		AudioVolume:               env.Config.AudioVolume(),

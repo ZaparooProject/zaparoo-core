@@ -2941,7 +2941,7 @@ None.
 
 | Key                       | Type                                      | Required | Description                                                     |
 | :------------------------ | :---------------------------------------- | :------- | :-------------------------------------------------------------- |
-| runZapScript              | boolean                                   | Yes      | Whether ZapScript execution is enabled.                         |
+| runZapScript              | boolean                                   | Yes      | The user's ZapScript setting. Holds do not change it.           |
 | debugLogging              | boolean                                   | Yes      | Whether debug logging is enabled.                               |
 | audioScanFeedback         | boolean                                   | Yes      | Whether audio feedback on scan is enabled.                      |
 | readersAutoDetect         | boolean                                   | Yes      | Whether automatic reader detection is enabled.                  |

@@ -302,6 +302,13 @@ func (s *State) SetRunZapScript(run bool) {
 	s.runZapScript = run
 }
 
+// RunZapScriptSetting returns the user's runZapScript choice, ignoring holds.
+func (s *State) RunZapScriptSetting() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.runZapScript
+}
+
 // RunZapScriptEnabled reports whether ZapScript may run. It is false while the
 // user setting is off or any client holds ZapScript disabled.
 func (s *State) RunZapScriptEnabled() bool {
