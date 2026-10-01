@@ -20,8 +20,10 @@
 package matcher
 
 import (
+	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -344,7 +346,7 @@ func TokenCoverageRatio(mediaType slugs.MediaType, query, candidateName string) 
 	}
 	required := make([]string, 0, len(queryTokens))
 	for _, queryToken := range queryTokens {
-		if queryToken == "1" {
+		if queryToken == "1" || isArticleOrTypo(queryToken) {
 			continue
 		}
 		required = append(required, queryToken)
@@ -356,16 +358,68 @@ func TokenCoverageRatio(mediaType slugs.MediaType, query, candidateName string) 
 	return float64(maxTokenMatching(required, candidateTokens)) / float64(len(required))
 }
 
+// droppedArticle is the article slugification removes from the start of a
+// title or subtitle, so it never appears among a candidate's tokens.
+const droppedArticle = "the"
+
+// shortWordMaxLen is the longest word that gets the deletion-or-swap typo
+// allowance in tokenIsMatch. Jaro-Winkler scores a short word with a missing
+// letter far below FuzzyMatchMinSimilarity ("te" against "the" is 0.65), while
+// longer words keep a high score through the letters they still share.
+const shortWordMaxLen = 4
+
+// isDeletionOrSwapTypo reports whether typo is word with one letter deleted or
+// two adjacent letters swapped. A substituted or inserted letter is not
+// accepted: on a short word that is usually another word ("gp" for "gt", "tie"
+// for "the"), not a typo. Words with digits never qualify, since a changed
+// digit is a different sequel.
+func isDeletionOrSwapTypo(typo, word string) bool {
+	t, w := []rune(typo), []rune(word)
+	if len(t) < 2 || slices.ContainsFunc(t, unicode.IsDigit) || slices.ContainsFunc(w, unicode.IsDigit) {
+		return false
+	}
+	i := 0
+	for i < len(t) && i < len(w) && t[i] == w[i] {
+		i++
+	}
+	switch len(w) - len(t) {
+	case 1:
+		return slices.Equal(t[i:], w[i+1:])
+	case 0:
+		return i+1 < len(t) && t[i] == w[i+1] && t[i+1] == w[i] && slices.Equal(t[i+2:], w[i+2:])
+	}
+	return false
+}
+
+// isArticleOrTypo reports whether token is the dropped article "the", or that
+// article with a letter deleted or swapped ("te", "he", "th", "teh"). Slugification
+// only drops the article where it opens a title or subtitle, so a query that
+// keeps it elsewhere ("Twisted Arena The Mega Odyssey" for "Twisted Arena: The
+// Mega Odyssey") still carries it. The candidate has no word for it to match,
+// and it says nothing about which title was meant, so it is not a word the
+// candidate must cover.
+func isArticleOrTypo(token string) bool {
+	return token == droppedArticle || isDeletionOrSwapTypo(token, droppedArticle)
+}
+
 // tokenIsMatch reports whether queryToken can be considered a match for
-// candidateToken: identical, close by Jaro-Winkler similarity, or - since
-// normal slugification only expands a correctly-spelled abbreviation, leaving
-// a typo of one exactly as typed - a typo of a known abbreviation whose
-// expansion is close to candidateToken instead.
+// candidateToken: identical, close by Jaro-Winkler similarity, a short word
+// with one letter deleted or swapped, the dropped article glued onto the front
+// of candidateToken ("thesun" for "sun"), or - since normal slugification only
+// expands a correctly-spelled abbreviation, leaving a typo of one exactly as
+// typed - a typo of a known abbreviation whose expansion is close to
+// candidateToken instead.
 func tokenIsMatch(queryToken, candidateToken string) bool {
 	if queryToken == candidateToken {
 		return true
 	}
 	if edlib.JaroWinklerSimilarity(queryToken, candidateToken) >= FuzzyMatchMinSimilarity {
+		return true
+	}
+	if len(candidateToken) <= shortWordMaxLen && isDeletionOrSwapTypo(queryToken, candidateToken) {
+		return true
+	}
+	if rest, glued := strings.CutPrefix(queryToken, droppedArticle); glued && len(rest) >= 3 && rest == candidateToken {
 		return true
 	}
 	if expansion, ok := slugs.ExpandWordIfAbbreviationTypo(queryToken); ok {
