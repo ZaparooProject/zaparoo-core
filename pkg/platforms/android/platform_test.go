@@ -42,18 +42,18 @@ const testReference = "content://org.example.documents/tree/games"
 // fakeHost is an in-memory Host: packages are installed unless listed in
 // failures, and one media folder holds nes/Game.nes and psx/Game.chd.
 type fakeHost struct {
-	failures        map[string]FailureReason
 	dispatchErr     error
 	foldersErr      error
 	readErr         error
 	foregroundErr   error
 	evidenceErr     error
-	substitute      string
+	failures        map[string]FailureReason
 	receipt         *DispatchReceipt
 	icons           map[string]string
 	files           map[string][]byte
 	state           *ForegroundState
 	evidence        *database.ForegroundEvidence
+	substitute      string
 	references      []string
 	cores           []string
 	apps            []AppInfo
@@ -61,10 +61,11 @@ type fakeHost struct {
 	inspections     []string
 	dispatched      []dispatchCall
 	evidenceQueries []evidenceQuery
+	appCalls        int
 	listings        int
 	coreCalls       int
-	appCalls        int
 	mu              syncutil.Mutex
+	notInteractive  bool
 	scanned         bool
 	appsScanned     bool
 }
@@ -253,6 +254,12 @@ func (h *fakeHost) ForegroundState() (ForegroundState, error) {
 		return *h.state, nil
 	}
 	return defaultForegroundState, nil
+}
+
+func (h *fakeHost) Interactive() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.notInteractive
 }
 
 func (h *fakeHost) ForegroundEvents(
