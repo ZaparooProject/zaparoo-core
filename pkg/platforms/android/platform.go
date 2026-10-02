@@ -140,7 +140,7 @@ func validateBuiltEntries(catalog map[string]*catalogEntry) error {
 	}
 	for _, entry := range entries {
 		id := entry.definition.ID
-		if _, clash := catalog[id]; clash || id == installedAppsID {
+		if _, clash := catalog[id]; clash || id == installedAppsID || id == installedAppsNonGameID {
 			return fmt.Errorf("built launcher %s clashes with a registered launcher: %w", id, ErrLaunchDefinition)
 		}
 		if err := entry.definition.Validate(); err != nil {

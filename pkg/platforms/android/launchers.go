@@ -158,7 +158,8 @@ func (p *Platform) Launchers(*config.Instance) []platforms.Launcher {
 	}
 	// Last, so a profile that describes an app is always preferred over the
 	// generic offer of the same app.
-	return append(launchers, p.installedAppsLauncher(snapshot))
+	return append(launchers,
+		p.installedAppsLauncherFor(snapshot, true), p.installedAppsLauncherFor(snapshot, false))
 }
 
 func (p *Platform) launcher(entry *catalogEntry, snapshot *hostSnapshot) platforms.Launcher {
@@ -229,7 +230,9 @@ func preflight(
 func (p *Platform) ownedLauncher(id string, snapshot *hostSnapshot) (platforms.Launcher, bool) {
 	switch id {
 	case installedAppsID:
-		return p.installedAppsLauncher(snapshot), true
+		return p.installedAppsLauncherFor(snapshot, true), true
+	case installedAppsNonGameID:
+		return p.installedAppsLauncherFor(snapshot, false), true
 	case scummVMStandaloneID:
 		return p.scummVMLauncher(snapshot), true
 	}
