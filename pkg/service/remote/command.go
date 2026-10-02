@@ -109,6 +109,7 @@ func (m *manager) executeCommand(
 	err = m.deps.RunZapScript(
 		ctx, token, playlists.PlaylistController{Queue: m.deps.PlaylistQueue}, nil, false)
 	if err != nil {
+		var repair *platforms.LaunchRepairError
 		switch {
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			return failResult("execution_timeout")
@@ -118,6 +119,15 @@ func (m *manager) executeCommand(
 			return failResult("media_not_found")
 		case errors.Is(err, state.ErrRunZapScriptDisabled):
 			return failResult("disabled")
+		// A host that can only start media with itself in the foreground
+		// (Android) refuses a remote launch the same way: the device just
+		// is not usable for it right now, not a generic execution failure.
+		// The reason string is Core's own closed launch-repair vocabulary
+		// (platforms.LaunchRepairReason), the same one a local client's
+		// run error already carries, so Online learns the real cause
+		// through one shared code, not a second one invented here.
+		case errors.As(err, &repair) && repair.Reason() == platforms.LaunchRepairHostForegroundRequired:
+			return failResult(string(platforms.LaunchRepairHostForegroundRequired))
 		default:
 			return failResult("execution_failed")
 		}
