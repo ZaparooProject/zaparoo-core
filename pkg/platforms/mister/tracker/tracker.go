@@ -729,13 +729,19 @@ func (tr *Tracker) resolveMGLFilePath(mglPath string) string {
 // search order is Main's findPrefixDir for the games directory: for each of
 // USB 0-5 the bare then games-prefixed folder, then /media/network, then
 // /media/fat/cifs, then the SD card. A missing folder falls back to
-// /media/fat/games/<core>, as prefixGameDir does. exists reports whether a
-// candidate directory is present.
+// /media/fat/games/<core>, as prefixGameDir does. A Minimig path starting with
+// ".." is the exception: Main resolves it from the storage root. exists reports
+// whether a candidate directory is present.
 func resolveMGLRelativePath(mglPath, coreName string, exists func(string) bool) string {
 	if filepath.IsAbs(mglPath) {
 		return filepath.Clean(mglPath)
 	}
 	if strings.EqualFold(coreName, "minimig") {
+		// Main loads a Minimig floppy whose path starts with ".." from the
+		// storage root rather than the Amiga folder.
+		if strings.HasPrefix(mglPath, "..") {
+			return filepath.Join(misterconfig.SDRootDir, mglPath)
+		}
 		coreName = "Amiga"
 	}
 

@@ -907,6 +907,20 @@ func TestResolveMGLRelativePath(t *testing.T) {
 			want:   "/games/NES/Game.nes",
 		},
 		{
+			name:   "minimig dot-dot path resolves from the storage root",
+			path:   "../usb0/Disks/Game.adf",
+			core:   "minimig",
+			exists: existing("/media/fat/games/Amiga"),
+			want:   "/media/usb0/Disks/Game.adf",
+		},
+		{
+			name:   "dot-dot path on another core is not rooted at storage",
+			path:   "../usb0/Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/games/NES"),
+			want:   "/media/fat/games/usb0/Game.nes",
+		},
+		{
 			name:   "minimig uses the Amiga folder",
 			path:   "Game.adf",
 			core:   "minimig",
