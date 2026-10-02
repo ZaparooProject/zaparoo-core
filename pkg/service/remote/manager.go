@@ -168,9 +168,22 @@ func Start(ctx context.Context, deps *Deps, wg *sync.WaitGroup) {
 }
 
 // pipeWanted reports whether any feature wants the wait held: remote
-// control for its commands, Library sync for change hints.
+// control for its commands, Library sync for change hints — and, on a
+// platform that can answer cheaply, only while the display is actually
+// interactive. Neither feature can do anything with the device asleep: a
+// remote operation cannot dispatch without the host in the foreground
+// already, and a library change hint only ever speeds up Library sync's own
+// periodic recheck, which still runs on its own schedule regardless. A
+// platform that cannot answer this (every one but Android today) is always
+// treated as interactive, so this changes nothing there.
 func (m *manager) pipeWanted() bool {
-	return m.deps.Config.RemoteControlEnabled() || m.deps.Config.LibrarySyncEnabled()
+	if !m.deps.Config.RemoteControlEnabled() && !m.deps.Config.LibrarySyncEnabled() {
+		return false
+	}
+	if reader, ok := m.deps.Platform.(platforms.InteractivityReader); ok {
+		return reader.Interactive()
+	}
+	return true
 }
 
 // reportStatus records the wait's state for the owner. While remote control
