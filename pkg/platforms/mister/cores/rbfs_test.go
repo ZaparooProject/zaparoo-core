@@ -155,6 +155,23 @@ func TestShallowScanRBF_IncludesCustomCompanionCores(t *testing.T) {
 	assert.Equal(t, expectedMglName, resolved.MglName)
 }
 
+func TestShallowScanRBF_IncludesBennuGDCore(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	coreDir := filepath.Join(root, "_Other", "_BennuGD")
+	require.NoError(t, fs.MkdirAll(coreDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(coreDir, "BennuGD_20260918.rbf"), nil, 0o600))
+
+	cache := &RBFCache{fs: fs, sdRoot: root}
+	cache.Refresh()
+
+	resolved, ok := cache.GetBySystemID("BennuGD")
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join("_Other", "_BennuGD", "BennuGD"), resolved.MglName)
+}
+
 func TestShallowScanRBF_IncludesLightGunSindenCores(t *testing.T) {
 	t.Parallel()
 

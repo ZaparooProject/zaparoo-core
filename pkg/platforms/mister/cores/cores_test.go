@@ -432,7 +432,7 @@ func TestGetCore(t *testing.T) {
 func TestUnknownCoreError(t *testing.T) {
 	t.Parallel()
 
-	for _, id := range []string{systemdefs.SystemGameCom, "TotallyUnknown", ""} {
+	for _, id := range []string{systemdefs.SystemDreamcast, "TotallyUnknown", ""} {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 
