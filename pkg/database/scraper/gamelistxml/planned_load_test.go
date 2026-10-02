@@ -729,7 +729,8 @@ func TestLoadParsedGamelistSystem_CancelStopsDecoding(t *testing.T) {
 			i, i, strings.Repeat("x", 200))
 	}
 	_, _ = body.WriteString("</gameList>")
-	require.NoError(t, afero.WriteFile(mem, "/roms/c64/gamelist.xml", []byte(body.String()), 0o600))
+	romDir := filepath.Join(t.TempDir(), "roms", "c64")
+	require.NoError(t, afero.WriteFile(mem, filepath.Join(romDir, "gamelist.xml"), []byte(body.String()), 0o600))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -737,7 +738,7 @@ func TestLoadParsedGamelistSystem_CancelStopsDecoding(t *testing.T) {
 	var cancelled atomic.Bool
 	fs := cancellingFs{Fs: mem, cancel: cancel, readsAfter: &readsAfter, cancelledAt: &cancelled}
 	parsed, err := (&GamelistXMLScraper{fs: fs}).loadParsedGamelistSystem(ctx,
-		scraper.ScrapeSystem{ID: "c64", ROMPaths: []string{"/roms/c64"}})
+		scraper.ScrapeSystem{ID: "c64", ROMPaths: []string{romDir}})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, parsed.SourceErrors)
 	assert.Empty(t, parsed.Files)
