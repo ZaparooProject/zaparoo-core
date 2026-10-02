@@ -562,14 +562,15 @@ func TestReadGameListXMLLimitFSContextStopsWhenCancelled(t *testing.T) {
 		_, _ = fmt.Fprintf(&body, "<game><path>./g%d.d64</path><name>G %d</name></game>", i, i)
 	}
 	_, _ = body.WriteString("</gameList>")
-	require.NoError(t, afero.WriteFile(fs, "/roms/gamelist.xml", []byte(body.String()), 0o600))
+	listPath := filepath.Join(t.TempDir(), "roms", "gamelist.xml")
+	require.NoError(t, afero.WriteFile(fs, listPath, []byte(body.String()), 0o600))
 
-	gl, err := ReadGameListXMLLimitFSContext(context.Background(), fs, "/roms/gamelist.xml", MaxGameListXMLSize)
+	gl, err := ReadGameListXMLLimitFSContext(context.Background(), fs, listPath, MaxGameListXMLSize)
 	require.NoError(t, err)
 	assert.Len(t, gl.Games, 2000)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = ReadGameListXMLLimitFSContext(ctx, fs, "/roms/gamelist.xml", MaxGameListXMLSize)
+	_, err = ReadGameListXMLLimitFSContext(ctx, fs, listPath, MaxGameListXMLSize)
 	require.ErrorIs(t, err, context.Canceled)
 }

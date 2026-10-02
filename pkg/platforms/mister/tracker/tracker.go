@@ -588,7 +588,7 @@ func (tr *Tracker) loadGameLocked() {
 				log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
 			}
 		} else {
-			path = ResolvePath(mgl.File.Path)
+			path = tr.resolveMGLFilePath(mgl.File.Path)
 			// The MGL is only a wrapper; identify the game by the file it
 			// loads so an MGL-observed launch dedupes against the same game
 			// seen by its direct path.
@@ -703,6 +703,70 @@ func resolveStorageRelativePath(path string, storageSelection []byte, exists fun
 		}
 	}
 	return filepath.Join(misterconfig.SDRootDir, path)
+}
+
+// mglHomeProbeCount is how many USB drives Main probes when it looks for a
+// core's games folder. It is wider than misterUSBRootCount, which mirrors the
+// recents lookup.
+const mglHomeProbeCount = 6
+
+// resolveMGLFilePath returns the absolute path of the file an MGL loads. Main
+// resolves a relative <file path> against the core's games folder, not the
+// storage root, so the same MGL must resolve the same way here or the tracker
+// records a path that is not the file that was loaded.
+func (tr *Tracker) resolveMGLFilePath(mglPath string) string {
+	if filepath.IsAbs(mglPath) || tr.ActiveCore == "" {
+		return ResolvePath(mglPath)
+	}
+	return resolveMGLRelativePath(mglPath, tr.ActiveCore, func(candidate string) bool {
+		info, err := os.Stat(candidate)
+		return err == nil && info.IsDir()
+	})
+}
+
+// resolveMGLRelativePath mirrors Main's resolution of a relative MGL file path:
+// the core's games folder (HomeDir) joined with the path. The games folder
+// search order is Main's findPrefixDir for the games directory: for each of
+// USB 0-5 the bare then games-prefixed folder, then /media/network, then
+// /media/fat/cifs, then the SD card. A missing folder falls back to
+// /media/fat/games/<core>, as prefixGameDir does. A Minimig path starting with
+// ".." is the exception: Main resolves it from the storage root. exists reports
+// whether a candidate directory is present.
+func resolveMGLRelativePath(mglPath, coreName string, exists func(string) bool) string {
+	if filepath.IsAbs(mglPath) {
+		return filepath.Clean(mglPath)
+	}
+	if strings.EqualFold(coreName, "minimig") {
+		// Main loads a Minimig floppy whose path starts with ".." from the
+		// storage root rather than the Amiga folder.
+		if strings.HasPrefix(mglPath, "..") {
+			return filepath.Join(misterconfig.SDRootDir, mglPath)
+		}
+		coreName = "Amiga"
+	}
+
+	mediaRoot := filepath.Dir(misterconfig.SDRootDir)
+	roots := make([]string, 0, mglHomeProbeCount+3)
+	for i := range mglHomeProbeCount {
+		roots = append(roots, filepath.Join(mediaRoot, fmt.Sprintf("usb%d", i)))
+	}
+	roots = append(roots, filepath.Join(mediaRoot, "network"), filepath.Join(misterconfig.SDRootDir, "cifs"))
+
+	candidates := make([]string, 0, 2*len(roots)+2)
+	for _, root := range roots {
+		candidates = append(candidates, filepath.Join(root, coreName), filepath.Join(root, "games", coreName))
+	}
+	candidates = append(candidates,
+		filepath.Join(misterconfig.SDRootDir, coreName),
+		filepath.Join(misterconfig.SDRootDir, "games", coreName),
+	)
+
+	for _, home := range candidates {
+		if exists(home) {
+			return filepath.Join(home, mglPath)
+		}
+	}
+	return filepath.Join(misterconfig.SDRootDir, "games", coreName, mglPath)
 }
 
 // recentGamePath reads the newest launchable path from a MiSTer recent file.

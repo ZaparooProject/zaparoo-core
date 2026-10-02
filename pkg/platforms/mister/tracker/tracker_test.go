@@ -815,6 +815,170 @@ func TestLoadGameIdentifiesMGLByLoadedFile(t *testing.T) {
 	assert.True(t, launched.Equal(published), "the MGL observation must not look like new media")
 }
 
+func TestResolveMGLRelativePath(t *testing.T) {
+	t.Parallel()
+
+	existing := func(dirs ...string) func(string) bool {
+		return func(candidate string) bool {
+			for _, dir := range dirs {
+				if candidate == dir {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	tests := []struct {
+		exists func(string) bool
+		name   string
+		path   string
+		core   string
+		want   string
+	}{
+		{
+			name:   "absolute path is only cleaned",
+			path:   "/media/fat/games/NES/../NES/Game.nes",
+			core:   "NES",
+			exists: existing(),
+			want:   "/media/fat/games/NES/Game.nes",
+		},
+		{
+			name:   "relative path goes under the core games folder",
+			path:   "Add-On Pack/Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/games/NES"),
+			want:   "/media/fat/games/NES/Add-On Pack/Game.nes",
+		},
+		{
+			name:   "missing games folder falls back to the SD games folder",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing(),
+			want:   "/media/fat/games/NES/Game.nes",
+		},
+		{
+			name:   "USB folder wins over the SD card",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/usb1/games/NES", "/media/fat/games/NES"),
+			want:   "/media/usb1/games/NES/Game.nes",
+		},
+		{
+			name:   "bare USB folder wins over its games folder",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/usb0/NES", "/media/usb0/games/NES"),
+			want:   "/media/usb0/NES/Game.nes",
+		},
+		{
+			name:   "USB 5 is probed",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/usb5/games/NES"),
+			want:   "/media/usb5/games/NES/Game.nes",
+		},
+		{
+			name:   "network share wins over cifs and the SD card",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/network/games/NES", "/media/fat/cifs/games/NES", "/media/fat/games/NES"),
+			want:   "/media/network/games/NES/Game.nes",
+		},
+		{
+			name:   "cifs wins over the SD card",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/cifs/NES", "/media/fat/games/NES"),
+			want:   "/media/fat/cifs/NES/Game.nes",
+		},
+		{
+			name:   "legacy SD folder wins over the games folder",
+			path:   "Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/NES", "/media/fat/games/NES"),
+			want:   "/media/fat/NES/Game.nes",
+		},
+		{
+			name:   "dot-dot path resolves from the games folder like Main",
+			path:   "../../../../games/NES/Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/games/NES"),
+			want:   "/games/NES/Game.nes",
+		},
+		{
+			name:   "minimig dot-dot path resolves from the storage root",
+			path:   "../usb0/Disks/Game.adf",
+			core:   "minimig",
+			exists: existing("/media/fat/games/Amiga"),
+			want:   "/media/usb0/Disks/Game.adf",
+		},
+		{
+			name:   "dot-dot path on another core is not rooted at storage",
+			path:   "../usb0/Game.nes",
+			core:   "NES",
+			exists: existing("/media/fat/games/NES"),
+			want:   "/media/fat/games/usb0/Game.nes",
+		},
+		{
+			name:   "minimig uses the Amiga folder",
+			path:   "Game.adf",
+			core:   "minimig",
+			exists: existing("/media/fat/games/Amiga"),
+			want:   "/media/fat/games/Amiga/Game.adf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, filepath.FromSlash(tt.want), resolveMGLRelativePath(tt.path, tt.core, tt.exists))
+		})
+	}
+}
+
+// Main resolves a relative MGL file path against the core's games folder, so
+// the tracker must record the file Main loaded rather than a root-relative
+// path that does not exist.
+func TestLoadGameResolvesRelativeMGLPathAgainstCoreFolder(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared GlobalLauncherCache, and
+	// ResolvePath changes the process working directory.
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:         "NES",
+		SystemID:   systemdefs.SystemNES,
+		Extensions: []string{".nes"},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	mglPath := filepath.Join(t.TempDir(), "zt.mgl")
+	mgl := `<mistergamedescription><rbf>_Console/NES</rbf>` +
+		`<file delay="2" type="f" index="0" path="Add-On Pack/Game (Hack).nes"/></mistergamedescription>`
+	require.NoError(t, os.WriteFile(mglPath, []byte(mgl), 0o600))
+
+	var published *models.ActiveMedia
+	tr := &Tracker{
+		pl:             pl,
+		cfg:            &config.Instance{},
+		ActiveCore:     "NES",
+		NameMap:        []NameMapping{{CoreName: "NES", System: systemdefs.SystemNES}},
+		readActiveGame: func() (string, error) { return mglPath, nil },
+		setActiveMedia: func(media *models.ActiveMedia) { published = media },
+	}
+
+	tr.loadGame()
+
+	require.NotNil(t, published)
+	assert.Equal(t, filepath.FromSlash("/media/fat/games/NES/Add-On Pack/Game (Hack).nes"), published.Path)
+}
+
 // .LASTLAUNCH.mgl is one reused file, so identifying a launch by the wrapper
 // gives every game behind it the same id. The second game then matches the
 // first's id and is dropped, leaving the tracker publishing media that is no
