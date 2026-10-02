@@ -29,6 +29,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testTimeout only separates "blocked forever" from "returned". It is generous
+// because CI schedulers can stall a goroutine for longer than any tight bound.
+const testTimeout = 5 * time.Second
+
 // TestSendNotification_NonBlocking is a regression test for the deadlock fix.
 // Previously, sendNotification used blocking sends which could freeze callers
 // when the channel buffer was full. The fix uses select/default for non-blocking sends.
@@ -48,7 +52,7 @@ func TestSendNotification_NonBlocking(t *testing.T) {
 	select {
 	case <-done:
 		// Success - didn't block
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testTimeout):
 		t.Fatal("sendNotification blocked on full channel - non-blocking fix has regressed")
 	}
 }
@@ -68,7 +72,7 @@ func TestSendNotification_SuccessfulSend(t *testing.T) {
 	case notification := <-ns:
 		assert.Equal(t, models.NotificationTokensAdded, notification.Method)
 		assert.Contains(t, string(notification.Params), "ABC123")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testTimeout):
 		t.Fatal("expected notification was not sent")
 	}
 }
@@ -85,7 +89,7 @@ func TestSendNotification_NilPayload(t *testing.T) {
 	case notification := <-ns:
 		assert.Equal(t, models.NotificationTokensRemoved, notification.Method)
 		assert.Nil(t, notification.Params)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testTimeout):
 		t.Fatal("expected notification was not sent")
 	}
 }
@@ -111,7 +115,7 @@ func TestSendNotification_DropsWhenFull(t *testing.T) {
 	select {
 	case <-done:
 		// Success - all sends completed without blocking
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testTimeout):
 		t.Fatal("sendNotification blocked when channel was full")
 	}
 
@@ -398,7 +402,7 @@ func TestMediaHistoryChanged(t *testing.T) {
 	select {
 	case notification := <-ns:
 		assert.Equal(t, models.NotificationMediaHistoryChanged, notification.Method)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testTimeout):
 		t.Fatal("expected notification was not sent")
 	}
 }
