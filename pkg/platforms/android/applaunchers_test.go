@@ -22,6 +22,7 @@ package android
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,8 +111,11 @@ func TestInstalledAppsLauncherSkipsProfiledPackages(t *testing.T) {
 	host := &fakeHost{
 		appsScanned: true,
 		apps: []AppInfo{
-			{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes"},
-			{Package: "com.theboisclub.pokemonred", Activity: "org.love2d.android.GameActivity", Label: "Pokeport"},
+			{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes", IsGame: true},
+			{
+				Package: "com.theboisclub.pokemonred", Activity: "org.love2d.android.GameActivity",
+				Label: "Pokeport", IsGame: true,
+			},
 		},
 	}
 	platform := startedPlatform(t.Context(), t, host)
@@ -124,6 +128,58 @@ func TestInstalledAppsLauncherSkipsProfiledPackages(t *testing.T) {
 	assert.True(t, apps.Test(nil, "android://com.example.notes/Notes"))
 	assert.False(t, apps.Test(nil, "android://com.theboisclub.pokemonred/Pokeport"))
 	assert.False(t, apps.Test(nil, "android://com.example.notes:red/Notes"))
+}
+
+// The host's game classification sends an app to the game launcher or the
+// browsable-only one, never both: Library sync only ever uploads the former.
+func TestInstalledAppsLauncherSplitsByGameClassification(t *testing.T) {
+	t.Parallel()
+
+	host := &fakeHost{
+		appsScanned: true,
+		apps: []AppInfo{
+			{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes", IsGame: false},
+			{Package: "com.example.arcade", Activity: "com.example.arcade.Main", Label: "Arcade", IsGame: true},
+		},
+	}
+	platform := startedPlatform(t.Context(), t, host)
+	launchers := platform.Launchers(nil)
+	games := launcherByID(t, launchers, installedAppsID)
+	apps := launcherByID(t, launchers, installedAppsNonGameID)
+
+	gameResults := scan(t, games)
+	require.Len(t, gameResults, 1)
+	assert.Equal(t, "android://com.example.arcade/Arcade", gameResults[0].Path)
+
+	appResults := scan(t, apps)
+	require.Len(t, appResults, 1)
+	assert.Equal(t, "android://com.example.notes/Notes", appResults[0].Path)
+
+	assert.True(t, games.Test(nil, "android://com.example.arcade/Arcade"))
+	assert.False(t, games.Test(nil, "android://com.example.notes/Notes"))
+	assert.True(t, apps.Test(nil, "android://com.example.notes/Notes"))
+	assert.False(t, apps.Test(nil, "android://com.example.arcade/Arcade"))
+
+	assert.Equal(t, systemdefs.SystemAndroid, games.SystemID)
+	assert.Equal(t, systemdefs.SystemApplication, apps.SystemID)
+}
+
+// A package the host does not currently report (for example, one already
+// indexed before it was uninstalled) must still match exactly one launcher,
+// and the same one as before this split existed: the game launcher, so an
+// existing media row's availability keeps surfacing the same way it always
+// has rather than becoming unclaimed by either launcher.
+func TestInstalledAppsLauncherDefaultsAnUnknownPackageToTheGameLauncher(t *testing.T) {
+	t.Parallel()
+
+	host := &fakeHost{appsScanned: true}
+	platform := startedPlatform(t.Context(), t, host)
+	launchers := platform.Launchers(nil)
+	games := launcherByID(t, launchers, installedAppsID)
+	apps := launcherByID(t, launchers, installedAppsNonGameID)
+
+	assert.True(t, games.Test(nil, "android://com.example.gone/Gone"))
+	assert.False(t, apps.Test(nil, "android://com.example.gone/Gone"))
 }
 
 // A listing the host never made is not evidence that no app is installed.
@@ -142,7 +198,7 @@ func TestInstalledAppDispatchNamesTheHostReportedActivity(t *testing.T) {
 	t.Parallel()
 
 	host := &fakeHost{appsScanned: true, apps: []AppInfo{
-		{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes"},
+		{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes", IsGame: true},
 	}}
 	platform := startedPlatform(t.Context(), t, host)
 	apps := launcherByID(t, platform.Launchers(nil), installedAppsID)
@@ -164,7 +220,7 @@ func TestLaunchMediaStartsAnInstalledApp(t *testing.T) {
 	t.Parallel()
 
 	host := &fakeHost{appsScanned: true, apps: []AppInfo{
-		{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes"},
+		{Package: "com.example.notes", Activity: "com.example.notes.Main", Label: "Notes", IsGame: true},
 	}}
 	platform := startedPlatform(t.Context(), t, host)
 	apps := launcherByID(t, platform.Launchers(nil), installedAppsID)

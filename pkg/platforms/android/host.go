@@ -173,9 +173,13 @@ func (s ForegroundState) valid() bool {
 }
 
 // AppInfo is one launchable app the host found. Label is the app's own
-// display name, which the host reads from the platform, never Core.
+// display name, which the host reads from the platform, never Core. IsGame is
+// the platform's own game classification (Android's app category, or the
+// legacy is-game flag), used to keep a generic app out of a synced game
+// library: see installedAppsLauncherFor.
 type AppInfo struct {
 	Package  string
 	Activity string
 	Label    string
+	IsGame   bool
 }
