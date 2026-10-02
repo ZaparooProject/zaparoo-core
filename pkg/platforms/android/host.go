@@ -148,6 +148,11 @@ type Host interface {
 	ForegroundEvents(
 		ctx context.Context, launchID, target string, fromMs, toMs int64,
 	) (database.ForegroundEvidence, error)
+	// Interactive cheaply reports whether the display is interactive right
+	// now, with no Usage Access query or boot/elapsed-clock sampling — unlike
+	// ForegroundState, this is meant to be called often by a background
+	// loop, never as session-timing evidence. See platforms.InteractivityReader.
+	Interactive() bool
 }
 
 // ForegroundState is a host-owned snapshot taken before intent dispatch or a
