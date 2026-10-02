@@ -27,6 +27,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -141,6 +142,40 @@ func resolveSystemsFromPlatform(
 			virtualSystems[launchers[i].SystemID] = struct{}{}
 		}
 	}
+
+	// A granted source root has no filesystem Core can walk with RootDirs, so
+	// GetSystemPaths above never finds anything for it; GetMediaSourceRoots
+	// is reserved for provenance a scanner explicitly records (ScanResult.
+	// Source), which an ordinary file walk - including Android's source-root
+	// walk - never sets. Join each granted root against the system's own
+	// launcher folders instead, the same way media.browse's root discovery
+	// already does for the identical reason (buildSystemBrowseRouteCandidates's
+	// addSourceRoute), so a folder cover can be found without depending on
+	// either.
+	var sourceRootRefs []string
+	if reader, ok := pl.(platforms.SourceRootReader); ok {
+		refs, refsErr := reader.SourceRoots(ctx)
+		if refsErr != nil {
+			return nil, fmt.Errorf("list source roots: %w", refsErr)
+		}
+		sourceRootRefs = refs
+	}
+	sourceFoldersBySystem := make(map[string][]string, len(launchers))
+	for i := range launchers {
+		if launchers[i].SystemID == "" || launchers[i].SkipFilesystemScan {
+			continue
+		}
+		sysID := launchers[i].SystemID
+		for _, folder := range launchers[i].Folders {
+			if filepath.IsAbs(folder) {
+				continue
+			}
+			if !slices.Contains(sourceFoldersBySystem[sysID], folder) {
+				sourceFoldersBySystem[sysID] = append(sourceFoldersBySystem[sysID], folder)
+			}
+		}
+	}
+
 	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
 	for _, sys := range sysDefs {
 		romPaths := pathsBySystem[sys.ID]
@@ -151,6 +186,14 @@ func resolveSystemsFromPlatform(
 		for _, root := range sourceRoots {
 			if !slices.Contains(romPaths, root) {
 				romPaths = append(romPaths, root)
+			}
+		}
+		for _, root := range sourceRootRefs {
+			for _, folder := range sourceFoldersBySystem[sys.ID] {
+				romPath := strings.TrimSuffix(root, "/") + "/" + folder
+				if !slices.Contains(romPaths, romPath) {
+					romPaths = append(romPaths, romPath)
+				}
 			}
 		}
 		if len(romPaths) == 0 {
