@@ -346,6 +346,29 @@ func TestPlatformIdentityAndUnsupportedOperations(t *testing.T) {
 	require.ErrorIs(t, err, platforms.ErrNotSupported)
 }
 
+func TestInteractiveFollowsTheHostAndDefaultsToInteractive(t *testing.T) {
+	t.Parallel()
+
+	settings := platforms.Settings{DataDir: "/data", HostManagedPaths: true}
+
+	noHost, err := New(settings, nil)
+	require.NoError(t, err)
+	assert.True(t, noHost.Interactive(), "no host yet must not make a background feature ineligible")
+
+	host := &fakeHost{}
+	platform, err := New(settings, host)
+	require.NoError(t, err)
+	assert.True(t, platform.Interactive())
+
+	host.mu.Lock()
+	host.notInteractive = true
+	host.mu.Unlock()
+	assert.False(t, platform.Interactive())
+
+	var reader platforms.InteractivityReader = platform
+	assert.False(t, reader.Interactive())
+}
+
 func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	t.Parallel()
 
