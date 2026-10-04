@@ -347,10 +347,11 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	launchers := platform.Launchers(nil)
 
 	// Three launchers Core builds (ScummVM standalone, two GameNative) lead
-	// the catalog; one trailing launcher offers every installed app no
-	// profile describes.
-	require.Len(t, launchers, len(platform.entries)+len(gameNativeEntries)+2)
-	assert.Equal(t, installedAppsID, launchers[len(launchers)-1].ID)
+	// the catalog; two trailing launchers offer every installed app no
+	// profile describes, split by the host's game classification.
+	require.Len(t, launchers, len(platform.entries)+len(gameNativeEntries)+3)
+	assert.Equal(t, installedAppsNonGameID, launchers[len(launchers)-1].ID)
+	assert.Equal(t, installedAppsID, launchers[len(launchers)-2].ID)
 	assert.Equal(t, scummVMStandaloneID, launchers[0].ID)
 	assert.Equal(t, gameNativeSteamID, launchers[1].ID)
 	assert.Equal(t, gameNativeWindowsID, launchers[2].ID)
