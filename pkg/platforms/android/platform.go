@@ -250,6 +250,18 @@ func (p *Platform) now() time.Time {
 
 func (p *Platform) Settings() platforms.Settings { return p.settings }
 
+// Interactive reports whether the display is interactive right now, for
+// platforms.InteractivityReader. A platform with no host yet defaults to
+// interactive, the same as the normal, safe-by-default answer every other
+// nil-host query on this type gives: never silently treat a background
+// feature as ineligible just because the host has not connected yet.
+func (p *Platform) Interactive() bool {
+	if p.host == nil {
+		return true
+	}
+	return p.host.Interactive()
+}
+
 func (*Platform) ScanHook(*tokens.Token) error { return nil }
 
 func (*Platform) SupportedReaders(*config.Instance) []readers.Reader { return nil }
