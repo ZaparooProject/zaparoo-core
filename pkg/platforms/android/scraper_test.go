@@ -101,6 +101,7 @@ func TestAppScraperFillsIconsByPackageWithoutChangingTitles(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 3, last.Processed)
+	require.Equal(t, 3, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 2, last.Matched)
 	require.Equal(t, 1, last.Skipped)
 	require.Equal(t, []string{"com.example.game", "com.example.missing"}, host.iconCalls)
@@ -230,6 +231,7 @@ func TestAppScraperReportsProgressEveryTwentyFiveRows(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 30, last.Processed)
+	require.Equal(t, 30, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 30, last.Matched)
 }
 
@@ -279,6 +281,7 @@ func TestAppScraperRunsBothSystemsAndSharesIconCache(t *testing.T) {
 	// The fake database answers the same one row for either system, so this
 	// is exercising that both systems really ran, not asserting real content.
 	require.Equal(t, 2, last.Processed)
+	require.Equal(t, 2, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 2, last.Matched)
 	require.Equal(t, 2, last.TotalSteps)
 	require.Equal(t, 2, last.CurrentStep)

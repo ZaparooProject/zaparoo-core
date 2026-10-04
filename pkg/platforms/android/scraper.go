@@ -125,15 +125,16 @@ func scrapeApps(
 		all.skipped += got.skipped
 		if fatal != nil {
 			ch <- scraper.ScrapeUpdate{
-				Done: true, SystemID: systemID, Processed: all.processed, Matched: all.matched,
-				Skipped: all.skipped, FatalErr: fatal, TotalSteps: len(systems), CurrentStep: step + 1,
+				Done: true, SystemID: systemID, Processed: all.processed, Total: all.processed,
+				Matched: all.matched, Skipped: all.skipped, FatalErr: fatal,
+				TotalSteps: len(systems), CurrentStep: step + 1,
 			}
 			return
 		}
 	}
 	ch <- scraper.ScrapeUpdate{
-		Done: true, Processed: all.processed, Matched: all.matched, Skipped: all.skipped,
-		TotalSteps: len(systems), CurrentStep: len(systems),
+		Done: true, Processed: all.processed, Total: all.processed, Matched: all.matched,
+		Skipped: all.skipped, TotalSteps: len(systems), CurrentStep: len(systems),
 	}
 }
 
