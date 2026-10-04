@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -122,6 +123,18 @@ func TestCommandClassifiesRunZapScriptErrors(t *testing.T) {
 		{
 			name: "file not found", err: zapscript.ErrFileNotFound,
 			wantStatus: "failed", wantErrorCode: "media_not_found",
+		},
+		{
+			name: "host needs to be in the foreground",
+			err: fmt.Errorf("launch: %w", platforms.NewLaunchRepairErrorWithReason(
+				platforms.LaunchRepairHostForegroundRequired, nil, "Open the app to launch")),
+			wantStatus: "failed", wantErrorCode: string(platforms.LaunchRepairHostForegroundRequired),
+		},
+		{
+			name: "a different repair reason is still execution_failed",
+			err: fmt.Errorf("launch: %w", platforms.NewLaunchRepairErrorWithReason(
+				platforms.LaunchRepairMediaUnavailable, nil, "Media is unavailable")),
+			wantStatus: "failed", wantErrorCode: "execution_failed",
 		},
 		{
 			name: "unrecognized error is execution_failed", err: errors.New("launcher crashed"),
