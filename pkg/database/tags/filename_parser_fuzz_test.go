@@ -228,7 +228,23 @@ func FuzzParseTitleFromFilename(f *testing.F) {
 	f.Add("File.rom.backup.zip", false)
 	f.Add("Game..zip", false)
 
+	// Structural set markers
+	f.Add("Game (Disc 1) (USA).cue", false)
+	f.Add("Game (Disk 2 of 4) [Side B", false)
+	f.Add("Game ((Disc 1)) [CD2]", false)
+
 	f.Fuzz(func(t *testing.T, filename string, stripLeadingNumbers bool) {
+		stripped := StripStructuralSetMarkers(filename)
+		if len(stripped) > len(filename) {
+			t.Errorf("Stripping markers grew the title: %q from %q", stripped, filename)
+		}
+		if utf8.ValidString(filename) && !utf8.ValidString(stripped) {
+			t.Errorf("Stripping markers broke UTF-8: %q from %q", stripped, filename)
+		}
+		if stripped != StripStructuralSetMarkers(filename) {
+			t.Errorf("Non-deterministic marker stripping for: %q", filename)
+		}
+
 		result := ParseTitleFromFilename(filename, stripLeadingNumbers)
 
 		if !utf8.ValidString(result) {

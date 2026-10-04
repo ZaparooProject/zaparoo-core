@@ -667,6 +667,9 @@ type SingletonContainerAlias struct {
 	ZapScriptTags []TagInfo
 	Row           MediaFullRow
 	HasCover      bool
+	// MultiDisc is set when Row is the first of several disc images of one
+	// title, so the directory holds other discs a user may want instead.
+	MultiDisc bool
 }
 
 // SingletonAliasCandidate identifies a child directory to consider for

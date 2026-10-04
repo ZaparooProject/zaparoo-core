@@ -2643,6 +2643,38 @@ func TestParseTitleFromFilename_SceneReleases(t *testing.T) {
 	}
 }
 
+func TestStripStructuralSetMarkers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "disc number", input: "Final Fantasy VII (Disc 1)", want: "Final Fantasy VII"},
+		{name: "disk of total", input: "Adventure (Disk 2 of 4)", want: "Adventure"},
+		{name: "file number", input: "Magazine (File 3)", want: "Magazine"},
+		{name: "side", input: "Cassette Game (Side A)", want: "Cassette Game"},
+		{name: "compact cd", input: "Game [CD2]", want: "Game"},
+		{name: "marker mid title", input: "Game (Disc 1) Special", want: "Game Special"},
+		{name: "several markers", input: "Game (Disc 1) (Side B)", want: "Game"},
+		{name: "other brackets kept", input: "Game (USA) (Disc 2) [!]", want: "Game (USA) [!]"},
+		{name: "no brackets", input: "Disc Jam", want: "Disc Jam"},
+		{name: "unclosed bracket kept", input: "Game (Disc 1", want: "Game (Disc 1"},
+		{name: "unclosed bracket after marker", input: "Game (Disc 1) (USA", want: "Game (USA"},
+		{name: "nested marker inside other group", input: "Game (Rev (Disc 1))", want: "Game (Rev (Disc 1))"},
+		{name: "marker only", input: "(Disc 1)", want: "(Disc 1)"},
+		{name: "empty", input: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, StripStructuralSetMarkers(tt.input))
+		})
+	}
+}
+
 func TestParseDisplayTitleFromFilename_PreservesOnlyStructuralSetMarkers(t *testing.T) {
 	t.Parallel()
 

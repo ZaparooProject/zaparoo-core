@@ -172,6 +172,74 @@ func TestSelectLaunchMedia(t *testing.T) {
 	}
 }
 
+func TestLaunchSelectorMultiDisc(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		rows      []database.Media
+		want      int64
+		multiDisc bool
+	}{
+		{
+			name: "two cue sheets of one title are a multi-disc set",
+			rows: []database.Media{
+				titledMedia(2, 10, "/roms/PSX/Game/Game (Disc 2).cue"),
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).cue"),
+			},
+			want:      1,
+			multiDisc: true,
+		},
+		{
+			name: "lone disc is not a set",
+			rows: []database.Media{titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).cue")},
+			want: 1,
+		},
+		{
+			name: "playlist stands in for its discs",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).chd"),
+				titledMedia(2, 10, "/roms/PSX/Game/Game (Disc 2).chd"),
+				titledMedia(3, 10, "/roms/PSX/Game/Game.m3u"),
+			},
+			want: 3,
+		},
+		{
+			name: "cue sheet stands in for its tracks",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/PSX/Game/Game.bin"),
+				titledMedia(2, 10, "/roms/PSX/Game/Game.cue"),
+			},
+			want: 2,
+		},
+		{
+			name: "ambiguous set is not a multi-disc set",
+			rows: []database.Media{
+				titledMedia(1, 10, "/roms/PSX/Game/Game (Disc 1).chd"),
+				titledMedia(2, 11, "/roms/PSX/Game/Other (Disc 2).chd"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var sel container.LaunchSelector
+			for i := range tt.rows {
+				sel.Add(&tt.rows[i])
+			}
+			got := sel.Result()
+			if tt.want == 0 {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tt.want, got.DBID)
+			}
+			assert.Equal(t, tt.multiDisc, sel.MultiDisc())
+		})
+	}
+}
+
 func TestIndexResolvesDiscFolder(t *testing.T) {
 	t.Parallel()
 

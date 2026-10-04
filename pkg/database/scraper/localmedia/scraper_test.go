@@ -160,6 +160,59 @@ func TestScrape_ImportsArtworkForUncollapsedDirectory(t *testing.T) {
 	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
+// media/folders holds pictures of folders. It is the only artwork directory
+// here, so the run must not be skipped as having none, and a picture in it
+// named after a game file is not that game's artwork.
+func TestScrape_ImportsDirectoryArtworkFromFoldersDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	collectionDir := filepath.Join(root, "Collection")
+	folderArtPath := filepath.Join(root, "media", "folders", "Collection.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(folderArtPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, folderArtPath, []byte("folder"), 0o600))
+	require.NoError(t, afero.WriteFile(
+		fs, filepath.Join(root, "media", "folders", "One.png"), []byte("not a game image"), 0o600,
+	))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
+		{
+			DBID: 11, MediaTitleDBID: 101, Path: filepath.Join(collectionDir, "One.nes"),
+			ParentDir: filepath.ToSlash(collectionDir) + "/", SystemID: "NES",
+		},
+		{
+			DBID: 12, MediaTitleDBID: 102, Path: filepath.Join(collectionDir, "Two.nes"),
+			ParentDir: filepath.ToSlash(collectionDir) + "/", SystemID: "NES",
+		},
+	}, nil)
+	mockDB.On(
+		"ReplaceDirectoryProperties",
+		mock.Anything,
+		int64(1),
+		[]database.DirectoryProperty{{
+			Path:    filepath.ToSlash(collectionDir),
+			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageImage),
+			Text:    filepath.ToSlash(folderArtPath),
+		}},
+	).Return(true, nil).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 16)
+	s := &scraperImpl{db: mockDB, fs: fs}
+	go s.scrapeLoop(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{{
+		DBID: 1, ID: "NES", ROMPaths: []string{root},
+	}}, ch)
+
+	var final scraper.ScrapeUpdate
+	for update := range ch {
+		final = update
+	}
+	assert.True(t, final.Done)
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestIndexedDirectoryPaths_DedupesAncestorsAndSkipsMissing(t *testing.T) {
 	t.Parallel()
 

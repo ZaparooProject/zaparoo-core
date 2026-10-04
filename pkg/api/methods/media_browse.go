@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -1490,6 +1491,9 @@ func buildBrowseResponse(
 	}
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
+	// Collapsed directories shown with their own folder artwork, whose launch
+	// target's cover colour would describe a different image.
+	var folderArtEntries []int
 	for _, dir := range dirs {
 		dirPath := dir.Path
 		if dirPath == "" {
@@ -1522,16 +1526,27 @@ func buildBrowseResponse(
 			entry.ZapScript = mediaEntry.ZapScript
 			entry.Tags = mediaEntry.Tags
 			entry.DisambiguatingTags = mediaEntry.DisambiguatingTags
+			if alias.MultiDisc {
+				entry.MultiDisc = true
+				entry.DisambiguatingTags = withoutDiscTags(entry.DisambiguatingTags)
+			}
+			if dir.HasCover {
+				folderArtEntries = append(folderArtEntries, len(entries))
+			}
 			entry.HasCover = entry.HasCover || mediaEntry.HasCover
 		}
 		entries = append(entries, entry)
 	}
 
 	for i := range files {
+		files[i].Name = mediatags.StripStructuralSetMarkers(files[i].Name)
 		entry := buildMediaEntry(&files[i], env)
 		entries = append(entries, entry)
 	}
 	attachBrowseCoverColors(env, entries)
+	for _, i := range folderArtEntries {
+		entries[i].CoverColor = ""
+	}
 
 	var pagination *models.PaginationInfo
 	if len(entries) > 0 {
@@ -1731,7 +1746,7 @@ func browseDirDisplayName(parentPath, name string) string {
 
 func browseMediaDisplayName(path, sortName, titleName string) string {
 	if sortName != "" {
-		return sortName
+		return mediatags.StripStructuralSetMarkers(sortName)
 	}
 
 	base := filepath.Base(path)
@@ -1745,6 +1760,19 @@ func browseMediaDisplayName(path, sortName, titleName string) string {
 	}
 
 	return titleName
+}
+
+// withoutDiscTags drops disc-number tags from a multi-disc directory's
+// disambiguating tags. They tell the launch target apart from its sibling
+// discs, which the directory entry stands for as a whole.
+func withoutDiscTags(tagInfos []database.TagInfo) []database.TagInfo {
+	kept := make([]database.TagInfo, 0, len(tagInfos))
+	for _, tag := range tagInfos {
+		if tag.Type != string(mediatags.TagTypeDisc) {
+			kept = append(kept, tag)
+		}
+	}
+	return kept
 }
 
 // attachBrowseCoverColors sets coverColor on the page's media entries and

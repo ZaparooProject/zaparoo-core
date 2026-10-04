@@ -74,6 +74,14 @@ func (s *LaunchSelector) Result() *database.Media {
 	return row
 }
 
+// MultiDisc reports whether Result's row was chosen because the rows are
+// several disc images of one title. It is false when a lone file, a playlist
+// or a cue sheet stands in for the directory, and when nothing was chosen.
+func (s *LaunchSelector) MultiDisc() bool {
+	_, _, multiDisc := s.choose()
+	return multiDisc
+}
+
 // Count returns how many rows were added.
 func (s *LaunchSelector) Count() int {
 	return s.count
@@ -111,19 +119,25 @@ func (s *LaunchSelector) addAt(row *database.Media, idx int) {
 
 // choice returns the chosen row and its position in add order, or nil and -1.
 func (s *LaunchSelector) choice() (row *database.Media, idx int) {
+	row, idx, _ = s.choose()
+	return row, idx
+}
+
+// choose is choice plus whether the shared-title disc-set rule made the pick.
+func (s *LaunchSelector) choose() (row *database.Media, idx int, multiDisc bool) {
 	switch {
 	case s.count == 0:
-		return nil, -1
+		return nil, -1, false
 	case s.count == 1:
-		return &s.first, s.firstIdx
+		return &s.first, s.firstIdx, false
 	case s.m3uCount == 1 && s.badForM3U == 0:
-		return &s.m3u, s.m3uIdx
+		return &s.m3u, s.m3uIdx, false
 	case s.cueCount == 1 && s.badForCue == 0:
-		return &s.cue, s.cueIdx
+		return &s.cue, s.cueIdx, false
 	case s.discSet:
-		return &s.lowest, s.lowestIdx
+		return &s.lowest, s.lowestIdx, true
 	default:
-		return nil, -1
+		return nil, -1, false
 	}
 }
 

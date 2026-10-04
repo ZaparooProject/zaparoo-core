@@ -773,6 +773,86 @@ func TestHandleMediaImage_DirectoryPathUsesDirectoryArtwork(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// A multi-disc folder collapses to its first disc, which may carry artwork of
+// its own. Asked for by path, the folder's artwork wins even when it is of a
+// less preferred type; the disc's artwork is only the fallback.
+func TestHandleMediaImage_CollapsedDirectoryPrefersFolderArtwork(t *testing.T) {
+	// Not parallel: resets process-wide no-image cache.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	writeImage := func(name string, shade uint8) (string, []byte) {
+		var data bytes.Buffer
+		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+		img.Set(0, 0, color.RGBA{R: shade, A: 255})
+		require.NoError(t, png.Encode(&data, img))
+		imagePath := filepath.Join(t.TempDir(), name)
+		require.NoError(t, os.WriteFile(imagePath, data.Bytes(), 0o600))
+		return imagePath, data.Bytes()
+	}
+	folderPath, folderData := writeImage("Chrono Cross (USA).png", 10)
+	discPath, discData := writeImage("Chrono Cross (USA) (Disc 1).png", 200)
+
+	directoryPath := filepath.Join("games", "Chrono Cross (USA)")
+	system := database.System{DBID: 100, SystemID: "PSX", Name: "PSX"}
+	disc := database.Media{DBID: 20, Path: filepath.Join(directoryPath, "Chrono Cross (USA) (Disc 1).cue")}
+	row := &database.MediaFullRow{
+		Media:  disc,
+		Title:  database.MediaTitle{DBID: 30, Name: "Chrono Cross"},
+		System: system,
+	}
+	request := json.RawMessage(fmt.Sprintf(
+		`{"system":%q,"path":%q,"imageTypes":["boxart","image"]}`, system.SystemID, directoryPath,
+	))
+
+	t.Run("folder artwork wins", func(t *testing.T) {
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("FindSystemBySystemID", system.SystemID).Return(system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, system.DBID, directoryPath).
+			Return([]database.MediaProperty{{TypeTag: "property:image-image", Text: folderPath}}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		resp, ok := result.(models.MediaImageResponse)
+		require.True(t, ok)
+		assert.Equal(t, "property:image-image", resp.TypeTag)
+		decoded, err := base64.StdEncoding.DecodeString(resp.Data)
+		require.NoError(t, err)
+		assert.Equal(t, folderData, decoded)
+		mockDB.AssertNotCalled(t, "FindSingleContainerLaunchMedia", mock.Anything, mock.Anything, mock.Anything)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("first disc artwork is the fallback", func(t *testing.T) {
+		mediaImageNoImages.clear()
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("FindSystemBySystemID", system.SystemID).Return(system, nil)
+		mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, directoryPath).
+			Return((*database.Media)(nil), nil)
+		mockDB.On("GetDirectoryProperties", mock.Anything, system.DBID, directoryPath).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, system.DBID, directoryPath).
+			Return(&disc, nil)
+		mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, disc.DBID).Return(row, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, disc.DBID).
+			Return([]database.MediaProperty{{TypeTag: "property:image-boxart", Text: discPath}}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, request))
+		require.NoError(t, err)
+		resp, ok := result.(models.MediaImageResponse)
+		require.True(t, ok)
+		assert.Equal(t, "property:image-boxart", resp.TypeTag)
+		decoded, err := base64.StdEncoding.DecodeString(resp.Data)
+		require.NoError(t, err)
+		assert.Equal(t, discData, decoded)
+		mockDB.AssertExpectations(t)
+	})
+}
+
 func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	// Not parallel: installs the process-wide thumb cache pointer.
 	fs := afero.NewMemMapFs()

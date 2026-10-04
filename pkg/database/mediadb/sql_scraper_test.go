@@ -2414,6 +2414,7 @@ func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
 	require.Len(t, aliases, 1)
 	assert.Equal(t, gameDir, aliases[0].ChildDir)
 	assert.Equal(t, cuePath, aliases[0].Row.Path)
+	assert.False(t, aliases[0].MultiDisc)
 }
 
 func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *testing.T) {
@@ -2440,6 +2441,7 @@ func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *te
 	require.NoError(t, err)
 	require.Len(t, aliases, 1)
 	assert.Equal(t, disc1Path, aliases[0].Row.Path)
+	assert.True(t, aliases[0].MultiDisc)
 }
 
 func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
