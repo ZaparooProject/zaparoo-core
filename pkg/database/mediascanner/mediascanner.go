@@ -1897,6 +1897,13 @@ func NewNamesIndexWithSources(
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
 				}
+				// An any-scanner runs for every system, so an absent optional
+				// source would otherwise be reported once per system.
+				if scanErr == platforms.ErrScannerUnavailable { //nolint:errorlint // Do not hide joined I/O failures.
+					log.Debug().Msgf("skipping %s 'any' scanner for system %s: optional installation unavailable",
+						anyScanners[i].ID, systemID)
+					continue
+				}
 				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s",
 					anyScanners[i].ID, systemID)
 				continue
