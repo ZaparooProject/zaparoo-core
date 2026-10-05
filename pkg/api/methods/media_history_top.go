@@ -88,6 +88,7 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 	}
 	mediaIDs := make(map[mediaPathRef]int64)
 	var tagsByID map[int64][]database.TagInfo
+	var zapScripts map[int64]string
 	tagsKnown := false
 	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
 	defer cancelEnrichment()
@@ -99,6 +100,7 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		var resolvedRefs []database.MediaRef
 		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
 		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		zapScripts = mediaTitleZapScripts(enrichCtx, env.Database.MediaDB, resolvedRefs)
 	}
 
 	responseEntries := make([]models.MediaHistoryTopEntry, 0, len(entries))
@@ -108,6 +110,7 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		responseEntries = append(responseEntries, models.MediaHistoryTopEntry{
 			MediaID:       mediaIDs[ref],
 			RelPath:       mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			ZapScript:     zapScripts[mediaIDs[ref]],
 			SystemID:      entry.SystemID,
 			SystemName:    entry.SystemName,
 			MediaName:     entry.MediaName,

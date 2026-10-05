@@ -30,7 +30,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -705,4 +707,69 @@ func TestHandleMediaMeta_TitlePropertiesDBError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get title property metadata")
 	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_RelativePathAndZapScript(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false})
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	mediaPath := filepath.ToSlash(filepath.Join(rootDir, "NES", "USA", "mario.nes"))
+	row := &database.MediaFullRow{
+		Media:  database.Media{DBID: 1, Path: mediaPath},
+		Title:  database.MediaTitle{DBID: 10, Slug: "super-mario-bros", Name: "Super Mario Bros"},
+		System: database.System{DBID: 100, SystemID: "NES", Name: "NES"},
+	}
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetTitleZapScriptsByMediaDBIDs", mock.Anything, []int64{1}).
+		Return(map[int64]string{1: "@NES/Super Mario Bros (region:us)"}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+	env.Platform = mockPlatform
+	env.Config = &config.Instance{}
+	env.LauncherCache = launcherCache
+
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.Media.RelPath)
+	assert.Equal(t, "NES/USA/mario.nes", *resp.Media.RelPath)
+	assert.Equal(t, "@NES/Super Mario Bros (region:us)", resp.Media.ZapScript)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_ZapScriptDBError(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := &database.MediaFullRow{
+		Media:  database.Media{DBID: 1, Path: filepath.Join("roms", "nes", "mario.nes")},
+		Title:  database.MediaTitle{DBID: 10, Name: "Super Mario Bros"},
+		System: database.System{DBID: 100, SystemID: "NES", Name: "NES"},
+	}
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetTitleZapScriptsByMediaDBIDs", mock.Anything, []int64{1}).
+		Return(map[int64]string(nil), errors.New("db busy"))
+
+	_, err := HandleMediaMeta(makeMediaMetaEnv(t, mockDB, mediaMetaParams(row)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get media zapscripts")
 }

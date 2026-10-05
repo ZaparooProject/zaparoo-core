@@ -387,8 +387,111 @@ func browseMediaRequest(
 		return browseVirtual(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 	}
 
+	// Launcher-relative path (SNES/USA): resolved to the indexed folder it
+	// names, then browsed like any other filesystem path.
+	resolved, isRelative, err := resolveRelativeBrowsePath(env, path, systems)
+	if err != nil {
+		return nil, err
+	}
+	if isRelative {
+		path = resolved
+	}
+
 	// Filesystem path
 	return browseFilesystem(env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
+}
+
+// resolveRelativeBrowsePath turns a launcher-relative folder path, the shape
+// relativePath has in browse responses (a system ID, optionally followed by a
+// path below that system's launcher folder), into the absolute folder it
+// names. The bool reports whether path had that shape; any other path is left
+// for browseFilesystem to validate.
+//
+// A system's launcher folder can exist under several roots. The first one, in
+// root order, that holds indexed content wins, which is the order a launch of
+// the same relative path searches in.
+func resolveRelativeBrowsePath(
+	env *requests.RequestEnv, path string, systems []systemdefs.System,
+) (resolved string, isRelative bool, err error) {
+	slashed := filepath.ToSlash(path)
+	if filepath.IsAbs(path) || strings.HasPrefix(slashed, "/") || env.LauncherCache == nil {
+		return "", false, nil
+	}
+	// A path that does not survive cleaning is rejected by browseFilesystem.
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	if cleaned != slashed && cleaned+"/" != slashed {
+		return "", false, nil
+	}
+
+	systemPart, remainder, _ := strings.Cut(cleaned, "/")
+	system, lookupErr := systemdefs.LookupSystem(systemPart)
+	if lookupErr != nil {
+		return "", false, nil //nolint:nilerr // not a relative path; browseFilesystem reports it
+	}
+
+	probeSystems := systems
+	if len(probeSystems) == 0 {
+		probeSystems = []systemdefs.System{*system}
+	}
+	for _, candidate := range relativeMediaPathCandidates(env, system.ID, remainder) {
+		prefix := candidate + "/"
+		dirCount, countErr := env.Database.MediaDB.BrowseDirCount(env.Context, database.BrowseDirCountOptions{
+			ExcludeHidden: env.ExcludeHidden,
+			PathPrefix:    prefix,
+			Systems:       probeSystems,
+		})
+		if countErr != nil {
+			return "", true, fmt.Errorf("error resolving relative path: %w", countErr)
+		}
+		if dirCount > 0 {
+			return candidate, true, nil
+		}
+		fileCount, countErr := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+			ExcludeHidden: env.ExcludeHidden,
+			PathPrefix:    prefix,
+			Systems:       probeSystems,
+		})
+		if countErr != nil {
+			return "", true, fmt.Errorf("error resolving relative path: %w", countErr)
+		}
+		if fileCount > 0 {
+			return candidate, true, nil
+		}
+	}
+	return "", true, models.ClientErrf("relative path not found: %s", cleaned)
+}
+
+// browseDirRelativePath returns the launcher-relative path of a directory:
+// the system ID alone for the system's launcher folder, or the system ID
+// followed by the path below it. It is nil when the directory cannot be
+// attributed to exactly one system or does not sit under that system's
+// launcher folders.
+func browseDirRelativePath(
+	env *requests.RequestEnv, dirPath string, dirSystemIDs []string, systems []systemdefs.System,
+) *string {
+	if env == nil || env.LauncherCache == nil || env.Platform == nil || strings.Contains(dirPath, "://") {
+		return nil
+	}
+	var systemID string
+	switch {
+	case len(dirSystemIDs) == 1:
+		systemID = dirSystemIDs[0]
+	case len(dirSystemIDs) == 0 && len(systems) == 1:
+		systemID = systems[0].ID
+	default:
+		return nil
+	}
+
+	if rel := mediaResponseRelativePath(env, systemID, dirPath); rel != nil {
+		return rel
+	}
+	normalized := helpers.NormalizePathForComparison(dirPath)
+	for _, candidate := range relativeMediaPathCandidates(env, systemID, "") {
+		if helpers.NormalizePathForComparison(candidate) == normalized {
+			return &systemID
+		}
+	}
+	return nil
 }
 
 // browseRoots returns the top-level root entries: filesystem roots with indexed
@@ -521,6 +624,7 @@ func resolveSystemRootEntries(
 		if len(count.SystemIDs) == 1 {
 			entry.SystemID = &count.SystemIDs[0]
 		}
+		entry.RelPath = browseDirRelativePath(env, route, count.SystemIDs, systems)
 		if group, ok := schemeGroups[route]; ok {
 			entry.Group = &group
 		}
@@ -1534,6 +1638,8 @@ func buildBrowseResponse(
 				folderArtEntries = append(folderArtEntries, len(entries))
 			}
 			entry.HasCover = entry.HasCover || mediaEntry.HasCover
+		} else {
+			entry.RelPath = browseDirRelativePath(env, dirPath, dir.SystemIDs, systems)
 		}
 		entries = append(entries, entry)
 	}
@@ -1557,8 +1663,14 @@ func buildBrowseResponse(
 		}
 	}
 
+	var relPath *string
+	if path != "" {
+		relPath = browseDirRelativePath(env, path, nil, systems)
+	}
+
 	return models.BrowseResults{
 		Path:       path,
+		RelPath:    relPath,
 		Entries:    entries,
 		Pagination: pagination,
 		TotalFiles: totalFiles,

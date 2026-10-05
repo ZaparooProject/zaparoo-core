@@ -887,3 +887,69 @@ func TestHandleMediaHistory_FullPageUsesSingleTagBatch(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 	mockMediaDB.AssertExpectations(t)
 }
+
+func TestHandleMediaHistory_IncludesZapScript(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	now := time.Now()
+	mediaPath := filepath.Join(string(filepath.Separator), "mock", "roms", "NES", "smb.nes")
+	missingPath := filepath.Join(string(filepath.Separator), "mock", "roms", "NES", "missing.nes")
+
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{DBID: 1, SystemID: "NES", MediaName: "Super Mario Bros", MediaPath: mediaPath, StartTime: now},
+		{DBID: 2, SystemID: "NES", MediaName: "Missing Game", MediaPath: missingPath, StartTime: now},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 7}}, nil)
+	mockMediaDB.On("GetTitleZapScriptsByMediaDBIDs", mock.Anything, []int64{42}).
+		Return(map[int64]string{42: "@NES/Super Mario Bros (region:us)"}, nil)
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, "@NES/Super Mario Bros (region:us)", resp.Entries[0].ZapScript)
+	assert.Empty(t, resp.Entries[1].ZapScript, "media that is no longer indexed has no script")
+
+	encoded, err := json.Marshal(resp.Entries[1])
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "zapScript")
+
+	mockUserDB.AssertExpectations(t)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_ZapScriptFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mediaPath := filepath.Join(string(filepath.Separator), "mock", "roms", "NES", "smb.nes")
+
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{DBID: 1, SystemID: "NES", MediaName: "Super Mario Bros", MediaPath: mediaPath, StartTime: time.Now()},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
+	mockMediaDB.On("GetTitleZapScriptsByMediaDBIDs", mock.Anything, []int64{42}).
+		Return(map[int64]string(nil), errors.New("db busy"))
+
+	result, err := HandleMediaHistory(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, int64(42), resp.Entries[0].MediaID)
+	assert.Empty(t, resp.Entries[0].ZapScript)
+}

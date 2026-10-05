@@ -50,6 +50,7 @@ func HandleMediaHistoryLatest(env requests.RequestEnv) (any, error) { //nolint:g
 
 	return models.MediaHistoryLatestResponse{
 		Entry: &models.MediaHistoryLatestEntry{
+			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,

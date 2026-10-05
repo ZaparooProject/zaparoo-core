@@ -114,10 +114,14 @@ type BrowseEntry struct {
 
 type BrowseResults struct {
 	Pagination *PaginationInfo `json:"pagination,omitempty"`
-	Path       string          `json:"path"`
-	Entries    []BrowseEntry   `json:"entries"`
-	TotalFiles int             `json:"totalFiles"`
-	TotalDirs  int             `json:"totalDirs"`
+	// RelPath is the browsed directory's own launcher-relative path. Set
+	// only for a single-system browse of a folder under that system's
+	// launcher folders.
+	RelPath    *string       `json:"relativePath,omitempty"`
+	Path       string        `json:"path"`
+	Entries    []BrowseEntry `json:"entries"`
+	TotalFiles int           `json:"totalFiles"`
+	TotalDirs  int           `json:"totalDirs"`
 }
 
 // BrowseIndexGroup is one first-character section of a browse list. Key is the
@@ -359,14 +363,17 @@ type ReaderResponse struct {
 }
 
 type MediaHistoryResponseEntry struct {
-	RelPath    *string `json:"relativePath,omitempty"`
-	EndedAt    *string `json:"endedAt,omitempty"`
-	SystemID   string  `json:"systemId"`
-	SystemName string  `json:"systemName"`
-	MediaName  string  `json:"mediaName"`
-	MediaPath  string  `json:"mediaPath"`
-	LauncherID string  `json:"launcherId"`
-	StartedAt  string  `json:"startedAt"`
+	RelPath *string `json:"relativePath,omitempty"`
+	EndedAt *string `json:"endedAt,omitempty"`
+	// ZapScript is the title command that launches this media. Omitted when
+	// the media is no longer indexed or enrichment failed.
+	ZapScript  string `json:"zapScript,omitempty"`
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaName  string `json:"mediaName"`
+	MediaPath  string `json:"mediaPath"`
+	LauncherID string `json:"launcherId"`
+	StartedAt  string `json:"startedAt"`
 	// SessionSource and SessionConfidence distinguish an externally-timed
 	// session's evidence from an estimate; a session Core timed itself is
 	// "active_media", and a row predating this distinction is "unspecified".
@@ -391,12 +398,13 @@ type MediaHistoryResponse struct {
 }
 
 type MediaHistoryLatestEntry struct {
-	SystemID   string `json:"systemId"`
-	SystemName string `json:"systemName"`
-	MediaName  string `json:"mediaName"`
-	MediaPath  string `json:"mediaPath"`
-	LauncherID string `json:"launcherId"`
-	StartedAt  string `json:"startedAt"`
+	RelPath    *string `json:"relativePath,omitempty"`
+	SystemID   string  `json:"systemId"`
+	SystemName string  `json:"systemName"`
+	MediaName  string  `json:"mediaName"`
+	MediaPath  string  `json:"mediaPath"`
+	LauncherID string  `json:"launcherId"`
+	StartedAt  string  `json:"startedAt"`
 }
 
 type MediaHistoryLatestResponse struct {
@@ -404,12 +412,14 @@ type MediaHistoryLatestResponse struct {
 }
 
 type MediaHistoryTopEntry struct {
-	RelPath      *string `json:"relativePath,omitempty"`
-	SystemID     string  `json:"systemId"`
-	SystemName   string  `json:"systemName"`
-	MediaName    string  `json:"mediaName"`
-	MediaPath    string  `json:"mediaPath"`
-	LastPlayedAt string  `json:"lastPlayedAt"`
+	RelPath *string `json:"relativePath,omitempty"`
+	// ZapScript follows the same rule as MediaHistoryResponseEntry.ZapScript.
+	ZapScript    string `json:"zapScript,omitempty"`
+	SystemID     string `json:"systemId"`
+	SystemName   string `json:"systemName"`
+	MediaName    string `json:"mediaName"`
+	MediaPath    string `json:"mediaPath"`
+	LastPlayedAt string `json:"lastPlayedAt"`
 	// Tags follows the same nil-omitted / empty-array rule as
 	// MediaHistoryResponseEntry.Tags.
 	Tags          []database.TagInfo `json:"tags,omitzero"`
@@ -454,14 +464,20 @@ type MediaMetaTitleResponse struct {
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
-	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
-	LauncherOverride    *string                          `json:"launcherOverride,omitempty"`
-	Path                string                           `json:"path"`
-	ParentDir           string                           `json:"parentDir"`
-	Tags                []database.TagInfo               `json:"tags"`
-	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
-	Title               MediaMetaTitleResponse           `json:"title"`
-	IsMissing           bool                             `json:"isMissing"`
+	Properties       map[string]MediaMetaPropertyItem `json:"properties"`
+	LauncherOverride *string                          `json:"launcherOverride,omitempty"`
+	// RelPath is the launcher-relative convenience path, when one can be
+	// derived.
+	RelPath *string `json:"relativePath,omitempty"`
+	Path    string  `json:"path"`
+	// ZapScript is the title command that launches this media. Omitted for
+	// a missing media row.
+	ZapScript           string                 `json:"zapScript,omitempty"`
+	ParentDir           string                 `json:"parentDir"`
+	Tags                []database.TagInfo     `json:"tags"`
+	AvailableImageTypes []string               `json:"availableImageTypes,omitempty"`
+	Title               MediaMetaTitleResponse `json:"title"`
+	IsMissing           bool                   `json:"isMissing"`
 }
 
 // MediaMetaResponse is the response envelope for the media.meta method.

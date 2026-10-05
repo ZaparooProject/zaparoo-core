@@ -1131,6 +1131,23 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
+	// A file that exists under the named system's launcher folders is the
+	// <system>/<path> format, whatever its name looks like. Checked before the
+	// title format so a path with no extension, or one inside a zip, is not
+	// mistaken for a title. A directory is left to the title check, where a
+	// game's own folder name has always resolved.
+	if systemPart, lookupPath, ok := strings.Cut(path, "/"); ok && lookupPath != "" {
+		if system, lookupErr := systemdefs.LookupSystem(systemPart); lookupErr == nil {
+			fp, found := findSystemFile(fs, pl, &env, system, lookupPath)
+			if found && !isDirectory(fs, fp) {
+				log.Debug().Msgf("launching found system path: %s", fp)
+				return platforms.CmdResult{
+					MediaChanged: true,
+				}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
+			}
+		}
+	}
+
 	// check for title launch format: SystemID/Game Name
 	if mightBeTitle(path) {
 		log.Debug().Msgf("detected possible title format, forwarding to cmdTitle: %s", path)
@@ -1153,44 +1170,11 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
-	var launchers []platforms.Launcher
-	allLaunchers := env.Launchers.Get(pl, env.Cfg)
-	for i := range allLaunchers {
-		if allLaunchers[i].SystemID == system.ID {
-			launchers = append(launchers, allLaunchers[i])
-		}
-	}
-
-	// Also collect launchers from fallback systems
-	for _, fallbackID := range system.Fallbacks {
-		for i := range allLaunchers {
-			if allLaunchers[i].SystemID == fallbackID {
-				launchers = append(launchers, allLaunchers[i])
-			}
-		}
-	}
-
-	var folders []string
-	for i := range launchers {
-		for _, folder := range launchers[i].Folders {
-			if !helpers.Contains(folders, folder) {
-				folders = append(folders, folder)
-			}
-		}
-	}
-
-	for _, f := range folders {
-		systemPath := filepath.Join(f, lookupPath)
-		log.Debug().Msgf("checking system path: %s", systemPath)
-		var systemFindErr error
-		var fp string
-		if fp, systemFindErr = findFile(fs, pl, env.Cfg, systemPath, env.PathRoot); systemFindErr == nil {
-			log.Debug().Msgf("launching found system path: %s", fp)
-			return platforms.CmdResult{
-				MediaChanged: true,
-			}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
-		}
-		log.Debug().Err(systemFindErr).Msgf("error finding system file: %s", lookupPath)
+	if fp, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
+		log.Debug().Msgf("launching found system path: %s", fp)
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
 	}
 
 	gamesdb := env.Database.MediaDB
@@ -1225,6 +1209,60 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	}
 
 	return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, path)
+}
+
+// findSystemFile looks for lookupPath under the folders of every launcher for
+// system and its fallback systems, returning the first file found.
+func findSystemFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	system *systemdefs.System,
+	lookupPath string,
+) (string, bool) {
+	var launchers []platforms.Launcher
+	allLaunchers := env.Launchers.Get(pl, env.Cfg)
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID == system.ID {
+			launchers = append(launchers, allLaunchers[i])
+		}
+	}
+
+	// Also collect launchers from fallback systems
+	for _, fallbackID := range system.Fallbacks {
+		for i := range allLaunchers {
+			if allLaunchers[i].SystemID == fallbackID {
+				launchers = append(launchers, allLaunchers[i])
+			}
+		}
+	}
+
+	var folders []string
+	for i := range launchers {
+		for _, folder := range launchers[i].Folders {
+			if !helpers.Contains(folders, folder) {
+				folders = append(folders, folder)
+			}
+		}
+	}
+
+	for _, f := range folders {
+		systemPath := filepath.Join(f, lookupPath)
+		log.Debug().Msgf("checking system path: %s", systemPath)
+		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
+		if findErr == nil {
+			return fp, true
+		}
+		log.Debug().Err(findErr).Msgf("error finding system file: %s", lookupPath)
+	}
+	return "", false
+}
+
+// isDirectory reports whether path is an existing directory. A path that
+// cannot be read, such as one inside a zip, is not one.
+func isDirectory(fs afero.Fs, path string) bool {
+	info, err := fs.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 //nolint:gocritic // single-use parameter in command handler

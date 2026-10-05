@@ -89,6 +89,10 @@ func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
+	zapScripts, err := db.GetTitleZapScriptsByMediaDBIDs(env.Context, mediaIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media zapscripts: %w", err)
+	}
 
 	if !params.Batch {
 		mediaTags := mediaTagsByID[resolved[0].Row.DBID]
@@ -104,7 +108,7 @@ func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
 			}
 		}
 		return buildMediaMetaResponse(
-			resolved[0].Row,
+			&env, resolved[0].Row, zapScripts[resolved[0].Row.DBID],
 			mediaTags, titleTags[resolved[0].Row.Title.DBID],
 			mediaProps, titleProps[resolved[0].Row.Title.DBID],
 		), nil
@@ -130,7 +134,7 @@ func HandleMediaMeta(env requests.RequestEnv) (result any, resultErr error) {
 			}
 		}
 		response := buildMediaMetaResponse(
-			item.Row,
+			&env, item.Row, zapScripts[item.Row.DBID],
 			mediaTags, titleTags[item.Row.Title.DBID],
 			mediaProps, titleProps[item.Row.Title.DBID],
 		)
@@ -240,11 +244,20 @@ func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any
 		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
-	return buildMediaMetaResponse(row, mediaTags, titleTags, mediaProps, titleProps), nil
+	zapScripts, err := db.GetTitleZapScriptsByMediaDBIDs(env.Context, []int64{row.DBID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media zapscripts: %w", err)
+	}
+
+	return buildMediaMetaResponse(
+		env, row, zapScripts[row.DBID], mediaTags, titleTags, mediaProps, titleProps,
+	), nil
 }
 
 func buildMediaMetaResponse(
+	env *requests.RequestEnv,
 	row *database.MediaFullRow,
+	zapScript string,
 	mediaTags []database.TagInfo,
 	titleTags []database.TagInfo,
 	mediaProps []database.MediaProperty,
@@ -269,6 +282,8 @@ func buildMediaMetaResponse(
 
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:                row.Path,
+		RelPath:             mediaResponseRelativePath(env, row.System.SystemID, row.Path),
+		ZapScript:           zapScript,
 		ParentDir:           row.ParentDir,
 		IsMissing:           row.IsMissing,
 		Tags:                mediaTags,

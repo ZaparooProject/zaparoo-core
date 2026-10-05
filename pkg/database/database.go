@@ -1382,6 +1382,10 @@ type MediaDBI interface {
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
 	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
+	// GetTitleZapScriptsByMediaDBIDs returns the ZapScript title command for each
+	// indexed, non-missing media row, keyed by MediaDBID. IDs with no such row
+	// are absent from the result.
+	GetTitleZapScriptsByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64]string, error)
 
 	SetIndexingCacheSize(enable bool)
 	SetWALAutoCheckpoint(pages int)
