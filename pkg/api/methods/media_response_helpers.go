@@ -289,6 +289,27 @@ func mediaTagsByRefs(
 	return tags, true
 }
 
+// mediaTitleZapScripts batch-loads the ZapScript title command for resolved
+// media rows. It is optional enrichment: a failure returns no scripts, so
+// callers omit the field rather than fail the page.
+func mediaTitleZapScripts(
+	ctx context.Context, db database.MediaDBI, refs []database.MediaRef,
+) map[int64]string {
+	if db == nil || len(refs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(refs))
+	for _, ref := range refs {
+		ids = append(ids, ref.MediaDBID)
+	}
+	scripts, err := db.GetTitleZapScriptsByMediaDBIDs(ctx, ids)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media zapscripts")
+		return nil
+	}
+	return scripts
+}
+
 // mediaEntryTags returns the tags for one response entry: nil (omitted from
 // JSON) when the media is unresolved or tags are unknown, and an empty slice
 // when the media is indexed but untagged.

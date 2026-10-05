@@ -29,9 +29,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,4 +174,63 @@ func TestHandleMediaHistoryLatest_ResponseHasNoTagsAndNoMediaDBCalls(t *testing.
 	assert.NotContains(t, decoded.Entry, "mediaId")
 	assert.Empty(t, mockMediaDB.Calls, "media.history.latest must not touch the media database")
 	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistoryLatest_RelativePath(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes", SystemID: "SNES", Folders: []string{"SNES"}},
+	})
+
+	tests := []struct {
+		wantRel   *string
+		name      string
+		mediaPath string
+	}{
+		{
+			name:      "under the launcher folder",
+			mediaPath: filepath.Join(rootDir, "SNES", "USA", "Super Mario World.sfc"),
+			wantRel:   stringPtr("SNES/USA/Super Mario World.sfc"),
+		},
+		{
+			name:      "outside every launcher folder",
+			mediaPath: filepath.Join(string(filepath.Separator), "elsewhere", "Super Mario World.sfc"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockUserDB.On("GetLatestMediaHistory").Return(database.MediaHistoryEntry{
+				SystemID:  "SNES",
+				MediaPath: tt.mediaPath,
+				StartTime: time.Unix(1_770_000_000, 0).UTC(),
+			}, true, nil).Once()
+
+			result, err := HandleMediaHistoryLatest(requests.RequestEnv{
+				Context:       context.Background(),
+				Database:      &database.Database{UserDB: mockUserDB},
+				Platform:      mockPlatform,
+				Config:        &config.Instance{},
+				LauncherCache: launcherCache,
+			})
+			require.NoError(t, err)
+
+			resp, ok := result.(models.MediaHistoryLatestResponse)
+			require.True(t, ok)
+			require.NotNil(t, resp.Entry)
+			assert.Equal(t, tt.mediaPath, resp.Entry.MediaPath)
+			if tt.wantRel == nil {
+				assert.Nil(t, resp.Entry.RelPath)
+				return
+			}
+			require.NotNil(t, resp.Entry.RelPath)
+			assert.Equal(t, *tt.wantRel, *resp.Entry.RelPath)
+		})
+	}
 }

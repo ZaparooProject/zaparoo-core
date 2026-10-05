@@ -114,6 +114,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	coverStatusesKnown := false
 	var tagsByID map[int64][]database.TagInfo
 	var coverColors map[int64]string
+	var zapScripts map[int64]string
 	tagsKnown := false
 	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
 	defer cancelEnrichment()
@@ -136,6 +137,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			}
 		}
 		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
+		zapScripts = mediaTitleZapScripts(enrichCtx, env.Database.MediaDB, resolvedRefs)
 		coverIDs := make([]int64, 0, len(resolvedRefs))
 		for _, ref := range resolvedRefs {
 			coverIDs = append(coverIDs, ref.MediaDBID)
@@ -165,6 +167,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
 			MediaID:           mediaID,
 			RelPath:           mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			ZapScript:         zapScripts[mediaID],
 			HasCover:          hasCover,
 			CoverColor:        coverColors[mediaID],
 			SystemID:          entry.SystemID,

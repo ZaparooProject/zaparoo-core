@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -355,4 +356,74 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	})
 
 	return resultTags, nil
+}
+
+// GetTitleZapScriptsByMediaDBIDs builds the ZapScript title command for each
+// media row, keyed by MediaDBID: the same @SystemID/Name (type:value) form the
+// search and browse queries emit, including the title's disambiguating tags.
+// IDs that match no non-missing media row are absent from the result.
+func (db *MediaDB) GetTitleZapScriptsByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64]string, error) {
+	scripts := make(map[int64]string, len(mediaDBIDs))
+	if len(mediaDBIDs) == 0 {
+		return scripts, nil
+	}
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return nil, err
+	}
+	for chunk := range slices.Chunk(mediaDBIDs, batchLookupIDsPerQuery) {
+		results, queryErr := queryTitleZapScriptRows(ctx, sqlDB, chunk)
+		if queryErr != nil {
+			db.NoteCorruption(queryErr)
+			return nil, queryErr
+		}
+		if attachErr := attachZapScriptTags(ctx, sqlDB, results); attachErr != nil {
+			db.NoteCorruption(attachErr)
+			return nil, attachErr
+		}
+		for i := range results {
+			scripts[results[i].MediaID] = results[i].ZapScript()
+		}
+	}
+	return scripts, nil
+}
+
+func queryTitleZapScriptRows(
+	ctx context.Context, sqlDB *sql.DB, ids []int64,
+) (results []database.SearchResultWithCursor, err error) {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := sqlDB.QueryContext(ctx, `
+		SELECT Media.DBID, Systems.SystemID, MediaTitles.Name, MediaTitles.DisambiguationTypes
+		FROM Media
+		JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE Media.IsMissing = 0 AND Media.DBID IN (`+prepareVariadic("?", ",", len(ids))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get title zapscripts: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close title zapscripts: %w", closeErr)
+		}
+	}()
+	results = make([]database.SearchResultWithCursor, 0, len(ids))
+	for rows.Next() {
+		var result database.SearchResultWithCursor
+		if scanErr := rows.Scan(
+			&result.MediaID, &result.SystemID, &result.Name, &result.DisambiguationTypes,
+		); scanErr != nil {
+			return nil, fmt.Errorf("scan title zapscript: %w", scanErr)
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate title zapscripts: %w", err)
+	}
+	return results, nil
 }

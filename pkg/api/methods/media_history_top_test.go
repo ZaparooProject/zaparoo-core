@@ -643,3 +643,31 @@ func TestHandleMediaHistoryTop_FullPageUsesSingleTagBatch(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 	mockMediaDB.AssertExpectations(t)
 }
+
+func TestHandleMediaHistoryTop_IncludesZapScript(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mediaPath := filepath.Join(string(filepath.Separator), "mock", "roms", "SNES", "smw.sfc")
+
+	mockUserDB.On("GetMediaHistoryTop", []string(nil), (*time.Time)(nil), 25).Return([]database.MediaHistoryTopEntry{
+		{SystemID: "SNES", MediaName: "Super Mario World", MediaPath: mediaPath, LastPlayedAt: time.Now()},
+	}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+		Return([]database.MediaPathID{{SystemID: "SNES", Path: mediaPath, DBID: 9}}, nil)
+	mockMediaDB.On("GetTitleZapScriptsByMediaDBIDs", mock.Anything, []int64{9}).
+		Return(map[int64]string{9: "@SNES/Super Mario World"}, nil)
+
+	result, err := HandleMediaHistoryTop(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryTopResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, "@SNES/Super Mario World", resp.Entries[0].ZapScript)
+	mockMediaDB.AssertExpectations(t)
+}

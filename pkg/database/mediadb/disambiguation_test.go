@@ -1054,3 +1054,41 @@ func TestGameVariantTagSQLPredicate_AgreesWithGo(t *testing.T) {
 	assert.False(t, matched[pair{"dump", "hacked:ffe"}])
 	assert.False(t, matched[pair{"dump", "modified"}])
 }
+
+func TestGetTitleZapScriptsByMediaDBIDs_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	contraSystem, _, contraIDs := setupDisambTitle(t, mediaDB, "NES", "Contra", []disambTitleMedia{
+		{path: "/roms/nes/contra-usa.nes", tags: map[string]string{"region": "us", "year": "1988"}},
+		{path: "/roms/nes/contra-jpn.nes", tags: map[string]string{"region": "jp", "year": "1988"}},
+	})
+	_, _, zeldaIDs := setupDisambTitle(t, mediaDB, "NES", "The Legend of Zelda", []disambTitleMedia{
+		{path: "/roms/nes/zelda.nes", tags: map[string]string{"region": "us"}},
+	})
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{contraSystem}))
+
+	const unknownID = int64(999_999)
+	got, err := mediaDB.GetTitleZapScriptsByMediaDBIDs(ctx, []int64{contraIDs[0], contraIDs[1], zeldaIDs[0], unknownID})
+	require.NoError(t, err)
+
+	assert.Equal(t, map[int64]string{
+		contraIDs[0]: "@NES/Contra (region:us)",
+		contraIDs[1]: "@NES/Contra (region:jp)",
+		zeldaIDs[0]:  "@NES/The Legend of Zelda",
+	}, got, "variants carry their disambiguating tag; an unknown ID is absent")
+
+	// The script is the one a search row reports for the same media.
+	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: "/roms/nes/", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	for i := range results {
+		assert.Equal(t, results[i].ZapScript(), got[results[i].MediaID])
+	}
+
+	empty, err := mediaDB.GetTitleZapScriptsByMediaDBIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}

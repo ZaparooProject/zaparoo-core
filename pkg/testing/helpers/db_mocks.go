@@ -3365,6 +3365,25 @@ func (m *MockMediaDBI) PutMediaCoverThumb(
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+// GetTitleZapScriptsByMediaDBIDs returns no scripts unless a test sets an
+// expectation.
+func (m *MockMediaDBI) GetTitleZapScriptsByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64]string, error) {
+	if !m.hasExpectedCall("GetTitleZapScriptsByMediaDBIDs") {
+		return map[int64]string{}, nil
+	}
+	args := m.Called(ctx, mediaDBIDs)
+	scripts, ok := args.Get(0).(map[int64]string)
+	if !ok {
+		scripts = map[int64]string{}
+	}
+	if err := args.Error(1); err != nil {
+		return scripts, fmt.Errorf("mock get title zapscripts failed: %w", err)
+	}
+	return scripts, nil
+}
+
 // GetMediaCoverColors returns no colours unless a test sets an expectation.
 func (m *MockMediaDBI) GetMediaCoverColors(
 	ctx context.Context, mediaDBIDs []int64,

@@ -837,6 +837,8 @@ Browse indexed media content by directory, similar to navigating a file manager.
 
 When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
 
+`path` also accepts the launcher-relative form reported as `relativePath`: a system ID, optionally followed by a path below that system's launcher folder (for example `SNES` or `SNES/USA`). Core browses the first matching folder, in platform root order, that holds indexed content, and the result's `path` is that folder's absolute path. A relative path that matches no indexed folder is an error. This lets a client keep a folder reference that survives the media moving to another root.
+
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
 A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. Display names leave out set markers such as `(Disc 1)`; the disc number is reported in `tags` instead. A directory qualifies when it has no nested media and holds one media file, one `.m3u` plus its discs, one `.cue` plus its companion tracks, or at least two supported disc-image files that all share one positive title identity. Shared-title disc sets support `.cue`, `.chd`, `.iso`, `.bin`, `.img`, and `.pbp`; mixed title identities or other extensions remain ambiguous. The selected target is deterministic by path then media ID. Existing single-file, playlist, and cue precedence remains unchanged. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
@@ -859,7 +861,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key        | Type   | Required | Description                                                                                                |
 | :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
-| path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
+| path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths, launcher-relative paths (e.g. `SNES/USA`), and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | includeHidden | boolean | No | Include hidden media and its contribution to directory/root counts. Defaults to `false`. Repeat with cursor requests. |
@@ -875,6 +877,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | Key        | Type                                  | Required | Description                                                              |
 | :--------- | :------------------------------------ | :------- | :----------------------------------------------------------------------- |
 | path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
+| relativePath | string                              | No       | Launcher-relative path of the browsed directory itself (for example `SNES/USA`). Present only when `systems` names exactly one system and the directory sits under that system's launcher folders. |
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
 | totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
@@ -893,7 +896,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries. |
-| relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
+| relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries, and on `directory` and `root` entries that belong to exactly one system, where it names the folder itself (`SNES/USA`, or `SNES` for the system's launcher folder) and can be sent back as `path`. Omitted for unmatched absolute paths, virtual URIs, and folders shared by several systems. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, plus any tag that makes the file a distinct game (a ROM hack, homebrew or public-domain work) even when it has no sibling, ordered by display importance. Same object shape as `tags`. Omitted when there is nothing to disambiguate. |
 | multiDisc    | boolean  | No       | `true` on a `directory` entry that stands for several disc images of one game. Its launch fields point at the first disc; browse its `path` to list the others. Omitted otherwise. |
@@ -939,7 +942,8 @@ All parameters are optional. When called with no parameters, returns root entrie
         "fileCount": 150,
         "hasCover": false,
         "systemId": "SNES",
-        "systemIds": ["SNES"]
+        "systemIds": ["SNES"],
+        "relativePath": "SNES"
       }
     ],
     "totalFiles": 0
@@ -1573,7 +1577,7 @@ Returns `null` on success.
 
 Return the most recent played media entry from the user database only. This is intended for startup paths that need the last played game as quickly as possible, without media database enrichment.
 
-This method does not return tags, metadata, media IDs, relative paths, pagination, end time, or play time.
+This method does not return tags, metadata, media IDs, ZapScript, pagination, end time, or play time.
 
 #### Parameters
 
@@ -1593,6 +1597,7 @@ None. Empty params may be omitted or sent as `{}`.
 | systemName | string | Yes      | Display name of the system from the history row. |
 | mediaName  | string | Yes      | Display name of the media from the history row. |
 | mediaPath  | string | Yes      | Path to the media file from the history row.    |
+| relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | launcherId | string | Yes      | ID of the launcher used.                        |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format. |
 
@@ -1620,6 +1625,7 @@ None. Empty params may be omitted or sent as `{}`.
       "systemName": "Super Nintendo Entertainment System",
       "mediaName": "Super Mario World",
       "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+      "relativePath": "SNES/Super Mario World (USA).sfc",
       "launcherId": "SNES",
       "startedAt": "2025-01-22T14:30:00Z"
     }
@@ -1662,6 +1668,7 @@ Optionally, an object:
 | mediaName  | string | Yes      | Display name of the media.                             |
 | mediaPath  | string | Yes      | Path to the media file.                                |
 | relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| zapScript  | string | No       | ZapScript command to launch this media item, in the same form `media.search` reports. Omitted when the history path cannot be resolved in the current media database. |
 | hasCover   | boolean | Yes     | Whether media-level or title-level image properties are available. |
 | coverColor | string  | No      | Average colour of the cover thumbnail as `#rrggbb`, for a placeholder while the image loads. Omitted until Core has built a thumbnail for the media through `media.image` with a `maxSize`. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
@@ -1703,6 +1710,7 @@ Optionally, an object:
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
         "relativePath": "snes/Super Mario World (USA).sfc",
+        "zapScript": "@SNES/Super Mario World",
         "hasCover": true,
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
@@ -1757,6 +1765,7 @@ Optionally, an object:
 | mediaName     | string | Yes      | Display name of the media.                             |
 | mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
 | relativePath  | string | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| zapScript     | string | No       | ZapScript command to launch this media item, in the same form `media.search` reports. Omitted when the history path cannot be resolved in the current media database. |
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
@@ -1793,6 +1802,7 @@ Optionally, an object:
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
         "relativePath": "snes/Super Mario World (USA).sfc",
+        "zapScript": "@SNES/Super Mario World",
         "totalPlayTime": 7200,
         "sessionCount": 12,
         "lastPlayedAt": "2026-02-14T20:30:00Z",
@@ -1996,6 +2006,8 @@ Single requests return the existing single `media` response shape. Batch request
 | Key        | Type                                    | Required | Description                                           |
 | :--------- | :-------------------------------------- | :------- | :---------------------------------------------------- |
 | path       | string                                  | Yes      | Media file path.                                      |
+| relativePath | string                                | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| zapScript  | string                                  | No       | ZapScript command to launch this media item, in the same form `media.search` reports. Omitted for a missing media row. |
 | parentDir  | string                                  | Yes      | Parent directory stored for the media row.            |
 | isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
 | tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
@@ -2053,6 +2065,8 @@ Property keys are canonical type tags such as `property:description`, `property:
   "result": {
     "media": {
       "path": "/roms/snes/Super Mario World.sfc",
+      "relativePath": "SNES/Super Mario World.sfc",
+      "zapScript": "@SNES/Super Mario World",
       "parentDir": "/roms/snes",
       "isMissing": false,
       "tags": [
