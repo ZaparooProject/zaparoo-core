@@ -23,6 +23,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -494,7 +495,7 @@ namespace ZaparooPlaynite
         {
             var info = new ProcessStartInfo
             {
-                FileName = Path.Combine(Environment.SystemDirectory, "taskkill.exe"),
+                FileName = Environment.SystemDirectory + Path.DirectorySeparatorChar + "taskkill.exe",
                 Arguments = "/PID " + pid + " /T" + (force ? " /F" : ""),
                 CreateNoWindow = true,
                 UseShellExecute = false,
@@ -640,36 +641,32 @@ namespace ZaparooPlaynite
                 e is AccessViolationException || e is ThreadAbortException;
         }
 
-        private const uint ProcessQueryLimitedInformation = 0x1000;
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool QueryFullProcessImageName(
-            IntPtr process, uint flags, StringBuilder name, ref uint size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr handle);
-
-        // Reads a process's image path. Process.MainModule cannot be used:
-        // Playnite is a 32-bit program and most games are 64-bit.
+        // Reads a process's image path through WMI. Process.MainModule cannot
+        // be used: Playnite is a 32-bit program and most games are 64-bit,
+        // which it refuses to inspect.
         private static string ProcessImagePath(int pid)
         {
-            var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid);
-            if (handle == IntPtr.Zero)
-            {
-                return null;
-            }
             try
             {
-                var buffer = new StringBuilder(32768);
-                var size = (uint)buffer.Capacity;
-                return QueryFullProcessImageName(handle, 0, buffer, ref size) ? buffer.ToString() : null;
+                var query = "SELECT ExecutablePath FROM Win32_Process WHERE ProcessId = " + pid;
+                using (var searcher = new ManagementObjectSearcher(query))
+                using (var results = searcher.Get())
+                {
+                    foreach (var result in results)
+                    {
+                        using (result)
+                        {
+                            return result["ExecutablePath"] as string;
+                        }
+                    }
+                }
+                return null;
             }
-            finally
+            catch (Exception e) when (e is ManagementException || e is COMException ||
+                e is UnauthorizedAccessException)
             {
-                CloseHandle(handle);
+                logger.Debug("Could not read image path of process " + pid + ": " + e.Message);
+                return null;
             }
         }
     }
