@@ -3757,22 +3757,27 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 
 	// For each candidate dir: skip if the recursive FileCount exceeds the
 	// direct rows (media in nested subdirectories). Otherwise apply
-	// container.SelectLaunchMedia to pick the launch target (mirrors the logic
-	// in FindSingleContainerLaunchMedia).
+	// container.SelectLaunchMedia's rule to pick the launch target (mirrors the
+	// logic in FindSingleContainerLaunchMedia).
 	type resolved struct {
-		childDir string
-		media    database.Media
+		childDir  string
+		media     database.Media
+		multiDisc bool
 	}
 	candidates := make([]resolved, 0, len(childDirRows))
 	for childDir, directRows := range childDirRows {
 		if len(directRows) != expectedCounts[childDir] {
 			continue
 		}
-		chosen := container.SelectLaunchMedia(directRows)
+		var sel container.LaunchSelector
+		for i := range directRows {
+			sel.Add(&directRows[i])
+		}
+		chosen := sel.Result()
 		if chosen == nil {
 			continue
 		}
-		candidates = append(candidates, resolved{childDir: childDir, media: *chosen})
+		candidates = append(candidates, resolved{childDir: childDir, media: *chosen, multiDisc: sel.MultiDisc()})
 	}
 	if len(candidates) == 0 {
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
@@ -3811,9 +3816,10 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			mediaTags = []database.TagInfo{}
 		}
 		aliases = append(aliases, database.SingletonContainerAlias{
-			ChildDir: c.childDir,
-			Row:      row,
-			Tags:     mediaTags,
+			ChildDir:  c.childDir,
+			Row:       row,
+			Tags:      mediaTags,
+			MultiDisc: c.multiDisc,
 		})
 		synthetic = append(synthetic, database.SearchResultWithCursor{
 			SystemID:            row.System.SystemID,

@@ -65,6 +65,18 @@ var ArtworkDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageMap): {"map", "maps"},
 }
 
+// DirectoryArtworkDirCandidates returns the ordered media sub-directory names
+// searched for a directory's own artwork of the given TagPropertyImage value.
+// A folders directory holds pictures of folders only, so it is searched here
+// and never for a game file.
+func DirectoryArtworkDirCandidates(propValue string) []string {
+	candidates := ArtworkDirCandidates[propValue]
+	if propValue != string(tags.TagPropertyImageImage) {
+		return candidates
+	}
+	return append([]string{"folders", "folder"}, candidates...)
+}
+
 // StatMediaDirs reads <rootPath>/media and returns subdirectory name to path.
 func StatMediaDirs(rootPath string) map[string]string {
 	return StatMediaDirsFS(afero.NewOsFs(), rootPath)

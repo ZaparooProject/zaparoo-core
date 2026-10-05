@@ -106,6 +106,10 @@ type BrowseEntry struct {
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
 	HasCover           bool               `json:"hasCover"`
+	// MultiDisc marks a directory entry that stands for several disc images
+	// of one game. Its launch fields point at the first disc; the others are
+	// listed by browsing the entry's path.
+	MultiDisc bool `json:"multiDisc,omitempty"`
 }
 
 type BrowseResults struct {

@@ -1082,7 +1082,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_UsesMediaDisplayNameFallbacks(t
 			mediaPath: filepath.ToSlash(filepath.Join("roms", "PSX", "D (USA)", "D (USA) (Disc 1).chd")),
 			sortName:  "D (Disc 1)",
 			titleName: "D",
-			wantName:  "D (Disc 1)",
+			wantName:  "D",
 		},
 		{
 			name:      "path basename",
@@ -1632,6 +1632,155 @@ func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T
 			mockPlatform.AssertExpectations(t)
 		})
 	}
+}
+
+func TestBuildBrowseResponse_MultiDiscDirectory(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	systems := []systemdefs.System{{ID: "PSX"}}
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirName := "Chrono Cross (USA)"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Chrono Cross (USA) (Disc 1).cue")),
+			ParentDir: dirPath + "/",
+			SortName:  "Chrono Cross (Disc 1)",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Chrono Cross"},
+		System: psxSystem,
+	}
+	discTag := database.TagInfo{Type: "disc", Tag: "1"}
+	regionTag := database.TagInfo{Type: "region", Tag: "us"}
+
+	tests := []struct {
+		name              string
+		wantScript        string
+		wantColor         string
+		wantTags          []database.TagInfo
+		multiDisc         bool
+		directoryHasCover bool
+	}{
+		{
+			name:       "disc set drops the disc tag but still launches disc one",
+			multiDisc:  true,
+			wantTags:   []database.TagInfo{regionTag},
+			wantScript: "@PSX/Chrono Cross (disc:1) (region:us)",
+			wantColor:  "#112233",
+		},
+		{
+			name:       "single launch target keeps its disc tag",
+			wantTags:   []database.TagInfo{discTag, regionTag},
+			wantScript: "@PSX/Chrono Cross (disc:1) (region:us)",
+			wantColor:  "#112233",
+		},
+		{
+			name:              "folder artwork is not given the disc's cover colour",
+			multiDisc:         true,
+			directoryHasCover: true,
+			wantTags:          []database.TagInfo{regionTag},
+			wantScript:        "@PSX/Chrono Cross (disc:1) (region:us)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			alias := []database.SingletonContainerAlias{{
+				ChildDir:      dirPath + "/",
+				Row:           row,
+				Tags:          []database.TagInfo{discTag, regionTag},
+				ZapScriptTags: []database.TagInfo{discTag, regionTag},
+				HasCover:      true,
+				MultiDisc:     tt.multiDisc,
+			}}
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Maybe()
+			mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+			mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+				[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 2}}).
+				Return(alias, nil).Once()
+			mockMediaDB.On("GetMediaCoverColors", mock.Anything, []int64{row.DBID}).
+				Return(map[int64]uint32{row.DBID: 0x112233}, nil).Once()
+
+			env := &requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{MediaDB: mockMediaDB},
+				Platform: mockPlatform,
+			}
+			result, err := buildBrowseResponse(env, path,
+				[]database.BrowseDirectoryResult{{
+					Name: dirName, FileCount: 2, SystemIDs: []string{"PSX"}, HasCover: tt.directoryHasCover,
+				}}, nil, defaultMaxResults, 0, 0, nil, false, systems)
+			require.NoError(t, err)
+			browseResults, ok := result.(models.BrowseResults)
+			require.True(t, ok)
+			require.Len(t, browseResults.Entries, 1)
+			entry := browseResults.Entries[0]
+			assert.Equal(t, "directory", entry.Type)
+			assert.Equal(t, dirPath, entry.Path)
+			assert.Equal(t, "Chrono Cross", entry.Name)
+			assert.Equal(t, row.DBID, entry.MediaID)
+			assert.Equal(t, tt.multiDisc, entry.MultiDisc)
+			assert.Equal(t, tt.wantTags, entry.DisambiguatingTags)
+			assert.Equal(t, []database.TagInfo{discTag, regionTag}, entry.Tags)
+			require.NotNil(t, entry.ZapScript)
+			assert.Equal(t, tt.wantScript, *entry.ZapScript)
+			assert.Equal(t, tt.wantColor, entry.CoverColor)
+			assert.True(t, entry.HasCover)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+func TestBuildBrowseResponse_FileNamesDropSetMarkers(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.ToSlash(filepath.Join("roms", "PSX", "Chrono Cross (USA)"))
+	discTag := func(n string) []database.TagInfo { return []database.TagInfo{{Type: "disc", Tag: n}} }
+	files := []database.SearchResultWithCursor{
+		{
+			MediaID: 1, SystemID: "PSX", Name: "Chrono Cross (Disc 1)",
+			Path: path + "/Chrono Cross (USA) (Disc 1).cue", ZapScriptTags: discTag("1"),
+		},
+		{
+			MediaID: 2, SystemID: "PSX", Name: "Chrono Cross (Disc 2)",
+			Path: path + "/Chrono Cross (USA) (Disc 2).cue", ZapScriptTags: discTag("2"),
+		},
+		{MediaID: 3, SystemID: "PSX", Name: "Readme (Final)", Path: path + "/Readme (Final).cue"},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path, nil, files, defaultMaxResults, 0, 0, nil, false, nil)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 3)
+
+	assert.Equal(t, "Chrono Cross", browseResults.Entries[0].Name)
+	assert.Equal(t, discTag("1"), browseResults.Entries[0].DisambiguatingTags)
+	require.NotNil(t, browseResults.Entries[0].ZapScript)
+	assert.Equal(t, "@PSX/Chrono Cross (disc:1)", *browseResults.Entries[0].ZapScript)
+	assert.False(t, browseResults.Entries[0].MultiDisc)
+
+	assert.Equal(t, "Chrono Cross", browseResults.Entries[1].Name)
+	assert.Equal(t, discTag("2"), browseResults.Entries[1].DisambiguatingTags)
+	require.NotNil(t, browseResults.Entries[1].ZapScript)
+	assert.Equal(t, "@PSX/Chrono Cross (disc:2)", *browseResults.Entries[1].ZapScript)
+
+	assert.Equal(t, "Readme (Final)", browseResults.Entries[2].Name)
 }
 
 func TestDedupeSystemRootEntries(t *testing.T) {

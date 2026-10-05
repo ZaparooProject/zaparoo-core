@@ -2237,6 +2237,30 @@ func stripSceneArtifacts(input string) string {
 }
 
 func stripMetadataBracketsForDisplay(s string) string {
+	return filterBracketGroups(s, true)
+}
+
+// StripStructuralSetMarkers removes structural set markers such as "(Disc 1)",
+// "(Disk 2 of 4)" and "(Side A)" from a display title and leaves every other
+// bracket group in place. The same markers are indexed as media and disc tags,
+// so a caller that reports tags alongside the name can drop them from the
+// name. A title that is nothing but a marker is returned unchanged.
+func StripStructuralSetMarkers(title string) string {
+	if !strings.ContainsAny(title, "([{<") {
+		return title
+	}
+	stripped := strings.TrimSpace(collapseSpaces(filterBracketGroups(title, false)))
+	if stripped == "" {
+		return title
+	}
+	return stripped
+}
+
+// filterBracketGroups keeps the bracket groups that are structural set markers
+// and drops the rest when keepStructural is set, and does the reverse when it
+// is not. Text after an unclosed bracket is metadata to the first form and part
+// of the name to the second.
+func filterBracketGroups(s string, keepStructural bool) string {
 	var result strings.Builder
 	result.Grow(len(s))
 
@@ -2267,7 +2291,8 @@ func stripMetadataBracketsForDisplay(s string) string {
 				depth--
 				if depth == 0 {
 					content := s[start+1 : i]
-					if _, ok := parseStructuralSetTag(cachedNormalizeTag(content), TagSourceBracketed); ok {
+					_, structural := parseStructuralSetTag(cachedNormalizeTag(content), TagSourceBracketed)
+					if structural == keepStructural {
 						_, _ = result.WriteString(s[start : i+1])
 					}
 				}
@@ -2275,6 +2300,9 @@ func stripMetadataBracketsForDisplay(s string) string {
 			if depth == 0 {
 				break
 			}
+		}
+		if depth != 0 && !keepStructural {
+			_, _ = result.WriteString(s[start:])
 		}
 	}
 

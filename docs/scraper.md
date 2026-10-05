@@ -213,7 +213,7 @@ Artwork for a directory entry is looked up under the directory's own name, match
 
 ## media-folder Directory Artwork
 
-For every present indexed media row, `media-folder` considers each ancestor directory below its system ROM root. It searches the usual artwork categories under `<systemRoot>/media/`, first at the mirrored ROM-relative location and then by flat directory basename. For example, directory `RPGs/Final Fantasy VII` checks `media/boxart/RPGs/Final Fantasy VII.png` before `media/boxart/Final Fantasy VII.png`. System root itself is excluded.
+For every present indexed media row, `media-folder` considers each ancestor directory below its system ROM root. It searches the usual artwork categories under `<systemRoot>/media/`, first at the mirrored ROM-relative location and then by flat directory basename. For example, directory `RPGs/Final Fantasy VII` checks `media/boxart/RPGs/Final Fantasy VII.png` before `media/boxart/Final Fantasy VII.png`. System root itself is excluded. Directories are also matched in `media/folders/` and `media/folder/`, which are searched first for the `image` type and are never used for a game file's artwork.
 
 Folder artwork does not change browse structure. Arbitrary collections remain `type: "directory"`; only existing container rules add launch metadata. `media.browse` reports `hasCover: true` when a directory image property exists for one of that entry's systems, and `media.image` accepts the directory's `(system, path)` to return it.
 

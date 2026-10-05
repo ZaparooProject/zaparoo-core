@@ -522,7 +522,7 @@ func hasArtworkDirs(availableDirs map[string]map[string]string) bool {
 			continue
 		}
 		for _, propValue := range artworkPropertyOrder {
-			for _, dir := range esmedia.ArtworkDirCandidates[string(propValue)] {
+			for _, dir := range esmedia.DirectoryArtworkDirCandidates(string(propValue)) {
 				if _, ok := dirs[dir]; ok {
 					return true
 				}
@@ -763,7 +763,7 @@ func (s *scraperImpl) directoryPropsForPath(
 	props := make([]database.DirectoryProperty, 0)
 	for _, propValue := range artworkPropertyOrder {
 		file := s.findArtworkFile(
-			ctx, roots, esmedia.ArtworkDirCandidates[string(propValue)], fallbackNames, availableDirs,
+			ctx, roots, esmedia.DirectoryArtworkDirCandidates(string(propValue)), fallbackNames, availableDirs,
 		)
 		if file == nil {
 			continue
