@@ -286,7 +286,11 @@ jobs:
       - name: Upload coverage to Codecov
         # Coverage is tracked per branch, so a release gate's run has nothing to
         # report against.
+        #
+        # Codecov is a reporting service, not a gate: an outage on its side
+        # shows as a failed step but does not fail the job.
         if: matrix.os == 'ubuntu' && !inputs.release_gate
+        continue-on-error: true
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
