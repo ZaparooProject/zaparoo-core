@@ -330,3 +330,48 @@ func TestLauncherDefinition(t *testing.T) {
 		"a malformed path must not select the launcher and stop the running game")
 	assert.False(t, launcher.Test(nil, "playnite://"))
 }
+
+func TestLauncherDrivesTheIntegration(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, harnessOptions{})
+	ext := h.connect(fixtureGames())
+	launcher := NewLauncher(h.integration)
+	path := GamePath(idNES, "NES Game")
+
+	existing := []platforms.ScanResult{{Path: "C:/roms/other.nes", Name: "Other"}}
+	results, err := launcher.Scanner(t.Context(), nil, systemdefs.SystemNES, existing)
+	require.NoError(t, err)
+	require.Len(t, results, 2, "the scanner adds to what was already collected")
+	assert.Equal(t, existing[0], results[0])
+	assert.Equal(t, path, results[1].Path)
+
+	require.NoError(t, launcher.Availability(nil))
+
+	proc, err := launcher.Launch(nil, path, nil)
+	require.NoError(t, err)
+	assert.Nil(t, proc, "Playnite owns the game process")
+	assert.Equal(t, 1, ext.count(CommandLaunch))
+	_, err = launcher.Launch(nil, "playnite://not-a-guid/NES Game", nil)
+	require.Error(t, err)
+
+	require.ErrorIs(t, launcher.Kill(nil), ErrNoActiveGame)
+	ext.write(started(game(t, idNES), 1, 4242))
+	h.requireMediaPath(path)
+	require.NoError(t, launcher.Kill(nil))
+	assert.Equal(t, 1, ext.count(CommandStop))
+}
+
+func TestLauncherScannerKeepsResultsWhenPlayniteIsClosed(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, harnessOptions{})
+	h.install()
+	launcher := NewLauncher(h.integration)
+
+	existing := []platforms.ScanResult{{Path: "C:/roms/other.nes", Name: "Other"}}
+	results, err := launcher.Scanner(t.Context(), nil, systemdefs.SystemNES, existing)
+	//nolint:errorlint,testifylint // Identity is the contract.
+	assert.True(t, err == platforms.ErrScannerUnavailable, "got %v", err)
+	assert.Equal(t, existing, results)
+}
