@@ -38,19 +38,28 @@ import (
 
 const appScraperID = "android-apps"
 
+// appScraperSystems are the two systems installed-app launchers index into:
+// the synced game system, and the browsable-only system Library sync never
+// uploads (see installedAppsLauncherFor). The icon scraper covers both, so a
+// non-game app still gets its on-device icon even though it is never synced.
+//
+//nolint:gochecknoglobals // immutable
+var appScraperSystems = []string{systemdefs.SystemAndroid, systemdefs.SystemApplication}
+
 // appScraper imports only on-device artwork. The package embedded in an app's
 // canonical media identity remains the join key even when its label changes.
 func (p *Platform) appScraper() platforms.Scraper {
-	launchers := []string{installedAppsID}
+	launchers := []string{installedAppsID, installedAppsNonGameID}
 	for i := range p.entries {
 		definition := &p.entries[i].definition
-		if definition.Strategy == StrategyApp && definition.System == systemdefs.SystemAndroid {
+		if definition.Strategy == StrategyApp &&
+			(definition.System == systemdefs.SystemAndroid || definition.System == systemdefs.SystemApplication) {
 			launchers = append(launchers, definition.ID)
 		}
 	}
 	return platforms.Scraper{
 		ID: appScraperID, Name: "Installed Android apps",
-		SupportedSystemIDs:  []string{systemdefs.SystemAndroid},
+		SupportedSystemIDs:  appScraperSystems,
 		AutoScrapeLaunchers: launchers, SupportsFillMissing: true,
 		Scrape: func(
 			ctx context.Context, _ *config.Instance, _ platforms.Platform, _ afero.Fs,
@@ -69,49 +78,99 @@ func (p *Platform) appScraper() platforms.Scraper {
 	}
 }
 
+// scrapeAppSystems is which of the two Android app systems a run covers: a
+// scope names exactly one system; an unscoped request's own system filter
+// (if any) narrows the pair; otherwise both are covered.
+func scrapeAppSystems(opts scraper.ScrapeOptions) []string {
+	if opts.Scope != nil {
+		return []string{opts.Scope.SystemID}
+	}
+	ids := opts.SystemIDs()
+	if len(ids) == 0 {
+		return appScraperSystems
+	}
+	systems := make([]string, 0, len(appScraperSystems))
+	for _, id := range appScraperSystems {
+		if slices.Contains(ids, id) {
+			systems = append(systems, id)
+		}
+	}
+	return systems
+}
+
+type appScrapeCounts struct {
+	processed, matched, skipped int
+}
+
+// scrapeApps runs scrapeAppsForSystem for each system this request covers,
+// in the same single-step-per-system shape libretrothumbs' multi-system run
+// already uses, so Core's progress UI shows one step per system rather than
+// one run silently covering two.
 func scrapeApps(
 	ctx context.Context, host Host, db database.MediaDBI, opts scraper.ScrapeOptions,
 	ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
-	finish := func(processed, matched, skipped int, err error) {
-		ch <- scraper.ScrapeUpdate{
-			Done: true, SystemID: systemdefs.SystemAndroid, Processed: processed, Total: processed,
-			Matched: matched, Skipped: skipped, FatalErr: err, TotalSteps: 1, CurrentStep: 1,
-		}
-	}
-	if ids := opts.SystemIDs(); len(ids) > 0 && !slices.Contains(ids, systemdefs.SystemAndroid) {
-		finish(0, 0, 0, nil)
+	systems := scrapeAppSystems(opts)
+	if len(systems) == 0 {
+		ch <- scraper.ScrapeUpdate{Done: true, TotalSteps: 1, CurrentStep: 1}
 		return
 	}
+	icons := make(map[string]string)
+	var all appScrapeCounts
+	for step, systemID := range systems {
+		got, fatal := scrapeAppsForSystem(ctx, host, db, opts, systemID, icons, step+1, len(systems), ch)
+		all.processed += got.processed
+		all.matched += got.matched
+		all.skipped += got.skipped
+		if fatal != nil {
+			ch <- scraper.ScrapeUpdate{
+				Done: true, SystemID: systemID, Processed: all.processed, Total: all.processed,
+				Matched: all.matched, Skipped: all.skipped, FatalErr: fatal,
+				TotalSteps: len(systems), CurrentStep: step + 1,
+			}
+			return
+		}
+	}
+	ch <- scraper.ScrapeUpdate{
+		Done: true, Processed: all.processed, Total: all.processed, Matched: all.matched,
+		Skipped: all.skipped, TotalSteps: len(systems), CurrentStep: len(systems),
+	}
+}
+
+// scrapeAppsForSystem scrapes on-device icons for one system's rows. icons
+// is shared package-keyed cache across every system this run covers, since a
+// package's icon does not depend on which system its launcher filed it
+// under. It answers its counts and a fatal error, exactly as
+// libretrothumbs.scrapeSystem does for its own multi-system run.
+func scrapeAppsForSystem(
+	ctx context.Context, host Host, db database.MediaDBI, opts scraper.ScrapeOptions,
+	systemID string, icons map[string]string, step, steps int, ch chan<- scraper.ScrapeUpdate,
+) (appScrapeCounts, error) {
+	var c appScrapeCounts
 	var rows []database.MediaWithFullPath
 	var completed map[int64]struct{}
 	if opts.Scope != nil {
 		selection, err := scraper.LoadScopedSelection(ctx, db, opts, appScraperID)
 		if err != nil {
-			finish(0, 0, 0, fmt.Errorf("android-apps: select scope: %w", err))
-			return
+			return c, fmt.Errorf("android-apps: select scope: %w", err)
 		}
 		rows, _ = selection.Pending()
 	} else {
 		var err error
-		rows, err = db.GetMediaBySystemID(systemdefs.SystemAndroid)
+		rows, err = db.GetMediaBySystemID(systemID)
 		if err != nil {
-			finish(0, 0, 0, fmt.Errorf("android-apps: load media: %w", err))
-			return
+			return c, fmt.Errorf("android-apps: load media: %w", err)
 		}
 		if len(rows) == 0 {
-			finish(0, 0, 0, nil)
-			return
+			return c, nil
 		}
-		system, err := db.FindSystemBySystemID(systemdefs.SystemAndroid)
+		system, err := db.FindSystemBySystemID(systemID)
 		if errors.Is(err, sql.ErrNoRows) {
-			finish(0, 0, 0, nil)
-			return
+			return c, nil
 		}
 		if err != nil {
-			finish(0, 0, 0, fmt.Errorf("android-apps: look up system: %w", err))
-			return
+			return c, fmt.Errorf("android-apps: look up system: %w", err)
 		}
 		switch {
 		case opts.RunID != "" && (opts.Force || opts.FillMissing):
@@ -120,30 +179,25 @@ func scrapeApps(
 			completed, err = db.GetScrapedMediaIDs(ctx, appScraperID, system.DBID)
 		}
 		if err != nil {
-			finish(0, 0, 0, fmt.Errorf("android-apps: load markers: %w", err))
-			return
+			return c, fmt.Errorf("android-apps: load markers: %w", err)
 		}
 	}
-	processed, matched, skipped := 0, 0, 0
-	icons := make(map[string]string)
 	report := func() {
 		select {
 		case ch <- scraper.ScrapeUpdate{
-			SystemID: systemdefs.SystemAndroid, Processed: processed, Total: len(rows),
-			Matched: matched, Skipped: skipped, TotalSteps: 1, CurrentStep: 1,
+			SystemID: systemID, Processed: c.processed, Total: len(rows),
+			Matched: c.matched, Skipped: c.skipped, TotalSteps: steps, CurrentStep: step,
 		}:
 		case <-ctx.Done():
 		}
 	}
 	for _, row := range rows {
 		if err := ctx.Err(); err != nil {
-			finish(processed, matched, skipped, err)
-			return
+			return c, fmt.Errorf("android-apps: %w", err)
 		}
 		if opts.Pauser != nil {
 			if err := opts.Pauser.Wait(ctx); err != nil {
-				finish(processed, matched, skipped, err)
-				return
+				return c, fmt.Errorf("android-apps: wait while paused: %w", err)
 			}
 		}
 		if row.IsMissing {
@@ -156,8 +210,8 @@ func scrapeApps(
 		if err != nil {
 			continue
 		}
-		processed++
-		if processed%25 == 0 {
+		c.processed++
+		if c.processed%25 == 0 {
 			report()
 		}
 		icon := icons[identity.Package]
@@ -165,7 +219,7 @@ func scrapeApps(
 			icon, err = host.AppIcon(identity.Package)
 			if err != nil || icon == "" {
 				log.Debug().Err(err).Str("package", identity.Package).Msg("android app icon unavailable")
-				skipped++
+				c.skipped++
 				continue
 			}
 			icons[identity.Package] = icon
@@ -180,10 +234,9 @@ func scrapeApps(
 			write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(appScraperID, opts.RunID))
 		}
 		if err := db.ApplyScrapeResult(ctx, row.DBID, row.MediaTitleDBID, write); err != nil {
-			finish(processed, matched, skipped, fmt.Errorf("android-apps: write media %d: %w", row.DBID, err))
-			return
+			return c, fmt.Errorf("android-apps: write media %d: %w", row.DBID, err)
 		}
-		matched++
+		c.matched++
 	}
-	finish(processed, matched, skipped, nil)
+	return c, nil
 }

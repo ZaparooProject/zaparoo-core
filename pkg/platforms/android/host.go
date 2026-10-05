@@ -148,6 +148,11 @@ type Host interface {
 	ForegroundEvents(
 		ctx context.Context, launchID, target string, fromMs, toMs int64,
 	) (database.ForegroundEvidence, error)
+	// Interactive cheaply reports whether the display is interactive right
+	// now, with no Usage Access query or boot/elapsed-clock sampling — unlike
+	// ForegroundState, this is meant to be called often by a background
+	// loop, never as session-timing evidence. See platforms.InteractivityReader.
+	Interactive() bool
 }
 
 // ForegroundState is a host-owned snapshot taken before intent dispatch or a
@@ -173,9 +178,13 @@ func (s ForegroundState) valid() bool {
 }
 
 // AppInfo is one launchable app the host found. Label is the app's own
-// display name, which the host reads from the platform, never Core.
+// display name, which the host reads from the platform, never Core. IsGame is
+// the platform's own game classification (Android's app category, or the
+// legacy is-game flag), used to keep a generic app out of a synced game
+// library: see installedAppsLauncherFor.
 type AppInfo struct {
 	Package  string
 	Activity string
 	Label    string
+	IsGame   bool
 }

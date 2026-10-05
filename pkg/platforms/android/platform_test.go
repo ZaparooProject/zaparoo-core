@@ -42,18 +42,18 @@ const testReference = "content://org.example.documents/tree/games"
 // fakeHost is an in-memory Host: packages are installed unless listed in
 // failures, and one media folder holds nes/Game.nes and psx/Game.chd.
 type fakeHost struct {
-	failures        map[string]FailureReason
 	dispatchErr     error
 	foldersErr      error
 	readErr         error
 	foregroundErr   error
 	evidenceErr     error
-	substitute      string
+	failures        map[string]FailureReason
 	receipt         *DispatchReceipt
 	icons           map[string]string
 	files           map[string][]byte
 	state           *ForegroundState
 	evidence        *database.ForegroundEvidence
+	substitute      string
 	references      []string
 	cores           []string
 	apps            []AppInfo
@@ -61,10 +61,11 @@ type fakeHost struct {
 	inspections     []string
 	dispatched      []dispatchCall
 	evidenceQueries []evidenceQuery
+	appCalls        int
 	listings        int
 	coreCalls       int
-	appCalls        int
 	mu              syncutil.Mutex
+	notInteractive  bool
 	scanned         bool
 	appsScanned     bool
 }
@@ -255,6 +256,12 @@ func (h *fakeHost) ForegroundState() (ForegroundState, error) {
 	return defaultForegroundState, nil
 }
 
+func (h *fakeHost) Interactive() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.notInteractive
+}
+
 func (h *fakeHost) ForegroundEvents(
 	_ context.Context, launchID, target string, fromMs, toMs int64,
 ) (database.ForegroundEvidence, error) {
@@ -339,6 +346,29 @@ func TestPlatformIdentityAndUnsupportedOperations(t *testing.T) {
 	require.ErrorIs(t, err, platforms.ErrNotSupported)
 }
 
+func TestInteractiveFollowsTheHostAndDefaultsToInteractive(t *testing.T) {
+	t.Parallel()
+
+	settings := platforms.Settings{DataDir: "/data", HostManagedPaths: true}
+
+	noHost, err := New(settings, nil)
+	require.NoError(t, err)
+	assert.True(t, noHost.Interactive(), "no host yet must not make a background feature ineligible")
+
+	host := &fakeHost{}
+	platform, err := New(settings, host)
+	require.NoError(t, err)
+	assert.True(t, platform.Interactive())
+
+	host.mu.Lock()
+	host.notInteractive = true
+	host.mu.Unlock()
+	assert.False(t, platform.Interactive())
+
+	var reader platforms.InteractivityReader = platform
+	assert.False(t, reader.Interactive())
+}
+
 func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	t.Parallel()
 
@@ -347,10 +377,11 @@ func TestLaunchersFollowCatalogOrderAndShareInspections(t *testing.T) {
 	launchers := platform.Launchers(nil)
 
 	// Three launchers Core builds (ScummVM standalone, two GameNative) lead
-	// the catalog; one trailing launcher offers every installed app no
-	// profile describes.
-	require.Len(t, launchers, len(platform.entries)+len(gameNativeEntries)+2)
-	assert.Equal(t, installedAppsID, launchers[len(launchers)-1].ID)
+	// the catalog; two trailing launchers offer every installed app no
+	// profile describes, split by the host's game classification.
+	require.Len(t, launchers, len(platform.entries)+len(gameNativeEntries)+3)
+	assert.Equal(t, installedAppsNonGameID, launchers[len(launchers)-1].ID)
+	assert.Equal(t, installedAppsID, launchers[len(launchers)-2].ID)
 	assert.Equal(t, scummVMStandaloneID, launchers[0].ID)
 	assert.Equal(t, gameNativeSteamID, launchers[1].ID)
 	assert.Equal(t, gameNativeWindowsID, launchers[2].ID)

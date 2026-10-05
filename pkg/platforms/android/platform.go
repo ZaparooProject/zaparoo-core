@@ -140,7 +140,7 @@ func validateBuiltEntries(catalog map[string]*catalogEntry) error {
 	}
 	for _, entry := range entries {
 		id := entry.definition.ID
-		if _, clash := catalog[id]; clash || id == installedAppsID {
+		if _, clash := catalog[id]; clash || id == installedAppsID || id == installedAppsNonGameID {
 			return fmt.Errorf("built launcher %s clashes with a registered launcher: %w", id, ErrLaunchDefinition)
 		}
 		if err := entry.definition.Validate(); err != nil {
@@ -249,6 +249,18 @@ func (p *Platform) now() time.Time {
 }
 
 func (p *Platform) Settings() platforms.Settings { return p.settings }
+
+// Interactive reports whether the display is interactive right now, for
+// platforms.InteractivityReader. A platform with no host yet defaults to
+// interactive, the same as the normal, safe-by-default answer every other
+// nil-host query on this type gives: never silently treat a background
+// feature as ineligible just because the host has not connected yet.
+func (p *Platform) Interactive() bool {
+	if p.host == nil {
+		return true
+	}
+	return p.host.Interactive()
+}
 
 func (*Platform) ScanHook(*tokens.Token) error { return nil }
 

@@ -35,9 +35,14 @@ const (
 	// maxInstalledApps bounds what the host may report in one sweep.
 	maxInstalledApps = 2048
 	// installedAppsID is the launcher that offers every launchable app the
-	// host reports and that no profile already describes.
+	// host classifies as a game, and that no profile already describes.
 	installedAppsID = "Android.Apps"
-	// installedAppsGroup is the display name for that launcher.
+	// installedAppsNonGameID is the same offer for an app the host does not
+	// classify as a game: still fully browsable and launchable, but filed
+	// under systemdefs.SystemApplication so Library sync never uploads an
+	// ordinary installed app's name as if it were a game.
+	installedAppsNonGameID = "Android.Apps.NonGame"
+	// installedAppsGroup is the display name for both launchers.
 	installedAppsGroup = "Android"
 	// installedAppsRepair is shown when the host cannot start a plain app.
 	installedAppsRepair = "Install or enable this app."
@@ -95,13 +100,29 @@ func (p *Platform) appLauncher(entry *catalogEntry, snapshot *hostSnapshot) plat
 	return launcher
 }
 
-// installedAppsLauncher offers every launchable app the host reports that no
-// profile already describes, so a plain app needs no catalog entry at all.
-func (p *Platform) installedAppsLauncher(snapshot *hostSnapshot) platforms.Launcher {
+// installedAppsLauncherFor offers every launchable app the host reports that
+// no profile already describes, so a plain app needs no catalog entry at
+// all. isGame selects which of the two installed-apps launchers this is: the
+// synced game one (systemdefs.SystemAndroid) or the browsable-only one
+// (systemdefs.SystemApplication) Library sync never uploads.
+//
+// A package the host has not currently reported (for example, one already
+// indexed from before this app was uninstalled) defaults to the game
+// launcher, matching this code's behavior before the two launchers split:
+// an existing media row's availability keeps surfacing through the same
+// launcher it always has, rather than silently stopping being claimed by
+// either one. Test must stay mutually exclusive between the two launchers
+// for any package the host does currently report, or PathToLaunchers would
+// hand the same path to both.
+func (p *Platform) installedAppsLauncherFor(snapshot *hostSnapshot, isGame bool) platforms.Launcher {
 	profiled := p.profiledPackages()
+	id, systemID := installedAppsID, systemdefs.SystemAndroid
+	if !isGame {
+		id, systemID = installedAppsNonGameID, systemdefs.SystemApplication
+	}
 	return platforms.Launcher{
-		ID:                 installedAppsID,
-		SystemID:           systemdefs.SystemAndroid,
+		ID:                 id,
+		SystemID:           systemID,
 		Groups:             []string{installedAppsGroup},
 		Schemes:            []string{shared.SchemeAndroid},
 		SkipFilesystemScan: true,
@@ -113,14 +134,20 @@ func (p *Platform) installedAppsLauncher(snapshot *hostSnapshot) platforms.Launc
 			if err != nil || parsed.Variant != "" {
 				return false
 			}
-			_, covered := profiled[parsed.Package]
-			return !covered
+			if _, covered := profiled[parsed.Package]; covered {
+				return false
+			}
+			game, known := appIsGame(snapshot, parsed.Package)
+			if !known {
+				return isGame
+			}
+			return game == isGame
 		},
 		Scanner: func(
 			_ context.Context, _ *config.Instance, _ string, results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			for _, app := range snapshot.installedApps() {
-				if _, covered := profiled[app.Package]; covered {
+				if _, covered := profiled[app.Package]; covered || app.IsGame != isGame {
 					continue
 				}
 				identity := AppIdentity{Package: app.Package, Name: app.Label}
@@ -134,6 +161,17 @@ func (p *Platform) installedAppsLauncher(snapshot *hostSnapshot) platforms.Launc
 			return nil, p.dispatchInstalledApp(snapshot, identity)
 		},
 	}
+}
+
+// appIsGame reports the host's game classification for an installed package,
+// and whether the host currently reports that package at all.
+func appIsGame(snapshot *hostSnapshot, pkg string) (isGame, known bool) {
+	for _, app := range snapshot.installedApps() {
+		if app.Package == pkg {
+			return app.IsGame, true
+		}
+	}
+	return false, false
 }
 
 // profiledPackages is every package an app profile already describes. The
@@ -175,8 +213,12 @@ func (p *Platform) dispatchInstalledApp(snapshot *hostSnapshot, identity string)
 	if found == nil {
 		return repairError(platforms.LaunchRepairLauncherNotInstalled, nil, msgNotInstalled)
 	}
+	id, systemID := installedAppsID, systemdefs.SystemAndroid
+	if !found.IsGame {
+		id, systemID = installedAppsNonGameID, systemdefs.SystemApplication
+	}
 	definition := LaunchDefinition{
-		ID: installedAppsID, Name: found.Label, System: systemdefs.SystemAndroid,
+		ID: id, Name: found.Label, System: systemID,
 		Package: found.Package, Activity: found.Activity, Action: actionMain,
 		Strategy: StrategyApp, StorageAccess: "none", Repair: installedAppsRepair,
 		Version: 3,

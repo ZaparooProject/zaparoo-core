@@ -92,7 +92,8 @@ func TestAppScraperFillsIconsByPackageWithoutChangingTitles(t *testing.T) {
 	}
 	updates := make(chan scraper.ScrapeUpdate, 8)
 	require.NoError(t, s.Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
-		scraper.ScrapeOptions{FillMissing: true, RunID: "run-one"}, platforms.ScraperCustomOptions{}, updates))
+		scraper.ScrapeOptions{FillMissing: true, RunID: "run-one", Systems: []string{systemdefs.SystemAndroid}},
+		platforms.ScraperCustomOptions{}, updates))
 	var last scraper.ScrapeUpdate
 	for update := range updates {
 		last = update
@@ -100,6 +101,7 @@ func TestAppScraperFillsIconsByPackageWithoutChangingTitles(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 3, last.Processed)
+	require.Equal(t, 3, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 2, last.Matched)
 	require.Equal(t, 1, last.Skipped)
 	require.Equal(t, []string{"com.example.game", "com.example.missing"}, host.iconCalls)
@@ -216,7 +218,7 @@ func TestAppScraperReportsProgressEveryTwentyFiveRows(t *testing.T) {
 	db := &appScrapeDB{media: media}
 	updates := make(chan scraper.ScrapeUpdate, 40)
 	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
-		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+		scraper.ScrapeOptions{Systems: []string{systemdefs.SystemAndroid}}, platforms.ScraperCustomOptions{}, updates))
 	var sawProgressAt25 bool
 	var last scraper.ScrapeUpdate
 	for update := range updates {
@@ -229,6 +231,7 @@ func TestAppScraperReportsProgressEveryTwentyFiveRows(t *testing.T) {
 	require.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
 	require.Equal(t, 30, last.Processed)
+	require.Equal(t, 30, last.Total, "a finished run reports its total, not zero")
 	require.Equal(t, 30, last.Matched)
 }
 
@@ -239,5 +242,48 @@ func TestAppScraperIncludesProfileLaunchers(t *testing.T) {
 	}}}
 	s := p.appScraper()
 	require.Contains(t, s.AutoScrapeLaunchers, "Android.Game")
+	require.Contains(t, s.AutoScrapeLaunchers, installedAppsID)
+	require.Contains(t, s.AutoScrapeLaunchers, installedAppsNonGameID)
 	require.Contains(t, p.Scrapers(nil), appScraperID)
+}
+
+// Both installed-apps systems are covered, so a non-game app still gets its
+// on-device icon even though Library sync never uploads it.
+func TestAppScraperCoversBothInstalledAppsSystems(t *testing.T) {
+	t.Parallel()
+	require.ElementsMatch(t, []string{systemdefs.SystemAndroid, systemdefs.SystemApplication}, appScraperSystems)
+	p := &Platform{host: &fakeHost{}}
+	s := p.appScraper()
+	require.ElementsMatch(t, appScraperSystems, s.SupportedSystemIDs)
+}
+
+// An unscoped run with no system filter scrapes both systems, sharing the
+// icon cache across them: a package only looked up once either way.
+func TestAppScraperRunsBothSystemsAndSharesIconCache(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	db := &appScrapeDB{
+		media: []database.MediaWithFullPath{{
+			DBID: 1, MediaTitleDBID: 11,
+			Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+		}},
+	}
+	p := &Platform{host: host}
+	updates := make(chan scraper.ScrapeUpdate, 8)
+	require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+		scraper.ScrapeOptions{}, platforms.ScraperCustomOptions{}, updates))
+	var last scraper.ScrapeUpdate
+	for update := range updates {
+		last = update
+	}
+	require.True(t, last.Done)
+	require.NoError(t, last.FatalErr)
+	// The fake database answers the same one row for either system, so this
+	// is exercising that both systems really ran, not asserting real content.
+	require.Equal(t, 2, last.Processed)
+	require.Equal(t, 2, last.Total, "a finished run reports its total, not zero")
+	require.Equal(t, 2, last.Matched)
+	require.Equal(t, 2, last.TotalSteps)
+	require.Equal(t, 2, last.CurrentStep)
+	require.Equal(t, []string{"com.example.game"}, host.iconCalls, "the icon cache is shared across both systems")
 }
