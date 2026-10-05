@@ -98,7 +98,7 @@ namespace ZaparooPlaynite
         public int Number;
         public int Pid;
         public string Exe;
-        public ManualResetEventSlim Stopped = new ManualResetEventSlim(false);
+        public readonly ManualResetEventSlim Stopped = new ManualResetEventSlim(false);
     }
 
     public class ZaparooPlugin : GenericPlugin
@@ -241,8 +241,10 @@ namespace ZaparooPlaynite
                 {
                     logger.Debug("Zaparoo pipe closed: " + e.Message);
                 }
-                catch (Exception e)
+                catch (Exception e) when (!IsCritical(e))
                 {
+                    // Nothing may escape this thread: an unhandled exception
+                    // on it would take Playnite down.
                     logger.Error(e, "Zaparoo pipe failed");
                 }
                 finally
@@ -262,7 +264,7 @@ namespace ZaparooPlaynite
             {
                 writer = new StreamWriter(pipe, utf8, 4096, true) { NewLine = "\n", AutoFlush = true };
             }
-            using (token.Register(() => { try { pipe.Dispose(); } catch { } }))
+            using (token.Register(() => ClosePipe(pipe)))
             using (var reader = new StreamReader(pipe, utf8, false, 4096, true))
             {
                 Send(new PluginEvent
@@ -287,8 +289,10 @@ namespace ZaparooPlaynite
                     {
                         command = Serialization.FromJson<CoreCommand>(line);
                     }
-                    catch (Exception e)
+                    catch (Exception e) when (!IsCritical(e))
                     {
+                        // Playnite's serializer does not document what it
+                        // throws for bad input.
                         logger.Warn("Ignoring malformed Zaparoo command: " + e.Message);
                         continue;
                     }
@@ -350,8 +354,10 @@ namespace ZaparooPlaynite
             {
                 action();
             }
-            catch (Exception e)
+            catch (Exception e) when (!IsCritical(e))
             {
+                // Runs on a thread pool thread, where an unhandled exception
+                // would take Playnite down.
                 logger.Error(e, "Zaparoo command " + command.Command + " failed");
                 SendError(command, e.Message);
             }
@@ -413,7 +419,7 @@ namespace ZaparooPlaynite
                 {
                     PlayniteApi.StartGame(id);
                 }
-                catch (Exception e)
+                catch (Exception e) when (!IsCritical(e))
                 {
                     logger.Error(e, "Failed to start game " + id);
                 }
@@ -551,8 +557,9 @@ namespace ZaparooPlaynite
             {
                 return PlayniteApi.ExpandGameVariables(game, game.Roms[0].Path);
             }
-            catch (Exception)
+            catch (Exception e) when (!IsCritical(e))
             {
+                logger.Debug("Could not expand ROM path for " + game.Name + ": " + e.Message);
                 return null;
             }
         }
@@ -571,8 +578,9 @@ namespace ZaparooPlaynite
                 var path = PlayniteApi.Database.GetFullFilePath(databasePath);
                 return File.Exists(path) ? path : null;
             }
-            catch (Exception)
+            catch (Exception e) when (!IsCritical(e))
             {
+                logger.Debug("Could not resolve image " + databasePath + ": " + e.Message);
                 return null;
             }
         }
@@ -584,7 +592,7 @@ namespace ZaparooPlaynite
             {
                 json = Serialization.ToJson(message);
             }
-            catch (Exception e)
+            catch (Exception e) when (!IsCritical(e))
             {
                 logger.Error(e, "Failed to encode Zaparoo event " + message.Event);
                 return false;
@@ -600,13 +608,36 @@ namespace ZaparooPlaynite
                     writer.WriteLine(json);
                     return true;
                 }
-                catch (Exception e)
+                catch (Exception e) when (e is IOException || e is ObjectDisposedException ||
+                    e is InvalidOperationException)
                 {
                     logger.Debug("Zaparoo pipe write failed: " + e.Message);
                     writer = null;
                     return false;
                 }
             }
+        }
+
+        // Closes the pipe to unblock the reader when Playnite shuts down.
+        private static void ClosePipe(NamedPipeClientStream pipe)
+        {
+            try
+            {
+                pipe.Dispose();
+            }
+            catch (Exception e) when (e is IOException || e is ObjectDisposedException)
+            {
+                logger.Debug("Zaparoo pipe close failed: " + e.Message);
+            }
+        }
+
+        // Reports exceptions that say the process itself is no longer sound.
+        // Those are never handled here; everything else is contained so a
+        // fault in this extension cannot take Playnite down with it.
+        private static bool IsCritical(Exception e)
+        {
+            return e is OutOfMemoryException || e is StackOverflowException ||
+                e is AccessViolationException || e is ThreadAbortException;
         }
 
         private const uint ProcessQueryLimitedInformation = 0x1000;
