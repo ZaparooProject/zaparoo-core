@@ -41,6 +41,7 @@ const (
 	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
 	SchemePopper     = "popper"
+	SchemePlaynite   = "playnite"
 	SchemeAndroid    = "android"
 )
 
@@ -76,6 +77,7 @@ var customSchemes = []string{
 	SchemeFaugus,
 	SchemeGOG,
 	SchemePopper,
+	SchemePlaynite,
 	SchemeAndroid,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,

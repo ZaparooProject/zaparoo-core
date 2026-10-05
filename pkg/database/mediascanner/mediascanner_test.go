@@ -1863,6 +1863,93 @@ func TestNewNamesIndex_FailingPipelineScannerKeepsCollectedFiles(t *testing.T) {
 	}
 }
 
+// TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia covers a scanner
+// with no system of its own whose source is closed for this run, such as a
+// frontend that is not running. It is asked once per system, so the absence
+// must not be logged as an error each time, and the media it indexed earlier
+// must keep its state.
+func TestNewNamesIndex_UnavailableAnyScannerKeepsIndexedMedia(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and logger.
+	for _, scanFailure := range []error{
+		platforms.ErrScannerUnavailable,
+		errors.Join(platforms.ErrScannerUnavailable, os.ErrPermission),
+	} {
+		t.Run(scanFailure.Error(), func(t *testing.T) {
+			var output bytes.Buffer
+			originalLogger, originalLevel := log.Logger, zerolog.GlobalLevel()
+			log.Logger = zerolog.New(&output)
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			t.Cleanup(func() { log.Logger = originalLogger; zerolog.SetGlobalLevel(originalLevel) })
+
+			available := true
+			anyLauncher := platforms.Launcher{
+				ID: "frontend",
+				Scanner: func(_ context.Context, _ *config.Instance, systemID string,
+					results []platforms.ScanResult,
+				) ([]platforms.ScanResult, error) {
+					if !available {
+						return results, scanFailure
+					}
+					if systemID != systemdefs.SystemPS2 {
+						return results, nil
+					}
+					return append(results, platforms.ScanResult{
+						Path: "frontend://1/Frontend%20Game", Name: "Frontend Game", NoExt: true,
+					}), nil
+				},
+			}
+
+			fsHelper := testhelpers.NewMemoryFS()
+			cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+			require.NoError(t, err)
+
+			platform := mocks.NewMockPlatform()
+			platform.On("ID").Return("test-platform")
+			platform.On("Settings").Return(platforms.Settings{})
+			platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+				[]platforms.Launcher{anyLauncher})
+
+			db, cleanup := testhelpers.NewTestDatabase(t)
+			defer cleanup()
+
+			testLauncherCacheMutex.Lock()
+			originalCache := helpers.GlobalLauncherCache
+			testCache := &helpers.LauncherCache{}
+			testCache.Initialize(platform, cfg)
+			helpers.GlobalLauncherCache = testCache
+			defer func() {
+				helpers.GlobalLauncherCache = originalCache
+				testLauncherCacheMutex.Unlock()
+			}()
+
+			systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+			filesIndexed, err := NewNamesIndex(
+				context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 1, filesIndexed)
+
+			available = false
+			output.Reset()
+			_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+			require.NoError(t, err)
+
+			mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+			require.NoError(t, err)
+			require.Len(t, mediaEntries, 1)
+			assert.False(t, mediaEntries[0].IsMissing,
+				"media from a source that is closed for this run must not be flagged missing")
+			if scanFailure == platforms.ErrScannerUnavailable { //nolint:errorlint // Exact sentinel only.
+				assert.Contains(t, output.String(), "optional installation unavailable")
+				assert.NotContains(t, output.String(), `"level":"error"`)
+			} else {
+				assert.Contains(t, output.String(), `"level":"error"`)
+			}
+		})
+	}
+}
+
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
 // are skipped during media scanning along with all their subdirectories.
 func TestZaparooignoreMarker(t *testing.T) {

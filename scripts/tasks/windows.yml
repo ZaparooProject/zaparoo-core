@@ -113,3 +113,28 @@ tasks:
       - docker cp zaparoo-launchbox-plugin-temp:/build/ZaparooLaunchBoxPlugin.dll "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}/"
       - docker rm zaparoo-launchbox-plugin-temp
       - cd "{{.OUTPUT_DIR}}" && zip -r "{{.PLUGIN_FOLDER}}.zip" "{{.PLUGIN_FOLDER}}"
+
+  build-playnite-plugin:
+    desc: Build Playnite extension package using Docker
+    dir: scripts/windows/playnite-plugin
+    vars:
+      OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
+      PACKAGE: "Zaparoo Playnite Integration.pext"
+      STAGE_DIR: "{{.ROOT_DIR}}/_build/windows_amd64/zaparoo-playnite"
+    sources:
+      - ZaparooPlugin.cs
+      - ZaparooPlaynite.csproj
+      - extension.yaml
+      - Dockerfile
+    generates:
+      - "{{.OUTPUT_DIR}}/{{.PACKAGE}}"
+    cmds:
+      - docker build --target build -t zaparoo-playnite-plugin "{{.ROOT_DIR}}/scripts/windows/playnite-plugin"
+      - docker rm -f zaparoo-playnite-plugin-temp 2>/dev/null || true
+      - docker create --name zaparoo-playnite-plugin-temp zaparoo-playnite-plugin /bin/true
+      - rm -rf "{{.STAGE_DIR}}" && mkdir -p "{{.STAGE_DIR}}"
+      - docker cp zaparoo-playnite-plugin-temp:/build/ZaparooPlaynite.dll "{{.STAGE_DIR}}/"
+      - docker cp zaparoo-playnite-plugin-temp:/build/extension.yaml "{{.STAGE_DIR}}/"
+      - docker rm zaparoo-playnite-plugin-temp
+      - rm -f "{{.OUTPUT_DIR}}/{{.PACKAGE}}"
+      - cd "{{.STAGE_DIR}}" && zip -r "{{.OUTPUT_DIR}}/{{.PACKAGE}}" .

@@ -252,6 +252,7 @@ tasks:
           "FuzzPayloadMemberPath ./pkg/platforms/updatepayload"
           "FuzzParseGameListXML ./pkg/platforms/shared/esapi"
           "FuzzResolveGamePath ./pkg/platforms/shared/esde"
+          "FuzzParseEvent ./pkg/platforms/shared/playnite"
           "FuzzParseMoonlightTarget ./pkg/platforms/shared/launchers"
           "FuzzParseBottlesMetadata ./pkg/platforms/shared/launchers"
           "FuzzFindPath ./pkg/database/mediascanner"
