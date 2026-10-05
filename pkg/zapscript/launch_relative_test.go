@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -174,4 +175,100 @@ func TestCmdLaunch_SystemFolderNamedLikeTitleStaysTitle(t *testing.T) {
 	assert.True(t, result.MediaChanged)
 	mockPlatform.AssertExpectations(t)
 	mockMediaDB.AssertExpectations(t)
+}
+
+// TestCmdLaunch_SystemPathReportsOwningSystem checks which system a
+// <system>/<path> launch is attributed to when the file is found through a
+// fallback system's launcher folder.
+func TestCmdLaunch_SystemPathReportsOwningSystem(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := launchTestAbsPath("path-root")
+
+	tests := []struct {
+		name       string
+		file       string
+		arg        string
+		wantSystem string
+		launchers  []platforms.Launcher
+	}{
+		{
+			name: "file in the fallback system's folder",
+			launchers: []platforms.Launcher{
+				{ID: "amiga500", SystemID: systemdefs.SystemAmiga500, Folders: []string{"A500"}},
+				{ID: "amiga", SystemID: systemdefs.SystemAmiga, Folders: []string{"Amiga"}},
+			},
+			file:       filepath.Join(pathRoot, "Amiga", "Game.adf"),
+			arg:        systemdefs.SystemAmiga500 + "/Game.adf",
+			wantSystem: systemdefs.SystemAmiga,
+		},
+		{
+			name: "file with no extension in the fallback system's folder",
+			launchers: []platforms.Launcher{
+				{ID: "amiga500", SystemID: systemdefs.SystemAmiga500, Folders: []string{"A500"}},
+				{ID: "amiga", SystemID: systemdefs.SystemAmiga, Folders: []string{"Amiga"}},
+			},
+			file:       filepath.Join(pathRoot, "Amiga", "Sub", "Game"),
+			arg:        systemdefs.SystemAmiga500 + "/Sub/Game",
+			wantSystem: systemdefs.SystemAmiga,
+		},
+		{
+			name: "file in the requested system's folder",
+			launchers: []platforms.Launcher{
+				{ID: "amiga500", SystemID: systemdefs.SystemAmiga500, Folders: []string{"A500"}},
+				{ID: "amiga", SystemID: systemdefs.SystemAmiga, Folders: []string{"Amiga"}},
+			},
+			file:       filepath.Join(pathRoot, "A500", "Game.adf"),
+			arg:        systemdefs.SystemAmiga500 + "/Game.adf",
+			wantSystem: systemdefs.SystemAmiga500,
+		},
+		{
+			name: "folder shared with the fallback system",
+			launchers: []platforms.Launcher{
+				{ID: "amiga", SystemID: systemdefs.SystemAmiga, Folders: []string{"Amiga"}},
+				{ID: "amiga500", SystemID: systemdefs.SystemAmiga500, Folders: []string{"Amiga"}},
+			},
+			file:       filepath.Join(pathRoot, "Amiga", "Game.adf"),
+			arg:        systemdefs.SystemAmiga500 + "/Game.adf",
+			wantSystem: systemdefs.SystemAmiga500,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := helpers.NewMemoryFS()
+			require.NoError(t, fs.WriteFile(tt.file, []byte("rom"), 0o600))
+
+			cfg := &config.Instance{}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Launchers", cfg).Return(tt.launchers)
+			mockPlatform.On("RootDirs", cfg).Return([]string{})
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+			mockPlatform.On(
+				"LaunchMedia", cfg, tt.file, mock.Anything, mock.Anything, mock.Anything,
+			).Return(nil).Once()
+
+			var resolved []platforms.ResolvedLaunch
+			env := platforms.CmdEnv{
+				Cmd:      zapscript.Command{Name: "launch", Args: []string{tt.arg}},
+				Cfg:      cfg,
+				PathRoot: pathRoot,
+				PrepareMediaLaunch: func(launch platforms.ResolvedLaunch) (bool, error) {
+					resolved = append(resolved, launch)
+					return true, nil
+				},
+			}
+
+			result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			require.Len(t, resolved, 1)
+			assert.Equal(t, tt.wantSystem, resolved[0].SystemID)
+			assert.Equal(t, tt.file, resolved[0].Path)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }

@@ -1138,12 +1138,12 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	// game's own folder name has always resolved.
 	if systemPart, lookupPath, ok := strings.Cut(path, "/"); ok && lookupPath != "" {
 		if system, lookupErr := systemdefs.LookupSystem(systemPart); lookupErr == nil {
-			fp, found := findSystemFile(fs, pl, &env, system, lookupPath)
+			fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath)
 			if found && !isDirectory(fs, fp) {
 				log.Debug().Msgf("launching found system path: %s", fp)
 				return platforms.CmdResult{
 					MediaChanged: true,
-				}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
+				}, launch(launchTarget{path: fp, systemID: foundSystemID, resolveMediaByPath: true})
 			}
 		}
 	}
@@ -1170,11 +1170,11 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
-	if fp, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
+	if fp, foundSystemID, found := findSystemFile(fs, pl, &env, system, lookupPath); found {
 		log.Debug().Msgf("launching found system path: %s", fp)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
+		}, launch(launchTarget{path: fp, systemID: foundSystemID, resolveMediaByPath: true})
 	}
 
 	gamesdb := env.Database.MediaDB
@@ -1212,14 +1212,16 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 }
 
 // findSystemFile looks for lookupPath under the folders of every launcher for
-// system and its fallback systems, returning the first file found.
+// system and its fallback systems, returning the first file found and the
+// system whose launcher folder holds it. A folder shared with a fallback
+// system belongs to system.
 func findSystemFile(
 	fs afero.Fs,
 	pl platforms.Platform,
 	env *platforms.CmdEnv,
 	system *systemdefs.System,
 	lookupPath string,
-) (string, bool) {
+) (path, systemID string, found bool) {
 	var launchers []platforms.Launcher
 	allLaunchers := env.Launchers.Get(pl, env.Cfg)
 	for i := range allLaunchers {
@@ -1237,25 +1239,26 @@ func findSystemFile(
 		}
 	}
 
-	var folders []string
+	var folders, folderSystemIDs []string
 	for i := range launchers {
 		for _, folder := range launchers[i].Folders {
 			if !helpers.Contains(folders, folder) {
 				folders = append(folders, folder)
+				folderSystemIDs = append(folderSystemIDs, launchers[i].SystemID)
 			}
 		}
 	}
 
-	for _, f := range folders {
+	for i, f := range folders {
 		systemPath := filepath.Join(f, lookupPath)
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		fp, findErr := findFile(fs, pl, env.Cfg, systemPath, env.PathRoot)
 		if findErr == nil {
-			return fp, true
+			return fp, folderSystemIDs[i], true
 		}
 		log.Debug().Err(findErr).Msgf("error finding system file: %s", lookupPath)
 	}
-	return "", false
+	return "", "", false
 }
 
 // isDirectory reports whether path is an existing directory. A path that
