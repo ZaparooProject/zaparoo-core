@@ -281,6 +281,7 @@ func TestValidCustomSchemes(t *testing.T) {
 		"launchbox",
 		"scummvm",
 		"popper",
+		"playnite",
 		"kodi-movie",
 		"kodi-episode",
 		"kodi-song",
