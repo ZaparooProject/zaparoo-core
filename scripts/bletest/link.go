@@ -105,6 +105,10 @@ func discover(ctx context.Context, central bluez.Central, opts linkOptions) (str
 		log.Info().Str("address", r.Address).Str("name", r.Name).Int16("rssi", r.RSSI).
 			Dur("after", time.Since(started)).Msg("found zaparoo service")
 		if opts.name == "" || strings.Contains(strings.ToLower(r.Name), strings.ToLower(opts.name)) {
+			// Let the scan stop before anything else scans.
+			cancel()
+			for range results { //nolint:revive // draining until the scan has stopped
+			}
 			return r.Address, nil
 		}
 	}

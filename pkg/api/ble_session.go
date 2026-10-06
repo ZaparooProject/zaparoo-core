@@ -49,6 +49,10 @@ const (
 	// and droppable notifications get skipped. A single message may be far
 	// larger; it is the backlog behind it that is held back.
 	bleOutboundHighWater = 1 << 20
+	// bleAdvertisingInterval is how often the API service is advertised:
+	// often enough that a phone finds and connects to it within about a
+	// second, without keeping the radio busy.
+	bleAdvertisingInterval = 150 * time.Millisecond
 	// bleAckTimeout is how long the writer waits, with the send window
 	// full, for the client to acknowledge anything at all.
 	bleAckTimeout = 30 * time.Second

@@ -143,7 +143,11 @@ func (t *bleTransport) serve(p bluez.Peripheral) {
 
 	// The name is read once here: renaming the device takes effect the
 	// next time advertising starts.
-	adv := bluez.Advertisement{LocalName: t.localName(), ServiceUUIDs: []string{apigatt.ServiceUUID}}
+	adv := bluez.Advertisement{
+		LocalName:    t.localName(),
+		ServiceUUIDs: []string{apigatt.ServiceUUID},
+		Interval:     bleAdvertisingInterval,
+	}
 	go func() {
 		defer t.wg.Done()
 		err := p.Serve(ctx, t.application(), adv, t)

@@ -39,6 +39,13 @@ const (
 	// its own connection attempt window.
 	connectTimeout = 30 * time.Second
 
+	bluezErrInProgress = "org.bluez.Error.InProgress"
+
+	// How often, and how many times, starting discovery is retried while
+	// bluetoothd is still stopping the previous session.
+	discoveryStartRetry    = 200 * time.Millisecond
+	discoveryStartAttempts = 10
+
 	// scanBuffer is how many scan results a consumer may leave unread
 	// before the oldest are dropped.
 	scanBuffer = 64
@@ -102,7 +109,7 @@ func (c *central) discover(
 		unsubscribe()
 		return nil, err
 	}
-	if err := c.a.call(ctx, c.a.obj, adapterIface+".StartDiscovery"); err != nil {
+	if err := c.startDiscovery(ctx); err != nil {
 		unsubscribe()
 		return nil, err
 	}
@@ -157,6 +164,26 @@ func (c *central) discover(
 		}
 	}()
 	return out, nil
+}
+
+// startDiscovery starts our discovery session. A session that was only just
+// stopped is still winding down inside bluetoothd for a moment, during
+// which a new one is refused as already in progress, so that is retried.
+func (c *central) startDiscovery(ctx context.Context) error {
+	var err error
+	for range discoveryStartAttempts {
+		err = c.a.call(ctx, c.a.obj, adapterIface+".StartDiscovery")
+		var dbusErr dbus.Error
+		if err == nil || !errors.As(err, &dbusErr) || dbusErr.Name != bluezErrInProgress {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("start discovery: %w", ctx.Err())
+		case <-time.After(discoveryStartRetry):
+		}
+	}
+	return err
 }
 
 // emitScanResult delivers r, making room by dropping the oldest undelivered

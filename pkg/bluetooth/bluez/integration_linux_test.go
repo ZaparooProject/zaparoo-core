@@ -123,6 +123,9 @@ type fakeBluez struct {
 	refuseAdvert bool
 	// outOfRange makes discovery find nothing.
 	outOfRange bool
+	// discoveryBusy is how many StartDiscovery calls are still refused
+	// because an earlier session is winding down.
+	discoveryBusy int
 }
 
 type appRegistration struct {
@@ -158,6 +161,11 @@ func (a *fakeAdapter) SetDiscoveryFilter(filter map[string]dbus.Variant) *dbus.E
 func (a *fakeAdapter) StartDiscovery() *dbus.Error {
 	a.f.record("StartDiscovery")
 	a.f.mu.Lock()
+	if a.f.discoveryBusy > 0 {
+		a.f.discoveryBusy--
+		a.f.mu.Unlock()
+		return dbus.NewError(bluezErrInProgress, []any{"Operation already in progress"})
+	}
 	if a.f.outOfRange {
 		a.f.mu.Unlock()
 		return nil
@@ -411,7 +419,9 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 			{UUID: "0da70004-b359-443b-836f-477d34b6a638", Flags: []string{FlagRead}},
 		},
 	}}}
-	adv := Advertisement{LocalName: "Test Zaparoo", ServiceUUIDs: []string{app.Services[0].UUID}}
+	adv := Advertisement{
+		LocalName: "Test Zaparoo", ServiceUUIDs: []string{app.Services[0].UUID}, Interval: 150 * time.Millisecond,
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
@@ -456,6 +466,13 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
 		Call(propertiesIface+".Get", 0, advIface, "Type").Store(&advType))
 	assert.Equal(t, "peripheral", advType.Value())
+	var minInterval, maxInterval dbus.Variant
+	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
+		Call(propertiesIface+".Get", 0, advIface, "MinInterval").Store(&minInterval))
+	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
+		Call(propertiesIface+".Get", 0, advIface, "MaxInterval").Store(&maxInterval))
+	assert.Equal(t, uint32(150), minInterval.Value())
+	assert.Equal(t, uint32(225), maxInterval.Value())
 
 	appObj := func(p dbus.ObjectPath) dbus.BusObject { return fake.conn.Object(string(reg.sender), p) }
 
@@ -559,6 +576,11 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 	central, err := adapter.Central()
 	require.NoError(t, err)
 
+	// The first attempts are refused the way bluetoothd refuses a scan
+	// started while the previous one is still stopping.
+	fake.mu.Lock()
+	fake.discoveryBusy = 2
+	fake.mu.Unlock()
 	findCtx, cancelFind := context.WithTimeout(t.Context(), integrationWait)
 	defer cancelFind()
 	dev, err := central.Find(findCtx, strings.ToLower(fakeDeviceAddr))

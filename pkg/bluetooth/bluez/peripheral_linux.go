@@ -335,6 +335,12 @@ func exportAdvertisement(exp *exported, a *adapter, path dbus.ObjectPath, adv Ad
 		// global Discoverable flag, which MiSTer's controller pairing owns.
 		"Discoverable": {Value: true, Emit: prop.EmitConst},
 	}}
+	if adv.Interval > 0 {
+		// Milliseconds, with a little room for the controller to choose.
+		minInterval := uint32(adv.Interval.Milliseconds()) //nolint:gosec // an advertising interval is small
+		spec[advIface]["MinInterval"] = &prop.Prop{Value: minInterval, Emit: prop.EmitConst}
+		spec[advIface]["MaxInterval"] = &prop.Prop{Value: minInterval + minInterval/2, Emit: prop.EmitConst}
+	}
 	if _, err := exp.exportProps(path, spec); err != nil {
 		return err
 	}

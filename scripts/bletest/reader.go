@@ -115,7 +115,9 @@ func runReader(ctx context.Context, args []string) error {
 			{UUID: nusTXUUID, Flags: []string{bluez.FlagNotify}},
 		},
 	}}}
-	adv := bluez.Advertisement{LocalName: *name, ServiceUUIDs: []string{nusServiceUUID}}
+	// Advertise as often as a real reader does, so the time Core takes to
+	// pick this one up means something.
+	adv := bluez.Advertisement{LocalName: *name, ServiceUUIDs: []string{nusServiceUUID}, Interval: 100 * time.Millisecond}
 
 	served := make(chan error, 1)
 	go func() { served <- peripheral.Serve(ctx, app, adv, readerHandler{}) }()
