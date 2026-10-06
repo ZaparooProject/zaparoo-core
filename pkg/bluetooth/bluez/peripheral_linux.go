@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -378,12 +379,25 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 
 // watchPeers reports peer disconnections until ctx ends or the adapter is
 // gone, and calls peersLeft once things have been quiet for advRestartDelay
-// after one or more of them.
+// after one or more connected devices left.
+//
+// Only a device that was connected counts. A scan fills bluetoothd with
+// device objects for everything in range and drops each one half a minute
+// later; treating those as departures restarted advertising continuously
+// while a reader was being scanned for, which is what the controller could
+// not take.
 func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 	prefix := p.a.devicePathPrefix()
 	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
-		return strings.HasPrefix(string(signalObject(sig)), prefix) &&
-			(sig.Name == signalPropertiesChanged || sig.Name == signalInterfacesRemoved)
+		if !strings.HasPrefix(string(signalObject(sig)), prefix) {
+			return false
+		}
+		switch sig.Name {
+		case signalPropertiesChanged, signalInterfacesAdded, signalInterfacesRemoved:
+			return true
+		default:
+			return false
+		}
 	})
 	defer unsubscribe()
 
@@ -391,7 +405,15 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 	restart := time.NewTimer(advRestartDelay)
 	restart.Stop()
 	defer restart.Stop()
-	peerLeft := func() { restart.Reset(advRestartDelay) }
+
+	connected := make(map[dbus.ObjectPath]bool)
+	left := func(path dbus.ObjectPath) {
+		p.currentHandler().OnDisconnect(peerFromPath(path))
+		if connected[path] {
+			delete(connected, path)
+			restart.Reset(advRestartDelay)
+		}
+	}
 
 	for {
 		select {
@@ -405,24 +427,29 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 			if !ok {
 				return
 			}
-			if iface, changed, ok := propertiesChanged(sig); ok {
-				if iface != deviceIface {
-					continue
-				}
-				if connected, present := changedBool(changed, "Connected"); present && !connected {
-					p.currentHandler().OnDisconnect(peerFromPath(sig.Path))
-					peerLeft()
+			if path, ifaces, added := interfacesAdded(sig); added {
+				// A central that connects to us arrives as a new device
+				// that is already connected.
+				if isConnected, present := changedBool(ifaces[deviceIface], "Connected"); present && isConnected {
+					connected[path] = true
 				}
 				continue
 			}
-			if path, ifaces, ok := interfacesRemoved(sig); ok {
-				for _, iface := range ifaces {
-					if iface == deviceIface {
-						p.currentHandler().OnDisconnect(peerFromPath(path))
-						peerLeft()
-						break
+			if iface, changed, changedOK := propertiesChanged(sig); changedOK {
+				if iface != deviceIface {
+					continue
+				}
+				if isConnected, present := changedBool(changed, "Connected"); present {
+					if isConnected {
+						connected[sig.Path] = true
+					} else {
+						left(sig.Path)
 					}
 				}
+				continue
+			}
+			if path, ifaces, removed := interfacesRemoved(sig); removed && slices.Contains(ifaces, deviceIface) {
+				left(path)
 			}
 		}
 	}

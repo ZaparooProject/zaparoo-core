@@ -101,7 +101,16 @@ func (c *central) discover(
 		return ok && iface == deviceIface
 	})
 
-	filter := map[string]dbus.Variant{"Transport": dbus.MakeVariant("le")}
+	filter := map[string]dbus.Variant{
+		"Transport": dbus.MakeVariant("le"),
+		// Setting any filter makes BlueZ ask the controller for every
+		// advertising packet it hears unless told otherwise. In a room
+		// with a few dozen BLE devices that is hundreds of events a
+		// second, enough to corrupt the HCI stream on a slow USB host and
+		// take the controller down. One report per device is all a scan
+		// needs.
+		"DuplicateData": dbus.MakeVariant(false),
+	}
 	if len(serviceUUIDs) > 0 {
 		filter["UUIDs"] = dbus.MakeVariant(serviceUUIDs)
 	}
@@ -253,10 +262,13 @@ func (r *ScanResult) clone() ScanResult {
 	return out
 }
 
-// Find scans until the device with the given address is heard, unless it is
-// already connected. The scan is not filtered by service: the address is
-// what identifies the device, and plenty of devices leave their services
-// out of the advertisement.
+// Find returns a device bluetoothd already knows without scanning, and
+// scans only for one it has never seen. A full scan reports every device in
+// range; on a MiSTer that burst of events alongside advertising corrupted the
+// controller's event stream and took the adapter down, where waiting on a
+// known device does not. The scan is not filtered by service: the address
+// identifies the device, and plenty of devices leave their services out of
+// the advertisement.
 func (c *central) Find(ctx context.Context, address string) (Device, error) {
 	addr, err := NormalizeAddress(address)
 	if err != nil {
@@ -264,18 +276,18 @@ func (c *central) Find(ctx context.Context, address string) (Device, error) {
 	}
 	path := dbus.ObjectPath(c.a.devicePathPrefix() + strings.ReplaceAll(addr, ":", "_"))
 
-	connected, err := c.connected(ctx, path)
+	known, err := c.known(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	if connected {
+	if known {
 		return c.a.newDevice(path, addr), nil
 	}
 
 	scanCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results, err := c.discover(scanCtx, nil, func(r *ScanResult) bool {
-		return r.HasRSSI && strings.EqualFold(r.Address, addr)
+		return strings.EqualFold(r.Address, addr)
 	})
 	if err != nil {
 		return nil, err
@@ -289,18 +301,14 @@ func (c *central) Find(ctx context.Context, address string) (Device, error) {
 	return nil, ErrUnavailable
 }
 
-// connected reports whether bluetoothd has the device at path connected.
-func (c *central) connected(ctx context.Context, path dbus.ObjectPath) (bool, error) {
+// known reports whether bluetoothd has a device object at path.
+func (c *central) known(ctx context.Context, path dbus.ObjectPath) (bool, error) {
 	objs, err := c.a.managedObjects(ctx)
 	if err != nil {
 		return false, err
 	}
-	props, ok := objs[path][deviceIface]
-	if !ok {
-		return false, nil
-	}
-	connected, isBool := props["Connected"].Value().(bool)
-	return isBool && connected, nil
+	_, ok := objs[path][deviceIface]
+	return ok, nil
 }
 
 // stopDiscovery releases our discovery session; failures are expected when

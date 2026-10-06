@@ -121,8 +121,6 @@ type fakeBluez struct {
 	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
 	// when the controller cannot advertise.
 	refuseAdvert bool
-	// outOfRange makes discovery find nothing.
-	outOfRange bool
 	// discoveryBusy is how many StartDiscovery calls are still refused
 	// because an earlier session is winding down.
 	discoveryBusy int
@@ -154,7 +152,9 @@ func (f *fakeBluez) record(call string) {
 type fakeAdapter struct{ f *fakeBluez }
 
 func (a *fakeAdapter) SetDiscoveryFilter(filter map[string]dbus.Variant) *dbus.Error {
-	a.f.record("SetDiscoveryFilter:" + stringProp(filter, "Transport"))
+	duplicates, isBool := filter["DuplicateData"].Value().(bool)
+	a.f.record("SetDiscoveryFilter:" + stringProp(filter, "Transport") +
+		":duplicates=" + strconv.FormatBool(!isBool || duplicates))
 	return nil
 }
 
@@ -165,10 +165,6 @@ func (a *fakeAdapter) StartDiscovery() *dbus.Error {
 		a.f.discoveryBusy--
 		a.f.mu.Unlock()
 		return dbus.NewError(bluezErrInProgress, []any{"Operation already in progress"})
-	}
-	if a.f.outOfRange {
-		a.f.mu.Unlock()
-		return nil
 	}
 	// Discovery "finds" the device: publish it and announce it.
 	a.f.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
@@ -514,6 +510,28 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	}
 	require.ErrorIs(t, peripheral.Notify("00000000-0000-0000-0000-000000000000", []byte("x")), ErrNotFound)
 
+	// A device that was only ever seen by a scan and is then forgotten is
+	// not a peer leaving: it must not restart advertising.
+	scanned := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_99")
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesAdded, scanned,
+		map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(false)}}))
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, scanned, []string{deviceIface}))
+	select {
+	case peer := <-handler.disconnects:
+		assert.Equal(t, string(scanned), peer.Path)
+	case <-time.After(integrationWait):
+		t.Fatal("device removal never reached the handler")
+	}
+	quiet := time.After(advRestartDelay + 500*time.Millisecond)
+	for waiting := true; waiting; {
+		select {
+		case call := <-fake.calls:
+			require.NotEqual(t, "UnregisterAdvertisement", call, "a device that never connected restarted advertising")
+		case <-quiet:
+			waiting = false
+		}
+	}
+
 	// A peer dropping its link is reported.
 	fake.deviceProp.SetMust(deviceIface, "Connected", true)
 	fake.deviceProp.SetMust(deviceIface, "Connected", false)
@@ -577,7 +595,7 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 	dev, err := central.Find(findCtx, strings.ToLower(fakeDeviceAddr))
 	require.NoError(t, err)
 	assert.Equal(t, fakeDeviceAddr, dev.Address())
-	fake.expectCall(t, "SetDiscoveryFilter:le")
+	fake.expectCall(t, "SetDiscoveryFilter:le:duplicates=false")
 	fake.expectCall(t, "StartDiscovery")
 	fake.expectCall(t, "StopDiscovery")
 
@@ -667,7 +685,7 @@ func TestIntegration_CentralScansReadsAndReportsMTU(t *testing.T) {
 	defer cancelScan()
 	results, err := central.Scan(scanCtx, ScanFilter{ServiceUUIDs: []string{strings.ToUpper(fakeServiceUUID)}})
 	require.NoError(t, err)
-	fake.expectCall(t, "SetDiscoveryFilter:le")
+	fake.expectCall(t, "SetDiscoveryFilter:le:duplicates=false")
 	fake.expectCall(t, "StartDiscovery")
 
 	select {
@@ -855,14 +873,13 @@ func TestIntegration_AdapterGoneWhenAdvertisingIsRefused(t *testing.T) {
 	fake.expectCall(t, "UnregisterApplication")
 }
 
-// A device bluetoothd remembers from an earlier session is not "found" until
-// it is heard again: connecting to a remembered device waits on a slow
-// background scan, which is what made a reader take many seconds to pick up.
-func TestIntegration_FindWaitsForARememberedDeviceToBeHeard(t *testing.T) {
+// A device bluetoothd remembers is returned without a scan, so that waiting
+// for it costs the controller almost nothing; only an unknown one is scanned
+// for.
+func TestIntegration_FindReturnsARememberedDeviceWithoutScanning(t *testing.T) {
 	addr := startSessionBus(t)
 	fake := newFakeBluez(t, addr)
 	fake.mu.Lock()
-	fake.outOfRange = true
 	fake.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
 		deviceIface: {
 			"Address":   dbus.MakeVariant(fakeDeviceAddr),
@@ -877,43 +894,21 @@ func TestIntegration_FindWaitsForARememberedDeviceToBeHeard(t *testing.T) {
 	central, err := adapter.Central()
 	require.NoError(t, err)
 
-	type found struct {
-		dev Device
-		err error
-	}
-	result := make(chan found, 1)
-	go func() {
-		dev, findErr := central.Find(t.Context(), fakeDeviceAddr)
-		result <- found{dev: dev, err: findErr}
-	}()
-	fake.expectCall(t, "StartDiscovery")
-	select {
-	case r := <-result:
-		t.Fatalf("a remembered device was returned without being heard: %v %v", r.dev, r.err)
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	// It starts advertising: the scan hears it and Find returns.
-	fake.deviceProp.SetMust(deviceIface, "RSSI", int16(-50))
-	select {
-	case r := <-result:
-		require.NoError(t, r.err)
-		assert.Equal(t, fakeDeviceAddr, r.dev.Address())
-	case <-time.After(integrationWait):
-		t.Fatal("the device was heard but never found")
-	}
-
-	// One that is already connected needs no scan at all.
-	fake.mu.Lock()
-	fake.objects[fakeDevicePath][deviceIface]["Connected"] = dbus.MakeVariant(true)
-	fake.mu.Unlock()
-	fake.expectCall(t, "StopDiscovery")
 	dev, err := central.Find(t.Context(), fakeDeviceAddr)
 	require.NoError(t, err)
 	assert.Equal(t, fakeDeviceAddr, dev.Address())
 	select {
 	case call := <-fake.calls:
-		t.Fatalf("a connected device was scanned for: %s", call)
-	default:
+		t.Fatalf("a remembered device was scanned for: %s", call)
+	case <-time.After(200 * time.Millisecond):
 	}
+
+	// One bluetoothd has never seen has to be scanned for.
+	fake.mu.Lock()
+	delete(fake.objects, fakeDevicePath)
+	fake.mu.Unlock()
+	dev, err = central.Find(t.Context(), fakeDeviceAddr)
+	require.NoError(t, err)
+	assert.Equal(t, fakeDeviceAddr, dev.Address())
+	fake.expectCall(t, "StartDiscovery")
 }

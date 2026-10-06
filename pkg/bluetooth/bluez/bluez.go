@@ -222,7 +222,9 @@ type ScanFilter struct {
 }
 
 // ScanResult is what is known about one remote device while scanning. A
-// device is reported again whenever any of it changes.
+// device is reported when it is first heard and again when bluetoothd learns
+// something new about it; repeats of the same advertisement are not reported,
+// so RSSI is a first reading, not a running one.
 type ScanResult struct {
 	// ManufacturerData is keyed by Bluetooth company identifier.
 	ManufacturerData map[uint16][]byte
@@ -243,11 +245,13 @@ type Central interface {
 	// ends or the adapter is gone, after which the channel is closed. A
 	// consumer that falls behind loses the oldest updates, not the scan.
 	Scan(ctx context.Context, filter ScanFilter) (<-chan ScanResult, error)
-	// Find returns the device with the given address once it has been
-	// heard advertising, or at once if it is already connected, scanning
-	// until then or until ctx ends. It deliberately does not return a
-	// device BlueZ merely remembers: connecting to one of those waits on a
-	// slow background scan, where a device just heard connects at once.
+	// Find returns the device with the given address. One bluetoothd
+	// already knows is returned at once, in range or not, and connecting
+	// to it waits for it to advertise: bluetoothd does that with a scan
+	// that only listens for that one device, which is slower to notice it
+	// than a full scan but asks almost nothing of the controller. Only a
+	// device bluetoothd has never seen is scanned for, until it is heard
+	// or ctx ends.
 	Find(ctx context.Context, address string) (Device, error)
 }
 
