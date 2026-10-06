@@ -110,7 +110,7 @@ Core advertises a primary service and the local name from `[service.ble] name`, 
 
 Info returns `{"v": 1, "deviceId": "<device id>", "maxMessage": 4194304, "maxUnauthenticated": 65536, "preferredMtu": 512, "window": 64}`. `deviceId` lets a client pick the stored credentials for this device before it speaks; peer addresses are not stable enough for that. `maxMessage` and `maxUnauthenticated` are the largest messages Core accepts from the client after and before it authenticates. Clients should request the largest ATT MTU the platform allows.
 
-**Framing.** A message is one complete WebSocket-equivalent frame: an encrypted frame, or one of the plaintext pairing requests below. It is split into chunks that fit `MTU - 3` bytes and written to RX one after another; Core sends replies the same way on TX. Every chunk starts with a header:
+**Framing.** A message is one complete WebSocket-equivalent frame: an encrypted frame, or one of the plaintext pairing requests below. It is split into chunks of at most `MTU - 3` bytes, and never more than 512 (the longest value an attribute can hold, which a 517-byte MTU would exceed), and written to RX one after another; Core sends replies the same way on TX. Every chunk starts with a header:
 
 ```text
 byte 0    flags   bits 7..4 = protocol version (1), bit 2 = ACK, bit 1 = LAST, bit 0 = FIRST, bit 3 reserved (0)

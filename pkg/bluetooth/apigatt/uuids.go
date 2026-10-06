@@ -78,6 +78,11 @@ const (
 	// attHeaderSize is what ATT itself takes from every packet.
 	attHeaderSize = 3
 
+	// MaxChunkSize is the longest value an attribute can hold. A link may
+	// negotiate an MTU that would carry more (517 is common), but the
+	// stack cuts a longer value short, so a chunk never exceeds this.
+	MaxChunkSize = 512
+
 	// PreferredMTU is what the Info characteristic suggests the app request.
 	PreferredMTU = 512
 )

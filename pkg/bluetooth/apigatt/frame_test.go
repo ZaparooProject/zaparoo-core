@@ -66,7 +66,7 @@ func TestChunkerRoundTrip(t *testing.T) {
 		for _, size := range []int{1, 10, 11, 12, 100, 1000, 70000} {
 			msg := testMessage(size)
 			chunks := splitAll(t, &Chunker{Tag: 0xBEEF}, msg, mtu)
-			limit := max(mtu, DefaultMTU) - attHeaderSize
+			limit := min(max(mtu, DefaultMTU)-attHeaderSize, MaxChunkSize)
 			for i, chunk := range chunks {
 				assert.LessOrEqual(t, len(chunk), limit, "mtu %d size %d chunk %d", mtu, size, i)
 				h, _, err := ParseChunk(chunk)

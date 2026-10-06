@@ -185,10 +185,11 @@ func chunkPayload(mtu, headerSize int) int {
 	if mtu < DefaultMTU {
 		mtu = DefaultMTU
 	}
-	return mtu - attHeaderSize - headerSize
+	return min(mtu-attHeaderSize, MaxChunkSize) - headerSize
 }
 
-// Split cuts msg into chunks that fit the link's ATT MTU and hands them to
+// Split cuts msg into chunks that fit the link's ATT MTU, and never more
+// than MaxChunkSize, and hands them to
 // emit in transmission order, one at a time, so a large message is never
 // held as chunks all at once. It stops at the first error from emit; the
 // sequence counter has then moved past the chunks already emitted.
