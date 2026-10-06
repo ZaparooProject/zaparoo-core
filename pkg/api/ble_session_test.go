@@ -25,8 +25,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,12 +148,17 @@ func (r *bleTestRig) route(ctx context.Context) {
 // bleTestClient drives the rig the way a phone would: chunked writes to RX,
 // reassembled notifications from TX filtered by its tag.
 type bleTestClient struct {
-	rig   *bleTestRig
-	reasm *apigatt.Reassembler
-	inbox chan []byte
-	peer  bluez.Peer
-	tag   uint16
-	mtu   int
+	rig     *bleTestRig
+	reasm   *apigatt.Reassembler
+	chunker *apigatt.Chunker
+	inbox   chan []byte
+	peer    bluez.Peer
+	pending [][]byte
+	mtu     int
+	tag     uint16
+	acked   uint16
+	// silent stops the client acknowledging what it receives.
+	silent bool
 }
 
 func (r *bleTestRig) client(address string, tag uint16, mtu int) *bleTestClient {
@@ -159,9 +167,10 @@ func (r *bleTestRig) client(address string, tag uint16, mtu int) *bleTestClient 
 	r.inboxes[tag] = inbox
 	r.mu.Unlock()
 	return &bleTestClient{
-		rig:   r,
-		reasm: apigatt.NewReassembler(clockwork.NewRealClock(), 0),
-		inbox: inbox,
+		rig:     r,
+		reasm:   apigatt.NewReassembler(0),
+		chunker: &apigatt.Chunker{Tag: tag},
+		inbox:   inbox,
 		peer: bluez.Peer{
 			Path:    "/org/bluez/hci0/dev_" + strings.ReplaceAll(address, ":", "_"),
 			Address: address,
@@ -173,10 +182,50 @@ func (r *bleTestRig) client(address string, tag uint16, mtu int) *bleTestClient 
 
 func (c *bleTestClient) send(t *testing.T, msg []byte) {
 	t.Helper()
-	chunks, err := apigatt.Chunker{MTU: c.mtu, Tag: c.tag}.Split(msg)
-	require.NoError(t, err)
-	for _, chunk := range chunks {
-		c.rig.peripheral.Handler().OnWrite(c.peer, apigatt.RXCharUUID, chunk, c.mtu)
+	for _, chunk := range c.chunks(t, msg) {
+		c.write(chunk)
+	}
+}
+
+// chunks splits msg into this client's next chunks without sending them.
+func (c *bleTestClient) chunks(t *testing.T, msg []byte) [][]byte {
+	t.Helper()
+	var chunks [][]byte
+	require.NoError(t, c.chunker.Split(msg, c.mtu, func(chunk []byte) error {
+		chunks = append(chunks, chunk)
+		return nil
+	}))
+	return chunks
+}
+
+func (c *bleTestClient) write(chunk []byte) {
+	c.rig.peripheral.Handler().OnWrite(c.peer, apigatt.RXCharUUID, chunk, c.mtu)
+}
+
+// openPending opens a session without authenticating it, by sending the
+// first chunk of a message and nothing more.
+func (c *bleTestClient) openPending(t *testing.T) {
+	t.Helper()
+	errStop := errors.New("stop after the first chunk")
+	err := c.chunker.Split(
+		[]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`), apigatt.DefaultMTU,
+		func(chunk []byte) error {
+			c.write(chunk)
+			return errStop
+		},
+	)
+	require.ErrorIs(t, err, errStop)
+}
+
+// acknowledge tells Core how far this client has received, the way a phone
+// would: once half a window has arrived since the last acknowledgement.
+func (c *bleTestClient) acknowledge(force bool) {
+	if c.silent && !force {
+		return
+	}
+	if next := c.reasm.Next(); force || next-c.acked >= apigatt.SendWindow/2 {
+		c.acked = next
+		c.write(apigatt.EncodeAck(c.tag, next))
 	}
 }
 
@@ -184,19 +233,23 @@ func (c *bleTestClient) send(t *testing.T, msg []byte) {
 func (c *bleTestClient) recv(t *testing.T) []byte {
 	t.Helper()
 	deadline := time.After(bleTestTimeout)
-	for {
+	for len(c.pending) == 0 {
 		select {
 		case chunk := <-c.inbox:
-			msg, err := c.reasm.Push(chunk)
+			h, payload, err := apigatt.ParseChunk(chunk)
 			require.NoError(t, err)
-			if msg != nil {
-				return msg
-			}
+			msgs, err := c.reasm.Push(h, payload)
+			require.NoError(t, err)
+			c.pending = append(c.pending, msgs...)
+			c.acknowledge(false)
 		case <-deadline:
 			t.Fatal("no message from the transport")
 			return nil
 		}
 	}
+	msg := c.pending[0]
+	c.pending = c.pending[1:]
+	return msg
 }
 
 // expectNothing asserts that nothing arrives for this client for a while.
@@ -335,9 +388,7 @@ func TestBLESession_IdleBeforeAuthClosesSession(t *testing.T) {
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
 	// A chunk that starts a message but never finishes it opens the session.
-	chunks, err := apigatt.Chunker{MTU: 23, Tag: 7}.Split([]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
-	require.NoError(t, err)
-	rig.peripheral.Handler().OnWrite(client.peer, apigatt.RXCharUUID, chunks[0], 23)
+	client.openPending(t)
 	require.NotNil(t, client.session())
 
 	rig.clock.Advance(blePendingIdleTimeout - time.Second)
@@ -351,9 +402,7 @@ func TestBLESession_DisconnectRemovesSession(t *testing.T) {
 
 	rig := newBLETestRig(t, bleTestRigOptions{})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
-	chunks, err := apigatt.Chunker{MTU: 23, Tag: 7}.Split([]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
-	require.NoError(t, err)
-	rig.peripheral.Handler().OnWrite(client.peer, apigatt.RXCharUUID, chunks[0], 23)
+	client.openPending(t)
 	require.NotNil(t, client.session())
 
 	rig.peripheral.Handler().OnDisconnect(client.peer)
@@ -385,9 +434,7 @@ func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
 	// Open a pending session with a partial message.
-	chunks, err := apigatt.Chunker{MTU: 23, Tag: 7}.Split([]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
-	require.NoError(t, err)
-	rig.peripheral.Handler().OnWrite(client.peer, apigatt.RXCharUUID, chunks[0], 23)
+	client.openPending(t)
 	s := client.session()
 	require.NotNil(t, s)
 
@@ -396,7 +443,6 @@ func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 	client.expectNothing(t)
 
 	// Authenticate, then the same notification goes out encrypted.
-	client.reasm = apigatt.NewReassembler(clockwork.NewRealClock(), 0)
 	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
 	require.NoError(t, err)
 	client.send(t, frameJSON)
@@ -405,11 +451,10 @@ func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 	s.sendNotification(models.NotificationStarted, notif)
 	assert.JSONEq(t, string(notif), string(decryptS2C(t, first.secrets, client.recv(t), 1)))
 
-	// Oversize notifications are dropped rather than desyncing the session.
-	s.sendNotification(models.NotificationStarted, []byte(strings.Repeat("y", apigatt.MaxMessageSize)))
-	client.expectNothing(t)
-	s.sendNotification(models.NotificationStarted, notif)
-	assert.JSONEq(t, string(notif), string(decryptS2C(t, first.secrets, client.recv(t), 2)))
+	// A large notification is streamed like any other message.
+	large := []byte(`{"jsonrpc":"2.0","method":"media.started","params":"` + strings.Repeat("y", 300_000) + `"}`)
+	s.sendNotification(models.NotificationStarted, large)
+	assert.Equal(t, large, decryptS2C(t, first.secrets, client.recv(t), 2))
 }
 
 // authenticate sends the fixture's first frame and consumes the response.
@@ -486,9 +531,7 @@ func TestBLETransport_BroadcastsThroughBroker(t *testing.T) {
 		methodMap: versionMethodMap(t), encGateway: first.gateway, notifBroker: b,
 	})
 	pending := rig.client("11:22:33:44:55:66", 1, 185)
-	chunks, err := apigatt.Chunker{MTU: 23, Tag: 1}.Split([]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
-	require.NoError(t, err)
-	rig.peripheral.Handler().OnWrite(pending.peer, apigatt.RXCharUUID, chunks[0], 23)
+	pending.openPending(t)
 	authed := rig.client("77:88:99:AA:BB:CC", 2, 185)
 	authed.authenticate(t, first)
 
@@ -524,15 +567,192 @@ func TestBLESession_OutboundOverflowClosesSession(t *testing.T) {
 
 	rig := newBLETestRig(t, bleTestRigOptions{})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
-	chunks, err := apigatt.Chunker{MTU: 23, Tag: 7}.Split([]byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
-	require.NoError(t, err)
-	rig.peripheral.Handler().OnWrite(client.peer, apigatt.RXCharUUID, chunks[0], 23)
+	client.openPending(t)
 	s := client.session()
 	require.NotNil(t, s)
 
-	require.ErrorIs(t, s.Write(make([]byte, bleOutboundLimit+1)), errBLEOutboundFull)
+	// Nothing is acknowledged, so the writer stalls with a full window and
+	// the queue behind it fills.
+	var err error
+	for i := 0; i < apigatt.SendWindow+bleOutboundMessages+2 && err == nil; i++ {
+		err = s.Write([]byte("m"))
+	}
+	require.ErrorIs(t, err, errBLEOutboundFull)
 	client.waitClosed(t)
 	require.ErrorIs(t, s.Write([]byte("late")), errBLESessionClosed)
+}
+
+// largeMethodMap answers "version" with a result of the given size.
+func largeMethodMap(t *testing.T, size int) *MethodMap {
+	t.Helper()
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod("version", func(requests.RequestEnv) (any, error) {
+		return map[string]string{"blob": strings.Repeat("x", size)}, nil
+	}, false))
+	return &methodMap
+}
+
+func TestBLESession_LargeResponseIsStreamed(t *testing.T) {
+	t.Parallel()
+
+	// Larger than the old 256 KiB transport cap and than the WebSocket
+	// inbound limit: nothing the API returns is refused for size.
+	const size = 5 * 1024 * 1024
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: largeMethodMap(t, size), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, 517)
+
+	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
+	require.NoError(t, err)
+	client.send(t, frameJSON)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
+	result, ok := resp.Result.(map[string]any)
+	require.True(t, ok)
+	assert.Len(t, result["blob"], size)
+}
+
+func TestBLESession_SendsOnlyWithinAcknowledgedWindow(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: largeMethodMap(t, 20_000), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, apigatt.DefaultMTU)
+	client.silent = true
+
+	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
+	require.NoError(t, err)
+	client.send(t, frameJSON)
+
+	// With no acknowledgement Core sends one window and stops.
+	receive := func(want int) {
+		t.Helper()
+		for range want {
+			select {
+			case chunk := <-client.inbox:
+				h, payload, parseErr := apigatt.ParseChunk(chunk)
+				require.NoError(t, parseErr)
+				msgs, pushErr := client.reasm.Push(h, payload)
+				require.NoError(t, pushErr)
+				client.pending = append(client.pending, msgs...)
+			case <-time.After(bleTestTimeout):
+				t.Fatal("transport stopped short of the window")
+			}
+		}
+		client.expectNothing(t)
+	}
+	receive(apigatt.SendWindow)
+
+	// Acknowledging half of it releases exactly that many more.
+	client.acked = apigatt.SendWindow / 2
+	client.write(apigatt.EncodeAck(client.tag, client.acked))
+	receive(apigatt.SendWindow / 2)
+
+	// A client that never acknowledges again is dropped.
+	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 2))
+	rig.clock.Advance(bleAckTimeout + time.Second)
+	client.waitClosed(t)
+}
+
+func TestBLESession_BadAcknowledgementClosesSession(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	client := rig.client("11:22:33:44:55:66", 7, 185)
+	client.openPending(t)
+	require.NotNil(t, client.session())
+
+	// Nothing has been sent, so there is nothing to acknowledge.
+	client.write(apigatt.EncodeAck(client.tag, 1))
+	client.waitClosed(t)
+}
+
+func TestBLESession_ChangedTagClosesSession(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	client := rig.client("11:22:33:44:55:66", 7, 185)
+	client.openPending(t)
+	require.NotNil(t, client.session())
+
+	client.write(apigatt.EncodeAck(client.tag+1, 0))
+	client.waitClosed(t)
+}
+
+// BlueZ hands every write to its own goroutine, so chunks of back-to-back
+// requests reach the session in any order. Encrypted frames only decrypt in
+// the order they were sent, so the session must restore it.
+func TestBLESession_PipelinedRequestsArriveOutOfOrder(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, 517)
+	client.authenticate(t, first)
+
+	const pipelined = 20
+	chunks := make([][]byte, 0, pipelined)
+	for i := 1; i <= pipelined; i++ {
+		req := fmt.Sprintf(`{"jsonrpc":"2.0","method":"version","id":%d}`, 100+i)
+		frame := first.secrets.encryptSubsequent(t, []byte(req), uint64(i)) //nolint:gosec // small loop index
+		// Single-chunk at this MTU, as real requests are.
+		chunks = append(chunks, client.chunks(t, frame)...)
+	}
+	require.Len(t, chunks, pipelined)
+
+	// Newest first, every write on its own goroutine.
+	var wg sync.WaitGroup
+	for i := len(chunks) - 1; i >= 0; i-- {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.write(chunks[i])
+		}()
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool)
+	for i := 1; i <= pipelined; i++ {
+		var resp models.ResponseObject
+		plaintext := decryptS2C(t, first.secrets, client.recv(t), uint64(i)) //nolint:gosec // small loop index
+		require.NoError(t, json.Unmarshal(plaintext, &resp))
+		id, err := json.Marshal(resp.ID)
+		require.NoError(t, err)
+		seen[string(id)] = true
+	}
+	assert.Len(t, seen, pipelined)
+	assert.NotNil(t, client.session(), "the session survived the reordering")
+}
+
+func TestBLESession_ResponsesWaitWhileTheLinkIsBackedUp(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	client := rig.client("11:22:33:44:55:66", 7, apigatt.DefaultMTU)
+	client.openPending(t)
+	s := client.session()
+	require.NotNil(t, s)
+	require.NoError(t, s.WaitWritable(t.Context()), "an empty queue never waits")
+
+	// Unacknowledged, this message keeps the writer busy and the queue
+	// over the high-water mark.
+	require.NoError(t, s.Write(make([]byte, bleOutboundHighWater)))
+
+	waited := make(chan error, 1)
+	go func() { waited <- s.WaitWritable(t.Context()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("wait returned while backed up: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, s.WaitWritable(ctx), context.Canceled)
+
+	s.shutdown("test")
+	require.ErrorIs(t, <-waited, errBLESessionClosed)
 }
 
 func TestBLESession_AuthenticatedIdleTimeout(t *testing.T) {

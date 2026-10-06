@@ -215,8 +215,34 @@ type Peripheral interface {
 	Disconnect(ctx context.Context, peer Peer) error
 }
 
+// ScanFilter narrows a scan. The zero value reports every LE device.
+type ScanFilter struct {
+	// ServiceUUIDs keeps only devices advertising at least one of these.
+	ServiceUUIDs []string
+}
+
+// ScanResult is what is known about one remote device while scanning. A
+// device is reported again whenever any of it changes.
+type ScanResult struct {
+	// ManufacturerData is keyed by Bluetooth company identifier.
+	ManufacturerData map[uint16][]byte
+	// ServiceData is keyed by service UUID.
+	ServiceData  map[string][]byte
+	Address      string
+	Name         string
+	ServiceUUIDs []string
+	// RSSI is the last signal strength in dBm, valid when HasRSSI. A
+	// device BlueZ only remembers from an earlier scan has none.
+	RSSI    int16
+	HasRSSI bool
+}
+
 // Central is the scanning and connecting side of an adapter.
 type Central interface {
+	// Scan reports the LE devices in range that match filter until ctx
+	// ends or the adapter is gone, after which the channel is closed. A
+	// consumer that falls behind loses the oldest updates, not the scan.
+	Scan(ctx context.Context, filter ScanFilter) (<-chan ScanResult, error)
 	// Find scans for the device with the given address, filtering on the
 	// service UUIDs, until it appears or ctx ends.
 	Find(ctx context.Context, address string, serviceUUIDs []string) (Device, error)
@@ -239,6 +265,11 @@ type RemoteCharacteristic interface {
 	// Subscribe enables notifications and streams their values until ctx
 	// ends or the device disconnects, after which the channel is closed.
 	Subscribe(ctx context.Context) (<-chan []byte, error)
+	// Read reads the characteristic's current value from the device.
+	Read(ctx context.Context) ([]byte, error)
+	// MTU is the ATT MTU negotiated for the link, or 0 when BlueZ does not
+	// report it (versions before 5.62).
+	MTU(ctx context.Context) (int, error)
 	// Write writes the value, with or without waiting for the peripheral's
 	// acknowledgement.
 	Write(ctx context.Context, value []byte, withResponse bool) error

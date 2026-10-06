@@ -36,8 +36,9 @@
 // Unlike a serial port, the device may be out of range or switched off for
 // long stretches, so the driver owns the link: Open attaches to the adapter
 // and returns at once, and a background loop finds, connects to and
-// reconnects the device with a growing pause between attempts. Each attempt
-// scans, and scanning shares the radio with the BLE API transport's
+// reconnects the device. It never backs off: one scan stays open until the
+// device is heard, so a reader that is switched on is picked up as soon as
+// it advertises. Scanning shares the radio with the BLE API transport's
 // advertising, so a reader that is missing makes the device a little
 // harder to discover until it turns up.
 package simpleserialble
@@ -73,32 +74,28 @@ const (
 	removalTimeout = 1 * time.Second
 	removalPoll    = 250 * time.Millisecond
 
-	// defaultFindTimeout bounds one scan for the device.
-	defaultFindTimeout = 15 * time.Second
-
-	// Pauses between attempts to reach a device that is not answering,
-	// doubling from the first to the last.
-	initialRetryPause = 1 * time.Second
-	maxRetryPause     = 30 * time.Second
+	// retryPause is the gap after an attempt that failed outright, the
+	// same as the reader manager's own connect tick. Waiting for the device
+	// to appear is not an attempt: the scan simply stays open.
+	retryPause = 1 * time.Second
 )
 
 // Reader is a simple serial reader reached over BLE.
 type Reader struct {
-	cfg         *config.Instance
-	open        func(ctx context.Context) (bluez.Adapter, error)
-	clock       clockwork.Clock
-	adapter     bluez.Adapter
-	cancel      context.CancelFunc
-	done        chan struct{}
-	lastToken   *tokens.Token
-	lastSeenAt  time.Time
-	device      config.ReadersConnect
-	address     string
-	findTimeout time.Duration
-	mu          syncutil.RWMutex
-	attached    bool
-	linked      bool
-	removable   bool
+	cfg        *config.Instance
+	open       func(ctx context.Context) (bluez.Adapter, error)
+	clock      clockwork.Clock
+	adapter    bluez.Adapter
+	cancel     context.CancelFunc
+	done       chan struct{}
+	lastToken  *tokens.Token
+	lastSeenAt time.Time
+	device     config.ReadersConnect
+	address    string
+	mu         syncutil.RWMutex
+	attached   bool
+	linked     bool
+	removable  bool
 }
 
 // NewReader builds a reader over the real BlueZ layer. It never powers the
@@ -116,11 +113,10 @@ func newReaderWith(
 	clock clockwork.Clock,
 ) *Reader {
 	return &Reader{
-		cfg:         cfg,
-		open:        open,
-		clock:       clock,
-		findTimeout: defaultFindTimeout,
-		removable:   true,
+		cfg:       cfg,
+		open:      open,
+		clock:     clock,
+		removable: true,
 	}
 }
 
@@ -185,7 +181,6 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- struct{}, iq chan<- readers.Scan) {
 	defer close(done)
 
-	pause := initialRetryPause
 	reported := false
 	for {
 		dev, values, err := r.connect(ctx, central)
@@ -198,18 +193,16 @@ func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- str
 				event = log.Info()
 				reported = true
 			}
-			event.Err(err).Str("address", r.address).Dur("retryIn", pause).
-				Msg("bluetooth simple serial reader not reachable, will retry")
+			event.Err(err).Str("address", r.address).
+				Msg("bluetooth simple serial reader not reachable, will keep trying")
 			select {
 			case <-ctx.Done():
 				return
-			case <-r.clock.After(pause):
+			case <-r.clock.After(retryPause):
 			}
-			pause = min(pause*2, maxRetryPause)
 			continue
 		}
 
-		pause = initialRetryPause
 		reported = false
 		r.setLinked(true)
 		log.Info().Str("address", r.address).Msg("bluetooth simple serial reader connected")
@@ -220,19 +213,17 @@ func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- str
 			r.disconnect(dev)
 			return
 		}
-		r.linkLost(iq)
+		r.linkLost(ctx, iq)
 	}
 }
 
 // connect finds and connects the device and subscribes to its TX stream.
 func (r *Reader) connect(ctx context.Context, central bluez.Central) (bluez.Device, <-chan []byte, error) {
-	findCtx, findCancel := context.WithTimeout(ctx, r.findTimeout)
-	defer findCancel()
-	dev, err := central.Find(findCtx, r.address, []string{nusServiceUUID})
+	dev, err := central.Find(ctx, r.address, []string{nusServiceUUID})
 	if err != nil {
 		return nil, nil, fmt.Errorf("find: %w", err)
 	}
-	if connectErr := dev.Connect(findCtx); connectErr != nil {
+	if connectErr := dev.Connect(ctx); connectErr != nil {
 		return nil, nil, fmt.Errorf("connect: %w", connectErr)
 	}
 
@@ -282,17 +273,17 @@ func (r *Reader) readLoop(ctx context.Context, iq chan<- readers.Scan, dev bluez
 				return
 			}
 			for _, line := range splitter.Feed(data) {
-				r.handleLine(line, iq)
+				r.handleLine(ctx, line, iq)
 			}
 		case <-ticker.Chan():
-			r.checkRemoval(iq)
+			r.checkRemoval(ctx, iq)
 		}
 	}
 }
 
 // handleLine emits a scan for a new token. Repeats of the current token
 // only refresh its presence.
-func (r *Reader) handleLine(line string, iq chan<- readers.Scan) {
+func (r *Reader) handleLine(ctx context.Context, line string, iq chan<- readers.Scan) {
 	parsed, ok := simpleproto.ParseLine(line, r.ReaderID())
 	if !ok {
 		return
@@ -304,42 +295,52 @@ func (r *Reader) handleLine(line string, iq chan<- readers.Scan) {
 	}
 
 	if !helpers.TokensEqual(parsed.Token, r.lastToken) {
-		iq <- readers.Scan{
+		r.emit(ctx, iq, &readers.Scan{
 			Source:   tokens.SourceReader,
 			ReaderID: r.ReaderID(),
 			Token:    parsed.Token,
-		}
+		})
 	}
 	r.lastToken = parsed.Token
 	r.lastSeenAt = r.clock.Now()
 }
 
 // checkRemoval reports the token gone once the reader stops repeating it.
-func (r *Reader) checkRemoval(iq chan<- readers.Scan) {
+func (r *Reader) checkRemoval(ctx context.Context, iq chan<- readers.Scan) {
 	if r.lastToken == nil || r.clock.Since(r.lastSeenAt) <= removalTimeout {
 		return
 	}
-	iq <- readers.Scan{
+	r.emit(ctx, iq, &readers.Scan{
 		Source:   tokens.SourceReader,
 		ReaderID: r.ReaderID(),
 		Token:    nil,
-	}
+	})
 	r.lastToken = nil
+}
+
+// emit hands a scan to the reader manager, giving up when the reader is
+// closed: the manager stops receiving before it closes its readers, and
+// Close waits for this loop.
+func (*Reader) emit(ctx context.Context, iq chan<- readers.Scan, scan *readers.Scan) {
+	select {
+	case iq <- *scan:
+	case <-ctx.Done():
+	}
 }
 
 // linkLost reports an active token as a reader error, not a removal, so
 // media keeps running while the device is reconnected.
-func (r *Reader) linkLost(iq chan<- readers.Scan) {
+func (r *Reader) linkLost(ctx context.Context, iq chan<- readers.Scan) {
 	log.Warn().Str("address", r.address).Msg("bluetooth simple serial reader lost its link, reconnecting")
 	if r.lastToken == nil {
 		return
 	}
-	iq <- readers.Scan{
+	r.emit(ctx, iq, &readers.Scan{
 		Source:      tokens.SourceReader,
 		ReaderID:    r.ReaderID(),
 		Token:       nil,
 		ReaderError: true,
-	}
+	})
 	r.lastToken = nil
 }
 

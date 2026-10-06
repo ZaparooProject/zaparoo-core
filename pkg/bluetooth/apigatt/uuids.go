@@ -24,8 +24,6 @@
 // framing can be fuzzed and reused on its own.
 package apigatt
 
-import "time"
-
 // Service and characteristic UUIDs. The app must use the same values; they
 // are fixed for the life of protocol version 1.
 const (
@@ -45,25 +43,33 @@ const (
 	// ProtocolVersion is carried in every chunk header.
 	ProtocolVersion = 1
 
-	// MaxMessageSize caps one reassembled message in either direction. It
-	// is far below the WebSocket limit because a BLE link moves tens of
-	// kilobytes per second at best.
-	MaxMessageSize = 256 * 1024
+	// MaxMessageSize caps one reassembled message from an authenticated
+	// client. It matches the WebSocket limit. Messages from Core have no
+	// cap: whatever the API returns is streamed.
+	MaxMessageSize = 4 * 1024 * 1024
+
+	// MaxUnauthenticatedMessageSize caps a message from a client that has
+	// not authenticated yet, which is anyone in radio range. It covers a
+	// pairing request or an encrypted first frame.
+	MaxUnauthenticatedMessageSize = 64 * 1024
 
 	// ReorderWindow is how far ahead of the expected chunk a chunk may
 	// arrive and still be held. BlueZ hands each write to us on its own
-	// goroutine, so reorders happen; the window is half the sequence space,
-	// which is the most that still tells "ahead" from "already seen".
-	// Memory is bounded by MaxMessageSize, not by the window.
-	ReorderWindow = 128
+	// goroutine, so chunks reach the reassembler in any order.
+	ReorderWindow = 256
+
+	// maxHeldBytes bounds the early chunks kept while waiting for the ones
+	// before them.
+	maxHeldBytes = 256 * 1024
+
+	// SendWindow is how many chunks Core sends beyond the last one the
+	// client acknowledged. It is what keeps a slow link from piling
+	// megabytes up inside bluetoothd.
+	SendWindow = 64
 
 	// MaxProtocolErrors is how many recoverable framing mistakes one
 	// connection may make before it is dropped.
 	MaxProtocolErrors = 3
-
-	// PartialIdleTimeout is how long a half-received message is kept before
-	// the next chunk starts over.
-	PartialIdleTimeout = 5 * time.Second
 
 	// DefaultMTU is the ATT MTU every link starts with; a peer that never
 	// negotiated a larger one gets 20-byte chunks.
@@ -78,18 +84,25 @@ const (
 
 // Info is the JSON document served by InfoCharUUID.
 type Info struct {
-	DeviceID     string `json:"deviceId"`
-	Version      int    `json:"v"`
-	MaxMessage   int    `json:"maxMessage"`
-	PreferredMTU int    `json:"preferredMtu"`
+	DeviceID string `json:"deviceId"`
+	Version  int    `json:"v"`
+	// MaxMessage and MaxUnauthenticated are the largest messages Core
+	// accepts from the client, after and before authentication.
+	MaxMessage         int `json:"maxMessage"`
+	MaxUnauthenticated int `json:"maxUnauthenticated"`
+	PreferredMTU       int `json:"preferredMtu"`
+	// Window is the most chunks Core sends without an acknowledgement.
+	Window int `json:"window"`
 }
 
 // NewInfo describes this endpoint for the given device.
 func NewInfo(deviceID string) Info {
 	return Info{
-		DeviceID:     deviceID,
-		Version:      ProtocolVersion,
-		MaxMessage:   MaxMessageSize,
-		PreferredMTU: PreferredMTU,
+		DeviceID:           deviceID,
+		Version:            ProtocolVersion,
+		MaxMessage:         MaxMessageSize,
+		MaxUnauthenticated: MaxUnauthenticatedMessageSize,
+		PreferredMTU:       PreferredMTU,
+		Window:             SendWindow,
 	}
 }

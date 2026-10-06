@@ -16,33 +16,47 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-
 package apigatt
 
 import (
 	"bytes"
 	"testing"
-
-	"github.com/jonboulle/clockwork"
 )
+
+// splitAll collects every chunk Split emits.
+func splitAll(tb testing.TB, c *Chunker, msg []byte, mtu int) [][]byte {
+	tb.Helper()
+	var chunks [][]byte
+	if err := c.Split(msg, mtu, func(chunk []byte) error {
+		chunks = append(chunks, chunk)
+		return nil
+	}); err != nil {
+		tb.Fatalf("split: %v", err)
+	}
+	return chunks
+}
 
 // FuzzParseChunk checks that no input makes the header parser panic and that
 // every accepted chunk survives an encode round trip.
 func FuzzParseChunk(f *testing.F) {
-	good, _ := Chunker{MTU: 100, Tag: 7}.Split([]byte("seed message"))
-	for _, c := range good {
+	for _, c := range splitAll(f, &Chunker{Tag: 7}, []byte("seed message"), 100) {
 		f.Add(c)
 	}
 	f.Add([]byte{})
-	f.Add([]byte{0x10, 0, 0, 0})
-	f.Add([]byte{0x11, 0, 0, 0, 0, 0, 0, 1, 'x'})
+	f.Add([]byte{0x10, 0, 0, 0, 0})
+	f.Add([]byte{0x11, 0, 0, 0, 0, 0, 0, 0, 1, 'x'})
+	f.Add(EncodeAck(7, 300))
 
 	f.Fuzz(func(t *testing.T, chunk []byte) {
 		h, payload, err := ParseChunk(chunk)
 		if err != nil {
 			return
 		}
-		again, payload2, err := ParseChunk(EncodeChunk(h, payload))
+		encoded := EncodeChunk(h, payload)
+		if h.Ack {
+			encoded = EncodeAck(h.Tag, h.Seq)
+		}
+		again, payload2, err := ParseChunk(encoded)
 		if err != nil {
 			t.Fatalf("re-encoded chunk failed to parse: %v", err)
 		}
@@ -53,37 +67,40 @@ func FuzzParseChunk(f *testing.F) {
 }
 
 // FuzzReassembler feeds arbitrary chunk streams and checks the reassembler
-// never panics, never holds more than its cap, and either fails or keeps
-// going without contradiction.
+// never panics and never returns or holds more than its caps.
 func FuzzReassembler(f *testing.F) {
-	chunks, _ := Chunker{MTU: 23}.Split([]byte("a longer seed message that needs several chunks to carry"))
+	chunks := splitAll(f, &Chunker{}, []byte("a longer seed message that needs several chunks to carry"), 23)
 	var stream []byte
 	for _, c := range chunks {
 		stream = append(stream, byte(len(c))) //nolint:gosec // an MTU-23 chunk is at most 20 bytes
 		stream = append(stream, c...)
 	}
 	f.Add(stream)
-	f.Add([]byte{9, 0x11, 0, 0, 0, 0, 0, 0, 1, 'x'})
+	f.Add([]byte{10, 0x13, 0, 0, 0, 0, 0, 0, 0, 1, 'x'})
 
+	const limit = 4096
 	f.Fuzz(func(t *testing.T, data []byte) {
-		r := NewReassembler(clockwork.NewFakeClock(), 4096)
+		r := NewReassembler(limit)
 		for len(data) > 0 {
-			n := int(data[0])
-			data = data[1:]
-			if n > len(data) {
-				n = len(data)
+			n := min(int(data[0]), len(data)-1)
+			chunk := data[1 : 1+n]
+			data = data[1+n:]
+			h, payload, err := ParseChunk(chunk)
+			if err != nil || h.Ack {
+				continue
 			}
-			chunk := data[:n]
-			data = data[n:]
-			msg, err := r.Push(chunk)
+			msgs, err := r.Push(h, payload)
 			if err != nil {
 				return
 			}
-			if len(msg) > 4096 {
-				t.Fatalf("reassembled %d bytes over the cap", len(msg))
+			for _, msg := range msgs {
+				if len(msg) > limit {
+					t.Fatalf("reassembled %d bytes over the cap", len(msg))
+				}
 			}
-			if len(r.buf)+r.heldBytes > 4096 {
-				t.Fatalf("holding %d bytes over the cap", len(r.buf)+r.heldBytes)
+			if len(r.buf) > limit || r.heldBytes > maxHeldBytes || len(r.held) >= ReorderWindow {
+				t.Fatalf("holding %d message bytes, %d early bytes, %d early chunks",
+					len(r.buf), r.heldBytes, len(r.held))
 			}
 		}
 	})

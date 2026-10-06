@@ -16,412 +16,323 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-
 package apigatt
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
+	"math"
+	"math/rand/v2"
 	"testing"
-	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestReassembler(t *testing.T) (*Reassembler, *clockwork.FakeClock) {
-	t.Helper()
-	clock := clockwork.NewFakeClock()
-	return NewReassembler(clock, 0), clock
-}
-
-// feed pushes every chunk and returns the messages completed along the way.
-func feed(t *testing.T, r *Reassembler, chunks [][]byte) [][]byte {
-	t.Helper()
-	var msgs [][]byte
-	for i, c := range chunks {
-		msg, err := r.Push(c)
-		require.NoError(t, err, "chunk %d", i)
-		if msg != nil {
-			msgs = append(msgs, msg)
-		}
-	}
-	return msgs
-}
-
-func message(n int) []byte {
+func testMessage(n int) []byte {
 	msg := make([]byte, n)
 	for i := range msg {
-		msg[i] = byte(i * 7)
+		msg[i] = byte(i*7 + i/251)
 	}
 	return msg
+}
+
+// pushChunk parses and pushes one raw chunk.
+func pushChunk(t *testing.T, r *Reassembler, chunk []byte) ([][]byte, error) {
+	t.Helper()
+	h, payload, err := ParseChunk(chunk)
+	if err != nil {
+		return nil, err
+	}
+	return r.Push(h, payload)
+}
+
+// pushAll pushes chunks in the given order and returns every message.
+func pushAll(t *testing.T, r *Reassembler, chunks [][]byte) [][]byte {
+	t.Helper()
+	var msgs [][]byte
+	for _, chunk := range chunks {
+		got, err := pushChunk(t, r, chunk)
+		require.NoError(t, err)
+		msgs = append(msgs, got...)
+	}
+	return msgs
 }
 
 func TestChunkerRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	sizes := []int{1, 12, 13, 100, 1000, 65_000}
-	mtus := []int{0, 23, 185, 512}
-	for _, mtu := range mtus {
-		for _, size := range sizes {
-			t.Run(fmt.Sprintf("mtu%d_size%d", mtu, size), func(t *testing.T) {
-				t.Parallel()
-				msg := message(size)
-				chunks, err := Chunker{MTU: mtu, Tag: 0xbeef}.Split(msg)
+	for _, mtu := range []int{0, DefaultMTU, 100, 185, 247, 512, 517} {
+		for _, size := range []int{1, 10, 11, 12, 100, 1000, 70000} {
+			msg := testMessage(size)
+			chunks := splitAll(t, &Chunker{Tag: 0xBEEF}, msg, mtu)
+			limit := max(mtu, DefaultMTU) - attHeaderSize
+			for i, chunk := range chunks {
+				assert.LessOrEqual(t, len(chunk), limit, "mtu %d size %d chunk %d", mtu, size, i)
+				h, _, err := ParseChunk(chunk)
 				require.NoError(t, err)
-
-				effective := max(mtu, DefaultMTU)
-				for i, c := range chunks {
-					assert.LessOrEqual(t, len(c), effective-attHeaderSize, "chunk %d exceeds MTU", i)
-					h, _, err := ParseChunk(c)
-					require.NoError(t, err)
-					assert.Equal(t, uint16(0xbeef), h.Tag)
-					assert.Equal(t, uint8(i), h.Seq)
-					assert.Equal(t, i == 0, h.First)
-					assert.Equal(t, i == len(chunks)-1, h.Last)
-				}
-
-				r, _ := newTestReassembler(t)
-				msgs := feed(t, r, chunks)
-				require.Len(t, msgs, 1)
-				assert.Equal(t, msg, msgs[0])
-				assert.Equal(t, 0, r.errors)
-			})
+				assert.Equal(t, uint16(0xBEEF), h.Tag)
+				assert.Equal(t, uint16(i), h.Seq) //nolint:gosec // test sizes stay under 65536 chunks
+				assert.Equal(t, i == 0, h.First)
+				assert.Equal(t, i == len(chunks)-1, h.Last)
+			}
+			msgs := pushAll(t, NewReassembler(0), chunks)
+			require.Len(t, msgs, 1)
+			assert.True(t, bytes.Equal(msg, msgs[0]), "mtu %d size %d", mtu, size)
 		}
 	}
 }
 
-func TestChunkerRejectsEmptyAndOversize(t *testing.T) {
+func TestChunkerRejectsEmpty(t *testing.T) {
 	t.Parallel()
 
-	_, err := Chunker{}.Split(nil)
+	c := &Chunker{}
+	err := c.Split(nil, 100, func([]byte) error { return nil })
 	require.ErrorIs(t, err, ErrEmptyMessage)
-	_, err = Chunker{}.Split(make([]byte, MaxMessageSize+1))
-	require.ErrorIs(t, err, ErrMessageTooLarge)
-	chunks, err := Chunker{MTU: 512}.Split(make([]byte, MaxMessageSize))
-	require.NoError(t, err)
-	assert.NotEmpty(t, chunks)
+	assert.Equal(t, uint16(0), c.Next())
 }
 
-func TestChunkerSequenceWraps(t *testing.T) {
+func TestChunkerStopsOnEmitError(t *testing.T) {
 	t.Parallel()
 
-	// At MTU 23 a 12-byte first payload and 16-byte follow-ups need well
-	// over 256 chunks for 8 KiB, so the sequence byte wraps mid-message.
-	msg := message(8 * 1024)
-	chunks, err := Chunker{MTU: 23}.Split(msg)
-	require.NoError(t, err)
-	require.Greater(t, len(chunks), 256)
-	r, _ := newTestReassembler(t)
-	msgs := feed(t, r, chunks)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, msg, msgs[0])
+	c := &Chunker{}
+	boom := errors.New("link gone")
+	calls := 0
+	err := c.Split(testMessage(1000), DefaultMTU, func([]byte) error {
+		calls++
+		if calls == 3 {
+			return boom
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, boom)
+	assert.Equal(t, 3, calls)
+	assert.Equal(t, uint16(3), c.Next())
 }
 
-func TestReassemblerBackToBackMessages(t *testing.T) {
+func TestChunkerSequenceContinuesAcrossMessagesAndWraps(t *testing.T) {
 	t.Parallel()
 
-	r, _ := newTestReassembler(t)
-	var all [][]byte
-	for _, size := range []int{5, 300, 1, 40} {
-		chunks, err := Chunker{MTU: 50}.Split(message(size))
+	c := &Chunker{seq: 65530}
+	r := NewReassembler(0)
+	r.nextSeq = 65530
+	first, second := testMessage(100), testMessage(77)
+	chunks := splitAll(t, c, first, DefaultMTU)
+	chunks = append(chunks, splitAll(t, c, second, DefaultMTU)...)
+	require.Greater(t, len(chunks), 6, "the stream must cross the wrap")
+
+	h, _, err := ParseChunk(chunks[len(chunks)-1])
+	require.NoError(t, err)
+	assert.Equal(t, c.Next()-1, h.Seq)
+	assert.Less(t, h.Seq, uint16(100), "sequence wrapped")
+
+	msgs := pushAll(t, r, chunks)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, first, msgs[0])
+	assert.Equal(t, second, msgs[1])
+	assert.Equal(t, c.Next(), r.Next())
+}
+
+// Chunks reach Core on separate goroutines, so any order is possible, across
+// message boundaries too. Messages must still come out in sending order.
+func TestReassemblerReordersAcrossMessages(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // a repeatable shuffle, not a secret
+	for round := range 200 {
+		c := &Chunker{Tag: 3}
+		want := make([][]byte, 0, 12)
+		chunks := make([][]byte, 0, ReorderWindow)
+		for i := range 12 {
+			// Mostly single-chunk messages, as requests are at a large MTU.
+			size := 1 + rng.IntN(8)
+			if i%4 == 0 {
+				size = 40 + rng.IntN(60)
+			}
+			msg := testMessage(size + round)
+			want = append(want, msg)
+			chunks = append(chunks, splitAll(t, c, msg, DefaultMTU)...)
+		}
+		require.Less(t, len(chunks), ReorderWindow)
+		rng.Shuffle(len(chunks), func(i, j int) { chunks[i], chunks[j] = chunks[j], chunks[i] })
+
+		got := pushAll(t, NewReassembler(0), chunks)
+		require.Equal(t, want, got, "round %d", round)
+	}
+}
+
+func TestReassemblerReleasesSeveralMessagesAtOnce(t *testing.T) {
+	t.Parallel()
+
+	c := &Chunker{}
+	chunks := make([][]byte, 0, 3)
+	for _, s := range []string{"one", "two", "three"} {
+		chunks = append(chunks, splitAll(t, c, []byte(s), 512)...)
+	}
+	require.Len(t, chunks, 3)
+
+	r := NewReassembler(0)
+	for _, i := range []int{2, 1} {
+		msgs, err := pushChunk(t, r, chunks[i])
 		require.NoError(t, err)
-		all = append(all, chunks...)
+		assert.Empty(t, msgs)
 	}
-	msgs := feed(t, r, all)
-	require.Len(t, msgs, 4)
-	assert.Equal(t, message(300), msgs[1])
-	assert.Equal(t, message(40), msgs[3])
+	msgs, err := pushChunk(t, r, chunks[0])
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, msgs)
+	assert.Equal(t, uint16(3), r.Next())
 }
 
-func TestReassemblerReorderWithinWindow(t *testing.T) {
+func TestReassemblerRejectsBeyondWindowAndBehind(t *testing.T) {
 	t.Parallel()
 
-	msg := message(200)
-	chunks, err := Chunker{MTU: 30}.Split(msg)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(chunks), 5)
+	ahead := EncodeChunk(Header{Seq: ReorderWindow}, []byte("x"))
+	_, err := pushChunk(t, NewReassembler(0), ahead)
+	require.ErrorIs(t, err, ErrSequence)
 
-	// Deliver 2,1,0 then 4,3 then the rest: every displacement stays inside
-	// the window.
-	order := make([]int, 0, len(chunks))
-	order = append(order, 2, 1, 0, 4, 3)
-	for i := 5; i < len(chunks); i++ {
-		order = append(order, i)
-	}
-	reordered := make([][]byte, 0, len(chunks))
-	for _, i := range order {
-		reordered = append(reordered, chunks[i])
-	}
-
-	r, _ := newTestReassembler(t)
-	msgs := feed(t, r, reordered)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, msg, msgs[0])
-	assert.Equal(t, 0, r.errors)
+	r := NewReassembler(0)
+	chunks := splitAll(t, &Chunker{}, []byte("done"), 512)
+	pushAll(t, r, chunks)
+	_, err = pushChunk(t, r, chunks[0])
+	require.ErrorIs(t, err, ErrSequence, "a chunk already consumed is behind the window")
 }
 
-func TestReassemblerRejectsBeyondWindow(t *testing.T) {
+func TestReassemblerRejectsDuplicateHeldChunk(t *testing.T) {
 	t.Parallel()
 
-	chunks, err := Chunker{MTU: 23}.Split(message(2000))
+	r := NewReassembler(0)
+	early := EncodeChunk(Header{Seq: 2}, []byte("x"))
+	_, err := pushChunk(t, r, early)
 	require.NoError(t, err)
-
-	r, _ := newTestReassembler(t)
-	_, err = r.Push(chunks[0])
-	require.NoError(t, err)
-	// Chunk 0 was applied, so chunk 1 is expected next.
-	inside := EncodeChunk(Header{Version: ProtocolVersion, Seq: 1 + ReorderWindow - 1}, []byte("x"))
-	_, err = r.Push(inside)
-	require.NoError(t, err, "the last position inside the window is held")
-	beyond := EncodeChunk(Header{Version: ProtocolVersion, Seq: 1 + ReorderWindow}, []byte("x"))
-	_, err = r.Push(beyond)
+	_, err = pushChunk(t, r, early)
 	require.ErrorIs(t, err, ErrSequence)
 }
 
-func TestReassemblerRestartDropsHeldChunks(t *testing.T) {
+func TestReassemblerCapsHeldBytes(t *testing.T) {
 	t.Parallel()
 
-	// Chunk 2 of an abandoned message must not be spliced into, or fail,
-	// the message the peer starts afresh.
-	chunks, err := Chunker{MTU: 23}.Split(message(100))
-	require.NoError(t, err)
-	r, _ := newTestReassembler(t)
-	_, err = r.Push(chunks[0])
-	require.NoError(t, err)
-	_, err = r.Push(chunks[2])
-	require.NoError(t, err)
-	require.Len(t, r.held, 1)
-
-	fresh, err := Chunker{MTU: 23}.Split(message(40))
-	require.NoError(t, err)
-	require.Len(t, fresh, 3)
-	msgs := feed(t, r, fresh)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, message(40), msgs[0])
-	assert.Equal(t, 1, r.errors)
-	assert.Empty(t, r.held)
-}
-
-func TestReassemblerRejectsDuplicateChunk(t *testing.T) {
-	t.Parallel()
-
-	chunks, err := Chunker{MTU: 23}.Split(message(200))
-	require.NoError(t, err)
-
-	r, _ := newTestReassembler(t)
-	_, err = r.Push(chunks[0])
-	require.NoError(t, err)
-	_, err = r.Push(chunks[2])
-	require.NoError(t, err)
-	_, err = r.Push(chunks[2])
+	r := NewReassembler(0)
+	payload := make([]byte, 4096)
+	var err error
+	for seq := uint16(1); seq < ReorderWindow && err == nil; seq++ {
+		_, err = pushChunk(t, r, EncodeChunk(Header{Seq: seq}, payload))
+	}
 	require.ErrorIs(t, err, ErrSequence)
-
-	r, _ = newTestReassembler(t)
-	_, err = r.Push(chunks[0])
-	require.NoError(t, err)
-	_, err = r.Push(chunks[1])
-	require.NoError(t, err)
-	_, err = r.Push(chunks[1])
-	require.ErrorIs(t, err, ErrSequence, "a chunk already applied is behind the window")
+	assert.LessOrEqual(t, r.heldBytes, maxHeldBytes)
 }
 
 func TestReassemblerLengthMismatch(t *testing.T) {
 	t.Parallel()
 
-	t.Run("last chunk arrives short", func(t *testing.T) {
-		t.Parallel()
-		chunks, err := Chunker{MTU: 23}.Split(message(100))
-		require.NoError(t, err)
-		r, _ := newTestReassembler(t)
-		_, err = r.Push(chunks[0])
-		require.NoError(t, err)
-		// Forge a LAST chunk with sequence 1 that ends the message early.
-		short := EncodeChunk(Header{Version: ProtocolVersion, Seq: 1, Last: true}, []byte("x"))
-		_, err = r.Push(short)
-		require.ErrorIs(t, err, ErrLengthMismatch)
-	})
+	short := EncodeChunk(Header{First: true, Last: true, Length: 10}, []byte("abc"))
+	_, err := pushChunk(t, NewReassembler(0), short)
+	require.ErrorIs(t, err, ErrLengthMismatch)
 
-	t.Run("payload overruns declared length", func(t *testing.T) {
-		t.Parallel()
-		r, _ := newTestReassembler(t)
-		first := EncodeChunk(Header{Version: ProtocolVersion, Seq: 0, First: true, Length: 3}, []byte("ab"))
-		_, err := r.Push(first)
-		require.NoError(t, err)
-		over := EncodeChunk(Header{Version: ProtocolVersion, Seq: 1}, []byte("cde"))
-		_, err = r.Push(over)
-		require.ErrorIs(t, err, ErrLengthMismatch)
-	})
+	long := EncodeChunk(Header{First: true, Length: 2}, []byte("abc"))
+	_, err = pushChunk(t, NewReassembler(0), long)
+	require.ErrorIs(t, err, ErrLengthMismatch)
 }
 
-func TestReassemblerCaps(t *testing.T) {
+func TestReassemblerMaxMessage(t *testing.T) {
 	t.Parallel()
 
-	t.Run("declared length over the cap", func(t *testing.T) {
-		t.Parallel()
-		r := NewReassembler(clockwork.NewFakeClock(), 64)
-		first := EncodeChunk(Header{Version: ProtocolVersion, First: true, Length: 65}, []byte("a"))
-		_, err := r.Push(first)
-		require.ErrorIs(t, err, ErrMessageTooLarge)
-	})
+	r := NewReassembler(8)
+	over := EncodeChunk(Header{First: true, Length: 9}, []byte("a"))
+	_, err := pushChunk(t, r, over)
+	require.ErrorIs(t, err, ErrMessageTooLarge)
 
-	t.Run("declared length over the protocol maximum is malformed at parse", func(t *testing.T) {
-		t.Parallel()
-		r, _ := newTestReassembler(t)
-		first := EncodeChunk(Header{Version: ProtocolVersion, First: true, Length: MaxMessageSize + 1}, []byte("a"))
-		_, err := r.Push(first)
-		require.ErrorIs(t, err, ErrMessageTooLarge)
-	})
+	// The limit is raised once a client authenticates.
+	r = NewReassembler(8)
+	r.SetMaxMessage(64)
+	msg := testMessage(64)
+	msgs := pushAll(t, r, splitAll(t, &Chunker{}, msg, DefaultMTU))
+	require.Len(t, msgs, 1)
+	assert.Equal(t, msg, msgs[0])
 
-	t.Run("held chunks count toward the cap", func(t *testing.T) {
-		t.Parallel()
-		r := NewReassembler(clockwork.NewFakeClock(), 32)
-		first := EncodeChunk(Header{Version: ProtocolVersion, First: true, Length: 32}, bytes.Repeat([]byte("a"), 10))
-		_, err := r.Push(first)
-		require.NoError(t, err)
-		held := EncodeChunk(Header{Version: ProtocolVersion, Seq: 2}, bytes.Repeat([]byte("b"), 30))
-		_, err = r.Push(held)
-		require.ErrorIs(t, err, ErrMessageTooLarge)
-	})
+	// Zero means no limit, for a client receiving from Core.
+	r.SetMaxMessage(0)
+	_, err = pushChunk(t, r, EncodeChunk(Header{Seq: r.Next(), First: true, Length: math.MaxUint32}, []byte("a")))
+	require.NoError(t, err)
 }
 
-func TestReassemblerMalformedChunks(t *testing.T) {
+func TestReassemblerDoesNotAllocateTheDeclaredLength(t *testing.T) {
 	t.Parallel()
 
-	good := EncodeChunk(Header{Version: ProtocolVersion, First: true, Last: true, Length: 1}, []byte("a"))
-	tests := []struct {
-		want  error
-		name  string
-		chunk []byte
-	}{
-		{name: "too short", chunk: good[:3], want: ErrMalformedChunk},
-		{name: "first header truncated", chunk: good[:6], want: ErrMalformedChunk},
-		{name: "empty payload", chunk: good[:FirstHeaderSize], want: ErrMalformedChunk},
-		{name: "wrong version", chunk: append([]byte{0x23}, good[1:]...), want: ErrMalformedChunk},
-		{name: "reserved bits", chunk: append([]byte{good[0] | 0x04}, good[1:]...), want: ErrMalformedChunk},
-		{
-			name:  "zero length",
-			chunk: EncodeChunk(Header{Version: ProtocolVersion, First: true, Last: true, Length: 0}, []byte("a")),
-			want:  ErrMalformedChunk,
-		},
-		{
-			name: "first chunk with non-zero sequence",
-			chunk: EncodeChunk(
-				Header{Version: ProtocolVersion, First: true, Last: true, Length: 1, Seq: 5}, []byte("a"),
-			),
-			want: ErrMalformedChunk,
-		},
+	r := NewReassembler(0)
+	first := EncodeChunk(Header{First: true, Length: MaxMessageSize}, []byte("a"))
+	_, err := pushChunk(t, r, first)
+	require.NoError(t, err)
+	assert.Less(t, cap(r.buf), 1024, "a declared length alone must not reserve memory")
+}
+
+func TestParseChunkMalformed(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string][]byte{
+		"empty":               {},
+		"short":               {0x10, 0, 0, 0},
+		"wrong version":       {0x20, 0, 0, 0, 0, 'x'},
+		"reserved bit":        {0x18, 0, 0, 0, 0, 'x'},
+		"no payload":          {0x10, 0, 0, 0, 0},
+		"short first":         {0x11, 0, 0, 0, 0, 0, 0},
+		"first no payload":    {0x11, 0, 0, 0, 0, 0, 0, 0, 1},
+		"zero length":         {0x11, 0, 0, 0, 0, 0, 0, 0, 0, 'x'},
+		"ack with payload":    {0x14, 0, 0, 0, 0, 'x'},
+		"ack with first flag": {0x15, 0, 0, 0, 0},
+		"ack with last flag":  {0x16, 0, 0, 0, 0},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			r, _ := newTestReassembler(t)
-			_, err := r.Push(tt.chunk)
-			require.ErrorIs(t, err, tt.want)
-		})
+	for name, chunk := range cases {
+		_, _, err := ParseChunk(chunk)
+		require.ErrorIs(t, err, ErrMalformedChunk, name)
 	}
+}
+
+func TestAckRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	h, payload, err := ParseChunk(EncodeAck(0x1234, 0xFFFE))
+	require.NoError(t, err)
+	assert.Empty(t, payload)
+	assert.Equal(t, Header{Version: ProtocolVersion, Ack: true, Seq: 0xFFFE, Tag: 0x1234}, h)
+
+	_, err = NewReassembler(0).Push(h, nil)
+	require.ErrorIs(t, err, ErrMalformedChunk, "an acknowledgement is not data")
 }
 
 func TestReassemblerRecoverableErrorsAreBudgeted(t *testing.T) {
 	t.Parallel()
 
-	t.Run("first chunk mid-message restarts", func(t *testing.T) {
-		t.Parallel()
-		chunks, err := Chunker{MTU: 23}.Split(message(100))
+	// A continuation with no message in progress is dropped and counted.
+	r := NewReassembler(0)
+	for seq := range uint16(MaxProtocolErrors - 1) {
+		msgs, err := pushChunk(t, r, EncodeChunk(Header{Seq: seq}, []byte("x")))
 		require.NoError(t, err)
-		r, _ := newTestReassembler(t)
-		_, err = r.Push(chunks[0])
-		require.NoError(t, err)
-		// Start over with a complete one-chunk message: it wins.
-		fresh, err := Chunker{MTU: 23}.Split([]byte("hi"))
-		require.NoError(t, err)
-		msg, err := r.Push(fresh[0])
-		require.NoError(t, err)
-		assert.Equal(t, []byte("hi"), msg)
-		assert.Equal(t, 1, r.errors)
-	})
+		assert.Empty(t, msgs)
+	}
+	_, err := pushChunk(t, r, EncodeChunk(Header{Seq: MaxProtocolErrors - 1}, []byte("x")))
+	require.ErrorIs(t, err, ErrTooManyErrors)
 
-	t.Run("stray chunks exhaust the budget", func(t *testing.T) {
-		t.Parallel()
-		r, _ := newTestReassembler(t)
-		stray := EncodeChunk(Header{Version: ProtocolVersion, Seq: 200}, []byte("x"))
-		for i := 1; i < MaxProtocolErrors; i++ {
-			_, err := r.Push(stray)
-			require.NoError(t, err, "mistake %d is still tolerated", i)
-			assert.Equal(t, i, r.errors)
-		}
-		_, err := r.Push(stray)
-		require.ErrorIs(t, err, ErrTooManyErrors)
-	})
-
-	t.Run("sequence zero without first flag", func(t *testing.T) {
-		t.Parallel()
-		r, _ := newTestReassembler(t)
-		bad := EncodeChunk(Header{Version: ProtocolVersion, Seq: 0}, []byte("x"))
-		_, err := r.Push(bad)
-		require.NoError(t, err)
-		assert.Equal(t, 1, r.errors)
-	})
-}
-
-func TestReassemblerEarlyChunkBeforeFirst(t *testing.T) {
-	t.Parallel()
-
-	// BlueZ may hand us chunk 1 before chunk 0; it must be held, not lost.
-	chunks, err := Chunker{MTU: 23}.Split(message(40))
+	// So is starting a new message before finishing the last, and the new
+	// message is the one delivered.
+	r = NewReassembler(0)
+	_, err = pushChunk(t, r, EncodeChunk(Header{First: true, Length: 100}, []byte("abandoned")))
 	require.NoError(t, err)
-	require.Len(t, chunks, 3)
-
-	r, _ := newTestReassembler(t)
-	msgs := feed(t, r, [][]byte{chunks[1], chunks[0], chunks[2]})
-	require.Len(t, msgs, 1)
-	assert.Equal(t, message(40), msgs[0])
-	assert.Equal(t, 0, r.errors)
-}
-
-func TestReassemblerIdlePartialIsDiscarded(t *testing.T) {
-	t.Parallel()
-
-	chunks, err := Chunker{MTU: 23}.Split(message(100))
+	msgs, err := pushChunk(t, r, EncodeChunk(Header{Seq: 1, First: true, Last: true, Length: 3}, []byte("new")))
 	require.NoError(t, err)
-
-	r, clock := newTestReassembler(t)
-	_, err = r.Push(chunks[0])
-	require.NoError(t, err)
-
-	clock.Advance(PartialIdleTimeout + time.Millisecond)
-
-	// The stale partial is gone: a fresh message completes cleanly and the
-	// restart is not charged as a mistake.
-	fresh, err := Chunker{MTU: 23}.Split([]byte("hello"))
-	require.NoError(t, err)
-	msg, err := r.Push(fresh[0])
-	require.NoError(t, err)
-	assert.Equal(t, []byte("hello"), msg)
-	assert.Equal(t, 0, r.errors)
-
-	// The continuation of the stale message looks like an early chunk of
-	// the next message, so it is held rather than charged, and forgotten
-	// once it too goes idle.
-	msg, err = r.Push(chunks[1])
-	require.NoError(t, err)
-	assert.Nil(t, msg)
-	assert.Equal(t, 0, r.errors)
-	assert.Len(t, r.held, 1)
-	clock.Advance(PartialIdleTimeout + time.Millisecond)
-	msg, err = r.Push(fresh[0])
-	require.NoError(t, err)
-	assert.Equal(t, []byte("hello"), msg)
-	assert.Empty(t, r.held)
+	assert.Equal(t, [][]byte{[]byte("new")}, msgs)
+	assert.Equal(t, 1, r.errors)
 }
 
 func TestNewInfo(t *testing.T) {
 	t.Parallel()
 
 	info := NewInfo("device-1")
-	assert.Equal(t, "device-1", info.DeviceID)
-	assert.Equal(t, ProtocolVersion, info.Version)
-	assert.Equal(t, MaxMessageSize, info.MaxMessage)
-	assert.Equal(t, PreferredMTU, info.PreferredMTU)
+	assert.Equal(t, Info{
+		DeviceID:           "device-1",
+		Version:            ProtocolVersion,
+		MaxMessage:         MaxMessageSize,
+		MaxUnauthenticated: MaxUnauthenticatedMessageSize,
+		PreferredMTU:       PreferredMTU,
+		Window:             SendWindow,
+	}, info)
 }

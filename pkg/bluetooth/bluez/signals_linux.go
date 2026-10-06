@@ -74,6 +74,33 @@ func interfacesRemoved(sig *dbus.Signal) (path dbus.ObjectPath, ifaces []string,
 	return path, ifaces, true
 }
 
+// bluezLeftBus reports whether sig says bluetoothd gave up its bus name,
+// which is the only notice of it crashing or being restarted.
+func bluezLeftBus(sig *dbus.Signal) bool {
+	if sig == nil || sig.Name != signalNameOwnerChanged || len(sig.Body) < 3 {
+		return false
+	}
+	name, ok := sig.Body[0].(string)
+	if !ok || name != bluezService {
+		return false
+	}
+	newOwner, ok := sig.Body[2].(string)
+	return ok && newOwner == ""
+}
+
+// signalObject is the object a signal is about. ObjectManager signals are
+// all emitted from the root and name their object in the body; every other
+// signal is emitted by the object itself.
+func signalObject(sig *dbus.Signal) dbus.ObjectPath {
+	if path, _, ok := interfacesAdded(sig); ok {
+		return path
+	}
+	if path, _, ok := interfacesRemoved(sig); ok {
+		return path
+	}
+	return sig.Path
+}
+
 // changedBool reports a boolean property from a PropertiesChanged payload.
 func changedBool(changed map[string]dbus.Variant, name string) (value, present bool) {
 	v, ok := changed[name]

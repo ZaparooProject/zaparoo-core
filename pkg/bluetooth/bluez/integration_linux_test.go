@@ -116,7 +116,11 @@ type fakeBluez struct {
 	charProp    *prop.Properties
 	calls       chan string
 	appRoot     chan appRegistration
+	advPaths    chan appRegistration
 	mu          syncutil.Mutex
+	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
+	// when the controller cannot advertise.
+	refuseAdvert bool
 }
 
 type appRegistration struct {
@@ -156,6 +160,11 @@ func (a *fakeAdapter) StartDiscovery() *dbus.Error {
 	a.f.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
 		deviceIface: {
 			"Address":          dbus.MakeVariant(fakeDeviceAddr),
+			"Name":             dbus.MakeVariant("Fake Reader"),
+			"UUIDs":            dbus.MakeVariant([]string{fakeServiceUUID}),
+			"RSSI":             dbus.MakeVariant(int16(-61)),
+			"ManufacturerData": dbus.MakeVariant(map[uint16]dbus.Variant{0x0059: dbus.MakeVariant([]byte{1, 2})}),
+			"ServiceData":      dbus.MakeVariant(map[string]dbus.Variant{fakeServiceUUID: dbus.MakeVariant([]byte{9})}),
 			"Connected":        dbus.MakeVariant(false),
 			"ServicesResolved": dbus.MakeVariant(false),
 		},
@@ -183,8 +192,20 @@ func (a *fakeAdapter) UnregisterApplication(_ dbus.ObjectPath) *dbus.Error {
 	return nil
 }
 
-func (a *fakeAdapter) RegisterAdvertisement(_ dbus.ObjectPath, _ map[string]dbus.Variant) *dbus.Error {
+func (a *fakeAdapter) RegisterAdvertisement(
+	sender dbus.Sender, path dbus.ObjectPath, _ map[string]dbus.Variant,
+) *dbus.Error {
 	a.f.record("RegisterAdvertisement")
+	a.f.mu.Lock()
+	refuse := a.f.refuseAdvert
+	a.f.mu.Unlock()
+	if refuse {
+		return dbus.NewError("org.bluez.Error.NotPermitted", []any{"Maximum advertisements reached"})
+	}
+	select {
+	case a.f.advPaths <- appRegistration{sender: sender, path: path}:
+	default:
+	}
 	return nil
 }
 
@@ -230,6 +251,11 @@ func (c *fakeChar) StopNotify() *dbus.Error {
 	return nil
 }
 
+func (c *fakeChar) ReadValue(_ map[string]dbus.Variant) ([]byte, *dbus.Error) {
+	c.f.record("ReadValue")
+	return []byte("read me"), nil
+}
+
 func (c *fakeChar) WriteValue(value []byte, options map[string]dbus.Variant) *dbus.Error {
 	c.f.record("WriteValue:" + string(value) + ":" + stringProp(options, "type"))
 	return nil
@@ -247,9 +273,10 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 	require.Equal(t, dbus.RequestNameReplyPrimaryOwner, reply)
 
 	f := &fakeBluez{
-		conn:    conn,
-		calls:   make(chan string, 64),
-		appRoot: make(chan appRegistration, 1),
+		conn:     conn,
+		calls:    make(chan string, 64),
+		appRoot:  make(chan appRegistration, 1),
+		advPaths: make(chan appRegistration, 1),
 	}
 	adapterSpec := prop.Map{adapterIface: {
 		"Address": {Value: "00:11:22:33:44:55", Emit: prop.EmitConst},
@@ -273,6 +300,7 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 
 	f.deviceProp, err = prop.Export(conn, fakeDevicePath, prop.Map{deviceIface: {
 		"Address":          {Value: fakeDeviceAddr, Emit: prop.EmitConst},
+		"RSSI":             {Value: int16(-61), Writable: true, Emit: prop.EmitTrue},
 		"Connected":        {Value: false, Writable: true, Emit: prop.EmitTrue},
 		"ServicesResolved": {Value: false, Writable: true, Emit: prop.EmitTrue},
 	}})
@@ -282,6 +310,7 @@ func newFakeBluez(t *testing.T, addr string) *fakeBluez {
 	f.charProp, err = prop.Export(conn, fakeCharPath, prop.Map{gattCharIface: {
 		"UUID":  {Value: fakeCharUUID, Emit: prop.EmitConst},
 		"Value": {Value: []byte{}, Writable: true, Emit: prop.EmitTrue},
+		"MTU":   {Value: uint16(247), Emit: prop.EmitConst},
 	}})
 	require.NoError(t, err)
 	require.NoError(t, conn.Export(&fakeChar{f: f}, fakeCharPath, gattCharIface))
@@ -394,7 +423,12 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	case <-time.After(integrationWait):
 		t.Fatal("application was never registered")
 	}
-	fake.expectCall(t, "RegisterAdvertisement")
+	var advReg appRegistration
+	select {
+	case advReg = <-fake.advPaths:
+	case <-time.After(integrationWait):
+		t.Fatal("advertisement was never registered")
+	}
 
 	var tree managedObjects
 	require.NoError(t, fake.conn.Object(string(reg.sender), reg.path).
@@ -413,7 +447,7 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 
 	// The advertisement is readable the way bluetoothd reads it.
 	var advType dbus.Variant
-	require.NoError(t, fake.conn.Object(string(reg.sender), "/org/zaparoo/ble/adv1").
+	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
 		Call(propertiesIface+".Get", 0, advIface, "Type").Store(&advType))
 	assert.Equal(t, "peripheral", advType.Value())
 
@@ -475,6 +509,16 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 		assert.Equal(t, fakeDeviceAddr, peer.Address)
 	case <-time.After(integrationWait):
 		t.Fatal("disconnect never reached the handler")
+	}
+
+	// So is bluetoothd forgetting the device altogether, which it announces
+	// from the root object with the device named in the signal body.
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, fakeDevicePath, []string{deviceIface}))
+	select {
+	case peer := <-handler.disconnects:
+		assert.Equal(t, string(fakeDevicePath), peer.Path)
+	case <-time.After(integrationWait):
+		t.Fatal("device removal never reached the handler")
 	}
 
 	// Disconnect asks bluetoothd to drop the peer.
@@ -553,4 +597,206 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 	defer cancelMissing()
 	_, err = central.Find(missingCtx, "AA:BB:CC:DD:EE:02", nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestIntegration_CentralScansReadsAndReportsMTU(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	central, err := adapter.Central()
+	require.NoError(t, err)
+
+	scanCtx, cancelScan := context.WithCancel(t.Context())
+	defer cancelScan()
+	results, err := central.Scan(scanCtx, ScanFilter{ServiceUUIDs: []string{strings.ToUpper(fakeServiceUUID)}})
+	require.NoError(t, err)
+	fake.expectCall(t, "SetDiscoveryFilter:le")
+	fake.expectCall(t, "StartDiscovery")
+
+	select {
+	case r := <-results:
+		assert.Equal(t, fakeDeviceAddr, r.Address)
+		assert.Equal(t, "Fake Reader", r.Name)
+		assert.Equal(t, []string{fakeServiceUUID}, r.ServiceUUIDs)
+		assert.True(t, r.HasRSSI)
+		assert.Equal(t, int16(-61), r.RSSI)
+		assert.Equal(t, map[uint16][]byte{0x0059: {1, 2}}, r.ManufacturerData)
+		assert.Equal(t, map[string][]byte{fakeServiceUUID: {9}}, r.ServiceData)
+	case <-time.After(integrationWait):
+		t.Fatal("scan reported nothing")
+	}
+
+	// A later sighting updates the same device. The first sighting may be
+	// reported more than once, so read until the update shows.
+	fake.deviceProp.SetMust(deviceIface, "RSSI", int16(-40))
+	deadline := time.After(integrationWait)
+	for updated := false; !updated; {
+		select {
+		case r := <-results:
+			assert.Equal(t, "Fake Reader", r.Name, "earlier details are kept")
+			updated = r.RSSI == -40
+		case <-deadline:
+			t.Fatal("scan did not report the update")
+		}
+	}
+
+	cancelScan()
+	for open := true; open; {
+		select {
+		case _, open = <-results:
+		case <-deadline:
+			t.Fatal("scan did not stop")
+		}
+	}
+	fake.expectCall(t, "StopDiscovery")
+
+	// A scan for a service nothing advertises reports nothing.
+	otherCtx, cancelOther := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancelOther()
+	none, err := central.Scan(otherCtx, ScanFilter{ServiceUUIDs: []string{"0000180f-0000-1000-8000-00805f9b34fb"}})
+	require.NoError(t, err)
+	_, open := <-none
+	assert.False(t, open)
+
+	dev, err := central.Find(t.Context(), fakeDeviceAddr, nil)
+	require.NoError(t, err)
+	require.NoError(t, dev.Connect(t.Context()))
+	ch, err := dev.Characteristic(fakeServiceUUID, fakeCharUUID)
+	require.NoError(t, err)
+
+	value, err := ch.Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "read me", string(value))
+	mtu, err := ch.MTU(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 247, mtu)
+
+	// bluetoothd forgetting the device ends the link.
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, fakeDevicePath, []string{deviceIface}))
+	select {
+	case <-dev.Disconnected():
+	case <-time.After(integrationWait):
+		t.Fatal("device removal was not noticed")
+	}
+}
+
+// waitGone fails unless the adapter is given up.
+func waitGone(t *testing.T, adapter Adapter, why string) {
+	t.Helper()
+	select {
+	case <-adapter.Gone():
+	case <-time.After(integrationWait):
+		t.Fatalf("adapter not marked gone after %s", why)
+	}
+}
+
+// Everything registered with bluetoothd dies with it, and a restart sends
+// no removal signals: losing the bus name is the only notice.
+func TestIntegration_AdapterGoneWhenBluetoothdLeavesTheBus(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+
+	_, err = fake.conn.ReleaseName(bluezService)
+	require.NoError(t, err)
+	waitGone(t, adapter, "bluetoothd left the bus")
+}
+
+func TestIntegration_AdapterGoneWhenPoweredOff(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+
+	// Unrelated adapter changes are not a loss.
+	fake.adapterProp.SetMust(adapterIface, "Powered", true)
+	select {
+	case <-adapter.Gone():
+		t.Fatal("adapter given up while still powered")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	fake.adapterProp.SetMust(adapterIface, "Powered", false)
+	waitGone(t, adapter, "power off")
+}
+
+func serveTestApplication(t *testing.T, peripheral Peripheral) <-chan error {
+	t.Helper()
+	handler := &recordingHandler{
+		writes:      make(chan string, 8),
+		disconnects: make(chan Peer, 8),
+		subscribes:  make(chan bool, 8),
+	}
+	app := Application{Services: []Service{{
+		UUID:            "0da70001-b359-443b-836f-477d34b6a638",
+		Primary:         true,
+		Characteristics: []Characteristic{{UUID: "0da70003-b359-443b-836f-477d34b6a638", Flags: []string{FlagNotify}}},
+	}}}
+	adv := Advertisement{LocalName: "Test Zaparoo", ServiceUUIDs: []string{app.Services[0].UUID}}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- peripheral.Serve(t.Context(), app, adv, handler) }()
+	return serveErr
+}
+
+// A controller reset makes bluetoothd drop the advertisement and tell us so.
+// Nobody can find the device after that, so the adapter is given up.
+func TestIntegration_AdapterGoneWhenAdvertisementIsReleased(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+
+	var advReg appRegistration
+	select {
+	case advReg = <-fake.advPaths:
+	case <-time.After(integrationWait):
+		t.Fatal("advertisement was never registered")
+	}
+	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).Call(advIface+".Release", 0).Err)
+
+	waitGone(t, adapter, "advertisement release")
+	select {
+	case err := <-serveErr:
+		require.NoError(t, err)
+	case <-time.After(integrationWait):
+		t.Fatal("Serve kept running on a lost adapter")
+	}
+}
+
+// An adapter that refuses to advertise is given up rather than held open
+// with nothing listening, so its owner tries again.
+func TestIntegration_AdapterGoneWhenAdvertisingIsRefused(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+	fake.mu.Lock()
+	fake.refuseAdvert = true
+	fake.mu.Unlock()
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+
+	select {
+	case err := <-serveTestApplication(t, peripheral):
+		require.ErrorContains(t, err, "Maximum advertisements reached")
+	case <-time.After(integrationWait):
+		t.Fatal("Serve did not report the refusal")
+	}
+	waitGone(t, adapter, "advertising refused")
+	fake.expectCall(t, "UnregisterApplication")
 }

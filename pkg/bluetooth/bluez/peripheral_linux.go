@@ -115,14 +115,16 @@ func (c *gattChar) StopNotify() *dbus.Error {
 
 // advertisement implements org.bluez.LEAdvertisement1.
 type advertisement struct {
+	a    *adapter
 	path dbus.ObjectPath
 }
 
 // Release is called by bluetoothd when it drops the advertisement on its
-// own, for example because the adapter went away. Serve notices the adapter
-// going with it, so there is nothing to do but note it.
+// own, for example after the controller was reset. Nobody can find the
+// device any more, so the adapter is given up for its owner to reopen.
 func (adv *advertisement) Release() *dbus.Error {
-	log.Debug().Str("path", string(adv.path)).Msg("bluetooth advertisement released by bluetoothd")
+	log.Warn().Str("path", string(adv.path)).Msg("bluetooth advertisement released by bluetoothd")
+	adv.a.markGone()
 	return nil
 }
 
@@ -229,15 +231,15 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		return err
 	}
 	if err := p.register(ctx, gattManagerIface+".RegisterApplication", root); err != nil {
-		return err
+		return p.registrationFailed(ctx, err)
 	}
 	defer p.unregister(gattManagerIface+".UnregisterApplication", root)
 
-	if err := exportAdvertisement(exp, advPath, adv); err != nil {
+	if err := exportAdvertisement(exp, p.a, advPath, adv); err != nil {
 		return err
 	}
 	if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
-		return err
+		return p.registrationFailed(ctx, err)
 	}
 	defer p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
 
@@ -248,6 +250,16 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 
 	p.watchPeers(ctx)
 	return nil
+}
+
+// registrationFailed gives the adapter up when bluetoothd refused a
+// registration, so the owner reopens it and tries again instead of sitting
+// on an adapter nobody can reach. A cancelled Serve is not a refusal.
+func (p *peripheral) registrationFailed(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		p.a.markGone()
+	}
+	return err
 }
 
 // exportApplication publishes the ObjectManager root, services and
@@ -293,7 +305,7 @@ func (p *peripheral) exportApplication(exp *exported, root dbus.ObjectPath, app 
 }
 
 // exportAdvertisement publishes the LEAdvertisement1 object.
-func exportAdvertisement(exp *exported, path dbus.ObjectPath, adv Advertisement) error {
+func exportAdvertisement(exp *exported, a *adapter, path dbus.ObjectPath, adv Advertisement) error {
 	spec := prop.Map{advIface: {
 		"Type":         {Value: "peripheral", Emit: prop.EmitConst},
 		"ServiceUUIDs": {Value: append([]string(nil), adv.ServiceUUIDs...), Emit: prop.EmitConst},
@@ -305,7 +317,7 @@ func exportAdvertisement(exp *exported, path dbus.ObjectPath, adv Advertisement)
 	if _, err := exp.exportProps(path, spec); err != nil {
 		return err
 	}
-	return exp.export(&advertisement{path: path}, path, advIface)
+	return exp.export(&advertisement{a: a, path: path}, path, advIface)
 }
 
 // variantsOf converts a property spec into the map shape GetManagedObjects
@@ -348,7 +360,7 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 func (p *peripheral) watchPeers(ctx context.Context) {
 	prefix := p.a.devicePathPrefix()
 	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
-		return strings.HasPrefix(string(sig.Path), prefix) &&
+		return strings.HasPrefix(string(signalObject(sig)), prefix) &&
 			(sig.Name == signalPropertiesChanged || sig.Name == signalInterfacesRemoved)
 	})
 	defer unsubscribe()
@@ -372,10 +384,10 @@ func (p *peripheral) watchPeers(ctx context.Context) {
 				}
 				continue
 			}
-			if _, ifaces, ok := interfacesRemoved(sig); ok {
+			if path, ifaces, ok := interfacesRemoved(sig); ok {
 				for _, iface := range ifaces {
 					if iface == deviceIface {
-						p.currentHandler().OnDisconnect(peerFromPath(sig.Path))
+						p.currentHandler().OnDisconnect(peerFromPath(path))
 						break
 					}
 				}

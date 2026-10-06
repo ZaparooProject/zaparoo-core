@@ -187,6 +187,83 @@ func TestManager_ReopensAfterAdapterGone(t *testing.T) {
 	assert.Same(t, second.Periph, *rec.last.Load())
 }
 
+// An adapter that had been working and then vanished, as when bluetoothd
+// restarts, is reopened without waiting for the next watch interval.
+func TestManager_ReopensAtOnceAfterLosingAWorkingAdapter(t *testing.T) {
+	t.Parallel()
+
+	first := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	second := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	var opens atomic.Int32
+	clock := clockwork.NewFakeClock()
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+		switch opens.Add(1) {
+		case 1:
+			return first, nil
+		case 2, 3:
+			// bluetoothd is still coming back.
+			return nil, bluez.ErrUnavailable
+		default:
+			return second, nil
+		}
+	})
+	var rec peripheralRecorder
+	m.OnPeripheral(rec.fn)
+	m.Start()
+	defer m.Stop()
+	require.Eventually(t, func() bool { return rec.calls.Load() == 1 }, eventually, 10*time.Millisecond)
+
+	// Long enough open to count as working.
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	clock.Advance(stableAfter)
+	require.Equal(t, int32(1), opens.Load())
+
+	first.MarkGone()
+	require.Eventually(t, func() bool { return opens.Load() >= 2 }, eventually, 10*time.Millisecond,
+		"reopened without waiting for anything")
+	assert.True(t, first.Closed())
+
+	// The retries that follow come every lossRetryInterval. Three of them
+	// are well inside one watch interval, so the ticker cannot be what
+	// brings the adapter back.
+	for range 3 {
+		if rec.calls.Load() == 2 {
+			break
+		}
+		require.NoError(t, clock.BlockUntilContext(t.Context(), 2))
+		clock.Advance(lossRetryInterval)
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.Eventually(t, func() bool { return rec.calls.Load() == 2 }, eventually, 10*time.Millisecond)
+	assert.Same(t, second.Periph, *rec.last.Load())
+}
+
+// An adapter that fails as soon as it is opened is not reopened in a tight
+// loop: it waits for the watch interval like any other unusable adapter.
+func TestManager_AdapterThatFailsAtOnceWaitsForTheInterval(t *testing.T) {
+	t.Parallel()
+
+	var opens atomic.Int32
+	clock := clockwork.NewFakeClock()
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+		opens.Add(1)
+		a := mocks.NewFakeAdapter(bluez.RolePeripheral)
+		a.MarkGone()
+		return a, nil
+	})
+	m.Start()
+	defer m.Stop()
+
+	require.Eventually(t, func() bool { return opens.Load() == 1 }, eventually, 10*time.Millisecond)
+	// Only the ticker is waiting; no retry timer was armed.
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), opens.Load(), "no reopen before the interval")
+
+	clock.Advance(watchInterval)
+	require.Eventually(t, func() bool { return opens.Load() == 2 }, eventually, 10*time.Millisecond)
+}
+
 func TestManager_ClosesWhenDisabledAtRuntime(t *testing.T) {
 	t.Parallel()
 

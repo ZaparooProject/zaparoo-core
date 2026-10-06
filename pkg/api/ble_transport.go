@@ -70,9 +70,12 @@ type bleTransport struct {
 	serveCancel context.CancelFunc
 	// unregister detaches serve from the bluetooth manager on stop.
 	unregister func()
-	wg         sync.WaitGroup
-	mu         syncutil.Mutex
-	stopped    bool
+	// lastServeErr is the last serve failure logged, so an adapter that
+	// keeps refusing the same way is reported once.
+	lastServeErr string
+	wg           sync.WaitGroup
+	mu           syncutil.Mutex
+	stopped      bool
 }
 
 func newBLETransport(d *bleTransportDeps) *bleTransport {
@@ -146,7 +149,15 @@ func (t *bleTransport) serve(p bluez.Peripheral) {
 		err := p.Serve(ctx, t.application(), adv, t)
 		switch {
 		case err != nil && ctx.Err() == nil:
-			log.Warn().Err(err).Msg("bluetooth api transport stopped")
+			t.mu.Lock()
+			repeat := t.lastServeErr == err.Error()
+			t.lastServeErr = err.Error()
+			t.mu.Unlock()
+			event := log.Warn()
+			if repeat {
+				event = log.Debug()
+			}
+			event.Err(err).Msg("bluetooth api transport stopped")
 		default:
 			log.Info().Msg("bluetooth api transport stopped")
 		}
@@ -204,6 +215,7 @@ func (t *bleTransport) sessionFor(peer bluez.Peer) *bleSession {
 	}
 	s := newBLESession(t, peer, t.peripheral)
 	t.sessions[peer.Path] = s
+	t.lastServeErr = ""
 	log.Info().Str("peer", peer.Address).Msg("bluetooth client connected")
 	return s
 }

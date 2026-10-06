@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,10 @@ const (
 	// its own connection attempt window.
 	connectTimeout = 30 * time.Second
 
+	// scanBuffer is how many scan results a consumer may leave unread
+	// before the oldest are dropped.
+	scanBuffer = 64
+
 	// notifyBuffer is how many notifications a subscriber may leave unread
 	// before the stream blocks bluetoothd's signal delivery to us.
 	notifyBuffer = 64
@@ -48,62 +53,208 @@ type central struct {
 	a *adapter
 }
 
-// Find scans until the device with the given address appears.
-func (c *central) Find(ctx context.Context, address string, serviceUUIDs []string) (Device, error) {
-	addr, err := NormalizeAddress(address)
-	if err != nil {
-		return nil, err
-	}
+// Scan reports matching devices in range until ctx ends.
+func (c *central) Scan(ctx context.Context, filter ScanFilter) (<-chan ScanResult, error) {
+	return c.discover(ctx, filter.ServiceUUIDs, func(r *ScanResult) bool {
+		// A device BlueZ only remembers has no signal strength; it is
+		// reported once it is actually heard.
+		return r.HasRSSI && advertisesAny(r.ServiceUUIDs, filter.ServiceUUIDs)
+	})
+}
 
-	if dev, err := c.knownDevice(ctx, addr); err != nil || dev != nil {
-		return dev, err
+// advertisesAny reports whether have contains one of want; an empty want
+// accepts everything.
+func advertisesAny(have, want []string) bool {
+	if len(want) == 0 {
+		return true
 	}
+	for _, w := range want {
+		if slices.ContainsFunc(have, func(h string) bool { return strings.EqualFold(h, w) }) {
+			return true
+		}
+	}
+	return false
+}
 
+// discover runs one discovery session, handing bluetoothd serviceUUIDs as its
+// filter and reporting every device that passes match.
+func (c *central) discover(
+	ctx context.Context, serviceUUIDs []string, match func(*ScanResult) bool,
+) (<-chan ScanResult, error) {
 	prefix := c.a.devicePathPrefix()
-	added, unsubscribe := c.a.signals.subscribe(func(sig *dbus.Signal) bool {
-		path, ifaces, ok := interfacesAdded(sig)
-		if !ok {
+	events, unsubscribe := c.a.signals.subscribe(func(sig *dbus.Signal) bool {
+		if !strings.HasPrefix(string(signalObject(sig)), prefix) {
 			return false
 		}
-		_, isDevice := ifaces[deviceIface]
-		return isDevice && strings.HasPrefix(string(path), prefix)
+		if _, ifaces, ok := interfacesAdded(sig); ok {
+			_, isDevice := ifaces[deviceIface]
+			return isDevice
+		}
+		iface, _, ok := propertiesChanged(sig)
+		return ok && iface == deviceIface
 	})
-	defer unsubscribe()
 
 	filter := map[string]dbus.Variant{"Transport": dbus.MakeVariant("le")}
 	if len(serviceUUIDs) > 0 {
 		filter["UUIDs"] = dbus.MakeVariant(serviceUUIDs)
 	}
 	if err := c.a.call(ctx, c.a.obj, adapterIface+".SetDiscoveryFilter", filter); err != nil {
+		unsubscribe()
 		return nil, err
 	}
 	if err := c.a.call(ctx, c.a.obj, adapterIface+".StartDiscovery"); err != nil {
+		unsubscribe()
 		return nil, err
 	}
-	defer c.stopDiscovery()
-
-	// A device that appeared between the first lookup and the subscription
-	// would otherwise be missed.
-	if dev, err := c.knownDevice(ctx, addr); err != nil || dev != nil {
-		return dev, err
+	// Read after subscribing, so a device that appears in between is in
+	// one or the other.
+	objs, err := c.a.managedObjects(ctx)
+	if err != nil {
+		c.stopDiscovery()
+		unsubscribe()
+		return nil, err
 	}
 
+	out := make(chan ScanResult, scanBuffer)
+	go func() {
+		defer close(out)
+		defer c.stopDiscovery()
+		defer unsubscribe()
+
+		seen := make(map[dbus.ObjectPath]*ScanResult)
+		update := func(path dbus.ObjectPath, props map[string]dbus.Variant) {
+			r := seen[path]
+			if r == nil {
+				r = &ScanResult{Address: addressFromPath(path)}
+				seen[path] = r
+			}
+			r.merge(props)
+			if match(r) {
+				emitScanResult(out, r)
+			}
+		}
+		for path, ifaces := range objs {
+			if props, ok := ifaces[deviceIface]; ok && strings.HasPrefix(string(path), prefix) {
+				update(path, props)
+			}
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.a.gone:
+				return
+			case sig, ok := <-events:
+				if !ok {
+					return
+				}
+				if path, ifaces, isAdded := interfacesAdded(sig); isAdded {
+					update(path, ifaces[deviceIface])
+				} else if _, changed, isChanged := propertiesChanged(sig); isChanged {
+					update(sig.Path, changed)
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// emitScanResult delivers r, making room by dropping the oldest undelivered
+// result when the consumer is behind: a newer sighting is worth more.
+func emitScanResult(out chan ScanResult, r *ScanResult) {
 	for {
 		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("find %s: %w", addr, ctx.Err())
-		case <-c.a.gone:
-			return nil, ErrUnavailable
-		case sig, ok := <-added:
-			if !ok {
-				return nil, ErrUnavailable
-			}
-			path, ifaces, _ := interfacesAdded(sig)
-			if strings.EqualFold(stringProp(ifaces[deviceIface], "Address"), addr) {
-				return c.a.newDevice(path, addr), nil
+		case out <- r.clone():
+			return
+		default:
+		}
+		select {
+		case <-out:
+		default:
+		}
+	}
+}
+
+// merge folds Device1 properties into the result.
+func (r *ScanResult) merge(props map[string]dbus.Variant) {
+	if v := stringProp(props, "Address"); v != "" {
+		r.Address = v
+	}
+	if v := stringProp(props, "Alias"); v != "" && r.Name == "" {
+		r.Name = v
+	}
+	if v := stringProp(props, "Name"); v != "" {
+		r.Name = v
+	}
+	if v, ok := props["UUIDs"].Value().([]string); ok {
+		r.ServiceUUIDs = v
+	}
+	if v, ok := props["RSSI"].Value().(int16); ok {
+		r.RSSI = v
+		r.HasRSSI = true
+	}
+	if v, ok := props["ManufacturerData"].Value().(map[uint16]dbus.Variant); ok {
+		r.ManufacturerData = make(map[uint16][]byte, len(v))
+		for id, data := range v {
+			if b, isBytes := data.Value().([]byte); isBytes {
+				r.ManufacturerData[id] = b
 			}
 		}
 	}
+	if v, ok := props["ServiceData"].Value().(map[string]dbus.Variant); ok {
+		r.ServiceData = make(map[string][]byte, len(v))
+		for uuid, data := range v {
+			if b, isBytes := data.Value().([]byte); isBytes {
+				r.ServiceData[uuid] = b
+			}
+		}
+	}
+}
+
+// clone copies the result so the consumer never shares the scan's maps.
+func (r *ScanResult) clone() ScanResult {
+	out := *r
+	out.ServiceUUIDs = slices.Clone(r.ServiceUUIDs)
+	out.ManufacturerData = make(map[uint16][]byte, len(r.ManufacturerData))
+	for id, data := range r.ManufacturerData {
+		out.ManufacturerData[id] = slices.Clone(data)
+	}
+	out.ServiceData = make(map[string][]byte, len(r.ServiceData))
+	for uuid, data := range r.ServiceData {
+		out.ServiceData[uuid] = slices.Clone(data)
+	}
+	return out
+}
+
+// Find scans until the device with the given address appears. A device
+// bluetoothd already knows is returned at once, in range or not: connecting
+// to it waits for it to advertise.
+func (c *central) Find(ctx context.Context, address string, serviceUUIDs []string) (Device, error) {
+	addr, err := NormalizeAddress(address)
+	if err != nil {
+		return nil, err
+	}
+
+	if dev, knownErr := c.knownDevice(ctx, addr); knownErr != nil || dev != nil {
+		return dev, knownErr
+	}
+
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results, err := c.discover(scanCtx, serviceUUIDs, func(r *ScanResult) bool {
+		return strings.EqualFold(r.Address, addr)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, found := <-results; found {
+		path := dbus.ObjectPath(c.a.devicePathPrefix() + strings.ReplaceAll(addr, ":", "_"))
+		return c.a.newDevice(path, addr), nil
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("find %s: %w", addr, ctx.Err())
+	}
+	return nil, ErrUnavailable
 }
 
 // knownDevice returns the device if bluetoothd already has an object for it.
@@ -161,7 +312,8 @@ func (a *adapter) newDevice(path dbus.ObjectPath, address string) *device {
 // device object vanishes.
 func (d *device) watch() {
 	events, unsubscribe := d.a.signals.subscribe(func(sig *dbus.Signal) bool {
-		return sig.Path == d.path && (sig.Name == signalPropertiesChanged || sig.Name == signalInterfacesRemoved)
+		return signalObject(sig) == d.path &&
+			(sig.Name == signalPropertiesChanged || sig.Name == signalInterfacesRemoved)
 	})
 	defer unsubscribe()
 	for {
@@ -183,7 +335,7 @@ func (d *device) watch() {
 				}
 				continue
 			}
-			if _, _, ok := interfacesRemoved(sig); ok {
+			if _, ifaces, ok := interfacesRemoved(sig); ok && slices.Contains(ifaces, deviceIface) {
 				d.drop()
 				return
 			}
@@ -341,6 +493,38 @@ func (rc *remoteChar) Subscribe(ctx context.Context) (<-chan []byte, error) {
 		}
 	}()
 	return out, nil
+}
+
+// Read reads the characteristic's value from the device.
+func (rc *remoteChar) Read(ctx context.Context) ([]byte, error) {
+	cctx, cancel := rc.d.a.callCtx(ctx)
+	defer cancel()
+	call := rc.obj.CallWithContext(cctx, gattCharIface+".ReadValue", 0, map[string]dbus.Variant{})
+	if call.Err != nil {
+		return nil, mapBusError("read characteristic", call.Err)
+	}
+	var value []byte
+	if err := call.Store(&value); err != nil {
+		return nil, fmt.Errorf("decode characteristic value: %w", err)
+	}
+	return value, nil
+}
+
+// MTU reports the negotiated ATT MTU, or 0 when this bluetoothd does not
+// expose it.
+func (rc *remoteChar) MTU(ctx context.Context) (int, error) {
+	v, err := rc.d.a.getProperty(ctx, rc.obj, gattCharIface, "MTU")
+	if err != nil {
+		if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotFound) || ctx.Err() != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	mtu, ok := v.Value().(uint16)
+	if !ok {
+		return 0, nil
+	}
+	return int(mtu), nil
 }
 
 // stopNotify is best effort: a disconnected device has already stopped.

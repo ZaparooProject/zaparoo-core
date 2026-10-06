@@ -21,6 +21,7 @@ package simpleserialble
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +64,6 @@ func newTestRig(t *testing.T, roles ...bluez.Role) *testRig {
 	reader := newReaderWith(cfg, func(context.Context) (bluez.Adapter, error) {
 		return adapter, nil
 	}, clock)
-	reader.findTimeout = 50 * time.Millisecond
 
 	rig := &testRig{
 		reader:  reader,
@@ -165,31 +165,77 @@ func TestOpen_RequiresCentralRole(t *testing.T) {
 	assert.False(t, rig.reader.Connected())
 }
 
-func TestOpen_ReturnsAtOnceAndKeepsSearching(t *testing.T) {
+func TestOpen_ReturnsAtOnceAndPicksTheDeviceUpWhenItAppears(t *testing.T) {
 	t.Parallel()
 
 	rig := newTestRig(t)
 	started := time.Now()
 	rig.open(t)
-	assert.Less(t, time.Since(started), rig.reader.findTimeout, "Open must not wait for the device")
+	assert.Less(t, time.Since(started), time.Second, "Open must not wait for the device")
 	assert.Contains(t, rig.reader.Info(), "searching")
 
-	// Attempts continue with growing pauses while the device is absent.
-	require.Eventually(t, func() bool {
-		rig.clock.Advance(maxRetryPause)
-		return len(rig.adapter.Cent.Finds()) >= 3
-	}, testTimeout, 10*time.Millisecond)
-	for _, f := range rig.adapter.Cent.Finds() {
-		assert.Equal(t, testAddress, f.Address)
-		assert.Equal(t, []string{nusServiceUUID}, f.ServiceUUIDs)
-	}
+	// However long the device stays away there is one scan, left open:
+	// no attempts to pace and so no pause to wait out when it turns up.
+	require.Eventually(t, func() bool { return len(rig.adapter.Cent.Finds()) == 1 },
+		testTimeout, 10*time.Millisecond)
+	rig.clock.Advance(10 * time.Minute)
 	rig.noScan(t)
+	finds := rig.adapter.Cent.Finds()
+	require.Len(t, finds, 1)
+	assert.Equal(t, testAddress, finds[0].Address)
+	assert.Equal(t, []string{nusServiceUUID}, finds[0].ServiceUUIDs)
 
-	// Once the device shows up it is connected on the next attempt.
+	// The device shows up and is connected with no time passing at all.
 	rig.addDevice()
-	rig.waitLinked(t)
+	require.Eventually(t, func() bool {
+		return rig.device.Connected() && strings.Contains(rig.reader.Info(), "connected")
+	}, testTimeout, 10*time.Millisecond)
 	assert.Equal(t, testAddress, rig.reader.Path())
 	assert.Equal(t, readers.GenerateReaderID(DriverID, testAddress), rig.reader.ReaderID())
+}
+
+// A device that is found but refuses the connection is retried at a flat
+// interval, never a growing one.
+func TestFailedConnectRetriesAtAFlatInterval(t *testing.T) {
+	t.Parallel()
+
+	rig := newTestRig(t)
+	rig.addDevice()
+	rig.device.ConnectErr = errors.New("connection refused")
+	rig.open(t)
+
+	for attempt := 1; attempt <= 8; attempt++ {
+		require.Eventually(t, func() bool { return len(rig.adapter.Cent.Finds()) == attempt },
+			testTimeout, 5*time.Millisecond, "attempt %d", attempt)
+		require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 1))
+		rig.clock.Advance(retryPause)
+	}
+}
+
+// The reader manager stops receiving scans before it closes its readers, so
+// Close must not wait on a scan nobody will take.
+func TestCloseWhileAScanIsUndelivered(t *testing.T) {
+	t.Parallel()
+
+	rig := newTestRig(t)
+	rig.scans = make(chan readers.Scan)
+	rig.addDevice()
+	rig.open(t)
+	rig.waitLinked(t)
+	rig.tx.Push([]byte("SCAN\tuid=abc123\n"))
+
+	closed := make(chan error, 1)
+	go func() {
+		// Give the read loop time to block on the send.
+		time.Sleep(50 * time.Millisecond)
+		closed <- rig.reader.Close()
+	}()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(testTimeout):
+		t.Fatal("Close hung on an undelivered scan")
+	}
 }
 
 func TestScansAndRemoval(t *testing.T) {

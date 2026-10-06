@@ -180,34 +180,68 @@ type FakeFind struct {
 }
 
 // FakeCentral is an in-memory bluez.Central serving the devices it knows.
-// Find for an unknown address blocks until the context ends.
+// Find for an unknown address blocks until the device is added or the
+// context ends, as a real scan does.
 type FakeCentral struct {
 	devices map[string]*FakeDevice
-	finds   []FakeFind
-	mu      syncutil.Mutex
+	// added is closed and replaced whenever a device is added.
+	added chan struct{}
+	finds []FakeFind
+	mu    syncutil.Mutex
 }
 
 func NewFakeCentral() *FakeCentral {
-	return &FakeCentral{devices: make(map[string]*FakeDevice)}
+	return &FakeCentral{devices: make(map[string]*FakeDevice), added: make(chan struct{})}
 }
 
-// AddDevice makes a device findable by address.
+// AddDevice makes a device findable by address and wakes any Find waiting
+// for it.
 func (c *FakeCentral) AddDevice(d *FakeDevice) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.devices[strings.ToUpper(d.Addr)] = d
+	close(c.added)
+	c.added = make(chan struct{})
 }
 
 func (c *FakeCentral) Find(ctx context.Context, address string, serviceUUIDs []string) (bluez.Device, error) {
 	c.mu.Lock()
 	c.finds = append(c.finds, FakeFind{Address: address, ServiceUUIDs: append([]string(nil), serviceUUIDs...)})
-	d := c.devices[strings.ToUpper(address)]
 	c.mu.Unlock()
-	if d != nil {
-		return d, nil
+	for {
+		c.mu.Lock()
+		d := c.devices[strings.ToUpper(address)]
+		added := c.added
+		c.mu.Unlock()
+		if d != nil {
+			return d, nil
+		}
+		select {
+		case <-added:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	<-ctx.Done()
-	return nil, ctx.Err()
+}
+
+// Scan reports every known device once, then waits for the context.
+func (c *FakeCentral) Scan(ctx context.Context, _ bluez.ScanFilter) (<-chan bluez.ScanResult, error) {
+	c.mu.Lock()
+	results := make([]bluez.ScanResult, 0, len(c.devices))
+	for addr := range c.devices {
+		results = append(results, bluez.ScanResult{Address: addr, HasRSSI: true})
+	}
+	c.mu.Unlock()
+
+	out := make(chan bluez.ScanResult, len(results))
+	for _, r := range results {
+		out <- r
+	}
+	go func() {
+		<-ctx.Done()
+		close(out)
+	}()
+	return out, nil
 }
 
 // Finds returns every Find call.
@@ -298,6 +332,9 @@ func (d *FakeDevice) Drop() {
 // notifications to subscribers.
 type FakeCharacteristic struct {
 	in chan []byte
+	// Value is what Read returns; Link is the MTU reported.
+	Value []byte
+	Link  int
 }
 
 func NewFakeCharacteristic() *FakeCharacteristic {
@@ -331,4 +368,12 @@ func (c *FakeCharacteristic) Subscribe(ctx context.Context) (<-chan []byte, erro
 
 func (*FakeCharacteristic) Write(_ context.Context, _ []byte, _ bool) error {
 	return nil
+}
+
+func (c *FakeCharacteristic) Read(_ context.Context) ([]byte, error) {
+	return append([]byte(nil), c.Value...), nil
+}
+
+func (c *FakeCharacteristic) MTU(_ context.Context) (int, error) {
+	return c.Link, nil
 }

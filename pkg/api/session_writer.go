@@ -19,7 +19,11 @@
 
 package api
 
-import "github.com/rs/zerolog/log"
+import (
+	"context"
+
+	"github.com/rs/zerolog/log"
+)
 
 // sessionWriter is what the dispatcher and the response helpers need from a
 // client connection: a way to write one complete message and a way to close
@@ -36,4 +40,14 @@ func closeSession(session sessionWriter) {
 	if err := session.Close(); err != nil {
 		log.Debug().Err(err).Msg("failed to close session")
 	}
+}
+
+// writableWaiter is implemented by transports far slower than the handlers
+// that feed them. The dispatcher waits on it before writing a response, so a
+// client that asks for more than its link can carry is slowed down instead
+// of overflowing the transport's queue and losing the connection.
+type writableWaiter interface {
+	// WaitWritable blocks until the transport has room for another
+	// response, ctx ends, or the session closes.
+	WaitWritable(ctx context.Context) error
 }

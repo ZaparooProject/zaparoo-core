@@ -48,7 +48,10 @@ const (
 	objectManagerIface = "org.freedesktop.DBus.ObjectManager"
 	propertiesIface    = "org.freedesktop.DBus.Properties"
 
+	busService = "org.freedesktop.DBus"
+
 	signalPropertiesChanged = propertiesIface + ".PropertiesChanged"
+	signalNameOwnerChanged  = busService + ".NameOwnerChanged"
 	signalInterfacesAdded   = objectManagerIface + ".InterfacesAdded"
 	signalInterfacesRemoved = objectManagerIface + ".InterfacesRemoved"
 
@@ -178,7 +181,9 @@ func (a *adapter) selectAdapter(ctx context.Context, powerOn bool) error {
 }
 
 // watchSignals subscribes to everything the roles need and starts the router.
-// The adapter is marked gone when its object is removed or the bus drops.
+// The adapter is marked gone when its object is removed, it is powered off,
+// bluetoothd leaves the bus, or the bus drops. Everything registered with
+// bluetoothd is lost in each of those cases, so owners have to start over.
 func (a *adapter) watchSignals(ctx context.Context) error {
 	matches := [][]dbus.MatchOption{
 		{
@@ -196,6 +201,12 @@ func (a *adapter) watchSignals(ctx context.Context) error {
 			dbus.WithMatchMember("InterfacesRemoved"),
 			dbus.WithMatchObjectPath(bluezRootPath),
 		},
+		{
+			dbus.WithMatchSender(busService),
+			dbus.WithMatchInterface(busService),
+			dbus.WithMatchMember("NameOwnerChanged"),
+			dbus.WithMatchArg(0, bluezService),
+		},
 	}
 	for _, m := range matches {
 		if err := a.conn.AddMatchSignalContext(ctx, m...); err != nil {
@@ -208,15 +219,16 @@ func (a *adapter) watchSignals(ctx context.Context) error {
 	a.signals = newSignalRouter()
 	go a.signals.run(in)
 
-	removed, unsubscribe := a.signals.subscribe(func(sig *dbus.Signal) bool {
-		path, _, ok := interfacesRemoved(sig)
-		return ok && path == a.path
+	lost, unsubscribe := a.signals.subscribe(func(sig *dbus.Signal) bool {
+		return a.lostReason(sig) != ""
 	})
 	go func() {
 		defer unsubscribe()
 		select {
-		case <-removed:
-			log.Warn().Str("adapter", string(a.path)).Msg("bluetooth adapter removed")
+		case sig, ok := <-lost:
+			if ok {
+				log.Warn().Str("adapter", string(a.path)).Msg(a.lostReason(sig))
+			}
 		case <-a.conn.Context().Done():
 			log.Warn().Msg("bluetooth bus connection closed")
 		case <-a.gone:
@@ -225,6 +237,31 @@ func (a *adapter) watchSignals(ctx context.Context) error {
 		a.markGone()
 	}()
 	return nil
+}
+
+// lostReason says why sig means this adapter can no longer be used, or ""
+// when it does not.
+func (a *adapter) lostReason(sig *dbus.Signal) string {
+	if path, ifaces, ok := interfacesRemoved(sig); ok && path == a.path {
+		for _, iface := range ifaces {
+			if iface == adapterIface {
+				return "bluetooth adapter removed"
+			}
+		}
+		return ""
+	}
+	if bluezLeftBus(sig) {
+		return "bluetoothd left the bus"
+	}
+	if sig.Path != a.path {
+		return ""
+	}
+	if iface, changed, ok := propertiesChanged(sig); ok && iface == adapterIface {
+		if powered, present := changedBool(changed, "Powered"); present && !powered {
+			return "bluetooth adapter powered off"
+		}
+	}
+	return ""
 }
 
 func (a *adapter) markGone() {

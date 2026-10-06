@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,13 +41,17 @@ import (
 )
 
 const (
-	// bleOutboundLimit caps the bytes queued for one session. A link that
-	// cannot drain this much is dead or hopelessly slow, and an encrypted
-	// frame can never be dropped without desyncing the counters, so the
-	// session is closed instead.
-	bleOutboundLimit = 1 << 20
-	// bleOutboundMessages caps the number of queued messages.
-	bleOutboundMessages = 64
+	// bleOutboundMessages caps the number of messages queued for one
+	// session. An encrypted frame can never be dropped without desyncing
+	// the counters, so a session that overflows is closed instead.
+	bleOutboundMessages = 256
+	// bleOutboundHighWater is how many queued bytes make responses wait
+	// and droppable notifications get skipped. A single message may be far
+	// larger; it is the backlog behind it that is held back.
+	bleOutboundHighWater = 1 << 20
+	// bleAckTimeout is how long the writer waits, with the send window
+	// full, for the client to acknowledge anything at all.
+	bleAckTimeout = 30 * time.Second
 	// bleInboundMessages caps reassembled messages waiting to be handled.
 	// Chunks arrive on BlueZ's goroutines; handling runs on one goroutine
 	// per session so encrypted frames are decrypted in the order they
@@ -81,15 +86,12 @@ const (
 	// report travels over a signal path that can drop under load, and the
 	// heartbeat is cheap on a radio link.
 	bleAuthenticatedIdleTimeout = 5 * time.Minute
-
-	// bleEnvelopeOverhead is the fixed cost of the encrypted frame around a
-	// plaintext: the AEAD tag, the JSON envelope, and base64 rounding.
-	bleEnvelopeOverhead = 64
 )
 
 var (
 	errBLESessionClosed = errors.New("bluetooth session closed")
 	errBLEOutboundFull  = errors.New("bluetooth session outbound queue full")
+	errBLEAckTimeout    = errors.New("bluetooth client stopped acknowledging")
 )
 
 // bleDroppableNotifications are the chatty progress notifications a
@@ -108,54 +110,59 @@ const (
 	bleAuthEncrypted
 )
 
-// blePlaintextLimit is the largest plaintext whose encrypted frame still
-// fits a wire message of the given size. Base64 grows the ciphertext by a
-// third.
-func blePlaintextLimit(wire int) int {
-	return wire*3/4 - bleEnvelopeOverhead
-}
-
 // bleSession is one central's connection: it reassembles chunks, runs the
 // pre-auth pairing methods, establishes the encrypted session, feeds the
 // shared dispatcher, and chunks everything going back out.
 type bleSession struct {
-	t             *bleTransport
-	p             bluez.Peripheral
-	reasm         *apigatt.Reassembler
-	dispatcher    *wsSessionDispatcher
-	cs            *apimiddleware.ClientSession
-	idleTimer     clockwork.Timer
-	pairLimiter   *rate.Limiter
-	inbound       chan []byte
-	outbound      chan []byte
-	ctx           context.Context
-	cancel        context.CancelFunc
-	peer          bluez.Peer
-	maxPlaintext  int
+	t           *bleTransport
+	p           bluez.Peripheral
+	reasm       *apigatt.Reassembler
+	dispatcher  *wsSessionDispatcher
+	cs          *apimiddleware.ClientSession
+	idleTimer   clockwork.Timer
+	pairLimiter *rate.Limiter
+	inbound     chan []byte
+	outbound    chan []byte
+	// acks wakes the writer when the client acknowledges chunks; room
+	// wakes responses waiting for the queue to drain.
+	acks   chan struct{}
+	room   chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
+	peer   bluez.Peer
+	// chunker numbers every chunk sent on this connection. sendMu keeps
+	// one message's chunks together on the wire.
+	chunker       apigatt.Chunker
 	outboundBytes int
 	mtu           int
+	sendMu        syncutil.Mutex
 	mu            syncutil.Mutex
 	closeOnce     sync.Once
 	tag           uint16
-	tagSet        bool
-	state         bleAuthState
-	closed        bool
+	// sent is the sequence number after the last chunk handed to the
+	// radio; acked is the client's last acknowledgement.
+	sent   uint16
+	acked  uint16
+	tagSet bool
+	state  bleAuthState
+	closed bool
 }
 
 func newBLESession(t *bleTransport, peer bluez.Peer, p bluez.Peripheral) *bleSession {
 	ctx, cancel := context.WithCancel(t.ctx)
 	s := &bleSession{
-		t:            t,
-		p:            p,
-		reasm:        apigatt.NewReassembler(t.clock, apigatt.MaxMessageSize),
-		pairLimiter:  rate.NewLimiter(blePairingRate, blePairingBurst),
-		inbound:      make(chan []byte, bleInboundMessages),
-		outbound:     make(chan []byte, bleOutboundMessages),
-		ctx:          ctx,
-		cancel:       cancel,
-		peer:         peer,
-		maxPlaintext: blePlaintextLimit(apigatt.MaxMessageSize),
-		mtu:          apigatt.DefaultMTU,
+		t:           t,
+		p:           p,
+		reasm:       apigatt.NewReassembler(apigatt.MaxUnauthenticatedMessageSize),
+		pairLimiter: rate.NewLimiter(blePairingRate, blePairingBurst),
+		inbound:     make(chan []byte, bleInboundMessages),
+		outbound:    make(chan []byte, bleOutboundMessages),
+		acks:        make(chan struct{}, 1),
+		room:        make(chan struct{}, 1),
+		ctx:         ctx,
+		cancel:      cancel,
+		peer:        peer,
+		mtu:         apigatt.DefaultMTU,
 	}
 	s.dispatcher = newSessionDispatcher(ctx, s, t.core.platform)
 	s.idleTimer = t.clock.AfterFunc(blePendingIdleTimeout, func() {
@@ -171,8 +178,16 @@ func (s *bleSession) clientID() string {
 	return "ble:" + s.peer.Address
 }
 
-// handleChunk consumes one write to the RX characteristic.
+// handleChunk consumes one write to the RX characteristic. BlueZ delivers
+// each write on its own goroutine, so calls arrive in any order; the
+// sequence number in the chunk is what orders them.
 func (s *bleSession) handleChunk(chunk []byte, mtu int) {
+	h, payload, err := apigatt.ParseChunk(chunk)
+	if err != nil {
+		s.framingError(err)
+		return
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -182,16 +197,35 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 		s.mtu = mtu
 	}
 	if !s.tagSet {
-		if h, _, err := apigatt.ParseChunk(chunk); err == nil {
-			s.tag = h.Tag
-			s.tagSet = true
-		}
+		s.tag = h.Tag
+		s.tagSet = true
 	}
-	msg, err := s.reasm.Push(chunk)
+	if h.Tag != s.tag {
+		s.mu.Unlock()
+		s.framingError(fmt.Errorf("%w: session tag changed", apigatt.ErrMalformedChunk))
+		return
+	}
+	if h.Ack {
+		// An acknowledgement may only move forward, and only over chunks
+		// that were actually sent.
+		valid := h.Seq-s.acked <= s.sent-s.acked
+		if valid {
+			s.acked = h.Seq
+		}
+		s.mu.Unlock()
+		if !valid {
+			s.framingError(fmt.Errorf("%w: acknowledgement of chunk %d never sent", apigatt.ErrSequence, h.Seq))
+			return
+		}
+		signal(s.acks)
+		s.touchIdle()
+		return
+	}
+	msgs, err := s.reasm.Push(h, payload)
 	queued := true
-	if err == nil && msg != nil {
-		// Queued under the lock so messages are handled in the order they
-		// completed, whatever order BlueZ's goroutines run in.
+	// Queued under the lock so messages are handled in the order the
+	// reassembler released them.
+	for _, msg := range msgs {
 		select {
 		case s.inbound <- msg:
 		default:
@@ -201,8 +235,7 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 	s.mu.Unlock()
 
 	if err != nil {
-		log.Warn().Err(err).Str("peer", s.peer.Address).Msg("bluetooth framing error")
-		s.shutdown("framing error")
+		s.framingError(err)
 		return
 	}
 	if !queued {
@@ -210,6 +243,19 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 		return
 	}
 	s.touchIdle()
+}
+
+func (s *bleSession) framingError(err error) {
+	log.Warn().Err(err).Str("peer", s.peer.Address).Msg("bluetooth framing error")
+	s.shutdown("framing error")
+}
+
+// signal wakes whoever waits on ch without blocking when nobody does.
+func signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 // reader handles reassembled messages one at a time.
@@ -295,6 +341,7 @@ func (s *bleSession) handleMessage(msg []byte) {
 		s.mu.Lock()
 		s.cs = frame.session
 		s.state = bleAuthEncrypted
+		s.reasm.SetMaxMessage(apigatt.MaxMessageSize)
 		timer := s.idleTimer
 		s.mu.Unlock()
 		if timer != nil {
@@ -477,11 +524,8 @@ func (s *bleSession) sendNotification(method string, data []byte) {
 	if closed || state != bleAuthEncrypted || cs == nil {
 		return
 	}
-	if len(data) > s.maxPlaintext {
-		log.Debug().Str("method", method).Int("bytes", len(data)).Msg("ble: notification too large, dropped")
-		return
-	}
-	if queued > bleOutboundLimit/2 && bleDroppableNotifications[method] {
+	backedUp := queued > bleOutboundHighWater/2 || len(s.outbound) > bleOutboundMessages/2
+	if backedUp && bleDroppableNotifications[method] {
 		log.Debug().Str("method", method).Int("queued", queued).Msg("ble: link backed up, dropping notification")
 		return
 	}
@@ -491,19 +535,15 @@ func (s *bleSession) sendNotification(method string, data []byte) {
 	}
 }
 
-// Write implements sessionWriter: it queues one complete wire message.
-// Encryption has already happened, so a message that cannot be queued
-// ends the session rather than desyncing the counters.
+// Write implements sessionWriter: it queues one complete wire message and
+// never blocks, because callers hold the encryption lock. Encryption has
+// already happened, so a message that cannot be queued ends the session
+// rather than desyncing the counters.
 func (s *bleSession) Write(msg []byte) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return errBLESessionClosed
-	}
-	if s.outboundBytes+len(msg) > bleOutboundLimit {
-		s.mu.Unlock()
-		s.shutdown("outbound queue overflow")
-		return errBLEOutboundFull
 	}
 	s.outboundBytes += len(msg)
 	s.mu.Unlock()
@@ -520,56 +560,110 @@ func (s *bleSession) Write(msg []byte) error {
 	}
 }
 
+// WaitWritable implements writableWaiter: responses wait here while the
+// link works through what is already queued.
+func (s *bleSession) WaitWritable(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+		closed, queued := s.closed, s.outboundBytes
+		s.mu.Unlock()
+		if closed {
+			return errBLESessionClosed
+		}
+		if queued < bleOutboundHighWater {
+			return nil
+		}
+		select {
+		case <-s.room:
+		case <-s.ctx.Done():
+			return errBLESessionClosed
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for bluetooth link: %w", ctx.Err())
+		}
+	}
+}
+
 // Close implements sessionWriter.
 func (s *bleSession) Close() error {
 	s.shutdown("closed by dispatcher")
 	return nil
 }
 
-// writeNow chunks a message straight onto the characteristic, bypassing
-// the queue, for the last words of a session that is about to end.
-func (s *bleSession) writeNow(msg []byte) {
+// send chunks one message onto the TX characteristic. With paced set it
+// stays inside the send window, waiting for the client's acknowledgements.
+func (s *bleSession) send(msg []byte, paced bool) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+
 	s.mu.Lock()
-	tag, mtu := s.tag, s.mtu
+	s.chunker.Tag = s.tag
+	mtu := s.mtu
 	s.mu.Unlock()
-	chunks, err := apigatt.Chunker{MTU: mtu, Tag: tag}.Split(msg)
-	if err != nil {
-		return
-	}
-	for _, chunk := range chunks {
+
+	//nolint:wrapcheck // the emit errors are already this package's own
+	return s.chunker.Split(msg, mtu, func(chunk []byte) error {
+		if paced {
+			if err := s.waitWindow(); err != nil {
+				return err
+			}
+		}
+		// Counted as sent before it reaches the radio, so the client's
+		// acknowledgement can never arrive ahead of the count.
+		s.mu.Lock()
+		s.sent = s.chunker.Next()
+		s.mu.Unlock()
 		if err := s.p.Notify(apigatt.TXCharUUID, chunk); err != nil {
-			return
+			return fmt.Errorf("notify: %w", err)
+		}
+		return nil
+	})
+}
+
+// waitWindow blocks while SendWindow chunks are unacknowledged.
+func (s *bleSession) waitWindow() error {
+	for {
+		s.mu.Lock()
+		outstanding := s.sent - s.acked
+		s.mu.Unlock()
+		if outstanding < apigatt.SendWindow {
+			return nil
+		}
+		select {
+		case <-s.acks:
+		case <-s.ctx.Done():
+			return errBLESessionClosed
+		case <-s.t.clock.After(bleAckTimeout):
+			return errBLEAckTimeout
 		}
 	}
 }
 
-// writer chunks queued messages onto the TX characteristic in order.
+// writeNow sends a message straight away, bypassing the queue and the send
+// window, for the last words of a session that is about to end.
+func (s *bleSession) writeNow(msg []byte) {
+	if err := s.send(msg, false); err != nil {
+		log.Debug().Err(err).Str("peer", s.peer.Address).Msg("ble: final write failed")
+	}
+}
+
+// writer sends queued messages in order.
 func (s *bleSession) writer() {
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case msg := <-s.outbound:
+			err := s.send(msg, true)
 			s.mu.Lock()
 			s.outboundBytes -= len(msg)
-			tag, mtu := s.tag, s.mtu
 			s.mu.Unlock()
-
-			chunks, err := apigatt.Chunker{MTU: mtu, Tag: tag}.Split(msg)
+			signal(s.room)
 			if err != nil {
-				log.Warn().Err(err).Int("bytes", len(msg)).Msg("ble: message cannot be framed")
-				s.shutdown("message cannot be framed")
+				if !errors.Is(err, errBLESessionClosed) {
+					log.Warn().Err(err).Str("peer", s.peer.Address).Msg("ble: sending message")
+				}
+				s.shutdown("send failed")
 				return
-			}
-			for _, chunk := range chunks {
-				if s.ctx.Err() != nil {
-					return
-				}
-				if err := s.p.Notify(apigatt.TXCharUUID, chunk); err != nil {
-					log.Warn().Err(err).Str("peer", s.peer.Address).Msg("ble: notify failed")
-					s.shutdown("notify failed")
-					return
-				}
 			}
 		}
 	}

@@ -541,6 +541,12 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 		return
 	}
 
+	if waiter, ok := d.session.(writableWaiter); ok {
+		// A failed wait means the session is closing; the write below
+		// reports that through the usual path.
+		_ = waiter.WaitWritable(d.ctx)
+	}
+
 	// The send helpers time marshaling and enqueueing separately. Melody's Write
 	// enqueues a frame; response_write does not claim socket delivery.
 	if resp.result.Error != nil {

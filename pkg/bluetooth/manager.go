@@ -37,6 +37,20 @@ import (
 // adapter. A dongle plugged in after boot is picked up within one interval.
 const watchInterval = 15 * time.Second
 
+const (
+	// After losing an adapter that had been working, typically because
+	// bluetoothd restarted or the controller was reset, the manager tries
+	// to get it back this often, this many times, before settling back to
+	// watchInterval.
+	lossRetryInterval = 2 * time.Second
+	lossRetryAttempts = 15
+
+	// stableAfter is how long an adapter must stay open to count as having
+	// worked. One lost sooner is failing to come up at all, and is retried
+	// quietly at watchInterval instead.
+	stableAfter = 2 * watchInterval
+)
+
 // PeripheralFunc is called with a ready peripheral each time one becomes
 // available. It must not block: start any long-running work on a goroutine.
 type PeripheralFunc func(bluez.Peripheral)
@@ -51,8 +65,15 @@ type Manager struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	callbacks map[int]PeripheralFunc
+	openedAt  time.Time
 	mu        syncutil.Mutex
 	nextID    int
+	// retries is how many quick attempts are left to get back an adapter
+	// that was lost. Only the watch loop touches it.
+	retries int
+	// flapping is set while the adapter keeps opening and failing straight
+	// away, so that cycle is logged once and not every interval.
+	flapping bool
 	// unavailableReported and roleReported keep a machine that has no
 	// usable adapter from logging the same line every interval.
 	unavailableReported bool
@@ -151,14 +172,49 @@ func (m *Manager) run(ctx context.Context) {
 
 	m.tick(ctx)
 	for {
+		m.mu.Lock()
+		current := m.adapter
+		m.mu.Unlock()
+		var gone <-chan struct{}
+		var retry <-chan time.Time
+		switch {
+		case current != nil:
+			gone = current.Gone()
+			m.retries = 0
+		case m.retries > 0:
+			retry = m.clock.After(lossRetryInterval)
+		}
+
 		select {
 		case <-ctx.Done():
 			m.closeAdapter("stopping")
 			return
 		case <-ticker.Chan():
 			m.tick(ctx)
+		case <-retry:
+			m.retries--
+			m.tick(ctx)
+		case <-gone:
+			if m.lost() {
+				m.tick(ctx)
+			}
 		}
 	}
+}
+
+// lost closes an adapter that went away. One that had been working is worth
+// getting back quickly, so it arms the quick retries; one that failed as
+// soon as it was opened waits for the watch interval. It reports which.
+func (m *Manager) lost() (retryNow bool) {
+	m.mu.Lock()
+	stable := m.clock.Since(m.openedAt) >= stableAfter
+	m.flapping = !stable
+	m.mu.Unlock()
+	m.closeAdapter("adapter went away")
+	if stable {
+		m.retries = lossRetryAttempts
+	}
+	return stable
 }
 
 // tick reconciles the adapter with configuration: closed while disabled,
@@ -175,7 +231,7 @@ func (m *Manager) tick(ctx context.Context) {
 	if current != nil {
 		select {
 		case <-current.Gone():
-			m.closeAdapter("adapter went away")
+			m.lost()
 		default:
 			return
 		}
@@ -204,6 +260,8 @@ func (m *Manager) tick(ctx context.Context) {
 
 	m.mu.Lock()
 	m.adapter = adapter
+	m.openedAt = m.clock.Now()
+	flapping := m.flapping
 	m.unavailableReported = false
 	m.roleReported = false
 	callbacks := make([]PeripheralFunc, 0, len(m.callbacks))
@@ -216,7 +274,11 @@ func (m *Manager) tick(ctx context.Context) {
 	for _, r := range adapter.Roles() {
 		roles = append(roles, string(r))
 	}
-	log.Info().Str("adapter", adapter.Address()).Strs("roles", roles).Msg("bluetooth adapter ready")
+	event := log.Info()
+	if flapping {
+		event = log.Debug()
+	}
+	event.Str("adapter", adapter.Address()).Strs("roles", roles).Msg("bluetooth adapter ready")
 
 	for _, fn := range callbacks {
 		fn(peripheral)
@@ -241,11 +303,16 @@ func (m *Manager) closeAdapter(reason string) {
 	m.mu.Lock()
 	adapter := m.adapter
 	m.adapter = nil
+	flapping := m.flapping
 	m.mu.Unlock()
 	if adapter == nil {
 		return
 	}
-	log.Info().Str("reason", reason).Msg("closing bluetooth adapter")
+	event := log.Info()
+	if flapping {
+		event = log.Debug()
+	}
+	event.Str("reason", reason).Msg("closing bluetooth adapter")
 	if err := adapter.Close(); err != nil {
 		log.Debug().Err(err).Msg("error closing bluetooth adapter")
 	}

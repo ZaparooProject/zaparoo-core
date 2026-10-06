@@ -244,7 +244,6 @@ WebSocket errors (plaintext JSON-RPC error, then connection closed):
 |---|---|
 | -32001 | Unsupported encryption version |
 | -32002 | Encryption required. Remote clients must send an encrypted first frame. |
-| -32004 | Response too large for the transport (Bluetooth LE only). `data.limit` and `data.size` say by how much. |
 | -32005 | Pairing failed (Bluetooth LE `pair.start` / `pair.finish` only). `data.status` and `data.message` mirror the HTTP endpoints. |
 
 ## Connection lifecycle

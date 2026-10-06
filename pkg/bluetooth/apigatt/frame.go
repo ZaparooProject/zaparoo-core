@@ -23,28 +23,37 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"time"
-
-	"github.com/jonboulle/clockwork"
+	"math"
 )
 
 // Chunk layout, both directions:
 //
-//	byte 0    flags   bits 7..4 protocol version, bit 1 LAST, bit 0 FIRST,
-//	                  bits 3..2 reserved and zero
-//	byte 1    seq     0 on FIRST, +1 per chunk, wraps at 256
-//	byte 2-3  tag     session tag, big endian
-//	byte 4-7  length  total message length, big endian, FIRST only
-//	payload           at least one byte
+//	byte 0    flags   bits 7..4 protocol version, bit 2 ACK, bit 1 LAST,
+//	                  bit 0 FIRST, bit 3 reserved and zero
+//	byte 1-2  seq     big endian; see below
+//	byte 3-4  tag     session tag, big endian
+//	byte 5-8  length  total message length, big endian, FIRST only
+//	payload           at least one byte, none on an ACK
+//
+// On a data chunk seq counts every data chunk the sender has sent on this
+// connection, starting at 0 and wrapping at 65536. It does not restart with
+// each message, so the receiver can put chunks back in order across message
+// boundaries as well as inside one.
+//
+// An ACK chunk is sent by the client only. Its seq is the sequence number of
+// the next data chunk the client expects from Core, which acknowledges
+// everything before it. Core never sends more than SendWindow chunks beyond
+// the last acknowledgement.
 const (
 	// HeaderSize is the header on every chunk but the first of a message.
-	HeaderSize = 4
+	HeaderSize = 5
 	// FirstHeaderSize is the header on the first chunk of a message.
-	FirstHeaderSize = 8
+	FirstHeaderSize = 9
 
 	flagFirst        = 0x01
 	flagLast         = 0x02
-	flagReservedMask = 0x0c
+	flagAck          = 0x04
+	flagReservedMask = 0x08
 	versionShift     = 4
 )
 
@@ -52,8 +61,8 @@ var (
 	// ErrMalformedChunk means the chunk cannot be parsed at all: too short,
 	// wrong version, reserved bits set. The connection should be dropped.
 	ErrMalformedChunk = errors.New("apigatt: malformed chunk")
-	// ErrMessageTooLarge means a message declared or accumulated more than
-	// MaxMessageSize bytes.
+	// ErrMessageTooLarge means a message declared more bytes than the
+	// receiver accepts.
 	ErrMessageTooLarge = errors.New("apigatt: message too large")
 	// ErrLengthMismatch means the chunks did not add up to the declared
 	// length.
@@ -71,15 +80,16 @@ var (
 // Header is the decoded chunk header.
 type Header struct {
 	Length  uint32 // valid only when First
+	Seq     uint16
 	Tag     uint16
 	Version uint8
-	Seq     uint8
 	First   bool
 	Last    bool
+	Ack     bool
 }
 
 // ParseChunk decodes one chunk into its header and payload. The payload
-// aliases chunk.
+// aliases chunk and is empty for an ACK.
 func ParseChunk(chunk []byte) (Header, []byte, error) {
 	if len(chunk) < HeaderSize {
 		return Header{}, nil, fmt.Errorf("%w: %d bytes", ErrMalformedChunk, len(chunk))
@@ -89,8 +99,9 @@ func ParseChunk(chunk []byte) (Header, []byte, error) {
 		Version: flags >> versionShift,
 		First:   flags&flagFirst != 0,
 		Last:    flags&flagLast != 0,
-		Seq:     chunk[1],
-		Tag:     binary.BigEndian.Uint16(chunk[2:4]),
+		Ack:     flags&flagAck != 0,
+		Seq:     binary.BigEndian.Uint16(chunk[1:3]),
+		Tag:     binary.BigEndian.Uint16(chunk[3:5]),
 	}
 	if h.Version != ProtocolVersion {
 		return Header{}, nil, fmt.Errorf("%w: version %d", ErrMalformedChunk, h.Version)
@@ -98,21 +109,21 @@ func ParseChunk(chunk []byte) (Header, []byte, error) {
 	if flags&flagReservedMask != 0 {
 		return Header{}, nil, fmt.Errorf("%w: reserved flag bits set", ErrMalformedChunk)
 	}
+	if h.Ack {
+		if h.First || h.Last || len(chunk) != HeaderSize {
+			return Header{}, nil, fmt.Errorf("%w: acknowledgement carries data", ErrMalformedChunk)
+		}
+		return h, nil, nil
+	}
 	headerSize := HeaderSize
 	if h.First {
-		if h.Seq != 0 {
-			return Header{}, nil, fmt.Errorf("%w: first chunk has sequence %d", ErrMalformedChunk, h.Seq)
-		}
 		if len(chunk) < FirstHeaderSize {
 			return Header{}, nil, fmt.Errorf("%w: first chunk is %d bytes", ErrMalformedChunk, len(chunk))
 		}
-		h.Length = binary.BigEndian.Uint32(chunk[4:8])
+		h.Length = binary.BigEndian.Uint32(chunk[5:9])
 		headerSize = FirstHeaderSize
 		if h.Length == 0 {
 			return Header{}, nil, fmt.Errorf("%w: zero length", ErrMalformedChunk)
-		}
-		if h.Length > MaxMessageSize {
-			return Header{}, nil, fmt.Errorf("%w: declared %d bytes", ErrMessageTooLarge, h.Length)
 		}
 	}
 	if len(chunk) == headerSize {
@@ -121,7 +132,8 @@ func ParseChunk(chunk []byte) (Header, []byte, error) {
 	return h, chunk[headerSize:], nil
 }
 
-// EncodeChunk builds one chunk. Length is written only for a first chunk.
+// EncodeChunk builds one data chunk. Length is written only for a first
+// chunk.
 func EncodeChunk(h Header, payload []byte) []byte {
 	size := HeaderSize
 	if h.First {
@@ -136,44 +148,58 @@ func EncodeChunk(h Header, payload []byte) []byte {
 		flags |= flagLast
 	}
 	out[0] = flags
-	out[1] = h.Seq
-	binary.BigEndian.PutUint16(out[2:4], h.Tag)
+	binary.BigEndian.PutUint16(out[1:3], h.Seq)
+	binary.BigEndian.PutUint16(out[3:5], h.Tag)
 	if h.First {
-		binary.BigEndian.PutUint32(out[4:8], h.Length)
+		binary.BigEndian.PutUint32(out[5:9], h.Length)
 	}
 	return append(out, payload...)
 }
 
-// Chunker splits messages into chunks that fit the link's ATT MTU.
+// EncodeAck builds the chunk that acknowledges every data chunk before next.
+func EncodeAck(tag, next uint16) []byte {
+	out := make([]byte, HeaderSize)
+	out[0] = byte(ProtocolVersion)<<versionShift | flagAck
+	binary.BigEndian.PutUint16(out[1:3], next)
+	binary.BigEndian.PutUint16(out[3:5], tag)
+	return out
+}
+
+// Chunker splits one side's messages into chunks for one connection. It
+// carries the sequence counter, so a connection needs exactly one per
+// direction and must not use it from two goroutines at once.
 type Chunker struct {
-	// MTU is the negotiated ATT MTU; anything below DefaultMTU is treated
-	// as DefaultMTU.
-	MTU int
 	// Tag is stamped on every chunk.
 	Tag uint16
+	seq uint16
+}
+
+// Next is the sequence number the next data chunk will carry.
+func (c *Chunker) Next() uint16 {
+	return c.seq
 }
 
 // chunkPayload is how many payload bytes fit after a header of the given
-// size.
-func (c Chunker) chunkPayload(headerSize int) int {
-	mtu := c.MTU
+// size. Anything below DefaultMTU is treated as DefaultMTU.
+func chunkPayload(mtu, headerSize int) int {
 	if mtu < DefaultMTU {
 		mtu = DefaultMTU
 	}
 	return mtu - attHeaderSize - headerSize
 }
 
-// Split cuts msg into chunks in transmission order.
-func (c Chunker) Split(msg []byte) ([][]byte, error) {
+// Split cuts msg into chunks that fit the link's ATT MTU and hands them to
+// emit in transmission order, one at a time, so a large message is never
+// held as chunks all at once. It stops at the first error from emit; the
+// sequence counter has then moved past the chunks already emitted.
+func (c *Chunker) Split(msg []byte, mtu int, emit func(chunk []byte) error) error {
 	if len(msg) == 0 {
-		return nil, ErrEmptyMessage
+		return ErrEmptyMessage
 	}
-	if len(msg) > MaxMessageSize {
-		return nil, fmt.Errorf("%w: %d bytes", ErrMessageTooLarge, len(msg))
+	if uint64(len(msg)) > math.MaxUint32 {
+		return fmt.Errorf("%w: %d bytes", ErrMessageTooLarge, len(msg))
 	}
 
-	var chunks [][]byte
-	var seq uint8
 	offset := 0
 	for offset < len(msg) {
 		first := offset == 0
@@ -181,108 +207,163 @@ func (c Chunker) Split(msg []byte) ([][]byte, error) {
 		if first {
 			headerSize = FirstHeaderSize
 		}
-		n := min(c.chunkPayload(headerSize), len(msg)-offset)
+		n := min(chunkPayload(mtu, headerSize), len(msg)-offset)
 		h := Header{
 			Version: ProtocolVersion,
-			Seq:     seq,
+			Seq:     c.seq,
 			Tag:     c.Tag,
 			First:   first,
 			Last:    offset+n == len(msg),
 		}
 		if first {
-			h.Length = uint32(len(msg)) //nolint:gosec // bounded by MaxMessageSize above
+			h.Length = uint32(len(msg)) //nolint:gosec // bounded by the check above
 		}
-		chunks = append(chunks, EncodeChunk(h, msg[offset:offset+n]))
+		c.seq++
+		if err := emit(EncodeChunk(h, msg[offset:offset+n])); err != nil {
+			return err
+		}
 		offset += n
-		seq++
 	}
-	return chunks, nil
+	return nil
 }
 
 // heldChunk is a chunk waiting for the ones before it.
 type heldChunk struct {
 	payload []byte
-	last    bool
+	header  Header
 }
 
-// Reassembler rebuilds messages from chunks for one connection. It
-// tolerates chunks arriving slightly out of order, caps memory, and drops a
-// half-received message that stalls.
+// Reassembler rebuilds one side's messages from chunks for one connection.
+// Chunks may arrive in any order within ReorderWindow; messages come out in
+// the order they were sent.
 type Reassembler struct {
-	clock       clockwork.Clock
-	held        map[uint8]heldChunk
-	lastChunkAt time.Time
-	buf         []byte
-	maxMessage  int
-	heldBytes   int
-	errors      int
-	expected    uint32
-	nextSeq     uint8
-	inProgress  bool
+	held       map[uint16]heldChunk
+	buf        []byte
+	heldBytes  int
+	errors     int
+	maxMessage uint32
+	expected   uint32
+	nextSeq    uint16
+	inProgress bool
 }
 
-// NewReassembler returns a reassembler; maxMessage of zero or less means
-// MaxMessageSize.
-func NewReassembler(clock clockwork.Clock, maxMessage int) *Reassembler {
-	if maxMessage <= 0 || maxMessage > MaxMessageSize {
-		maxMessage = MaxMessageSize
-	}
-	if clock == nil {
-		clock = clockwork.NewRealClock()
-	}
-	return &Reassembler{clock: clock, held: make(map[uint8]heldChunk), maxMessage: maxMessage}
+// NewReassembler returns a reassembler accepting messages up to maxMessage
+// bytes. Zero or less means no limit, which is what a client receiving from
+// Core wants; Core always sets one.
+func NewReassembler(maxMessage int) *Reassembler {
+	r := &Reassembler{held: make(map[uint16]heldChunk)}
+	r.SetMaxMessage(maxMessage)
+	return r
 }
 
-// Push consumes one chunk. It returns the completed message when this chunk
-// finished one. A non-nil error means the connection should be dropped;
+// SetMaxMessage changes the largest message accepted from now on. Zero or
+// less means no limit.
+func (r *Reassembler) SetMaxMessage(maxMessage int) {
+	if maxMessage <= 0 || uint64(maxMessage) > math.MaxUint32 {
+		r.maxMessage = math.MaxUint32
+		return
+	}
+	r.maxMessage = uint32(maxMessage)
+}
+
+// Next is the sequence number of the next chunk the reassembler is waiting
+// for, which is what a client sends in an ACK.
+func (r *Reassembler) Next() uint16 {
+	return r.nextSeq
+}
+
+// Push consumes one data chunk already decoded by ParseChunk and returns
+// the messages it completed, oldest first: a chunk that fills a gap can
+// release several. A non-nil error means the connection should be dropped;
 // the reassembler is unusable afterwards.
-func (r *Reassembler) Push(chunk []byte) ([]byte, error) {
-	h, payload, err := ParseChunk(chunk)
-	if err != nil {
-		return nil, err
+func (r *Reassembler) Push(h Header, payload []byte) ([][]byte, error) {
+	if h.Ack {
+		return nil, fmt.Errorf("%w: acknowledgement is not data", ErrMalformedChunk)
 	}
-
-	now := r.clock.Now()
-	if (r.inProgress || len(r.held) > 0) && now.Sub(r.lastChunkAt) > PartialIdleTimeout {
-		r.reset()
-	}
-	r.lastChunkAt = now
-
-	if h.First {
-		if r.inProgress {
-			// The peer started over mid-message: a restarted client, or
-			// one that gave up on a message. Recoverable, but counted, and
-			// whatever was held belonged to the abandoned message.
-			if err := r.recoverable(); err != nil {
-				return nil, err
-			}
-			r.dropHeld()
-		}
-		r.startMessage(h.Length)
-		return r.apply(payload, h.Last)
-	}
-
 	distance := h.Seq - r.nextSeq
 	switch {
-	case distance == 0 && !r.inProgress:
-		// Sequence zero without the FIRST flag can never be applied.
-		return nil, r.recoverable()
 	case distance == 0:
-		return r.apply(payload, h.Last)
+		return r.drain(h, payload)
 	case distance < ReorderWindow:
 		if _, dup := r.held[h.Seq]; dup {
 			return nil, fmt.Errorf("%w: duplicate chunk %d", ErrSequence, h.Seq)
 		}
-		if err := r.hold(h.Seq, payload, h.Last); err != nil {
-			return nil, err
+		if r.heldBytes+len(payload) > maxHeldBytes {
+			return nil, fmt.Errorf("%w: too much held waiting for chunk %d", ErrSequence, r.nextSeq)
 		}
+		r.held[h.Seq] = heldChunk{header: h, payload: append([]byte(nil), payload...)}
+		r.heldBytes += len(payload)
 		return nil, nil
-	case !r.inProgress:
-		// A stray chunk far from any message we are receiving.
-		return nil, r.recoverable()
 	default:
 		return nil, fmt.Errorf("%w: chunk %d, expected %d", ErrSequence, h.Seq, r.nextSeq)
 	}
+}
+
+// drain applies the expected chunk, then every held chunk that now follows
+// in sequence.
+func (r *Reassembler) drain(h Header, payload []byte) ([][]byte, error) {
+	var msgs [][]byte
+	for {
+		msg, err := r.apply(h, payload)
+		if err != nil {
+			return nil, err
+		}
+		if msg != nil {
+			msgs = append(msgs, msg)
+		}
+		next, ok := r.held[r.nextSeq]
+		if !ok {
+			return msgs, nil
+		}
+		delete(r.held, r.nextSeq)
+		r.heldBytes -= len(next.payload)
+		h, payload = next.header, next.payload
+	}
+}
+
+// apply appends the chunk the sequence was waiting for and returns the
+// message if this chunk finished one.
+func (r *Reassembler) apply(h Header, payload []byte) ([]byte, error) {
+	r.nextSeq++
+	switch {
+	case h.First:
+		if r.inProgress {
+			// The peer started over mid-message: it gave up on the one
+			// it was sending. Recoverable, but counted.
+			if err := r.recoverable(); err != nil {
+				return nil, err
+			}
+		}
+		if h.Length > r.maxMessage {
+			return nil, fmt.Errorf("%w: declared %d bytes, limit %d", ErrMessageTooLarge, h.Length, r.maxMessage)
+		}
+		r.buf = r.buf[:0]
+		r.expected = h.Length
+		r.inProgress = true
+	case !r.inProgress:
+		// A continuation with no message to continue.
+		return nil, r.recoverable()
+	}
+
+	if uint64(len(r.buf)+len(payload)) > uint64(r.expected) {
+		return nil, fmt.Errorf("%w: %d bytes exceeds declared %d",
+			ErrLengthMismatch, len(r.buf)+len(payload), r.expected)
+	}
+	r.buf = append(r.buf, payload...)
+	if !h.Last {
+		return nil, nil
+	}
+	if uint64(len(r.buf)) != uint64(r.expected) {
+		return nil, fmt.Errorf("%w: got %d bytes, declared %d", ErrLengthMismatch, len(r.buf), r.expected)
+	}
+	msg := r.buf
+	// The buffer is handed to the caller rather than copied, and a fresh
+	// one is grown for the next message, so a large message is not pinned
+	// for the life of the connection.
+	r.buf = nil
+	r.expected = 0
+	r.inProgress = false
+	return msg, nil
 }
 
 // recoverable counts a protocol mistake and fails once the budget is used.
@@ -292,68 +373,4 @@ func (r *Reassembler) recoverable() error {
 		return ErrTooManyErrors
 	}
 	return nil
-}
-
-func (r *Reassembler) startMessage(length uint32) {
-	r.buf = r.buf[:0]
-	r.expected = length
-	r.nextSeq = 0
-	r.inProgress = true
-}
-
-func (r *Reassembler) reset() {
-	r.buf = r.buf[:0]
-	r.expected = 0
-	r.nextSeq = 0
-	r.inProgress = false
-	r.dropHeld()
-}
-
-func (r *Reassembler) dropHeld() {
-	r.held = make(map[uint8]heldChunk)
-	r.heldBytes = 0
-}
-
-// hold keeps an early chunk until its predecessors arrive.
-func (r *Reassembler) hold(seq uint8, payload []byte, last bool) error {
-	if len(r.buf)+r.heldBytes+len(payload) > r.maxMessage {
-		return fmt.Errorf("%w: held chunks exceed %d bytes", ErrMessageTooLarge, r.maxMessage)
-	}
-	r.held[seq] = heldChunk{payload: append([]byte(nil), payload...), last: last}
-	r.heldBytes += len(payload)
-	return nil
-}
-
-// apply appends the expected chunk, then any held chunks that now follow
-// in sequence, and returns the message once the last chunk lands.
-func (r *Reassembler) apply(payload []byte, last bool) ([]byte, error) {
-	for {
-		if int(r.expected) > r.maxMessage {
-			return nil, fmt.Errorf("%w: declared %d bytes", ErrMessageTooLarge, r.expected)
-		}
-		if len(r.buf)+len(payload) > int(r.expected) {
-			return nil, fmt.Errorf("%w: %d bytes exceeds declared %d",
-				ErrLengthMismatch, len(r.buf)+len(payload), r.expected)
-		}
-		r.buf = append(r.buf, payload...)
-		r.nextSeq++
-		if last {
-			if len(r.buf) != int(r.expected) {
-				return nil, fmt.Errorf("%w: got %d bytes, declared %d", ErrLengthMismatch, len(r.buf), r.expected)
-			}
-			if len(r.held) > 0 {
-				return nil, fmt.Errorf("%w: chunks beyond the last one", ErrSequence)
-			}
-			msg := append([]byte(nil), r.buf...)
-			r.reset()
-			return msg, nil
-		}
-		next, ok := r.held[r.nextSeq]
-		if !ok {
-			return nil, nil
-		}
-		delete(r.held, r.nextSeq)
-		r.heldBytes -= len(next.payload)
-		payload, last = next.payload, next.last
-	}
 }
