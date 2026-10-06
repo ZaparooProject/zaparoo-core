@@ -121,6 +121,8 @@ type fakeBluez struct {
 	// refuseAdvert makes RegisterAdvertisement fail the way bluetoothd does
 	// when the controller cannot advertise.
 	refuseAdvert bool
+	// outOfRange makes discovery find nothing.
+	outOfRange bool
 }
 
 type appRegistration struct {
@@ -155,8 +157,12 @@ func (a *fakeAdapter) SetDiscoveryFilter(filter map[string]dbus.Variant) *dbus.E
 
 func (a *fakeAdapter) StartDiscovery() *dbus.Error {
 	a.f.record("StartDiscovery")
-	// Discovery "finds" the device: publish it and announce it.
 	a.f.mu.Lock()
+	if a.f.outOfRange {
+		a.f.mu.Unlock()
+		return nil
+	}
+	// Discovery "finds" the device: publish it and announce it.
 	a.f.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
 		deviceIface: {
 			"Address":          dbus.MakeVariant(fakeDeviceAddr),
@@ -555,7 +561,7 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 
 	findCtx, cancelFind := context.WithTimeout(t.Context(), integrationWait)
 	defer cancelFind()
-	dev, err := central.Find(findCtx, strings.ToLower(fakeDeviceAddr), []string{fakeServiceUUID})
+	dev, err := central.Find(findCtx, strings.ToLower(fakeDeviceAddr))
 	require.NoError(t, err)
 	assert.Equal(t, fakeDeviceAddr, dev.Address())
 	fake.expectCall(t, "SetDiscoveryFilter:le")
@@ -630,7 +636,7 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 	// A device that never shows up times out cleanly.
 	missingCtx, cancelMissing := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancelMissing()
-	_, err = central.Find(missingCtx, "AA:BB:CC:DD:EE:02", nil)
+	_, err = central.Find(missingCtx, "AA:BB:CC:DD:EE:02")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -696,7 +702,7 @@ func TestIntegration_CentralScansReadsAndReportsMTU(t *testing.T) {
 	_, open := <-none
 	assert.False(t, open)
 
-	dev, err := central.Find(t.Context(), fakeDeviceAddr, nil)
+	dev, err := central.Find(t.Context(), fakeDeviceAddr)
 	require.NoError(t, err)
 	require.NoError(t, dev.Connect(t.Context()))
 	ch, err := dev.Characteristic(fakeServiceUUID, fakeCharUUID)
@@ -834,4 +840,67 @@ func TestIntegration_AdapterGoneWhenAdvertisingIsRefused(t *testing.T) {
 	}
 	waitGone(t, adapter, "advertising refused")
 	fake.expectCall(t, "UnregisterApplication")
+}
+
+// A device bluetoothd remembers from an earlier session is not "found" until
+// it is heard again: connecting to a remembered device waits on a slow
+// background scan, which is what made a reader take many seconds to pick up.
+func TestIntegration_FindWaitsForARememberedDeviceToBeHeard(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+	fake.mu.Lock()
+	fake.outOfRange = true
+	fake.objects[fakeDevicePath] = map[string]map[string]dbus.Variant{
+		deviceIface: {
+			"Address":   dbus.MakeVariant(fakeDeviceAddr),
+			"Connected": dbus.MakeVariant(false),
+		},
+	}
+	fake.mu.Unlock()
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	central, err := adapter.Central()
+	require.NoError(t, err)
+
+	type found struct {
+		dev Device
+		err error
+	}
+	result := make(chan found, 1)
+	go func() {
+		dev, findErr := central.Find(t.Context(), fakeDeviceAddr)
+		result <- found{dev: dev, err: findErr}
+	}()
+	fake.expectCall(t, "StartDiscovery")
+	select {
+	case r := <-result:
+		t.Fatalf("a remembered device was returned without being heard: %v %v", r.dev, r.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// It starts advertising: the scan hears it and Find returns.
+	fake.deviceProp.SetMust(deviceIface, "RSSI", int16(-50))
+	select {
+	case r := <-result:
+		require.NoError(t, r.err)
+		assert.Equal(t, fakeDeviceAddr, r.dev.Address())
+	case <-time.After(integrationWait):
+		t.Fatal("the device was heard but never found")
+	}
+
+	// One that is already connected needs no scan at all.
+	fake.mu.Lock()
+	fake.objects[fakeDevicePath][deviceIface]["Connected"] = dbus.MakeVariant(true)
+	fake.mu.Unlock()
+	fake.expectCall(t, "StopDiscovery")
+	dev, err := central.Find(t.Context(), fakeDeviceAddr)
+	require.NoError(t, err)
+	assert.Equal(t, fakeDeviceAddr, dev.Address())
+	select {
+	case call := <-fake.calls:
+		t.Fatalf("a connected device was scanned for: %s", call)
+	default:
+	}
 }

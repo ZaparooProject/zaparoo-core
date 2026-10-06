@@ -243,9 +243,12 @@ type Central interface {
 	// ends or the adapter is gone, after which the channel is closed. A
 	// consumer that falls behind loses the oldest updates, not the scan.
 	Scan(ctx context.Context, filter ScanFilter) (<-chan ScanResult, error)
-	// Find scans for the device with the given address, filtering on the
-	// service UUIDs, until it appears or ctx ends.
-	Find(ctx context.Context, address string, serviceUUIDs []string) (Device, error)
+	// Find returns the device with the given address once it has been
+	// heard advertising, or at once if it is already connected, scanning
+	// until then or until ctx ends. It deliberately does not return a
+	// device BlueZ merely remembers: connecting to one of those waits on a
+	// slow background scan, where a device just heard connects at once.
+	Find(ctx context.Context, address string) (Device, error)
 }
 
 // Device is a remote peripheral.

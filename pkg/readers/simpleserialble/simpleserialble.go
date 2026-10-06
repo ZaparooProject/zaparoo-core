@@ -219,7 +219,7 @@ func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- str
 
 // connect finds and connects the device and subscribes to its TX stream.
 func (r *Reader) connect(ctx context.Context, central bluez.Central) (bluez.Device, <-chan []byte, error) {
-	dev, err := central.Find(ctx, r.address, []string{nusServiceUUID})
+	dev, err := central.Find(ctx, r.address)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find: %w", err)
 	}

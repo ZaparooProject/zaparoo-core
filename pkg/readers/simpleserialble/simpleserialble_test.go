@@ -183,7 +183,6 @@ func TestOpen_ReturnsAtOnceAndPicksTheDeviceUpWhenItAppears(t *testing.T) {
 	finds := rig.adapter.Cent.Finds()
 	require.Len(t, finds, 1)
 	assert.Equal(t, testAddress, finds[0].Address)
-	assert.Equal(t, []string{nusServiceUUID}, finds[0].ServiceUUIDs)
 
 	// The device shows up and is connected with no time passing at all.
 	rig.addDevice()

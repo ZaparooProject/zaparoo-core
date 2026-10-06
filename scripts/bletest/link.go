@@ -74,7 +74,7 @@ func dial(ctx context.Context, central bluez.Central, opts linkOptions) (*link, 
 		address = found
 	}
 
-	dev, err := central.Find(ctx, address, []string{apigatt.ServiceUUID})
+	dev, err := central.Find(ctx, address)
 	if err != nil {
 		return nil, fmt.Errorf("find %s: %w", address, err)
 	}

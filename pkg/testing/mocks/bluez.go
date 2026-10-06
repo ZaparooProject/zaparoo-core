@@ -175,8 +175,7 @@ func (p *FakePeripheral) Disconnects() []bluez.Peer {
 
 // FakeFind records one Find call.
 type FakeFind struct {
-	Address      string
-	ServiceUUIDs []string
+	Address string
 }
 
 // FakeCentral is an in-memory bluez.Central serving the devices it knows.
@@ -204,9 +203,9 @@ func (c *FakeCentral) AddDevice(d *FakeDevice) {
 	c.added = make(chan struct{})
 }
 
-func (c *FakeCentral) Find(ctx context.Context, address string, serviceUUIDs []string) (bluez.Device, error) {
+func (c *FakeCentral) Find(ctx context.Context, address string) (bluez.Device, error) {
 	c.mu.Lock()
-	c.finds = append(c.finds, FakeFind{Address: address, ServiceUUIDs: append([]string(nil), serviceUUIDs...)})
+	c.finds = append(c.finds, FakeFind{Address: address})
 	c.mu.Unlock()
 	for {
 		c.mu.Lock()

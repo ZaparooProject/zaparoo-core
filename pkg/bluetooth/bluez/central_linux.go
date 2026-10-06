@@ -226,29 +226,34 @@ func (r *ScanResult) clone() ScanResult {
 	return out
 }
 
-// Find scans until the device with the given address appears. A device
-// bluetoothd already knows is returned at once, in range or not: connecting
-// to it waits for it to advertise.
-func (c *central) Find(ctx context.Context, address string, serviceUUIDs []string) (Device, error) {
+// Find scans until the device with the given address is heard, unless it is
+// already connected. The scan is not filtered by service: the address is
+// what identifies the device, and plenty of devices leave their services
+// out of the advertisement.
+func (c *central) Find(ctx context.Context, address string) (Device, error) {
 	addr, err := NormalizeAddress(address)
 	if err != nil {
 		return nil, err
 	}
+	path := dbus.ObjectPath(c.a.devicePathPrefix() + strings.ReplaceAll(addr, ":", "_"))
 
-	if dev, knownErr := c.knownDevice(ctx, addr); knownErr != nil || dev != nil {
-		return dev, knownErr
+	connected, err := c.connected(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if connected {
+		return c.a.newDevice(path, addr), nil
 	}
 
 	scanCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results, err := c.discover(scanCtx, serviceUUIDs, func(r *ScanResult) bool {
-		return strings.EqualFold(r.Address, addr)
+	results, err := c.discover(scanCtx, nil, func(r *ScanResult) bool {
+		return r.HasRSSI && strings.EqualFold(r.Address, addr)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if _, found := <-results; found {
-		path := dbus.ObjectPath(c.a.devicePathPrefix() + strings.ReplaceAll(addr, ":", "_"))
 		return c.a.newDevice(path, addr), nil
 	}
 	if ctx.Err() != nil {
@@ -257,23 +262,18 @@ func (c *central) Find(ctx context.Context, address string, serviceUUIDs []strin
 	return nil, ErrUnavailable
 }
 
-// knownDevice returns the device if bluetoothd already has an object for it.
-func (c *central) knownDevice(ctx context.Context, addr string) (Device, error) {
+// connected reports whether bluetoothd has the device at path connected.
+func (c *central) connected(ctx context.Context, path dbus.ObjectPath) (bool, error) {
 	objs, err := c.a.managedObjects(ctx)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	prefix := c.a.devicePathPrefix()
-	for path, ifaces := range objs {
-		props, ok := ifaces[deviceIface]
-		if !ok || !strings.HasPrefix(string(path), prefix) {
-			continue
-		}
-		if strings.EqualFold(stringProp(props, "Address"), addr) {
-			return c.a.newDevice(path, addr), nil
-		}
+	props, ok := objs[path][deviceIface]
+	if !ok {
+		return false, nil
 	}
-	return nil, nil //nolint:nilnil // nil device means not known yet, not an error
+	connected, _ := props["Connected"].Value().(bool)
+	return connected, nil
 }
 
 // stopDiscovery releases our discovery session; failures are expected when
