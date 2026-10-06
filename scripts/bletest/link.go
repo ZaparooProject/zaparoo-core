@@ -170,7 +170,15 @@ func (l *link) receive(ctx context.Context, chunks <-chan []byte) {
 	defer close(l.msgs)
 	reasm := apigatt.NewReassembler(0)
 	var acked uint16
+	var received int64
+	lastReport := time.Now()
 	for chunk := range chunks {
+		received += int64(len(chunk))
+		if time.Since(lastReport) >= 5*time.Second {
+			lastReport = time.Now()
+			log.Info().Int64("bytes", received).Uint16("next", reasm.Next()).Uint16("acked", acked).
+				Int("held", reasm.Held()).Msg("receiving")
+		}
 		h, payload, err := apigatt.ParseChunk(chunk)
 		if err != nil {
 			log.Error().Err(err).Hex("chunk", chunk).Msg("unparseable chunk from core")

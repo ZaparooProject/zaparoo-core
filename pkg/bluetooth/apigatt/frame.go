@@ -273,6 +273,12 @@ func (r *Reassembler) Next() uint16 {
 	return r.nextSeq
 }
 
+// Held is how many chunks are waiting for an earlier one that has not
+// arrived. It staying above zero means a chunk was lost.
+func (r *Reassembler) Held() int {
+	return len(r.held)
+}
+
 // Push consumes one data chunk already decoded by ParseChunk and returns
 // the messages it completed, oldest first: a chunk that fills a gap can
 // release several. A non-nil error means the connection should be dropped;

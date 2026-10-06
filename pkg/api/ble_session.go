@@ -633,7 +633,10 @@ func (s *bleSession) waitWindow() error {
 		case <-s.ctx.Done():
 			return errBLESessionClosed
 		case <-s.t.clock.After(bleAckTimeout):
-			return errBLEAckTimeout
+			s.mu.Lock()
+			sent, acked := s.sent, s.acked
+			s.mu.Unlock()
+			return fmt.Errorf("%w: sent through chunk %d, acknowledged through %d", errBLEAckTimeout, sent, acked)
 		}
 	}
 }
@@ -653,7 +656,12 @@ func (s *bleSession) writer() {
 		case <-s.ctx.Done():
 			return
 		case msg := <-s.outbound:
+			started := s.t.clock.Now()
 			err := s.send(msg, true)
+			if took := s.t.clock.Since(started); took > time.Second {
+				log.Debug().Int("bytes", len(msg)).Dur("took", took).Err(err).
+					Str("peer", s.peer.Address).Msg("ble: sent large message")
+			}
 			s.mu.Lock()
 			s.outboundBytes -= len(msg)
 			s.mu.Unlock()

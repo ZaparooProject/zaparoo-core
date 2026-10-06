@@ -511,12 +511,6 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 		t.Fatal("disconnect never reached the handler")
 	}
 
-	// A controller stops advertising while a central is connected and is
-	// not reliably restarted when it leaves, so the advertisement is
-	// registered afresh.
-	fake.expectCall(t, "UnregisterAdvertisement")
-	fake.expectCall(t, "RegisterAdvertisement")
-
 	// So is bluetoothd forgetting the device altogether, which it announces
 	// from the root object with the device named in the signal body.
 	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, fakeDevicePath, []string{deviceIface}))
@@ -525,6 +519,17 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 		assert.Equal(t, string(fakeDevicePath), peer.Path)
 	case <-time.After(integrationWait):
 		t.Fatal("device removal never reached the handler")
+	}
+
+	// A controller stops advertising while a central is connected and is
+	// not reliably restarted when it leaves, so the advertisement is
+	// registered afresh: once for the two departures above, not per signal.
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.expectCall(t, "RegisterAdvertisement")
+	select {
+	case call := <-fake.calls:
+		t.Fatalf("a burst of departures restarted advertising more than once: %s", call)
+	case <-time.After(advRestartDelay + 500*time.Millisecond):
 	}
 
 	// Disconnect asks bluetoothd to drop the peer.

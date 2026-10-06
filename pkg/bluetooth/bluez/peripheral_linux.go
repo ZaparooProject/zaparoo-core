@@ -46,6 +46,13 @@ const (
 	registerTimeout = 10 * time.Second
 
 	bluezErrFailed = "org.bluez.Error.Failed"
+
+	// advRestartDelay is how long after the last device left the
+	// advertisement is restarted. Devices leave in bursts, most of them not
+	// ours (every remembered controller is reported when an adapter comes
+	// up), and each restart is a round of commands to the controller, so
+	// a burst gets one restart.
+	advRestartDelay = time.Second
 )
 
 var errAlreadyServing = errors.New("bluez: peripheral is already serving")
@@ -261,7 +268,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 			}
 			return
 		}
-		log.Debug().Msg("bluetooth advertisement restarted after a peer left")
+		log.Debug().Msg("bluetooth advertisement restarted after a device left")
 	})
 	return nil
 }
@@ -370,8 +377,9 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 }
 
 // watchPeers reports peer disconnections until ctx ends or the adapter is
-// gone, calling peerLeft after each one.
-func (p *peripheral) watchPeers(ctx context.Context, peerLeft func()) {
+// gone, and calls peersLeft once things have been quiet for advRestartDelay
+// after one or more of them.
+func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 	prefix := p.a.devicePathPrefix()
 	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
 		return strings.HasPrefix(string(signalObject(sig)), prefix) &&
@@ -379,12 +387,20 @@ func (p *peripheral) watchPeers(ctx context.Context, peerLeft func()) {
 	})
 	defer unsubscribe()
 
+	// Stopped until a peer leaves.
+	restart := time.NewTimer(advRestartDelay)
+	restart.Stop()
+	defer restart.Stop()
+	peerLeft := func() { restart.Reset(advRestartDelay) }
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.a.gone:
 			return
+		case <-restart.C:
+			peersLeft()
 		case sig, ok := <-events:
 			if !ok {
 				return
