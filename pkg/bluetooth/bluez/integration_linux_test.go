@@ -589,18 +589,42 @@ func TestIntegration_CentralFindsConnectsAndSubscribes(t *testing.T) {
 	require.NoError(t, tx.Write(t.Context(), []byte("ack"), true))
 	fake.expectCall(t, "WriteValue:ack:request")
 
-	// The link dropping ends the stream and is visible on Disconnected.
+	// A device that rebuilds its services keeps the link but drops the
+	// characteristic, which ends that subscription.
+	rebuiltCtx, cancelRebuilt := context.WithCancel(t.Context())
+	defer cancelRebuilt()
+	rebuilt, err := tx.Subscribe(rebuiltCtx)
+	require.NoError(t, err)
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, fakeCharPath, []string{gattCharIface}))
+	select {
+	case _, open := <-rebuilt:
+		assert.False(t, open, "stream closes when the characteristic is removed")
+	case <-time.After(integrationWait):
+		t.Fatal("stream outlived its characteristic")
+	}
+	select {
+	case v, open := <-values:
+		assert.False(t, open, "the other subscription to it closes too, got %q", v)
+	case <-time.After(integrationWait):
+		t.Fatal("second stream outlived its characteristic")
+	}
+
+	// The link dropping is visible on Disconnected.
 	fake.deviceProp.SetMust(deviceIface, "Connected", false)
 	select {
 	case <-dev.Disconnected():
 	case <-time.After(integrationWait):
 		t.Fatal("disconnect was not noticed")
 	}
-	select {
-	case _, open := <-values:
-		assert.False(t, open, "stream closes after disconnect")
-	case <-time.After(integrationWait):
-		t.Fatal("stream did not close")
+	linkCtx, cancelLink := context.WithCancel(t.Context())
+	defer cancelLink()
+	if afterDrop, subErr := tx.Subscribe(linkCtx); subErr == nil {
+		select {
+		case _, open := <-afterDrop:
+			assert.False(t, open, "stream closes after disconnect")
+		case <-time.After(integrationWait):
+			t.Fatal("stream did not close")
+		}
 	}
 
 	// A device that never shows up times out cleanly.

@@ -448,11 +448,14 @@ type remoteChar struct {
 	path dbus.ObjectPath
 }
 
-// Subscribe enables notifications and streams values until ctx ends or the
-// device disconnects.
+// Subscribe enables notifications and streams values until ctx ends, the
+// device disconnects, or the characteristic itself goes away: a device can
+// rebuild its services without dropping the link, and the old
+// characteristic never speaks again.
 func (rc *remoteChar) Subscribe(ctx context.Context) (<-chan []byte, error) {
 	values, unsubscribe := rc.d.a.signals.subscribe(func(sig *dbus.Signal) bool {
-		return sig.Path == rc.path && sig.Name == signalPropertiesChanged
+		return signalObject(sig) == rc.path &&
+			(sig.Name == signalPropertiesChanged || sig.Name == signalInterfacesRemoved)
 	})
 	if err := rc.d.a.call(ctx, rc.obj, gattCharIface+".StartNotify"); err != nil {
 		unsubscribe()
@@ -473,6 +476,12 @@ func (rc *remoteChar) Subscribe(ctx context.Context) (<-chan []byte, error) {
 			case sig, ok := <-values:
 				if !ok {
 					return
+				}
+				if _, ifaces, removed := interfacesRemoved(sig); removed {
+					if slices.Contains(ifaces, gattCharIface) {
+						return
+					}
+					continue
 				}
 				iface, changed, ok := propertiesChanged(sig)
 				if !ok || iface != gattCharIface {

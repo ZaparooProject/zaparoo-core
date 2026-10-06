@@ -125,6 +125,9 @@ func runReader(ctx context.Context, args []string) error {
 	for {
 		for _, step := range steps {
 			if err := playStep(ctx, peripheral, step); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 			select {
@@ -159,7 +162,7 @@ func playStep(ctx context.Context, peripheral bluez.Peripheral, step readerStep)
 		case <-deadline:
 			return nil
 		case <-ctx.Done():
-			return nil
+			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
