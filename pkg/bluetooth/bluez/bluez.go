@@ -184,10 +184,6 @@ type Application struct {
 type Advertisement struct {
 	LocalName    string
 	ServiceUUIDs []string
-	// Interval is how often to advertise. Zero leaves it to BlueZ, whose
-	// default of 1.28 seconds makes a central take several seconds to
-	// connect. Older bluetoothd versions ignore it.
-	Interval time.Duration
 }
 
 // PeripheralHandler receives GATT server events. Calls for one peer may

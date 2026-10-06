@@ -419,9 +419,7 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 			{UUID: "0da70004-b359-443b-836f-477d34b6a638", Flags: []string{FlagRead}},
 		},
 	}}}
-	adv := Advertisement{
-		LocalName: "Test Zaparoo", ServiceUUIDs: []string{app.Services[0].UUID}, Interval: 150 * time.Millisecond,
-	}
+	adv := Advertisement{LocalName: "Test Zaparoo", ServiceUUIDs: []string{app.Services[0].UUID}}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
@@ -466,13 +464,6 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
 		Call(propertiesIface+".Get", 0, advIface, "Type").Store(&advType))
 	assert.Equal(t, "peripheral", advType.Value())
-	var minInterval, maxInterval dbus.Variant
-	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
-		Call(propertiesIface+".Get", 0, advIface, "MinInterval").Store(&minInterval))
-	require.NoError(t, fake.conn.Object(string(advReg.sender), advReg.path).
-		Call(propertiesIface+".Get", 0, advIface, "MaxInterval").Store(&maxInterval))
-	assert.Equal(t, uint32(150), minInterval.Value())
-	assert.Equal(t, uint32(225), maxInterval.Value())
 
 	appObj := func(p dbus.ObjectPath) dbus.BusObject { return fake.conn.Object(string(reg.sender), p) }
 
