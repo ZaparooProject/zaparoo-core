@@ -75,7 +75,8 @@ func runClient(ctx context.Context, args []string) error {
 	}, ", "))
 	fs.Var(&o.requests, "req", `request to send, as "method" or "method {params}"; repeatable`)
 	fs.IntVar(&o.pipeline, "pipeline", 0, "send this many version requests back to back before reading any reply")
-	fs.IntVar(&o.upload, "upload", 0, "send a version request padded to this many bytes, to load the client-to-Core direction")
+	fs.IntVar(&o.upload, "upload", 0,
+		"send a version request padded to this many bytes, to load the client-to-Core direction")
 	fs.DurationVar(&o.listen, "listen", 0, "stay connected this long printing notifications")
 	fs.DurationVar(&o.pingEvery, "ping-every", 30*time.Second, "heartbeat interval while listening")
 	fs.DurationVar(&o.timeout, "timeout", 10*time.Minute, "longest wait for any one response")

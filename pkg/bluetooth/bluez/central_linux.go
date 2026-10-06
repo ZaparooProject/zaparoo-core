@@ -299,8 +299,8 @@ func (c *central) connected(ctx context.Context, path dbus.ObjectPath) (bool, er
 	if !ok {
 		return false, nil
 	}
-	connected, _ := props["Connected"].Value().(bool)
-	return connected, nil
+	connected, isBool := props["Connected"].Value().(bool)
+	return isBool && connected, nil
 }
 
 // stopDiscovery releases our discovery session; failures are expected when
