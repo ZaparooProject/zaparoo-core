@@ -511,6 +511,12 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 		t.Fatal("disconnect never reached the handler")
 	}
 
+	// A controller stops advertising while a central is connected and is
+	// not reliably restarted when it leaves, so the advertisement is
+	// registered afresh.
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.expectCall(t, "RegisterAdvertisement")
+
 	// So is bluetoothd forgetting the device altogether, which it announces
 	// from the root object with the device named in the signal body.
 	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, fakeDevicePath, []string{deviceIface}))

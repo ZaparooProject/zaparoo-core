@@ -248,7 +248,21 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		Strs("services", adv.ServiceUUIDs).
 		Msg("bluetooth peripheral advertising")
 
-	p.watchPeers(ctx)
+	p.watchPeers(ctx, func() {
+		// A controller stops advertising when a central connects, and
+		// bluetoothd does not reliably start it again when that central
+		// leaves: the advertisement stays registered but nothing is on
+		// the air. Registering it afresh is what brings it back.
+		p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
+		if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
+			if ctx.Err() == nil {
+				log.Warn().Err(err).Msg("bluetooth advertisement could not be restarted")
+				p.a.markGone()
+			}
+			return
+		}
+		log.Debug().Msg("bluetooth advertisement restarted after a peer left")
+	})
 	return nil
 }
 
@@ -356,8 +370,8 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 }
 
 // watchPeers reports peer disconnections until ctx ends or the adapter is
-// gone.
-func (p *peripheral) watchPeers(ctx context.Context) {
+// gone, calling peerLeft after each one.
+func (p *peripheral) watchPeers(ctx context.Context, peerLeft func()) {
 	prefix := p.a.devicePathPrefix()
 	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
 		return strings.HasPrefix(string(signalObject(sig)), prefix) &&
@@ -381,6 +395,7 @@ func (p *peripheral) watchPeers(ctx context.Context) {
 				}
 				if connected, present := changedBool(changed, "Connected"); present && !connected {
 					p.currentHandler().OnDisconnect(peerFromPath(sig.Path))
+					peerLeft()
 				}
 				continue
 			}
@@ -388,6 +403,7 @@ func (p *peripheral) watchPeers(ctx context.Context) {
 				for _, iface := range ifaces {
 					if iface == deviceIface {
 						p.currentHandler().OnDisconnect(peerFromPath(path))
+						peerLeft()
 						break
 					}
 				}
