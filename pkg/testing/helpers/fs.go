@@ -412,6 +412,9 @@ func NewTestConfigWithListenAndPort(fs *FSHelper, configDir, listenHost string, 
 	defaults := config.BaseDefaults
 	defaults.Service.APIPort = &port
 	defaults.Service.APIListen = listenHost
+	// A test must never open the machine's real Bluetooth adapter.
+	bleEnabled := false
+	defaults.Service.BLE.Enabled = &bleEnabled
 
 	if fs != nil {
 		cfg, err := config.NewConfigWithFs(configDir, defaults, fs.Fs)

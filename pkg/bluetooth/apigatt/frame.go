@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 )
 
 // Chunk layout, both directions:
@@ -135,25 +136,23 @@ func ParseChunk(chunk []byte) (Header, []byte, error) {
 // EncodeChunk builds one data chunk. Length is written only for a first
 // chunk.
 func EncodeChunk(h Header, payload []byte) []byte {
+	var header [FirstHeaderSize]byte
 	size := HeaderSize
-	if h.First {
-		size = FirstHeaderSize
-	}
-	out := make([]byte, size, size+len(payload))
 	flags := byte(ProtocolVersion) << versionShift
 	if h.First {
+		size = FirstHeaderSize
 		flags |= flagFirst
 	}
 	if h.Last {
 		flags |= flagLast
 	}
-	out[0] = flags
-	binary.BigEndian.PutUint16(out[1:3], h.Seq)
-	binary.BigEndian.PutUint16(out[3:5], h.Tag)
+	header[0] = flags
+	binary.BigEndian.PutUint16(header[1:3], h.Seq)
+	binary.BigEndian.PutUint16(header[3:5], h.Tag)
 	if h.First {
-		binary.BigEndian.PutUint32(out[5:9], h.Length)
+		binary.BigEndian.PutUint32(header[5:9], h.Length)
 	}
-	return append(out, payload...)
+	return slices.Concat(header[:size], payload)
 }
 
 // EncodeAck builds the chunk that acknowledges every data chunk before next.
