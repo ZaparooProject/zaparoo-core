@@ -299,7 +299,7 @@ func TestBrowseIndex_CaseInsensitiveNaturalOrderStaysContiguous(t *testing.T) {
 		index.Buckets[2].Offset,
 	})
 	for _, bucket := range index.Buckets {
-		assert.Equal(t, bucket.Key, firstBrowsedBucketForCursor(t, mediaDB, bucket, index.SortMode))
+		assert.Equal(t, bucket.Key, firstBrowsedBucketForCursor(t, mediaDB, &bucket, index.SortMode))
 	}
 }
 

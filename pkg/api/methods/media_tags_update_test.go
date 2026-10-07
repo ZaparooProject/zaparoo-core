@@ -536,11 +536,13 @@ func TestHandleMediaTagsUpdateAndMetaUpdate_RefusedDuringOptimization(t *testing
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
 	assert.Equal(t, "database optimization in progress", err.Error())
+	requireBusyError(t, err, "database optimization in progress")
 
 	_, err = HandleMediaMetaUpdate(env(fmt.Sprintf(`{"mediaId":%d,"media":{"launcherOverride":null}}`, mediaID)))
 	require.Error(t, err)
 	require.ErrorAs(t, err, &clientErr)
 	assert.Equal(t, "database optimization in progress", err.Error())
+	requireBusyError(t, err, "database optimization in progress")
 
 	stored, _, err := userDB.GetMediaUserData("NES", path)
 	require.NoError(t, err)

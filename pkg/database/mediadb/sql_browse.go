@@ -613,6 +613,31 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	results, err := sqlBrowseDirectoryRows(ctx, db, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decorate what the caller will actually see. Attaching cover flags before
+	// the hidden rows are dropped would query artwork for directories the page
+	// is about to discard.
+	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, &opts, results); err != nil {
+		return nil, fmt.Errorf("browse directory cover flags: %w", err)
+	}
+	return results, nil
+}
+
+// sqlBrowseDirectoryRows is the directory listing without its cover flags:
+// the names, counts and order media.browse pages through, routed to the
+// browse cache or Media exactly as the listing is. The directory facet reads
+// it directly, since it needs every name in order and no artwork.
+//
+//nolint:gocritic // Value options preserve the browse contract.
+func sqlBrowseDirectoryRows(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
 	hidden, err := loadHiddenMedia(ctx, db, opts.ExcludeHidden)
 	if err != nil {
 		return nil, err
@@ -662,13 +687,6 @@ func sqlBrowseDirectories(
 					Msg("browse cache returned no directories; using media fallback")
 			}
 		}
-	}
-
-	// Decorate what the caller will actually see. Attaching cover flags before
-	// the hidden rows are dropped would query artwork for directories the page
-	// is about to discard.
-	if err := fetchAndAttachDirectoryCoverFlags(ctx, db, &opts, results); err != nil {
-		return nil, fmt.Errorf("browse directory cover flags: %w", err)
 	}
 	return results, nil
 }
@@ -3344,7 +3362,106 @@ const browseIndexBucketHint = 38
 // When resolveBrowseSortMode picks a filename / rank-prefix / date-prefix
 // ordering, the first-character mapping would not match the displayed order, so
 // the result reports scheme "none" with no buckets.
+//
+// A scope that lists directories ahead of files and has no files to bucket
+// gets the facet of its directories instead; see sqlBrowseDirectoryIndex.
 func sqlBrowseIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	result, err := sqlBrowseFileIndex(ctx, db, opts)
+	if err != nil || !opts.DirectoryFallback || result.TotalFiles > 0 {
+		return result, err
+	}
+	directories, found, err := sqlBrowseDirectoryIndex(ctx, db, opts)
+	if err != nil {
+		return database.BrowseIndexResult{}, err
+	}
+	if !found {
+		return result, nil
+	}
+	return directories, nil
+}
+
+// sqlBrowseDirectoryIndex computes the first-character facet over a scope's
+// directory entries, for a folder whose games are each a folder of their own
+// (most CD systems) and which therefore has no direct files to bucket. found
+// is false when the scope has no directories either.
+//
+// It folds the same listing media.browse pages through rather than a second
+// statement, so a bucket's offset is by construction the position
+// media.browse returns that directory at, with the same system and hidden
+// filtering, whichever of the cache or Media routes answered. Directories are
+// never tag filtered and always ascend by name, whatever sort the files below
+// them use, so neither Tags nor Sort is consulted.
+//
+// The listing comes from BrowseDirCounts on a ready cache, which holds one
+// row per child directory, so this reads as many rows as the folder has
+// directories and none of Media. The fold is done in Go because the listing
+// has four statement shapes (cache, single-system cache, Media, overlay) and
+// hidden rows are subtracted after the read; a folder of game directories is
+// a few hundred to a few thousand names.
+func sqlBrowseDirectoryIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (result database.BrowseIndexResult, found bool, err error) {
+	dirs, err := sqlBrowseDirectoryRows(ctx, db, database.BrowseDirectoriesOptions{
+		ExcludeHidden: opts.ExcludeHidden,
+		PathPrefix:    opts.PathPrefix,
+		Overlay:       opts.Overlay,
+		Systems:       opts.Systems,
+	})
+	if err != nil {
+		return database.BrowseIndexResult{}, false, err
+	}
+	if len(dirs) == 0 {
+		return database.BrowseIndexResult{}, false, nil
+	}
+
+	result = database.BrowseIndexResult{
+		Scheme:      browseIndexSchemeLatin,
+		Directories: true,
+		TotalDirs:   len(dirs),
+		Buckets:     make([]database.BrowseIndexBucket, 0, browseIndexBucketHint),
+	}
+	seen := make(map[string]struct{}, browseIndexBucketHint)
+	for i := range dirs {
+		key := browseDirectoryBucketKey(dirs[i].Name)
+		if last := len(result.Buckets) - 1; last >= 0 && result.Buckets[last].Key == key {
+			result.Buckets[last].Count++
+			continue
+		}
+		if _, repeated := seen[key]; repeated {
+			// The listing is not grouped by first character, so offsets could
+			// not describe contiguous sections. No rail applies.
+			return database.BrowseIndexResult{
+				Scheme:      browseIndexSchemeNone,
+				Directories: true,
+				TotalDirs:   len(dirs),
+			}, true, nil
+		}
+		seen[key] = struct{}{}
+		bucket := database.BrowseIndexBucket{Key: key, Count: 1, Offset: i, AtStart: i == 0}
+		if i > 0 {
+			bucket.AfterDirName = dirs[i-1].Name
+		}
+		result.Buckets = append(result.Buckets, bucket)
+	}
+	return result, true, nil
+}
+
+// browseDirectoryBucketKey folds a directory name into its browse bucket. The
+// directory collation orders by the name with its bracketed metadata removed,
+// so the bucket is taken from that same stripped name: "[T-En]Mario" sorts,
+// and is bucketed, under M.
+func browseDirectoryBucketKey(name string) string {
+	return BrowseNameFirstChar(stripBrowseDirectoryMetadata(name))
+}
+
+// sqlBrowseFileIndex is the facet over a scope's direct media files.
+func sqlBrowseFileIndex(
 	ctx context.Context,
 	db sqlQueryable,
 	opts *database.BrowseIndexOptions,

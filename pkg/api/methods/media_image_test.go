@@ -509,11 +509,12 @@ func TestResizeImageIfNeeded_DecodesWebPSource(t *testing.T) {
 func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
 	t.Parallel()
 
-	// Source already fits the requested tier (no downscale), but must still be
-	// re-encoded to WebP at native dimensions so a request snapped to a tier at
-	// or above native size gets the format win. High-frequency content that PNG
-	// cannot compress but lossy WebP can guarantees the WebP comes out smaller.
-	const dim = 64
+	// Source already fits the requested tier (no downscale) but is too large to
+	// pass through, so it must still be re-encoded to WebP at native dimensions:
+	// a request snapped to a tier at or above native size gets the format win.
+	// High-frequency content that PNG cannot compress but lossy WebP can
+	// guarantees the WebP comes out smaller.
+	const dim = 250
 	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
 	for y := range dim {
 		for x := range dim {
@@ -528,13 +529,175 @@ func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
 	var in bytes.Buffer
 	require.NoError(t, png.Encode(&in, src))
 
-	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 128)
+	require.Greater(t, in.Len(), thumbPassthroughMaxBytes, "source must be past the passthrough limit")
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/png", 256)
 	require.Equal(t, "image/webp", contentType)
+	assert.NotNil(t, avgColor)
 	assert.Less(t, len(resized), in.Len(), "lossy webp should beat the high-entropy png")
 	decoded, err := webp.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
 	assert.Equal(t, dim, decoded.Bounds().Dx(), "native dimensions preserved when no downscale")
 	assert.Equal(t, dim, decoded.Bounds().Dy())
+}
+
+// noisyTestImage is high-frequency content, which PNG cannot compress and
+// lossy WebP can, so an encode of it is always smaller than its PNG.
+func noisyTestImage(dim int) *image.RGBA {
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{
+				R: uint8((x*53 ^ y*97) & 0xff),
+				G: uint8((x*131 + y*29) & 0xff),
+				B: uint8((x*17 ^ y*191) & 0xff),
+				A: 255,
+			})
+		}
+	}
+	return src
+}
+
+// A small source that already fits is handed back as it is: on ARM32 the
+// WebP encode was nearly the whole request and saved a few kilobytes.
+func TestResizeImageWithColor_SmallSourceThatFitsSkipsEncode(t *testing.T) {
+	t.Parallel()
+
+	// The PNG here is one WebP would shrink, so it is the size rule and not
+	// the "WebP no smaller" rule that keeps the original.
+	src := noisyTestImage(64)
+	var pngBytes, jpegBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, src))
+	require.NoError(t, jpeg.Encode(&jpegBytes, src, &jpeg.Options{Quality: 90}))
+	webpBytes, webpType, err := encodeResizedImage(src)
+	require.NoError(t, err)
+	require.Less(t, len(webpBytes), pngBytes.Len())
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		maxSize     int
+	}{
+		{name: "jpeg below the box", contentType: "image/jpeg", binary: jpegBytes.Bytes(), maxSize: 128},
+		{name: "jpeg exactly the box", contentType: "image/jpeg", binary: jpegBytes.Bytes(), maxSize: 64},
+		{name: "png", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: 128},
+		{name: "webp", contentType: webpType, binary: webpBytes, maxSize: 128},
+		{name: "jpeg with no content type", contentType: "", binary: jpegBytes.Bytes(), maxSize: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.LessOrEqual(t, len(tt.binary), thumbPassthroughMaxBytes)
+
+			resized, contentType, avgColor := resizeImageWithColor(tt.binary, tt.contentType, tt.maxSize)
+			assert.Equal(t, tt.binary, resized, "original bytes returned unchanged")
+			assert.Equal(t, tt.contentType, contentType)
+			require.NotNil(t, avgColor, "the colour still comes from the decoded frame")
+			assert.Equal(t, *averageImageColor(mustDecodeResizable(t, tt.binary, tt.contentType)), *avgColor)
+		})
+	}
+}
+
+func mustDecodeResizable(t *testing.T, binary []byte, contentType string) image.Image {
+	t.Helper()
+	img, err := decodeResizableImage(binary, contentType)
+	require.NoError(t, err)
+	return img
+}
+
+func TestResizeImageWithColor_SmallSourceNeedingDownscaleStillEncodes(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	require.NoError(t, jpeg.Encode(&in, noisyTestImage(64), &jpeg.Options{Quality: 90}))
+	require.LessOrEqual(t, in.Len(), thumbPassthroughMaxBytes)
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "image/jpeg", 32)
+	require.Equal(t, "image/webp", contentType)
+	assert.NotNil(t, avgColor)
+	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, 32, decoded.Bounds().Dx())
+	assert.Equal(t, 32, decoded.Bounds().Dy())
+}
+
+// The thumbnail cache names files by format. A source whose declared type it
+// cannot store would miss the cache on every request if passed through, so it
+// keeps going through the encode.
+func TestResizeImageWithColor_SmallSourceTheCacheCannotStoreStillEncodes(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, noisyTestImage(64)))
+	require.LessOrEqual(t, in.Len(), thumbPassthroughMaxBytes)
+	require.Empty(t, thumbCacheExtension("application/octet-stream", in.Bytes()))
+
+	resized, contentType, avgColor := resizeImageWithColor(in.Bytes(), "application/octet-stream", 128)
+	assert.Equal(t, "image/webp", contentType)
+	assert.NotNil(t, avgColor)
+	assert.Less(t, len(resized), in.Len())
+}
+
+// A passed-through original lands in the thumbnail cache under its own
+// format, and both deliveries serve it back as that format, cold and warm.
+func TestHandleMediaImage_SmallSourceThatFitsIsCachedInItsOwnFormat(t *testing.T) {
+	// Not parallel: installs process-wide thumbnail cache pointer.
+	cache := &mediaThumbCache{
+		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	var blob bytes.Buffer
+	require.NoError(t, jpeg.Encode(&blob, noisyTestImage(64), &jpeg.Options{Quality: 90}))
+	require.LessOrEqual(t, blob.Len(), thumbPassthroughMaxBytes)
+
+	row := makeMediaFullRow(9101, 9110)
+	mockDB := testhelpers.NewMockMediaDBI()
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/jpeg", Binary: blob.Bytes()},
+		}, nil)
+
+	result, err := HandleMediaImage(makeMediaImageEnv(t, mockDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	)))
+	require.NoError(t, err)
+	cold, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, mediaImageDeliveryPath, cold.Delivery)
+	assert.Equal(t, "image/jpeg", cold.ContentType)
+	assert.Equal(t, ".jpg", filepath.Ext(cold.LocalPath))
+	assert.True(t, cache.isSafeLocalPath(cold.LocalPath))
+	stored, err := afero.ReadFile(cache.fs, cold.LocalPath)
+	require.NoError(t, err)
+	assert.Equal(t, blob.Bytes(), stored, "the original is stored, not a re-encode")
+
+	// Warm, from the cache alone: a strict mock fails on any database call.
+	strictDB := testhelpers.NewMockMediaDBI()
+	result, err = HandleMediaImage(makeMediaImageEnv(t, strictDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	)))
+	require.NoError(t, err)
+	warm, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, cold.LocalPath, warm.LocalPath)
+	assert.Equal(t, "image/jpeg", warm.ContentType)
+
+	result, err = HandleMediaImage(makeMediaImageEnv(t, strictDB, mediaImageParams(row, `"maxSize": 256`)))
+	require.NoError(t, err)
+	inline, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/jpeg", inline.ContentType)
+	data, err := base64.StdEncoding.DecodeString(inline.Data)
+	require.NoError(t, err)
+	assert.Equal(t, blob.Bytes(), data)
+	strictDB.AssertExpectations(t)
 }
 
 func TestResizeImageIfNeeded_KeepsOriginalWhenWebPNotSmaller(t *testing.T) {

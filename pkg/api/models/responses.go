@@ -124,6 +124,12 @@ type BrowseResults struct {
 	TotalDirs  int           `json:"totalDirs"`
 }
 
+// Entry types a media.browse.index response can describe.
+const (
+	BrowseIndexEntryTypeMedia     = "media"
+	BrowseIndexEntryTypeDirectory = "directory"
+)
+
 // BrowseIndexGroup is one first-character section of a browse list. Key is the
 // stable bucket identifier and Label is what to display (equal for the Latin
 // scheme; separated so a future locale scheme can show a glyph differing from
@@ -133,6 +139,11 @@ type BrowseResults struct {
 // as opaque. Offset is the 0-based position of the bucket's first item among
 // the scope's media files (excluding any leading directories), for clients that
 // jump to a position in the full list rather than reload from the cursor.
+//
+// When BrowseIndexResults.EntryType is "directory" the groups describe the
+// scope's directory entries instead: Count is a number of directories and
+// Offset is the position among the directory entries media.browse lists, so
+// no leading-directory count is added to it.
 type BrowseIndexGroup struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
@@ -146,8 +157,14 @@ type BrowseIndexGroup struct {
 // applies to the scope (non-alphabetical sort, or a root listing); Groups is
 // then empty. Groups is authoritative and already ordered for the active sort;
 // clients render it as-is without assuming any alphabet.
+//
+// EntryType says what the groups count: "media" for the scope's media files,
+// or "directory" when the scope has no media files of its own and the groups
+// were computed over its directory entries. A Core that predates the field
+// omits it, which a client reads as "media".
 type BrowseIndexResults struct {
 	Scheme     string             `json:"scheme"`
+	EntryType  string             `json:"entryType"`
 	Groups     []BrowseIndexGroup `json:"groups"`
 	TotalFiles int                `json:"totalFiles"`
 }

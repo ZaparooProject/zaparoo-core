@@ -27,13 +27,19 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
-type mediaWriteClientConflictError struct {
-	cause   error
-	message string
+// mediaBusyError is the refusal a media operation gets while another one
+// holds the media database: indexing, scraping, optimization, maintenance or
+// recovery. It is a categorized error so a client can recognize the state
+// from error.data.category ("busy") instead of matching the message, which
+// stays as it was. The cause is kept as a ClientError underneath, so the
+// refusal is still an expected client-facing condition to anything that asks,
+// and still matches the conflict it came from.
+func mediaBusyError(message string, cause error) error {
+	if cause == nil {
+		cause = errors.New(message)
+	}
+	return models.CategorizedErr(models.ErrorCategoryBusy, message, models.ClientErr(cause))
 }
-
-func (e *mediaWriteClientConflictError) Error() string { return e.message }
-func (e *mediaWriteClientConflictError) Unwrap() error { return e.cause }
 
 func mediaWriteClientError(err error, requested database.MediaWriteOperation) error {
 	var conflict *database.MediaWriteConflictError
@@ -54,7 +60,7 @@ func mediaWriteClientError(err error, requested database.MediaWriteOperation) er
 	case conflict.Active == database.MediaWriteOperationOptimization:
 		message = "database optimization in progress"
 	}
-	return models.ClientErr(&mediaWriteClientConflictError{cause: err, message: message})
+	return mediaBusyError(message, err)
 }
 
 func startIndexing(mediaDB database.MediaDBI) (*database.MediaWriteLease, error) {
@@ -68,7 +74,7 @@ func startIndexing(mediaDB database.MediaDBI) (*database.MediaWriteLease, error)
 	}
 	if !statusInstance.startIfNotRunning() {
 		lease.Release()
-		return nil, models.ClientErrf("indexing already in progress")
+		return nil, mediaBusyError("indexing already in progress", nil)
 	}
 	return lease, nil
 }
@@ -86,7 +92,7 @@ func startScraping(
 	}
 	if !scrapingStatusInstance.startIfNotRunning(scraperID, force) {
 		lease.Release()
-		return nil, models.ClientErrf("scraping already in progress")
+		return nil, mediaBusyError("scraping already in progress", nil)
 	}
 	return lease, nil
 }

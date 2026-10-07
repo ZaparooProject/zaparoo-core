@@ -57,7 +57,7 @@ func browseIndexTestSystems(t *testing.T, systemIDs ...string) []systemdefs.Syst
 // firstBrowsedBucketForCursor seeks media.browse to the bucket's cursor and
 // returns the canonical bucket of the first row of the resulting page.
 func firstBrowsedBucketForCursor(
-	t *testing.T, mediaDB *MediaDB, bucket database.BrowseIndexBucket, sortMode string,
+	t *testing.T, mediaDB *MediaDB, bucket *database.BrowseIndexBucket, sortMode string,
 ) string {
 	t.Helper()
 	opts := &database.BrowseFilesOptions{
@@ -121,7 +121,7 @@ func TestBrowseIndex_BucketsCountsAndSeek(t *testing.T) {
 
 	// Each bucket's cursor must seek a media.browse page to that bucket's first row.
 	for _, b := range result.Buckets {
-		assert.Equalf(t, b.Key, firstBrowsedBucketForCursor(t, mediaDB, b, result.SortMode),
+		assert.Equalf(t, b.Key, firstBrowsedBucketForCursor(t, mediaDB, &b, result.SortMode),
 			"cursor for bucket %q should land on bucket %q", b.Key, b.Key)
 	}
 }
@@ -156,7 +156,7 @@ func TestBrowseIndex_DescOrder(t *testing.T) {
 	require.True(t, result.Buckets[0].AtStart, "Z begins a descending list")
 
 	for _, b := range result.Buckets {
-		assert.Equalf(t, b.Key, firstBrowsedBucketForCursor(t, mediaDB, b, result.SortMode),
+		assert.Equalf(t, b.Key, firstBrowsedBucketForCursor(t, mediaDB, &b, result.SortMode),
 			"desc cursor for bucket %q should land on bucket %q", b.Key, b.Key)
 	}
 }
@@ -221,4 +221,229 @@ func TestBrowseIndex_EmptyDirectory(t *testing.T) {
 	assert.Equal(t, "latin", result.Scheme)
 	assert.Empty(t, result.Buckets)
 	assert.Equal(t, 0, result.TotalFiles)
+}
+
+// seedBrowseIndexGameDirs indexes one game per directory under parent, the
+// layout of a CD system.
+func seedBrowseIndexGameDirs(t *testing.T, mediaDB *MediaDB, systemID, parent string, names []string) {
+	t.Helper()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: systemID, Name: systemID})
+	require.NoError(t, err)
+	for _, name := range names {
+		insertSystemMedia(t, mediaDB, system, name, filepath.Join(parent, name, name+".chd"))
+	}
+}
+
+// assertDirectoryBucketsMatchListing checks a directory facet against the
+// listing media.browse pages through for the same scope.
+func assertDirectoryBucketsMatchListing(
+	t *testing.T,
+	mediaDB *MediaDB,
+	result *database.BrowseIndexResult,
+	scope *database.BrowseDirectoriesOptions,
+) {
+	t.Helper()
+	ctx := context.Background()
+	dirs, err := mediaDB.BrowseDirectories(ctx, *scope)
+	require.NoError(t, err)
+	require.Equal(t, len(dirs), result.TotalDirs)
+
+	next := 0
+	for i, bucket := range result.Buckets {
+		assert.Equalf(t, next, bucket.Offset, "bucket %q offset", bucket.Key)
+		assert.Equalf(t, i == 0, bucket.AtStart, "bucket %q AtStart", bucket.Key)
+		next += bucket.Count
+
+		paged := *scope
+		paged.AfterName = bucket.AfterDirName
+		rest, pageErr := mediaDB.BrowseDirectories(ctx, paged)
+		require.NoError(t, pageErr)
+		require.Lenf(t, rest, len(dirs)-bucket.Offset, "bucket %q keyset", bucket.Key)
+		assert.Equalf(t, dirs[bucket.Offset].Name, rest[0].Name, "bucket %q keyset lands on its first directory",
+			bucket.Key)
+	}
+	assert.Equal(t, len(dirs), next, "buckets cover every directory")
+}
+
+func TestBrowseIndex_DirectoryFallback(t *testing.T) {
+	t.Parallel()
+
+	names := []string{
+		"#1 Hits", "007 Racing", "3Xtreme", "alundra", "Ape Escape", "[T-En]Mizzurna Falls",
+		"Metal Gear Solid", "(Demo) Wipeout", "Zanac",
+	}
+	// "(Demo) Wipeout" strips to " Wipeout", whose leading space is a symbol.
+	wantKeys := []string{"#", "0-9", "A", "M", "Z"}
+	wantCounts := map[string]int{"#": 2, "0-9": 2, "A": 2, "M": 2, "Z": 1}
+
+	for _, cached := range []bool{false, true} {
+		name := "media"
+		if cached {
+			name = "cache"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mediaDB, cleanup := setupTempMediaDB(t)
+			defer cleanup()
+			seedBrowseIndexGameDirs(t, mediaDB, "PSX", filepath.Join("roms", "psx"), names)
+			if cached {
+				require.NoError(t, mediaDB.PopulateBrowseCache(context.Background()))
+			}
+
+			for _, sortOrder := range []string{"name-asc", "name-desc", "filename-asc"} {
+				result, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+					PathPrefix:        "roms/psx/",
+					Sort:              sortOrder,
+					DirectoryFallback: true,
+				})
+				require.NoError(t, err)
+				assert.True(t, result.Directories, sortOrder)
+				assert.Equal(t, "latin", result.Scheme, sortOrder)
+				assert.Equal(t, 0, result.TotalFiles, sortOrder)
+
+				keys := make([]string, len(result.Buckets))
+				counts := make(map[string]int, len(result.Buckets))
+				for i, bucket := range result.Buckets {
+					keys[i] = bucket.Key
+					counts[bucket.Key] = bucket.Count
+				}
+				// Directories ascend whatever the file sort is.
+				assert.Equal(t, wantKeys, keys, sortOrder)
+				assert.Equal(t, wantCounts, counts, sortOrder)
+				assertDirectoryBucketsMatchListing(t, mediaDB, &result,
+					&database.BrowseDirectoriesOptions{PathPrefix: "roms/psx/"})
+			}
+		})
+	}
+}
+
+func TestBrowseIndex_DirectoryFallbackScopesBySystem(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	parent := filepath.Join("roms", "cd")
+	seedBrowseIndexGameDirs(t, mediaDB, "PSX", parent, []string{"Alundra", "Castlevania"})
+	seedBrowseIndexGameDirs(t, mediaDB, "Saturn", parent, []string{"Burning Rangers", "Nights"})
+	require.NoError(t, mediaDB.PopulateBrowseCache(context.Background()))
+
+	systems := browseIndexTestSystems(t, "Saturn")
+	result, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+		PathPrefix:        "roms/cd/",
+		Systems:           systems,
+		DirectoryFallback: true,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Directories)
+	keys := make([]string, len(result.Buckets))
+	for i, bucket := range result.Buckets {
+		keys[i] = bucket.Key
+	}
+	assert.Equal(t, []string{"B", "N"}, keys, "only the requested system's directories are bucketed")
+	assertDirectoryBucketsMatchListing(t, mediaDB, &result,
+		&database.BrowseDirectoriesOptions{PathPrefix: "roms/cd/", Systems: systems})
+}
+
+func TestBrowseIndex_DirectoryFallbackOnlyWithoutFiles(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedBrowseIndexGameDirs(t, mediaDB, "NES", filepath.Join("roms", "nes"), []string{"Alpha Set", "Zeta Set"})
+	seedBrowseIndexMedia(t, mediaDB, "NES", []string{"Bravo", "Charlie"})
+
+	// A folder with files of its own keeps the file facet.
+	mixed, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+		PathPrefix:        browseIndexTestDir,
+		Sort:              "name-asc",
+		DirectoryFallback: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, mixed.Directories)
+	assert.Equal(t, 2, mixed.TotalFiles)
+	assert.Equal(t, 0, mixed.TotalDirs)
+	require.Len(t, mixed.Buckets, 2)
+	assert.Equal(t, "B", mixed.Buckets[0].Key)
+	assert.Equal(t, 0, mixed.Buckets[0].Offset, "file offsets exclude directories")
+	assert.Equal(t, "C", mixed.Buckets[1].Key)
+	assert.Equal(t, 1, mixed.Buckets[1].Offset)
+
+	// A scope that lists no directories never falls back, even when empty.
+	flat, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+		PathPrefix: "roms/",
+		Sort:       "name-asc",
+	})
+	require.NoError(t, err)
+	assert.False(t, flat.Directories)
+	assert.Empty(t, flat.Buckets)
+
+	// With the fallback, the same file-less folder buckets its one directory.
+	nested, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+		PathPrefix:        "roms/",
+		Sort:              "name-asc",
+		DirectoryFallback: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, nested.Directories)
+	require.Len(t, nested.Buckets, 1)
+	assert.Equal(t, "N", nested.Buckets[0].Key)
+
+	// Neither files nor directories: the empty file facet, unchanged.
+	empty, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+		PathPrefix:        "roms/empty/",
+		Sort:              "name-asc",
+		DirectoryFallback: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, empty.Directories)
+	assert.Equal(t, "latin", empty.Scheme)
+	assert.Empty(t, empty.Buckets)
+}
+
+func TestBrowseIndex_DirectoryFallbackMergesOverlayRoutes(t *testing.T) {
+	t.Parallel()
+
+	for _, cached := range []bool{false, true} {
+		name := "media"
+		if cached {
+			name = "cache"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mediaDB, cleanup := setupTempMediaDB(t)
+			defer cleanup()
+			seedBrowseIndexGameDirs(t, mediaDB, "PSX", filepath.Join("usb0", "psx"),
+				[]string{"Ape Escape", "Crash Bandicoot", "Metal Gear Solid"})
+			seedBrowseIndexGameDirs(t, mediaDB, "PSX", filepath.Join("fat", "psx"),
+				[]string{"alundra", "Crash Bandicoot", "Castlevania", "Zanac"})
+			if cached {
+				require.NoError(t, mediaDB.PopulateBrowseCache(context.Background()))
+			}
+
+			overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+				{PathPrefix: "usb0/psx/", IncludeDirs: true},
+				{PathPrefix: "fat/psx/", IncludeDirs: true},
+			}}
+			systems := browseIndexTestSystems(t, "PSX")
+			result, err := mediaDB.BrowseIndex(context.Background(), database.BrowseIndexOptions{
+				Overlay:           overlay,
+				Systems:           systems,
+				DirectoryFallback: true,
+			})
+			require.NoError(t, err)
+			require.True(t, result.Directories)
+			assert.Equal(t, 6, result.TotalDirs, "the directory in both routes is counted once")
+
+			keys := make([]string, len(result.Buckets))
+			counts := make(map[string]int, len(result.Buckets))
+			for i, bucket := range result.Buckets {
+				keys[i] = bucket.Key
+				counts[bucket.Key] = bucket.Count
+			}
+			assert.Equal(t, []string{"A", "C", "M", "Z"}, keys)
+			assert.Equal(t, map[string]int{"A": 2, "C": 2, "M": 1, "Z": 1}, counts)
+			assertDirectoryBucketsMatchListing(t, mediaDB, &result,
+				&database.BrowseDirectoriesOptions{Overlay: overlay, Systems: systems})
+		})
+	}
 }
