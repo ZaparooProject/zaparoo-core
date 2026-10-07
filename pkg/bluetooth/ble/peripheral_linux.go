@@ -246,6 +246,10 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 	if err := exportAdvertisement(exp, p.a, advPath, adv); err != nil {
 		return err
 	}
+	// Watching starts before advertising does, so a central that connects
+	// the moment the device becomes visible is not missed.
+	events, unsubscribe := p.subscribePeers()
+	defer unsubscribe()
 	if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
 		return p.registrationFailed(ctx, err)
 	}
@@ -256,7 +260,7 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		Strs("services", adv.ServiceUUIDs).
 		Msg("bluetooth peripheral advertising")
 
-	p.watchPeers(ctx, func(peerLeft bool) {
+	p.watchPeers(ctx, events, func(peerLeft bool) {
 		// A controller stops advertising when a central connects.
 		// Registering the advertisement afresh puts it back on the air:
 		// straight away, if the controller can hold a connection and
@@ -385,19 +389,11 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 	}
 }
 
-// watchPeers reports peer disconnections until ctx ends or the adapter is
-// gone, and calls peersChanged once things have been quiet for
-// advRestartDelay after one or more devices connected or left, saying
-// whether any of them left.
-//
-// Only a device that was connected counts. A scan fills bluetoothd with
-// device objects for everything in range and drops each one half a minute
-// later; treating those as departures restarted advertising continuously
-// while a reader was being scanned for, which is what the controller could
-// not take.
-func (p *peripheral) watchPeers(ctx context.Context, peersChanged func(peerLeft bool)) {
+// subscribePeers subscribes to the signals that say a remote device of this
+// adapter appeared, connected, disconnected or was forgotten.
+func (p *peripheral) subscribePeers() (events <-chan *dbus.Signal, unsubscribe func()) {
 	prefix := p.a.devicePathPrefix()
-	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
+	return p.a.signals.subscribe(func(sig *dbus.Signal) bool {
 		if !strings.HasPrefix(string(signalObject(sig)), prefix) {
 			return false
 		}
@@ -408,8 +404,21 @@ func (p *peripheral) watchPeers(ctx context.Context, peersChanged func(peerLeft 
 			return false
 		}
 	})
-	defer unsubscribe()
+}
 
+// watchPeers reports peer disconnections until ctx ends or the adapter is
+// gone, and calls peersChanged once things have been quiet for
+// advRestartDelay after one or more devices connected or left, saying
+// whether any of them left.
+//
+// Only a device that was connected counts. A scan fills bluetoothd with
+// device objects for everything in range and drops each one half a minute
+// later; treating those as departures restarted advertising continuously
+// while a reader was being scanned for, which is what the controller could
+// not take.
+func (p *peripheral) watchPeers(
+	ctx context.Context, events <-chan *dbus.Signal, peersChanged func(peerLeft bool),
+) {
 	// Stopped until a peer comes or goes.
 	restart := time.NewTimer(advRestartDelay)
 	restart.Stop()
