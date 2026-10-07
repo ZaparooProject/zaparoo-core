@@ -912,3 +912,52 @@ func TestIntegration_FindReturnsARememberedDeviceWithoutScanning(t *testing.T) {
 	assert.Equal(t, fakeDeviceAddr, dev.Address())
 	fake.expectCall(t, "StartDiscovery")
 }
+
+// When a central connects, the advertisement is restarted so another can
+// find the device. A controller that cannot advertise while connected
+// refuses, which is not a reason to give the adapter up; the restart after
+// the central leaves is.
+func TestIntegration_AdvertisingRestartsWhenAPeerConnects(t *testing.T) {
+	addr := startSessionBus(t)
+	fake := newFakeBluez(t, addr)
+
+	adapter, err := Open(t.Context(), WithBusAddress(addr))
+	require.NoError(t, err)
+	defer func() { _ = adapter.Close() }()
+	peripheral, err := adapter.Peripheral()
+	require.NoError(t, err)
+	serveErr := serveTestApplication(t, peripheral)
+	select {
+	case <-fake.advPaths:
+	case <-time.After(integrationWait):
+		t.Fatal("advertisement was never registered")
+	}
+	fake.expectCall(t, "RegisterAdvertisement")
+
+	// A central connects: advertising is restarted for the next one.
+	fake.deviceProp.SetMust(deviceIface, "Connected", true)
+	fake.expectCall(t, "UnregisterAdvertisement")
+	fake.expectCall(t, "RegisterAdvertisement")
+
+	// A second connects while the controller is at its limit: the refusal
+	// is tolerated and the adapter stays.
+	fake.mu.Lock()
+	fake.refuseAdvert = true
+	fake.mu.Unlock()
+	second := dbus.ObjectPath(string(fakeAdapterPath) + "/dev_AA_BB_CC_DD_EE_02")
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesAdded, second,
+		map[string]map[string]dbus.Variant{deviceIface: {"Connected": dbus.MakeVariant(true)}}))
+	fake.expectCall(t, "RegisterAdvertisement")
+	select {
+	case <-adapter.Gone():
+		t.Fatal("a refusal while a peer is connected gave the adapter up")
+	case err := <-serveErr:
+		t.Fatalf("Serve stopped: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// When a central leaves and the restart is still refused, nobody can
+	// find the device, and the adapter is given up to be reopened.
+	require.NoError(t, fake.conn.Emit(bluezRootPath, signalInterfacesRemoved, second, []string{deviceIface}))
+	waitGone(t, adapter, "a refused restart after a peer left")
+}

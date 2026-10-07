@@ -48,8 +48,8 @@ const (
 
 	bluezErrFailed = "org.bluez.Error.Failed"
 
-	// advRestartDelay is how long after the last device left the
-	// advertisement is restarted. Devices leave in bursts, most of them not
+	// advRestartDelay is how long after the last device connected or left
+	// the advertisement is restarted. Devices come and go in bursts, most of them not
 	// ours (every remembered controller is reported when an adapter comes
 	// up), and each restart is a round of commands to the controller, so
 	// a burst gets one restart.
@@ -256,20 +256,28 @@ func (p *peripheral) Serve(ctx context.Context, app Application, adv Advertiseme
 		Strs("services", adv.ServiceUUIDs).
 		Msg("bluetooth peripheral advertising")
 
-	p.watchPeers(ctx, func() {
-		// A controller stops advertising when a central connects, and
-		// bluetoothd does not reliably start it again when that central
-		// leaves: the advertisement stays registered but nothing is on
-		// the air. Registering it afresh is what brings it back.
+	p.watchPeers(ctx, func(peerLeft bool) {
+		// A controller stops advertising when a central connects.
+		// Registering the advertisement afresh puts it back on the air:
+		// straight away, if the controller can hold a connection and
+		// advertise at once, so a second client can find the device; and
+		// once that central leaves, when bluetoothd would otherwise keep
+		// the advertisement registered with nothing being sent.
 		p.unregister(advManagerIface+".UnregisterAdvertisement", advPath)
-		if err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath); err != nil {
-			if ctx.Err() == nil {
-				log.Warn().Err(err).Msg("bluetooth advertisement could not be restarted")
-				p.a.markGone()
-			}
-			return
+		err := p.register(ctx, advManagerIface+".RegisterAdvertisement", advPath)
+		switch {
+		case err == nil:
+			log.Debug().Bool("peerLeft", peerLeft).Msg("bluetooth advertisement restarted")
+		case ctx.Err() != nil:
+		case peerLeft:
+			log.Warn().Err(err).Msg("bluetooth advertisement could not be restarted")
+			p.a.markGone()
+		default:
+			// A controller that cannot advertise while connected says no
+			// here. That is not a fault; advertising resumes when the
+			// peer leaves.
+			log.Debug().Err(err).Msg("bluetooth advertisement not restarted while a peer is connected")
 		}
-		log.Debug().Msg("bluetooth advertisement restarted after a device left")
 	})
 	return nil
 }
@@ -378,15 +386,16 @@ func (p *peripheral) unregister(method string, path dbus.ObjectPath) {
 }
 
 // watchPeers reports peer disconnections until ctx ends or the adapter is
-// gone, and calls peersLeft once things have been quiet for advRestartDelay
-// after one or more connected devices left.
+// gone, and calls peersChanged once things have been quiet for
+// advRestartDelay after one or more devices connected or left, saying
+// whether any of them left.
 //
 // Only a device that was connected counts. A scan fills bluetoothd with
 // device objects for everything in range and drops each one half a minute
 // later; treating those as departures restarted advertising continuously
 // while a reader was being scanned for, which is what the controller could
 // not take.
-func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
+func (p *peripheral) watchPeers(ctx context.Context, peersChanged func(peerLeft bool)) {
 	prefix := p.a.devicePathPrefix()
 	events, unsubscribe := p.a.signals.subscribe(func(sig *dbus.Signal) bool {
 		if !strings.HasPrefix(string(signalObject(sig)), prefix) {
@@ -401,16 +410,24 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 	})
 	defer unsubscribe()
 
-	// Stopped until a peer leaves.
+	// Stopped until a peer comes or goes.
 	restart := time.NewTimer(advRestartDelay)
 	restart.Stop()
 	defer restart.Stop()
 
 	connected := make(map[dbus.ObjectPath]bool)
+	anyLeft := false
+	arrived := func(path dbus.ObjectPath) {
+		if !connected[path] {
+			connected[path] = true
+			restart.Reset(advRestartDelay)
+		}
+	}
 	left := func(path dbus.ObjectPath) {
 		p.currentHandler().OnDisconnect(peerFromPath(path))
 		if connected[path] {
 			delete(connected, path)
+			anyLeft = true
 			restart.Reset(advRestartDelay)
 		}
 	}
@@ -422,7 +439,8 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 		case <-p.a.gone:
 			return
 		case <-restart.C:
-			peersLeft()
+			peersChanged(anyLeft)
+			anyLeft = false
 		case sig, ok := <-events:
 			if !ok {
 				return
@@ -431,7 +449,7 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 				// A central that connects to us arrives as a new device
 				// that is already connected.
 				if isConnected, present := changedBool(ifaces[deviceIface], "Connected"); present && isConnected {
-					connected[path] = true
+					arrived(path)
 				}
 				continue
 			}
@@ -441,7 +459,7 @@ func (p *peripheral) watchPeers(ctx context.Context, peersLeft func()) {
 				}
 				if isConnected, present := changedBool(changed, "Connected"); present {
 					if isConnected {
-						connected[sig.Path] = true
+						arrived(sig.Path)
 					} else {
 						left(sig.Path)
 					}
