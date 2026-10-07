@@ -197,7 +197,7 @@ If a method fails, it will populate the `error` key in the response object with 
 | :------ | :----- | :------- | :---------------------------------------------------------------------------------------- |
 | code    | number | Yes      | An integer specifying the general error category. **Error codes are not yet formalised.** |
 | message | string | Yes      | Short human readable message explaining the error cause, if possible.                     |
-| data    | object | No       | Optional structured detail. Methods that emit it document its shape; [`run`](methods.md#run) emits `{ "category": string }`, plus `reason` and `params` for the categories that [document them](methods.md#launch-repair-errors). |
+| data    | object | No       | Optional structured detail. Methods that emit it document its shape; [`run`](methods.md#run) emits `{ "category": string }`, plus `reason` and `params` for the categories that [document them](methods.md#launch-repair-errors). Media methods refused while another operation holds the media database emit `{ "category": "busy" }`; see [media database busy errors](methods.md#media-database-busy-errors). |
 
 #### Protocol Errors
 

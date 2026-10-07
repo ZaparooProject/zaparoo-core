@@ -765,13 +765,20 @@ type BrowseFileCountOptions struct {
 // BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
 // mirrors the scoping fields of BrowseFilesOptions so the index describes the
 // exact list a media.browse call would return.
+//
+// DirectoryFallback is set by a caller whose scope lists directories ahead of
+// files (a filesystem or source path, or the root contents view). When that
+// scope has no files to bucket, the facet is computed over its directory
+// entries instead. A flat virtual scheme lists no directories and leaves it
+// unset.
 type BrowseIndexOptions struct {
-	PathPrefix    string
-	Overlay       *BrowseOverlay
-	Sort          string
-	Systems       []systemdefs.System
-	Tags          []zapscript.TagFilter
-	ExcludeHidden bool
+	PathPrefix        string
+	Overlay           *BrowseOverlay
+	Sort              string
+	Systems           []systemdefs.System
+	Tags              []zapscript.TagFilter
+	ExcludeHidden     bool
+	DirectoryFallback bool
 }
 
 // BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
@@ -782,13 +789,20 @@ type BrowseIndexOptions struct {
 // order); it excludes leading directories, which the caller adds. AtStart is
 // true for the bucket that begins the list (no preceding row), in which case
 // the caller should produce an empty cursor.
+//
+// In a directory facet (BrowseIndexResult.Directories) the bucket describes
+// directories instead: Offset is the position among the scope's directories,
+// and AfterDirName replaces SortValue/LastID as the keyset. It is the name of
+// the directory immediately before the bucket's first, which is what a
+// dirs-phase media.browse cursor resumes after.
 type BrowseIndexBucket struct {
-	Key       string
-	SortValue string
-	LastID    int64
-	Count     int
-	Offset    int
-	AtStart   bool
+	Key          string
+	SortValue    string
+	AfterDirName string
+	LastID       int64
+	Count        int
+	Offset       int
+	AtStart      bool
 }
 
 // BrowseIndexResult is the ordered set of first-character buckets for a browse
@@ -798,11 +812,18 @@ type BrowseIndexBucket struct {
 // empty and no rail applies. SortMode is the resolved browse sort mode the
 // buckets were computed under and must be embedded into the seek cursors so the
 // subsequent media.browse page continues in the same order.
+//
+// Directories reports that the scope had no files and the buckets were
+// computed over its directory entries, in the order BrowseDirectories lists
+// them. TotalDirs is then the number of directories bucketed, and TotalFiles
+// is zero.
 type BrowseIndexResult struct {
-	Scheme     string
-	SortMode   string
-	Buckets    []BrowseIndexBucket
-	TotalFiles int
+	Scheme      string
+	SortMode    string
+	Buckets     []BrowseIndexBucket
+	TotalFiles  int
+	TotalDirs   int
+	Directories bool
 }
 
 // BrowseVirtualScheme represents a virtual URI scheme with indexed content.

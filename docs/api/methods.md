@@ -1088,6 +1088,8 @@ Return the ordered first-character "jump to letter" buckets for a browse scope. 
 
 The scope parameters mirror `media.browse` so the index describes the exact media-file list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`tags`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
 
+A scope can have no media files of its own and still be a list of games: on most CD systems each game is a folder, which `media.browse` returns as a `directory` entry carrying the game's `mediaId`. When the scope has no media files but does have directory entries, the buckets are computed over those directory entries instead and `entryType` is `directory`. See [Directory buckets](#directory-buckets). A scope with at least one media file of its own is always bucketed by its media files.
+
 #### Parameters
 
 All parameters are optional.
@@ -1106,7 +1108,8 @@ All parameters are optional.
 | Key        | Type                                          | Required | Description                                                                 |
 | :--------- | :-------------------------------------------- | :------- | :-------------------------------------------------------------------------- |
 | scheme     | string                                        | Yes      | Collation used to derive the buckets. `latin` for first-character bucketing; `none` when no rail applies (a root listing, or a directory whose effective sort is not alphabetical, e.g. a ranked/date-prefixed collection folder), in which case `groups` is empty. |
-| totalFiles | number                                        | Yes      | Total media files matching the complete systems/path/tags scope.             |
+| entryType  | string                                        | Yes      | What the groups count: `media` for the scope's media files, or `directory` when the scope has no media files and the groups describe its directory entries. Always `media` when `scheme` is `none` for a root listing. A Core that predates this field omits it; treat a missing value as `media`. |
+| totalFiles | number                                        | Yes      | Total media files matching the complete systems/path/tags scope. `0` when `entryType` is `directory`. |
 | groups     | [BrowseIndexGroup](#browse-index-group-object)[] | Yes   | Only non-empty buckets, ordered to match `sort`.                            |
 
 ##### Browse index group object
@@ -1115,11 +1118,23 @@ All parameters are optional.
 | :----- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | key    | string | Yes      | Stable bucket identifier (`A`–`Z`, `0-9`, `#`). Treat as opaque.                                  |
 | label  | string | Yes      | Display text for the bucket. Equal to `key` for the `latin` scheme.                               |
-| count  | number | Yes      | Number of media files in the bucket.                                                              |
-| cursor | string | Yes      | Opaque `media.browse` cursor positioned just before the bucket's first row. Empty string for the bucket that begins the list (call `media.browse` with no cursor for the first page). |
-| offset | number | Yes      | 0-based position of the bucket's first item among the scope's media files, taken from its row number in the same ordered listing `media.browse` pages through (so it cannot drift from the browse order). Excludes any directory entries the listing shows before files; a client that jumps to a position in the full list adds its own leading-directory count. Use this to jump to the bucket's position rather than reloading from `cursor`. |
+| count  | number | Yes      | Number of media files in the bucket, or the number of directory entries when `entryType` is `directory`. |
+| cursor | string | Yes      | Opaque `media.browse` cursor positioned just before the bucket's first row (its first directory entry when `entryType` is `directory`). Empty string for the bucket that begins the list (call `media.browse` with no cursor for the first page). |
+| offset | number | Yes      | 0-based position of the bucket's first item among the scope's media files, taken from its row number in the same ordered listing `media.browse` pages through (so it cannot drift from the browse order). Excludes any directory entries the listing shows before files; a client that jumps to a position in the full list adds its own leading-directory count. Use this to jump to the bucket's position rather than reloading from `cursor`. When `entryType` is `directory` this is instead the position among the scope's directory entries, and nothing is added to it: see [Directory buckets](#directory-buckets). |
 
 Clients should render `groups` exactly as received, in order, without assuming a particular alphabet: `scheme` and `key` are opaque so a future locale-aware scheme (e.g. pinyin/kana/hangul buckets) requires no client change.
+
+##### Directory buckets
+
+When `entryType` is `directory`, every group describes directory entries of the scope rather than media files:
+
+- `count` is the number of directory entries in the bucket.
+- `offset` is the 0-based position of the bucket's first directory among the scope's `directory` entries, in the order `media.browse` returns them. It already counts directories, so a client must not add a leading-directory count to it. In the root `contents` view, any `root` entries `media.browse` lists ahead of the directories are not counted.
+- `cursor` is the cursor `media.browse` itself returns after the directory that precedes the bucket. Passing it to `media.browse` with the same scope returns a page that begins at the bucket's first directory and continues through the remaining directories.
+- Buckets follow the order `media.browse` lists directories in, which ascends by name whatever `sort` is: `sort` orders media files only. The bucket is taken from the directory name as it is ordered, which ignores bracketed metadata such as `(USA)` or `[T-En]`. A directory entry that stands for a single game displays that game's name, which can begin with a different character than the directory name it is ordered by.
+- The same `systems` and `includeHidden` scoping `media.browse` applies to its directory listing applies here. `tags` filters media files only, in both methods: a `tags` filter that leaves the scope with no matching media files yields directory buckets over the unfiltered directory entries, which is what `media.browse` lists for that request.
+
+A flat virtual scheme (for example `steam://`) has no directory entries and is always `media`.
 
 #### Example
 
@@ -1145,6 +1160,7 @@ Clients should render `groups` exactly as received, in order, without assuming a
   "id": 1,
   "result": {
     "scheme": "latin",
+    "entryType": "media",
     "totalFiles": 150,
     "groups": [
       { "key": "#", "label": "#", "count": 3, "cursor": "", "offset": 0 },
@@ -1264,6 +1280,34 @@ Either `mediaId` or `system` plus `path` is required. At least one of `add` or `
 | :--- | :--------------------------- | :------- | :----------------------------------- |
 | tags | [TagInfo](#taginfo-object)[] | Yes      | Effective tags for the media item.   |
 
+#### Media database busy errors
+
+While indexing, database optimization, maintenance or recovery owns the media database, the update is refused at once and nothing is stored. The response is an [error](index.md#response-errors) whose `data.category` is `busy`, the same category [`run`](#run) uses for a launch already in progress. Branch on the category, not on the message, and retry once the operation has finished ([`media`](#media) and the [`media.indexing`](notifications.md) notification report it). A running scrape does not refuse the update.
+
+| Message                                  | Operation holding the media database        |
+| :--------------------------------------- | :------------------------------------------ |
+| `media indexing is in progress`          | Indexing.                                   |
+| `database optimization in progress`      | Optimization.                               |
+| `media database maintenance in progress` | Maintenance or recovery.                    |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "error": {
+    "code": 1,
+    "message": "media indexing is in progress",
+    "data": {
+      "category": "busy"
+    }
+  }
+}
+```
+
+[`media.meta.update`](#mediametaupdate) is refused the same way. [`media.generate`](#mediagenerate) and [`media.scrape`](#mediascrape) report `busy` too when they cannot start because one of these operations, or another index or scrape, is running; their messages also include `indexing already in progress`, `scraping already in progress` and `scraping is in progress`.
+
+A Core that predates the category sends the same messages with no `data`.
+
 #### Example
 
 ##### Request
@@ -1322,6 +1366,7 @@ An omitted or `null` value parameters key is also valid and will index every sys
 - The server will validate all provided system IDs and return an error if any are invalid
 - If all systems are specified (equivalent to no restriction), a full database rebuild will be performed for optimal performance
 - Selective indexing cannot be performed while database optimization is running
+- A request refused because indexing, scraping, optimization, maintenance or recovery is already running returns an error whose `data.category` is `busy`. See [media database busy errors](#media-database-busy-errors).
 - Resume functionality will validate that the system configuration hasn't changed between indexing sessions
 
 #### Result
@@ -2158,6 +2203,8 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 | :---- | :------------------------------ | :------- | :-------------------------- |
 | media | [MediaMeta](#media-meta-object) | Yes      | Updated metadata for row.   |
 
+While indexing, database optimization, maintenance or recovery owns the media database, the update is refused with an error whose `data.category` is `busy`. See [media database busy errors](#media-database-busy-errors).
+
 #### Example
 
 ##### Set override
@@ -2312,7 +2359,7 @@ An object identifying a media row by `mediaId` or identifying media/directory co
 
 Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
-Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
+Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source**: when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output that had to be scaled down is re-encoded as WebP (lossy, alpha preserved) regardless of source format, and cached on disk so repeat requests are cheap. A source that already fits the box is re-encoded as WebP too when it is larger than 64 KiB, so a near-native request for large art still gets the smaller WebP. The original bytes and content type are returned instead when the source already fits the box and is at most 64 KiB (the encode costs far more than the few kilobytes it would save on constrained devices), when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded. A resized request can therefore return `image/jpeg` or `image/png` as well as `image/webp`: read `contentType` rather than assuming WebP. The same applies to `localPath` delivery, where the cached file keeps the original's extension.
 
 When a resized thumbnail is built for a request whose image type preference list has more than one entry, Core records the image type it resolved to and the thumbnail's average colour. Later requests, including after a restart, are then served from the thumbnail cache without reading the original artwork, and list results (`media.browse`, `media.search`, `media.history`) report the colour as `coverColor`. A request for a single image type does not change the recorded cover. The records are cleared together with the thumbnail cache after indexing or scraping changes artwork.
 

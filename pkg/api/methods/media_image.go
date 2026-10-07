@@ -613,12 +613,25 @@ type rawMediaImage struct {
 	mediaDBID   int64 // 0 when the image belongs to a directory, not a media row
 }
 
+// thumbPassthroughMaxBytes is the largest source that is returned as it is
+// when it already fits the requested box, instead of being re-encoded as
+// WebP. On a MiSTer (ARM32) the encode was 300 to 345 ms of a 0.33 to 0.38 s
+// request for a 320x320 JPEG of 10 to 29 KB, to save 4 to 7 KB: at this size
+// the format win is a few kilobytes and the encode is nearly the whole cost.
+const thumbPassthroughMaxBytes = 64 << 10
+
 // resizeImageIfNeeded decodes binary, scales it down to fit within a
 // maxSize×maxSize bounding box when either dimension exceeds maxSize, and
-// re-encodes the result as lossy WebP with alpha preserved. When the source
-// already fits, it is still re-encoded as WebP (keeping native dimensions) so
-// callers requesting a tier at or above native size get the format win — unless
-// the WebP would be no smaller, in which case the original bytes are kept.
+// re-encodes the result as lossy WebP with alpha preserved.
+//
+// A source that already fits is not scaled. If it is also no larger than
+// thumbPassthroughMaxBytes and in a format the thumbnail cache stores (JPEG,
+// PNG, WebP), the original bytes and content type are returned without an
+// encode. A larger source that fits is still re-encoded as WebP (keeping
+// native dimensions) so callers requesting a tier at or above native size get
+// the format win, unless the WebP would be no smaller, in which case the
+// original bytes are kept.
+//
 // Returns the original bytes unchanged when maxSize <= 0 (full size requested)
 // or when the source cannot be decoded.
 func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resized []byte, resizedType string) {
@@ -628,7 +641,8 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 
 // resizeImageWithColor is resizeImageIfNeeded that also returns the average
 // colour of the decoded frame as 0xRRGGBB, or nil when the image was not
-// decoded or is fully transparent.
+// decoded or is fully transparent. The colour is computed whether or not the
+// frame goes on to be encoded.
 func resizeImageWithColor(
 	binary []byte, contentType string, maxSize int,
 ) (resized []byte, resizedType string, avgColor *uint32) {
@@ -642,9 +656,10 @@ func resizeImageWithColor(
 	bounds := src.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 	// Downscale to fit the maxSize box when larger; otherwise keep native
-	// dimensions. Either way the frame is re-encoded as WebP below — a request
-	// that snaps to a tier at or above the native size still gets the format win
-	// instead of falling back to the original (often large lossless PNG).
+	// dimensions. A frame that was scaled, or a source too large to pass
+	// through, is re-encoded as WebP below: a request that snaps to a tier at or
+	// above the native size still gets the format win instead of falling back
+	// to the original (often large lossless PNG).
 	frame := src
 	newW, newH := w, h
 	if w > maxSize || h > maxSize {
@@ -666,6 +681,14 @@ func resizeImageWithColor(
 		frame = dst
 	}
 	avgColor = averageImageColor(frame)
+	// A small source that already fits skips the encode; see
+	// thumbPassthroughMaxBytes. The colour still comes from the decoded frame.
+	// The cache names its files by format, so a source it could not store keeps
+	// going through the encode rather than missing the cache on every request.
+	if newW == w && newH == h && len(binary) <= thumbPassthroughMaxBytes &&
+		thumbCacheExtension(contentType, binary) != "" {
+		return binary, contentType, avgColor
+	}
 	out, outputType, err := encodeResizedImage(frame)
 	if err != nil {
 		return binary, contentType, avgColor

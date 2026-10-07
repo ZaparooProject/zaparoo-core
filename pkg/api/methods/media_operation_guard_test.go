@@ -91,11 +91,53 @@ func TestMediaWriteClientErrorMessages(t *testing.T) {
 			require.ErrorIs(t, err, database.ErrMediaWriteConflict)
 			var clientErr *models.ClientError
 			require.ErrorAs(t, err, &clientErr)
+			requireBusyError(t, err, tt.expected)
 		})
 	}
 
 	original := errors.New("coordinator failed")
 	assert.Same(t, original, mediaWriteClientError(original, database.MediaWriteOperationIndexing))
+}
+
+// requireBusyError asserts err is the categorized refusal a client sees while
+// another operation holds the media database: category "busy", the given
+// message on the wire, and still an expected client error underneath.
+func requireBusyError(t *testing.T, err error, message string) {
+	t.Helper()
+	var catErr *models.CategorizedError
+	require.ErrorAs(t, err, &catErr)
+	assert.Equal(t, models.ErrorCategoryBusy, catErr.Category)
+	assert.Equal(t, message, catErr.Message)
+	assert.Empty(t, catErr.Reason)
+	assert.Empty(t, catErr.Params)
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+}
+
+// A second index or scrape is refused by the status slot rather than the
+// write lease when the lease was handed over; both refusals are the same
+// "busy" state to a client.
+func TestMediaOperationGuardDuplicateStartIsBusy(t *testing.T) {
+	// Shared API status instances make this test intentionally non-parallel.
+	ClearIndexingStatus()
+	ClearScrapingStatus()
+	t.Cleanup(ClearIndexingStatus)
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	SetIndexingForTest()
+	lease, err := startIndexing(mockDB)
+	assert.Nil(t, lease)
+	requireBusyError(t, err, "indexing already in progress")
+	ClearIndexingStatus()
+
+	first, err := startScraping(mockDB, "test-scraper", false)
+	require.NoError(t, err)
+	defer first.Release()
+	second, err := startScraping(mockDB, "test-scraper", false)
+	assert.Nil(t, second)
+	requireBusyError(t, err, "scraping already in progress")
+	require.ErrorIs(t, err, database.ErrMediaWriteConflict)
 }
 
 func TestMediaOperationGuardRequiresWriteCoordinator(t *testing.T) {

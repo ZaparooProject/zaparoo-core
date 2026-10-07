@@ -679,7 +679,7 @@ func startMediaDBGeneration(
 		}
 		if !statusInstance.startIfNotRunning() {
 			lease.Release()
-			return models.ClientErrf("indexing already in progress")
+			return mediaBusyError("indexing already in progress", nil)
 		}
 	}
 	leaseOwned := true
@@ -710,7 +710,7 @@ func startMediaDBGeneration(
 	case db.MediaDB.IsOptimizing():
 		statusInstance.clear()
 		notifyMediaIndexingStopped(ns, db.MediaDB)
-		return models.ClientErrf("database optimization in progress")
+		return mediaBusyError("database optimization in progress", nil)
 	case optimizationStatus == mediadb.IndexingStatusRunning:
 		log.Info().Msg("persisted optimization was interrupted; allowing media indexing to start")
 	}
