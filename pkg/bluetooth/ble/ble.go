@@ -17,12 +17,13 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package bluez is a thin layer over the BlueZ D-Bus API. It exposes the two
-// Bluetooth Low Energy roles Core needs: a peripheral (GATT server plus
-// advertising, used by the app transport) and a central (scan, connect,
-// subscribe, used by reader drivers). Only Linux has an implementation; the
-// other platforms report ErrUnsupported.
-package bluez
+// Package ble is a thin layer over the operating system's Bluetooth Low
+// Energy stack. It exposes the two roles Core needs: a peripheral (GATT
+// server plus advertising, used by the app transport) and a central (scan,
+// connect, subscribe, used by reader drivers). Linux is served by BlueZ over
+// D-Bus and Windows by the WinRT Bluetooth API; other platforms report
+// ErrUnsupported.
+package ble
 
 import (
 	"context"
@@ -34,20 +35,20 @@ import (
 )
 
 var (
-	// ErrUnsupported is returned on platforms without a BlueZ implementation.
-	ErrUnsupported = errors.New("bluez: not supported on this platform")
-	// ErrUnavailable is returned when the system bus or bluetoothd cannot be
-	// reached.
-	ErrUnavailable = errors.New("bluez: bluetoothd not reachable")
-	// ErrNoAdapter is returned when bluetoothd is running but no adapter is
-	// plugged in.
-	ErrNoAdapter = errors.New("bluez: no bluetooth adapter")
+	// ErrUnsupported is returned on platforms without an implementation.
+	ErrUnsupported = errors.New("bluetooth: not supported on this platform")
+	// ErrUnavailable is returned when the system's Bluetooth service cannot
+	// be reached: on Linux, the system bus or bluetoothd.
+	ErrUnavailable = errors.New("bluetooth: system bluetooth service not reachable")
+	// ErrNoAdapter is returned when the Bluetooth service is running but no
+	// adapter is plugged in.
+	ErrNoAdapter = errors.New("bluetooth: no bluetooth adapter")
 	// ErrRoleUnsupported is returned when the adapter cannot take the
 	// requested role.
-	ErrRoleUnsupported = errors.New("bluez: adapter does not support this role")
+	ErrRoleUnsupported = errors.New("bluetooth: adapter does not support this role")
 	// ErrNotFound is returned when a remote device, service, or
 	// characteristic is not present.
-	ErrNotFound = errors.New("bluez: not found")
+	ErrNotFound = errors.New("bluetooth: not found")
 )
 
 // Role is a BLE link-layer role an adapter can take.
@@ -207,10 +208,11 @@ type Peripheral interface {
 	// Serve registers the application and advertisement, then blocks until
 	// ctx ends or the adapter is gone. Both are unregistered on return.
 	Serve(ctx context.Context, app Application, adv Advertisement, h PeripheralHandler) error
-	// Notify sends value to every peer subscribed to the characteristic.
-	// BlueZ fans notifications out; callers tag the payload if they need
-	// to address one peer.
-	Notify(charUUID string, value []byte) error
+	// Notify sends value to peer on the characteristic. Where the stack
+	// cannot address one peer (BlueZ), or peer is the zero value, it goes
+	// to every subscriber, so callers tag the payload if they need the
+	// others to ignore it.
+	Notify(peer Peer, charUUID string, value []byte) error
 	// Disconnect drops a peer's connection.
 	Disconnect(ctx context.Context, peer Peer) error
 }

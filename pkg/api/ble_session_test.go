@@ -39,7 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -152,7 +152,7 @@ type bleTestClient struct {
 	reasm   *apigatt.Reassembler
 	chunker *apigatt.Chunker
 	inbox   chan []byte
-	peer    bluez.Peer
+	peer    ble.Peer
 	pending [][]byte
 	mtu     int
 	tag     uint16
@@ -171,7 +171,7 @@ func (r *bleTestRig) client(address string, tag uint16, mtu int) *bleTestClient 
 		reasm:   apigatt.NewReassembler(0),
 		chunker: &apigatt.Chunker{Tag: tag},
 		inbox:   inbox,
-		peer: bluez.Peer{
+		peer: ble.Peer{
 			Path:    "/org/bluez/hci0/dev_" + strings.ReplaceAll(address, ":", "_"),
 			Address: address,
 		},
@@ -250,6 +250,20 @@ func (c *bleTestClient) recv(t *testing.T) []byte {
 	msg := c.pending[0]
 	c.pending = c.pending[1:]
 	return msg
+}
+
+// expectSessionClosed reads the plaintext notice Core sends as it ends a
+// session, which is the only word a client gets on a stack that cannot drop
+// the link.
+func (c *bleTestClient) expectSessionClosed(t *testing.T) {
+	t.Helper()
+	var resp models.ResponseErrorObject
+	require.NoError(t, json.Unmarshal(c.recv(t), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, JSONRPCErrorSessionClosed.Code, resp.Error.Code)
+	data, ok := resp.Error.Data.(map[string]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, data["reason"])
 }
 
 // expectNothing asserts that nothing arrives for this client for a while.
@@ -339,10 +353,10 @@ func TestBLESession_WebSocketFrameIsRejected(t *testing.T) {
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
 	client.send(t, first.binary(t))
+	client.expectSessionClosed(t)
 	client.waitClosed(t)
-	client.expectNothing(t)
 	require.Eventually(t, func() bool {
-		return slices.ContainsFunc(rig.peripheral.Disconnects(), func(p bluez.Peer) bool {
+		return slices.ContainsFunc(rig.peripheral.Disconnects(), func(p ble.Peer) bool {
 			return p.Path == client.peer.Path
 		})
 	}, bleTestTimeout, 5*time.Millisecond)
@@ -360,8 +374,8 @@ func TestBLESession_JSONEnvelopeIsRejected(t *testing.T) {
 	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
 	require.NoError(t, err)
 	client.send(t, frameJSON)
+	client.expectSessionClosed(t)
 	client.waitClosed(t)
-	client.expectNothing(t)
 }
 
 // A first frame cut short anywhere in its header is refused, not read past.
@@ -386,8 +400,8 @@ func TestBLESession_PlaintextRequestIsRejected(t *testing.T) {
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
 	client.send(t, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`))
+	client.expectSessionClosed(t)
 	client.waitClosed(t)
-	client.expectNothing(t)
 }
 
 func TestBLESession_FramingErrorClosesSession(t *testing.T) {
@@ -433,7 +447,7 @@ func TestBLESession_InfoCharacteristic(t *testing.T) {
 	t.Parallel()
 
 	rig := newBLETestRig(t, bleTestRigOptions{})
-	data, err := rig.peripheral.Handler().OnRead(bluez.Peer{}, apigatt.InfoCharUUID)
+	data, err := rig.peripheral.Handler().OnRead(ble.Peer{}, apigatt.InfoCharUUID)
 	require.NoError(t, err)
 	var info apigatt.Info
 	require.NoError(t, json.Unmarshal(data, &info))
@@ -441,7 +455,7 @@ func TestBLESession_InfoCharacteristic(t *testing.T) {
 	assert.Equal(t, apigatt.ProtocolVersion, info.Version)
 	assert.Equal(t, apigatt.MaxMessageSize, info.MaxMessage)
 
-	_, err = rig.peripheral.Handler().OnRead(bluez.Peer{}, apigatt.RXCharUUID)
+	_, err = rig.peripheral.Handler().OnRead(ble.Peer{}, apigatt.RXCharUUID)
 	require.Error(t, err)
 }
 
@@ -658,6 +672,107 @@ func TestBLESession_SendsOnlyWithinAcknowledgedWindow(t *testing.T) {
 	require.NoError(t, rig.clock.BlockUntilContext(t.Context(), 2))
 	rig.clock.Advance(bleAckTimeout + time.Second)
 	client.waitClosed(t)
+}
+
+// A write the Bluetooth stack dropped leaves a gap that reordering will never
+// fill. Core waits for it only so long, then says the session is over.
+func TestBLESession_LostChunkEndsTheSession(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, 517)
+	client.authenticate(t, first)
+
+	lost := client.chunks(t, first.secrets.encryptSubsequentBinary(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":2}`), 1))
+	require.Len(t, lost, 1)
+	// The next request arrives; the one before it never does.
+	client.send(t, first.secrets.encryptSubsequentBinary(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":3}`), 2))
+	client.expectNothing(t)
+	require.NotNil(t, client.session())
+
+	rig.clock.Advance(bleGapTimeout - time.Second)
+	require.NotNil(t, client.session(), "a gap is given time to close")
+	rig.clock.Advance(2 * time.Second)
+	client.expectSessionClosed(t)
+	client.waitClosed(t)
+}
+
+// A gap that closes in time is ordinary reordering and costs nothing.
+func TestBLESession_LateChunkWithinTheGapTimeoutIsFine(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, 517)
+	client.authenticate(t, first)
+
+	late := client.chunks(t, first.secrets.encryptSubsequentBinary(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":2}`), 1))
+	client.send(t, first.secrets.encryptSubsequentBinary(
+		t, []byte(`{"jsonrpc":"2.0","method":"version","id":3}`), 2))
+	rig.clock.Advance(bleGapTimeout / 2)
+	client.write(late[0])
+
+	// Both are answered, in whichever order the handlers finish.
+	answered := make([]models.RPCID, 0, 2)
+	for counter := uint64(1); counter <= 2; counter++ {
+		var resp models.ResponseObject
+		require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), counter), &resp))
+		answered = append(answered, resp.ID)
+	}
+	assert.ElementsMatch(t, []models.RPCID{models.NewNumberID(2), models.NewNumberID(3)}, answered)
+
+	rig.clock.Advance(2 * bleGapTimeout)
+	client.expectNothing(t)
+	assert.NotNil(t, client.session())
+}
+
+// Not every stack lets Core drop a link. A peer that keeps writing after its
+// session was ended is ignored until it disconnects, instead of getting a
+// new session and a new closing notice for every chunk.
+func TestBLESession_PeerIsIgnoredAfterItsSessionIsEndedUntilItDisconnects(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	client := rig.client("11:22:33:44:55:66", 7, 185)
+	client.openPending(t)
+	require.NotNil(t, client.session())
+
+	client.write(apigatt.EncodeAck(client.tag, 1))
+	client.expectSessionClosed(t)
+	client.waitClosed(t)
+
+	for range 5 {
+		client.send(t, []byte(`{"jsonrpc":"2.0","method":"pair.start","id":1}`))
+	}
+	client.expectNothing(t)
+	assert.Nil(t, client.session(), "no new session while the peer is still connected")
+
+	// Once it has gone, it may come back.
+	rig.peripheral.Handler().OnDisconnect(client.peer)
+	again := rig.client("11:22:33:44:55:66", 8, 185)
+	again.openPending(t)
+	assert.NotNil(t, again.session())
+}
+
+// If the disconnect is never seen, the peer is not locked out for good.
+func TestBLESession_IgnoredPeerIsAllowedBackAfterAWhile(t *testing.T) {
+	t.Parallel()
+
+	rig := newBLETestRig(t, bleTestRigOptions{})
+	client := rig.client("11:22:33:44:55:66", 7, 185)
+	client.openPending(t)
+	client.write(apigatt.EncodeAck(client.tag, 1))
+	client.expectSessionClosed(t)
+	client.waitClosed(t)
+
+	rig.clock.Advance(bleRefuseFor + time.Second)
+	again := rig.client("11:22:33:44:55:66", 8, 185)
+	again.openPending(t)
+	assert.NotNil(t, again.session())
 }
 
 func TestBLESession_BadAcknowledgementClosesSession(t *testing.T) {

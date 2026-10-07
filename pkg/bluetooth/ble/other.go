@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -19,11 +19,11 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package bluez
+package ble
 
 import "context"
 
-// Open reports ErrUnsupported: only Linux has a BlueZ implementation. The
+// Open reports ErrUnsupported: this platform has no implementation. The
 // options are still validated so callers see the same errors everywhere.
 func Open(_ context.Context, opts ...Option) (Adapter, error) {
 	_ = applyOptions(opts)

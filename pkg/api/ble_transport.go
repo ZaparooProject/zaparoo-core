@@ -26,11 +26,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
@@ -66,7 +67,12 @@ type bleTransport struct {
 	// private address, so it cannot be the only one.
 	pairLimiter *rate.Limiter
 	sessions    map[string]*bleSession
-	peripheral  bluez.Peripheral
+	// refused holds the peers whose session Core ended, and when. Not
+	// every stack can drop a link, and a client that keeps writing after
+	// being told its session is over would otherwise get a new session,
+	// and a new closing notice, for every chunk.
+	refused     map[string]time.Time
+	peripheral  ble.Peripheral
 	serveCancel context.CancelFunc
 	// unregister detaches serve from the bluetooth manager on stop.
 	unregister func()
@@ -83,6 +89,7 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 		bleTransportDeps: *d,
 		pairLimiter:      rate.NewLimiter(bleTransportPairingRate, bleTransportPairingBurst),
 		sessions:         make(map[string]*bleSession),
+		refused:          make(map[string]time.Time),
 	}
 	t.ctx, t.cancel = context.WithCancel(d.core.st.GetContext())
 	if t.clock == nil {
@@ -101,14 +108,14 @@ func newBLETransport(d *bleTransportDeps) *bleTransport {
 }
 
 // application is the GATT layout the app expects.
-func (*bleTransport) application() bluez.Application {
-	return bluez.Application{Services: []bluez.Service{{
+func (*bleTransport) application() ble.Application {
+	return ble.Application{Services: []ble.Service{{
 		UUID:    apigatt.ServiceUUID,
 		Primary: true,
-		Characteristics: []bluez.Characteristic{
-			{UUID: apigatt.RXCharUUID, Flags: []string{bluez.FlagWrite, bluez.FlagWriteWithoutResponse}},
-			{UUID: apigatt.TXCharUUID, Flags: []string{bluez.FlagNotify}},
-			{UUID: apigatt.InfoCharUUID, Flags: []string{bluez.FlagRead}},
+		Characteristics: []ble.Characteristic{
+			{UUID: apigatt.RXCharUUID, Flags: []string{ble.FlagWrite, ble.FlagWriteWithoutResponse}},
+			{UUID: apigatt.TXCharUUID, Flags: []string{ble.FlagNotify}},
+			{UUID: apigatt.InfoCharUUID, Flags: []string{ble.FlagRead}},
 		},
 	}}}
 }
@@ -124,7 +131,7 @@ func (t *bleTransport) localName() string {
 // serve starts serving on a peripheral. The bluetooth manager calls it each
 // time an adapter becomes ready; it returns at once and serves in the
 // background until the peripheral goes away or the transport stops.
-func (t *bleTransport) serve(p bluez.Peripheral) {
+func (t *bleTransport) serve(p ble.Peripheral) {
 	t.mu.Lock()
 	if t.stopped {
 		t.mu.Unlock()
@@ -143,7 +150,7 @@ func (t *bleTransport) serve(p bluez.Peripheral) {
 
 	// The name is read once here: renaming the device takes effect the
 	// next time advertising starts.
-	adv := bluez.Advertisement{LocalName: t.localName(), ServiceUUIDs: []string{apigatt.ServiceUUID}}
+	adv := ble.Advertisement{LocalName: t.localName(), ServiceUUIDs: []string{apigatt.ServiceUUID}}
 	go func() {
 		defer t.wg.Done()
 		err := p.Serve(ctx, t.application(), adv, t)
@@ -183,7 +190,7 @@ func (t *bleTransport) stop() {
 
 // closeSessions ends every session served by p, or every session when p is
 // nil.
-func (t *bleTransport) closeSessions(reason string, p bluez.Peripheral) {
+func (t *bleTransport) closeSessions(reason string, p ble.Peripheral) {
 	t.mu.Lock()
 	sessions := make([]*bleSession, 0, len(t.sessions))
 	for _, s := range t.sessions {
@@ -198,7 +205,7 @@ func (t *bleTransport) closeSessions(reason string, p bluez.Peripheral) {
 }
 
 // sessionFor returns the session for a peer, creating it on first contact.
-func (t *bleTransport) sessionFor(peer bluez.Peer) *bleSession {
+func (t *bleTransport) sessionFor(peer ble.Peer) *bleSession {
 	if peer.Path == "" {
 		return nil
 	}
@@ -210,6 +217,12 @@ func (t *bleTransport) sessionFor(peer bluez.Peer) *bleSession {
 	if s, ok := t.sessions[peer.Path]; ok {
 		return s
 	}
+	if at, ok := t.refused[peer.Path]; ok {
+		if t.clock.Since(at) < bleRefuseFor {
+			return nil
+		}
+		delete(t.refused, peer.Path)
+	}
 	if t.peripheral == nil {
 		return nil
 	}
@@ -218,6 +231,14 @@ func (t *bleTransport) sessionFor(peer bluez.Peer) *bleSession {
 	t.lastServeErr = ""
 	log.Info().Str("peer", peer.Address).Msg("bluetooth client connected")
 	return s
+}
+
+// refuse stops a peer whose session Core ended from starting another until
+// it disconnects, or until long enough has passed that it must have.
+func (t *bleTransport) refuse(peer ble.Peer) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.refused[peer.Path] = t.clock.Now()
 }
 
 // forget removes a session from the table once it has closed.
@@ -229,8 +250,8 @@ func (t *bleTransport) forget(s *bleSession) {
 	}
 }
 
-// OnWrite implements bluez.PeripheralHandler: every write to RX is a chunk.
-func (t *bleTransport) OnWrite(peer bluez.Peer, charUUID string, value []byte, mtu int) {
+// OnWrite implements ble.PeripheralHandler: every write to RX is a chunk.
+func (t *bleTransport) OnWrite(peer ble.Peer, charUUID string, value []byte, mtu int) {
 	if !strings.EqualFold(charUUID, apigatt.RXCharUUID) {
 		return
 	}
@@ -239,10 +260,10 @@ func (t *bleTransport) OnWrite(peer bluez.Peer, charUUID string, value []byte, m
 	}
 }
 
-// OnRead implements bluez.PeripheralHandler: only Info is readable.
-func (t *bleTransport) OnRead(_ bluez.Peer, charUUID string) ([]byte, error) {
+// OnRead implements ble.PeripheralHandler: only Info is readable.
+func (t *bleTransport) OnRead(_ ble.Peer, charUUID string) ([]byte, error) {
 	if !strings.EqualFold(charUUID, apigatt.InfoCharUUID) {
-		return nil, bluez.ErrNotFound
+		return nil, ble.ErrNotFound
 	}
 	data, err := json.Marshal(apigatt.NewInfo(t.core.cfg.DeviceID()))
 	if err != nil {
@@ -251,17 +272,18 @@ func (t *bleTransport) OnRead(_ bluez.Peer, charUUID string) ([]byte, error) {
 	return data, nil
 }
 
-// OnSubscribe implements bluez.PeripheralHandler. BlueZ does not say which
+// OnSubscribe implements ble.PeripheralHandler. BlueZ does not say which
 // peer subscribed, so there is nothing to act on: sessions start on the
 // first write and end when the peer disconnects.
-func (*bleTransport) OnSubscribe(_ bluez.Peer, charUUID string, subscribed bool) {
+func (*bleTransport) OnSubscribe(_ ble.Peer, charUUID string, subscribed bool) {
 	log.Trace().Str("characteristic", charUUID).Bool("subscribed", subscribed).Msg("ble: subscription changed")
 }
 
-// OnDisconnect implements bluez.PeripheralHandler.
-func (t *bleTransport) OnDisconnect(peer bluez.Peer) {
+// OnDisconnect implements ble.PeripheralHandler.
+func (t *bleTransport) OnDisconnect(peer ble.Peer) {
 	t.mu.Lock()
 	s := t.sessions[peer.Path]
+	delete(t.refused, peer.Path)
 	t.mu.Unlock()
 	if s != nil {
 		s.shutdownWith("client disconnected", false)
@@ -304,10 +326,10 @@ func (t *bleTransport) broadcast(notifs <-chan models.Notification) {
 }
 
 // disconnectPeer asks the peripheral to drop a peer, best effort.
-func disconnectPeer(p bluez.Peripheral, peer bluez.Peer) {
-	ctx, cancel := context.WithTimeout(context.Background(), bluez.DefaultCallTimeout)
+func disconnectPeer(p ble.Peripheral, peer ble.Peer) {
+	ctx, cancel := context.WithTimeout(context.Background(), ble.DefaultCallTimeout)
 	defer cancel()
-	if err := p.Disconnect(ctx, peer); err != nil && !errors.Is(err, bluez.ErrNotFound) {
+	if err := p.Disconnect(ctx, peer); err != nil && !errors.Is(err, ble.ErrNotFound) {
 		log.Debug().Err(err).Str("peer", peer.Address).Msg("bluetooth disconnect failed")
 	}
 }

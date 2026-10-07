@@ -66,7 +66,8 @@ func runClient(ctx context.Context, args []string) error {
 	fs.StringVar(&o.link.name, "match", "", "when scanning, only accept an advertised name containing this")
 	fs.IntVar(&o.link.mtu, "mtu", 0, "ATT MTU to chunk for; read from BlueZ when 0")
 	fs.DurationVar(&o.link.scanFor, "scan", 30*time.Second, "how long to scan before giving up")
-	fs.BoolVar(&o.link.withResponse, "write-requests", false, "send every chunk as a write request")
+	fast := fs.Bool("fast-writes", false,
+		"send most chunks as writes without a response, which some stacks drop under load")
 	fs.StringVar(&o.creds, "creds", "bletest-creds.json", "where pairing credentials are kept")
 	fs.StringVar(&o.pin, "pair", "", "pair first using this PIN and save the credentials")
 	fs.StringVar(&o.name, "client-name", "bletest", "client name to pair under")
@@ -83,6 +84,7 @@ func runClient(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+	o.link.withResponse = !*fast
 
 	adapter, err := openAdapter(ctx)
 	if err != nil {
@@ -230,6 +232,15 @@ func expectDropped(ctx context.Context, l *link, what string) error {
 		log.Info().Msgf("PASS: core dropped the connection after %s", what)
 		return nil
 	case msg := <-l.msgs:
+		// A stack that cannot drop the link, as on Windows, can only say
+		// so: Core's closing notice is a plaintext error.
+		var notice struct {
+			Error *rpcError `json:"error"`
+		}
+		if json.Unmarshal(msg, &notice) == nil && notice.Error != nil {
+			log.Info().Err(notice.Error).Msgf("PASS: core ended the session after %s", what)
+			return nil //nolint:nilerr // the notice is the outcome being tested for
+		}
 		return fmt.Errorf("core answered %s with %q", what, truncate(msg))
 	case <-time.After(45 * time.Second):
 		return fmt.Errorf("core kept the connection open after %s", what)

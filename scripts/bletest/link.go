@@ -30,28 +30,30 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
+
+// ackedWriteEvery is how often a chunk is sent as a write request rather
+// than a write without response.
+const ackedWriteEvery = 8
 
 // link is one connection to Core's GATT service: it finds the device,
 // chunks what it sends, reassembles what it receives and acknowledges it.
 type link struct {
-	dev    bluez.Device
-	rx     bluez.RemoteCharacteristic
-	msgs   chan []byte
-	cancel context.CancelFunc
-	info   apigatt.Info
-	mtu    int
-	// bytesIn counts reassembled bytes and chunksIn data chunks received,
-	// for throughput figures.
-	bytesIn  atomic.Int64
-	chunksIn atomic.Int64
-	chunker  apigatt.Chunker
-	// noAck stops the client acknowledging, to prove Core stops sending.
-	noAck atomic.Bool
-	tag   uint16
-	// withResponse sends every chunk as a write request.
+	rx           ble.RemoteCharacteristic
+	dev          ble.Device
+	msgs         chan []byte
+	cancel       context.CancelFunc
+	info         apigatt.Info
+	mtu          int
+	bytesIn      atomic.Int64
+	chunksIn     atomic.Int64
+	writeMu      syncutil.Mutex
+	noAck        atomic.Bool
+	chunker      apigatt.Chunker
+	tag          uint16
 	withResponse bool
 }
 
@@ -64,7 +66,7 @@ type linkOptions struct {
 }
 
 // dial scans for Core, connects and reads the Info characteristic.
-func dial(ctx context.Context, central bluez.Central, opts linkOptions) (*link, error) {
+func dial(ctx context.Context, central ble.Central, opts linkOptions) (*link, error) {
 	address := opts.address
 	if address == "" {
 		found, err := discover(ctx, central, opts)
@@ -93,11 +95,11 @@ func dial(ctx context.Context, central bluez.Central, opts linkOptions) (*link, 
 }
 
 // discover scans for a device advertising the Zaparoo service.
-func discover(ctx context.Context, central bluez.Central, opts linkOptions) (string, error) {
+func discover(ctx context.Context, central ble.Central, opts linkOptions) (string, error) {
 	scanCtx, cancel := context.WithTimeout(ctx, opts.scanFor)
 	defer cancel()
 	started := time.Now()
-	results, err := central.Scan(scanCtx, bluez.ScanFilter{ServiceUUIDs: []string{apigatt.ServiceUUID}})
+	results, err := central.Scan(scanCtx, ble.ScanFilter{ServiceUUIDs: []string{apigatt.ServiceUUID}})
 	if err != nil {
 		return "", fmt.Errorf("scan: %w", err)
 	}
@@ -218,17 +220,31 @@ func (l *link) receive(ctx context.Context, chunks <-chan []byte) {
 }
 
 func (l *link) write(ctx context.Context, chunk []byte) error {
-	if err := l.rx.Write(ctx, chunk, l.withResponse); err != nil {
+	return l.writeChunk(ctx, chunk, l.withResponse)
+}
+
+func (l *link) writeChunk(ctx context.Context, chunk []byte, withResponse bool) error {
+	// One write at a time: data chunks and acknowledgements come from
+	// different goroutines, and a stack refuses a second write request
+	// while one is waiting for its response.
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	if err := l.rx.Write(ctx, chunk, withResponse); err != nil {
 		return fmt.Errorf("write chunk: %w", err)
 	}
 	return nil
 }
 
-// send chunks one message onto RX.
+// send chunks one message onto RX. A write without a response can be
+// dropped by the receiving stack when it falls behind, so every
+// ackedWriteEvery-th chunk of a message goes as a write request: waiting for
+// its response is what keeps the sender from outrunning the receiver.
 func (l *link) send(ctx context.Context, msg []byte) error {
+	sent := 0
 	//nolint:wrapcheck // write errors are wrapped where they happen
 	return l.chunker.Split(msg, l.mtu, func(chunk []byte) error {
-		return l.write(ctx, chunk)
+		sent++
+		return l.writeChunk(ctx, chunk, l.withResponse || sent%ackedWriteEvery == 0)
 	})
 }
 
@@ -251,7 +267,7 @@ func (l *link) close() {
 	if l.cancel != nil {
 		l.cancel()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), bluez.DefaultCallTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ble.DefaultCallTimeout)
 	defer cancel()
 	if err := l.dev.Disconnect(ctx); err != nil {
 		log.Debug().Err(err).Msg("disconnect failed")

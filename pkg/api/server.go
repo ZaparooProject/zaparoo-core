@@ -147,6 +147,15 @@ func isHTTPClientDisconnect(err error) bool {
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
+// JSONRPCErrorSessionClosed is the last thing Core sends on a Bluetooth
+// session it is ending, in plaintext because the session's encryption can
+// no longer be relied on. Data holds the reason. Not every Bluetooth stack
+// lets Core drop the link itself, so this is how the client is told.
+var JSONRPCErrorSessionClosed = models.ErrorObject{
+	Code:    -32004,
+	Message: "session closed",
+}
+
 // JSONRPCErrorPairingFailed is returned by the pre-auth pairing methods.
 // Data holds the HTTP status the pairing endpoints would have used and its
 // public message, so clients can share their handling.

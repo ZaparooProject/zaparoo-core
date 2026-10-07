@@ -50,7 +50,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -83,9 +83,9 @@ const (
 // Reader is a simple serial reader reached over BLE.
 type Reader struct {
 	cfg        *config.Instance
-	open       func(ctx context.Context) (bluez.Adapter, error)
+	open       func(ctx context.Context) (ble.Adapter, error)
 	clock      clockwork.Clock
-	adapter    bluez.Adapter
+	adapter    ble.Adapter
 	cancel     context.CancelFunc
 	done       chan struct{}
 	lastToken  *tokens.Token
@@ -98,18 +98,18 @@ type Reader struct {
 	removable  bool
 }
 
-// NewReader builds a reader over the real BlueZ layer. It never powers the
+// NewReader builds a reader over the system's Bluetooth stack. It never powers the
 // adapter on: a reader that keeps retrying must not keep switching a radio
 // back on that the user turned off.
 func NewReader(cfg *config.Instance) *Reader {
-	return newReaderWith(cfg, func(ctx context.Context) (bluez.Adapter, error) {
-		return bluez.Open(ctx)
+	return newReaderWith(cfg, func(ctx context.Context) (ble.Adapter, error) {
+		return ble.Open(ctx)
 	}, clockwork.NewRealClock())
 }
 
 func newReaderWith(
 	cfg *config.Instance,
-	open func(ctx context.Context) (bluez.Adapter, error),
+	open func(ctx context.Context) (ble.Adapter, error),
 	clock clockwork.Clock,
 ) *Reader {
 	return &Reader{
@@ -142,7 +142,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
-	address, err := bluez.NormalizeAddress(device.Path)
+	address, err := ble.NormalizeAddress(device.Path)
 	if err != nil {
 		return fmt.Errorf("reader path: %w", err)
 	}
@@ -178,7 +178,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 // run keeps the device connected for as long as the reader is attached.
 // What it needs is passed in rather than read from the reader, so Close
 // can clear the reader's fields without racing this goroutine.
-func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- struct{}, iq chan<- readers.Scan) {
+func (r *Reader) run(ctx context.Context, central ble.Central, done chan<- struct{}, iq chan<- readers.Scan) {
 	defer close(done)
 
 	reported := false
@@ -218,7 +218,7 @@ func (r *Reader) run(ctx context.Context, central bluez.Central, done chan<- str
 }
 
 // connect finds and connects the device and subscribes to its TX stream.
-func (r *Reader) connect(ctx context.Context, central bluez.Central) (bluez.Device, <-chan []byte, error) {
+func (r *Reader) connect(ctx context.Context, central ble.Central) (ble.Device, <-chan []byte, error) {
 	dev, err := central.Find(ctx, r.address)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find: %w", err)
@@ -241,8 +241,8 @@ func (r *Reader) connect(ctx context.Context, central bluez.Central) (bluez.Devi
 }
 
 // disconnect drops the link, best effort.
-func (*Reader) disconnect(dev bluez.Device) {
-	ctx, cancel := context.WithTimeout(context.Background(), bluez.DefaultCallTimeout)
+func (*Reader) disconnect(dev ble.Device) {
+	ctx, cancel := context.WithTimeout(context.Background(), ble.DefaultCallTimeout)
 	defer cancel()
 	if err := dev.Disconnect(ctx); err != nil {
 		log.Debug().Err(err).Msg("bluetooth reader disconnect failed")
@@ -257,7 +257,7 @@ func (r *Reader) setLinked(linked bool) {
 
 // readLoop turns the notification stream into scans until the link drops
 // or the reader is closed.
-func (r *Reader) readLoop(ctx context.Context, iq chan<- readers.Scan, dev bluez.Device, values <-chan []byte) {
+func (r *Reader) readLoop(ctx context.Context, iq chan<- readers.Scan, dev ble.Device, values <-chan []byte) {
 	splitter := simpleproto.NewLineSplitter(0)
 	ticker := r.clock.NewTicker(removalPoll)
 	defer ticker.Stop()

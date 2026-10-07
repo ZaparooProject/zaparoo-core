@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/rs/zerolog/log"
 )
 
@@ -70,17 +70,17 @@ func parseScript(script string) ([]readerStep, error) {
 // readerHandler logs what the connected Core does.
 type readerHandler struct{}
 
-func (readerHandler) OnWrite(peer bluez.Peer, _ string, value []byte, _ int) {
+func (readerHandler) OnWrite(peer ble.Peer, _ string, value []byte, _ int) {
 	log.Info().Str("peer", peer.Address).Bytes("value", value).Msg("core wrote to the reader")
 }
 
-func (readerHandler) OnRead(bluez.Peer, string) ([]byte, error) { return nil, bluez.ErrNotFound }
+func (readerHandler) OnRead(ble.Peer, string) ([]byte, error) { return nil, ble.ErrNotFound }
 
-func (readerHandler) OnSubscribe(_ bluez.Peer, _ string, subscribed bool) {
+func (readerHandler) OnSubscribe(_ ble.Peer, _ string, subscribed bool) {
 	log.Info().Bool("subscribed", subscribed).Msg("core subscription changed")
 }
 
-func (readerHandler) OnDisconnect(peer bluez.Peer) {
+func (readerHandler) OnDisconnect(peer ble.Peer) {
 	log.Info().Str("peer", peer.Address).Msg("core disconnected")
 }
 
@@ -107,15 +107,15 @@ func runReader(ctx context.Context, args []string) error {
 		return fmt.Errorf("peripheral role: %w", err)
 	}
 
-	app := bluez.Application{Services: []bluez.Service{{
+	app := ble.Application{Services: []ble.Service{{
 		UUID:    nusServiceUUID,
 		Primary: true,
-		Characteristics: []bluez.Characteristic{
-			{UUID: nusRXUUID, Flags: []string{bluez.FlagWrite, bluez.FlagWriteWithoutResponse}},
-			{UUID: nusTXUUID, Flags: []string{bluez.FlagNotify}},
+		Characteristics: []ble.Characteristic{
+			{UUID: nusRXUUID, Flags: []string{ble.FlagWrite, ble.FlagWriteWithoutResponse}},
+			{UUID: nusTXUUID, Flags: []string{ble.FlagNotify}},
 		},
 	}}}
-	adv := bluez.Advertisement{LocalName: *name, ServiceUUIDs: []string{nusServiceUUID}}
+	adv := ble.Advertisement{LocalName: *name, ServiceUUIDs: []string{nusServiceUUID}}
 
 	served := make(chan error, 1)
 	go func() { served <- peripheral.Serve(ctx, app, adv, readerHandler{}) }()
@@ -146,7 +146,7 @@ func runReader(ctx context.Context, args []string) error {
 }
 
 // playStep holds one token on the reader, or none, for the step's duration.
-func playStep(ctx context.Context, peripheral bluez.Peripheral, step readerStep) error {
+func playStep(ctx context.Context, peripheral ble.Peripheral, step readerStep) error {
 	log.Info().Str("uid", step.uid).Dur("for", step.d).Msg("reader state")
 	deadline := time.After(step.d)
 	ticker := time.NewTicker(scanRepeat)
@@ -154,7 +154,8 @@ func playStep(ctx context.Context, peripheral bluez.Peripheral, step readerStep)
 	for {
 		if step.uid != "" {
 			line := "SCAN\tuid=" + step.uid + "\n"
-			if err := peripheral.Notify(nusTXUUID, []byte(line)); err != nil && !errors.Is(err, bluez.ErrNotFound) {
+			err := peripheral.Notify(ble.Peer{}, nusTXUUID, []byte(line))
+			if err != nil && !errors.Is(err, ble.ErrNotFound) {
 				return fmt.Errorf("notify: %w", err)
 			}
 		}

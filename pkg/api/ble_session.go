@@ -33,7 +33,7 @@ import (
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/apigatt"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -49,6 +49,14 @@ const (
 	// and droppable notifications get skipped. A single message may be far
 	// larger; it is the backlog behind it that is held back.
 	bleOutboundHighWater = 1 << 20
+	// bleGapTimeout is how long a chunk may be missing while later ones
+	// wait for it. Reordering closes a gap in milliseconds; one that stays
+	// open is a write the Bluetooth stack dropped, and nothing more can
+	// be read from the connection.
+	bleGapTimeout = 10 * time.Second
+	// bleRefuseFor is how long a peer whose session Core ended is ignored
+	// if it is never seen to disconnect.
+	bleRefuseFor = 30 * time.Second
 	// bleAckTimeout is how long the writer waits, with the send window
 	// full, for the client to acknowledge anything at all.
 	bleAckTimeout = 30 * time.Second
@@ -114,41 +122,39 @@ const (
 // pre-auth pairing methods, establishes the encrypted session, feeds the
 // shared dispatcher, and chunks everything going back out.
 type bleSession struct {
-	t           *bleTransport
-	p           bluez.Peripheral
-	reasm       *apigatt.Reassembler
-	dispatcher  *wsSessionDispatcher
-	cs          *apimiddleware.ClientSession
-	idleTimer   clockwork.Timer
-	pairLimiter *rate.Limiter
-	inbound     chan []byte
-	outbound    chan []byte
-	// acks wakes the writer when the client acknowledges chunks; room
-	// wakes responses waiting for the queue to drain.
-	acks   chan struct{}
-	room   chan struct{}
-	ctx    context.Context
-	cancel context.CancelFunc
-	peer   bluez.Peer
-	// chunker numbers every chunk sent on this connection. sendMu keeps
-	// one message's chunks together on the wire.
-	chunker       apigatt.Chunker
+	idleTimer     clockwork.Timer
+	gapTimer      clockwork.Timer
+	p             ble.Peripheral
+	ctx           context.Context
+	cancel        context.CancelFunc
+	room          chan struct{}
+	dispatcher    *wsSessionDispatcher
+	pairLimiter   *rate.Limiter
+	inbound       chan []byte
+	outbound      chan []byte
+	acks          chan struct{}
+	cs            *apimiddleware.ClientSession
+	reasm         *apigatt.Reassembler
+	t             *bleTransport
+	peer          ble.Peer
+	farewell      []byte
 	outboundBytes int
 	mtu           int
-	sendMu        syncutil.Mutex
-	mu            syncutil.Mutex
 	closeOnce     sync.Once
+	mu            syncutil.Mutex
+	sendMu        syncutil.Mutex
+	chunker       apigatt.Chunker
 	tag           uint16
-	// sent is the sequence number after the last chunk handed to the
-	// radio; acked is the client's last acknowledgement.
-	sent   uint16
-	acked  uint16
+	sent          uint16
+	acked         uint16
+	// gapAt is the sequence number gapTimer is waiting on.
+	gapAt  uint16
 	tagSet bool
 	state  bleAuthState
 	closed bool
 }
 
-func newBLESession(t *bleTransport, peer bluez.Peer, p bluez.Peripheral) *bleSession {
+func newBLESession(t *bleTransport, peer ble.Peer, p ble.Peripheral) *bleSession {
 	ctx, cancel := context.WithCancel(t.ctx)
 	s := &bleSession{
 		t:           t,
@@ -222,6 +228,7 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 		return
 	}
 	msgs, err := s.reasm.Push(h, payload)
+	s.watchGapLocked()
 	queued := true
 	// Queued under the lock so messages are handled in the order the
 	// reassembler released them.
@@ -243,6 +250,30 @@ func (s *bleSession) handleChunk(chunk []byte, mtu int) {
 		return
 	}
 	s.touchIdle()
+}
+
+// watchGapLocked starts, restarts or stops the timer that gives up on a
+// chunk that never arrives. The caller holds s.mu.
+func (s *bleSession) watchGapLocked() {
+	if s.reasm.Held() == 0 {
+		if s.gapTimer != nil {
+			s.gapTimer.Stop()
+			s.gapTimer = nil
+		}
+		return
+	}
+	next := s.reasm.Next()
+	if s.gapTimer != nil && s.gapAt == next {
+		return
+	}
+	if s.gapTimer != nil {
+		s.gapTimer.Stop()
+	}
+	s.gapAt = next
+	s.gapTimer = s.t.clock.AfterFunc(bleGapTimeout, func() {
+		log.Warn().Str("peer", s.peer.Address).Uint16("missing", next).Msg("bluetooth chunk never arrived")
+		s.shutdown("a chunk was lost in transit")
+	})
 }
 
 func (s *bleSession) framingError(err error) {
@@ -360,10 +391,11 @@ func (s *bleSession) handleMessage(msg []byte) {
 		cs = frame.session
 		log.Info().Str("peer", s.peer.Address).Msg("bluetooth client authenticated")
 	case frameUnsupportedVersion:
-		// Sent on the spot: the queue would be cancelled by the shutdown
-		// before the writer got to it.
+		// The usual answer to this takes the place of the closing notice.
 		if data, marshalErr := unsupportedEncryptionVersionResponse(); marshalErr == nil {
-			s.writeNow(data)
+			s.mu.Lock()
+			s.farewell = data
+			s.mu.Unlock()
 		}
 		endTrackedRequest()
 		s.shutdown("unsupported encryption version")
@@ -616,7 +648,7 @@ func (s *bleSession) send(msg []byte, paced bool) error {
 		s.mu.Lock()
 		s.sent = s.chunker.Next()
 		s.mu.Unlock()
-		if err := s.p.Notify(apigatt.TXCharUUID, chunk); err != nil {
+		if err := s.p.Notify(s.peer, apigatt.TXCharUUID, chunk); err != nil {
 			return fmt.Errorf("notify: %w", err)
 		}
 		return nil
@@ -648,6 +680,12 @@ func (s *bleSession) waitWindow() error {
 // writeNow sends a message straight away, bypassing the queue and the send
 // window, for the last words of a session that is about to end.
 func (s *bleSession) writeNow(msg []byte) {
+	s.mu.Lock()
+	spoken := s.tagSet
+	s.mu.Unlock()
+	if len(msg) == 0 || !spoken {
+		return
+	}
 	if err := s.send(msg, false); err != nil {
 		log.Debug().Err(err).Str("peer", s.peer.Address).Msg("ble: final write failed")
 	}
@@ -681,6 +719,24 @@ func (s *bleSession) writer() {
 	}
 }
 
+// farewellMessage is the plaintext notice sent as a session Core is ending
+// closes.
+func (s *bleSession) farewellMessage(reason string) []byte {
+	s.mu.Lock()
+	farewell := s.farewell
+	s.mu.Unlock()
+	if farewell != nil {
+		return farewell
+	}
+	errObj := JSONRPCErrorSessionClosed
+	errObj.Data = map[string]any{"reason": reason}
+	data, err := json.Marshal(models.ResponseErrorObject{JSONRPC: "2.0", ID: models.NullRPCID, Error: &errObj})
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // shutdown ends the session and drops the peer's link.
 func (s *bleSession) shutdown(reason string) {
 	s.shutdownWith(reason, true)
@@ -694,6 +750,10 @@ func (s *bleSession) shutdownWith(reason string, disconnect bool) {
 		s.mu.Lock()
 		s.closed = true
 		timer := s.idleTimer
+		if s.gapTimer != nil {
+			s.gapTimer.Stop()
+			s.gapTimer = nil
+		}
 		s.mu.Unlock()
 
 		log.Info().Str("peer", s.peer.Address).Str("reason", reason).Msg("bluetooth client session closed")
@@ -702,9 +762,18 @@ func (s *bleSession) shutdownWith(reason string, disconnect bool) {
 			timer.Stop()
 		}
 		s.t.forget(s)
+		if disconnect {
+			s.t.refuse(s.peer)
+		}
 		s.t.wg.Add(1)
 		go func() {
 			defer s.t.wg.Done()
+			if disconnect {
+				// Sent before the dispatcher is torn down and the link
+				// dropped. On a stack that cannot drop the link it is the
+				// only notice the client gets.
+				s.writeNow(s.farewellMessage(reason))
+			}
 			s.dispatcher.close()
 			if disconnect {
 				disconnectPeer(s.p, s.peer)

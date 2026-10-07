@@ -28,7 +28,7 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Launch endpoint**: `/l/{zapscript}` - GET-based execution for QR codes
 - **Auth**: API keys via `auth.toml`, anonymous access from localhost
 - **Discovery**: mDNS (`_zaparoo._tcp`)
-- **Bluetooth LE** (Linux, on by default): the same JSON-RPC API and pairing over a GATT service, `pkg/bluetooth` + `pkg/api/ble_*.go`. See the "Bluetooth LE" section of `docs/api/index.md`.
+- **Bluetooth LE** (Linux and Windows, on by default): the same JSON-RPC API and pairing over a GATT service, `pkg/bluetooth` (BlueZ on Linux, WinRT on Windows) + `pkg/api/ble_*.go`. See the "Bluetooth LE" section of `docs/api/index.md`.
 - **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime, global UI). See `docs/api/notifications.md`.
 - **Full docs**: `docs/api/`
 

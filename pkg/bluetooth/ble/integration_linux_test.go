@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package bluez
+package ble
 
 import (
 	"bufio"
@@ -497,7 +497,7 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 		dbus.WithMatchInterface(propertiesIface), dbus.WithMatchMember("PropertiesChanged"),
 		dbus.WithMatchObjectPath(txPath),
 	))
-	require.NoError(t, peripheral.Notify(app.Services[0].Characteristics[1].UUID, []byte("reply")))
+	require.NoError(t, peripheral.Notify(Peer{}, app.Services[0].Characteristics[1].UUID, []byte("reply")))
 	select {
 	case sig := <-changes:
 		iface, changed, ok := propertiesChanged(sig)
@@ -508,7 +508,7 @@ func TestIntegration_PeripheralServesApplication(t *testing.T) {
 	case <-time.After(integrationWait):
 		t.Fatal("notify emitted no property change")
 	}
-	require.ErrorIs(t, peripheral.Notify("00000000-0000-0000-0000-000000000000", []byte("x")), ErrNotFound)
+	require.ErrorIs(t, peripheral.Notify(Peer{}, "00000000-0000-0000-0000-000000000000", []byte("x")), ErrNotFound)
 
 	// A device that was only ever seen by a scan and is then forgotten is
 	// not a peer leaving: it must not restart advertising.

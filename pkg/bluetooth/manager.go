@@ -27,7 +27,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
@@ -54,15 +54,15 @@ const (
 
 // PeripheralFunc is called with a ready peripheral each time one becomes
 // available. It must not block: start any long-running work on a goroutine.
-type PeripheralFunc func(bluez.Peripheral)
+type PeripheralFunc func(ble.Peripheral)
 
 // Manager keeps an adapter open while the BLE transport is enabled and
 // hands its peripheral side to whoever registered interest.
 type Manager struct {
 	cfg       *config.Instance
 	clock     clockwork.Clock
-	open      func(ctx context.Context) (bluez.Adapter, error)
-	adapter   bluez.Adapter
+	open      func(ctx context.Context) (ble.Adapter, error)
+	adapter   ble.Adapter
 	cancel    context.CancelFunc
 	done      chan struct{}
 	callbacks map[int]PeripheralFunc
@@ -85,19 +85,19 @@ type Manager struct {
 	unsupported bool
 }
 
-// NewManager builds a manager over the real BlueZ layer.
+// NewManager builds a manager over the system's Bluetooth stack.
 func NewManager(cfg *config.Instance) *Manager {
-	return newManagerWith(cfg, clockwork.NewRealClock(), func(ctx context.Context) (bluez.Adapter, error) {
+	return newManagerWith(cfg, clockwork.NewRealClock(), func(ctx context.Context) (ble.Adapter, error) {
 		// The user enabled the transport, so a powered-off adapter is
 		// switched on for them.
-		return bluez.Open(ctx, bluez.WithPowerOn())
+		return ble.Open(ctx, ble.WithPowerOn())
 	})
 }
 
 func newManagerWith(
 	cfg *config.Instance,
 	clock clockwork.Clock,
-	open func(ctx context.Context) (bluez.Adapter, error),
+	open func(ctx context.Context) (ble.Adapter, error),
 ) *Manager {
 	return &Manager{cfg: cfg, clock: clock, open: open, callbacks: make(map[int]PeripheralFunc)}
 }
@@ -137,7 +137,7 @@ func (m *Manager) Stop() {
 }
 
 // Roles reports what the open adapter supports, or nil without one.
-func (m *Manager) Roles() []bluez.Role {
+func (m *Manager) Roles() []ble.Role {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.adapter == nil {
@@ -248,7 +248,7 @@ func (m *Manager) tick(ctx context.Context) {
 
 	adapter, err := m.open(ctx)
 	if err != nil {
-		if errors.Is(err, bluez.ErrUnsupported) {
+		if errors.Is(err, ble.ErrUnsupported) {
 			// Nothing will change that on this platform, and the transport
 			// is on by default, so say nothing and stop asking.
 			m.mu.Lock()

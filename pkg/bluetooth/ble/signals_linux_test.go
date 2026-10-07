@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package bluez
+package ble
 
 import (
 	"testing"
@@ -179,4 +179,24 @@ func TestSignalRouter(t *testing.T) {
 	_, open = <-late
 	assert.False(t, open, "subscribing after close yields a closed channel")
 	cancelLate()
+}
+
+// The fake bluetoothd in the integration tests shares these constants with
+// the code under test, so nothing else would notice one of them being wrong.
+// They are BlueZ's published D-Bus names, spelled out.
+func TestBlueZNamesAreTheRealOnes(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "org.bluez", bluezService)
+	assert.Equal(t, "org.bluez.Adapter1", adapterIface)
+	assert.Equal(t, "org.bluez.Device1", deviceIface)
+	assert.Equal(t, "org.bluez.GattService1", gattServiceIface)
+	assert.Equal(t, "org.bluez.GattCharacteristic1", gattCharIface)
+	assert.Equal(t, "org.bluez.GattManager1", gattManagerIface)
+	assert.Equal(t, "org.bluez.LEAdvertisingManager1", advManagerIface)
+	assert.Equal(t, "org.bluez.LEAdvertisement1", advIface)
+	assert.Equal(t, "org.freedesktop.DBus.ObjectManager", objectManagerIface)
+	assert.Equal(t, "org.freedesktop.DBus.Properties", propertiesIface)
+	assert.Equal(t, "org.bluez.Error.Failed", bluezErrFailed)
+	assert.Equal(t, "org.bluez.Error.InProgress", bluezErrInProgress)
 }

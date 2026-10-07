@@ -42,7 +42,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -74,8 +74,8 @@ func run() error {
 
 // openAdapter opens the local adapter, powering it on: whoever runs this
 // tool wants the radio used.
-func openAdapter(ctx context.Context) (bluez.Adapter, error) {
-	adapter, err := bluez.Open(ctx, bluez.WithPowerOn())
+func openAdapter(ctx context.Context) (ble.Adapter, error) {
+	adapter, err := ble.Open(ctx, ble.WithPowerOn())
 	if err != nil {
 		return nil, err //nolint:wrapcheck // already names bluez
 	}

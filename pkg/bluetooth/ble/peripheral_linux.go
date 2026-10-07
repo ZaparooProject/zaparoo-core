@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package bluez
+package ble
 
 import (
 	"context"
@@ -56,7 +56,7 @@ const (
 	advRestartDelay = time.Second
 )
 
-var errAlreadyServing = errors.New("bluez: peripheral is already serving")
+var errAlreadyServing = errors.New("bluetooth: peripheral is already serving")
 
 // serveCounter numbers Serve calls for unique object paths.
 var serveCounter atomic.Uint64
@@ -474,8 +474,9 @@ func (p *peripheral) watchPeers(ctx context.Context, peersChanged func(peerLeft 
 }
 
 // Notify updates the characteristic value; bluetoothd turns the property
-// change into an ATT notification for every subscribed peer.
-func (p *peripheral) Notify(charUUID string, value []byte) error {
+// change into an ATT notification for every subscribed peer, whichever one
+// was asked for.
+func (p *peripheral) Notify(_ Peer, charUUID string, value []byte) error {
 	p.mu.Lock()
 	c := p.chars[strings.ToLower(charUUID)]
 	p.mu.Unlock()

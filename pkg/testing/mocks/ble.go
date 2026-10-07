@@ -24,24 +24,24 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
-// FakeAdapter is an in-memory bluez.Adapter.
+// FakeAdapter is an in-memory ble.Adapter.
 type FakeAdapter struct {
 	Periph   *FakePeripheral
 	Cent     *FakeCentral
 	gone     chan struct{}
 	Addr     string
-	RoleList []bluez.Role
+	RoleList []ble.Role
 	goneOnce sync.Once
 	mu       syncutil.Mutex
 	closed   bool
 }
 
 // NewFakeAdapter returns an adapter reporting the given roles.
-func NewFakeAdapter(roles ...bluez.Role) *FakeAdapter {
+func NewFakeAdapter(roles ...ble.Role) *FakeAdapter {
 	return &FakeAdapter{
 		Periph:   NewFakePeripheral(),
 		Cent:     NewFakeCentral(),
@@ -53,18 +53,18 @@ func NewFakeAdapter(roles ...bluez.Role) *FakeAdapter {
 
 func (a *FakeAdapter) Address() string { return a.Addr }
 
-func (a *FakeAdapter) Roles() []bluez.Role { return append([]bluez.Role(nil), a.RoleList...) }
+func (a *FakeAdapter) Roles() []ble.Role { return append([]ble.Role(nil), a.RoleList...) }
 
-func (a *FakeAdapter) Peripheral() (bluez.Peripheral, error) {
-	if !bluez.SupportsRole(a.RoleList, bluez.RolePeripheral) {
-		return nil, bluez.ErrRoleUnsupported
+func (a *FakeAdapter) Peripheral() (ble.Peripheral, error) {
+	if !ble.SupportsRole(a.RoleList, ble.RolePeripheral) {
+		return nil, ble.ErrRoleUnsupported
 	}
 	return a.Periph, nil
 }
 
-func (a *FakeAdapter) Central() (bluez.Central, error) {
-	if !bluez.SupportsRole(a.RoleList, bluez.RoleCentral) {
-		return nil, bluez.ErrRoleUnsupported
+func (a *FakeAdapter) Central() (ble.Central, error) {
+	if !ble.SupportsRole(a.RoleList, ble.RoleCentral) {
+		return nil, ble.ErrRoleUnsupported
 	}
 	return a.Cent, nil
 }
@@ -97,14 +97,14 @@ type FakeNotification struct {
 	Value    []byte
 }
 
-// FakePeripheral is an in-memory bluez.Peripheral. Serve blocks until its
+// FakePeripheral is an in-memory ble.Peripheral. Serve blocks until its
 // context ends; tests drive the handler it was given through Handler.
 type FakePeripheral struct {
-	handler       bluez.PeripheralHandler
+	handler       ble.PeripheralHandler
 	Notifications chan FakeNotification
-	app           bluez.Application
-	adv           bluez.Advertisement
-	disconnects   []bluez.Peer
+	app           ble.Application
+	adv           ble.Advertisement
+	disconnects   []ble.Peer
 	mu            syncutil.Mutex
 }
 
@@ -115,7 +115,7 @@ func NewFakePeripheral() *FakePeripheral {
 }
 
 func (p *FakePeripheral) Serve(
-	ctx context.Context, app bluez.Application, adv bluez.Advertisement, h bluez.PeripheralHandler,
+	ctx context.Context, app ble.Application, adv ble.Advertisement, h ble.PeripheralHandler,
 ) error {
 	p.mu.Lock()
 	p.handler = h
@@ -130,27 +130,27 @@ func (p *FakePeripheral) Serve(
 }
 
 // Handler returns the handler of the active Serve call, or nil.
-func (p *FakePeripheral) Handler() bluez.PeripheralHandler {
+func (p *FakePeripheral) Handler() ble.PeripheralHandler {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.handler
 }
 
 // Application returns what the active Serve call registered.
-func (p *FakePeripheral) Application() bluez.Application {
+func (p *FakePeripheral) Application() ble.Application {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.app
 }
 
 // Advertisement returns what the active Serve call advertised.
-func (p *FakePeripheral) Advertisement() bluez.Advertisement {
+func (p *FakePeripheral) Advertisement() ble.Advertisement {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.adv
 }
 
-func (p *FakePeripheral) Notify(charUUID string, value []byte) error {
+func (p *FakePeripheral) Notify(_ ble.Peer, charUUID string, value []byte) error {
 	n := FakeNotification{CharUUID: charUUID, Value: append([]byte(nil), value...)}
 	select {
 	case p.Notifications <- n:
@@ -159,7 +159,7 @@ func (p *FakePeripheral) Notify(charUUID string, value []byte) error {
 	return nil
 }
 
-func (p *FakePeripheral) Disconnect(_ context.Context, peer bluez.Peer) error {
+func (p *FakePeripheral) Disconnect(_ context.Context, peer ble.Peer) error {
 	p.mu.Lock()
 	p.disconnects = append(p.disconnects, peer)
 	p.mu.Unlock()
@@ -167,10 +167,10 @@ func (p *FakePeripheral) Disconnect(_ context.Context, peer bluez.Peer) error {
 }
 
 // Disconnects returns every peer Disconnect was called with.
-func (p *FakePeripheral) Disconnects() []bluez.Peer {
+func (p *FakePeripheral) Disconnects() []ble.Peer {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]bluez.Peer(nil), p.disconnects...)
+	return append([]ble.Peer(nil), p.disconnects...)
 }
 
 // FakeFind records one Find call.
@@ -178,7 +178,7 @@ type FakeFind struct {
 	Address string
 }
 
-// FakeCentral is an in-memory bluez.Central serving the devices it knows.
+// FakeCentral is an in-memory ble.Central serving the devices it knows.
 // Find for an unknown address blocks until the device is added or the
 // context ends, as a real scan does.
 type FakeCentral struct {
@@ -203,7 +203,7 @@ func (c *FakeCentral) AddDevice(d *FakeDevice) {
 	c.added = make(chan struct{})
 }
 
-func (c *FakeCentral) Find(ctx context.Context, address string) (bluez.Device, error) {
+func (c *FakeCentral) Find(ctx context.Context, address string) (ble.Device, error) {
 	c.mu.Lock()
 	c.finds = append(c.finds, FakeFind{Address: address})
 	c.mu.Unlock()
@@ -224,15 +224,15 @@ func (c *FakeCentral) Find(ctx context.Context, address string) (bluez.Device, e
 }
 
 // Scan reports every known device once, then waits for the context.
-func (c *FakeCentral) Scan(ctx context.Context, _ bluez.ScanFilter) (<-chan bluez.ScanResult, error) {
+func (c *FakeCentral) Scan(ctx context.Context, _ ble.ScanFilter) (<-chan ble.ScanResult, error) {
 	c.mu.Lock()
-	results := make([]bluez.ScanResult, 0, len(c.devices))
+	results := make([]ble.ScanResult, 0, len(c.devices))
 	for addr := range c.devices {
-		results = append(results, bluez.ScanResult{Address: addr, HasRSSI: true})
+		results = append(results, ble.ScanResult{Address: addr, HasRSSI: true})
 	}
 	c.mu.Unlock()
 
-	out := make(chan bluez.ScanResult, len(results))
+	out := make(chan ble.ScanResult, len(results))
 	for _, r := range results {
 		out <- r
 	}
@@ -250,7 +250,7 @@ func (c *FakeCentral) Finds() []FakeFind {
 	return append([]FakeFind(nil), c.finds...)
 }
 
-// FakeDevice is an in-memory bluez.Device.
+// FakeDevice is an in-memory ble.Device.
 type FakeDevice struct {
 	ConnectErr   error
 	chars        map[string]*FakeCharacteristic
@@ -307,12 +307,12 @@ func (d *FakeDevice) Disconnect(_ context.Context) error {
 	return nil
 }
 
-func (d *FakeDevice) Characteristic(serviceUUID, charUUID string) (bluez.RemoteCharacteristic, error) {
+func (d *FakeDevice) Characteristic(serviceUUID, charUUID string) (ble.RemoteCharacteristic, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c, ok := d.chars[charKey(serviceUUID, charUUID)]
 	if !ok {
-		return nil, bluez.ErrNotFound
+		return nil, ble.ErrNotFound
 	}
 	return c, nil
 }
@@ -327,7 +327,7 @@ func (d *FakeDevice) Drop() {
 	d.dropOnce.Do(func() { close(d.disconnected) })
 }
 
-// FakeCharacteristic is an in-memory bluez.RemoteCharacteristic. Push feeds
+// FakeCharacteristic is an in-memory ble.RemoteCharacteristic. Push feeds
 // notifications to subscribers.
 type FakeCharacteristic struct {
 	in chan []byte

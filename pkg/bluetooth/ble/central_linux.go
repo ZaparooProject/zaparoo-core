@@ -19,7 +19,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package bluez
+package ble
 
 import (
 	"context"
@@ -49,6 +49,10 @@ const (
 	// scanBuffer is how many scan results a consumer may leave unread
 	// before the oldest are dropped.
 	scanBuffer = 64
+
+	// writeResponseTimeout bounds a write that waits for the peripheral's
+	// acknowledgement.
+	writeResponseTimeout = 20 * time.Second
 
 	// notifyBuffer is how many notifications a subscriber may leave unread
 	// before the stream blocks bluetoothd's signal delivery to us.
@@ -432,7 +436,7 @@ func (d *device) Connect(ctx context.Context) error {
 	}
 }
 
-var errDisconnected = errors.New("bluez: device disconnected")
+var errDisconnected = errors.New("bluetooth: device disconnected")
 
 func (d *device) Disconnect(ctx context.Context) error {
 	return d.a.call(ctx, d.obj, deviceIface+".Disconnect")
@@ -593,5 +597,16 @@ func (rc *remoteChar) Write(ctx context.Context, value []byte, withResponse bool
 		kind = "request"
 	}
 	options := map[string]dbus.Variant{"type": dbus.MakeVariant(kind)}
-	return rc.d.a.call(ctx, rc.obj, gattCharIface+".WriteValue", value, options)
+	if !withResponse {
+		return rc.d.a.call(ctx, rc.obj, gattCharIface+".WriteValue", value, options)
+	}
+	// The response comes back only after everything queued ahead of this
+	// write has crossed the link, which on a slow one takes far longer
+	// than an ordinary D-Bus round trip.
+	cctx, cancel := context.WithTimeout(ctx, writeResponseTimeout)
+	defer cancel()
+	if call := rc.obj.CallWithContext(cctx, gattCharIface+".WriteValue", 0, value, options); call.Err != nil {
+		return mapBusError(gattCharIface+".WriteValue", call.Err)
+	}
+	return nil
 }

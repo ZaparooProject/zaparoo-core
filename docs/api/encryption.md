@@ -267,6 +267,7 @@ WebSocket errors (plaintext JSON-RPC error, then connection closed):
 |---|---|
 | -32001 | Unsupported encryption version |
 | -32002 | Encryption required. Remote clients must send an encrypted first frame. |
+| -32004 | Session closed (Bluetooth LE only). Sent in plaintext as Core ends a session; `data.reason` says why. |
 | -32005 | Pairing failed (Bluetooth LE `pair.start` / `pair.finish` only). `data.status` and `data.message` mirror the HTTP endpoints. |
 
 ## Connection lifecycle

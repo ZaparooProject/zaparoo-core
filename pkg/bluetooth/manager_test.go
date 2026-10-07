@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
@@ -46,11 +46,11 @@ func newTestConfig(t *testing.T, enabled bool) *config.Instance {
 
 // peripheralRecorder counts the peripherals handed to OnPeripheral.
 type peripheralRecorder struct {
-	last  atomic.Pointer[bluez.Peripheral]
+	last  atomic.Pointer[ble.Peripheral]
 	calls atomic.Int32
 }
 
-func (r *peripheralRecorder) fn(p bluez.Peripheral) {
+func (r *peripheralRecorder) fn(p ble.Peripheral) {
 	r.last.Store(&p)
 	r.calls.Add(1)
 }
@@ -68,9 +68,9 @@ func TestManager_DisabledNeverOpens(t *testing.T) {
 
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, false), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, false), clock, func(context.Context) (ble.Adapter, error) {
 		opens.Add(1)
-		return mocks.NewFakeAdapter(bluez.RolePeripheral), nil
+		return mocks.NewFakeAdapter(ble.RolePeripheral), nil
 	})
 	m.Start()
 	defer m.Stop()
@@ -84,9 +84,9 @@ func TestManager_DisabledNeverOpens(t *testing.T) {
 func TestManager_OpensAndHandsOutPeripheral(t *testing.T) {
 	t.Parallel()
 
-	adapter := mocks.NewFakeAdapter(bluez.RoleCentral, bluez.RolePeripheral)
+	adapter := mocks.NewFakeAdapter(ble.RoleCentral, ble.RolePeripheral)
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		return adapter, nil
 	})
 	var rec peripheralRecorder
@@ -95,7 +95,7 @@ func TestManager_OpensAndHandsOutPeripheral(t *testing.T) {
 
 	require.Eventually(t, func() bool { return rec.calls.Load() == 1 }, eventually, 10*time.Millisecond)
 	assert.Same(t, adapter.Periph, *rec.last.Load())
-	assert.Equal(t, []bluez.Role{bluez.RoleCentral, bluez.RolePeripheral}, m.Roles())
+	assert.Equal(t, []ble.Role{ble.RoleCentral, ble.RolePeripheral}, m.Roles())
 
 	m.Stop()
 	assert.True(t, adapter.Closed(), "Stop must close the adapter")
@@ -107,9 +107,9 @@ func TestManager_LateRegistrationGetsCurrentPeripheral(t *testing.T) {
 
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		opens.Add(1)
-		return mocks.NewFakeAdapter(bluez.RolePeripheral), nil
+		return mocks.NewFakeAdapter(ble.RolePeripheral), nil
 	})
 	m.Start()
 	defer m.Stop()
@@ -132,12 +132,12 @@ func TestManager_LateRegistrationGetsCurrentPeripheral(t *testing.T) {
 func TestManager_RetriesUntilAdapterAppears(t *testing.T) {
 	t.Parallel()
 
-	adapter := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	adapter := mocks.NewFakeAdapter(ble.RolePeripheral)
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		if opens.Add(1) < 3 {
-			return nil, bluez.ErrNoAdapter
+			return nil, ble.ErrNoAdapter
 		}
 		return adapter, nil
 	})
@@ -164,11 +164,11 @@ func TestManager_RetriesUntilAdapterAppears(t *testing.T) {
 func TestManager_ReopensAfterAdapterGone(t *testing.T) {
 	t.Parallel()
 
-	first := mocks.NewFakeAdapter(bluez.RolePeripheral)
-	second := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	first := mocks.NewFakeAdapter(ble.RolePeripheral)
+	second := mocks.NewFakeAdapter(ble.RolePeripheral)
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		if opens.Add(1) == 1 {
 			return first, nil
 		}
@@ -192,17 +192,17 @@ func TestManager_ReopensAfterAdapterGone(t *testing.T) {
 func TestManager_ReopensAtOnceAfterLosingAWorkingAdapter(t *testing.T) {
 	t.Parallel()
 
-	first := mocks.NewFakeAdapter(bluez.RolePeripheral)
-	second := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	first := mocks.NewFakeAdapter(ble.RolePeripheral)
+	second := mocks.NewFakeAdapter(ble.RolePeripheral)
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		switch opens.Add(1) {
 		case 1:
 			return first, nil
 		case 2, 3:
 			// bluetoothd is still coming back.
-			return nil, bluez.ErrUnavailable
+			return nil, ble.ErrUnavailable
 		default:
 			return second, nil
 		}
@@ -245,9 +245,9 @@ func TestManager_AdapterThatFailsAtOnceWaitsForTheInterval(t *testing.T) {
 
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		opens.Add(1)
-		a := mocks.NewFakeAdapter(bluez.RolePeripheral)
+		a := mocks.NewFakeAdapter(ble.RolePeripheral)
 		a.MarkGone()
 		return a, nil
 	})
@@ -274,9 +274,9 @@ func TestManager_UnsupportedPlatformIsAskedOnce(t *testing.T) {
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 	require.True(t, cfg.BLEEnabled(), "the transport is on by default")
-	m := newManagerWith(cfg, clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(cfg, clock, func(context.Context) (ble.Adapter, error) {
 		opens.Add(1)
-		return nil, bluez.ErrUnsupported
+		return nil, ble.ErrUnsupported
 	})
 	m.Start()
 	defer m.Stop()
@@ -292,10 +292,10 @@ func TestManager_UnsupportedPlatformIsAskedOnce(t *testing.T) {
 func TestManager_ClosesWhenDisabledAtRuntime(t *testing.T) {
 	t.Parallel()
 
-	adapter := mocks.NewFakeAdapter(bluez.RolePeripheral)
+	adapter := mocks.NewFakeAdapter(ble.RolePeripheral)
 	cfg := newTestConfig(t, true)
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(cfg, clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(cfg, clock, func(context.Context) (ble.Adapter, error) {
 		return adapter, nil
 	})
 	m.Start()
@@ -311,10 +311,10 @@ func TestManager_ClosesWhenDisabledAtRuntime(t *testing.T) {
 func TestManager_AdapterWithoutPeripheralRoleIsClosed(t *testing.T) {
 	t.Parallel()
 
-	adapter := mocks.NewFakeAdapter(bluez.RoleCentral)
+	adapter := mocks.NewFakeAdapter(ble.RoleCentral)
 	var opens atomic.Int32
 	clock := clockwork.NewFakeClock()
-	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clock, func(context.Context) (ble.Adapter, error) {
 		opens.Add(1)
 		return adapter, nil
 	})
@@ -336,7 +336,7 @@ func TestManager_AdapterWithoutPeripheralRoleIsClosed(t *testing.T) {
 func TestManager_StopBeforeStartAndTwice(t *testing.T) {
 	t.Parallel()
 
-	m := newManagerWith(newTestConfig(t, true), clockwork.NewFakeClock(), func(context.Context) (bluez.Adapter, error) {
+	m := newManagerWith(newTestConfig(t, true), clockwork.NewFakeClock(), func(context.Context) (ble.Adapter, error) {
 		return nil, errors.New("must not be called")
 	})
 	m.Stop()

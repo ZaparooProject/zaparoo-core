@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/ble"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -51,17 +51,17 @@ type testRig struct {
 
 // newTestRig builds a reader over a fake adapter. The device is only
 // findable once addDevice is called.
-func newTestRig(t *testing.T, roles ...bluez.Role) *testRig {
+func newTestRig(t *testing.T, roles ...ble.Role) *testRig {
 	t.Helper()
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 
 	if len(roles) == 0 {
-		roles = []bluez.Role{bluez.RoleCentral}
+		roles = []ble.Role{ble.RoleCentral}
 	}
 	adapter := mocks.NewFakeAdapter(roles...)
 	clock := clockwork.NewFakeClock()
-	reader := newReaderWith(cfg, func(context.Context) (bluez.Adapter, error) {
+	reader := newReaderWith(cfg, func(context.Context) (ble.Adapter, error) {
 		return adapter, nil
 	}, clock)
 
@@ -158,9 +158,9 @@ func TestOpen_RejectsBadDriverAndAddress(t *testing.T) {
 func TestOpen_RequiresCentralRole(t *testing.T) {
 	t.Parallel()
 
-	rig := newTestRig(t, bluez.RolePeripheral)
+	rig := newTestRig(t, ble.RolePeripheral)
 	err := rig.reader.Open(config.ReadersConnect{Driver: DriverID, Path: testAddress}, rig.scans, readers.OpenOpts{})
-	require.ErrorIs(t, err, bluez.ErrRoleUnsupported)
+	require.ErrorIs(t, err, ble.ErrRoleUnsupported)
 	assert.True(t, rig.adapter.Closed(), "a failed open releases the adapter")
 	assert.False(t, rig.reader.Connected())
 }
