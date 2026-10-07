@@ -142,6 +142,32 @@ func (s *testEncryptionPeerSecrets) encryptSubsequent(t *testing.T, plaintext []
 	return data
 }
 
+// encryptSubsequentBinary is encryptSubsequent in the binary envelope: the
+// ciphertext alone.
+func (s *testEncryptionPeerSecrets) encryptSubsequentBinary(t *testing.T, plaintext []byte, counter uint64) []byte {
+	t.Helper()
+	ct, err := crypto.Encrypt(s.c2sGCM, s.c2sNonce, counter, plaintext, s.aad)
+	require.NoError(t, err)
+	return ct
+}
+
+// decryptBinary opens a binary server-to-client frame with the given counter.
+func (s *testEncryptionPeerSecrets) decryptBinary(t *testing.T, wire []byte, counter uint64) []byte {
+	t.Helper()
+	pt, err := crypto.Decrypt(s.s2cGCM, s.s2cNonce, counter, wire, s.aad)
+	require.NoError(t, err)
+	return pt
+}
+
+// binaryFirstFrame builds the binary first frame for the given credentials.
+func binaryFirstFrame(version int, salt []byte, token string, ciphertext []byte) []byte {
+	out := []byte{byte(version)} //nolint:gosec // a small protocol version
+	out = append(out, salt...)
+	out = append(out, byte(len(token))) //nolint:gosec // test tokens are short
+	out = append(out, token...)
+	return append(out, ciphertext...)
+}
+
 // testEncryptionSourceIP is the client address the test frames are built for.
 // EstablishSession binds a session to it, so callers driving the frame through
 // the server have to present the same one.
@@ -769,7 +795,7 @@ func TestDecryptIncomingFrame_EncryptedFirstFrameDiscardsQueuedPlaintext(t *test
 	body, err := json.Marshal(first.frame)
 	require.NoError(t, err)
 	pt, cs, ok := decryptIncomingFrame(
-		session, body, first.gateway, false, false, testEncryptionSourceIP,
+		session, body, first.gateway, false, false, testEncryptionSourceIP, false,
 	)
 	require.True(t, ok, "an encrypted first frame is accepted when encryption is optional")
 	require.NotNil(t, cs)
@@ -802,4 +828,12 @@ func TestDecryptIncomingFrame_EncryptedFirstFrameDiscardsQueuedPlaintext(t *test
 	)
 	require.NoError(t, err)
 	assert.Equal(t, after, decrypted, "the first frame on the wire is the one sent after the upgrade")
+}
+
+// binary is the fixture's first frame in the binary envelope.
+func (f *testEncryptionFirstFrame) binary(t *testing.T) []byte {
+	t.Helper()
+	ct, err := base64.StdEncoding.DecodeString(f.frame.Ciphertext)
+	require.NoError(t, err)
+	return binaryFirstFrame(f.frame.Version, f.salt, f.frame.AuthToken, ct)
 }

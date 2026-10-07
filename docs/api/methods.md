@@ -2970,7 +2970,7 @@ None.
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
 | encryption                | boolean                                   | Yes      | Whether paired encryption is required for remote WebSocket connections. Localhost remains exempt. |
-| bleEnabled                | boolean                                   | Yes      | Whether the API is also served over [Bluetooth LE](./#bluetooth-le). Defaults to false.        |
+| bleEnabled                | boolean                                   | Yes      | Whether the API is also served over [Bluetooth LE](./#bluetooth-le). Defaults to true.         |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
@@ -3031,7 +3031,7 @@ None.
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
     "encryption": false,
-    "bleEnabled": false,
+    "bleEnabled": true,
     "readersConnect": [],
     "systemDefaults": [
       {

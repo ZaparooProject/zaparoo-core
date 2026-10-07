@@ -322,7 +322,17 @@ func (s *bleSession) handleMessage(msg []byte) {
 		return
 	}
 
-	frame, err := decryptFrame(cs, msg, s.t.encGateway, s.clientID(), apimiddleware.TransportBLE)
+	// Encrypted frames are binary on this transport. Anything that opens
+	// like JSON before a session exists is a plaintext request, and
+	// plaintext is never acceptable over BLE: there is no loopback and no
+	// legacy role, only paired clients.
+	if cs == nil && bytes.HasPrefix(msg, []byte("{")) {
+		endTrackedRequest()
+		s.shutdown("plaintext is not accepted over bluetooth")
+		return
+	}
+
+	frame, err := decryptFrame(cs, msg, s.t.encGateway, s.clientID(), apimiddleware.TransportBLE, true)
 	switch frame.outcome {
 	case frameDecrypted:
 		if err != nil {
@@ -357,12 +367,6 @@ func (s *bleSession) handleMessage(msg []byte) {
 		}
 		endTrackedRequest()
 		s.shutdown("unsupported encryption version")
-		return
-	case framePlaintext:
-		// Plaintext is never acceptable over BLE: there is no loopback and
-		// no legacy role, only paired clients.
-		endTrackedRequest()
-		s.shutdown("plaintext is not accepted over bluetooth")
 		return
 	default:
 		log.Error().Uint8("outcome", uint8(frame.outcome)).Msg("ble: unhandled frame outcome")

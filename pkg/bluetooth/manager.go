@@ -24,6 +24,7 @@ package bluetooth
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/bluetooth/bluez"
@@ -80,6 +81,8 @@ type Manager struct {
 	roleReported        bool
 	started             bool
 	stopped             bool
+	// unsupported is set once the platform says it has no BlueZ at all.
+	unsupported bool
 }
 
 // NewManager builds a manager over the real BlueZ layer.
@@ -220,6 +223,12 @@ func (m *Manager) lost() (retryNow bool) {
 // tick reconciles the adapter with configuration: closed while disabled,
 // re-opened after it went away, opened when it first becomes possible.
 func (m *Manager) tick(ctx context.Context) {
+	m.mu.Lock()
+	unsupported := m.unsupported
+	m.mu.Unlock()
+	if unsupported {
+		return
+	}
 	if !m.cfg.BLEEnabled() {
 		m.closeAdapter("disabled by configuration")
 		return
@@ -239,6 +248,14 @@ func (m *Manager) tick(ctx context.Context) {
 
 	adapter, err := m.open(ctx)
 	if err != nil {
+		if errors.Is(err, bluez.ErrUnsupported) {
+			// Nothing will change that on this platform, and the transport
+			// is on by default, so say nothing and stop asking.
+			m.mu.Lock()
+			m.unsupported = true
+			m.mu.Unlock()
+			return
+		}
 		m.reportUnavailable(err)
 		return
 	}

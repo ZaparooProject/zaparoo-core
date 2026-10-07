@@ -1251,7 +1251,7 @@ func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 		// landed in that window would be written with a stale nil and dropped.
 		cs = getClientSession(s)
 	}
-	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
+	if err := writeNotificationFrame(frameWriter(s, cs), cs, getWebSocketAuthState(s), plaintext); err != nil {
 		logWSWriteError(err, "broadcasting notification")
 		closeSession(s)
 	}
@@ -1416,6 +1416,7 @@ func handleWSMessage(
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	tracker RequestTracker,
+	binary bool,
 ) func(session *melody.Session, msg []byte) {
 	deps := newRequestDeps(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
@@ -1489,7 +1490,7 @@ func handleWSMessage(
 		// encryption state. Returns the plaintext to dispatch and the
 		// resolved client session (or nil for plaintext sessions).
 		plaintext, cs, ok := decryptIncomingFrame(
-			session, msg, encGateway, encryptionEnabled, isLocal, sourceIP)
+			session, msg, encGateway, encryptionEnabled, isLocal, sourceIP, binary)
 		if !ok {
 			endTrackedRequest()
 			return
@@ -1602,6 +1603,11 @@ type decryptedFrame struct {
 // first frame, or report plaintext. Whether plaintext is acceptable and what
 // to do with the connection on failure are the caller's decisions.
 //
+// binary says the message arrived as binary data rather than text. A first
+// frame that arrives that way is a binary first frame, and the session it
+// establishes speaks binary from then on; a session cannot change format
+// partway through.
+//
 // The outcome is always set, even on error, so the caller can tell a frame
 // that failed to decrypt from one that failed to establish a session.
 func decryptFrame(
@@ -1610,18 +1616,33 @@ func decryptFrame(
 	encGateway *apimiddleware.EncryptionGateway,
 	sourceIP string,
 	transport string,
+	binary bool,
 ) (decryptedFrame, error) {
 	if cs != nil {
-		var frame apimiddleware.EncryptedFrame
-		if unmarshalErr := json.Unmarshal(msg, &frame); unmarshalErr != nil || frame.Ciphertext == "" {
+		if (cs.Format() == apimiddleware.FrameBinary) != binary {
 			return decryptedFrame{outcome: frameDecrypted},
-				fmt.Errorf("%w: malformed encrypted frame", apimiddleware.ErrInvalidFrame)
+				fmt.Errorf("%w: frame format changed mid-session", apimiddleware.ErrInvalidFrame)
 		}
-		pt, decryptErr := cs.DecryptSubsequent(frame)
+		pt, decryptErr := cs.DecryptFrame(msg)
 		if decryptErr != nil {
 			return decryptedFrame{outcome: frameDecrypted}, fmt.Errorf("decrypt frame: %w", decryptErr)
 		}
 		return decryptedFrame{plaintext: pt, outcome: frameDecrypted}, nil
+	}
+
+	if binary {
+		frame, parseErr := apimiddleware.ParseBinaryFirstFrame(msg)
+		if parseErr != nil {
+			return decryptedFrame{outcome: frameEstablished}, fmt.Errorf("parse first frame: %w", parseErr)
+		}
+		if frame.Version != apimiddleware.EncryptionProtoVersion {
+			return decryptedFrame{outcome: frameUnsupportedVersion}, apimiddleware.ErrUnsupportedVersion
+		}
+		newCS, pt, establishErr := encGateway.EstablishBinarySession(frame, sourceIP, transport)
+		if establishErr != nil {
+			return decryptedFrame{outcome: frameEstablished}, fmt.Errorf("establish session: %w", establishErr)
+		}
+		return decryptedFrame{plaintext: pt, session: newCS, outcome: frameEstablished}, nil
 	}
 
 	if !apimiddleware.IsEncryptedFirstFrame(msg) {
@@ -1643,6 +1664,24 @@ func decryptFrame(
 	return decryptedFrame{plaintext: pt, session: newCS, outcome: frameEstablished}, nil
 }
 
+// binaryWriter is a connection that distinguishes binary messages from text,
+// as a WebSocket does.
+type binaryWriter interface {
+	WriteBinary([]byte) error
+}
+
+// frameWriter is how this session's encrypted frames reach the wire: as
+// binary messages when the session speaks binary and the connection tells
+// the two apart, as plain writes otherwise.
+func frameWriter(session sessionWriter, cs *apimiddleware.ClientSession) func([]byte) error {
+	if cs != nil && cs.Format() == apimiddleware.FrameBinary {
+		if bw, ok := session.(binaryWriter); ok {
+			return bw.WriteBinary
+		}
+	}
+	return session.Write
+}
+
 // decryptIncomingFrame is the encryption decision point for WebSocket frames.
 // It handles three cases:
 //
@@ -1662,9 +1701,10 @@ func decryptIncomingFrame(
 	encryptionEnabled bool,
 	isLocal bool,
 	sourceIP string,
+	binary bool,
 ) (plaintext []byte, cs *apimiddleware.ClientSession, ok bool) {
 	cs = getClientSession(session)
-	frame, err := decryptFrame(cs, msg, encGateway, sourceIP, apimiddleware.TransportWebSocket)
+	frame, err := decryptFrame(cs, msg, encGateway, sourceIP, apimiddleware.TransportWebSocket, binary)
 	switch frame.outcome {
 	case frameDecrypted:
 		if err != nil {
@@ -1768,7 +1808,7 @@ func sendWSEncryptedResponse(
 	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
 	defer endWrite()
 	writeStarted := time.Now()
-	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	writeErr := cs.SendEncryptedFrame(data, frameWriter(session, cs))
 	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "result", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
@@ -1807,7 +1847,7 @@ func sendWSEncryptedError(
 	endWrite := apidiag.Begin(ctx, apidiag.ResponseWrite)
 	defer endWrite()
 	writeStarted := time.Now()
-	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	writeErr := cs.SendEncryptedFrame(data, frameWriter(session, cs))
 	apidiag.RecordError(ctx, writeErr)
 	logWebSocketTransportTiming(
 		id, "error", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
@@ -2515,11 +2555,20 @@ func StartWithListener(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
-	session.HandleMessage(handleWSMessage(
-		methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-		db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
-		encGateway, lastSeenTracker, tracker,
-	))
+	// A client chooses its frame format by how it sends its first frame:
+	// text for the JSON envelope, binary for the binary one.
+	for _, binary := range []bool{false, true} {
+		handler := handleWSMessage(
+			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
+			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
+			encGateway, lastSeenTracker, tracker, binary,
+		)
+		if binary {
+			session.HandleMessageBinary(handler)
+		} else {
+			session.HandleMessage(handler)
+		}
+	}
 
 	// Static app assets
 	r.Get("/app/*", handleApp)

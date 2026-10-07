@@ -41,7 +41,7 @@ func TestDecryptFrame_Plaintext(t *testing.T) {
 	first := newTestEncryptionFirstFrame(t)
 	msg := []byte(`{"jsonrpc":"2.0","method":"version","id":1}`)
 
-	frame, err := decryptFrame(nil, msg, first.gateway, testEncryptionSourceIP, apimiddleware.TransportWebSocket)
+	frame, err := decryptFrame(nil, msg, first.gateway, testEncryptionSourceIP, apimiddleware.TransportWebSocket, false)
 	require.NoError(t, err)
 	assert.Equal(t, framePlaintext, frame.outcome)
 	assert.Nil(t, frame.session)
@@ -55,7 +55,7 @@ func TestDecryptFrame_EstablishesThenDecrypts(t *testing.T) {
 
 	established, err := decryptFrame(
 		nil, marshalFirstFrame(t, first.frame), first.gateway,
-		testEncryptionSourceIP, apimiddleware.TransportWebSocket,
+		testEncryptionSourceIP, apimiddleware.TransportWebSocket, false,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, frameEstablished, established.outcome)
@@ -65,7 +65,7 @@ func TestDecryptFrame_EstablishesThenDecrypts(t *testing.T) {
 	second := []byte(`{"jsonrpc":"2.0","method":"media","id":2}`)
 	decrypted, err := decryptFrame(
 		established.session, first.secrets.encryptSubsequent(t, second, 1), first.gateway,
-		testEncryptionSourceIP, apimiddleware.TransportWebSocket,
+		testEncryptionSourceIP, apimiddleware.TransportWebSocket, false,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, frameDecrypted, decrypted.outcome)
@@ -79,7 +79,7 @@ func TestDecryptFrame_MalformedOnEstablishedSession(t *testing.T) {
 	first := newTestEncryptionFirstFrame(t)
 	established, err := decryptFrame(
 		nil, marshalFirstFrame(t, first.frame), first.gateway,
-		testEncryptionSourceIP, apimiddleware.TransportWebSocket,
+		testEncryptionSourceIP, apimiddleware.TransportWebSocket, false,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, established.session)
@@ -87,7 +87,7 @@ func TestDecryptFrame_MalformedOnEstablishedSession(t *testing.T) {
 	for _, msg := range []string{`{"e":""}`, `not json`, `{"jsonrpc":"2.0","method":"version","id":1}`} {
 		frame, err := decryptFrame(
 			established.session, []byte(msg), first.gateway,
-			testEncryptionSourceIP, apimiddleware.TransportWebSocket,
+			testEncryptionSourceIP, apimiddleware.TransportWebSocket, false,
 		)
 		require.ErrorIs(t, err, apimiddleware.ErrInvalidFrame, msg)
 		assert.Equal(t, frameDecrypted, frame.outcome, msg)
@@ -105,7 +105,7 @@ func TestDecryptFrame_UnsupportedVersion(t *testing.T) {
 
 	frame, err := decryptFrame(
 		nil, marshalFirstFrame(t, firstFrame), first.gateway,
-		testEncryptionSourceIP, apimiddleware.TransportWebSocket,
+		testEncryptionSourceIP, apimiddleware.TransportWebSocket, false,
 	)
 	require.ErrorIs(t, err, apimiddleware.ErrUnsupportedVersion)
 	assert.Equal(t, frameUnsupportedVersion, frame.outcome)
@@ -122,7 +122,7 @@ func TestDecryptFrame_TransportMismatchFailsToEstablish(t *testing.T) {
 
 	frame, err := decryptFrame(
 		nil, marshalFirstFrame(t, first.frame), first.gateway,
-		testEncryptionSourceIP, apimiddleware.TransportBLE,
+		testEncryptionSourceIP, apimiddleware.TransportBLE, false,
 	)
 	require.Error(t, err)
 	assert.Equal(t, frameEstablished, frame.outcome)

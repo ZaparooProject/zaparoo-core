@@ -278,24 +278,28 @@ func newSession(l *link, creds *credentials, label string) (*session, error) {
 }
 
 // seal encrypts one plaintext into the wire frame for its position in the
-// session: the first frame carries the token and salt.
+// session. Frames are binary on this transport: the first is a short header
+// (version, salt, token length, token) followed by the ciphertext, and every
+// later one is the ciphertext alone.
 func (s *session) seal(plaintext []byte) ([]byte, error) {
 	ct, err := crypto.Encrypt(s.c2s, s.c2sNonce, s.sent, plaintext, s.aad)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
-	frame := map[string]any{"e": base64.StdEncoding.EncodeToString(ct)}
-	if s.sent == 0 {
-		frame["v"] = encryptionVersion
-		frame["t"] = s.token
-		frame["s"] = base64.StdEncoding.EncodeToString(s.salt)
-	}
+	first := s.sent == 0
 	s.sent++
-	data, err := json.Marshal(frame)
-	if err != nil {
-		return nil, fmt.Errorf("encode frame: %w", err)
+	if !first {
+		return ct, nil
 	}
-	return data, nil
+	if s.token == "" || len(s.token) > 255 {
+		return nil, fmt.Errorf("auth token is %d bytes, want 1-255", len(s.token))
+	}
+	frame := make([]byte, 0, 2+len(s.salt)+len(s.token)+len(ct))
+	frame = append(frame, encryptionVersion)
+	frame = append(frame, s.salt...)
+	frame = append(frame, byte(len(s.token))) //nolint:gosec // checked just above
+	frame = append(frame, s.token...)
+	return append(frame, ct...), nil
 }
 
 func (s *session) send(ctx context.Context, plaintext []byte) error {
@@ -312,26 +316,17 @@ func (s *session) recv(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var frame struct {
-		Error      *rpcError `json:"error"`
-		Ciphertext string    `json:"e"`
-	}
-	if err = json.Unmarshal(raw, &frame); err != nil {
-		return nil, fmt.Errorf("decode frame %q: %w", truncate(raw), err)
-	}
-	if frame.Ciphertext == "" {
-		if frame.Error != nil {
-			return nil, frame.Error
+	pt, err := crypto.Decrypt(s.s2c, s.s2cNonce, s.received, raw, s.aad)
+	if err != nil {
+		// Before a session exists Core can only answer in plaintext, as
+		// it does for an encryption version it does not speak.
+		var plain struct {
+			Error *rpcError `json:"error"`
 		}
-		return nil, fmt.Errorf("core sent plaintext: %q", truncate(raw))
-	}
-	ct, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
-	if err != nil {
-		return nil, fmt.Errorf("decode ciphertext: %w", err)
-	}
-	pt, err := crypto.Decrypt(s.s2c, s.s2cNonce, s.received, ct, s.aad)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt frame %d: %w", s.received, err)
+		if json.Unmarshal(raw, &plain) == nil && plain.Error != nil {
+			return nil, plain.Error
+		}
+		return nil, fmt.Errorf("decrypt frame %d (%s): %w", s.received, truncate(raw), err)
 	}
 	s.received++
 	return pt, nil

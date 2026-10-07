@@ -264,6 +264,31 @@ func TestManager_AdapterThatFailsAtOnceWaitsForTheInterval(t *testing.T) {
 	require.Eventually(t, func() bool { return opens.Load() == 2 }, eventually, 10*time.Millisecond)
 }
 
+// On a platform with no BlueZ the manager asks once and never again: the
+// transport is on by default, and nothing there will ever answer.
+func TestManager_UnsupportedPlatformIsAskedOnce(t *testing.T) {
+	t.Parallel()
+
+	var opens atomic.Int32
+	clock := clockwork.NewFakeClock()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	require.True(t, cfg.BLEEnabled(), "the transport is on by default")
+	m := newManagerWith(cfg, clock, func(context.Context) (bluez.Adapter, error) {
+		opens.Add(1)
+		return nil, bluez.ErrUnsupported
+	})
+	m.Start()
+	defer m.Stop()
+
+	require.Eventually(t, func() bool { return opens.Load() == 1 }, eventually, 10*time.Millisecond)
+	for range 3 {
+		advance(t, clock)
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), opens.Load())
+}
+
 func TestManager_ClosesWhenDisabledAtRuntime(t *testing.T) {
 	t.Parallel()
 

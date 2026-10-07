@@ -275,13 +275,7 @@ func (c *bleTestClient) waitClosed(t *testing.T) {
 
 func decryptS2C(t *testing.T, secrets *testEncryptionPeerSecrets, wire []byte, counter uint64) []byte {
 	t.Helper()
-	var frame apimiddleware.EncryptedFrame
-	require.NoError(t, json.Unmarshal(wire, &frame))
-	ct, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
-	require.NoError(t, err)
-	pt, err := crypto.Decrypt(secrets.s2cGCM, secrets.s2cNonce, counter, ct, secrets.aad)
-	require.NoError(t, err)
-	return pt
+	return secrets.decryptBinary(t, wire, counter)
 }
 
 func versionMethodMap(t *testing.T) *MethodMap {
@@ -300,9 +294,7 @@ func TestBLESession_EncryptedRequestResponse(t *testing.T) {
 	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
 	client := rig.client("11:22:33:44:55:66", 0x1234, 23)
 
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
@@ -311,7 +303,7 @@ func TestBLESession_EncryptedRequestResponse(t *testing.T) {
 
 	// The session is authenticated: a second request on the same session
 	// decrypts with the next counter.
-	client.send(t, first.secrets.encryptSubsequent(t, []byte(`{"jsonrpc":"2.0","method":"version","id":2}`), 1))
+	client.send(t, first.secrets.encryptSubsequentBinary(t, []byte(`{"jsonrpc":"2.0","method":"version","id":2}`), 1))
 	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 1), &resp))
 	assert.Equal(t, models.NewNumberID(2), resp.ID)
 
@@ -330,12 +322,10 @@ func TestBLESession_PingPongAfterAuth(t *testing.T) {
 	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 	client.recv(t)
 
-	client.send(t, first.secrets.encryptSubsequent(t, []byte("ping"), 1))
+	client.send(t, first.secrets.encryptSubsequentBinary(t, []byte("ping"), 1))
 	assert.Equal(t, "pong", string(decryptS2C(t, first.secrets, client.recv(t), 1)))
 }
 
@@ -348,9 +338,7 @@ func TestBLESession_WebSocketFrameIsRejected(t *testing.T) {
 	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 	client.waitClosed(t)
 	client.expectNothing(t)
 	require.Eventually(t, func() bool {
@@ -358,6 +346,37 @@ func TestBLESession_WebSocketFrameIsRejected(t *testing.T) {
 			return p.Path == client.peer.Path
 		})
 	}, bleTestTimeout, 5*time.Millisecond)
+}
+
+// The JSON envelope the WebSocket transport accepts is not spoken here: BLE
+// frames are binary, and anything that opens like JSON is plaintext.
+func TestBLESession_JSONEnvelopeIsRejected(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+	client := rig.client("11:22:33:44:55:66", 7, 185)
+
+	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
+	require.NoError(t, err)
+	client.send(t, frameJSON)
+	client.waitClosed(t)
+	client.expectNothing(t)
+}
+
+// A first frame cut short anywhere in its header is refused, not read past.
+func TestBLESession_TruncatedFirstFrameIsRejected(t *testing.T) {
+	t.Parallel()
+
+	first := newTestEncryptionFirstFrameFor(t, apimiddleware.TransportBLE)
+	full := first.binary(t)
+	headerEnd := len(full) - len(`{"jsonrpc":"2.0","method":"version","id":1}`) - 16
+	for _, n := range []int{1, 5, 17, 18, headerEnd} {
+		rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
+		client := rig.client("11:22:33:44:55:66", 7, 185)
+		client.send(t, full[:n])
+		client.waitClosed(t)
+	}
 }
 
 func TestBLESession_PlaintextRequestIsRejected(t *testing.T) {
@@ -443,9 +462,7 @@ func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 	client.expectNothing(t)
 
 	// Authenticate, then the same notification goes out encrypted.
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 	client.recv(t)
 
 	s.sendNotification(models.NotificationStarted, notif)
@@ -460,9 +477,7 @@ func TestBLESession_NotificationsOnlyAfterAuth(t *testing.T) {
 // authenticate sends the fixture's first frame and consumes the response.
 func (c *bleTestClient) authenticate(t *testing.T, first *testEncryptionFirstFrame) {
 	t.Helper()
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	c.send(t, frameJSON)
+	c.send(t, first.binary(t))
 	c.recv(t)
 }
 
@@ -482,31 +497,27 @@ func TestBLESession_TwoClientsAreIsolated(t *testing.T) {
 	}
 	first.db.On("GetClientByToken", "second-token").Return(secondClient, nil)
 	second.secrets.aad = []byte("second-token:" + apimiddleware.TransportBLE)
-	secondFrame := second.reencrypt(t, `{"jsonrpc":"2.0","method":"version","id":1}`)
+	second.reencrypt(t, `{"jsonrpc":"2.0","method":"version","id":1}`)
 
 	rig := newBLETestRig(t, bleTestRigOptions{methodMap: versionMethodMap(t), encGateway: first.gateway})
 	a := rig.client("11:22:33:44:55:66", 0x0a0a, 185)
 	b := rig.client("77:88:99:AA:BB:CC", 0x0b0b, 185)
 
 	a.authenticate(t, first)
-	b.send(t, secondFrame)
+	b.send(t, second.binary(t))
 	bReply := b.recv(t)
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(decryptS2C(t, second.secrets, bReply, 0), &resp))
 	assert.Equal(t, map[string]any{"version": "test"}, resp.Result)
 
 	// B's reply is unreadable under A's keys, and vice versa.
-	var frame apimiddleware.EncryptedFrame
-	require.NoError(t, json.Unmarshal(bReply, &frame))
-	ct, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
-	require.NoError(t, err)
-	_, err = crypto.Decrypt(first.secrets.s2cGCM, first.secrets.s2cNonce, 1, ct, first.secrets.aad)
+	_, err := crypto.Decrypt(first.secrets.s2cGCM, first.secrets.s2cNonce, 1, bReply, first.secrets.aad)
 	require.Error(t, err)
 
 	// Requests interleave without crossing sessions: each reply carries
 	// the requester's tag and decrypts only with its keys.
-	a.send(t, first.secrets.encryptSubsequent(t, []byte(`{"jsonrpc":"2.0","method":"version","id":"a2"}`), 1))
-	b.send(t, second.secrets.encryptSubsequent(t, []byte(`{"jsonrpc":"2.0","method":"version","id":"b2"}`), 1))
+	a.send(t, first.secrets.encryptSubsequentBinary(t, []byte(`{"jsonrpc":"2.0","method":"version","id":"a2"}`), 1))
+	b.send(t, second.secrets.encryptSubsequentBinary(t, []byte(`{"jsonrpc":"2.0","method":"version","id":"b2"}`), 1))
 	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, a.recv(t), 1), &resp))
 	assert.Equal(t, models.NewStringID("a2"), resp.ID)
 	require.NoError(t, json.Unmarshal(decryptS2C(t, second.secrets, b.recv(t), 1), &resp))
@@ -549,11 +560,9 @@ func TestBLESession_UnsupportedVersionIsAnswered(t *testing.T) {
 	rig := newBLETestRig(t, bleTestRigOptions{encGateway: first.gateway})
 	client := rig.client("11:22:33:44:55:66", 7, 185)
 
-	frame := first.frame
-	frame.Version = apimiddleware.EncryptionProtoVersion + 1
-	frameJSON, err := json.Marshal(frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	frame := first.binary(t)
+	frame[0] = apimiddleware.EncryptionProtoVersion + 1
+	client.send(t, frame)
 
 	var resp models.ResponseErrorObject
 	require.NoError(t, json.Unmarshal(client.recv(t), &resp))
@@ -602,9 +611,7 @@ func TestBLESession_LargeResponseIsStreamed(t *testing.T) {
 	rig := newBLETestRig(t, bleTestRigOptions{methodMap: largeMethodMap(t, size), encGateway: first.gateway})
 	client := rig.client("11:22:33:44:55:66", 7, 517)
 
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 
 	var resp models.ResponseObject
 	require.NoError(t, json.Unmarshal(decryptS2C(t, first.secrets, client.recv(t), 0), &resp))
@@ -621,9 +628,7 @@ func TestBLESession_SendsOnlyWithinAcknowledgedWindow(t *testing.T) {
 	client := rig.client("11:22:33:44:55:66", 7, apigatt.DefaultMTU)
 	client.silent = true
 
-	frameJSON, err := json.Marshal(first.frame) //nolint:gosec // test fixture token
-	require.NoError(t, err)
-	client.send(t, frameJSON)
+	client.send(t, first.binary(t))
 
 	// With no acknowledgement Core sends one window and stops.
 	receive := func(want int) {
@@ -695,7 +700,7 @@ func TestBLESession_PipelinedRequestsArriveOutOfOrder(t *testing.T) {
 	chunks := make([][]byte, 0, pipelined)
 	for i := 1; i <= pipelined; i++ {
 		req := fmt.Sprintf(`{"jsonrpc":"2.0","method":"version","id":%d}`, 100+i)
-		frame := first.secrets.encryptSubsequent(t, []byte(req), uint64(i)) //nolint:gosec // small loop index
+		frame := first.secrets.encryptSubsequentBinary(t, []byte(req), uint64(i)) //nolint:gosec // small loop index
 		// Single-chunk at this MTU, as real requests are.
 		chunks = append(chunks, client.chunks(t, frame)...)
 	}
@@ -768,7 +773,7 @@ func TestBLESession_AuthenticatedIdleTimeout(t *testing.T) {
 	require.NotNil(t, client.session())
 
 	// Traffic keeps the session alive; silence past the longer timeout ends it.
-	client.send(t, first.secrets.encryptSubsequent(t, []byte("ping"), 1))
+	client.send(t, first.secrets.encryptSubsequentBinary(t, []byte("ping"), 1))
 	client.recv(t)
 	rig.clock.Advance(bleAuthenticatedIdleTimeout - time.Second)
 	require.NotNil(t, client.session())
@@ -911,14 +916,7 @@ func TestBLESession_PairThenAuthenticateOnSameConnection(t *testing.T) {
 	aad := []byte(created.AuthToken + ":" + apimiddleware.TransportBLE)
 	ct, err := crypto.Encrypt(c2s, keys.C2SNonce, 0, []byte(`{"jsonrpc":"2.0","method":"version","id":3}`), aad)
 	require.NoError(t, err)
-	firstFrame, err := json.Marshal(apimiddleware.EncryptedFirstFrame{ //nolint:gosec // test token
-		Version:     apimiddleware.EncryptionProtoVersion,
-		Ciphertext:  base64.StdEncoding.EncodeToString(ct),
-		AuthToken:   created.AuthToken,
-		SessionSalt: base64.StdEncoding.EncodeToString(salt),
-	})
-	require.NoError(t, err)
-	client.send(t, firstFrame)
+	client.send(t, binaryFirstFrame(apimiddleware.EncryptionProtoVersion, salt, created.AuthToken, ct))
 
 	secrets := &testEncryptionPeerSecrets{s2cGCM: s2c, s2cNonce: keys.S2CNonce, aad: aad}
 	var resp models.ResponseObject

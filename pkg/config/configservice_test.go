@@ -131,7 +131,7 @@ func TestBLEEnabled(t *testing.T) {
 		name    string
 		want    bool
 	}{
-		{name: "nil returns false (default disabled)", enabled: nil, want: false},
+		{name: "nil returns true (default enabled)", enabled: nil, want: true},
 		{name: "true returns true", enabled: boolPtr(true), want: true},
 		{name: "false returns false", enabled: boolPtr(false), want: false},
 	}
@@ -157,11 +157,11 @@ func TestSetBLEEnabled(t *testing.T) {
 	t.Parallel()
 
 	inst := &Instance{}
+	assert.True(t, inst.BLEEnabled(), "on unless turned off")
+	inst.SetBLEEnabled(false)
 	assert.False(t, inst.BLEEnabled())
 	inst.SetBLEEnabled(true)
 	assert.True(t, inst.BLEEnabled())
-	inst.SetBLEEnabled(false)
-	assert.False(t, inst.BLEEnabled())
 }
 
 func TestBLEName(t *testing.T) {

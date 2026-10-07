@@ -90,6 +90,62 @@ type EncryptedFrame struct {
 	Ciphertext string `json:"e"`
 }
 
+// FrameFormat is how a session's encrypted frames are wrapped on the wire. It
+// is fixed by the first frame and holds for the life of the connection.
+type FrameFormat uint8
+
+const (
+	// FrameJSON wraps the base64 ciphertext in a JSON object. It travels as
+	// text, which is what every client has always sent.
+	FrameJSON FrameFormat = iota
+	// FrameBinary sends the ciphertext as it is, with a short binary header
+	// on the first frame only. It saves the third that base64 adds.
+	FrameBinary
+)
+
+// Binary first frame layout:
+//
+//	byte 0        encryption protocol version
+//	byte 1-16     session salt
+//	byte 17       auth token length, 1-255
+//	byte 18-...   auth token
+//	rest          ciphertext
+//
+// Every later frame, in both directions, is the ciphertext alone.
+const (
+	binaryFirstFrameSaltOffset  = 1
+	binaryFirstFrameTokenOffset = binaryFirstFrameSaltOffset + crypto.SessionSaltSize + 1
+)
+
+// BinaryFirstFrame is a decoded binary first frame. The slices alias the
+// message it was parsed from.
+type BinaryFirstFrame struct {
+	AuthToken   string
+	SessionSalt []byte
+	Ciphertext  []byte
+	Version     int
+}
+
+// ParseBinaryFirstFrame decodes the binary first frame of a connection. It
+// checks the shape only; the version and credentials are judged when the
+// session is established.
+func ParseBinaryFirstFrame(data []byte) (BinaryFirstFrame, error) {
+	if len(data) < binaryFirstFrameTokenOffset {
+		return BinaryFirstFrame{}, fmt.Errorf("%w: binary first frame is %d bytes", ErrInvalidFrame, len(data))
+	}
+	tokenLen := int(data[binaryFirstFrameTokenOffset-1])
+	tokenEnd := binaryFirstFrameTokenOffset + tokenLen
+	if tokenLen == 0 || len(data) <= tokenEnd {
+		return BinaryFirstFrame{}, fmt.Errorf("%w: binary first frame is truncated", ErrInvalidFrame)
+	}
+	return BinaryFirstFrame{
+		Version:     int(data[0]),
+		SessionSalt: data[binaryFirstFrameSaltOffset : binaryFirstFrameSaltOffset+crypto.SessionSaltSize],
+		AuthToken:   string(data[binaryFirstFrameTokenOffset:tokenEnd]),
+		Ciphertext:  data[tokenEnd:],
+	}, nil
+}
+
 // frameProbe is a permissive parse used to detect whether an incoming frame
 // looks like an encrypted first frame. This is a separate type from
 // EncryptedFirstFrame so we can detect malformed frames without rejecting
@@ -124,6 +180,43 @@ type ClientSession struct {
 	recvCounter uint64
 	sendCounter uint64
 	mu          syncutil.Mutex
+	format      FrameFormat
+}
+
+// Format is how this session's frames are wrapped (immutable after
+// construction, no lock needed).
+func (cs *ClientSession) Format() FrameFormat {
+	return cs.format
+}
+
+// wrap puts a ciphertext in this session's wire format.
+func (cs *ClientSession) wrap(ciphertext []byte) ([]byte, error) {
+	if cs.format == FrameBinary {
+		return ciphertext, nil
+	}
+	wrapped, err := json.Marshal(EncryptedFrame{
+		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal outgoing frame: %w", err)
+	}
+	return wrapped, nil
+}
+
+// DecryptFrame decrypts one frame after the first, taking it out of this
+// session's wire format.
+func (cs *ClientSession) DecryptFrame(msg []byte) ([]byte, error) {
+	if cs == nil {
+		return nil, ErrSessionNotEstablished
+	}
+	if cs.format == FrameBinary {
+		return cs.DecryptIncoming(msg)
+	}
+	var frame EncryptedFrame
+	if err := json.Unmarshal(msg, &frame); err != nil || frame.Ciphertext == "" {
+		return nil, fmt.Errorf("%w: malformed encrypted frame", ErrInvalidFrame)
+	}
+	return cs.DecryptSubsequent(frame)
 }
 
 // AuthToken returns the auth token (immutable after construction, no lock needed).
@@ -164,21 +257,15 @@ func (cs *ClientSession) EncryptOutgoing(plaintext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// EncryptOutgoingFrame encrypts and wraps in the {"e":"..."} JSON envelope.
-// Prefer SendEncryptedFrame when writing directly to a WebSocket (holds
+// EncryptOutgoingFrame encrypts and wraps in the session's wire format.
+// Prefer SendEncryptedFrame when writing directly to a connection (holds
 // the lock across encrypt + write to preserve counter order).
 func (cs *ClientSession) EncryptOutgoingFrame(plaintext []byte) ([]byte, error) {
 	ciphertext, err := cs.EncryptOutgoing(plaintext)
 	if err != nil {
 		return nil, err
 	}
-	wrapped, err := json.Marshal(EncryptedFrame{
-		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal outgoing frame: %w", err)
-	}
-	return wrapped, nil
+	return cs.wrap(ciphertext)
 }
 
 // SendEncryptedFrame encrypts, wraps, and writes under the mutex so
@@ -192,11 +279,9 @@ func (cs *ClientSession) SendEncryptedFrame(plaintext []byte, writeFn func([]byt
 	if err != nil {
 		return fmt.Errorf("encrypt outgoing: %w", err)
 	}
-	wrapped, err := json.Marshal(EncryptedFrame{
-		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
-	})
+	wrapped, err := cs.wrap(ciphertext)
 	if err != nil {
-		return fmt.Errorf("marshal outgoing frame: %w", err)
+		return err
 	}
 	if err := writeFn(wrapped); err != nil {
 		return fmt.Errorf("write encrypted frame: %w", err)
@@ -336,35 +421,81 @@ func (m *EncryptionGateway) EstablishSession(
 }
 
 // EstablishSessionForTransport validates, decrypts, and returns a
-// ClientSession for the first encrypted frame. transport is bound into the
-// AEAD associated data, so the client must use the same label. Failures
+// ClientSession for a JSON first frame. transport is bound into the AEAD
+// associated data, so the client must use the same label. Failures
 // increment the (authToken, sourceIP) rate limiter; callers should close the
 // connection on error.
-//
-// Non-constant-time: auth token validity is distinguishable by timing, but
-// tokens are already plaintext on the wire and grant no capability without
-// the 32-byte pairing key. If a future credential is NOT public on the
-// wire, these branches MUST be refactored to constant-time.
 func (m *EncryptionGateway) EstablishSessionForTransport(
 	frame EncryptedFirstFrame,
 	sourceIP string,
 	transport string,
 ) (*ClientSession, []byte, error) {
-	if frame.Version != EncryptionProtoVersion {
+	return m.establish(&firstFrame{
+		version: frame.Version,
+		token:   frame.AuthToken,
+		format:  FrameJSON,
+		salt: func() ([]byte, error) {
+			return base64.StdEncoding.DecodeString(frame.SessionSalt) //nolint:wrapcheck // wrapped by the caller
+		},
+		ciphertext: func() ([]byte, error) {
+			return base64.StdEncoding.DecodeString(frame.Ciphertext) //nolint:wrapcheck // wrapped by the caller
+		},
+	}, sourceIP, transport)
+}
+
+// EstablishBinarySession is EstablishSessionForTransport for a binary first
+// frame. The session it returns sends and expects binary frames.
+func (m *EncryptionGateway) EstablishBinarySession(
+	frame BinaryFirstFrame,
+	sourceIP string,
+	transport string,
+) (*ClientSession, []byte, error) {
+	return m.establish(&firstFrame{
+		version:    frame.Version,
+		token:      frame.AuthToken,
+		format:     FrameBinary,
+		salt:       func() ([]byte, error) { return frame.SessionSalt, nil },
+		ciphertext: func() ([]byte, error) { return frame.Ciphertext, nil },
+	}, sourceIP, transport)
+}
+
+// firstFrame is a first frame in either wire format. The salt and
+// ciphertext are decoded on demand so a malformed one is only counted
+// against a token that exists.
+type firstFrame struct {
+	salt       func() ([]byte, error)
+	ciphertext func() ([]byte, error)
+	token      string
+	version    int
+	format     FrameFormat
+}
+
+// establish is the shared body of session establishment.
+//
+// Non-constant-time: auth token validity is distinguishable by timing, but
+// tokens are already plaintext on the wire and grant no capability without
+// the 32-byte pairing key. If a future credential is NOT public on the
+// wire, these branches MUST be refactored to constant-time.
+func (m *EncryptionGateway) establish(
+	frame *firstFrame,
+	sourceIP string,
+	transport string,
+) (*ClientSession, []byte, error) {
+	if frame.version != EncryptionProtoVersion {
 		return nil, nil, ErrUnsupportedVersion
 	}
-	if frame.AuthToken == "" {
+	if frame.token == "" {
 		return nil, nil, ErrUnknownAuthToken
 	}
 
 	// Rate limit by (authToken, IP) BEFORE doing any expensive work.
-	if blocked := m.isBlocked(frame.AuthToken, sourceIP); blocked {
+	if blocked := m.isBlocked(frame.token, sourceIP); blocked {
 		return nil, nil, ErrConnectionBlocked
 	}
 
 	// Lookup before failure recording — unknown tokens skip recordFailure
 	// to prevent failSeen map exhaustion from fabricated tokens.
-	c, err := m.db.GetClientByToken(frame.AuthToken)
+	c, err := m.db.GetClientByToken(frame.token)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrUnknownAuthToken, err)
 	}
@@ -372,44 +503,44 @@ func (m *EncryptionGateway) EstablishSessionForTransport(
 		return nil, nil, ErrUnknownAuthToken
 	}
 	if len(c.PairingKey) != crypto.PairingKeySize {
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, ErrInvalidPairingKey
 	}
 
 	// Validate salt (recordFailure safe — token exists).
-	salt, err := base64.StdEncoding.DecodeString(frame.SessionSalt)
+	salt, err := frame.salt()
 	if err != nil {
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidFrame, err)
 	}
 	if len(salt) != crypto.SessionSaltSize {
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, ErrInvalidSaltLength
 	}
 
 	// Reserve salt (rolled back on failure to defend against replay attacks).
-	if dupErr := m.checkAndRecordSalt(frame.AuthToken, salt); dupErr != nil {
+	if dupErr := m.checkAndRecordSalt(frame.token, salt); dupErr != nil {
 		// Salt dedup failures aren't rate-limited (CSPRNG bugs, not attacks).
 		return nil, nil, dupErr
 	}
 
 	keys, err := crypto.DeriveSessionKeys(c.PairingKey, salt)
 	if err != nil {
-		m.releaseSalt(frame.AuthToken, salt)
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.releaseSalt(frame.token, salt)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, fmt.Errorf("derive session keys: %w", err)
 	}
 
 	c2sGCM, err := crypto.NewAEAD(keys.C2SKey)
 	if err != nil {
-		m.releaseSalt(frame.AuthToken, salt)
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.releaseSalt(frame.token, salt)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, fmt.Errorf("new c2s aead: %w", err)
 	}
 	s2cGCM, err := crypto.NewAEAD(keys.S2CKey)
 	if err != nil {
-		m.releaseSalt(frame.AuthToken, salt)
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.releaseSalt(frame.token, salt)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, fmt.Errorf("new s2c aead: %w", err)
 	}
 
@@ -424,24 +555,25 @@ func (m *EncryptionGateway) EstablishSessionForTransport(
 		aad:         []byte(c.AuthToken + ":" + transport),
 		recvCounter: 0,
 		sendCounter: 0,
+		format:      frame.format,
 	}
 
 	// Decrypt first frame to validate keys.
-	ciphertext, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
+	ciphertext, err := frame.ciphertext()
 	if err != nil {
-		m.releaseSalt(frame.AuthToken, salt)
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.releaseSalt(frame.token, salt)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidFrame, err)
 	}
 	plaintext, err := cs.DecryptIncoming(ciphertext)
 	if err != nil {
-		m.releaseSalt(frame.AuthToken, salt)
-		m.recordFailure(frame.AuthToken, sourceIP)
+		m.releaseSalt(frame.token, salt)
+		m.recordFailure(frame.token, sourceIP)
 		return nil, nil, err
 	}
 
 	// Successful first frame — clear any prior failure state.
-	m.clearFailures(frame.AuthToken, sourceIP)
+	m.clearFailures(frame.token, sourceIP)
 	return cs, plaintext, nil
 }
 

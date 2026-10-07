@@ -530,7 +530,7 @@ func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
 	}
 
 	if resp.pong {
-		if err := writePong(d.session.Write, resp.cs); err != nil {
+		if err := writePong(frameWriter(d.session, resp.cs), resp.cs); err != nil {
 			logWSWriteError(err, "sending pong")
 			closeSession(d.session)
 		}

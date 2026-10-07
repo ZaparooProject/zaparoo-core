@@ -259,6 +259,7 @@ tasks:
           "FuzzFindPath ./pkg/database/mediascanner"
           "FuzzProcessRequestObject ./pkg/api"
           "FuzzEstablishSession ./pkg/api/middleware"
+          "FuzzParseBinaryFirstFrame ./pkg/api/middleware"
           "FuzzStartSession ./pkg/api"
           "FuzzHandleRun ./pkg/api/methods"
           "FuzzHandleMediaLookupCandidates ./pkg/api/methods"

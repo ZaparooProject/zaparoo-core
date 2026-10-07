@@ -93,9 +93,10 @@ type Discovery struct {
 	InstanceName string `toml:"instance_name,omitempty"`
 }
 
-// BLE configures the Bluetooth Low Energy API transport. Enabled is off by
-// default because advertising is visible to everyone in radio range and
-// needs a Bluetooth adapter to be of any use.
+// BLE configures the Bluetooth Low Energy API transport. It is on unless
+// Enabled is set to false. A device without a usable Bluetooth adapter
+// simply never advertises; one with an adapter is visible to everyone in
+// radio range, and only paired clients get past the pairing methods.
 type BLE struct {
 	Enabled *bool  `toml:"enabled,omitempty"`
 	Name    string `toml:"name,omitempty"`
@@ -257,11 +258,11 @@ func (c *Instance) SetDiscoveryInstanceName(name string) {
 }
 
 // BLEEnabled reports whether the Bluetooth Low Energy API transport should
-// advertise. It defaults to false.
+// advertise. It defaults to true.
 func (c *Instance) BLEEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Service.BLE.Enabled != nil && *c.vals.Service.BLE.Enabled
+	return c.vals.Service.BLE.Enabled == nil || *c.vals.Service.BLE.Enabled
 }
 
 func (c *Instance) SetBLEEnabled(enabled bool) {
