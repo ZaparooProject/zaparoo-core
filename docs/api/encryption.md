@@ -146,6 +146,29 @@ Counters are implicit: both sides start at 0 and increment per frame. WebSocket 
 
 Server notifications (e.g. `media.started`) use this same format, encrypted with the session keys.
 
+### Binary envelope
+
+The JSON envelope above costs a third more bytes than the ciphertext it carries, because of base64. A client can use a binary envelope instead, which carries the ciphertext as it is. Everything else is unchanged: the same keys, nonces, counters, AAD and decrypted payload.
+
+The first frame is a short header followed by the ciphertext:
+
+```text
+byte 0        protocol version (1)
+byte 1-16     session salt, 16 bytes
+byte 17       auth token length in bytes, 1-255
+byte 18-...   auth token
+rest          AES-256-GCM ciphertext of the JSON-RPC request
+```
+
+Every later frame, in both directions, is the ciphertext alone, with nothing around it.
+
+The format is chosen by the first frame and holds for the life of the connection:
+
+- **WebSocket**: send the first frame as a binary message to use the binary envelope, or as a text message to use the JSON envelope. Core answers with the same kind of message, including notifications, and closes the connection if a later frame arrives as the other kind. The JSON envelope remains the default and is not going away.
+- **Bluetooth LE**: the binary envelope is the only one. See [Bluetooth LE](./#bluetooth-le).
+
+Errors Core sends before a session exists, such as an unsupported protocol version, are plaintext JSON in either case, and on WebSocket arrive as a text message.
+
 ### Decrypted payload
 
 Standard JSON-RPC 2.0:
@@ -186,11 +209,13 @@ Counters don't wrap. Disconnect and reconnect with a fresh salt to start over.
 
 ### AAD
 
-All encrypt/decrypt operations bind ciphertext to the session:
+All encrypt/decrypt operations bind ciphertext to the session and to the transport it travels over:
 
 ```text
-aad = authToken + ":ws"
+aad = authToken + ":" + transport
 ```
+
+`transport` is `ws` for WebSocket and `ble` for Bluetooth LE. A frame encrypted for one transport fails authentication on the other, so credentials captured on one link cannot be replayed on another.
 
 ## Security limits
 
@@ -242,6 +267,8 @@ WebSocket errors (plaintext JSON-RPC error, then connection closed):
 |---|---|
 | -32001 | Unsupported encryption version |
 | -32002 | Encryption required. Remote clients must send an encrypted first frame. |
+| -32004 | Session closed (Bluetooth LE only). Sent in plaintext as Core ends a session; `data.reason` says why. |
+| -32005 | Pairing failed (Bluetooth LE `pair.start` / `pair.finish` only). `data.status` and `data.message` mirror the HTTP endpoints. |
 
 ## Connection lifecycle
 
@@ -280,7 +307,7 @@ function connect(url, authToken, pairingKey):
     c2sBase = hkdf_expand(prk, info="zaparoo-c2s-nonce-v1", len=12)
     s2cBase = hkdf_expand(prk, info="zaparoo-s2c-nonce-v1", len=12)
 
-    aad         = encode(authToken + ":ws")
+    aad         = encode(authToken + ":ws")   // ":ble" over Bluetooth LE
     sendCounter = 0
     recvCounter = 0
 

@@ -1,0 +1,285 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+// Package ble is a thin layer over the operating system's Bluetooth Low
+// Energy stack. It exposes the two roles Core needs: a peripheral (GATT
+// server plus advertising, used by the app transport) and a central (scan,
+// connect, subscribe, used by reader drivers). Linux is served by BlueZ over
+// D-Bus and Windows by the WinRT Bluetooth API; other platforms report
+// ErrUnsupported.
+package ble
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+)
+
+var (
+	// ErrUnsupported is returned on platforms without an implementation.
+	ErrUnsupported = errors.New("bluetooth: not supported on this platform")
+	// ErrUnavailable is returned when the system's Bluetooth service cannot
+	// be reached: on Linux, the system bus or bluetoothd.
+	ErrUnavailable = errors.New("bluetooth: system bluetooth service not reachable")
+	// ErrNoAdapter is returned when the Bluetooth service is running but no
+	// adapter is plugged in.
+	ErrNoAdapter = errors.New("bluetooth: no bluetooth adapter")
+	// ErrRoleUnsupported is returned when the adapter cannot take the
+	// requested role.
+	ErrRoleUnsupported = errors.New("bluetooth: adapter does not support this role")
+	// ErrNotFound is returned when a remote device, service, or
+	// characteristic is not present.
+	ErrNotFound = errors.New("bluetooth: not found")
+)
+
+// Role is a BLE link-layer role an adapter can take.
+type Role string
+
+const (
+	// RoleCentral scans and initiates connections.
+	RoleCentral Role = "central"
+	// RolePeripheral advertises and accepts connections.
+	RolePeripheral Role = "peripheral"
+)
+
+// Characteristic flags, as BlueZ names them.
+const (
+	FlagRead                 = "read"
+	FlagWrite                = "write"
+	FlagWriteWithoutResponse = "write-without-response"
+	FlagNotify               = "notify"
+)
+
+// DefaultCallTimeout bounds a single D-Bus round trip.
+const DefaultCallTimeout = 3 * time.Second
+
+// NormalizeAddress validates a Bluetooth address and returns it in the
+// upper-case colon form BlueZ uses.
+func NormalizeAddress(address string) (string, error) {
+	hw, err := net.ParseMAC(strings.TrimSpace(address))
+	if err != nil || len(hw) != 6 {
+		return "", fmt.Errorf("invalid bluetooth address %q", address)
+	}
+	return strings.ToUpper(hw.String()), nil
+}
+
+// SupportsRole reports whether roles allows role. An empty list means the
+// adapter did not say, which callers treat as "try it".
+func SupportsRole(roles []Role, role Role) bool {
+	if len(roles) == 0 {
+		return true
+	}
+	for _, r := range roles {
+		if r == role || r == RoleCentral+"-"+RolePeripheral {
+			return true
+		}
+	}
+	return false
+}
+
+// Option configures Open.
+type Option func(*options)
+
+type options struct {
+	busAddress  string
+	callTimeout time.Duration
+	powerOn     bool
+}
+
+// WithBusAddress connects to the bus at addr instead of the system bus. Tests
+// use it to point the layer at a private bus hosting a fake bluetoothd.
+func WithBusAddress(addr string) Option {
+	return func(o *options) { o.busAddress = addr }
+}
+
+// WithPowerOn powers the adapter on if it is off. Only a caller acting on
+// an explicit user choice should ask for this; a background retry must not
+// keep switching a radio back on that the user turned off.
+func WithPowerOn() Option {
+	return func(o *options) { o.powerOn = true }
+}
+
+// WithCallTimeout overrides DefaultCallTimeout.
+func WithCallTimeout(d time.Duration) Option {
+	return func(o *options) { o.callTimeout = d }
+}
+
+func applyOptions(opts []Option) options {
+	o := options{callTimeout: DefaultCallTimeout}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.callTimeout <= 0 {
+		o.callTimeout = DefaultCallTimeout
+	}
+	return o
+}
+
+// Adapter is one local Bluetooth controller.
+type Adapter interface {
+	// Address is the controller's own Bluetooth address.
+	Address() string
+	// Roles lists what the controller supports; empty when BlueZ did not
+	// report it.
+	Roles() []Role
+	// Peripheral returns the GATT server and advertising side.
+	Peripheral() (Peripheral, error)
+	// Central returns the scanning and connecting side.
+	Central() (Central, error)
+	// Gone is closed when the adapter disappears or the bus connection
+	// drops, so owners can start over.
+	Gone() <-chan struct{}
+	// Close releases the bus connection. Everything obtained from the
+	// adapter stops working.
+	Close() error
+}
+
+// Peer identifies a remote central connected to the local GATT server.
+type Peer struct {
+	// Path is the BlueZ Device1 object path, unique per connection.
+	Path string
+	// Address is the peer's Bluetooth address as BlueZ reports it, which
+	// for phones is usually a rotating private address.
+	Address string
+}
+
+// Characteristic describes one characteristic of a local service.
+type Characteristic struct {
+	UUID  string
+	Flags []string
+}
+
+// Service describes one local GATT service.
+type Service struct {
+	UUID            string
+	Characteristics []Characteristic
+	Primary         bool
+}
+
+// Application is the set of local services registered together.
+type Application struct {
+	Services []Service
+}
+
+// Advertisement describes what the peripheral broadcasts. It is always a
+// connectable advertisement.
+type Advertisement struct {
+	LocalName    string
+	ServiceUUIDs []string
+}
+
+// PeripheralHandler receives GATT server events. Calls for one peer may
+// arrive out of order because BlueZ delivers each one on its own goroutine;
+// consumers must tolerate that.
+type PeripheralHandler interface {
+	// OnWrite is called once per write to a characteristic. mtu is the
+	// negotiated ATT MTU when BlueZ reports it, otherwise 0.
+	OnWrite(peer Peer, charUUID string, value []byte, mtu int)
+	// OnRead returns the value a peer reads from a characteristic.
+	OnRead(peer Peer, charUUID string) ([]byte, error)
+	// OnSubscribe reports notification subscriptions. BlueZ does not say
+	// which peer subscribed, so peer is zero-valued.
+	OnSubscribe(peer Peer, charUUID string, subscribed bool)
+	// OnDisconnect is called when a peer's connection ends.
+	OnDisconnect(peer Peer)
+}
+
+// Peripheral is the GATT server and advertising side of an adapter.
+type Peripheral interface {
+	// Serve registers the application and advertisement, then blocks until
+	// ctx ends or the adapter is gone. Both are unregistered on return.
+	Serve(ctx context.Context, app Application, adv Advertisement, h PeripheralHandler) error
+	// Notify sends value to peer on the characteristic. Where the stack
+	// cannot address one peer (BlueZ), or peer is the zero value, it goes
+	// to every subscriber, so callers tag the payload if they need the
+	// others to ignore it.
+	Notify(peer Peer, charUUID string, value []byte) error
+	// Disconnect drops a peer's connection.
+	Disconnect(ctx context.Context, peer Peer) error
+}
+
+// ScanFilter narrows a scan. The zero value reports every LE device.
+type ScanFilter struct {
+	// ServiceUUIDs keeps only devices advertising at least one of these.
+	ServiceUUIDs []string
+}
+
+// ScanResult is what is known about one remote device while scanning. A
+// device is reported when it is first heard and again when bluetoothd learns
+// something new about it; repeats of the same advertisement are not reported,
+// so RSSI is a first reading, not a running one.
+type ScanResult struct {
+	// ManufacturerData is keyed by Bluetooth company identifier.
+	ManufacturerData map[uint16][]byte
+	// ServiceData is keyed by service UUID.
+	ServiceData  map[string][]byte
+	Address      string
+	Name         string
+	ServiceUUIDs []string
+	// RSSI is the last signal strength in dBm, valid when HasRSSI. A
+	// device BlueZ only remembers from an earlier scan has none.
+	RSSI    int16
+	HasRSSI bool
+}
+
+// Central is the scanning and connecting side of an adapter.
+type Central interface {
+	// Scan reports the LE devices in range that match filter until ctx
+	// ends or the adapter is gone, after which the channel is closed. A
+	// consumer that falls behind loses the oldest updates, not the scan.
+	Scan(ctx context.Context, filter ScanFilter) (<-chan ScanResult, error)
+	// Find returns the device with the given address. One bluetoothd
+	// already knows is returned at once, in range or not, and connecting
+	// to it waits for it to advertise: bluetoothd does that with a scan
+	// that only listens for that one device, which is slower to notice it
+	// than a full scan but asks almost nothing of the controller. Only a
+	// device bluetoothd has never seen is scanned for, until it is heard
+	// or ctx ends.
+	Find(ctx context.Context, address string) (Device, error)
+}
+
+// Device is a remote peripheral.
+type Device interface {
+	Address() string
+	// Connect connects and waits for service discovery to finish.
+	Connect(ctx context.Context) error
+	Disconnect(ctx context.Context) error
+	// Characteristic looks up a characteristic of a resolved service.
+	Characteristic(serviceUUID, charUUID string) (RemoteCharacteristic, error)
+	// Disconnected is closed once the connection has ended.
+	Disconnected() <-chan struct{}
+}
+
+// RemoteCharacteristic is one characteristic on a connected device.
+type RemoteCharacteristic interface {
+	// Subscribe enables notifications and streams their values until ctx
+	// ends or the device disconnects, after which the channel is closed.
+	Subscribe(ctx context.Context) (<-chan []byte, error)
+	// Read reads the characteristic's current value from the device.
+	Read(ctx context.Context) ([]byte, error)
+	// MTU is the ATT MTU negotiated for the link, or 0 when BlueZ does not
+	// report it (versions before 5.62).
+	MTU(ctx context.Context) (int, error)
+	// Write writes the value, with or without waiting for the peripheral's
+	// acknowledgement.
+	Write(ctx context.Context, value []byte, withResponse bool) error
+}

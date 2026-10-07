@@ -107,7 +107,7 @@ func startWebSocketAuthDeadline(session *melody.Session, timeout time.Duration) 
 	}
 	timer := time.AfterFunc(timeout, func() {
 		if getWebSocketAuthState(session) == webSocketAuthPending {
-			closeMelodySession(session)
+			closeSession(session)
 		}
 	})
 	session.Set(melodySessionAuthDeadlineKey, timer)
@@ -290,7 +290,7 @@ func unsupportedEncryptionVersionResponse() ([]byte, error) {
 }
 
 // sendWSPlaintext sends plaintext before encryption handshake completes.
-func sendWSPlaintext(session *melody.Session, data []byte) {
+func sendWSPlaintext(session sessionWriter, data []byte) {
 	if err := session.Write(data); err != nil {
 		log.Debug().Err(err).Msg("failed to write plaintext WS message")
 	}

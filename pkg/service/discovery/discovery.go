@@ -299,15 +299,14 @@ func (s *Service) InstanceName() string {
 }
 
 // resolveInstanceName determines the instance name to advertise.
-// Priority: config value > hostname > fallback.
 func (s *Service) resolveInstanceName() (string, error) {
 	return ResolveInstanceName(s.cfg), nil
 }
 
-// ResolveInstanceName returns the instance name this service advertises under
-// ServiceType, for a host that has to publish the record itself because Core
-// cannot run its own responder there. Priority: config value > hostname >
-// fallback.
+// ResolveInstanceName is the name this device presents to discovery
+// clients, over mDNS and Bluetooth alike, and the name a host publishes when
+// it has to advertise the record itself because Core cannot run its own
+// responder there. Priority: config value > hostname > fallback.
 func ResolveInstanceName(cfg *config.Instance) string {
 	if name := cfg.DiscoveryInstanceName(); name != "" {
 		return name

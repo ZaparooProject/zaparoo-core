@@ -129,6 +129,45 @@ type testEncryptionPeerSecrets struct {
 	aad      []byte
 }
 
+// encryptSubsequent builds the {"e":...} frame a client sends after the first
+// frame, with the given client-to-server counter.
+func (s *testEncryptionPeerSecrets) encryptSubsequent(t *testing.T, plaintext []byte, counter uint64) []byte {
+	t.Helper()
+	ct, err := crypto.Encrypt(s.c2sGCM, s.c2sNonce, counter, plaintext, s.aad)
+	require.NoError(t, err)
+	data, err := json.Marshal(apimiddleware.EncryptedFrame{
+		Ciphertext: base64.StdEncoding.EncodeToString(ct),
+	})
+	require.NoError(t, err)
+	return data
+}
+
+// encryptSubsequentBinary is encryptSubsequent in the binary envelope: the
+// ciphertext alone.
+func (s *testEncryptionPeerSecrets) encryptSubsequentBinary(t *testing.T, plaintext []byte, counter uint64) []byte {
+	t.Helper()
+	ct, err := crypto.Encrypt(s.c2sGCM, s.c2sNonce, counter, plaintext, s.aad)
+	require.NoError(t, err)
+	return ct
+}
+
+// decryptBinary opens a binary server-to-client frame with the given counter.
+func (s *testEncryptionPeerSecrets) decryptBinary(t *testing.T, wire []byte, counter uint64) []byte {
+	t.Helper()
+	pt, err := crypto.Decrypt(s.s2cGCM, s.s2cNonce, counter, wire, s.aad)
+	require.NoError(t, err)
+	return pt
+}
+
+// binaryFirstFrame builds the binary first frame for the given credentials.
+func binaryFirstFrame(version int, salt []byte, token string, ciphertext []byte) []byte {
+	out := []byte{byte(version)} //nolint:gosec // a small protocol version
+	out = append(out, salt...)
+	out = append(out, byte(len(token))) //nolint:gosec // test tokens are short
+	out = append(out, token...)
+	return append(out, ciphertext...)
+}
+
 // testEncryptionSourceIP is the client address the test frames are built for.
 // EstablishSession binds a session to it, so callers driving the frame through
 // the server have to present the same one.
@@ -138,9 +177,32 @@ const testEncryptionSourceIP = "192.168.1.50"
 // first frame through the server: the gateway that will accept it, the frame
 // itself, and the client-side cipher state for reading what comes back.
 type testEncryptionFirstFrame struct {
-	gateway *apimiddleware.EncryptionGateway
-	secrets *testEncryptionPeerSecrets
-	frame   apimiddleware.EncryptedFirstFrame
+	gateway    *apimiddleware.EncryptionGateway
+	secrets    *testEncryptionPeerSecrets
+	db         *helpers.MockUserDBI
+	pairingKey []byte
+	salt       []byte
+	transport  string
+	frame      apimiddleware.EncryptedFirstFrame
+}
+
+// reencrypt rebuilds the first frame's ciphertext for a different plaintext
+// with the frame's current AuthToken, for fixtures that stand in for a
+// second paired client.
+func (f *testEncryptionFirstFrame) reencrypt(t *testing.T, plaintext string) []byte {
+	t.Helper()
+	keys, err := crypto.DeriveSessionKeys(f.pairingKey, f.salt)
+	require.NoError(t, err)
+	c2s, err := crypto.NewAEAD(keys.C2SKey)
+	require.NoError(t, err)
+	aad := []byte(f.frame.AuthToken + ":" + f.transport)
+	ct, err := crypto.Encrypt(c2s, keys.C2SNonce, 0, []byte(plaintext), aad)
+	require.NoError(t, err)
+	f.frame.Ciphertext = base64.StdEncoding.EncodeToString(ct)
+	f.secrets.aad = aad
+	data, err := json.Marshal(f.frame) //nolint:gosec // test fixture token
+	require.NoError(t, err)
+	return data
 }
 
 // establishTestEncryptionSession constructs a real *apimiddleware.ClientSession
@@ -162,13 +224,31 @@ func establishTestEncryptionSession(t *testing.T) (*apimiddleware.ClientSession,
 // hand the frame to the code under test instead of the gateway.
 func newTestEncryptionFirstFrame(t *testing.T) *testEncryptionFirstFrame {
 	t.Helper()
-	return newTestEncryptionFirstFrameForRequest(
-		t, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`),
+	return newTestEncryptionFirstFrameWith(
+		t, apimiddleware.TransportWebSocket, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`),
 	)
 }
 
 func newTestEncryptionFirstFrameForRequest(
 	t *testing.T,
+	plaintextReq []byte,
+) *testEncryptionFirstFrame {
+	t.Helper()
+	return newTestEncryptionFirstFrameWith(t, apimiddleware.TransportWebSocket, plaintextReq)
+}
+
+// newTestEncryptionFirstFrameFor is newTestEncryptionFirstFrame with the
+// frame bound to the given transport label.
+func newTestEncryptionFirstFrameFor(t *testing.T, transport string) *testEncryptionFirstFrame {
+	t.Helper()
+	return newTestEncryptionFirstFrameWith(
+		t, transport, []byte(`{"jsonrpc":"2.0","method":"version","id":1}`),
+	)
+}
+
+func newTestEncryptionFirstFrameWith(
+	t *testing.T,
+	transport string,
 	plaintextReq []byte,
 ) *testEncryptionFirstFrame {
 	t.Helper()
@@ -202,12 +282,16 @@ func newTestEncryptionFirstFrameForRequest(
 	clientS2C, err := crypto.NewAEAD(keys.S2CKey)
 	require.NoError(t, err)
 
-	aad := []byte(c.AuthToken + ":ws")
+	aad := []byte(c.AuthToken + ":" + transport)
 	ct, err := crypto.Encrypt(clientC2S, keys.C2SNonce, 0, plaintextReq, aad)
 	require.NoError(t, err)
 
 	return &testEncryptionFirstFrame{
-		gateway: mgr,
+		gateway:    mgr,
+		db:         db,
+		pairingKey: pairingKey,
+		salt:       salt,
+		transport:  transport,
 		frame: apimiddleware.EncryptedFirstFrame{
 			Version:     apimiddleware.EncryptionProtoVersion,
 			Ciphertext:  base64.StdEncoding.EncodeToString(ct),
@@ -711,7 +795,7 @@ func TestDecryptIncomingFrame_EncryptedFirstFrameDiscardsQueuedPlaintext(t *test
 	body, err := json.Marshal(first.frame)
 	require.NoError(t, err)
 	pt, cs, ok := decryptIncomingFrame(
-		session, body, first.gateway, false, false, testEncryptionSourceIP,
+		session, body, first.gateway, false, false, testEncryptionSourceIP, false,
 	)
 	require.True(t, ok, "an encrypted first frame is accepted when encryption is optional")
 	require.NotNil(t, cs)
@@ -744,4 +828,12 @@ func TestDecryptIncomingFrame_EncryptedFirstFrameDiscardsQueuedPlaintext(t *test
 	)
 	require.NoError(t, err)
 	assert.Equal(t, after, decrypted, "the first frame on the wire is the one sent after the upgrade")
+}
+
+// binary is the fixture's first frame in the binary envelope.
+func (f *testEncryptionFirstFrame) binary(t *testing.T) []byte {
+	t.Helper()
+	ct, err := base64.StdEncoding.DecodeString(f.frame.Ciphertext)
+	require.NoError(t, err)
+	return binaryFirstFrame(f.frame.Version, f.salt, f.frame.AuthToken, ct)
 }

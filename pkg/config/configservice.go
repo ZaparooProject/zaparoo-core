@@ -42,6 +42,7 @@ func isValidAPIPort(port int) bool {
 type Service struct {
 	APIPort       *int          `toml:"api_port,omitempty"`
 	Discovery     Discovery     `toml:"discovery,omitempty"`
+	BLE           BLE           `toml:"ble,omitempty"`
 	RemoteControl RemoteControl `toml:"remote_control,omitempty"`
 	DeviceID      string        `toml:"device_id"`
 	// OnlineBaseURL is the base URL of the Zaparoo Online service every
@@ -90,6 +91,15 @@ type PixelCadePublisher struct {
 type Discovery struct {
 	Enabled      *bool  `toml:"enabled,omitempty"`
 	InstanceName string `toml:"instance_name,omitempty"`
+}
+
+// BLE configures the Bluetooth Low Energy API transport. It is on unless
+// Enabled is set to false. A device without a usable Bluetooth adapter
+// simply never advertises; one with an adapter is visible to everyone in
+// radio range, and only paired clients get past the pairing methods.
+type BLE struct {
+	Enabled *bool  `toml:"enabled,omitempty"`
+	Name    string `toml:"name,omitempty"`
 }
 
 func (c *Instance) APIPort() int {
@@ -245,6 +255,34 @@ func (c *Instance) SetDiscoveryInstanceName(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Service.Discovery.InstanceName = name
+}
+
+// BLEEnabled reports whether the Bluetooth Low Energy API transport should
+// advertise. It defaults to true.
+func (c *Instance) BLEEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.BLE.Enabled == nil || *c.vals.Service.BLE.Enabled
+}
+
+func (c *Instance) SetBLEEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.BLE.Enabled = &enabled
+}
+
+// BLEName returns the configured Bluetooth local name, or an empty string
+// when the transport should fall back to the discovery instance name.
+func (c *Instance) BLEName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.BLE.Name
+}
+
+func (c *Instance) SetBLEName(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.BLE.Name = name
 }
 
 // RemoteControlEnabled reports whether device owner explicitly consented to
