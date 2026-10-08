@@ -95,6 +95,31 @@ func TestScrapeJobsForSourcesQueuesEveryArcadeSystemIndexed(t *testing.T) {
 	assert.False(t, jobs[0].Force)
 }
 
+func TestScrapeJobsForSourcesQueuesEverySystemForAnAllLaunchersScraper(t *testing.T) {
+	t.Parallel()
+	scrapers := arcadeScrapers()
+	docs := platforms.Scraper{
+		ID: "mister-docs", Name: "mister-docs", SupportedSystemIDs: []string{},
+		SupportsFillMissing: true, AutoScrapeAllLaunchers: true, Scrape: fakeScrape,
+	}
+	scrapers[docs.ID] = docs
+	assert.True(t, scrapeSourcesAllLaunchers(scrapers))
+	assert.False(t, scrapeSourcesAllLaunchers(arcadeScrapers()))
+
+	jobs := scrapeJobsForSources(scrapers, []mediascanner.IndexedSource{
+		{LauncherID: systemdefs.SystemArcade, SystemID: systemdefs.SystemArcade, Files: 2600},
+		{LauncherID: systemdefs.SystemSNES, SystemID: systemdefs.SystemSNES, Files: 900},
+		{LauncherID: "custom", SystemID: systemdefs.SystemGenesis, Files: 0},
+	})
+
+	require.Len(t, jobs, 2)
+	assert.Equal(t, "mister-arcade", jobs[0].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade}, jobs[0].Systems)
+	assert.Equal(t, "mister-docs", jobs[1].ScraperID)
+	assert.Equal(t, []string{systemdefs.SystemArcade, systemdefs.SystemSNES}, jobs[1].Systems)
+	assert.True(t, jobs[1].FillMissing)
+}
+
 func TestScrapeJobsForSourcesIgnoresEmptyContributions(t *testing.T) {
 	t.Parallel()
 	// A launcher that matched nothing has no rows to enrich, and an

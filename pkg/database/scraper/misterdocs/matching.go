@@ -119,13 +119,14 @@ type matchResult struct {
 func buildPendingWrites(
 	idx systemIndex,
 	records []sourceRecords,
-	runID string,
+	opts scraper.ScrapeOptions,
 	unmapped *scraper.UnmappedValues,
 ) matchResult {
 	pending := make(map[int64]*pendingWrite)
 	foundPaths := make(map[string]struct{})
 	stats := matchStats{}
-	for _, source := range records {
+	for i := range records {
+		source := &records[i]
 		for _, record := range source.Artwork {
 			stats.Processed++
 			if record.ImagePath != "" {
@@ -178,14 +179,15 @@ func buildPendingWrites(
 		p := pending[mediaID]
 		recordsPerTarget = append(recordsPerTarget, p.records)
 		write := &database.ScrapeWrite{
-			Sentinel:   scraper.SentinelTagInfo(scraperID),
-			MediaTags:  sortedTags(p.mediaTags),
-			TitleTags:  sortedTags(p.titleTags),
-			MediaProps: sortedProps(p.mediaProp),
-			TitleProps: sortedProps(p.titleProp),
+			Sentinel:    scraper.SentinelTagInfo(scraperID),
+			MediaTags:   sortedTags(p.mediaTags),
+			TitleTags:   sortedTags(p.titleTags),
+			MediaProps:  sortedProps(p.mediaProp),
+			TitleProps:  sortedProps(p.titleProp),
+			FillMissing: opts.FillMissing,
 		}
-		if runID != "" {
-			write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, runID))
+		if opts.RunID != "" {
+			write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
 		}
 		targets = append(targets, database.ScrapeWriteTarget{
 			MediaDBID: p.mediaID, MediaTitleDBID: p.titleID, Write: write,
@@ -200,7 +202,7 @@ func buildPendingWrites(
 func applyArtworkRecord(
 	idx systemIndex,
 	pending map[int64]*pendingWrite,
-	source sourceRecords,
+	source *sourceRecords,
 	record artworkRecord,
 	unmapped *scraper.UnmappedValues,
 ) bool {
@@ -211,7 +213,7 @@ func applyArtworkRecord(
 	write := getPending(pending, media.DBID, title.DBID)
 	if record.ImagePath != "" {
 		prop := database.MediaProperty{
-			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+			TypeTag: source.imageTypeTag(),
 			Text:    filepath.ToSlash(record.ImagePath),
 		}
 		props := write.titleProp
@@ -350,7 +352,7 @@ func matchManualTitle(idx systemIndex, path string) *database.TitleWithSystem {
 // synthesised from images and gameinfo, so the representative dump's details
 // are not replaced by a demo or regional variant that resolves to the same
 // title later.
-func applyGameMetadata(write *pendingWrite, source sourceRecords, key string, unmapped *scraper.UnmappedValues) {
+func applyGameMetadata(write *pendingWrite, source *sourceRecords, key string, unmapped *scraper.UnmappedValues) {
 	info, ok := source.GameInfo[key]
 	if ok {
 		if year := normalizedYear(info.Year); year != "" && tags.IsValidTagValue(tags.TagTypeYear, year) {

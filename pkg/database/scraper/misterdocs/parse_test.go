@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,7 +83,7 @@ func TestLoadArtworkRecords_ImportsIndexAndOptionalMetadata(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 2)
 	assert.Equal(t, "Game (USA)", got.Artwork[0].Name)
@@ -113,7 +114,7 @@ func TestLoadArtworkRecords_OmitsAmbiguousDuplicateNames(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	// Neither key may claim the shared name, but each image still resolves
 	// under its own key.
@@ -121,6 +122,40 @@ func TestLoadArtworkRecords_OmitsAmbiguousDuplicateNames(t *testing.T) {
 	assert.Equal(t, "First", got.Artwork[0].Name)
 	assert.Equal(t, "Second", got.Artwork[1].Name)
 	assert.Equal(t, 2, got.RowErrors)
+}
+
+func TestLoadArtworkRecords_ScreenPackKeepsItsTypeAndLeavesMetadataToTheBoxPack(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Screenshots")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string][]byte{
+		"index.tsv":       []byte("#name\tcrc\tsize\tkey\nGame (Europe)\t\t\tGame (USA)\n"),
+		"Game (USA).png":  []byte("image"),
+		"gameinfo.tsv":    []byte("#key\tname\tyear\nGame (USA)\tGame\t1991\nOther (USA)\tOther\t1992\n"),
+		"synopsis_en.tsv": []byte("#key\tsynopsis\nGame (USA)\tA game.\n"),
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
+	}
+
+	source := sourceDir{Path: dir, Kind: sourceArtwork, Image: tags.TagPropertyImageScreenshot}
+	got, err := loadSourceRecords(context.Background(), fs, source, nil)
+	require.NoError(t, err)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageScreenshot), got.imageTypeTag())
+	assert.Empty(t, got.GameInfo)
+	assert.Empty(t, got.Synopsis)
+	// The index row and the image filed under its own key; no metadata-only
+	// record for the game the pack has no screenshot of.
+	require.Len(t, got.Artwork, 2)
+	assert.Equal(t, filepath.Join(dir, "Game (USA).png"), got.Artwork[0].ImagePath)
+
+	source.Metadata = true
+	got, err = loadSourceRecords(context.Background(), fs, source, nil)
+	require.NoError(t, err)
+	assert.Len(t, got.GameInfo, 2)
+	assert.Equal(t, "A game.", got.Synopsis["Game (USA)"])
 }
 
 func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
@@ -139,7 +174,7 @@ func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 1)
 	assert.Empty(t, got.GameInfo)
@@ -165,7 +200,7 @@ func TestLoadArtworkRecords_KeepsFirstOfDuplicateOptionalMetadataKeys(t *testing
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 1)
 	assert.Equal(t, "1994", got.GameInfo["Game"].Year)
@@ -181,7 +216,7 @@ func TestLoadArtworkRecords_RequiresColumns(t *testing.T) {
 	require.NoError(t, fs.MkdirAll(dir, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "index.tsv"), []byte("#name\nGame\n"), 0o600))
 
-	_, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	_, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires name and key")
 }
@@ -345,7 +380,7 @@ func TestLoadArtworkRecords_PicksSynopsisByPreferredLanguage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			fs, dir := writeSynopsisPack(t)
-			got, err := loadArtworkRecords(context.Background(), fs, dir, tt.langs)
+			got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, tt.langs)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got.Synopsis["Game"])
 		})
@@ -369,7 +404,7 @@ func TestLoadArtworkRecords_PrefersEnglishOverArbitraryLanguage(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, []string{"es"})
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, []string{"es"})
 	require.NoError(t, err)
 	assert.Equal(t, "English", got.Synopsis["Game"])
 }
@@ -391,7 +426,7 @@ func TestLoadArtworkRecords_AddsMetadataOnlyRecordsForImagelessGames(t *testing.
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Artwork, 2)
 	assert.Equal(t, "Shown (USA)", got.Artwork[0].Key)
@@ -416,7 +451,7 @@ func TestLoadArtworkRecords_DegradesToExactKeysWithoutIndex(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []artworkRecord{
 		{Name: "Mario (USA)", Key: "Mario (USA)", ImagePath: filepath.Join(dir, "Mario (USA).jpg")},
@@ -448,7 +483,7 @@ func TestLoadArtworkRecords_MarksSlugUniquenessPerKey(t *testing.T) {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	unique := make(map[string]bool, len(got.Artwork))
 	for _, record := range got.Artwork {
@@ -482,7 +517,7 @@ func TestLoadArtworkRecords_DoesNotDuplicateDumpsAlreadyNamedInIndex(t *testing.
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), []byte(content), 0o600))
 	}
 
-	got, err := loadArtworkRecords(context.Background(), fs, dir, nil)
+	got, err := loadArtworkRecords(context.Background(), fs, sourceDir{Path: dir, Metadata: true}, nil)
 	require.NoError(t, err)
 	names := make([]string, 0, len(got.Artwork))
 	for _, record := range got.Artwork {

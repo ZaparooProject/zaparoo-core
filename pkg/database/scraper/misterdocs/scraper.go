@@ -52,6 +52,10 @@ const (
 func NewPlatformScraper() platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{},
+		SupportsFillMissing: true,
+		// It only reads packs already on the card and skips a system that has
+		// none, so every indexed system queues a fill-missing run.
+		AutoScrapeAllLaunchers: true,
 		Scrape: func(
 			ctx context.Context,
 			cfg *config.Instance,
@@ -62,6 +66,9 @@ func NewPlatformScraper() platforms.Scraper {
 			_ platforms.ScraperCustomOptions,
 			ch chan<- scraper.ScrapeUpdate,
 		) error {
+			if opts.FillMissing && opts.Force {
+				return errors.New("misterdocs: fill-missing and force are mutually exclusive")
+			}
 			if pl == nil || db == nil || db.MediaDB == nil {
 				return errors.New("misterdocs: platform and media database are required")
 			}
@@ -290,7 +297,7 @@ func (s *scraperImpl) scrapeStep(
 	}
 	scanDuration := time.Since(scanStart)
 	matchStart := time.Now()
-	matched := buildPendingWrites(load.idx, records, opts.RunID, &s.unmapped)
+	matched := buildPendingWrites(load.idx, records, opts, &s.unmapped)
 	load.idx = systemIndex{}
 	writeTargets, stats := matched.Targets, matched.Stats
 	matchDuration := time.Since(matchStart)
@@ -668,7 +675,7 @@ func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
 	return nil
 }
 
-// deleteStaleProperties drops the docs artwork and manual properties a forced
+// deleteStaleProperties drops the docs image and manual properties a forced
 // run no longer finds, reading the rows' properties a batch at a time.
 func (s *scraperImpl) deleteStaleProperties(
 	ctx context.Context,
@@ -751,8 +758,15 @@ func isStaleDocsProperty(
 	if prop.Text == "" {
 		return false
 	}
-	if prop.TypeTag != tags.PropertyTypeTag(tags.TagPropertyImageBoxart) &&
-		prop.TypeTag != tags.PropertyTypeTag(tags.TagPropertyManual) {
+	isManual := prop.TypeTag == tags.PropertyTypeTag(tags.TagPropertyManual)
+	imageDirName := ""
+	for i := range imageDirs {
+		if prop.TypeTag == tags.PropertyTypeTag(imageDirs[i].property) {
+			imageDirName = imageDirs[i].name
+			break
+		}
+	}
+	if !isManual && imageDirName == "" {
 		return false
 	}
 	path := filepath.Clean(filepath.FromSlash(prop.Text))
@@ -770,8 +784,8 @@ func isStaleDocsProperty(
 		return false
 	}
 	parent := strings.ToLower(filepath.Base(filepath.Dir(path)))
-	if prop.TypeTag == tags.PropertyTypeTag(tags.TagPropertyImageBoxart) {
-		return strings.EqualFold(parent, artworkDirName)
+	if isManual {
+		return strings.Contains(parent, "manual")
 	}
-	return strings.Contains(parent, "manual")
+	return strings.EqualFold(parent, imageDirName)
 }

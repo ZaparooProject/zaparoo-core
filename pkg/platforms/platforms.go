@@ -585,6 +585,9 @@ type Scraper struct {
 	// fill-missing jobs. Empty leaves this scraper manual-only.
 	AutoScrapeLaunchers []string
 	SupportsFillMissing bool
+	// AutoScrapeAllLaunchers opts in the contributions of every launcher, for
+	// a scraper that is not tied to particular ones.
+	AutoScrapeAllLaunchers bool
 }
 
 // LauncherResolver looks up a launcher by its unique ID. Implementations cover

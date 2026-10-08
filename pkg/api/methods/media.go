@@ -806,8 +806,9 @@ func startMediaDBGeneration(
 		availableScrapers := pl.Scrapers(cfg)
 		var indexedSources []mediascanner.IndexedSource
 		sourceOptions := mediascanner.IndexSourceOptions{
-			LauncherIDs: scrapeSourceLaunchers(availableScrapers),
-			Completed:   func(sources []mediascanner.IndexedSource) { indexedSources = sources },
+			LauncherIDs:  scrapeSourceLaunchers(availableScrapers),
+			AllLaunchers: scrapeSourcesAllLaunchers(availableScrapers),
+			Completed:    func(sources []mediascanner.IndexedSource) { indexedSources = sources },
 		}
 		total, err := mediascanner.NewNamesIndexWithSources(
 			indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {

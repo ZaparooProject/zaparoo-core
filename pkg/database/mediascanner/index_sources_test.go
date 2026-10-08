@@ -39,7 +39,7 @@ import (
 
 func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 	// The production indexer currently uses the global launcher cache.
-	for _, mode := range []string{"success", "empty", "failed", "filtered", "cancelled", "unavailable"} {
+	for _, mode := range []string{"success", "all", "empty", "failed", "filtered", "cancelled", "unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "game.nes"), []byte("fixture"), 0o600))
@@ -98,9 +98,15 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			defer func() { helpers.GlobalLauncherCache = previous; testLauncherCacheMutex.Unlock() }()
 			var sources []IndexedSource
 			called := false
+			// "all" names no launcher and still hears from every one.
+			launcherIDs := []string{"filesystem", "catalog"}
+			if mode == "all" {
+				launcherIDs = nil
+			}
 			_, err = NewNamesIndexWithSources(ctx, pl, cfg, []systemdefs.System{{ID: systemdefs.SystemNES}},
 				db, func(IndexStatus) {}, nil, &IndexSourceOptions{
-					LauncherIDs: []string{"filesystem", "catalog"},
+					LauncherIDs:  launcherIDs,
+					AllLaunchers: mode == "all",
 					Completed: func(result []IndexedSource) {
 						called = true
 						status, statusErr := db.MediaDB.GetIndexingStatus()
@@ -117,7 +123,7 @@ func TestIndexSourcesSuccessfulContributions(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, called)
 			want := []IndexedSource{{LauncherID: "filesystem", SystemID: systemdefs.SystemNES, Files: 1}}
-			if mode == "success" {
+			if mode == "success" || mode == "all" {
 				want = append(want, IndexedSource{LauncherID: "catalog", SystemID: systemdefs.SystemNES, Files: 1})
 			}
 			require.ElementsMatch(t, want, sources)
