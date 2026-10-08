@@ -311,7 +311,12 @@ tasks:
   nilcheck:
     desc: Run nilaway for nil-pointer analysis
     cmds:
-      - nilaway ./...
+      # Run through go vet so each package is analysed in its own process.
+      # Standalone nilaway loads the whole dependency graph into one process
+      # and needs well over 10 GB for this repo.
+      - >-
+        go vet -p 4 -vettool="$(command -v nilaway)"
+        -include-pkgs=github.com/ZaparooProject/zaparoo-core ./...
 
   deadlock:
     desc: Run tests with go-deadlock to detect lock ordering violations

@@ -204,9 +204,7 @@ func TestHandleDeviceStatus_NoMonitor(t *testing.T) {
 	t.Cleanup(st.StopService)
 
 	_, err := HandleDeviceStatus(requests.RequestEnv{Context: t.Context(), Platform: pl, State: st, IsLocal: true})
-	var catErr *models.CategorizedError
-	require.ErrorAs(t, err, &catErr)
-	assert.Equal(t, models.ErrorCategoryUnavailable, catErr.Category)
+	assert.Equal(t, models.ErrorCategoryUnavailable, errorCategory(t, err))
 }
 
 // Rebooting stops the device for everyone using it, so it needs the capability
@@ -251,6 +249,18 @@ func TestHandleDevicePower_Authorization(t *testing.T) {
 			assert.Equal(t, hoststatus.PowerReboot, awaitCommit(t, control))
 		})
 	}
+}
+
+// errorCategory returns the category of a categorized API error, failing the
+// test when err is not one.
+func errorCategory(t *testing.T, err error) string {
+	t.Helper()
+	var catErr *models.CategorizedError
+	if !errors.As(err, &catErr) || catErr == nil {
+		t.Fatalf("expected a categorized error, got %v", err)
+		return ""
+	}
+	return catErr.Category
 }
 
 func awaitCommit(t *testing.T, control *fakePowerControl) hoststatus.PowerAction {
@@ -310,9 +320,7 @@ func TestHandleDevicePower_Refusals(t *testing.T) {
 			control := newFakePowerControl()
 			result, err := HandleDevicePower(tt.action)(deviceTestEnv(t, control))
 			assert.Nil(t, result)
-			var catErr *models.CategorizedError
-			require.ErrorAs(t, err, &catErr)
-			assert.Equal(t, tt.category, catErr.Category)
+			assert.Equal(t, tt.category, errorCategory(t, err))
 			assert.Empty(t, control.committed)
 		})
 	}
@@ -330,9 +338,7 @@ func TestHandleDevicePower_BusyDuringBackup(t *testing.T) {
 
 	result, err := HandleDevicePower(hoststatus.PowerReboot)(env)
 	assert.Nil(t, result)
-	var catErr *models.CategorizedError
-	require.ErrorAs(t, err, &catErr)
-	assert.Equal(t, models.ErrorCategoryBusy, catErr.Category)
+	assert.Equal(t, models.ErrorCategoryBusy, errorCategory(t, err))
 
 	lease.Release()
 	_, err = HandleDevicePower(hoststatus.PowerReboot)(env)
@@ -348,7 +354,5 @@ func TestHandleDevicePower_NoMonitor(t *testing.T) {
 
 	env := requests.RequestEnv{Context: t.Context(), Platform: pl, State: st, IsLocal: true}
 	_, err := HandleDevicePower(hoststatus.PowerReboot)(env)
-	var catErr *models.CategorizedError
-	require.ErrorAs(t, err, &catErr)
-	assert.Equal(t, models.ErrorCategoryUnavailable, catErr.Category)
+	assert.Equal(t, models.ErrorCategoryUnavailable, errorCategory(t, err))
 }
