@@ -484,8 +484,12 @@ func startServiceWithOptions(
 		st.GetContext(), ns,
 		models.NotificationMediaIndexing,
 		models.NotificationUIChanged,
+		models.NotificationDeviceChanged,
 	)
 	notifBroker.Start()
+
+	deviceMonitor := newDeviceMonitor(pl, cfg, notifBroker.Publish)
+	st.SetDeviceMonitor(deviceMonitor)
 
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRendererFor(pl, opts), func(payload models.UIStateResponse) {
 		notifications.UIChanged(notifBroker.Publish, payload)
@@ -976,6 +980,7 @@ func startServiceWithOptions(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, notifBroker, backgroundWG,
 	)
 	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
+	startDeviceMonitor(st.GetContext(), deviceMonitor, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchDecksForPlaylistRefresh(st.GetContext(), notifBroker, svc)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)

@@ -105,7 +105,10 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodMappingsReload,
 		models.MethodDecksNew,
 		models.MethodDecksUpdate,
-		models.MethodDecksDelete:
+		models.MethodDecksDelete,
+		models.MethodDevicePowerReboot,
+		models.MethodDevicePowerShutdown,
+		models.MethodDevicePowerSuspend:
 		return apiPriorityHigh
 	case models.MethodMediaImage,
 		models.MethodMediaAsset,
@@ -168,6 +171,12 @@ func isMediaDBTransactionAPIMethod(method string) bool {
 // TestIsControlAllowed_BlocksMediaDBReadingCommands in pkg/zapscript guards
 // this invariant — it fails if a future MediaDB-reading command is ever added
 // without being rejected by isControlAllowed.
+// isDeviceAPIMethod reports whether a method belongs to the device namespace,
+// none of which reads MediaDB.
+func isDeviceAPIMethod(method string) bool {
+	return strings.HasPrefix(strings.ToLower(method), "device.")
+}
+
 func isMediaDBFreeInstantMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodRun) ||
 		strings.EqualFold(method, models.MethodDecksOpen) ||

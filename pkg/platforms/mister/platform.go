@@ -118,6 +118,7 @@ type Platform struct {
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
 	profileData         *profileDataManager
+	battery             *batteryBoard
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
 	launchCoreAtRBF     func(cores.RBFInfo) error
@@ -141,6 +142,7 @@ func NewPlatform() *Platform {
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
+	p.battery = newBatteryBoard()
 	return p
 }
 

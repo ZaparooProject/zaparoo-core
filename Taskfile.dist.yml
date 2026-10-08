@@ -271,6 +271,12 @@ tasks:
           "FuzzCheckMappingText ./pkg/service"
           "FuzzCheckMappingData ./pkg/service"
           "FuzzBuildStructuralCommand ./pkg/service/remote"
+          "FuzzParseDefaultRouteInterface ./pkg/helpers/hoststatus"
+          "FuzzParseInputModalias ./pkg/helpers/hoststatus"
+          "FuzzConnectorName ./pkg/helpers/hoststatus"
+          "FuzzMountSource ./pkg/helpers/hoststatus"
+          "FuzzParsePmsetDetail ./pkg/helpers/power"
+          "FuzzDetailFrom ./pkg/helpers/power"
         )
         for target in "${targets[@]}"; do
           func="${target%% *}"

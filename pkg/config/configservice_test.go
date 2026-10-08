@@ -639,3 +639,28 @@ func TestIsDefaultOnlineBaseURL(t *testing.T) {
 	assert.True(t, IsDefaultOnlineBaseURL(DefaultOnlineBaseURL+"/"))
 	assert.False(t, IsDefaultOnlineBaseURL("https://self-hosted.example.com"))
 }
+
+func TestInternetCheckEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		check *bool
+		name  string
+		want  bool
+	}{
+		{name: "unset means on", want: true},
+		{name: "on", check: boolPtr(true), want: true},
+		{name: "off", check: boolPtr(false), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{vals: Values{Service: Service{InternetCheck: tt.check}}}
+			assert.Equal(t, tt.want, inst.InternetCheckEnabled())
+		})
+	}
+
+	loaded := &Instance{}
+	require.NoError(t, loaded.LoadTOML("[service]\ninternet_check = false\n"))
+	assert.False(t, loaded.InternetCheckEnabled())
+}

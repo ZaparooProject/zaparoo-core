@@ -56,21 +56,22 @@ var errNotAFile = errors.New("source path names no file")
 // Platform implements platforms.Platform for Android. Token readers, input
 // and screenshots have no host capability yet and report ErrNotSupported.
 type Platform struct {
-	host             Host
+	snapshotAt       time.Time
 	launcherContexts platforms.LauncherContextManager
-	db               *database.Database
+	host             Host
+	historyHooks     platforms.MediaHistoryHooks
+	deviceChanged    func()
+	folders          map[string]string
+	clock            func() time.Time
+	snapshot         *hostSnapshot
 	entryByID        map[string]*catalogEntry
-	// folders maps each source root ID to the host reference it was made
-	// from, as of the last SourceRoots call.
-	folders      map[string]string
-	snapshotAt   time.Time
-	clock        func() time.Time
-	snapshot     *hostSnapshot
-	settings     platforms.Settings
-	historyHooks platforms.MediaHistoryHooks
-	entries      []catalogEntry
-	mu           syncutil.RWMutex
-	snapshotMu   syncutil.Mutex
+	deviceStatus     *DeviceStatus
+	db               *database.Database
+	settings         platforms.Settings
+	entries          []catalogEntry
+	mu               syncutil.RWMutex
+	deviceMu         syncutil.RWMutex
+	snapshotMu       syncutil.Mutex
 }
 
 var (

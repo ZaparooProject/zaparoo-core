@@ -785,3 +785,57 @@ Download progress is reported at most a few times a second, and the final byte a
   }
 }
 ```
+
+## Device
+
+### device.changed
+
+Sent when the state of the device Core runs on changes: its battery, network link, internet reachability, Bluetooth adapter, docked state, connected controllers, or whether its clock can be trusted.
+
+Core only watches the device while at least one client holds a WebSocket or SSE connection. Call [`device.status`](methods.md#devicestatus) once after connecting for the full state, then apply these notifications.
+
+Each notification carries the whole of the state it covers, not a difference from the last one. Replace what you hold with it. When changes arrive faster than a client reads them, intermediate notifications are dropped and the latest is delivered.
+
+The payload leaves out interface names, addresses, the hostname, the hardware model and storage paths. Notifications reach every connected client, so anything that identifies the device on its network is only available from `device.status`.
+
+#### Parameters
+
+Each key is always present and is `null` when the device has no such section or no reading. The values have the same meaning as in [`device.status`](methods.md#devicestatus).
+
+| Key         | Type           | Required | Description                                              |
+| :---------- | :------------- | :------- | :------------------------------------------------------- |
+| power       | object \| null | Yes      | `present`, `percent`, `source` and `chargeState`.        |
+| network     | object \| null | Yes      | `type` and `internet`.                                   |
+| bluetooth   | object \| null | Yes      | `present` and `powered`.                                 |
+| display     | object \| null | Yes      | `docked`.                                                |
+| controllers | object \| null | Yes      | `count` and `items`, as in `device.status`.              |
+| time        | object         | Yes      | `clockReliable`.                                         |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "device.changed",
+  "params": {
+    "power": { "present": true, "percent": 96, "source": "external", "chargeState": "charging" },
+    "network": { "type": "wifi", "internet": "full" },
+    "bluetooth": { "present": true, "powered": true },
+    "display": { "docked": true },
+    "controllers": {
+      "count": 1,
+      "items": [
+        {
+          "id": "input17",
+          "name": "DualSense Wireless Controller",
+          "vendorId": "054c",
+          "productId": "0ce6",
+          "connection": "bluetooth",
+          "battery": { "percent": 80, "level": "full" }
+        }
+      ]
+    },
+    "time": { "clockReliable": true }
+  }
+}
+```

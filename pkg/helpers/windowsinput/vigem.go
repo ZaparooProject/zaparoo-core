@@ -30,6 +30,7 @@ const (
 	fileDeviceBusExtender = 0x2a
 	methodBuffered        = 0
 	fileWriteData         = 2
+	fileReadData          = 1
 
 	vigemBase = 0x801
 )
@@ -41,6 +42,9 @@ var (
 	ioctlCheckVersion     = ctlCode(fileDeviceBusExtender, vigemBase+0x002, methodBuffered, fileWriteData)
 	ioctlWaitDeviceReady  = ctlCode(fileDeviceBusExtender, vigemBase+0x003, methodBuffered, fileWriteData)
 	ioctlXusbSubmitReport = ctlCode(fileDeviceBusExtender, vigemBase+0x201, methodBuffered, fileWriteData)
+	ioctlXusbGetUserIndex = ctlCode(
+		fileDeviceBusExtender, vigemBase+0x206, methodBuffered, fileWriteData|fileReadData,
+	)
 )
 
 // ErrDriverMissing reports that the ViGEmBus driver is not installed. That is
@@ -74,6 +78,14 @@ type vigemWaitDeviceReady struct {
 type vigemUnplugTarget struct {
 	Size     uint32
 	SerialNo uint32
+}
+
+// xusbGetUserIndex asks the bus which XInput slot a pad was given. The driver
+// fills UserIndex in.
+type xusbGetUserIndex struct {
+	Size      uint32
+	SerialNo  uint32
+	UserIndex uint32
 }
 
 type xusbSubmitReport struct {

@@ -70,6 +70,8 @@ func TestGrant_Has(t *testing.T) {
 	assert.True(t, admin.Has(CapProfilesManage))
 	assert.True(t, admin.Has(CapSettingsWrite))
 	assert.True(t, admin.Has(CapUpdateApply))
+	assert.True(t, admin.Has(CapDevicePower))
+	assert.False(t, member.Has(CapDevicePower))
 	assert.False(t, member.Has(CapProfilesManage))
 	assert.False(t, member.Has(CapSettingsWrite))
 	assert.True(t, member.Has(CapScreenshot))
@@ -108,6 +110,12 @@ func TestGrant_AuthenticationAndAccess(t *testing.T) {
 	assert.False(t, Grant{}.Has(CapUpdateApply))
 	assert.False(t, Grant{Role: RoleMember}.Has(CapUpdateApply))
 	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapUpdateApply))
+
+	assert.True(t, Grant{IsLocal: true}.Has(CapDevicePower))
+	assert.True(t, Grant{Role: RoleAdmin}.Has(CapDevicePower))
+	assert.False(t, Grant{}.Has(CapDevicePower))
+	assert.False(t, Grant{Role: RoleMember}.Has(CapDevicePower))
+	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapDevicePower))
 }
 
 func TestGrant_Capabilities(t *testing.T) {
@@ -122,7 +130,7 @@ func TestGrant_Capabilities(t *testing.T) {
 			name:  "paired admin is sorted",
 			grant: Grant{Role: RoleAdmin},
 			want: []Capability{
-				CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
 				CapScreenshot, CapSettingsWrite, CapUpdateApply,
 			},
 		},
@@ -145,7 +153,7 @@ func TestGrant_Capabilities(t *testing.T) {
 			name:  "local member gets local capabilities",
 			grant: Grant{Role: RoleMember, IsLocal: true},
 			want: []Capability{
-				CapInput, CapPlaytimeExtend, CapProfilesManage,
+				CapDevicePower, CapInput, CapPlaytimeExtend, CapProfilesManage,
 				CapScreenshot, CapSettingsWrite, CapUpdateApply,
 			},
 		},
@@ -182,6 +190,16 @@ func TestLegacyPlatformPolicy(t *testing.T) {
 		platformids.ReplayOS,
 	} {
 		assert.True(t, LegacyEnabled(platformID), platformID)
+	}
+	// No appliance platform lets an unpaired client turn the device off.
+	for _, platformID := range []string{
+		platformids.Mister,
+		platformids.Mistex,
+		platformids.Batocera,
+		platformids.LibreELEC,
+		platformids.ReplayOS,
+	} {
+		assert.False(t, Grant{PlatformID: platformID}.Has(CapDevicePower), platformID)
 	}
 	for _, platformID := range []string{
 		platformids.Linux,
@@ -251,6 +269,7 @@ func TestGrant_RoleRemoteNeverGainsCapabilities(t *testing.T) {
 	assert.False(t, grant.Has(CapProfilesManage))
 	assert.False(t, grant.Has(CapSettingsWrite))
 	assert.False(t, grant.Has(CapUpdateApply))
+	assert.False(t, grant.Has(CapDevicePower))
 	assert.Empty(t, grant.Capabilities())
 
 	// Local never applies to remote-operation requests, but if it somehow

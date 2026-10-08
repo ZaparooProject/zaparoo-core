@@ -45,6 +45,7 @@ mappings.update mappings.reload readers readers.write readers.write.cancel versi
 inbox inbox.delete inbox.clear settings.auth.claim settings.auth.status settings.auth.unlink
 settings.auth.link settings.auth.link.status settings.auth.link.cancel
 update.check update.status update.apply input.keyboard input.gamepad screenshot media.title.parse remote.activity
+device.status device.power.reboot device.power.shutdown device.power.suspend
 `)
 	result := make(map[string]struct{}, len(methods))
 	for _, method := range methods {
