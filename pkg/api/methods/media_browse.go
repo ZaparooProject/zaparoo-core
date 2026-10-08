@@ -38,10 +38,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	mediatags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -1641,6 +1643,11 @@ func buildBrowseResponse(
 		} else {
 			entry.RelPath = browseDirRelativePath(env, dirPath, dir.SystemIDs, systems)
 		}
+		if dir.Hidden {
+			// Only a listing that includes hidden entries returns the folder,
+			// and it says so the way a hidden file does.
+			entry.Tags = append(slices.Clip(entry.Tags), hiddenDirectoryTag())
+		}
 		entries = append(entries, entry)
 	}
 
@@ -1810,6 +1817,7 @@ func resolveDirSingletonAliases(
 		if len(aliases) == 0 {
 			continue
 		}
+		aliases = preferLastPlayedDiscs(env, systemID, system.DBID, candidates, aliases)
 		if singletonAliases == nil {
 			singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
 		}
@@ -1825,6 +1833,84 @@ func resolveDirSingletonAliases(
 		Dur("duration", time.Since(started)).
 		Msg("browse singleton alias resolution timing")
 	return singletonAliases
+}
+
+// lastPlayedDiscHistoryLimit bounds how far back a multi-disc folder's last
+// played disc is looked for: the most recently played distinct media of the
+// system. A disc played longer ago than that resolves to the first disc.
+const lastPlayedDiscHistoryLimit = 100
+
+// preferLastPlayedDiscs re-resolves the page's multi-disc folders whose most
+// recently played disc is not the one the container rule picked, so the entry
+// launches the disc the user left off on. Only a page that holds a multi-disc
+// folder reads play history, and only folders with a played disc are resolved
+// again. Any failure leaves the first-disc aliases in place.
+func preferLastPlayedDiscs(
+	env *requests.RequestEnv,
+	systemID string,
+	systemDBID int64,
+	candidates []database.SingletonAliasCandidate,
+	aliases []database.SingletonContainerAlias,
+) []database.SingletonContainerAlias {
+	if env.Database.UserDB == nil {
+		return aliases
+	}
+	multiDisc := make(map[string]int)
+	for i := range aliases {
+		if aliases[i].MultiDisc {
+			multiDisc[aliases[i].ChildDir] = i
+		}
+	}
+	if len(multiDisc) == 0 {
+		return aliases
+	}
+
+	history, err := env.Database.UserDB.GetDistinctMediaHistory(
+		env.Context, []string{systemID}, 0, lastPlayedDiscHistoryLimit,
+	)
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemID).Msg("browse last played disc lookup failed")
+		return aliases
+	}
+	// History is newest first, so the first path seen for a folder is the
+	// disc last played from it. History keeps the path a launch was given;
+	// media paths are canonical.
+	lastPlayed := make(map[string]string, len(multiDisc))
+	for i := range history {
+		mediaPath := pathutil.CanonicalMediaPath(history[i].MediaPath)
+		childDir := container.ParentDir(mediaPath)
+		if _, ok := multiDisc[childDir]; !ok {
+			continue
+		}
+		if _, seen := lastPlayed[childDir]; !seen {
+			lastPlayed[childDir] = mediaPath
+		}
+	}
+
+	var again []database.SingletonAliasCandidate
+	for i := range candidates {
+		preferred, ok := lastPlayed[candidates[i].ChildDir]
+		if !ok || preferred == aliases[multiDisc[candidates[i].ChildDir]].Row.Path {
+			continue
+		}
+		candidate := candidates[i]
+		candidate.PreferredPath = preferred
+		again = append(again, candidate)
+	}
+	if len(again) == 0 {
+		return aliases
+	}
+	preferred, err := env.Database.MediaDB.ResolveSingletonContainerAliases(env.Context, systemDBID, again)
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemID).Msg("browse last played disc resolution failed")
+		return aliases
+	}
+	for i := range preferred {
+		if index, ok := multiDisc[preferred[i].ChildDir]; ok {
+			aliases[index] = preferred[i]
+		}
+	}
+	return aliases
 }
 
 // browseChildPath builds the next browse path for a child directory one level

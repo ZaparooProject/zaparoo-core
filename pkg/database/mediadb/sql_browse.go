@@ -688,7 +688,55 @@ func sqlBrowseDirectoryRows(
 			}
 		}
 	}
-	return results, nil
+	return applyHiddenDirsToDirectories(ctx, db, opts, hidden, results)
+}
+
+// applyHiddenDirsToDirectories settles the hidden folders among a listing's
+// rows. A listing that excludes hidden entries drops them: the cached routes
+// already have, by subtracting each folder's whole count, and this covers the
+// Media fallbacks, which count from rows no folder filters. One that includes
+// hidden entries keeps them and says which they are.
+//
+//nolint:gocritic // Value options preserve the browse contract.
+func applyHiddenDirsToDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+	hidden *hiddenMedia,
+	results []database.BrowseDirectoryResult,
+) ([]database.BrowseDirectoryResult, error) {
+	if len(results) == 0 {
+		return results, nil
+	}
+	var dirs []hiddenDir
+	if opts.ExcludeHidden {
+		if hidden != nil {
+			dirs = hidden.dirs
+		}
+	} else {
+		var err error
+		if dirs, err = loadHiddenDirs(ctx, db); err != nil {
+			return nil, err
+		}
+	}
+	if len(dirs) == 0 {
+		return results, nil
+	}
+	kept := results[:0]
+	for i := range results {
+		prefix := results[i].Path
+		if prefix == "" {
+			prefix = opts.PathPrefix + results[i].Name
+		}
+		if hiddenDirCovers(dirs, hiddenDirPrefix(prefix), results[i].SystemIDs, opts.Systems) {
+			if opts.ExcludeHidden {
+				continue
+			}
+			results[i].Hidden = true
+		}
+		kept = append(kept, results[i])
+	}
+	return kept, nil
 }
 
 func browseDirectoryPropertyPath(
@@ -4057,7 +4105,7 @@ func applyHiddenToRootCandidates(
 		if hidden.countUnder(key, opts.Systems) == 0 {
 			continue
 		}
-		visible, err := sqlAnyVisibleMedia(ctx, db, key, opts.Systems)
+		visible, err := sqlAnyVisibleMedia(ctx, db, key, opts.Systems, hidden)
 		if err != nil {
 			return err
 		}
@@ -4071,7 +4119,7 @@ func applyHiddenToRootCandidates(
 		for _, name := range children {
 			prefix := key + name + "/"
 			if hidden.countUnder(prefix, opts.Systems) > 0 {
-				visible, err := sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems)
+				visible, err := sqlAnyVisibleMedia(ctx, db, prefix, opts.Systems, hidden)
 				if err != nil {
 					return err
 				}

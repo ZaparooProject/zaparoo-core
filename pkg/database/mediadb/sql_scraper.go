@@ -3724,6 +3724,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	// Repeated candidates collapse to one entry so a directory's rows are never
 	// scanned by two chunks and appended twice.
 	expectedCounts := make(map[string]int, len(dirCandidates))
+	preferredPaths := make(map[string]string)
 	childDirs := make([]string, 0, len(dirCandidates))
 	for _, c := range dirCandidates {
 		childDir := c.ChildDir
@@ -3734,6 +3735,9 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			childDirs = append(childDirs, childDir)
 		}
 		expectedCounts[childDir] = c.FileCount
+		if c.PreferredPath != "" {
+			preferredPaths[childDir] = c.PreferredPath
+		}
 	}
 
 	// The direct media rows of the candidate dirs, served by
@@ -3777,7 +3781,18 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		if chosen == nil {
 			continue
 		}
-		candidates = append(candidates, resolved{childDir: childDir, media: *chosen, multiDisc: sel.MultiDisc()})
+		multiDisc := sel.MultiDisc()
+		// Only a disc set has a choice to make: a playlist or a cue sheet
+		// stands in for its directory whatever was played.
+		if preferred := preferredPaths[childDir]; multiDisc && preferred != "" {
+			for i := range directRows {
+				if directRows[i].Path == preferred {
+					chosen = &directRows[i]
+					break
+				}
+			}
+		}
+		candidates = append(candidates, resolved{childDir: childDir, media: *chosen, multiDisc: multiDisc})
 	}
 	if len(candidates) == 0 {
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error

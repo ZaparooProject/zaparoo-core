@@ -657,6 +657,20 @@ type BrowseDirectoryResult struct {
 	SystemIDs []string
 	FileCount int
 	HasCover  bool
+	// Hidden is set on a hidden folder when the listing includes hidden
+	// entries. One that excludes them never returns the folder.
+	Hidden bool
+}
+
+// HiddenDirectory is a folder hidden for one system. Path is canonical, with
+// no trailing slash. The folder leaves its parent's listing and its media
+// leave search and random selection, while the folder's own path still
+// browses. UserDB records it as the hidden flag of a MediaUserData row whose
+// path is the folder's; what makes that row a folder is the index, where the
+// path names no file and holds media.
+type HiddenDirectory struct {
+	SystemID string
+	Path     string
 }
 
 // SingletonContainerAlias is the resolved launch media for a child directory
@@ -667,8 +681,10 @@ type SingletonContainerAlias struct {
 	ZapScriptTags []TagInfo
 	Row           MediaFullRow
 	HasCover      bool
-	// MultiDisc is set when Row is the first of several disc images of one
-	// title, so the directory holds other discs a user may want instead.
+	// MultiDisc is set when Row is one of several disc images of one title,
+	// so the directory holds other discs a user may want instead. Row is the
+	// candidate's PreferredPath when that names one of them, and the first
+	// disc otherwise.
 	MultiDisc bool
 }
 
@@ -677,10 +693,13 @@ type SingletonContainerAlias struct {
 // slash. FileCount is the recursive per-system media count for the directory
 // (from the browse cache) — when it exceeds the number of direct media rows,
 // the directory contains nested subdirectories and is not a singleton
-// container.
+// container. PreferredPath optionally names the disc a multi-disc directory
+// should resolve to, such as the one last played; it is ignored unless the
+// directory is a disc set holding that exact path.
 type SingletonAliasCandidate struct {
-	ChildDir  string
-	FileCount int
+	ChildDir      string
+	PreferredPath string
+	FileCount     int
 }
 
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
@@ -1575,6 +1594,13 @@ type MediaDBI interface {
 	// overrides) already stored in media.db, for the one-time UserDB backfill.
 	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
 	MediaPreferencesRevision(ctx context.Context) (string, error)
+	// ReplaceHiddenDirectories brings the projection of the hidden folders
+	// UserDB records in line with dirs and advances the preferences revision
+	// when it changed anything. It reports whether it did.
+	ReplaceHiddenDirectories(ctx context.Context, dirs []HiddenDirectory) (bool, error)
+	// HasMediaUnderDirectory reports whether a system has indexed, present
+	// media anywhere under a directory path.
+	HasMediaUnderDirectory(ctx context.Context, systemDBID int64, path string) (bool, error)
 
 	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)

@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -287,6 +288,174 @@ func TestMediaVisibilityDiscoveryAndRecovery(t *testing.T) {
 // A search cursor is only valid for the visibility it was taken under. Both a
 // mode change and a preference edit move the result set, so replaying a stale
 // cursor would skip or repeat rows rather than continue the list.
+// Hiding a folder is one preference against its path. The folder leaves its
+// parent's listing and its media leave search, includeHidden brings both back
+// with the folder tagged, and the folder still browses by its own path.
+func TestHiddenFolderDiscoveryAndRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	folder := filepath.Join(root, "_alternatives")
+	addTestMediaPaths(t, mediaDB,
+		filepath.Join(root, "Alpha.nes"),
+		filepath.Join(folder, "Game", "Alt One.nes"),
+		filepath.Join(folder, "Game", "Alt Two.nes"),
+	)
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+
+	platform := mocks.NewMockPlatform()
+	platform.On("RootDirs", mock.Anything).Return([]string{root})
+	platform.On("SupportedReaders", mock.Anything).Return(nil)
+	cache := &phelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "NES", SystemID: "NES", Folders: []string{root}}})
+	env := requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		Platform: platform, Config: &config.Instance{}, LauncherCache: cache,
+	}
+	encode := func(params map[string]any) string {
+		t.Helper()
+		encoded, err := json.Marshal(params)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	update := func(verb string) []database.TagInfo {
+		t.Helper()
+		result, err := HandleMediaTagsUpdate(withParams(&env, encode(map[string]any{
+			"system": "NES", "path": folder, verb: []string{"user:hidden"},
+		})))
+		require.NoError(t, err)
+		response, ok := result.(models.TagsResponse)
+		require.True(t, ok)
+		return response.Tags
+	}
+	browse := func(params map[string]any) models.BrowseResults {
+		t.Helper()
+		params["systems"] = []string{"NES"}
+		result, err := HandleMediaBrowse(withParams(&env, encode(params)))
+		require.NoError(t, err)
+		response, ok := result.(models.BrowseResults)
+		require.True(t, ok)
+		return response
+	}
+	searchCount := func(params map[string]any) int {
+		t.Helper()
+		params["systems"] = []string{"NES"}
+		params["query"] = ""
+		result, err := HandleMediaSearch(withParams(&env, encode(params)))
+		require.NoError(t, err)
+		response, ok := result.(models.SearchResults)
+		require.True(t, ok)
+		return len(response.Results)
+	}
+	folderEntry := func(page models.BrowseResults) *models.BrowseEntry {
+		for i := range page.Entries {
+			if page.Entries[i].Type == "directory" {
+				return &page.Entries[i]
+			}
+		}
+		return nil
+	}
+
+	hidden := database.TagInfo{Type: "user", Tag: "hidden"}
+	assert.Equal(t, []database.TagInfo{hidden}, update("add"))
+	rows, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "one row for the folder, none for its files")
+	assert.Equal(t, pathutil.CanonicalMediaPath(folder), rows[0].Path)
+	assert.True(t, rows[0].IsHidden)
+
+	listed := browse(map[string]any{"path": root})
+	assert.Nil(t, folderEntry(listed))
+	assert.Zero(t, listed.TotalDirs)
+	assert.Equal(t, 1, searchCount(map[string]any{}))
+
+	shown := browse(map[string]any{"path": root, "includeHidden": true})
+	entry := folderEntry(shown)
+	require.NotNil(t, entry)
+	assert.Equal(t, []database.TagInfo{hidden}, entry.Tags)
+	assert.Equal(t, 1, shown.TotalDirs)
+	assert.Equal(t, 3, searchCount(map[string]any{"includeHidden": true}))
+
+	// Addressed directly, the folder lists and searches as any other.
+	inside := browse(map[string]any{"path": folder})
+	require.NotNil(t, folderEntry(inside))
+	assert.Empty(t, folderEntry(inside).Tags, "what is inside carries no tag of its own")
+	assert.Equal(t, 2, searchCount(map[string]any{"pathPrefix": folder}))
+
+	assert.Empty(t, update("remove"))
+	assert.NotNil(t, folderEntry(browse(map[string]any{"path": root})))
+	assert.Equal(t, 3, searchCount(map[string]any{}))
+	rows, err = userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, rows, "unhiding leaves no row behind")
+}
+
+// Any other tag on a folder still means its single launch target, and a path
+// that holds no media is still not found.
+func TestHiddenFolderLeavesOtherRequestsAlone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	root := t.TempDir()
+	folder := filepath.Join(root, "Game")
+	ids := addTestMediaPaths(t, mediaDB, filepath.Join(folder, "Game.nes"))
+	env := requests.RequestEnv{
+		Context: ctx, Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
+		Platform: mocks.NewMockPlatform(), Config: &config.Instance{},
+	}
+	request := func(path, tag string) (any, error) {
+		encoded, err := json.Marshal(map[string]any{"system": "NES", "path": path, "add": []string{tag}})
+		require.NoError(t, err)
+		return HandleMediaTagsUpdate(withParams(&env, string(encoded)))
+	}
+
+	_, err := request(folder, "user:favorite")
+	require.NoError(t, err)
+	row, found, err := userDB.GetMediaUserData("NES", filepath.Join(folder, "Game.nes"))
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.True(t, row.IsFavorite, "the favorite lands on the folder's launch target")
+	folderHidden := func() bool {
+		dirs, browseErr := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			PathPrefix: pathutil.CanonicalMediaPath(root) + "/",
+		})
+		require.NoError(t, browseErr)
+		require.Len(t, dirs, 1)
+		return dirs[0].Hidden
+	}
+	assert.False(t, folderHidden())
+
+	_, err = request(filepath.Join(root, "Missing"), "user:hidden")
+	require.ErrorContains(t, err, "media not found")
+
+	// A hidden path that has left the index can still be unhidden.
+	gone := filepath.Join(root, "Gone")
+	require.NoError(t, userDB.SetMediaUserHidden("NES", gone, true))
+	encoded, err := json.Marshal(map[string]any{"system": "NES", "path": gone, "remove": []string{"user:hidden"}})
+	require.NoError(t, err)
+	_, err = HandleMediaTagsUpdate(withParams(&env, string(encoded)))
+	require.NoError(t, err)
+	_, found, err = userDB.GetMediaUserData("NES", gone)
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// A file named with a trailing slash is still a file, not a folder.
+	_, _ = request(filepath.Join(folder, "Game.nes")+"/", "user:hidden")
+	assert.False(t, folderHidden())
+
+	// A file is hidden as a file, never as a folder.
+	_, err = HandleMediaTagsUpdate(withParams(&env, fmt.Sprintf(`{"mediaId":%d,"add":["user:hidden"]}`, ids[0])))
+	require.NoError(t, err)
+	assert.False(t, folderHidden(), "a hidden file is not projected as a folder")
+}
+
 func TestSearchCursorRejectedAfterVisibilityChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

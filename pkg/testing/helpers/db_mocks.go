@@ -2512,6 +2512,24 @@ func (m *MockMediaDBI) GetAllSystems() ([]database.System, error) {
 	return []database.System{}, nil
 }
 
+func (m *MockMediaDBI) ReplaceHiddenDirectories(
+	ctx context.Context, dirs []database.HiddenDirectory,
+) (bool, error) {
+	if !m.hasExpectedCall("ReplaceHiddenDirectories") {
+		return false, nil // default mock behavior for tests that hide no folders
+	}
+	args := m.Called(ctx, dirs)
+	return args.Bool(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) HasMediaUnderDirectory(ctx context.Context, systemDBID int64, path string) (bool, error) {
+	if !m.hasExpectedCall("HasMediaUnderDirectory") {
+		return false, nil // default mock behavior for tests that address no folders
+	}
+	args := m.Called(ctx, systemDBID, path)
+	return args.Bool(0), args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) MediaPreferencesRevision(ctx context.Context) (string, error) {
 	args := m.Called(ctx)
 	if err := args.Error(1); err != nil {

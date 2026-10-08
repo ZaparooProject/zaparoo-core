@@ -2347,6 +2347,14 @@ func NewNamesIndexWithSources(
 	} else {
 		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
 	}
+	// Hidden folders are projected whole, so one already in line writes nothing.
+	if syncErr := database.SyncHiddenDirectories(ctx, fdb.UserDB, db); syncErr != nil {
+		if maintenanceErr := bestEffortMaintenanceError(
+			syncErr, "failed to re-apply hidden directories",
+		); maintenanceErr != nil {
+			return 0, maintenanceErr
+		}
+	}
 	logPhaseMetrics("reapply_media_user_data")
 
 	status.Phase = PhaseBuildingCaches

@@ -198,6 +198,11 @@ func buildCandidateTagFilterSQLForRef(
 	}
 
 	for _, f := range notFilters {
+		if dirClause, dirArgs, ok := hiddenDirFilterSQL(f, mediaRef); ok {
+			clauses = append(clauses, dirClause)
+			args = append(args, dirArgs...)
+			continue
+		}
 		typ, val := resolveFilter(f.Type, f.Value)
 		clauses = append(clauses, "NOT "+candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?", mediaRef))
 		args = append(args, typ, val, typ, val)
@@ -320,6 +325,11 @@ func buildTagFilterSQLForRef(filters []zapscript.TagFilter, mediaRef string) (cl
 	// once lets SQLite use the reverse tag indexes instead of repeating correlated
 	// tag joins for every candidate media row.
 	for _, f := range notFilters {
+		if dirClause, dirArgs, ok := hiddenDirFilterSQL(f, mediaRef); ok {
+			clauses = append(clauses, dirClause)
+			args = append(args, dirArgs...)
+			continue
+		}
 		typ, val := resolveFilter(f.Type, f.Value)
 		clause := mediaRef + `.DBID NOT IN (
 			SELECT MediaDBID FROM MediaTags
