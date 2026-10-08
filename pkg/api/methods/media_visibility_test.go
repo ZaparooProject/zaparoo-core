@@ -435,6 +435,10 @@ func TestHiddenFolderLeavesOtherRequestsAlone(t *testing.T) {
 	_, err = request(filepath.Join(root, "Missing"), "user:hidden")
 	require.ErrorContains(t, err, "media not found")
 
+	// A file named with a trailing slash is still a file, not a folder.
+	_, _ = request(filepath.Join(folder, "Game.nes")+"/", "user:hidden")
+	assert.False(t, folderHidden())
+
 	// A file is hidden as a file, never as a folder.
 	_, err = HandleMediaTagsUpdate(withParams(&env, fmt.Sprintf(`{"mediaId":%d,"add":["user:hidden"]}`, ids[0])))
 	require.NoError(t, err)

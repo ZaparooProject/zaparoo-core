@@ -206,15 +206,17 @@ func updateHiddenDirectory(
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to resolve system: %w", err)
 	}
-	exact, err := env.Database.MediaDB.FindMediaBySystemAndPaths(env.Context, system.DBID, []string{ref.Path})
+	// Media paths are stored canonically, so a trailing slash or a backslash
+	// in the request must not make an indexed file look like a folder.
+	dirPath := pathutil.CanonicalMediaPath(ref.Path)
+	exact, err := env.Database.MediaDB.FindMediaBySystemAndPaths(env.Context, system.DBID, []string{dirPath})
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to find media: %w", err)
 	}
-	if _, isMedia := exact[ref.Path]; isMedia {
+	if _, isMedia := exact[dirPath]; isMedia {
 		return nil, false, nil
 	}
 
-	dirPath := pathutil.CanonicalMediaPath(ref.Path)
 	isDir, err := env.Database.MediaDB.HasMediaUnderDirectory(env.Context, system.DBID, dirPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to probe directory: %w", err)
