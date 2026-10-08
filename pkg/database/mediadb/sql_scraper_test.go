@@ -2444,6 +2444,58 @@ func TestResolveSingletonContainerAliases_SharedTitleDiscSetUsesLowestPath(t *te
 	assert.True(t, aliases[0].MultiDisc)
 }
 
+func TestResolveSingletonContainerAliases_PreferredPathPicksThatDisc(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	discDir := aliasTestDir(parent, "DiscSet")
+	disc1Path := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 1).chd"))
+	disc2Path := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 2).chd"))
+	cueDir := aliasTestDir(parent, "CueSet")
+	cuePath := filepath.ToSlash(filepath.Join(parent, "CueSet", "Other.cue"))
+	binPath := filepath.ToSlash(filepath.Join(parent, "CueSet", "Other.bin"))
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game', 'Game'),
+			(2, 2, 'other', 'Other');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 1, 2, ?, ?),
+			(3, 2, 2, ?, ?),
+			(4, 2, 2, ?, ?);
+	`, disc1Path, discDir, disc2Path, discDir, cuePath, cueDir, binPath, cueDir)
+	require.NoError(t, err)
+
+	resolve := func(candidates ...database.SingletonAliasCandidate) map[string]database.SingletonContainerAlias {
+		aliases, resolveErr := mediaDB.ResolveSingletonContainerAliases(ctx, 2, candidates)
+		require.NoError(t, resolveErr)
+		byDir := make(map[string]database.SingletonContainerAlias, len(aliases))
+		for i := range aliases {
+			byDir[aliases[i].ChildDir] = aliases[i]
+		}
+		return byDir
+	}
+
+	aliases := resolve(
+		database.SingletonAliasCandidate{ChildDir: discDir, FileCount: 2, PreferredPath: disc2Path},
+		// A cue sheet stands in for its directory whatever was played.
+		database.SingletonAliasCandidate{ChildDir: cueDir, FileCount: 2, PreferredPath: binPath},
+	)
+	require.Len(t, aliases, 2)
+	assert.Equal(t, disc2Path, aliases[discDir].Row.Path)
+	assert.True(t, aliases[discDir].MultiDisc)
+	assert.Equal(t, cuePath, aliases[cueDir].Row.Path)
+	assert.False(t, aliases[cueDir].MultiDisc)
+
+	// A path that is not one of the discs leaves the first disc chosen.
+	stale := filepath.ToSlash(filepath.Join(parent, "DiscSet", "Game (Disc 3).chd"))
+	aliases = resolve(database.SingletonAliasCandidate{ChildDir: discDir, FileCount: 2, PreferredPath: stale})
+	assert.Equal(t, disc1Path, aliases[discDir].Row.Path)
+}
+
 func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupAliasTestDB(t)

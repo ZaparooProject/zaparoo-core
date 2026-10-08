@@ -1744,6 +1744,160 @@ func TestBuildBrowseResponse_MultiDiscDirectory(t *testing.T) {
 	}
 }
 
+func TestBuildBrowseResponse_MultiDiscDirectoryLaunchesLastPlayedDisc(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	systems := []systemdefs.System{{ID: "PSX"}}
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirName := "Chrono Cross (USA)"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	discRow := func(dbid int64, disc string) database.MediaFullRow {
+		return database.MediaFullRow{
+			Media: database.Media{
+				DBID:      dbid,
+				Path:      filepath.ToSlash(filepath.Join(dirPath, "Chrono Cross (USA) (Disc "+disc+").cue")),
+				ParentDir: dirPath + "/",
+				SortName:  "Chrono Cross (Disc " + disc + ")",
+			},
+			Title:  database.MediaTitle{DBID: 30, Name: "Chrono Cross"},
+			System: psxSystem,
+		}
+	}
+	discAlias := func(row database.MediaFullRow, disc string) []database.SingletonContainerAlias {
+		tags := []database.TagInfo{{Type: "disc", Tag: disc}}
+		return []database.SingletonContainerAlias{{
+			ChildDir: dirPath + "/", Row: row, Tags: tags, ZapScriptTags: tags, HasCover: true, MultiDisc: true,
+		}}
+	}
+	disc1, disc2 := discRow(20, "1"), discRow(21, "2")
+	otherGame := filepath.ToSlash(filepath.Join(path, "Other", "Other.chd"))
+
+	tests := []struct {
+		historyErr error
+		name       string
+		wantScript string
+		history    []database.MediaHistoryEntry
+		wantID     int64
+		reresolved bool
+	}{
+		{
+			name: "the disc played last wins over an older one",
+			history: []database.MediaHistoryEntry{
+				{SystemID: "PSX", MediaPath: otherGame},
+				{SystemID: "PSX", MediaPath: disc2.Path},
+				{SystemID: "PSX", MediaPath: disc1.Path},
+			},
+			reresolved: true,
+			wantID:     disc2.DBID,
+			wantScript: "@PSX/Chrono Cross (disc:2)",
+		},
+		{
+			name:       "the first disc played last needs no second resolution",
+			history:    []database.MediaHistoryEntry{{SystemID: "PSX", MediaPath: disc1.Path}},
+			wantID:     disc1.DBID,
+			wantScript: "@PSX/Chrono Cross (disc:1)",
+		},
+		{
+			name:       "an unplayed folder launches the first disc",
+			history:    []database.MediaHistoryEntry{{SystemID: "PSX", MediaPath: otherGame}},
+			wantID:     disc1.DBID,
+			wantScript: "@PSX/Chrono Cross (disc:1)",
+		},
+		{
+			name:       "a history failure leaves the first disc",
+			historyErr: errors.New("history unavailable"),
+			wantID:     disc1.DBID,
+			wantScript: "@PSX/Chrono Cross (disc:1)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockUserDB := helpers.NewMockUserDBI()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Maybe()
+			mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+			mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+				[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 2}}).
+				Return(discAlias(disc1, "1"), nil).Once()
+			mockUserDB.On("GetDistinctMediaHistory", mock.Anything, []string{"PSX"}, int64(0),
+				lastPlayedDiscHistoryLimit).Return(tt.history, tt.historyErr).Once()
+			if tt.reresolved {
+				mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+					[]database.SingletonAliasCandidate{{
+						ChildDir: dirPath + "/", FileCount: 2, PreferredPath: disc2.Path,
+					}}).Return(discAlias(disc2, "2"), nil).Once()
+			}
+			mockMediaDB.On("GetMediaCoverColors", mock.Anything, []int64{tt.wantID}).
+				Return(map[int64]uint32{}, nil).Once()
+
+			env := &requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB},
+				Platform: mockPlatform,
+			}
+			result, err := buildBrowseResponse(env, path,
+				[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 2, SystemIDs: []string{"PSX"}}},
+				nil, defaultMaxResults, 0, 0, nil, false, systems)
+			require.NoError(t, err)
+			browseResults, ok := result.(models.BrowseResults)
+			require.True(t, ok)
+			require.Len(t, browseResults.Entries, 1)
+			entry := browseResults.Entries[0]
+			assert.True(t, entry.MultiDisc)
+			assert.Equal(t, tt.wantID, entry.MediaID)
+			require.NotNil(t, entry.ZapScript)
+			assert.Equal(t, tt.wantScript, *entry.ZapScript)
+			assert.Empty(t, entry.DisambiguatingTags)
+			mockMediaDB.AssertExpectations(t)
+			mockUserDB.AssertExpectations(t)
+		})
+	}
+}
+
+func TestBuildBrowseResponse_SingleLaunchTargetReadsNoHistory(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirPath := filepath.ToSlash(filepath.Join(path, "Game"))
+	row := database.MediaFullRow{
+		Media:  database.Media{DBID: 20, Path: dirPath + "/Game.cue", ParentDir: dirPath + "/"},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: psxSystem,
+	}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Any history read fails the test: the mock has no expectation for one.
+	mockUserDB := helpers.NewMockUserDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Maybe()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 2}}).
+		Return([]database.SingletonContainerAlias{{ChildDir: dirPath + "/", Row: row}}, nil).Once()
+	mockMediaDB.On("GetMediaCoverColors", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]uint32{}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Game", FileCount: 2, SystemIDs: []string{"PSX"}}},
+		nil, defaultMaxResults, 0, 0, nil, false, []systemdefs.System{{ID: "PSX"}})
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, row.DBID, browseResults.Entries[0].MediaID)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestBuildBrowseResponse_FileNamesDropSetMarkers(t *testing.T) {
 	t.Parallel()
 

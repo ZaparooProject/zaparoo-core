@@ -222,6 +222,12 @@ func makeDatabase(
 	if err := backfillMediaUserData(ctx, db, nil); err != nil {
 		log.Warn().Err(err).Msg("failed to backfill media user data into the user database")
 	}
+	// Either database may have been replaced since they last agreed on which
+	// folders are hidden. UserDB holds the truth, so a failure only leaves the
+	// projection stale until the next sync.
+	if err := database.SyncHiddenDirectories(ctx, db.UserDB, db.MediaDB); err != nil {
+		log.Warn().Err(err).Msg("failed to project hidden directories into the media database")
+	}
 
 	repairBrowseSortIndex(mediaDB)
 

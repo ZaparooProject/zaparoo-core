@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	zapscript "github.com/ZaparooProject/go-zapscript"
@@ -97,8 +98,12 @@ type hiddenMediaEntry struct {
 // keeps its cached aggregates and subtracts this set from them; recomputing
 // those aggregates from Media instead costs tens of seconds on a real library,
 // because the caches are the only reason a browse page is not a table scan.
+//
+// dirs are the hidden folders, each standing for all the media under it with
+// one count instead of a row per file.
 type hiddenMedia struct {
 	entries []hiddenMediaEntry
+	dirs    []hiddenDir
 }
 
 // loadHiddenMedia returns nil when visibility filtering is off or nothing is
@@ -123,14 +128,21 @@ func loadHiddenMedia(ctx context.Context, db sqlQueryable, excludeHidden bool) (
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("read hidden media: %w", rowsErr)
 	}
-	if len(entries) == 0 {
+	dirs, err := loadHiddenDirs(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if err := loadHiddenDirCounts(ctx, db, dirs); err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 && len(dirs) == 0 {
 		return nil, nil //nolint:nilnil // See above.
 	}
-	return &hiddenMedia{entries: entries}, nil
+	return &hiddenMedia{entries: entries, dirs: dirs}, nil
 }
 
 func (h *hiddenMedia) empty() bool {
-	return h == nil || len(h.entries) == 0
+	return h == nil || (len(h.entries) == 0 && len(h.dirs) == 0)
 }
 
 func hiddenMatchesSystems(systemID string, systems []systemdefs.System) bool {
@@ -158,6 +170,11 @@ func (h *hiddenMedia) countUnder(prefix string, systems []systemdefs.System) int
 			count++
 		}
 	}
+	for i := range h.dirs {
+		if h.dirs[i].within(prefix) && hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+			count += h.dirs[i].Count
+		}
+	}
 	return count
 }
 
@@ -170,6 +187,11 @@ func (h *hiddenMedia) countForSystem(systemID string) int {
 	for i := range h.entries {
 		if h.entries[i].SystemID == systemID {
 			count++
+		}
+	}
+	for i := range h.dirs {
+		if h.dirs[i].SystemID == systemID {
+			count += h.dirs[i].Count
 		}
 	}
 	return count
@@ -194,6 +216,16 @@ func (h *hiddenMedia) childCounts(prefix string, systems []systemdefs.System) ma
 			continue
 		}
 		counts[rest[:slash]]++
+	}
+	for i := range h.dirs {
+		if !h.dirs[i].within(prefix) || !hiddenMatchesSystems(h.dirs[i].SystemID, systems) {
+			continue
+		}
+		// The folder is the named child itself or somewhere beneath it.
+		rest := h.dirs[i].Prefix[len(prefix):]
+		if slash := strings.Index(rest, "/"); slash > 0 {
+			counts[rest[:slash]] += h.dirs[i].Count
+		}
 	}
 	if len(counts) == 0 {
 		return nil
@@ -317,7 +349,7 @@ func sqlNeedsVisibilityFilter(ctx context.Context, db sqlQueryable, excludeHidde
 // rows are removed. Reading in path order stops at the first visible row, so
 // the scan is bounded by the hidden run at the start of the subtree.
 func sqlAnyVisibleMedia(
-	ctx context.Context, db sqlQueryable, prefix string, systems []systemdefs.System,
+	ctx context.Context, db sqlQueryable, prefix string, systems []systemdefs.System, hidden *hiddenMedia,
 ) (bool, error) {
 	pathCondition, args := browsePathPrefixCondition("m.Path", prefix)
 	query := `SELECT EXISTS(SELECT 1 FROM Media m
@@ -327,7 +359,19 @@ func sqlAnyVisibleMedia(
 		query += ` AND ` + systemClause
 		args = append(args, systemArgs...)
 	}
-	query += browseVisibilityCondition("m.DBID", true) + ` LIMIT 1)`
+	var dirConditions strings.Builder
+	if hidden != nil {
+		for i := range hidden.dirs {
+			if !hidden.dirs[i].within(prefix) {
+				continue
+			}
+			dirCondition, dirArgs := browsePathPrefixCondition("m.Path", hidden.dirs[i].Prefix)
+			_, _ = dirConditions.WriteString(` AND NOT (s.SystemID = ? AND ` + dirCondition + `)`)
+			args = append(args, hidden.dirs[i].SystemID)
+			args = append(args, dirArgs...)
+		}
+	}
+	query += browseVisibilityCondition("m.DBID", true) + dirConditions.String() + ` LIMIT 1)`
 	var exists bool
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&exists); err != nil {
 		return false, fmt.Errorf("probe visible media: %w", err)
@@ -343,15 +387,27 @@ func discoveryExcludesHidden(tags []zapscript.TagFilter) bool {
 	return !filters.IncludesHidden(tags, false)
 }
 
-func discoveryTags(ctx context.Context, db sqlQueryable, tags []zapscript.TagFilter, excludeHidden bool) (
-	[]zapscript.TagFilter, error,
-) {
+// scope says whether the query reads below one directory's own files, and so
+// whether hidden folders have to be excluded from it as well.
+func discoveryTags(
+	ctx context.Context, db sqlQueryable, tags []zapscript.TagFilter, excludeHidden bool, scope dirScope,
+) ([]zapscript.TagFilter, error) {
+	if !excludeHidden {
+		return tags, nil
+	}
 	needed, err := sqlNeedsVisibilityFilter(ctx, db, excludeHidden)
 	if err != nil {
 		return nil, err
 	}
 	if needed {
-		return filters.ExcludeHidden(tags), nil
+		tags = filters.ExcludeHidden(tags)
 	}
-	return tags, nil
+	dirFilters, err := hiddenDirFilters(ctx, db, scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(dirFilters) == 0 {
+		return tags, nil
+	}
+	return append(slices.Clone(tags), dirFilters...), nil
 }

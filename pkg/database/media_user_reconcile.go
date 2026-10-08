@@ -80,6 +80,9 @@ func ReconcileMediaUserData(ctx context.Context, db *Database) error {
 	if err != nil {
 		return err
 	}
+	if _, err := projectHiddenDirectories(ctx, db.UserDB, db.MediaDB); err != nil {
+		return err
+	}
 	log.Info().Int("rows", len(rows)).Int("flagsChanged", flagsChanged).
 		Int("overridesSet", set).Int("overridesCleared", cleared).
 		Msg("reconciled media user data")

@@ -392,6 +392,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - no Truncate() for successful resume
@@ -567,6 +568,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - no special fallback in this scenario
@@ -714,6 +716,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - fallback to fresh start
@@ -797,6 +800,7 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock indexing state methods with database error
@@ -878,6 +882,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations - should fall back to fresh start when systems differ
@@ -969,6 +974,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	mockMediaDB.On("TruncateSystems", []string{}).Return(nil).Maybe()
@@ -1042,6 +1048,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	mockUserDB.On("ListHiddenDirectories").Return([]database.HiddenDirectory{}, nil).Maybe()
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations

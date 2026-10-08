@@ -3257,7 +3257,7 @@ func (db *MediaDB) BrowseFiles(
 	}
 	defer call.finish(db)
 	scoped := *opts
-	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	scoped.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return nil, err
 	}
@@ -3302,7 +3302,7 @@ func (db *MediaDB) BrowseFileCount(
 		return 0, err
 	}
 	defer call.finish(db)
-	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return 0, err
 	}
@@ -3347,7 +3347,7 @@ func (db *MediaDB) BrowseIndex(
 		return database.BrowseIndexResult{}, err
 	}
 	defer call.finish(db)
-	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden)
+	opts.Tags, err = discoveryTags(ctx, call.conn, opts.Tags, opts.ExcludeHidden, directListing)
 	if err != nil {
 		return database.BrowseIndexResult{}, err
 	}
@@ -3513,7 +3513,9 @@ func (db *MediaDB) SearchMediaWithFilters(
 
 	scoped := *filters
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden)
+	scoped.Tags, visibilityErr = discoveryTags(
+		ctx, db.sql.Load(), filters.Tags, filters.ExcludeHidden, recursiveScope(filters.PathPrefix),
+	)
 	if visibilityErr != nil {
 		return nil, visibilityErr
 	}
@@ -4046,7 +4048,7 @@ func (db *MediaDB) SystemMediaCounts(
 		return nil, ErrNullSQL
 	}
 	if len(tagFilters) > 0 {
-		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden)
+		scoped, visibilityErr := discoveryTags(ctx, db.sql.Load(), tagFilters, excludeHidden, recursiveScope(""))
 		if visibilityErr != nil {
 			if database.IsCorruptionError(visibilityErr) {
 				db.NoteCorruption(visibilityErr)
@@ -4139,7 +4141,9 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	excludeHidden := discoveryExcludesHidden(query.Tags)
 	scoped := *query
 	var visibilityErr error
-	scoped.Tags, visibilityErr = discoveryTags(ctx, db.sql.Load(), query.Tags, excludeHidden)
+	scoped.Tags, visibilityErr = discoveryTags(
+		ctx, db.sql.Load(), query.Tags, excludeHidden, recursiveScope(query.PathPrefix),
+	)
 	if visibilityErr != nil {
 		return result, visibilityErr
 	}
