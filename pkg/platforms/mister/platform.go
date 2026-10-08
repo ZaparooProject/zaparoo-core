@@ -1908,7 +1908,7 @@ func (*Platform) ManagedByPackageManager() bool {
 func (p *Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
-	docs := misterdocs.NewPlatformScraper()
+	docs := misterdocs.NewPlatformScraper(misterdocs.SetNameCache(NewArcadeSetNameCache(p)))
 	arcade := NewArcadeScraper(p, ArcadeSystemIDs())
 	thumbnails := libretrothumbs.NewPlatformScraper()
 	return map[string]platforms.Scraper{

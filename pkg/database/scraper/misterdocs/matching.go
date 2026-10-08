@@ -186,7 +186,10 @@ func buildPendingWrites(
 			TitleProps:  sortedProps(p.titleProp),
 			FillMissing: opts.FillMissing,
 		}
-		if opts.RunID != "" {
+		// Only a scoped run reads its markers back (scraper.LoadScopedSelection).
+		// A run over whole systems restarts the system it was on, so marking
+		// every row would only add a write per game and a bulk delete after.
+		if opts.RunID != "" && opts.Scope != nil {
 			write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
 		}
 		targets = append(targets, database.ScrapeWriteTarget{

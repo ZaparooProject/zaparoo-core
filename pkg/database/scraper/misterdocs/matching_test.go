@@ -156,7 +156,23 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 	assert.Contains(t, write.TitleTags, database.TagInfo{
 		Type: string(tags.TagTypeDeveloper), Tag: "studio", Label: "Studio",
 	})
-	assert.Contains(t, write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
+	// A run over whole systems never reads a run marker back, so it writes none.
+	assert.NotContains(t, write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
+}
+
+func TestBuildPendingWrites_MarksOnlyScopedRuns(t *testing.T) {
+	t.Parallel()
+
+	records := []sourceRecords{{Artwork: []artworkRecord{{
+		Name: "Game (USA)", Key: "Game", ImagePath: filepath.Join("docs", "SNES", "Artwork", "Game.jpg"),
+	}}}}
+	scoped := buildPendingWrites(
+		testSystemIndex(), records,
+		scraper.ScrapeOptions{RunID: "run-1", Scope: &database.ScrapeScope{}}, &scraper.UnmappedValues{},
+	)
+	require.Len(t, scoped.Targets, 1)
+	// A scoped force run resumes from its markers (scraper.LoadScopedSelection).
+	assert.Contains(t, scoped.Targets[0].Write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
 }
 
 func TestBuildPendingWrites_SkipsDuplicateArtworkForMedia(t *testing.T) {

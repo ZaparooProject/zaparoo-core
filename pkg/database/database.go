@@ -1670,6 +1670,21 @@ type MediaDBI interface {
 	// (type:value) equals tagValue.
 	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
 
+	// GetTitlesByDBIDs returns the given MediaTitles rows, for a scraper that
+	// has streamed a system's media and needs only the titles it kept.
+	GetTitlesByDBIDs(ctx context.Context, titleDBIDs []int64) ([]TitleWithSystem, error)
+
+	// LibraryRevision returns a counter that moves whenever indexing changes
+	// one system's titles, media rows or their tags, and never otherwise. A
+	// scraper compares it to tell whether a system holds anything it has not
+	// already considered. It is one keyed read, whatever the system's size.
+	LibraryRevision(ctx context.Context, systemID string) (int64, error)
+	// GetScrapeFingerprint returns the fingerprint a scraper stored for a
+	// system when it last completed it, or "" when it has stored none.
+	GetScrapeFingerprint(ctx context.Context, scraperID, systemID string) (string, error)
+	// SetScrapeFingerprint records the state a scraper completed a system in.
+	SetScrapeFingerprint(ctx context.Context, scraperID, systemID, fingerprint string) error
+
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.
 	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)

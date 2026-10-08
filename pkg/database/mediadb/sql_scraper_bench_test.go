@@ -86,6 +86,108 @@ func benchApplyScrapeResultsCompanionBatch(
 	})
 }
 
+// benchFillMissingTargets is a batch shaped like one an installed artwork
+// pack produces after an index: three media-level images, title metadata and
+// a description per game, all offered under the fill-missing policy.
+func benchFillMissingTargets(count int) []database.ScrapeWriteTarget {
+	targets := make([]database.ScrapeWriteTarget, count)
+	for i := range targets {
+		id := int64(i + 1)
+		image := func(kind string) database.MediaProperty {
+			return database.MediaProperty{
+				TypeTag: "property:image-" + kind,
+				Text:    filepath.ToSlash(filepath.Join("docs", "Bench", kind, fmt.Sprintf("%05d.png", id))),
+			}
+		}
+		targets[i] = database.ScrapeWriteTarget{
+			MediaDBID:      id,
+			MediaTitleDBID: id,
+			Write: &database.ScrapeWrite{
+				FillMissing: true,
+				Sentinel:    database.TagInfo{Type: "scraper.bench", Tag: "scraped"},
+				MediaProps:  []database.MediaProperty{image("boxart"), image("screenshot"), image("titleshot")},
+				TitleTags:   benchTitleTags(id),
+				TitleProps: []database.MediaProperty{
+					{TypeTag: "property:description", Text: fmt.Sprintf("Description for bench game %d", id)},
+				},
+			},
+		}
+	}
+	return targets
+}
+
+// BenchmarkApplyScrapeResults_FillMissingBatch_100 measures the batch every
+// index-triggered scrape writes. "first" stores every field; "repeat" finds
+// them all stored, which is what each later index pays. The per-target
+// variants run the one-target-at-a-time policy the batch must agree with, as
+// the yardstick. Accept SQL changes only with numbers from target storage.
+func BenchmarkApplyScrapeResults_FillMissingBatch_100(b *testing.B) {
+	ctx := context.Background()
+	perTarget := func(mediaDB *MediaDB, targets []database.ScrapeWriteTarget) error {
+		targets, err := acceptScrapeTargets("bench", targets)
+		if err != nil {
+			return err
+		}
+		tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin: %w", err)
+		}
+		writeCtx := newScrapeWriteTxContext(tx)
+		for i := range targets {
+			if err := applyScrapeWriteTarget(ctx, writeCtx, targets[i]); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit: %w", err)
+		}
+		return nil
+	}
+	bulk := func(mediaDB *MediaDB, targets []database.ScrapeWriteTarget) error {
+		return mediaDB.ApplyScrapeResults(ctx, targets)
+	}
+	clearScraped := func(b *testing.B, mediaDB *MediaDB) {
+		b.Helper()
+		_, err := mediaDB.sql.Load().ExecContext(ctx, `
+			DELETE FROM MediaTags; DELETE FROM MediaTitleTags;
+			DELETE FROM MediaProperties; DELETE FROM MediaTitleProperties;
+		`)
+		require.NoError(b, err)
+	}
+	for _, variant := range []struct {
+		apply func(*MediaDB, []database.ScrapeWriteTarget) error
+		name  string
+		first bool
+	}{
+		{name: "first/bulk", apply: bulk, first: true},
+		{name: "first/per-target", apply: perTarget, first: true},
+		{name: "repeat/bulk", apply: bulk},
+		{name: "repeat/per-target", apply: perTarget},
+	} {
+		b.Run(variant.name, func(b *testing.B) {
+			b.ReportAllocs()
+			mediaDB, cleanup := setupBenchMediaDB(b, scraperBenchRows)
+			defer cleanup()
+			targets := benchFillMissingTargets(100)
+			if !variant.first {
+				require.NoError(b, variant.apply(mediaDB, targets))
+			}
+			b.ResetTimer()
+			for b.Loop() {
+				if variant.first {
+					b.StopTimer()
+					clearScraped(b, mediaDB)
+					b.StartTimer()
+				}
+				if err := variant.apply(mediaDB, targets); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func setupBenchMediaDB(b *testing.B, rows int) (mediaDB *MediaDB, cleanup func()) {
 	b.Helper()
 	tempDir, err := os.MkdirTemp("", "zaparoo-bench-mediadb-*")
@@ -131,6 +233,10 @@ func seedBenchScraperDB(b *testing.B, mediaDB *MediaDB, rows int) {
 		SELECT DBID, 'xml-game-id' FROM TagTypes WHERE Type = 'property';
 		INSERT INTO Tags (TypeDBID, Tag)
 		SELECT DBID, 'image-boxart' FROM TagTypes WHERE Type = 'property';
+		INSERT INTO Tags (TypeDBID, Tag)
+		SELECT DBID, 'image-screenshot' FROM TagTypes WHERE Type = 'property';
+		INSERT INTO Tags (TypeDBID, Tag)
+		SELECT DBID, 'image-titleshot' FROM TagTypes WHERE Type = 'property';
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'Bench', 'Bench');
 	`)
 	require.NoError(b, err)

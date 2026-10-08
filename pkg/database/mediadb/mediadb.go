@@ -1988,6 +1988,9 @@ func (db *MediaDB) Truncate() error {
 	if err := sqlTruncate(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
+	if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), nil); err != nil {
+		return err
+	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
@@ -2012,6 +2015,11 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	err := sqlTruncateSystems(db.ctx, db.sql.Load(), systemIDs)
 	if err != nil {
 		return err
+	}
+	if len(systemIDs) > 0 {
+		if err := sqlClearScrapeFingerprints(db.ctx, db.sql.Load(), systemIDs); err != nil {
+			return err
+		}
 	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
@@ -2513,6 +2521,14 @@ func (db *MediaDB) ReconcileStagedSystem(
 	stats, err := sqlReconcileStagedSystem(ctx, db.conn(), db.clock, systemID, opts)
 	if err != nil {
 		return stats, err
+	}
+	// A reconcile that changed nothing leaves the revision alone, which is
+	// what lets an index-triggered scrape tell the system holds nothing new.
+	if stats.TitlesInserted > 0 || stats.TitlesRenamed > 0 || stats.MediaUpserted > 0 ||
+		stats.MediaMissing > 0 || stats.TagLinksAdded > 0 || stats.TagLinksDeleted > 0 {
+		if bumpErr := sqlBumpLibraryRevision(ctx, db.conn(), systemID); bumpErr != nil {
+			return stats, bumpErr
+		}
 	}
 	if stats.MediaUpserted > 0 || stats.MediaMissing > 0 {
 		db.mediaSearchBoundsDirty = true

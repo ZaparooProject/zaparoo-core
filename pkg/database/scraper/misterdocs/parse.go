@@ -428,7 +428,7 @@ func loadManualRecords(ctx context.Context, fs afero.Fs, dir string) ([]string, 
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			result, err = appendManualRecord(fs, dir, entry, result)
+			result, err = appendManualRecord(dir, entry, result)
 			if err != nil {
 				return nil, err
 			}
@@ -445,19 +445,14 @@ func loadManualRecords(ctx context.Context, fs afero.Fs, dir string) ([]string, 
 }
 
 func appendManualRecord(
-	fs afero.Fs,
 	dir string,
 	entry os.FileInfo,
 	result []string,
 ) ([]string, error) {
-	if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 ||
-		!strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
+	if !entry.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
 		return result, nil
 	}
 	path := filepath.Join(dir, entry.Name())
-	if !isRegularFile(fs, path) {
-		return result, nil
-	}
 	if len(result) >= maxMetadataRecords {
 		return nil, fmt.Errorf("misterdocs: manuals directory exceeds %d records", maxMetadataRecords)
 	}
@@ -483,14 +478,12 @@ func imageFilesByStem(ctx context.Context, fs afero.Fs, dir string) (map[string]
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 ||
-				!supportedImageExt(filepath.Ext(entry.Name())) {
+			// The listing already says what each entry is, so no image is
+			// stat'd a second time.
+			if !entry.Mode().IsRegular() || !supportedImageExt(filepath.Ext(entry.Name())) {
 				continue
 			}
 			path := filepath.Join(dir, entry.Name())
-			if !isRegularFile(fs, path) {
-				continue
-			}
 			if imageCount >= maxMetadataRecords {
 				return nil, fmt.Errorf("misterdocs: artwork directory exceeds %d records", maxMetadataRecords)
 			}

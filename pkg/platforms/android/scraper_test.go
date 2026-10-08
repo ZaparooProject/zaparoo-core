@@ -38,8 +38,28 @@ type appScrapeDB struct {
 	database.MediaDBI
 	systemErr error
 	completed map[int64]struct{}
-	media     []database.MediaWithFullPath
-	writes    []database.ScrapeWriteTarget
+	// fingerprints holds what the scraper recorded per system, and revision
+	// is the library revision every system reports.
+	fingerprints map[string]string
+	media        []database.MediaWithFullPath
+	writes       []database.ScrapeWriteTarget
+	revision     int64
+}
+
+func (db *appScrapeDB) LibraryRevision(context.Context, string) (int64, error) {
+	return db.revision, nil
+}
+
+func (db *appScrapeDB) GetScrapeFingerprint(_ context.Context, _, systemID string) (string, error) {
+	return db.fingerprints[systemID], nil
+}
+
+func (db *appScrapeDB) SetScrapeFingerprint(_ context.Context, _, systemID, fingerprint string) error {
+	if db.fingerprints == nil {
+		db.fingerprints = make(map[string]string)
+	}
+	db.fingerprints[systemID] = fingerprint
+	return nil
 }
 
 func (db *appScrapeDB) FindSystemBySystemID(string) (database.System, error) {
@@ -116,6 +136,66 @@ func TestAppScraperFillsIconsByPackageWithoutChangingTitles(t *testing.T) {
 			TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageImage), Text: "/private/game.png",
 		}}, target.Write.MediaProps)
 	}
+}
+
+func TestAppScraperSkipsASystemWhoseAppsHaveNotChanged(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{"com.example.game": "/private/game.png"}}
+	p := &Platform{host: host}
+	db := &appScrapeDB{media: []database.MediaWithFullPath{{
+		DBID: 1, MediaTitleDBID: 11,
+		Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+	}}}
+	run := func(opts scraper.ScrapeOptions) {
+		t.Helper()
+		opts.Systems = []string{systemdefs.SystemAndroid}
+		updates := make(chan scraper.ScrapeUpdate, 8)
+		require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+			opts, platforms.ScraperCustomOptions{}, updates))
+		for update := range updates {
+			require.NoError(t, update.FatalErr)
+		}
+	}
+	fill := scraper.ScrapeOptions{FillMissing: true, RunID: "run"}
+
+	run(fill)
+	require.Len(t, db.writes, 1)
+	require.NotEmpty(t, db.fingerprints[systemdefs.SystemAndroid])
+
+	// No app was added or removed, so the next index-triggered run asks the
+	// host for nothing.
+	run(fill)
+	require.Len(t, db.writes, 1)
+	require.Len(t, host.iconCalls, 1)
+
+	// An index that changed the system's rows makes it worth another look,
+	// and a manual run never skips.
+	db.revision++
+	run(fill)
+	require.Len(t, db.writes, 2)
+	run(scraper.ScrapeOptions{})
+	require.Len(t, db.writes, 3)
+}
+
+func TestAppScraperRetriesASystemWithAnIconItCouldNotGet(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{icons: map[string]string{}}
+	p := &Platform{host: host}
+	db := &appScrapeDB{media: []database.MediaWithFullPath{{
+		DBID: 1, MediaTitleDBID: 11,
+		Path: (AppIdentity{Package: "com.example.game", Name: "Game"}).AppPath(),
+	}}}
+	for range 2 {
+		updates := make(chan scraper.ScrapeUpdate, 8)
+		require.NoError(t, p.appScraper().Scrape(t.Context(), nil, nil, nil, &database.Database{MediaDB: db},
+			scraper.ScrapeOptions{FillMissing: true, RunID: "run", Systems: []string{systemdefs.SystemAndroid}},
+			platforms.ScraperCustomOptions{}, updates))
+		for update := range updates {
+			require.NoError(t, update.FatalErr)
+		}
+	}
+	require.Empty(t, db.fingerprints, "a system with a missing icon is not recorded as complete")
+	require.Len(t, host.iconCalls, 2, "so the next run asks again")
 }
 
 func TestAppScraperDoesNotRevisitCompletedRows(t *testing.T) {

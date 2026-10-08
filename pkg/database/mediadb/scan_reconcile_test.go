@@ -566,6 +566,44 @@ var (
 // A rescan that changes nothing must not refresh single-file variant titles:
 // with two or more touched titles the refresh covers the whole system, which
 // costs tens of seconds per system on MiSTer storage.
+func TestReconcileStagedSystem_LibraryRevisionMovesOnlyWhenRowsDo(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	revision := func(systemID string) int64 {
+		t.Helper()
+		value, err := mediaDB.LibraryRevision(ctx, systemID)
+		require.NoError(t, err)
+		return value
+	}
+	files := map[string][]database.ScanStagedTag{"alpha": nil, "beta": nil}
+
+	stageVariantTestMedia(t, mediaDB, "SNES", files)
+	first := revision("SNES")
+	assert.Positive(t, first, "the first index added rows")
+	assert.Zero(t, revision("NES"), "another system was not touched")
+
+	// Indexing the same files again changes nothing, so a scraper that has
+	// already considered this system has nothing new to look at.
+	stageVariantTestMedia(t, mediaDB, "SNES", files)
+	assert.Equal(t, first, revision("SNES"))
+
+	files["gamma"] = nil
+	stageVariantTestMedia(t, mediaDB, "SNES", files)
+	added := revision("SNES")
+	assert.Greater(t, added, first, "a new game")
+
+	delete(files, "alpha")
+	stageVariantTestMedia(t, mediaDB, "SNES", files)
+	removed := revision("SNES")
+	assert.Greater(t, removed, added, "a game gone missing")
+
+	files["beta"] = []database.ScanStagedTag{variantTestHack}
+	stageVariantTestMedia(t, mediaDB, "SNES", files)
+	assert.Greater(t, revision("SNES"), removed, "a changed tag")
+}
+
 func TestReconcileStagedSystem_UnchangedLoneVariantsTouchNothing(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)

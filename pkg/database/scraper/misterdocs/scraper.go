@@ -43,13 +43,18 @@ import (
 )
 
 const (
-	scraperID      = "mister-docs"
-	scraperName    = "MiSTer docs databases"
-	writeBatchSize = 100
+	scraperID   = "mister-docs"
+	scraperName = "MiSTer docs databases"
 )
 
-// NewPlatformScraper returns the MiSTer installed-docs scraper.
-func NewPlatformScraper() platforms.Scraper {
+// SetNameCache answers an arcade descriptor's set name without reading the
+// descriptor. ok is false when the cache cannot answer for that file; an empty
+// name with ok true means the descriptor has none.
+type SetNameCache func(path string) (setName string, ok bool)
+
+// NewPlatformScraper returns the MiSTer installed-docs scraper. setNames is an
+// optional fast path for arcade set names and may be nil.
+func NewPlatformScraper(setNames SetNameCache) platforms.Scraper {
 	return platforms.Scraper{
 		ID: scraperID, Name: scraperName, SupportedSystemIDs: []string{},
 		SupportsFillMissing: true,
@@ -91,7 +96,7 @@ func NewPlatformScraper() platforms.Scraper {
 			}
 			impl := &scraperImpl{
 				fs: fs, db: db.MediaDB, docsRoots: candidateDocsRoots(rootDirs),
-				sources: sourcesBySystem(sources), langs: langs,
+				sources: sourcesBySystem(sources), langs: langs, setNames: setNames,
 			}
 			go impl.scrapeLoop(ctx, opts, targets, ch)
 			return nil
@@ -103,6 +108,13 @@ type scraperImpl struct {
 	sources map[string][]sourceDir
 	fs      afero.Fs
 	db      database.MediaDBI
+	// setNames is an optional fast path for arcade set names.
+	setNames SetNameCache
+	// loaded holds the packs a later step will read again, keyed by folder,
+	// and lastUse the last step that reads each folder. Game Boy Color falls
+	// back to the Game Boy pack, for one, and parsing it once serves both.
+	loaded  map[string]sourceRecords
+	lastUse map[string]int
 	// unmapped collects the pack values this run had no tag mapping for.
 	unmapped  scraper.UnmappedValues
 	docsRoots []string
@@ -136,15 +148,57 @@ func (s *scraperImpl) scrapeLoop(
 	if opts.Scope != nil {
 		steps = opts.SystemIDs()
 	}
+	s.planSourceReuse(steps)
 	var totals runTotals
 	for step := range steps {
 		if !s.scrapeStep(ctx, opts, steps, step, &totals, ch) {
 			return
 		}
+		s.releaseSources(step)
 	}
 	final := totals.done()
 	final.TotalSteps, final.CurrentStep = len(steps), len(steps)
 	ch <- final
+}
+
+// planSourceReuse notes the last step that reads each pack folder, so a pack
+// shared between systems is parsed once and dropped as soon as nothing later
+// needs it.
+func (s *scraperImpl) planSourceReuse(steps []string) {
+	s.loaded = make(map[string]sourceRecords)
+	s.lastUse = make(map[string]int)
+	for step, targetID := range steps {
+		for _, sourceID := range sourceIDsForTarget(targetID) {
+			for _, source := range s.sources[sourceID] {
+				s.lastUse[source.Path] = step
+			}
+		}
+	}
+}
+
+// releaseSources drops the packs no step after this one reads.
+func (s *scraperImpl) releaseSources(step int) {
+	for path := range s.loaded {
+		if s.lastUse[path] <= step {
+			delete(s.loaded, path)
+		}
+	}
+}
+
+// loadSource returns a pack's records, parsing it unless an earlier step
+// already did, and keeps them when a later step reads the same folder.
+func (s *scraperImpl) loadSource(ctx context.Context, source sourceDir, step int) (sourceRecords, error) {
+	if loaded, ok := s.loaded[source.Path]; ok {
+		return loaded, nil
+	}
+	loaded, err := loadSourceRecords(ctx, s.fs, source, s.langs)
+	if err != nil {
+		return sourceRecords{}, err
+	}
+	if s.lastUse[source.Path] > step {
+		s.loaded[source.Path] = loaded
+	}
+	return loaded, nil
 }
 
 // stepSources is what one step loaded from the installed packs.
@@ -158,7 +212,7 @@ type stepSources struct {
 // loadStepSources reads every pack serving targetID. It returns false when
 // the scrape was stopped while loading.
 func (s *scraperImpl) loadStepSources(
-	ctx context.Context, opts scraper.ScrapeOptions, targetID string,
+	ctx context.Context, opts scraper.ScrapeOptions, targetID string, step int,
 ) (stepSources, bool) {
 	var result stepSources
 	successfulRoots := make(map[string]struct{})
@@ -167,7 +221,7 @@ func (s *scraperImpl) loadStepSources(
 			if err := waitForScrape(ctx, opts); err != nil {
 				return result, false
 			}
-			loaded, loadErr := loadSourceRecords(ctx, s.fs, source, s.langs)
+			loaded, loadErr := s.loadSource(ctx, source, step)
 			if loadErr != nil {
 				result.err = errors.Join(
 					result.err,
@@ -253,7 +307,32 @@ func (s *scraperImpl) scrapeStep(
 		}
 	}
 
-	sources, ok := s.loadStepSources(ctx, opts, targetID)
+	// A run over whole systems fingerprints each one. An index-triggered
+	// run ends the step here when the packs and the library are as its last
+	// completed run left them; every unscoped run records the state it
+	// finishes in.
+	sourceState, fingerprinted := "", false
+	if opts.Scope == nil {
+		state, stateErr := s.sourceState(ctx, opts, targetID)
+		switch {
+		case stateErr == nil:
+			sourceState, fingerprinted = state, true
+		case ctx.Err() != nil:
+			ch <- totals.done()
+			return false
+		default:
+			log.Debug().Err(stateErr).Str("system", targetID).Msg("misterdocs: could not fingerprint packs")
+		}
+	}
+	if fingerprinted && opts.FillMissing &&
+		scraper.SystemUnchanged(ctx, s.db, scraperID, targetID, fingerprintVersion, sourceState) {
+		log.Debug().Str("system", targetID).Dur("total", time.Since(stepStart)).
+			Msg("misterdocs: packs and library unchanged, step skipped")
+		ch <- scraper.ScrapeUpdate{SystemID: targetID, TotalSteps: len(steps), CurrentStep: step + 1}
+		return true
+	}
+
+	sources, ok := s.loadStepSources(ctx, opts, targetID, step)
 	if !ok {
 		ch <- totals.done()
 		return false
@@ -327,7 +406,7 @@ func (s *scraperImpl) scrapeStep(
 	writeStart := time.Now()
 	matchedWritten := 0
 	stepError := sourceError
-	if err := s.applyTargets(ctx, opts, writeTargets, func(from, to int) {
+	if err := scraper.ApplyTargets(ctx, s.db, opts, scraperID, writeTargets, func(from, to int) {
 		for i := from; i < to; i++ {
 			matchedWritten += matched.RecordsPerTarget[i]
 		}
@@ -339,6 +418,13 @@ func (s *scraperImpl) scrapeStep(
 		stats.Skipped++
 	}
 	writeDuration := time.Since(writeStart)
+	if fingerprinted && stepError == nil {
+		if rememberErr := scraper.RememberSystem(
+			ctx, s.db, scraperID, targetID, fingerprintVersion, sourceState,
+		); rememberErr != nil {
+			log.Debug().Err(rememberErr).Msg("misterdocs: step fingerprint not stored")
+		}
+	}
 	log.Debug().
 		Str("system", targetID).
 		Int("records", stats.Processed).
@@ -428,8 +514,8 @@ type systemLoad struct {
 
 // loadSystem builds a system's match index from streamed rows, keeping only
 // the rows matchKeys can reach. Titles are read before media, so a title a
-// slug matches keeps every one of its media rows, and again afterwards when a
-// kept media row belongs to a title not yet held.
+// slug matches keeps every one of its media rows; the titles of the other
+// kept media rows are then fetched by ID.
 //
 //nolint:gocognit // three streamed passes, each with its own filter
 func (s *scraperImpl) loadSystem(
@@ -506,15 +592,18 @@ func (s *scraperImpl) loadSystem(
 		}
 	}
 	if len(needed) > 0 {
-		err := s.db.ForEachTitleBySystemID(ctx, systemID, func(title *database.TitleWithSystem) error {
-			if _, ok := needed[title.DBID]; ok {
-				titles = append(titles, *title)
-			}
-			return nil
-		})
+		ids := make([]int64, 0, len(needed))
+		for id := range needed {
+			ids = append(ids, id)
+		}
+		extra, err := s.db.GetTitlesByDBIDs(ctx, ids)
 		if err != nil {
 			return load, fmt.Errorf("misterdocs: load titles for %s: %w", systemID, err)
 		}
+		for i := range extra {
+			extra[i].SystemID = systemID
+		}
+		titles = append(titles, extra...)
 	}
 
 	load.idx = newSystemIndex(titles, media)
@@ -577,7 +666,7 @@ func (s *scraperImpl) resolveArcadeSetNames(
 			return nil, err
 		}
 		scanned++
-		setName, ok := readMRASetName(s.fs, media[i].Path)
+		setName, ok := s.arcadeSetName(media[i].Path)
 		if !ok {
 			continue
 		}
@@ -598,6 +687,17 @@ func (s *scraperImpl) resolveArcadeSetNames(
 	return bySetName, nil
 }
 
+// arcadeSetName returns a descriptor's set name from the platform's cache
+// when it can answer, and from the descriptor itself otherwise.
+func (s *scraperImpl) arcadeSetName(path string) (string, bool) {
+	if s.setNames != nil {
+		if setName, ok := s.setNames(path); ok {
+			return setName, setName != ""
+		}
+	}
+	return readMRASetName(s.fs, path)
+}
+
 func (s *scraperImpl) eligibleTargets(targets []string, force bool) []string {
 	result := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -615,64 +715,9 @@ func (s *scraperImpl) eligibleTargets(targets []string, force bool) []string {
 	return result
 }
 
-// applyTargets writes targets in batches, calling onBatch with the half-open
-// index range of each batch once it has committed.
-func (s *scraperImpl) applyTargets(
-	ctx context.Context,
-	opts scraper.ScrapeOptions,
-	targets []database.ScrapeWriteTarget,
-	onBatch func(from, to int),
-) error {
-	batcher, canBatch := s.db.(database.ScrapeResultBatchApplier)
-	for start := 0; start < len(targets); start += writeBatchSize {
-		if err := waitForScrape(ctx, opts); err != nil {
-			return err
-		}
-		end := min(start+writeBatchSize, len(targets))
-		batch := targets[start:end]
-		if err := s.applyBatch(ctx, batcher, canBatch, batch); err != nil {
-			return err
-		}
-		if onBatch != nil {
-			onBatch(start, end)
-		}
-	}
-	return nil
-}
-
-func (s *scraperImpl) applyBatch(
-	ctx context.Context,
-	batcher database.ScrapeResultBatchApplier,
-	canBatch bool,
-	batch []database.ScrapeWriteTarget,
-) error {
-	if canBatch {
-		batchErr := batcher.ApplyScrapeResults(ctx, batch)
-		if batchErr == nil {
-			return nil
-		}
-		log.Warn().Err(batchErr).
-			Int("targets", len(batch)).
-			Msg("misterdocs: batch write failed, falling back to per-record writes")
-	}
-	for _, target := range batch {
-		if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
-			return fmt.Errorf("misterdocs: write media %d: %w", target.MediaDBID, err)
-		}
-	}
-	return nil
-}
-
 func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if opts.Pauser != nil {
-		if err := opts.Pauser.Wait(ctx); err != nil {
-			return fmt.Errorf("misterdocs: wait while paused: %w", err)
-		}
-	}
-	return nil
+	//nolint:wrapcheck // scraper.Wait names the scraper in its error
+	return scraper.Wait(ctx, opts, scraperID)
 }
 
 // deleteStaleProperties drops the docs image and manual properties a forced
